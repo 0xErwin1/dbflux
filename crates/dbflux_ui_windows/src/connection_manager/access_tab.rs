@@ -41,15 +41,17 @@ impl ConnectionManagerWindow {
             && self.selected_auth_profile_needs_login(cx);
         let auth_profile_is_valid = self.selected_auth_profile_is_valid(cx);
 
+        let access_tab_label = dbflux_i18n::t!("access.tab_label");
+
         let mut sections = vec![
             self.render_section(
-                "Access",
+                &access_tab_label,
                 div().flex().flex_col().gap_2().child(
                     div()
                         .flex()
                         .flex_col()
                         .gap_1()
-                        .child(Label::new("Access Method"))
+                        .child(Label::new(dbflux_i18n::t!("access.method_label")))
                         .child(
                             div()
                                 .min_w(Widths::CM_FORM_DROPDOWN)
@@ -68,13 +70,13 @@ impl ConnectionManagerWindow {
                         .flex()
                         .flex_col()
                         .gap_3()
-                        .child(Text::muted("Direct connections use the database fields from the Main tab."))
+                        .child(Text::muted(dbflux_i18n::t!("access.direct_hint")))
                         .child(
                             div()
                                 .flex()
                                 .flex_col()
                                 .gap_1()
-                                .child(Label::new("Auth Profile (optional)"))
+                                .child(Label::new(dbflux_i18n::t!("access.auth_profile_optional")))
                                 .child(
                                     self.render_focus_shell(
                                         show_focus && self.form_focus == FormFocus::SsmAuthProfile,
@@ -82,17 +84,17 @@ impl ConnectionManagerWindow {
                                         self.auth_profile.auth_profile_dropdown.clone(),
                                         cx,
                                     )
-                                        .min_w(px(280.0))
-                                        .on_mouse_down(
-                                            MouseButton::Left,
-                                            cx.listener(|this, _, window, cx| {
-                                                this.enter_edit_mode_for_field(
-                                                    FormFocus::SsmAuthProfile,
-                                                    window,
-                                                    cx,
-                                                );
-                                            }),
-                                        ),
+                                    .min_w(px(280.0))
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, window, cx| {
+                                            this.enter_edit_mode_for_field(
+                                                FormFocus::SsmAuthProfile,
+                                                window,
+                                                cx,
+                                            );
+                                        }),
+                                    ),
                                 )
                                 .child(
                                     div()
@@ -104,77 +106,85 @@ impl ConnectionManagerWindow {
                                                 show_focus
                                                     && self.form_focus == FormFocus::SsmAuthManage,
                                                 ring_color,
-                                                Button::new("auth-open-settings", "Manage")
-                                                    .ghost()
-                                                    .small()
-                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                        this.open_auth_profiles_settings(cx);
-                                                    })),
+                                                Button::new(
+                                                    "auth-open-settings",
+                                                    dbflux_i18n::t!("access.manage"),
+                                                )
+                                                .ghost()
+                                                .small()
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.open_auth_profiles_settings(cx);
+                                                })),
                                                 cx,
                                             )
-                                                .on_mouse_down(
-                                                    MouseButton::Left,
-                                                    cx.listener(|this, _, window, cx| {
-                                                        this.enter_edit_mode_for_field(
-                                                            FormFocus::SsmAuthManage,
-                                                            window,
-                                                            cx,
-                                                        );
-                                                    }),
-                                                ),
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _, window, cx| {
+                                                    this.enter_edit_mode_for_field(
+                                                        FormFocus::SsmAuthManage,
+                                                        window,
+                                                        cx,
+                                                    );
+                                                }),
+                                            ),
                                         )
                                         .child(
                                             self.render_focus_shell(
                                                 show_focus
                                                     && self.form_focus == FormFocus::SsmAuthLogin,
                                                 ring_color,
-                                                Button::new("auth-login-selected", "Login")
-                                                    .ghost()
-                                                    .small()
-                                                    .disabled(!login_enabled)
-                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                        this.login_selected_auth_profile(cx);
-                                                    })),
+                                                Button::new(
+                                                    "auth-login-selected",
+                                                    dbflux_i18n::t!("access.login"),
+                                                )
+                                                .ghost()
+                                                .small()
+                                                .disabled(!login_enabled)
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.login_selected_auth_profile(cx);
+                                                })),
                                                 cx,
                                             )
-                                                .on_mouse_down(
-                                                    MouseButton::Left,
-                                                    cx.listener(|this, _, window, cx| {
-                                                        this.enter_edit_mode_for_field(
-                                                            FormFocus::SsmAuthLogin,
-                                                            window,
-                                                            cx,
-                                                        );
-                                                    }),
-                                                ),
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _, window, cx| {
+                                                    this.enter_edit_mode_for_field(
+                                                        FormFocus::SsmAuthLogin,
+                                                        window,
+                                                        cx,
+                                                    );
+                                                }),
+                                            ),
                                         )
                                         .child(
                                             self.render_focus_shell(
                                                 show_focus
-                                                    && self.form_focus
-                                                        == FormFocus::SsmAuthRefresh,
+                                                    && self.form_focus == FormFocus::SsmAuthRefresh,
                                                 ring_color,
-                                                Button::new("auth-refresh-session", "Refresh")
-                                                    .ghost()
-                                                    .small()
-                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                        this.refresh_auth_profile_statuses(cx);
-                                                    })),
+                                                Button::new(
+                                                    "auth-refresh-session",
+                                                    dbflux_i18n::t!("access.refresh"),
+                                                )
+                                                .ghost()
+                                                .small()
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.refresh_auth_profile_statuses(cx);
+                                                })),
                                                 cx,
                                             )
-                                                .on_mouse_down(
-                                                    MouseButton::Left,
-                                                    cx.listener(|this, _, window, cx| {
-                                                        this.enter_edit_mode_for_field(
-                                                            FormFocus::SsmAuthRefresh,
-                                                            window,
-                                                            cx,
-                                                        );
-                                                    }),
-                                                ),
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _, window, cx| {
+                                                    this.enter_edit_mode_for_field(
+                                                        FormFocus::SsmAuthRefresh,
+                                                        window,
+                                                        cx,
+                                                    );
+                                                }),
+                                            ),
                                         ),
                                 )
-                                .child(Text::caption("Used for resolving Secret/Parameter/Auth value sources in Direct mode.")),
+                                .child(Text::caption(dbflux_i18n::t!("access.auth_profile_hint"))),
                         )
                         .when_some(self.selected_auth_profile_status_text(cx), |d, status| {
                             d.child(Text::caption(status))
@@ -182,12 +192,13 @@ impl ConnectionManagerWindow {
                         .when(auth_profile_is_valid, |d| {
                             d.child(
                                 StatusIndicator::new(Status::Connected)
-                                    .label("Auth profile session is valid"),
+                                    .label(dbflux_i18n::t!("access.session_valid")),
                             )
                         })
-                        .when_some(self.auth_profile.auth_profile_action_message.as_ref(), |d, message| {
-                            d.child(Text::caption(message.clone()))
-                        })
+                        .when_some(
+                            self.auth_profile.auth_profile_action_message.as_ref(),
+                            |d, message| d.child(Text::caption(message.clone())),
+                        )
                         .into_any_element(),
                 );
             }
@@ -208,14 +219,19 @@ impl ConnectionManagerWindow {
             && self.selected_auth_profile_needs_login(cx);
         let auth_profile_is_valid = self.selected_auth_profile_is_valid(cx);
 
+        let ssm_title = dbflux_i18n::t!("access.ssm_title");
+        let ssm_instance_id_label = dbflux_i18n::t!("access.ssm_instance_id");
+        let ssm_region_label = dbflux_i18n::t!("access.ssm_region");
+        let ssm_remote_port_label = dbflux_i18n::t!("access.ssm_remote_port");
+
         self.render_section(
-            "SSM Port Forwarding",
+            &ssm_title,
             div()
                 .flex()
                 .flex_col()
                 .gap_3()
                 .child(self.render_ssm_value_field(
-                    "Instance ID",
+                    &ssm_instance_id_label,
                     &self.access.input_ssm_instance_id,
                     self.access.ssm_instance_id_value_source_selector.clone(),
                     true,
@@ -227,7 +243,7 @@ impl ConnectionManagerWindow {
                     cx,
                 ))
                 .child(self.render_ssm_value_field(
-                    "Region",
+                    &ssm_region_label,
                     &self.access.input_ssm_region,
                     self.access.ssm_region_value_source_selector.clone(),
                     true,
@@ -239,7 +255,7 @@ impl ConnectionManagerWindow {
                     cx,
                 ))
                 .child(self.render_ssm_value_field(
-                    "Remote Port",
+                    &ssm_remote_port_label,
                     &self.access.input_ssm_remote_port,
                     self.access.ssm_remote_port_value_source_selector.clone(),
                     false,
@@ -250,13 +266,13 @@ impl ConnectionManagerWindow {
                     FormFocus::SsmRemotePort,
                     cx,
                 ))
-                .child(Text::caption("DBFlux and the OS auto-assign the local tunnel port. Only Remote Port is configurable here."))
+                .child(Text::caption(dbflux_i18n::t!("access.ssm_port_hint")))
                 .child(
                     div()
                         .flex()
                         .flex_col()
                         .gap_1()
-                        .child(Label::new("Auth Profile"))
+                        .child(Label::new(dbflux_i18n::t!("access.auth_profile")))
                         .child(
                             self.render_focus_shell(
                                 show_focus && self.form_focus == FormFocus::SsmAuthProfile,
@@ -264,17 +280,17 @@ impl ConnectionManagerWindow {
                                 self.auth_profile.auth_profile_dropdown.clone(),
                                 cx,
                             )
-                                .min_w(px(280.0))
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(|this, _, window, cx| {
-                                        this.enter_edit_mode_for_field(
-                                            FormFocus::SsmAuthProfile,
-                                            window,
-                                            cx,
-                                        );
-                                    }),
-                                ),
+                            .min_w(px(280.0))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, window, cx| {
+                                    this.enter_edit_mode_for_field(
+                                        FormFocus::SsmAuthProfile,
+                                        window,
+                                        cx,
+                                    );
+                                }),
+                            ),
                         )
                         .child(
                             div()
@@ -285,71 +301,86 @@ impl ConnectionManagerWindow {
                                     self.render_focus_shell(
                                         show_focus && self.form_focus == FormFocus::SsmAuthManage,
                                         ring_color,
-                                        Button::new("ssm-auth-open-settings", "Manage")
-                                            .ghost()
-                                            .small()
-                                            .on_click(cx.listener(|this, _, _, cx| {
+                                        Button::new(
+                                            "ssm-auth-open-settings",
+                                            dbflux_i18n::t!("access.manage"),
+                                        )
+                                        .ghost()
+                                        .small()
+                                        .on_click(
+                                            cx.listener(|this, _, _, cx| {
                                                 this.open_auth_profiles_settings(cx);
-                                            })),
-                                        cx,
-                                    )
-                                        .on_mouse_down(
-                                            MouseButton::Left,
-                                            cx.listener(|this, _, window, cx| {
-                                                this.enter_edit_mode_for_field(
-                                                    FormFocus::SsmAuthManage,
-                                                    window,
-                                                    cx,
-                                                );
                                             }),
                                         ),
+                                        cx,
+                                    )
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, window, cx| {
+                                            this.enter_edit_mode_for_field(
+                                                FormFocus::SsmAuthManage,
+                                                window,
+                                                cx,
+                                            );
+                                        }),
+                                    ),
                                 )
                                 .child(
                                     self.render_focus_shell(
                                         show_focus && self.form_focus == FormFocus::SsmAuthLogin,
                                         ring_color,
-                                        Button::new("ssm-auth-login-selected", "Login")
-                                            .ghost()
-                                            .small()
-                                            .disabled(!login_enabled)
-                                            .on_click(cx.listener(|this, _, _, cx| {
+                                        Button::new(
+                                            "ssm-auth-login-selected",
+                                            dbflux_i18n::t!("access.login"),
+                                        )
+                                        .ghost()
+                                        .small()
+                                        .disabled(!login_enabled)
+                                        .on_click(
+                                            cx.listener(|this, _, _, cx| {
                                                 this.login_selected_auth_profile(cx);
-                                            })),
-                                        cx,
-                                    )
-                                        .on_mouse_down(
-                                            MouseButton::Left,
-                                            cx.listener(|this, _, window, cx| {
-                                                this.enter_edit_mode_for_field(
-                                                    FormFocus::SsmAuthLogin,
-                                                    window,
-                                                    cx,
-                                                );
                                             }),
                                         ),
+                                        cx,
+                                    )
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, window, cx| {
+                                            this.enter_edit_mode_for_field(
+                                                FormFocus::SsmAuthLogin,
+                                                window,
+                                                cx,
+                                            );
+                                        }),
+                                    ),
                                 )
                                 .child(
                                     self.render_focus_shell(
                                         show_focus && self.form_focus == FormFocus::SsmAuthRefresh,
                                         ring_color,
-                                        Button::new("ssm-auth-refresh-session", "Refresh")
-                                            .ghost()
-                                            .small()
-                                            .on_click(cx.listener(|this, _, _, cx| {
+                                        Button::new(
+                                            "ssm-auth-refresh-session",
+                                            dbflux_i18n::t!("access.refresh"),
+                                        )
+                                        .ghost()
+                                        .small()
+                                        .on_click(
+                                            cx.listener(|this, _, _, cx| {
                                                 this.refresh_auth_profile_statuses(cx);
-                                            })),
-                                        cx,
-                                    )
-                                        .on_mouse_down(
-                                            MouseButton::Left,
-                                            cx.listener(|this, _, window, cx| {
-                                                this.enter_edit_mode_for_field(
-                                                    FormFocus::SsmAuthRefresh,
-                                                    window,
-                                                    cx,
-                                                );
                                             }),
                                         ),
+                                        cx,
+                                    )
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, window, cx| {
+                                            this.enter_edit_mode_for_field(
+                                                FormFocus::SsmAuthRefresh,
+                                                window,
+                                                cx,
+                                            );
+                                        }),
+                                    ),
                                 ),
                         )
                         .when_some(self.selected_auth_profile_status_text(cx), |d, status| {
@@ -358,7 +389,7 @@ impl ConnectionManagerWindow {
                         .when(auth_profile_is_valid, |d| {
                             d.child(
                                 StatusIndicator::new(Status::Connected)
-                                    .label("Auth profile session is valid"),
+                                    .label(dbflux_i18n::t!("access.session_valid")),
                             )
                         }),
                 ),
@@ -1261,5 +1292,66 @@ impl ConnectionManagerWindow {
                 )
                 .into_any_element(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    const ACCESS_DIRECT_SSM_KEYS: &[&str] = &[
+        "access.tab_label",
+        "access.method_label",
+        "access.direct_hint",
+        "access.auth_profile_optional",
+        "access.manage",
+        "access.login",
+        "access.refresh",
+        "access.auth_profile_hint",
+        "access.session_valid",
+        "access.ssm_title",
+        "access.ssm_instance_id",
+        "access.ssm_region",
+        "access.ssm_remote_port",
+        "access.ssm_port_hint",
+        "access.auth_profile",
+    ];
+
+    #[test]
+    fn access_direct_ssm_keys_resolve_in_both_locales() {
+        for locale in ["en", "es"] {
+            for key in ACCESS_DIRECT_SSM_KEYS {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(
+                    !value.is_empty(),
+                    "key {key} resolved empty for locale {locale}"
+                );
+                assert_ne!(value, *key, "key {key} did not resolve for locale {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "key {key} fell back to the raw locale-qualified form for locale {locale}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn access_method_label_differs_between_locales() {
+        let en = dbflux_i18n::t!("access.method_label", locale = "en");
+        let es = dbflux_i18n::t!("access.method_label", locale = "es");
+
+        assert_ne!(
+            en, es,
+            "access.method_label should differ between en and es"
+        );
+    }
+
+    #[test]
+    fn access_ssm_instance_id_label_exact_values() {
+        let en = dbflux_i18n::t!("access.ssm_instance_id", locale = "en");
+        let es = dbflux_i18n::t!("access.ssm_instance_id", locale = "es");
+
+        assert_eq!(en, "Instance ID");
+        assert_eq!(es, "ID de instancia");
     }
 }
