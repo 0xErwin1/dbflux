@@ -2,6 +2,7 @@
 import Base from '../layouts/Base.astro';
 import { VERSIONS, versionHome, versionLabel } from '../data/versions';
 import { docsUrl, siteUrl } from '../data/site';
+import { localeFromPathname, t } from '../i18n';
 
 /**
  * Versions come and go, so a link that worked against one release can land here
@@ -9,24 +10,37 @@ import { docsUrl, siteUrl } from '../data/site';
  * than a dead end.
  */
 const versions = VERSIONS;
+
+/**
+ * Astro serves one static `404.html`, so there is no `/es/404` route — this
+ * always renders in English. `locale` is still derived from the build-time URL
+ * rather than hardcoded, matching every other page's pattern.
+ */
+const locale = localeFromPathname(Astro.url.pathname);
 ---
 
-<Base title="Page not found — DBFlux" description="That page does not exist." noindex>
+<Base
+  title="Page not found — DBFlux"
+  description="That page does not exist."
+  noindex
+  locale={locale}
+>
   <section class="miss">
     <p class="eyebrow">404</p>
-    <h1>That page does not exist.</h1>
-    <p class="miss__lede">
-      It may have been renamed, or it may belong to a version of DBFlux other than the one you were
-      reading.
-    </p>
+    <h1>{t(locale, 'notfound.title')}</h1>
+    <p class="miss__lede">{t(locale, 'notfound.lede')}</p>
 
     <div class="miss__actions">
-      <a class="btn btn--primary" href={docsUrl('')}>Documentation</a>
-      <a class="btn btn--secondary" href={siteUrl()}>Home</a>
+      <a class="btn btn--primary" href={docsUrl('', '', locale)}
+        >{t(locale, 'notfound.docs_button')}</a
+      >
+      <a class="btn btn--secondary" href={siteUrl('', locale)}
+        >{t(locale, 'notfound.home_button')}</a
+      >
     </div>
 
     <p class="miss__versions">
-      Documentation by version:{' '}
+      {t(locale, 'notfound.versions_label')}{' '}
       {
         versions.map((version, index) => (
           <>

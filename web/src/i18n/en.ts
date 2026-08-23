@@ -189,7 +189,7 @@ export const en = {
         body: 'If an action exists, it has a binding and a command-palette entry. The mouse is a fallback, and no workflow depends on it.',
       },
       p02: {
-        title: "The UI never knows a driver's name",
+        title: 'The UI never knows a driver’s name',
         body: 'Category, query language and capability flags decide what renders. A driver that needs new behaviour adds a seam to the core rather than a special case to the interface.',
       },
       p03: {
@@ -217,8 +217,13 @@ export const en = {
         detail: 'Twelve built in as Rust crates; anything else over the RPC driver protocol.',
       },
     },
-    muted_links:
-      'The full crate map and the cross-crate flows live in the architecture guide. If you want to write a driver, start with driver authoring.',
+    muted_links: {
+      prefix: 'The full crate map and the cross-crate flows live in the ',
+      architecture: 'architecture guide',
+      middle: '. If you want to write a driver, start with ',
+      driver_authoring: 'driver authoring',
+      suffix: '.',
+    },
     maintainer_title: 'Maintainer',
     maintainer_body:
       'Ignacio Perez, a backend and systems developer working in Rust and C. DBFlux is his, and the great majority of its commits are too.',
