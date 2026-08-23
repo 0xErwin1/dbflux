@@ -46,7 +46,7 @@ impl KeybindingsSection {
                     .iter()
                     .filter(|(chord, cmd, _)| {
                         let chord_str = chord.to_string().to_lowercase();
-                        let cmd_name = cmd.display_name().to_lowercase();
+                        let cmd_name = crate::labels::keybinding_command_name(cmd).to_lowercase();
                         chord_str.contains(&filter_text) || cmd_name.contains(&filter_text)
                     })
                     .cloned()
@@ -83,7 +83,7 @@ impl KeybindingsSection {
                     chord_groups
                         .entry(chord.clone())
                         .or_default()
-                        .push(cmd.display_name().to_string());
+                        .push(crate::labels::keybinding_command_name(cmd));
                 }
 
                 let mut emitted_conflict_for: std::collections::HashSet<KeyChord> =
@@ -102,7 +102,7 @@ impl KeybindingsSection {
                         && group.len() > 1
                         && !emitted_conflict_for.contains(chord)
                     {
-                        let current_name = cmd.display_name().to_string();
+                        let current_name = crate::labels::keybinding_command_name(cmd);
                         let others: Vec<String> = group
                             .iter()
                             .filter(|name| **name != current_name)
@@ -117,7 +117,7 @@ impl KeybindingsSection {
 
                     flat_items.push(KeybindingsListItem::Binding {
                         chord: chord.clone(),
-                        cmd_name: cmd.display_name().to_string(),
+                        cmd_name: crate::labels::keybinding_command_name(cmd),
                         is_inherited,
                         is_selected: is_binding_selected,
                         ctx_idx: idx,
@@ -187,8 +187,10 @@ impl KeybindingsSection {
                                 binding_count,
                             } => {
                                 let has_parent = context.parent().is_some();
-                                let parent_name =
-                                    context.parent().map(|p| p.display_name()).unwrap_or("");
+                                let parent_name = context
+                                    .parent()
+                                    .map(|p| crate::labels::keybinding_context_name(&p))
+                                    .unwrap_or_default();
 
                                 div()
                                     .id(SharedString::from(format!(
@@ -244,7 +246,9 @@ impl KeybindingsSection {
                                             .flex()
                                             .items_center()
                                             .gap_2()
-                                            .child(FieldLabel::new(context.display_name()))
+                                            .child(FieldLabel::new(
+                                                crate::labels::keybinding_context_name(&context),
+                                            ))
                                             .child(
                                                 Body::new(
                                                     crate::labels::keybindings_binding_count(
@@ -257,7 +261,7 @@ impl KeybindingsSection {
                                     // Inherits info
                                     .when(has_parent, |d| {
                                         d.child(MonoCaption::new(
-                                            crate::labels::keybindings_inherits_from(parent_name),
+                                            crate::labels::keybindings_inherits_from(&parent_name),
                                         ))
                                     })
                                     .into_any_element()
@@ -452,7 +456,8 @@ impl KeybindingsSection {
             bindings
                 .into_iter()
                 .filter(|(chord, cmd, _)| {
-                    Self::binding_matches_filter(chord, cmd.display_name(), filter)
+                    let cmd_name = crate::labels::keybinding_command_name(cmd);
+                    Self::binding_matches_filter(chord, &cmd_name, filter)
                 })
                 .collect()
         }

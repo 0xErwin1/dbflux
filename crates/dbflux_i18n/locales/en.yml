@@ -2529,6 +2529,116 @@ settings:
       title: "Conflict: %{chord} also bound to %{others}"
       body: Two or more commands share this chord in this context.
       unknown_other: another binding
+    command:
+      toggle_command_palette: Toggle Command Palette
+      new_query_tab: New Query Tab
+      close_tab: Close Current Tab
+      next_tab: Next Tab
+      prev_tab: Previous Tab
+      switch_to_tab: Switch to Tab
+      open_tab_menu: Open Tab Menu
+      focus_sidebar: Focus Sidebar
+      focus_editor: Focus Editor
+      focus_results: Focus Results
+      focus_tasks: Focus Background Tasks
+      cycle_focus_forward: Cycle Focus Forward
+      cycle_focus_backward: Cycle Focus Backward
+      focus_left: Focus Left
+      focus_right: Focus Right
+      focus_up: Focus Up
+      focus_down: Focus Down
+      select_next: Select Next
+      select_prev: Select Previous
+      select_first: Select First
+      select_last: Select Last
+      page_down: Page Down
+      page_up: Page Up
+      extend_select_next: Extend Selection Down
+      extend_select_prev: Extend Selection Up
+      toggle_selection: Toggle Selection
+      move_selected_up: Move Selected Up
+      move_selected_down: Move Selected Down
+      column_left: Column Left
+      column_right: Column Right
+      execute: Execute
+      cancel: Cancel
+      expand_collapse: Expand/Collapse
+      delete: Delete
+      rename: Rename
+      focus_search: Focus Search
+      toggle_favorite: Toggle Favorite
+      run_query: Run Query
+      run_query_in_new_tab: Run Query in New Tab
+      cancel_query: Cancel Query
+      open_history: Toggle History Dropdown
+      open_saved_queries: Open Saved Queries
+      save_query: Save
+      save_file_as: Save File As
+      open_script_file: Open Script File
+      export_results: Export Results
+      results_next_page: Results Next Page
+      results_prev_page: Results Previous Page
+      focus_toolbar: Focus Toolbar
+      toggle_panel: Toggle Panel
+      results_delete_row: Delete Row
+      results_add_row: Add Row
+      results_duplicate_row: Duplicate Row
+      results_copy_row: Copy Row
+      results_copy_cell: Copy Cell
+      results_set_null: Set Cell to NULL
+      open_context_menu: Open Context Menu
+      menu_up: Menu Up
+      menu_down: Menu Down
+      menu_select: Menu Select
+      menu_back: Menu Back
+      sidebar_next_tab: Sidebar Next Tab
+      refresh_schema: Refresh Schema
+      open_connection_manager: Open Connection Manager
+      export_connections: "Export Connections…"
+      disconnect: Disconnect
+      open_item_menu: Open Item Menu
+      create_folder: Create Folder
+      toggle_editor: Toggle Editor Panel
+      toggle_results: Toggle Results Panel
+      toggle_tasks: Toggle Tasks Panel
+      toggle_sidebar: Toggle Sidebar
+      open_settings: Open Settings
+      open_login_modal: Open Auth Profile Login
+      open_sso_wizard: Open AWS SSO Wizard
+      open_audit_viewer: Open Audit Viewer
+      open_mcp_approvals: Open MCP Approvals
+      refresh_mcp_governance: Refresh MCP Governance
+      open_saved_chart: "Open Chart..."
+      import_dashboard: "Import Dashboard from JSON..."
+      new_dashboard: "New Dashboard..."
+    context:
+      global: Global
+      sidebar: Sidebar
+      editor: Editor
+      results: Results
+      background_tasks: Background Tasks
+      command_palette: Command Palette
+      connection_manager: Connection Manager
+      history_modal: History
+      text_input: Text Input
+      dropdown: Dropdown
+      sql_preview_modal: SQL Preview
+      context_menu: Context Menu
+      confirm_modal: Confirm
+      form_navigation: Form Navigation
+      context_bar: Context Bar
+      audit: Audit Viewer
+      event_streams_picker: Event Streams Picker
+    category:
+      global: Global
+      focus: Focus
+      navigation: Navigation
+      results: Results
+      actions: Actions
+      editor: Editor
+      sidebar: Sidebar
+      view: View
+      dashboards: Dashboards
   hooks:
     header:
       title: Hooks
