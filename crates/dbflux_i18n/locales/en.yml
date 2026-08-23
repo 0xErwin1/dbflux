@@ -188,6 +188,45 @@ document:
         deleted:
           one: "%{count} delete"
           many: "%{count} deletes"
+    mutation:
+      confirm:
+        delete:
+          summary:
+            one: 'Delete %{count} row from "%{table}"'
+            many: 'Delete %{count} rows from "%{table}"'
+            unknown: 'Delete rows from "%{table}"'
+        update:
+          summary:
+            one: 'Update %{count} column in "%{table}"'
+            many: 'Update %{count} columns in "%{table}"'
+      error:
+        update_document_unsupported_id: "Cannot update document field: the document has an unsupported _id value"
+        update_document_failed: "Failed to update document: %{error}"
+        save_row_unsupported_pk: "Cannot save row: primary key uses an unsupported value type"
+        save_row_identity_failed: "Cannot save row: failed to build row identity from primary key columns"
+        save_row_unsupported_values: "Cannot save row: unsupported values are read-only"
+        save_failed: "Save failed: %{error}"
+        save_document_unsupported_id: "Cannot save document: it has an unsupported _id value"
+        insert_failed: "Insert failed: %{error}"
+        insert_no_values: "Cannot insert: no values provided"
+        delete_document_unsupported_id: "Cannot delete document: it has an unsupported _id value"
+        delete_failed: "Delete failed: %{error}"
+        delete_no_primary_key: "Cannot delete: no primary key defined for this table"
+        delete_identity_failed: "Cannot delete: failed to identify row"
+        bulk_delete_no_rows_identified: "Cannot delete: failed to identify any rows"
+        bulk_delete_no_documents_identified: "Cannot delete: failed to identify any documents"
+      toast:
+        document_updated: Document updated
+        saved: Saved
+        document_inserted: Document inserted
+        row_inserted: Row inserted
+        document_deleted: Document deleted
+        row_deleted: Row deleted
+        rows_deleted: "%{count} row(s) deleted"
+        documents_deleted: "%{count} document(s) deleted"
+        partial_delete:
+          row: "Deleted %{done} of %{total} row(s), then failed: %{error}"
+          document: "Deleted %{done} of %{total} document(s), then failed: %{error}"
     row_inspector:
       badge:
         primary_key: PK

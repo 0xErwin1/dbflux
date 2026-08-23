@@ -181,21 +181,9 @@ pub fn build_pending_modal(
     };
 
     let summary = match &spec.kind {
-        MutationKind::Delete => {
-            let row_desc = match est_rows {
-                Some(n) => format!("{} rows", n),
-                None => "rows".to_string(),
-            };
-            format!("Delete {} from \"{}\"", row_desc, table_name)
-        }
+        MutationKind::Delete => crate::labels::delete_rows_label(est_rows, &table_name),
         MutationKind::Update { assignments } => {
-            let col_count = assignments.len();
-            format!(
-                "Update {} column{} in \"{}\"",
-                col_count,
-                if col_count == 1 { "" } else { "s" },
-                table_name
-            )
+            crate::labels::update_columns_label(assignments.len(), &table_name)
         }
     };
 
