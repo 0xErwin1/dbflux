@@ -932,7 +932,7 @@ impl Sidebar {
                 Self::append_menu_section(
                     &mut items,
                     [ContextMenuItem::item(
-                        "New Dashboard...",
+                        dbflux_i18n::t!("sidebar.menu.new_dashboard"),
                         ContextMenuAction::NewDashboard,
                     )],
                 );
@@ -962,7 +962,7 @@ impl Sidebar {
                     Self::append_menu_section(
                         &mut items,
                         [ContextMenuItem::item(
-                            "Import Dashboard from JSON...",
+                            dbflux_i18n::t!("sidebar.menu.import_dashboard"),
                             ContextMenuAction::ImportDashboard,
                         )],
                     );
@@ -973,14 +973,14 @@ impl Sidebar {
 
             SchemaNodeKind::RemoteDashboardsFolder => {
                 vec![ContextMenuItem::item(
-                    "Refresh",
+                    dbflux_i18n::t!("sidebar.menu.refresh"),
                     ContextMenuAction::RefreshRemoteDashboards,
                 )]
             }
 
             SchemaNodeKind::SavedChartsFolder => {
                 vec![ContextMenuItem::item(
-                    "New Saved Chart...",
+                    dbflux_i18n::t!("sidebar.menu.new_saved_chart"),
                     ContextMenuAction::NewSavedChart,
                 )]
             }
@@ -990,21 +990,30 @@ impl Sidebar {
 
                 Self::append_menu_section(
                     &mut items,
-                    [ContextMenuItem::item("Open", ContextMenuAction::Open)],
+                    [ContextMenuItem::item(
+                        dbflux_i18n::t!("sidebar.menu.open"),
+                        ContextMenuAction::Open,
+                    )],
                 );
 
                 Self::append_menu_section(
                     &mut items,
                     [
-                        ContextMenuItem::item("Rename...", ContextMenuAction::RenameDashboard),
-                        ContextMenuItem::item("Duplicate", ContextMenuAction::DuplicateDashboard),
+                        ContextMenuItem::item(
+                            dbflux_i18n::t!("sidebar.menu.rename_ellipsis"),
+                            ContextMenuAction::RenameDashboard,
+                        ),
+                        ContextMenuItem::item(
+                            dbflux_i18n::t!("sidebar.menu.duplicate"),
+                            ContextMenuAction::DuplicateDashboard,
+                        ),
                     ],
                 );
 
                 Self::append_menu_section(
                     &mut items,
                     [ContextMenuItem::danger(
-                        "Delete...",
+                        dbflux_i18n::t!("sidebar.menu.delete_ellipsis"),
                         ContextMenuAction::DeleteDashboard,
                     )],
                 );
@@ -1017,21 +1026,30 @@ impl Sidebar {
 
                 Self::append_menu_section(
                     &mut items,
-                    [ContextMenuItem::item("Open", ContextMenuAction::Open)],
+                    [ContextMenuItem::item(
+                        dbflux_i18n::t!("sidebar.menu.open"),
+                        ContextMenuAction::Open,
+                    )],
                 );
 
                 Self::append_menu_section(
                     &mut items,
                     [
-                        ContextMenuItem::item("Rename...", ContextMenuAction::RenameSavedChart),
-                        ContextMenuItem::item("Duplicate", ContextMenuAction::DuplicateSavedChart),
+                        ContextMenuItem::item(
+                            dbflux_i18n::t!("sidebar.menu.rename_ellipsis"),
+                            ContextMenuAction::RenameSavedChart,
+                        ),
+                        ContextMenuItem::item(
+                            dbflux_i18n::t!("sidebar.menu.duplicate"),
+                            ContextMenuAction::DuplicateSavedChart,
+                        ),
                     ],
                 );
 
                 Self::append_menu_section(
                     &mut items,
                     [ContextMenuItem::danger(
-                        "Delete...",
+                        dbflux_i18n::t!("sidebar.menu.delete_ellipsis"),
                         ContextMenuAction::DeleteSavedChart,
                     )],
                 );
@@ -1040,19 +1058,22 @@ impl Sidebar {
             }
 
             SchemaNodeKind::DatabasesFolder => {
-                vec![ContextMenuItem::item("Refresh", ContextMenuAction::Refresh)]
+                vec![ContextMenuItem::item(
+                    dbflux_i18n::t!("sidebar.menu.refresh"),
+                    ContextMenuAction::Refresh,
+                )]
             }
 
             SchemaNodeKind::InstanceMetricsFolder => {
                 vec![ContextMenuItem::item(
-                    "Refresh",
+                    dbflux_i18n::t!("sidebar.menu.refresh"),
                     ContextMenuAction::RefreshInstanceCatalog,
                 )]
             }
 
             SchemaNodeKind::InstanceInspectorsFolder => {
                 vec![ContextMenuItem::item(
-                    "Refresh",
+                    dbflux_i18n::t!("sidebar.menu.refresh"),
                     ContextMenuAction::RefreshInstanceCatalog,
                 )]
             }
@@ -1062,13 +1083,16 @@ impl Sidebar {
 
                 Self::append_menu_section(
                     &mut items,
-                    [ContextMenuItem::item("Open", ContextMenuAction::Open)],
+                    [ContextMenuItem::item(
+                        dbflux_i18n::t!("sidebar.menu.open"),
+                        ContextMenuAction::Open,
+                    )],
                 );
 
                 Self::append_menu_section(
                     &mut items,
                     [ContextMenuItem::item(
-                        "Copy Metric ID",
+                        dbflux_i18n::t!("sidebar.menu.copy_metric_id"),
                         ContextMenuAction::CopyItemId,
                     )],
                 );
@@ -1081,13 +1105,16 @@ impl Sidebar {
 
                 Self::append_menu_section(
                     &mut items,
-                    [ContextMenuItem::item("Open", ContextMenuAction::Open)],
+                    [ContextMenuItem::item(
+                        dbflux_i18n::t!("sidebar.menu.open"),
+                        ContextMenuAction::Open,
+                    )],
                 );
 
                 Self::append_menu_section(
                     &mut items,
                     [ContextMenuItem::item(
-                        "Copy Inspector ID",
+                        dbflux_i18n::t!("sidebar.menu.copy_inspector_id"),
                         ContextMenuAction::CopyItemId,
                     )],
                 );
@@ -1099,7 +1126,10 @@ impl Sidebar {
                 let mut items = Vec::new();
                 Self::append_menu_section(
                     &mut items,
-                    [ContextMenuItem::item("Open", ContextMenuAction::Open)],
+                    [ContextMenuItem::item(
+                        dbflux_i18n::t!("sidebar.menu.open"),
+                        ContextMenuAction::Open,
+                    )],
                 );
                 items
             }
@@ -1988,6 +2018,42 @@ mod menu_i18n_tests {
 
         assert_eq!(english, "Connect");
         assert_eq!(spanish, "Conectar");
+        assert_ne!(english, spanish);
+    }
+
+    const B3_KEYS: [&str; 7] = [
+        "sidebar.menu.new_dashboard",
+        "sidebar.menu.import_dashboard",
+        "sidebar.menu.new_saved_chart",
+        "sidebar.menu.rename_ellipsis",
+        "sidebar.menu.delete_ellipsis",
+        "sidebar.menu.copy_metric_id",
+        "sidebar.menu.copy_inspector_id",
+    ];
+
+    #[test]
+    fn menu_b3_keys_resolve_in_both_locales() {
+        for key in B3_KEYS {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert_ne!(value, key, "missing translation for {locale}.{key}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "translation fell back to the miss sentinel for {locale}.{key}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn menu_new_dashboard_differs_between_locales() {
+        let english = dbflux_i18n::t!("sidebar.menu.new_dashboard", locale = "en");
+        let spanish = dbflux_i18n::t!("sidebar.menu.new_dashboard", locale = "es");
+
+        assert_eq!(english, "New Dashboard...");
+        assert_eq!(spanish, "Nuevo dashboard...");
         assert_ne!(english, spanish);
     }
 }

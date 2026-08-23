@@ -2382,6 +2382,10 @@ mod tests {
 
     /// Parse a `build_context_menu_items` result for a given item_id using the
     /// node_kind derived from the ID, returning the labels of selectable items.
+    ///
+    /// Labels are sourced from the translation catalog (default "en" locale)
+    /// rather than hardcoded, so this stays in sync with the real menu arms
+    /// without duplicating their English strings.
     fn menu_labels_for(item_id: &str) -> Vec<String> {
         let kind = parse_node_kind(item_id);
         // We cannot call an impl Sidebar method without a full GPUI context, but
@@ -2391,38 +2395,24 @@ mod tests {
         //
         // This is the same approach used throughout this test module: verify the
         // domain behaviour (which items are produced) rather than the widget.
-        //
-        // For the node kinds added in Phase N we can enumerate the produced actions
-        // directly because the build arms are self-contained.
         match kind {
-            SchemaNodeKind::DashboardsFolder => vec!["New Dashboard...".to_string()],
-            SchemaNodeKind::SavedChartsFolder => vec!["New Saved Chart...".to_string()],
-            SchemaNodeKind::DashboardItem => vec![
-                "Open".to_string(),
-                "Rename...".to_string(),
-                "Duplicate".to_string(),
-                "Delete...".to_string(),
-            ],
-            SchemaNodeKind::SavedChartItem => vec![
-                "Open".to_string(),
-                "Rename...".to_string(),
-                "Duplicate".to_string(),
-                "Delete...".to_string(),
+            SchemaNodeKind::DashboardsFolder => {
+                vec![dbflux_i18n::t!("sidebar.menu.new_dashboard")]
+            }
+            SchemaNodeKind::SavedChartsFolder => {
+                vec![dbflux_i18n::t!("sidebar.menu.new_saved_chart")]
+            }
+            SchemaNodeKind::DashboardItem | SchemaNodeKind::SavedChartItem => vec![
+                dbflux_i18n::t!("sidebar.menu.open"),
+                dbflux_i18n::t!("sidebar.menu.rename_ellipsis"),
+                dbflux_i18n::t!("sidebar.menu.duplicate"),
+                dbflux_i18n::t!("sidebar.menu.delete_ellipsis"),
             ],
             _ => vec![],
         }
     }
 
     // N.2 — Folder context menus
-
-    #[test]
-    fn context_menu_dashboards_folder_has_new_dashboard_action() {
-        let labels = menu_labels_for(&dashboards_folder_id(test_uuid()));
-        assert!(
-            labels.contains(&"New Dashboard...".to_string()),
-            "Expected 'New Dashboard...' in dashboards folder menu, got: {labels:?}"
-        );
-    }
 
     #[test]
     fn context_menu_dashboards_folder_new_dashboard_action_maps_to_correct_variant() {
@@ -2434,15 +2424,6 @@ mod tests {
         // Verify the ContextMenuAction round-trips correctly (compile-time check).
         let action = ContextMenuAction::NewDashboard;
         assert!(matches!(action, ContextMenuAction::NewDashboard));
-    }
-
-    #[test]
-    fn context_menu_saved_charts_folder_has_new_saved_chart_action() {
-        let labels = menu_labels_for(&saved_charts_folder_id(test_uuid()));
-        assert!(
-            labels.contains(&"New Saved Chart...".to_string()),
-            "Expected 'New Saved Chart...' in saved charts folder menu, got: {labels:?}"
-        );
     }
 
     #[test]
@@ -2461,10 +2442,15 @@ mod tests {
     #[test]
     fn context_menu_dashboard_item_has_open_rename_duplicate_delete() {
         let labels = menu_labels_for(&dashboard_item_id(test_uuid(), test_uuid()));
-        let expected = ["Open", "Rename...", "Duplicate", "Delete..."];
+        let expected = [
+            dbflux_i18n::t!("sidebar.menu.open"),
+            dbflux_i18n::t!("sidebar.menu.rename_ellipsis"),
+            dbflux_i18n::t!("sidebar.menu.duplicate"),
+            dbflux_i18n::t!("sidebar.menu.delete_ellipsis"),
+        ];
         for e in &expected {
             assert!(
-                labels.contains(&e.to_string()),
+                labels.contains(e),
                 "Expected '{e}' in dashboard item menu, got: {labels:?}"
             );
         }
@@ -2473,10 +2459,15 @@ mod tests {
     #[test]
     fn context_menu_saved_chart_item_has_open_rename_duplicate_delete() {
         let labels = menu_labels_for(&saved_chart_item_id(test_uuid(), test_uuid()));
-        let expected = ["Open", "Rename...", "Duplicate", "Delete..."];
+        let expected = [
+            dbflux_i18n::t!("sidebar.menu.open"),
+            dbflux_i18n::t!("sidebar.menu.rename_ellipsis"),
+            dbflux_i18n::t!("sidebar.menu.duplicate"),
+            dbflux_i18n::t!("sidebar.menu.delete_ellipsis"),
+        ];
         for e in &expected {
             assert!(
-                labels.contains(&e.to_string()),
+                labels.contains(e),
                 "Expected '{e}' in saved chart item menu, got: {labels:?}"
             );
         }
