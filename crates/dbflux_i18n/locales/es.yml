@@ -5,6 +5,45 @@ errors:
     detail: "Correlación: %{id}"
     clipboard: "%{summary}\nCorrelación: %{id}"
 modals:
+  add_panel_picker:
+    title: Agregar paneles
+    submit:
+      zero: Agregar paneles
+      one: Agregar 1 panel
+      many: "Agregar %{count} paneles"
+      create: Crear panel
+    saved:
+      empty: 'No hay gráficos guardados en esta conexión. Usa "Desde consulta" o "Desde métrica" para crear uno directamente.'
+      search_label: Buscar
+      search_placeholder: Buscar gráficos...
+    tab:
+      saved: Gráficos guardados
+      query: Desde consulta
+      metric: Desde métrica
+    name_placeholder: Nombre del panel
+    name_label: Nombre
+    query:
+      placeholder: Escribe una consulta…
+      label: Consulta
+    chart_kind:
+      label: Tipo de gráfico
+      line: Línea
+      bar: Barras
+      area: Área
+      scatter: Dispersión
+    metric:
+      namespace_filter_placeholder: Filtrar espacios de nombres…
+      metric_filter_placeholder: Filtrar métricas…
+      namespace_label: Espacio de nombres
+      metric_label: Métrica
+      period_label: Período (segundos)
+      statistic_label: Estadística
+      loading_namespaces: Cargando espacios de nombres…
+      select_namespace_hint: Selecciona un espacio de nombres para cargar métricas.
+      loading: Cargando…
+      no_metrics: No hay métricas en este espacio de nombres.
+      no_metrics_filtered: Ninguna métrica coincide con el filtro.
+    cancel: Cancelar
   rename:
     placeholder: Escribe un nombre
     title:
