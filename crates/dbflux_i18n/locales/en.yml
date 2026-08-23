@@ -483,6 +483,13 @@ document:
       select: SELECT
       update: UPDATE
       delete: DELETE
+    section:
+      columns: COLUMNS
+      execution: EXECUTION
+      filters: FILTERS
+      filters_where: FILTERS (WHERE)
+      sort: SORT
+      sql_preview: SQL PREVIEW
     status:
       limit: Limit
       offset: Offset

@@ -274,13 +274,13 @@ fn render_body(
                 .min_h(px(0.0))
                 .overflow_y_scrollbar()
                 .child(section_card(
-                    "COLUMNS",
+                    dbflux_i18n::t!("document.query_builder.section.columns"),
                     AppIcon::Columns,
                     theme,
                     columns_body,
                 ))
                 .child(section_card(
-                    "FILTERS",
+                    dbflux_i18n::t!("document.query_builder.section.filters"),
                     AppIcon::ListFilter,
                     theme,
                     filters_body,
@@ -308,7 +308,12 @@ fn render_body(
             }
 
             body.when_some(sort_body, |body, sort_body| {
-                body.child(section_card("SORT", AppIcon::ArrowUpDown, theme, sort_body))
+                body.child(section_card(
+                    dbflux_i18n::t!("document.query_builder.section.sort"),
+                    AppIcon::ArrowUpDown,
+                    theme,
+                    sort_body,
+                ))
             })
             .child(section_card(
                 "LIMIT & OFFSET",
@@ -334,13 +339,13 @@ fn render_body(
                     assignments_body,
                 ))
                 .child(section_card(
-                    "FILTERS (WHERE)",
+                    dbflux_i18n::t!("document.query_builder.section.filters_where"),
                     AppIcon::ListFilter,
                     theme,
                     filters_body,
                 ))
                 .child(section_card(
-                    "EXECUTION",
+                    dbflux_i18n::t!("document.query_builder.section.execution"),
                     AppIcon::Play,
                     theme,
                     execution_body,
@@ -356,13 +361,13 @@ fn render_body(
                 .min_h(px(0.0))
                 .overflow_y_scrollbar()
                 .child(section_card(
-                    "FILTERS (WHERE)",
+                    dbflux_i18n::t!("document.query_builder.section.filters_where"),
                     AppIcon::ListFilter,
                     theme,
                     filters_body,
                 ))
                 .child(section_card(
-                    "EXECUTION",
+                    dbflux_i18n::t!("document.query_builder.section.execution"),
                     AppIcon::Play,
                     theme,
                     execution_body,
@@ -377,18 +382,25 @@ fn render_body(
 /// the user has scrolled past.
 fn render_preview_pane(panel: &mut QueryBuilderPanel, theme: &Theme) -> impl IntoElement {
     let body = render_preview_body(panel, theme).into_any_element();
-    section_card("SQL PREVIEW", AppIcon::Code, theme, body)
+    section_card(
+        dbflux_i18n::t!("document.query_builder.section.sql_preview"),
+        AppIcon::Code,
+        theme,
+        body,
+    )
 }
 
 /// Renders a section as a bordered card with an uppercase header bar and
 /// a padded body. Used for every section in the builder panel so the
 /// hierarchy stays consistent.
 fn section_card(
-    title: &'static str,
+    title: impl Into<SharedString>,
     icon: AppIcon,
     theme: &Theme,
     body: AnyElement,
 ) -> impl IntoElement {
+    let title: SharedString = title.into();
+
     div()
         .flex()
         .flex_col()
@@ -408,7 +420,7 @@ fn section_card(
                     div()
                         .text_size(FontSizes::XS)
                         .text_color(theme.muted_foreground)
-                        .child(SharedString::from(title)),
+                        .child(title),
                 ),
         )
         .child(
@@ -905,5 +917,77 @@ mod tests {
         assert_eq!(options[1].1, "UPDATE");
         assert_eq!(options[2].0, BuilderMode::Delete);
         assert_eq!(options[2].1, "DELETE");
+    }
+
+    #[test]
+    fn query_builder_section_keys_resolve_in_both_locales() {
+        let keys = [
+            "document.query_builder.section.columns",
+            "document.query_builder.section.filters",
+            "document.query_builder.section.filters_where",
+            "document.query_builder.section.sort",
+            "document.query_builder.section.execution",
+            "document.query_builder.section.sql_preview",
+        ];
+
+        for key in keys {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn query_builder_section_columns_differs_between_locales() {
+        let en = dbflux_i18n::t!("document.query_builder.section.columns", locale = "en");
+        let es = dbflux_i18n::t!("document.query_builder.section.columns", locale = "es");
+
+        assert_eq!(en, "COLUMNS");
+        assert_eq!(es, "COLUMNAS");
+        assert_ne!(en, es);
+    }
+
+    #[test]
+    fn query_builder_sql_clause_headers_stay_literal_in_source() {
+        let full_source = include_str!("view.rs");
+        let source = full_source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("view.rs must contain the render code above the test module");
+
+        for literal_header in [
+            "\"JOINS\"",
+            "\"GROUP BY / AGGREGATES\"",
+            "\"HAVING\"",
+            "\"LIMIT & OFFSET\"",
+            "\"SET\"",
+        ] {
+            assert!(
+                source.contains(literal_header),
+                "expected SQL clause header literal {literal_header:?} in view.rs source"
+            );
+        }
+
+        for translated_header in [
+            "\"COLUMNS\"",
+            "\"FILTERS\",",
+            "\"FILTERS (WHERE)\"",
+            "\"SORT\"",
+            "\"EXECUTION\"",
+            "\"SQL PREVIEW\"",
+        ] {
+            assert!(
+                !source.contains(translated_header),
+                "general header literal {translated_header:?} must be replaced with a t! call"
+            );
+        }
     }
 }
