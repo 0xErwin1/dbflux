@@ -376,7 +376,7 @@ impl Render for ServicesSection {
 
                 element.child(
                     Dialog::new(window, cx)
-                        .title("Delete Service")
+                        .title(dbflux_i18n::t!("settings.rpc_services.delete_dialog_title"))
                         .confirm()
                         .on_ok(move |_, window, cx| {
                             entity.update(cx, |section, cx| {
@@ -390,11 +390,48 @@ impl Render for ServicesSection {
                             });
                             true
                         })
-                        .child(div().text_sm().child(format!(
-                            "Are you sure you want to delete \"{}\"?",
-                            svc_delete_name
-                        ))),
+                        .child(
+                            div()
+                                .text_sm()
+                                .child(crate::labels::rpc_services_delete_body(&svc_delete_name)),
+                        ),
                 )
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    const SERVICES_KEYS: &[&str] = &[
+        "settings.rpc_services.delete_dialog_title",
+        "settings.rpc_services.delete_dialog.body",
+    ];
+
+    #[test]
+    fn services_keys_resolve_in_both_locales() {
+        for locale in ["en", "es"] {
+            for key in SERVICES_KEYS {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(
+                    !value.is_empty(),
+                    "key {key} resolved empty for locale {locale}"
+                );
+                assert_ne!(value, *key, "key {key} did not resolve for locale {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "key {key} fell back to the raw locale-qualified form for locale {locale}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn services_delete_dialog_title_differs_between_locales() {
+        let english = dbflux_i18n::t!("settings.rpc_services.delete_dialog_title", locale = "en");
+        let spanish = dbflux_i18n::t!("settings.rpc_services.delete_dialog_title", locale = "es");
+
+        assert_ne!(english, spanish);
     }
 }

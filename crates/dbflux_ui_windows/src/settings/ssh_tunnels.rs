@@ -296,7 +296,9 @@ impl SshTunnelsSection {
 
         if host.is_empty() || user.is_empty() {
             self.ssh_test_status = SshTestStatus::Failed;
-            self.ssh_test_error = Some("Host and user are required".to_string());
+            self.ssh_test_error = Some(dbflux_i18n::t!(
+                "settings.ssh_tunnels.error.host_and_user_required"
+            ));
             cx.notify();
             return;
         }
@@ -408,7 +410,7 @@ impl SshTunnelsSection {
 
         let task = cx.background_executor().spawn(async move {
             let dialog = rfd::FileDialog::new()
-                .set_title("Select SSH Private Key")
+                .set_title(dbflux_i18n::t!("connection_manager.select_ssh_key_title"))
                 .set_directory(&start_dir);
 
             dialog.pick_file()
