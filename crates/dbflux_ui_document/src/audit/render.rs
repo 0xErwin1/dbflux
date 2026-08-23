@@ -152,7 +152,7 @@ impl AuditDocument {
             };
 
             let is_selected = idx == selected_index;
-            let label = item.label;
+            let label = item.label.clone();
             let icon = item.icon;
 
             // Icon color follows the DataGridPanel context menu convention.
@@ -306,7 +306,7 @@ impl AuditDocument {
 
         let can_apply_custom_time_range = self.can_apply_custom_time_range(cx);
         let custom_apply_button = ToolbarButton::new("audit-custom-time-apply")
-            .label("Apply")
+            .label(dbflux_i18n::t!("document.audit.filter.apply"))
             .focused(self.slot_has_ring(ToolbarSlot::CustomApply))
             .disabled(!can_apply_custom_time_range)
             .on_click(cx.listener(|this, _, _, cx| {
@@ -407,7 +407,7 @@ impl AuditDocument {
 
         // Clear button.
         let clear_btn = ToolbarButton::new("audit-clear-btn")
-            .label("Clear")
+            .label(dbflux_i18n::t!("document.audit.filter.clear"))
             .variant(ToolbarButtonVariant::Ghost)
             .focused(self.slot_has_ring(ToolbarSlot::Clear))
             .on_click(cx.listener(|this, _, window, cx| {
@@ -439,7 +439,11 @@ impl AuditDocument {
             if !self.is_external_event_stream() {
                 let is_chart = matches!(self.view_mode, AuditViewMode::Chart);
 
-                let toggle_label = if is_chart { "Table" } else { "Chart" };
+                let toggle_label = if is_chart {
+                    dbflux_i18n::t!("document.audit.filter.view_mode.table")
+                } else {
+                    dbflux_i18n::t!("document.audit.filter.view_mode.chart")
+                };
                 let view_toggle = div()
                     .id("audit-view-toggle")
                     .h(Heights::BUTTON)
@@ -480,7 +484,9 @@ impl AuditDocument {
                         .items_center()
                         .gap_1()
                         .w(px(148.0))
-                        .child(Text::caption("Group:"))
+                        .child(Text::caption(dbflux_i18n::t!(
+                            "document.audit.filter.group_label"
+                        )))
                         .child(div().flex_1().child(self.dropdown_chart_group_by.clone()));
                     items.push(group_by_control.into_any_element());
 
@@ -488,8 +494,8 @@ impl AuditDocument {
                     // Fixed-width so it does not stretch the toolbar row.
                     let current_y_scale = self.chart.chart_shell.read(cx).y_scale();
                     let y_scale_label = match current_y_scale {
-                        YScale::Linear => "Y: Linear",
-                        YScale::Log => "Y: Log",
+                        YScale::Linear => dbflux_i18n::t!("document.audit.filter.y_scale.linear"),
+                        YScale::Log => dbflux_i18n::t!("document.audit.filter.y_scale.log"),
                     };
                     let y_scale_toggle = div()
                         .id("audit-y-scale-toggle")
@@ -557,7 +563,7 @@ impl AuditDocument {
                 .child(Text::muted(self.status_message.clone().unwrap_or_default()))
                 .child(
                     gpui_component::button::Button::new("audit-retry")
-                        .label("Retry")
+                        .label(dbflux_i18n::t!("document.audit.filter.retry"))
                         .small()
                         .ghost()
                         .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
@@ -1029,7 +1035,7 @@ impl AuditDocument {
                     .size(Heights::ICON_SM)
                     .muted(),
             )
-            .child(Text::caption("Export"))
+            .child(Text::caption(dbflux_i18n::t!("document.audit.menu.export")))
             .child(Icon::new(AppIcon::ChevronDown).size(px(12.0)).muted()) // guardrail-allow: 12px icon size, no ICON_XS token
             .when(menu_open, |trigger| {
                 trigger.child(self.render_export_menu(theme, cx))
@@ -1041,29 +1047,38 @@ impl AuditDocument {
         theme: &gpui_component::Theme,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let items = [("CSV", "csv"), ("JSON", "json")]
-            .into_iter()
-            .enumerate()
-            .map(|(index, (label, format))| {
-                // Identical to DataGridPanel::render_export_menu items.
-                div()
-                    .id(SharedString::from(format!("audit-export-{}", index)))
-                    .flex()
-                    .items_center()
-                    .gap(Spacing::SM)
-                    .h(Heights::ROW_COMPACT)
-                    .px(Spacing::SM)
-                    .mx(Spacing::XS)
-                    .rounded(Radii::SM)
-                    .cursor_pointer()
-                    .hover(|d| d.bg(theme.secondary))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.export_with_format(format, cx);
-                    }))
-                    .child(Text::body(label))
-                    .into_any_element()
-            })
-            .collect::<Vec<_>>();
+        let items = [
+            (
+                dbflux_i18n::t!("document.audit.menu.export_format.csv"),
+                "csv",
+            ),
+            (
+                dbflux_i18n::t!("document.audit.menu.export_format.json"),
+                "json",
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, (label, format))| {
+            // Identical to DataGridPanel::render_export_menu items.
+            div()
+                .id(SharedString::from(format!("audit-export-{}", index)))
+                .flex()
+                .items_center()
+                .gap(Spacing::SM)
+                .h(Heights::ROW_COMPACT)
+                .px(Spacing::SM)
+                .mx(Spacing::XS)
+                .rounded(Radii::SM)
+                .cursor_pointer()
+                .hover(|d| d.bg(theme.secondary))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.export_with_format(format, cx);
+                }))
+                .child(Text::body(label))
+                .into_any_element()
+        })
+        .collect::<Vec<_>>();
 
         // Identical to DataGridPanel::render_export_menu container.
         deferred(
@@ -1204,7 +1219,7 @@ impl AuditDocument {
                                     .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
                                     .color(theme.muted_foreground),
                             )
-                            .child(Text::dim("Loading…")),
+                            .child(Text::dim(dbflux_i18n::t!("document.audit.filter.loading"))),
                     )
                 },
             );
@@ -1367,5 +1382,46 @@ impl AuditDocument {
         );
 
         format!("{}\n{}", header, row)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    const FILTER_KEYS: &[&str] = &[
+        "document.audit.filter.apply",
+        "document.audit.filter.clear",
+        "document.audit.filter.group_label",
+        "document.audit.filter.loading",
+        "document.audit.filter.retry",
+        "document.audit.filter.view_mode.chart",
+        "document.audit.filter.view_mode.table",
+        "document.audit.filter.y_scale.linear",
+        "document.audit.filter.y_scale.log",
+    ];
+
+    #[test]
+    fn audit_filter_keys_resolve_in_both_locales() {
+        for key in FILTER_KEYS {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, *key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn audit_filter_clear_label_differs_between_locales() {
+        let en = dbflux_i18n::t!("document.audit.filter.clear", locale = "en");
+        let es = dbflux_i18n::t!("document.audit.filter.clear", locale = "es");
+
+        assert_eq!(en, "Clear");
+        assert_ne!(en, es);
     }
 }

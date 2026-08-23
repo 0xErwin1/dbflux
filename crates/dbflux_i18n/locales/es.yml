@@ -211,6 +211,27 @@ connection_manager:
     configure: Configurar
     configure_named: "Configurar %{name}"
 document:
+  audit:
+    filter:
+      apply: Aplicar
+      clear: Limpiar
+      group_label: "Agrupar:"
+      loading: "Cargando…"
+      retry: Reintentar
+      view_mode:
+        chart: Gráfico
+        table: Tabla
+      y_scale:
+        linear: "Y: Lineal"
+        log: "Y: Logarítmica"
+    menu:
+      copy_row_as_csv: Copiar fila como CSV
+      copy_summary: Copiar resumen
+      export: Exportar
+      export_format:
+        csv: CSV
+        json: JSON
+      filter_by_correlation: Filtrar por correlación
   code:
     toolbar:
       refresh: Actualizar

@@ -62,31 +62,31 @@ struct AuditContextMenuState {
 }
 
 /// Flat list of context menu items.  Separators carry `action: None`.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct AuditMenuItem {
-    label: &'static str,
+    label: SharedString,
     action: Option<AuditContextMenuAction>,
     icon: Option<AppIcon>,
 }
 
 impl AuditMenuItem {
-    const fn item(label: &'static str, action: AuditContextMenuAction, icon: AppIcon) -> Self {
+    fn item(label: impl Into<SharedString>, action: AuditContextMenuAction, icon: AppIcon) -> Self {
         Self {
-            label,
+            label: label.into(),
             action: Some(action),
             icon: Some(icon),
         }
     }
 
-    const fn separator() -> Self {
+    fn separator() -> Self {
         Self {
-            label: "",
+            label: SharedString::default(),
             action: None,
             icon: None,
         }
     }
 
-    fn is_separator(self) -> bool {
+    fn is_separator(&self) -> bool {
         self.action.is_none()
     }
 }
