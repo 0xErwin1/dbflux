@@ -269,8 +269,9 @@ fn render_change_row(
             before,
             after,
         } => {
-            let before_label = if *before { "nullable" } else { "NOT NULL" };
-            let after_label = if *after { "nullable" } else { "NOT NULL" };
+            let nullable_label = dbflux_i18n::t!("modals.schema_drift.change.nullable");
+            let before_label = if *before { &nullable_label } else { "NOT NULL" };
+            let after_label = if *after { &nullable_label } else { "NOT NULL" };
             drift_row(
                 warning_bg,
                 column,
@@ -417,6 +418,7 @@ mod tests {
             "modals.schema_drift.change.changed",
             "modals.schema_drift.change.primary_key",
             "modals.schema_drift.change.foreign_keys",
+            "modals.schema_drift.change.nullable",
             "modals.schema_drift.continue_stale",
             "modals.schema_drift.cancel",
             "modals.schema_drift.refreshing",
@@ -443,6 +445,15 @@ mod tests {
         let es = dbflux_i18n::t!("modals.schema_drift.refresh", locale = "es");
         assert_eq!(en, "Refresh and re-run");
         assert_eq!(es, "Actualizar y volver a ejecutar");
+        assert_ne!(en, es);
+    }
+
+    #[test]
+    fn schema_drift_nullable_label_diverges_between_locales() {
+        let en = dbflux_i18n::t!("modals.schema_drift.change.nullable", locale = "en");
+        let es = dbflux_i18n::t!("modals.schema_drift.change.nullable", locale = "es");
+        assert_eq!(en, "nullable");
+        assert_eq!(es, "admite NULL");
         assert_ne!(en, es);
     }
 }
