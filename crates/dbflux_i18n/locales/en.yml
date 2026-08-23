@@ -353,6 +353,50 @@ settings:
       button: Save
       error: "Failed to save general settings: %{error}"
       success: Settings saved. Some changes apply on next startup.
+  about:
+    title: About
+    subtitle: Project information
+    report_bug: Report a bug
+    or: or
+    view_source: view the source code
+    on_github: on GitHub.
+    copyright: "Copyright © 2026 %{author} and contributors."
+    license: "Licensed under the %{license} licenses."
+    third_party_licenses: Third-Party Licenses
+    lucide: UI icons from Lucide (ISC License)
+    simple_icons: Brand icons from Simple Icons (CC0 1.0)
+  keybindings:
+    title: Keyboard Shortcuts
+    subtitle: View all keyboard shortcuts by context
+    filter_placeholder: Filter keybindings...
+    binding_count:
+      one: (1 binding)
+      many: "(%{count} bindings)"
+    inherits_from: "inherits from %{parent}"
+    inherited: inherited
+    conflict:
+      title: "Conflict: %{chord} also bound to %{others}"
+      body: Two or more commands share this chord in this context.
+      unknown_other: another binding
+  nav:
+    general_group: General
+    general: General
+    keybindings: Keybindings
+    audit: Audit
+    about: About
+    network: Network
+    ssh_tunnels: SSH Tunnels
+    proxies: Proxy
+    auth_profiles: Access Providers
+    connection: Connection
+    hooks: Hooks
+    drivers: Drivers
+    services: RPC Services
+    mcp_governance: MCP Governance
+    mcp_clients: Clients
+    mcp_roles: Roles
+    mcp_policies: Policies
+
 sidebar:
   confirm:
     delete_hint: Press x to confirm delete, ESC to cancel
