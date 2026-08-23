@@ -1723,6 +1723,17 @@ mod tests {
     ];
 
     #[test]
+    fn new_folder_default_name_resolves_in_both_locales() {
+        let key = "sidebar.tree.folder.new_default";
+        let english = dbflux_i18n::t!(key, locale = "en");
+        let spanish = dbflux_i18n::t!(key, locale = "es");
+
+        assert_eq!(english, "New Folder");
+        assert_ne!(spanish, format!("es.{key}"));
+        assert_ne!(english, spanish);
+    }
+
+    #[test]
     fn sidebar_e1_keys_resolve_in_both_locales() {
         for key in E1_KEYS {
             for locale in ["en", "es"] {
