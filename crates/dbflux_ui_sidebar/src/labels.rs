@@ -3,9 +3,6 @@
 use dbflux_core::DatabaseCategory;
 
 /// Translated label for a schema-tree container folder, e.g. `"Tables (12)"`.
-///
-/// Not yet wired into `tree_builder.rs` — that lands in a follow-up slice.
-#[allow(dead_code)]
 pub(crate) fn container_folder_label(category: DatabaseCategory, count: usize) -> String {
     match category {
         DatabaseCategory::Relational => {
@@ -99,6 +96,24 @@ pub(crate) fn delete_items_label(count: usize) -> String {
     } else {
         dbflux_i18n::t!("sidebar.menu.delete")
     }
+}
+
+/// Translated label for a connecting profile row, e.g. `"Connecting to
+/// prod-db…"`.
+pub(crate) fn profile_connecting_label(name: &str) -> String {
+    dbflux_i18n::t!("sidebar.tree.status.profile_connecting", name = name)
+}
+
+/// Translated label for a database node still loading its schema, e.g.
+/// `"orders (loading…)"`.
+pub(crate) fn node_loading_label(name: &str) -> String {
+    dbflux_i18n::t!("sidebar.tree.status.database_loading", name = name)
+}
+
+/// Translated label for a retryable fetch error sentinel row, e.g.
+/// `"Error: access denied — click to retry"`.
+pub(crate) fn error_retry_label(error: &str) -> String {
+    dbflux_i18n::t!("sidebar.tree.status.error_retry", error = error)
 }
 
 #[cfg(test)]
@@ -355,5 +370,38 @@ mod tests {
         );
         assert!(plural.contains('3'));
         assert_ne!(singular, plural);
+    }
+
+    #[test]
+    fn profile_connecting_label_includes_the_profile_name() {
+        let label = super::profile_connecting_label("prod-db");
+
+        assert!(label.contains("prod-db"));
+        assert_eq!(
+            label,
+            dbflux_i18n::t!("sidebar.tree.status.profile_connecting", name = "prod-db")
+        );
+    }
+
+    #[test]
+    fn node_loading_label_includes_the_database_name() {
+        let label = super::node_loading_label("orders");
+
+        assert!(label.contains("orders"));
+        assert_eq!(
+            label,
+            dbflux_i18n::t!("sidebar.tree.status.database_loading", name = "orders")
+        );
+    }
+
+    #[test]
+    fn error_retry_label_includes_the_error_message() {
+        let label = super::error_retry_label("access denied");
+
+        assert!(label.contains("access denied"));
+        assert_eq!(
+            label,
+            dbflux_i18n::t!("sidebar.tree.status.error_retry", error = "access denied")
+        );
     }
 }

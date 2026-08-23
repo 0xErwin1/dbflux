@@ -97,7 +97,7 @@ impl Sidebar {
         if self.loading_items.contains(&item_id) && children.is_empty() {
             children.push(TreeItem::new(
                 format!("{}_loading", item_id),
-                "Loading...".to_string(),
+                dbflux_i18n::t!("sidebar.tree.status.loading"),
             ));
         }
 
@@ -251,7 +251,7 @@ impl Sidebar {
         let is_connecting = state.is_operation_pending(profile_id, None);
 
         let profile_label = if is_connecting {
-            format!("{} (connecting...)", profile.name)
+            crate::labels::profile_connecting_label(&profile.name)
         } else {
             profile.name.clone()
         };
@@ -501,7 +501,7 @@ impl Sidebar {
     fn build_databases_folder_item(profile_id: Uuid, children: Vec<TreeItem>) -> TreeItem {
         TreeItem::new(
             SchemaNodeId::DatabasesFolder { profile_id }.to_string(),
-            "Databases".to_string(),
+            dbflux_i18n::t!("sidebar.tree.folder.databases"),
         )
         .expanded(true)
         .children(children)
@@ -1012,7 +1012,7 @@ impl Sidebar {
         suffix: &str,
     ) -> TreeItem {
         let id = format!("{}|{}|{}", suffix, profile_id, database_name);
-        TreeItem::new(id, "Loading...".to_string())
+        TreeItem::new(id, dbflux_i18n::t!("sidebar.tree.status.loading"))
     }
 
     /// Build an error retry placeholder child for metric sidebar nodes.
@@ -1020,7 +1020,7 @@ impl Sidebar {
     /// The sentinel ID encodes the retry key so `execute_item` can route it
     /// back to the appropriate fetch helper.
     pub(crate) fn error_retry_placeholder(retry_sentinel_id: &str, error_msg: &str) -> TreeItem {
-        let label = format!("Error: {} — click to retry", error_msg);
+        let label = crate::labels::error_retry_label(error_msg);
         TreeItem::new(retry_sentinel_id.to_string(), label)
     }
 
@@ -1062,7 +1062,10 @@ impl Sidebar {
                     database: database_name.to_string(),
                 }
                 .to_string(),
-                format!("Measurements ({})", measurements.len()),
+                crate::labels::container_folder_label(
+                    dbflux_core::DatabaseCategory::TimeSeries,
+                    measurements.len(),
+                ),
             )
             .expanded(true)
             .children(measurement_items),
@@ -1495,14 +1498,14 @@ fn build_kv_database_children(
                     database: database_name.clone(),
                 }
                 .to_string(),
-                "Loading...".to_string(),
+                dbflux_i18n::t!("sidebar.tree.status.loading"),
             )]
         } else {
             Vec::new()
         };
 
         let db_label = if is_pending {
-            format!("{} (loading...)", database_name)
+            crate::labels::node_loading_label(&database_name)
         } else {
             database_name.clone()
         };
@@ -1652,7 +1655,7 @@ fn resolve_db_children(
                     database: db_name.to_owned(),
                 }
                 .to_string(),
-                "Loading...".to_string(),
+                dbflux_i18n::t!("sidebar.tree.status.loading"),
             )]
         } else {
             Vec::new()
@@ -1742,7 +1745,7 @@ fn resolve_db_children(
                 database: db_name.to_owned(),
             }
             .to_string(),
-            "Loading...".to_string(),
+            dbflux_i18n::t!("sidebar.tree.status.loading"),
         )]
     } else {
         Vec::new()
@@ -1766,7 +1769,7 @@ fn build_named_db_item(
     db_children: Vec<TreeItem>,
 ) -> TreeItem {
     let db_label = if is_pending {
-        format!("{} (loading...)", db_name)
+        crate::labels::node_loading_label(db_name)
     } else {
         db_name.to_owned()
     };
@@ -1854,7 +1857,7 @@ fn build_bucket_children(
     if buckets.is_empty() {
         return vec![TreeItem::new(
             format!("buckets-empty|{profile_id}"),
-            "No buckets".to_string(),
+            dbflux_i18n::t!("sidebar.tree.empty.buckets"),
         )];
     }
 
@@ -1906,7 +1909,7 @@ fn build_collections_folder(
                 database: database_name.to_string(),
             }
             .to_string(),
-            format!("{} ({})", category.container_name(), db_schema.tables.len()),
+            crate::labels::container_folder_label(category, db_schema.tables.len()),
         )
         .expanded(category.default_expand_container())
         .children(collection_children),
@@ -3074,7 +3077,10 @@ mod tests {
         let children = build_bucket_children(profile_id, &cache);
 
         assert_eq!(children.len(), 1);
-        assert_eq!(children[0].label.as_ref(), "No buckets");
+        assert_eq!(
+            children[0].label.as_ref(),
+            dbflux_i18n::t!("sidebar.tree.empty.buckets")
+        );
     }
 
     #[test]
@@ -3217,7 +3223,10 @@ mod tests {
         // Should produce exactly one "Measurements (N)" folder
         assert_eq!(result.len(), 1);
         let folder = &result[0];
-        assert_eq!(folder.label.as_ref(), "Measurements (2)");
+        assert_eq!(
+            folder.label.as_ref(),
+            crate::labels::container_folder_label(dbflux_core::DatabaseCategory::TimeSeries, 2)
+        );
         assert!(folder.is_expanded());
 
         // Each measurement becomes a Collection leaf
@@ -3518,7 +3527,10 @@ mod tests {
             Sidebar::build_remote_dashboard_children(profile_id, &state, &folder_id, &errors);
 
         assert_eq!(children.len(), 1);
-        assert_eq!(children[0].label.as_ref(), "Loading...");
+        assert_eq!(
+            children[0].label.as_ref(),
+            dbflux_i18n::t!("sidebar.tree.status.loading")
+        );
     }
 
     #[test]
@@ -4337,6 +4349,52 @@ mod tests {
         assert!(
             empty_children.is_empty(),
             "empty storage_hints must produce no folder"
+        );
+    }
+
+    /// Every translation key wired into this slice's tree-builder functions
+    /// must resolve to a real value in both shipped locales, never fall back
+    /// to the raw key or the `{locale}.{key}` miss sentinel.
+    #[test]
+    fn tree_c1a_keys_resolve_in_both_locales() {
+        const KEYS: [&str; 5] = [
+            "sidebar.tree.folder.databases",
+            "sidebar.tree.status.profile_connecting",
+            "sidebar.tree.status.database_loading",
+            "sidebar.tree.status.error_retry",
+            "sidebar.tree.empty.buckets",
+        ];
+
+        for key in KEYS {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert_ne!(value, key, "missing translation for {locale}.{key}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "translation fell back to the miss sentinel for {locale}.{key}"
+                );
+            }
+        }
+    }
+
+    /// `build_collections_folder`'s container title, now routed through
+    /// `container_folder_label`, must render different text per locale
+    /// instead of the English-only literal it used to hardcode.
+    #[test]
+    fn tree_folder_tables_differs_between_locales() {
+        let english_template = dbflux_i18n::t!("sidebar.tree.container.relational", locale = "en");
+        let spanish_template = dbflux_i18n::t!("sidebar.tree.container.relational", locale = "es");
+
+        assert_ne!(english_template, spanish_template);
+
+        let resolved =
+            crate::labels::container_folder_label(dbflux_core::DatabaseCategory::Relational, 5);
+
+        assert_eq!(
+            resolved,
+            dbflux_i18n::t!("sidebar.tree.container.relational", count = 5)
         );
     }
 }

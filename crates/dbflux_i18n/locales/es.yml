@@ -524,8 +524,15 @@ sidebar:
       wide_column: Tablas (%{count})
       log_stream: Log Groups (%{count})
       object_storage: Buckets (%{count})
+    folder:
+      databases: Bases de datos
     status:
       loading: Cargando…
+      profile_connecting: "Conectando a %{name}…"
+      database_loading: "%{name} (cargando…)"
+      error_retry: "Error: %{error} — clic para reintentar"
+    empty:
+      buckets: Sin buckets
 sql_preview:
   title:
     sql: Vista previa de SQL
