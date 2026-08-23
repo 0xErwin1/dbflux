@@ -3222,6 +3222,7 @@ dependencies = [
  "dbflux_app",
  "dbflux_components",
  "dbflux_core",
+ "dbflux_i18n",
  "dbflux_ipc",
  "dbflux_ssh",
  "dbflux_storage",
