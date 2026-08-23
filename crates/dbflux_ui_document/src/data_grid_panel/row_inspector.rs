@@ -79,7 +79,7 @@ pub struct FkReference {
 // ---------------------------------------------------------------------------
 
 fn render_section_header(
-    label: &'static str,
+    label: impl Into<SharedString>,
     theme: &gpui_component::theme::Theme,
 ) -> impl IntoElement {
     div()
@@ -89,7 +89,7 @@ fn render_section_header(
         .border_color(theme.border)
         .bg(theme.secondary.opacity(0.5))
         .child(
-            Text::caption(label)
+            Text::caption(label.into())
                 .font_size(dbflux_components::tokens::FontSizes::XS)
                 .color(theme.muted_foreground),
         )
@@ -97,6 +97,8 @@ fn render_section_header(
 
 fn render_row_entry(
     cell: &InspectorCell,
+    pk_badge: &str,
+    fk_badge: &str,
     theme: &gpui_component::theme::Theme,
 ) -> impl IntoElement {
     let value_text = cell.value.as_display_string_truncated(200);
@@ -125,14 +127,14 @@ fn render_row_entry(
                 .overflow_hidden()
                 .when(cell.is_primary_key, |d| {
                     d.child(
-                        Text::caption("PK")
+                        Text::caption(pk_badge.to_string())
                             .font_size(dbflux_components::tokens::FontSizes::XS)
                             .color(theme.accent),
                     )
                 })
                 .when(cell.is_foreign_key, |d| {
                     d.child(
-                        Text::caption("FK")
+                        Text::caption(fk_badge.to_string())
                             .font_size(dbflux_components::tokens::FontSizes::XS)
                             .color(theme.muted_foreground),
                     )
@@ -182,7 +184,12 @@ fn render_references_section(
                     .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
                     .color(theme.muted_foreground),
             )
-            .child(Text::caption("Loading schema…").color(theme.muted_foreground))
+            .child(
+                Text::caption(dbflux_i18n::t!(
+                    "document.data.row_inspector.references.loading"
+                ))
+                .color(theme.muted_foreground),
+            )
             .into_any_element();
     }
 
@@ -190,23 +197,31 @@ fn render_references_section(
         return div()
             .px(Spacing::SM)
             .py(Spacing::XS)
-            .child(Text::caption("No references").color(theme.muted_foreground))
+            .child(
+                Text::caption(dbflux_i18n::t!(
+                    "document.data.row_inspector.references.empty"
+                ))
+                .color(theme.muted_foreground),
+            )
             .into_any_element();
     }
+
+    let resolving_label = dbflux_i18n::t!("document.data.row_inspector.references.resolving");
+    let not_found_label = dbflux_i18n::t!("document.data.row_inspector.references.not_found");
 
     div()
         .flex()
         .flex_col()
-        .children(
-            references
-                .iter()
-                .map(|fk_ref| render_fk_reference_entry(fk_ref, theme)),
-        )
+        .children(references.iter().map(|fk_ref| {
+            render_fk_reference_entry(fk_ref, &resolving_label, &not_found_label, theme)
+        }))
         .into_any_element()
 }
 
 fn render_fk_reference_entry(
     fk_ref: &FkReference,
+    resolving_label: &str,
+    not_found_label: &str,
     theme: &gpui_component::theme::Theme,
 ) -> impl IntoElement {
     let qualified_table = match &fk_ref.target_schema {
@@ -251,7 +266,7 @@ fn render_fk_reference_entry(
                         .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
                         .color(theme.muted_foreground),
                 )
-                .child(Text::caption("Resolving…").color(theme.muted_foreground))
+                .child(Text::caption(resolving_label.to_string()).color(theme.muted_foreground))
                 .into_any_element(),
 
             LoadingState::Failed { message } => div()
@@ -269,7 +284,7 @@ fn render_fk_reference_entry(
             LoadingState::Loaded(map) if map.is_empty() => div()
                 .px(Spacing::SM)
                 .py(Spacing::XS)
-                .child(Text::caption("— not found").color(theme.muted_foreground))
+                .child(Text::caption(not_found_label.to_string()).color(theme.muted_foreground))
                 .into_any_element(),
 
             LoadingState::Loaded(map) => {
@@ -330,27 +345,39 @@ fn render_column_metadata(
     cell: &InspectorCell,
     theme: &gpui_component::theme::Theme,
 ) -> impl IntoElement {
+    let yes_label = dbflux_i18n::t!("document.data.row_inspector.meta.yes");
+    let no_label = dbflux_i18n::t!("document.data.row_inspector.meta.no");
+    let bool_label = |value: bool| if value { &yes_label } else { &no_label };
+
     div()
         .flex()
         .flex_col()
         .gap(Spacing::XS)
         .px(Spacing::SM)
         .py(Spacing::SM)
-        .child(render_meta_row("Name", &cell.name, theme))
-        .child(render_meta_row("Type", &cell.type_label, theme))
         .child(render_meta_row(
-            "Nullable",
-            if cell.nullable { "yes" } else { "no" },
+            &dbflux_i18n::t!("document.data.row_inspector.meta.name"),
+            &cell.name,
             theme,
         ))
         .child(render_meta_row(
-            "Primary Key",
-            if cell.is_primary_key { "yes" } else { "no" },
+            &dbflux_i18n::t!("document.data.row_inspector.meta.type"),
+            &cell.type_label,
             theme,
         ))
         .child(render_meta_row(
-            "Foreign Key",
-            if cell.is_foreign_key { "yes" } else { "no" },
+            &dbflux_i18n::t!("document.data.row_inspector.meta.nullable"),
+            bool_label(cell.nullable),
+            theme,
+        ))
+        .child(render_meta_row(
+            &dbflux_i18n::t!("document.data.row_inspector.meta.primary_key"),
+            bool_label(cell.is_primary_key),
+            theme,
+        ))
+        .child(render_meta_row(
+            &dbflux_i18n::t!("document.data.row_inspector.meta.foreign_key"),
+            bool_label(cell.is_foreign_key),
             theme,
         ))
 }
@@ -478,6 +505,8 @@ impl Render for RowInspectorContent {
         let theme = cx.theme();
         let snapshot = self.snapshot.clone();
         let has_fk = snapshot.cells.iter().any(|c| c.is_foreign_key);
+        let pk_badge = dbflux_i18n::t!("document.data.row_inspector.badge.primary_key");
+        let fk_badge = dbflux_i18n::t!("document.data.row_inspector.badge.foreign_key");
 
         div()
             .id("row-inspector-content")
@@ -486,19 +515,31 @@ impl Render for RowInspectorContent {
             .flex_col()
             .overflow_y_scroll()
             .track_focus(&self.focus_handle)
-            .child(render_section_header("ROW", theme))
+            .child(render_section_header(
+                dbflux_i18n::t!("document.data.row_inspector.section.row"),
+                theme,
+            ))
             .children(
                 snapshot
                     .cells
                     .iter()
-                    .map(|cell| render_row_entry(cell, theme)),
+                    .map(|cell| render_row_entry(cell, &pk_badge, &fk_badge, theme)),
             )
             .when(has_fk, |d| {
-                d.child(render_section_header("REFERENCES", theme)).child(
-                    render_references_section(&self.references, self.references_ready, theme),
-                )
+                d.child(render_section_header(
+                    dbflux_i18n::t!("document.data.row_inspector.section.references"),
+                    theme,
+                ))
+                .child(render_references_section(
+                    &self.references,
+                    self.references_ready,
+                    theme,
+                ))
             })
-            .child(render_section_header("COLUMN", theme))
+            .child(render_section_header(
+                dbflux_i18n::t!("document.data.row_inspector.section.column"),
+                theme,
+            ))
             .when_some(
                 snapshot.cells.get(
                     snapshot
@@ -706,5 +747,81 @@ mod tests {
         let map = HashMap::new();
         let summary = summarize_row(&map);
         assert_eq!(summary, "0 fields");
+    }
+
+    #[test]
+    fn row_inspector_keys_resolve_in_both_locales() {
+        let keys = [
+            "document.data.row_inspector.badge.primary_key",
+            "document.data.row_inspector.badge.foreign_key",
+            "document.data.row_inspector.meta.name",
+            "document.data.row_inspector.meta.type",
+            "document.data.row_inspector.meta.nullable",
+            "document.data.row_inspector.meta.primary_key",
+            "document.data.row_inspector.meta.foreign_key",
+            "document.data.row_inspector.meta.yes",
+            "document.data.row_inspector.meta.no",
+            "document.data.row_inspector.references.empty",
+            "document.data.row_inspector.references.loading",
+            "document.data.row_inspector.references.not_found",
+            "document.data.row_inspector.references.resolving",
+            "document.data.row_inspector.section.column",
+            "document.data.row_inspector.section.references",
+            "document.data.row_inspector.section.row",
+        ];
+
+        for key in keys {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn row_inspector_title_differs_between_locales() {
+        let en = dbflux_i18n::t!("document.data.row_inspector.section.row", locale = "en");
+        let es = dbflux_i18n::t!("document.data.row_inspector.section.row", locale = "es");
+
+        assert_eq!(en, "ROW");
+        assert_ne!(en, es);
+    }
+
+    #[test]
+    fn row_inspector_meta_yes_no_labels_differ_between_locales() {
+        let en_yes = dbflux_i18n::t!("document.data.row_inspector.meta.yes", locale = "en");
+        let es_yes = dbflux_i18n::t!("document.data.row_inspector.meta.yes", locale = "es");
+
+        assert_eq!(en_yes, "yes");
+        assert_ne!(en_yes, es_yes);
+    }
+
+    #[test]
+    fn row_inspector_render_functions_hoist_translations_out_of_per_row_closures() {
+        let source = include_str!("row_inspector.rs");
+
+        for function_name in ["fn render_row_entry(", "fn render_fk_reference_entry("] {
+            let start = source
+                .find(function_name)
+                .unwrap_or_else(|| panic!("{function_name} not found in row_inspector.rs"));
+            let after_signature = &source[start + function_name.len()..];
+            let end = after_signature
+                .find("\nfn ")
+                .unwrap_or(after_signature.len());
+            let body = &after_signature[..end];
+
+            assert!(
+                !body.contains("dbflux_i18n::t!("),
+                "{function_name} must not call t! per row; hoist the translated label \
+                 before the closure that invokes it"
+            );
+        }
     }
 }

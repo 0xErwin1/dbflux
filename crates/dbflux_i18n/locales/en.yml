@@ -188,6 +188,27 @@ document:
         deleted:
           one: "%{count} delete"
           many: "%{count} deletes"
+    row_inspector:
+      badge:
+        primary_key: PK
+        foreign_key: FK
+      meta:
+        name: Name
+        type: Type
+        nullable: Nullable
+        primary_key: Primary Key
+        foreign_key: Foreign Key
+        yes: "yes"
+        no: "no"
+      references:
+        empty: No references
+        loading: "Loading schema…"
+        not_found: "— not found"
+        resolving: "Resolving…"
+      section:
+        column: COLUMN
+        references: REFERENCES
+        row: ROW
   shared:
     refresh:
       off: Off
