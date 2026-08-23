@@ -54,6 +54,34 @@ controls:
       many: "+%{count} more"
 document:
   data:
+    chart_dock:
+      toolbar:
+        apply: Apply
+      save:
+        title: Save chart
+        name_placeholder: Chart name
+        cancel: Cancel
+        save: Save
+      degraded:
+        no_time_column:
+          title: No time column detected
+          body: This result has no Timestamp column. Pick a column to use as the time axis.
+        no_numeric_series:
+          title: No numeric series
+          body: This result has no Float or Integer columns to plot as series.
+        no_data:
+          title: No data yet
+          body: Run the query to populate the chart view.
+        build_failed:
+          title: Chart build failed
+          body: The query result has chartable columns but the chart could not be built.
+        open_table_tab: Open Table tab
+        pick_time_column: "Pick time column…"
+        hide_picker: Hide picker
+      picker:
+        x_axis_label: X axis (time / label column)
+        y_axis_label: Y axis (numeric columns)
+        apply: Apply
     grid:
       edit_bar:
         clean: No unsaved changes

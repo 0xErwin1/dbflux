@@ -154,12 +154,44 @@ fn pending_deleted_label(count: usize) -> String {
     }
 }
 
+/// Title and body copy for the chart dock's degraded-state card, keyed by
+/// the chart auto-detection outcome.
+///
+/// `None` shares the `NoTimeColumn` copy because the dock renders the
+/// degraded card before detection has run at least once, and both cases
+/// point the user at the same recovery action (pick a time column).
+pub(crate) fn chart_degraded_copy(
+    detection: &Option<dbflux_components::chart::ChartDetection>,
+) -> (String, String) {
+    use dbflux_components::chart::ChartDetection;
+
+    match detection {
+        Some(ChartDetection::NoTimeColumn) | None => (
+            dbflux_i18n::t!("document.data.chart_dock.degraded.no_time_column.title"),
+            dbflux_i18n::t!("document.data.chart_dock.degraded.no_time_column.body"),
+        ),
+        Some(ChartDetection::NoNumericSeries) => (
+            dbflux_i18n::t!("document.data.chart_dock.degraded.no_numeric_series.title"),
+            dbflux_i18n::t!("document.data.chart_dock.degraded.no_numeric_series.body"),
+        ),
+        Some(ChartDetection::EmptyResult) => (
+            dbflux_i18n::t!("document.data.chart_dock.degraded.no_data.title"),
+            dbflux_i18n::t!("document.data.chart_dock.degraded.no_data.body"),
+        ),
+        Some(ChartDetection::Ok { .. }) => (
+            dbflux_i18n::t!("document.data.chart_dock.degraded.build_failed.title"),
+            dbflux_i18n::t!("document.data.chart_dock.degraded.build_failed.body"),
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        pending_change_count_label, pending_edits_summary, refresh_policy_label, row_count_label,
-        unsaved_changes_label,
+        chart_degraded_copy, pending_change_count_label, pending_edits_summary,
+        refresh_policy_label, row_count_label, unsaved_changes_label,
     };
+    use dbflux_components::chart::ChartDetection;
     use dbflux_core::RefreshPolicy;
 
     #[test]
@@ -234,5 +266,74 @@ mod tests {
     fn pending_change_count_label_one_many() {
         assert_eq!(pending_change_count_label(1), "1 pending change");
         assert_eq!(pending_change_count_label(2), "2 pending changes");
+    }
+
+    #[test]
+    fn chart_dock_part1_keys_resolve_in_both_locales() {
+        let keys = [
+            "document.data.chart_dock.toolbar.apply",
+            "document.data.chart_dock.save.title",
+            "document.data.chart_dock.save.name_placeholder",
+            "document.data.chart_dock.save.cancel",
+            "document.data.chart_dock.save.save",
+            "document.data.chart_dock.degraded.no_time_column.title",
+            "document.data.chart_dock.degraded.no_time_column.body",
+            "document.data.chart_dock.degraded.no_numeric_series.title",
+            "document.data.chart_dock.degraded.no_numeric_series.body",
+            "document.data.chart_dock.degraded.no_data.title",
+            "document.data.chart_dock.degraded.no_data.body",
+            "document.data.chart_dock.degraded.build_failed.title",
+            "document.data.chart_dock.degraded.build_failed.body",
+            "document.data.chart_dock.degraded.open_table_tab",
+            "document.data.chart_dock.degraded.pick_time_column",
+            "document.data.chart_dock.degraded.hide_picker",
+            "document.data.chart_dock.picker.x_axis_label",
+            "document.data.chart_dock.picker.y_axis_label",
+            "document.data.chart_dock.picker.apply",
+        ];
+
+        for key in keys {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn chart_dock_degraded_title_differs_between_locales() {
+        for detection in [
+            None,
+            Some(ChartDetection::NoTimeColumn),
+            Some(ChartDetection::NoNumericSeries),
+            Some(ChartDetection::EmptyResult),
+            Some(ChartDetection::Ok {
+                time_col: 0,
+                numeric_cols: vec![1],
+            }),
+        ] {
+            let (title, body) = chart_degraded_copy(&detection);
+
+            assert!(!title.is_empty());
+            assert!(!body.is_empty());
+        }
+
+        let (en_title, _) = chart_degraded_copy(&Some(ChartDetection::NoTimeColumn));
+        assert_eq!(en_title, "No time column detected");
+    }
+
+    #[test]
+    fn chart_degraded_copy_none_matches_no_time_column() {
+        let none_copy = chart_degraded_copy(&None);
+        let no_time_copy = chart_degraded_copy(&Some(ChartDetection::NoTimeColumn));
+
+        assert_eq!(none_copy, no_time_copy);
     }
 }
