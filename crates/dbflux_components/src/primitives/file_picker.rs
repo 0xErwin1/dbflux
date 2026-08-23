@@ -37,7 +37,7 @@ impl FilePicker {
         Self {
             id: id.into(),
             current_value: current_value.into(),
-            placeholder: SharedString::from("Browse\u{2026}"),
+            placeholder: dbflux_i18n::t!("components.file_picker.browse").into(),
             folder_icon: folder_icon.into(),
             clear_icon: clear_icon.into(),
             on_browse: None,
@@ -161,7 +161,7 @@ impl RenderOnce for FilePicker {
 /// basename is shown so the row stays compact.
 pub fn file_picker_label(value: &str) -> String {
     if value.trim().is_empty() {
-        return "Browse\u{2026}".to_string();
+        return dbflux_i18n::t!("components.file_picker.browse");
     }
 
     std::path::Path::new(value)
@@ -176,12 +176,18 @@ mod tests {
 
     #[test]
     fn empty_value_returns_browse_placeholder() {
-        assert_eq!(file_picker_label(""), "Browse\u{2026}");
+        assert_eq!(
+            file_picker_label(""),
+            dbflux_i18n::t!("components.file_picker.browse")
+        );
     }
 
     #[test]
     fn whitespace_only_value_returns_browse_placeholder() {
-        assert_eq!(file_picker_label("   "), "Browse\u{2026}");
+        assert_eq!(
+            file_picker_label("   "),
+            dbflux_i18n::t!("components.file_picker.browse")
+        );
     }
 
     #[test]
@@ -197,5 +203,15 @@ mod tests {
     #[test]
     fn bare_filename_returns_itself() {
         assert_eq!(file_picker_label("server.crt"), "server.crt");
+    }
+
+    #[test]
+    fn file_picker_browse_key_resolves() {
+        let en = dbflux_i18n::t!("components.file_picker.browse", locale = "en");
+        let es = dbflux_i18n::t!("components.file_picker.browse", locale = "es");
+
+        assert!(!en.is_empty() && en != "components.file_picker.browse");
+        assert!(!es.is_empty() && es != "components.file_picker.browse");
+        assert_ne!(en, es);
     }
 }

@@ -14,6 +14,16 @@ chart:
     annotate: Anotar
     copy_as_query: Copiar como consulta
     coming_soon: Próximamente
+common:
+  time_range:
+    error:
+      invalid_selection: La selección de hora no es válida
+      ambiguous_local: La hora local es ambigua o no válida
+      invalid_start: "Hora de inicio no válida: %{error}"
+      invalid_end: "Hora de fin no válida: %{error}"
+      start_after_end: La hora de inicio debe ser anterior a la hora de fin
+      no_date_range: No se seleccionó un rango de fechas
+      incomplete_time_selection: Selección de hora incompleta
 components:
   json_editor:
     empty_error: El documento no puede estar vacío
@@ -28,6 +38,20 @@ components:
     parameter: Parameter Store
     auth: Campo de sesión de autenticación
     json_key_placeholder: Clave JSON (opcional)
+  file_picker:
+    browse: "Explorar…"
+composites:
+  refresh_split_button:
+    label: Actualizar
+controls:
+  dropdown:
+    placeholder: Seleccionar
+  multi_select:
+    placeholder: "Seleccionar…"
+    clear_all: Borrar todo
+    more:
+      one: "+%{count} más"
+      many: "+%{count} más"
 document:
   data:
     grid:
