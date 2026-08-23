@@ -15,14 +15,14 @@ pub(super) fn build_context_menu_items(
         if has_row_target {
             items.extend([
                 ContextMenuItem {
-                    label: "Copy",
+                    label: dbflux_i18n::t!("document.data.context_menu.item.copy").into(),
                     action: Some(ContextMenuAction::Copy),
                     icon: Some(AppIcon::Layers),
                     is_separator: false,
                     is_danger: false,
                 },
                 ContextMenuItem {
-                    label: "View Document",
+                    label: dbflux_i18n::t!("document.data.context_menu.item.view_document").into(),
                     action: Some(ContextMenuAction::EditInModal),
                     icon: Some(AppIcon::Maximize2),
                     is_separator: false,
@@ -34,7 +34,7 @@ pub(super) fn build_context_menu_items(
         if is_editable {
             if !items.is_empty() {
                 items.push(ContextMenuItem {
-                    label: "",
+                    label: "".into(),
                     action: None,
                     icon: None,
                     is_separator: true,
@@ -43,7 +43,7 @@ pub(super) fn build_context_menu_items(
             }
 
             items.push(ContextMenuItem {
-                label: "Add Document",
+                label: dbflux_i18n::t!("document.data.context_menu.item.add_document").into(),
                 action: Some(ContextMenuAction::AddRow),
                 icon: Some(AppIcon::Plus),
                 is_separator: false,
@@ -53,14 +53,18 @@ pub(super) fn build_context_menu_items(
             if has_row_target {
                 items.extend([
                     ContextMenuItem {
-                        label: "Duplicate Document",
+                        label: dbflux_i18n::t!(
+                            "document.data.context_menu.item.duplicate_document"
+                        )
+                        .into(),
                         action: Some(ContextMenuAction::DuplicateRow),
                         icon: Some(AppIcon::Layers),
                         is_separator: false,
                         is_danger: false,
                     },
                     ContextMenuItem {
-                        label: "Delete Document",
+                        label: dbflux_i18n::t!("document.data.context_menu.item.delete_document")
+                            .into(),
                         action: Some(ContextMenuAction::DeleteRow),
                         icon: Some(AppIcon::Delete),
                         is_separator: false,
@@ -74,7 +78,7 @@ pub(super) fn build_context_menu_items(
     }
 
     let mut items = vec![ContextMenuItem {
-        label: "Copy",
+        label: dbflux_i18n::t!("document.data.context_menu.item.copy").into(),
         action: Some(ContextMenuAction::Copy),
         icon: Some(AppIcon::Layers),
         is_separator: false,
@@ -85,49 +89,49 @@ pub(super) fn build_context_menu_items(
         if has_row_target {
             items.extend([
                 ContextMenuItem {
-                    label: "Paste",
+                    label: dbflux_i18n::t!("document.data.context_menu.item.paste").into(),
                     action: Some(ContextMenuAction::Paste),
                     icon: Some(AppIcon::Download),
                     is_separator: false,
                     is_danger: false,
                 },
                 ContextMenuItem {
-                    label: "Edit",
+                    label: dbflux_i18n::t!("document.data.context_menu.item.edit").into(),
                     action: Some(ContextMenuAction::Edit),
                     icon: Some(AppIcon::Pencil),
                     is_separator: false,
                     is_danger: false,
                 },
                 ContextMenuItem {
-                    label: "Edit in Modal",
+                    label: dbflux_i18n::t!("document.data.context_menu.item.edit_in_modal").into(),
                     action: Some(ContextMenuAction::EditInModal),
                     icon: Some(AppIcon::Maximize2),
                     is_separator: false,
                     is_danger: false,
                 },
                 ContextMenuItem {
-                    label: "",
+                    label: "".into(),
                     action: None,
                     icon: None,
                     is_separator: true,
                     is_danger: false,
                 },
                 ContextMenuItem {
-                    label: "Set to Default",
+                    label: dbflux_i18n::t!("document.data.context_menu.item.set_default").into(),
                     action: Some(ContextMenuAction::SetDefault),
                     icon: Some(AppIcon::RotateCcw),
                     is_separator: false,
                     is_danger: false,
                 },
                 ContextMenuItem {
-                    label: "Set to NULL",
+                    label: dbflux_i18n::t!("document.data.context_menu.item.set_null").into(),
                     action: Some(ContextMenuAction::SetNull),
                     icon: Some(AppIcon::X),
                     is_separator: false,
                     is_danger: false,
                 },
                 ContextMenuItem {
-                    label: "",
+                    label: "".into(),
                     action: None,
                     icon: None,
                     is_separator: true,
@@ -137,7 +141,7 @@ pub(super) fn build_context_menu_items(
         }
 
         items.push(ContextMenuItem {
-            label: "Add Row",
+            label: dbflux_i18n::t!("document.data.context_menu.item.add_row").into(),
             action: Some(ContextMenuAction::AddRow),
             icon: Some(AppIcon::Plus),
             is_separator: false,
@@ -147,7 +151,7 @@ pub(super) fn build_context_menu_items(
         if has_row_target {
             if inspect_row_enabled {
                 items.push(ContextMenuItem {
-                    label: "Inspect Row",
+                    label: dbflux_i18n::t!("document.data.context_menu.item.inspect_row").into(),
                     action: Some(ContextMenuAction::InspectRow),
                     icon: Some(AppIcon::Info),
                     is_separator: false,
@@ -157,14 +161,14 @@ pub(super) fn build_context_menu_items(
 
             items.extend([
                 ContextMenuItem {
-                    label: "Duplicate Row",
+                    label: dbflux_i18n::t!("document.data.context_menu.item.duplicate_row").into(),
                     action: Some(ContextMenuAction::DuplicateRow),
                     icon: Some(AppIcon::Layers),
                     is_separator: false,
                     is_danger: false,
                 },
                 ContextMenuItem {
-                    label: "Delete Row",
+                    label: dbflux_i18n::t!("document.data.context_menu.item.delete_row").into(),
                     action: Some(ContextMenuAction::DeleteRow),
                     icon: Some(AppIcon::Delete),
                     is_separator: false,
@@ -176,14 +180,14 @@ pub(super) fn build_context_menu_items(
 
     if can_chart {
         items.push(ContextMenuItem {
-            label: "",
+            label: "".into(),
             action: None,
             icon: None,
             is_separator: true,
             is_danger: false,
         });
         items.push(ContextMenuItem {
-            label: "Chart this query",
+            label: dbflux_i18n::t!("document.data.context_menu.item.chart_this_query").into(),
             action: Some(ContextMenuAction::ChartThisQuery),
             icon: Some(AppIcon::ChartSpline),
             is_separator: false,
