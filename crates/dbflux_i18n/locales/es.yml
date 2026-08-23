@@ -264,6 +264,112 @@ connection_manager:
     cancel: Cancelar
     configure: Configurar
     configure_named: "Configurar %{name}"
+  import:
+    placeholder:
+      bundle_passphrase: Frase del paquete
+      bundle_path: "Ruta al paquete TOML…"
+      secret_value: Introduce el valor secreto
+    dialog:
+      open_title: Abrir paquete de conexión
+    filter:
+      toml: Paquete TOML
+      all: Todos los archivos
+    error:
+      choose_file: Elige un archivo de paquete para importar.
+      cannot_read_file: "No se pudo leer el archivo: %{error}"
+      parse_error: "Error de análisis: %{error}"
+      encrypted_needs_passphrase: Este paquete está cifrado. Introduce la frase e inténtalo de nuevo.
+      encryption_unavailable: Este paquete está cifrado con frase, pero la función de cifrado no está disponible en esta compilación de DBFlux.
+      wrong_passphrase: Frase incorrecta o paquete dañado.
+      decryption_error: "Error de descifrado: %{error}"
+      import_failed: "Fallo en la importación: %{error}"
+      secret_failures_toast:
+        one: "%{count} secreto no se pudo escribir en el llavero durante la importación. Es posible que el llavero esté bloqueado o no disponible."
+        many: "%{count} secretos no se pudieron escribir en el llavero durante la importación. Es posible que el llavero esté bloqueado o no disponible."
+    field:
+      bundle_file: Archivo del paquete
+      bundle_encrypted: El paquete está cifrado
+      passphrase: Frase
+    hint:
+      no_native_picker: No hay selector de archivos nativo en este sistema — escribe o pega la ruta del paquete arriba.
+      external_refs: Las referencias a valores externos se mantienen igual
+      external_refs_body: Las referencias SSM, Secrets Manager y de entorno se importan sin cambios y se resuelven en esta máquina al conectar.
+      leave_empty_skip: Déjalo vacío para omitir.
+      select_profile_or_skip: "Selecciona un perfil u omítelo:"
+    modal_title: Importar
+    preview:
+      intro: "Este paquete importará lo siguiente:"
+      count:
+        connections:
+          one: "%{count} conexión"
+          many: "%{count} conexiones"
+        auth_profiles:
+          one: "%{count} perfil de autenticación"
+          many: "%{count} perfiles de autenticación"
+        ssh_tunnels:
+          one: "%{count} túnel SSH"
+          many: "%{count} túneles SSH"
+        proxies:
+          one: "%{count} perfil de proxy"
+          many: "%{count} perfiles de proxy"
+      conflicts_banner:
+        one: "%{count} perfil ya existe en el destino — elige cómo resolverlo."
+        many: "%{count} perfiles ya existen en el destino — elige cómo resolver cada uno."
+      required_banner:
+        one: "%{count} valor puede ser necesario después de importar — los secretos omitidos del paquete se pueden introducir u omitir."
+        many: "%{count} valores pueden ser necesarios después de importar — los secretos omitidos del paquete se pueden introducir u omitir."
+      driver_not_installed_banner: Una o más conexiones hacen referencia a un driver no instalado en esta máquina y se omitirán.
+    conflict_kind:
+      auth_profile: Perfil de autenticación
+      ssh_tunnel: Túnel SSH
+      proxy: Proxy
+      connection: Conexión
+    conflicts:
+      intro: Algunos perfiles de este paquete ya existen. Elige cómo gestionar cada conflicto.
+      row_label: "%{kind}: \"%{bundle_name}\" entra en conflicto con \"%{existing_name}\""
+    required:
+      intro: Los siguientes valores pueden ser necesarios. Deja un secreto vacío para omitirlo — la conexión se importa igual sin él.
+      secret_label: "Secreto para \"%{owner}\": %{field}"
+      aws_reference_label: "Perfil de autenticación de AWS \"%{name}\" (%{provider_id}) para \"%{owner}\""
+      auth_profile_ref_label: "Perfil de autenticación para \"%{owner}\": %{field}"
+      no_matching_auth_profile: No hay ningún perfil de autenticación coincidente en esta máquina. La conexión se importa sin uno; asígnalo más tarde en Ajustes > Perfiles de autenticación.
+    status:
+      complete: Importación completa.
+      loading: "Cargando…"
+      importing: "Importando…"
+      imported_toast:
+        one: "Se importó %{count} entidad."
+        many: "Se importaron %{count} entidades."
+    banner:
+      failed: Fallo en la importación
+    outcome:
+      succeeded:
+        one: "%{count} entidad importada."
+        many: "%{count} entidades importadas."
+      needs_driver:
+        one: "%{count} conexión omitida — driver no instalado."
+        many: "%{count} conexiones omitidas — driver no instalado."
+      config_failures:
+        one: "%{count} conexión no se pudo configurar."
+        many: "%{count} conexiones no se pudieron configurar."
+      unresolved_refs:
+        one: "%{count} conexión tenía referencias sin resolver y no se importó."
+        many: "%{count} conexiones tenían referencias sin resolver y no se importaron."
+      secret_failures:
+        one: "%{count} secreto no se pudo escribir en el llavero. Introdúcelo manualmente para la conexión afectada."
+        many: "%{count} secretos no se pudieron escribir en el llavero. Introdúcelos manualmente para cada conexión afectada."
+    action:
+      reuse_existing: Reutilizar existente
+      create_new: Crear nuevo
+      map_to: "Asignar a: %{name}"
+      skip: Omitir
+      use_profile: "Usar: %{name}"
+      cancel: Cancelar
+      back: Atrás
+      done: Finalizar
+      load: Cargar
+      continue_: Continuar
+      import: Importar
 connections:
   window:
     manager_title: Administrador de conexiones

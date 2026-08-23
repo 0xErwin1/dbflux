@@ -292,6 +292,305 @@ pub(crate) fn audit_save_failed_copy(error: &str) -> String {
     dbflux_i18n::t!("settings.audit.error.save_failed_copy", error = error)
 }
 
+/// Formats the "Cannot read file: <error>" import-panel error.
+pub(crate) fn import_error_cannot_read_file(error: &str) -> String {
+    dbflux_i18n::t!(
+        "connection_manager.import.error.cannot_read_file",
+        error = error
+    )
+}
+
+/// Formats the "Parse error: <error>" import-panel error.
+pub(crate) fn import_error_parse_error(error: &str) -> String {
+    dbflux_i18n::t!("connection_manager.import.error.parse_error", error = error)
+}
+
+/// Formats the "Decryption error: <error>" import-panel error.
+pub(crate) fn import_error_decryption_error(error: &str) -> String {
+    dbflux_i18n::t!(
+        "connection_manager.import.error.decryption_error",
+        error = error
+    )
+}
+
+/// Formats the "Import failed: <error>" import-panel error.
+pub(crate) fn import_error_import_failed(error: &str) -> String {
+    dbflux_i18n::t!(
+        "connection_manager.import.error.import_failed",
+        error = error
+    )
+}
+
+/// Formats the pluralized "N secret(s) could not be written to the keyring during import..."
+/// toast raised from the import apply pipeline.
+pub(crate) fn import_error_secret_failures_toast(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!(
+            "connection_manager.import.error.secret_failures_toast.one",
+            count = count
+        )
+    } else {
+        dbflux_i18n::t!(
+            "connection_manager.import.error.secret_failures_toast.many",
+            count = count
+        )
+    }
+}
+
+/// Formats the pluralized "N connection(s)" import-preview count line.
+pub(crate) fn import_preview_count_connections(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!(
+            "connection_manager.import.preview.count.connections.one",
+            count = count
+        )
+    } else {
+        dbflux_i18n::t!(
+            "connection_manager.import.preview.count.connections.many",
+            count = count
+        )
+    }
+}
+
+/// Formats the pluralized "N auth profile(s)" import-preview count line.
+pub(crate) fn import_preview_count_auth_profiles(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!(
+            "connection_manager.import.preview.count.auth_profiles.one",
+            count = count
+        )
+    } else {
+        dbflux_i18n::t!(
+            "connection_manager.import.preview.count.auth_profiles.many",
+            count = count
+        )
+    }
+}
+
+/// Formats the pluralized "N SSH tunnel(s)" import-preview count line.
+pub(crate) fn import_preview_count_ssh_tunnels(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!(
+            "connection_manager.import.preview.count.ssh_tunnels.one",
+            count = count
+        )
+    } else {
+        dbflux_i18n::t!(
+            "connection_manager.import.preview.count.ssh_tunnels.many",
+            count = count
+        )
+    }
+}
+
+/// Formats the pluralized "N proxy profile(s)" import-preview count line.
+pub(crate) fn import_preview_count_proxies(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!(
+            "connection_manager.import.preview.count.proxies.one",
+            count = count
+        )
+    } else {
+        dbflux_i18n::t!(
+            "connection_manager.import.preview.count.proxies.many",
+            count = count
+        )
+    }
+}
+
+/// Formats the pluralized import-preview "already exist at the destination" conflicts banner.
+pub(crate) fn import_preview_conflicts_banner(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!(
+            "connection_manager.import.preview.conflicts_banner.one",
+            count = count
+        )
+    } else {
+        dbflux_i18n::t!(
+            "connection_manager.import.preview.conflicts_banner.many",
+            count = count
+        )
+    }
+}
+
+/// Formats the pluralized import-preview "may be required after import" banner.
+pub(crate) fn import_preview_required_banner(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!(
+            "connection_manager.import.preview.required_banner.one",
+            count = count
+        )
+    } else {
+        dbflux_i18n::t!(
+            "connection_manager.import.preview.required_banner.many",
+            count = count
+        )
+    }
+}
+
+/// Resolves the translated label for an import conflict's entity kind.
+pub(crate) fn import_conflict_kind_label(kind: dbflux_portability::ConflictKind) -> String {
+    use dbflux_portability::ConflictKind;
+
+    match kind {
+        ConflictKind::AuthProfile => {
+            dbflux_i18n::t!("connection_manager.import.conflict_kind.auth_profile")
+        }
+        ConflictKind::SshTunnel => {
+            dbflux_i18n::t!("connection_manager.import.conflict_kind.ssh_tunnel")
+        }
+        ConflictKind::Proxy => dbflux_i18n::t!("connection_manager.import.conflict_kind.proxy"),
+        ConflictKind::Connection => {
+            dbflux_i18n::t!("connection_manager.import.conflict_kind.connection")
+        }
+    }
+}
+
+/// Formats the "<kind>: "<bundle name>" conflicts with "<existing name>"" import conflict row label.
+pub(crate) fn import_conflicts_row_label(
+    kind_label: &str,
+    bundle_name: &str,
+    existing_name: &str,
+) -> String {
+    dbflux_i18n::t!(
+        "connection_manager.import.conflicts.row_label",
+        kind = kind_label,
+        bundle_name = bundle_name,
+        existing_name = existing_name
+    )
+}
+
+/// Formats the "Secret for "<owner>": <field>" import required-resolution label.
+pub(crate) fn import_required_secret_label(owner: &str, field: &str) -> String {
+    dbflux_i18n::t!(
+        "connection_manager.import.required.secret_label",
+        owner = owner,
+        field = field
+    )
+}
+
+/// Formats the "AWS auth profile "<name>" (<provider>) for "<owner>"" import required-resolution label.
+pub(crate) fn import_required_aws_reference_label(
+    name: &str,
+    provider_id: &str,
+    owner: &str,
+) -> String {
+    dbflux_i18n::t!(
+        "connection_manager.import.required.aws_reference_label",
+        name = name,
+        provider_id = provider_id,
+        owner = owner
+    )
+}
+
+/// Formats the "Auth profile for "<owner>": <field>" import required-resolution label.
+pub(crate) fn import_required_auth_profile_ref_label(owner: &str, field: &str) -> String {
+    dbflux_i18n::t!(
+        "connection_manager.import.required.auth_profile_ref_label",
+        owner = owner,
+        field = field
+    )
+}
+
+/// Formats the pluralized "Imported N entity/entities." import success toast.
+pub(crate) fn import_status_imported_toast(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!(
+            "connection_manager.import.status.imported_toast.one",
+            count = count
+        )
+    } else {
+        dbflux_i18n::t!(
+            "connection_manager.import.status.imported_toast.many",
+            count = count
+        )
+    }
+}
+
+/// Formats the pluralized "N entity/entities imported." import-outcome success banner.
+pub(crate) fn import_outcome_succeeded(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!(
+            "connection_manager.import.outcome.succeeded.one",
+            count = count
+        )
+    } else {
+        dbflux_i18n::t!(
+            "connection_manager.import.outcome.succeeded.many",
+            count = count
+        )
+    }
+}
+
+/// Formats the pluralized "N connection(s) skipped — driver not installed." import-outcome banner.
+pub(crate) fn import_outcome_needs_driver(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!(
+            "connection_manager.import.outcome.needs_driver.one",
+            count = count
+        )
+    } else {
+        dbflux_i18n::t!(
+            "connection_manager.import.outcome.needs_driver.many",
+            count = count
+        )
+    }
+}
+
+/// Formats the pluralized "N connection(s) could not be configured." import-outcome banner.
+pub(crate) fn import_outcome_config_failures(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!(
+            "connection_manager.import.outcome.config_failures.one",
+            count = count
+        )
+    } else {
+        dbflux_i18n::t!(
+            "connection_manager.import.outcome.config_failures.many",
+            count = count
+        )
+    }
+}
+
+/// Formats the pluralized "N connection(s) had unresolvable references..." import-outcome banner.
+pub(crate) fn import_outcome_unresolved_refs(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!(
+            "connection_manager.import.outcome.unresolved_refs.one",
+            count = count
+        )
+    } else {
+        dbflux_i18n::t!(
+            "connection_manager.import.outcome.unresolved_refs.many",
+            count = count
+        )
+    }
+}
+
+/// Formats the pluralized "N secret(s) could not be written to the keyring..." import-outcome banner.
+pub(crate) fn import_outcome_secret_failures(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!(
+            "connection_manager.import.outcome.secret_failures.one",
+            count = count
+        )
+    } else {
+        dbflux_i18n::t!(
+            "connection_manager.import.outcome.secret_failures.many",
+            count = count
+        )
+    }
+}
+
+/// Formats the "Map to: <candidate name>" import conflict-resolution segment label.
+pub(crate) fn import_action_map_to(name: &str) -> String {
+    dbflux_i18n::t!("connection_manager.import.action.map_to", name = name)
+}
+
+/// Formats the "Use: <profile name>" import required-reference segment label.
+pub(crate) fn import_action_use_profile(name: &str) -> String {
+    dbflux_i18n::t!("connection_manager.import.action.use_profile", name = name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -302,7 +601,17 @@ mod tests {
         hooks_create_dir_failed, hooks_delete_message, hooks_delete_unreadable_message,
         hooks_duplicate_id, hooks_env_pair_invalid, hooks_form_interpreter_hint,
         hooks_interpreter_auto_label, hooks_interpreter_missing, hooks_open_script_failed,
-        hooks_write_script_failed, mcp_preview_summary, proxies_delete_body,
+        hooks_write_script_failed, import_action_map_to, import_action_use_profile,
+        import_conflict_kind_label, import_conflicts_row_label, import_error_cannot_read_file,
+        import_error_decryption_error, import_error_import_failed, import_error_parse_error,
+        import_error_secret_failures_toast, import_outcome_config_failures,
+        import_outcome_needs_driver, import_outcome_secret_failures, import_outcome_succeeded,
+        import_outcome_unresolved_refs, import_preview_conflicts_banner,
+        import_preview_count_auth_profiles, import_preview_count_connections,
+        import_preview_count_proxies, import_preview_count_ssh_tunnels,
+        import_preview_required_banner, import_required_auth_profile_ref_label,
+        import_required_aws_reference_label, import_required_secret_label,
+        import_status_imported_toast, mcp_preview_summary, proxies_delete_body,
         ssh_private_key_with_path, ssh_tunnels_delete_body,
     };
 
@@ -566,5 +875,123 @@ mod tests {
         let message = audit_save_failed_copy("disk full");
 
         assert!(message.contains("disk full"));
+    }
+
+    #[test]
+    fn import_error_helpers_embed_error_cause() {
+        assert!(import_error_cannot_read_file("permission denied").contains("permission denied"));
+        assert!(import_error_parse_error("unexpected token").contains("unexpected token"));
+        assert!(import_error_decryption_error("bad tag").contains("bad tag"));
+        assert!(import_error_import_failed("disk full").contains("disk full"));
+    }
+
+    #[test]
+    fn import_preview_count_helpers_use_singular_for_one() {
+        assert_eq!(import_preview_count_connections(1), "1 connection");
+        assert_eq!(import_preview_count_auth_profiles(1), "1 auth profile");
+        assert_eq!(import_preview_count_ssh_tunnels(1), "1 SSH tunnel");
+        assert_eq!(import_preview_count_proxies(1), "1 proxy profile");
+    }
+
+    #[test]
+    fn import_preview_count_helpers_use_plural_for_many() {
+        assert_eq!(import_preview_count_connections(3), "3 connections");
+        assert_eq!(import_preview_count_auth_profiles(2), "2 auth profiles");
+        assert_eq!(import_preview_count_ssh_tunnels(2), "2 SSH tunnels");
+        assert_eq!(import_preview_count_proxies(2), "2 proxy profiles");
+    }
+
+    #[test]
+    fn import_preview_banners_pluralize_by_count() {
+        let one = import_preview_conflicts_banner(1);
+        let many = import_preview_conflicts_banner(3);
+        assert!(one.contains('1'));
+        assert!(many.contains('3'));
+        assert_ne!(one, many);
+
+        let required_one = import_preview_required_banner(1);
+        let required_many = import_preview_required_banner(2);
+        assert!(required_one.contains('1'));
+        assert!(required_many.contains('2'));
+        assert_ne!(required_one, required_many);
+    }
+
+    #[test]
+    fn import_conflict_kind_label_is_exhaustive_over_the_enum() {
+        use dbflux_portability::ConflictKind;
+
+        for kind in [
+            ConflictKind::AuthProfile,
+            ConflictKind::SshTunnel,
+            ConflictKind::Proxy,
+            ConflictKind::Connection,
+        ] {
+            let label = import_conflict_kind_label(kind);
+            assert!(!label.is_empty(), "{kind:?} resolved an empty label");
+        }
+    }
+
+    #[test]
+    fn import_conflicts_row_label_embeds_kind_and_names() {
+        let message = import_conflicts_row_label("SSH tunnel", "bastion-a", "bastion-b");
+
+        assert!(message.contains("SSH tunnel"));
+        assert!(message.contains("bastion-a"));
+        assert!(message.contains("bastion-b"));
+    }
+
+    #[test]
+    fn import_required_label_helpers_embed_their_arguments() {
+        assert!(import_required_secret_label("prod-mongo", "password").contains("prod-mongo"));
+        assert!(import_required_secret_label("prod-mongo", "password").contains("password"));
+
+        let aws = import_required_aws_reference_label(
+            "prod-sso",
+            "aws-iam-identity-center",
+            "prod-mongo",
+        );
+        assert!(aws.contains("prod-sso"));
+        assert!(aws.contains("aws-iam-identity-center"));
+        assert!(aws.contains("prod-mongo"));
+
+        let profile_ref = import_required_auth_profile_ref_label("prod-mongo", "auth_profile_id");
+        assert!(profile_ref.contains("prod-mongo"));
+        assert!(profile_ref.contains("auth_profile_id"));
+    }
+
+    #[test]
+    fn import_status_imported_toast_uses_singular_form_for_one() {
+        assert_eq!(import_status_imported_toast(1), "Imported 1 entity.");
+        assert_eq!(import_status_imported_toast(3), "Imported 3 entities.");
+    }
+
+    #[test]
+    fn import_outcome_banners_pluralize_by_count() {
+        assert_eq!(import_outcome_succeeded(1), "1 entity imported.");
+        assert_eq!(import_outcome_succeeded(2), "2 entities imported.");
+
+        assert!(import_outcome_needs_driver(1).contains('1'));
+        assert!(import_outcome_needs_driver(2).contains('2'));
+
+        assert!(import_outcome_config_failures(1).contains('1'));
+        assert!(import_outcome_config_failures(2).contains('2'));
+
+        assert!(import_outcome_unresolved_refs(1).contains('1'));
+        assert!(import_outcome_unresolved_refs(2).contains('2'));
+
+        assert!(import_outcome_secret_failures(1).contains('1'));
+        assert!(import_outcome_secret_failures(2).contains('2'));
+    }
+
+    #[test]
+    fn import_error_secret_failures_toast_pluralizes_by_count() {
+        assert!(import_error_secret_failures_toast(1).contains('1'));
+        assert!(import_error_secret_failures_toast(2).contains('2'));
+    }
+
+    #[test]
+    fn import_action_segment_labels_embed_their_names() {
+        assert!(import_action_map_to("staging-db").contains("staging-db"));
+        assert!(import_action_use_profile("prod-sso").contains("prod-sso"));
     }
 }
