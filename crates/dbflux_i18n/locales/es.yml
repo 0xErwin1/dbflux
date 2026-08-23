@@ -478,6 +478,31 @@ document:
       connection_not_found: Conexión no encontrada
       connection_error: "Error de conexión: %{error}"
       collection_source_unsupported: "El origen de colección no es compatible con ChartDocument; ábrelo desde DataDocument"
+    metric_picker:
+      apply: Aplicar
+      dropdown:
+        custom: "Personalizado…"
+      period:
+        placeholder: Período (segundos)
+        error: "Período: %{message}"
+        validation:
+          not_a_number: "el período debe ser un número, se recibió %{value}"
+          too_low: el período debe ser de al menos 1 segundo
+          too_high: el período no debe superar los 86400 segundos (24 horas)
+      statistic:
+        placeholder: "Estadística (p. ej. p99)"
+        error: "Estadística: %{message}"
+        validation:
+          empty: la estadística no debe estar vacía
+      dimensions:
+        title: DIMENSIONES
+        loading: "Cargando dimensiones…"
+        error: "Se produjo un error: %{message}"
+        retry: Reintentar
+        aggregate_all: Agregar todo
+        empty: No hay combinaciones de dimensiones
+        connection_not_found: Conexión no encontrada o inactiva
+        catalog_unsupported: La conexión no admite el catálogo de métricas
   code:
     toolbar:
       refresh: Actualizar

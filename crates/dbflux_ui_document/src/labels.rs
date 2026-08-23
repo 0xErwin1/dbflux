@@ -1371,6 +1371,47 @@ pub(crate) fn chart_toolbar_points_label(count: usize) -> String {
     }
 }
 
+/// Label for the trailing "Custom…" entry appended to the metric picker's
+/// period and statistic dropdowns.
+pub(crate) fn metric_picker_custom_dropdown_label() -> String {
+    dbflux_i18n::t!("document.chart.metric_picker.dropdown.custom")
+}
+
+/// Inline error shown beneath the metric picker's dimensions section when
+/// the background fetch fails or the connection cannot serve one.
+pub(crate) fn metric_picker_dimensions_error_label(message: &str) -> String {
+    dbflux_i18n::t!(
+        "document.chart.metric_picker.dimensions.error",
+        message = message
+    )
+}
+
+/// Inline error shown beneath the metric picker's period "Custom…" input.
+pub(crate) fn metric_picker_period_error_label(message: &str) -> String {
+    dbflux_i18n::t!(
+        "document.chart.metric_picker.period.error",
+        message = message
+    )
+}
+
+/// Inline error shown beneath the metric picker's statistic "Custom…"
+/// input.
+pub(crate) fn metric_picker_statistic_error_label(message: &str) -> String {
+    dbflux_i18n::t!(
+        "document.chart.metric_picker.statistic.error",
+        message = message
+    )
+}
+
+/// Validation error for a non-numeric custom period entry, with the raw
+/// user input interpolated as it was debug-formatted before this change.
+pub(crate) fn metric_picker_period_not_a_number_error(raw: &str) -> String {
+    dbflux_i18n::t!(
+        "document.chart.metric_picker.period.validation.not_a_number",
+        value = format!("{raw:?}")
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1386,13 +1427,15 @@ mod tests {
         delete_rows_label, execution_count_state_label, execution_mode_label,
         history_items_count_label, history_tab_label, image_decode_error, image_header_error,
         incomplete_aggregate_rows_label, join_kind_label, live_output_lines_label,
-        live_output_truncated_label, object_browser_status_summary,
-        object_browser_versions_count_label, partial_delete_label, pending_change_count_label,
-        pending_edits_summary, presign_expiry_label, presign_method_label, preview_gate_message,
-        refresh_policy_label, result_tab_count_label, row_count_label, schema_change_description,
-        script_confirm_message_label, sort_direction_label, table_action_description,
-        unsaved_changes_label, update_columns_label, valid_lines_label, versioning_off_label,
-        versioning_status_label,
+        live_output_truncated_label, metric_picker_custom_dropdown_label,
+        metric_picker_dimensions_error_label, metric_picker_period_error_label,
+        metric_picker_period_not_a_number_error, metric_picker_statistic_error_label,
+        object_browser_status_summary, object_browser_versions_count_label, partial_delete_label,
+        pending_change_count_label, pending_edits_summary, presign_expiry_label,
+        presign_method_label, preview_gate_message, refresh_policy_label, result_tab_count_label,
+        row_count_label, schema_change_description, script_confirm_message_label,
+        sort_direction_label, table_action_description, unsaved_changes_label,
+        update_columns_label, valid_lines_label, versioning_off_label, versioning_status_label,
     };
     use crate::buckets_table::BucketEncryptionChoice;
     use crate::object_browser::{PresignExpiry, PresignMethodChoice, PreviewGate};
@@ -3752,5 +3795,186 @@ mod tests {
             locale = "es"
         );
         assert_ne!(en, es);
+    }
+
+    // ── PR 25: chart/{metric_picker,metric_picker_render}.rs ────────────────
+
+    const METRIC_PICKER_KEYS: &[&str] = &[
+        "document.chart.metric_picker.apply",
+        "document.chart.metric_picker.dropdown.custom",
+        "document.chart.metric_picker.period.placeholder",
+        "document.chart.metric_picker.period.error",
+        "document.chart.metric_picker.period.validation.not_a_number",
+        "document.chart.metric_picker.period.validation.too_low",
+        "document.chart.metric_picker.period.validation.too_high",
+        "document.chart.metric_picker.statistic.placeholder",
+        "document.chart.metric_picker.statistic.error",
+        "document.chart.metric_picker.statistic.validation.empty",
+        "document.chart.metric_picker.dimensions.title",
+        "document.chart.metric_picker.dimensions.loading",
+        "document.chart.metric_picker.dimensions.error",
+        "document.chart.metric_picker.dimensions.retry",
+        "document.chart.metric_picker.dimensions.aggregate_all",
+        "document.chart.metric_picker.dimensions.empty",
+        "document.chart.metric_picker.dimensions.connection_not_found",
+        "document.chart.metric_picker.dimensions.catalog_unsupported",
+    ];
+
+    /// PR 25: every `document.chart.metric_picker.*` key resolves to a
+    /// non-empty, non-fallback value in both locales.
+    #[test]
+    fn metric_picker_keys_resolve_in_both_locales() {
+        for key in METRIC_PICKER_KEYS {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(*key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, *key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+    }
+
+    /// PR 25: the trailing "Custom…" dropdown entry diverges between
+    /// locales and matches the pre-i18n English literal.
+    #[test]
+    fn metric_picker_custom_dropdown_label_matches_english_and_differs_between_locales() {
+        let value = metric_picker_custom_dropdown_label();
+        assert!(
+            !value.is_empty(),
+            "metric_picker_custom_dropdown_label must not resolve empty"
+        );
+
+        let en = dbflux_i18n::t!(
+            "document.chart.metric_picker.dropdown.custom",
+            locale = "en"
+        );
+        let es = dbflux_i18n::t!(
+            "document.chart.metric_picker.dropdown.custom",
+            locale = "es"
+        );
+
+        assert_eq!(en, "Custom…");
+        assert_ne!(en, es);
+    }
+
+    /// PR 25: `PERIOD_PRESETS` labels ("1 min", "5 min", …) stay English
+    /// data, same as `STATISTIC_PRESETS` — the vocabulary rule for this
+    /// change explicitly excludes period values from translation.
+    #[test]
+    fn period_presets_stay_untranslated_data() {
+        use crate::chart::metric_picker::PERIOD_PRESETS;
+
+        let labels: Vec<&str> = PERIOD_PRESETS.iter().map(|(_, label)| *label).collect();
+        assert_eq!(labels, vec!["1 min", "5 min", "15 min", "1 hr"]);
+    }
+
+    /// PR 25: the dimensions-section error interpolates the underlying
+    /// message and diverges between locales.
+    #[test]
+    fn metric_picker_dimensions_error_label_interpolates_message() {
+        let value = metric_picker_dimensions_error_label("boom");
+        assert!(
+            value.contains("boom"),
+            "dimensions error must interpolate the message: {value}"
+        );
+
+        let en = dbflux_i18n::t!(
+            "document.chart.metric_picker.dimensions.error",
+            locale = "en"
+        );
+        let es = dbflux_i18n::t!(
+            "document.chart.metric_picker.dimensions.error",
+            locale = "es"
+        );
+        assert_ne!(en, es);
+    }
+
+    /// PR 25: the period "Custom…" inline error interpolates the underlying
+    /// message and diverges between locales.
+    #[test]
+    fn metric_picker_period_error_label_interpolates_message() {
+        let value = metric_picker_period_error_label("must be a number");
+        assert!(
+            value.contains("must be a number"),
+            "period error must interpolate the message: {value}"
+        );
+
+        let en = dbflux_i18n::t!("document.chart.metric_picker.period.error", locale = "en");
+        let es = dbflux_i18n::t!("document.chart.metric_picker.period.error", locale = "es");
+        assert_ne!(en, es);
+    }
+
+    /// PR 25: the statistic "Custom…" inline error interpolates the
+    /// underlying message and diverges between locales.
+    #[test]
+    fn metric_picker_statistic_error_label_interpolates_message() {
+        let value = metric_picker_statistic_error_label("must not be empty");
+        assert!(
+            value.contains("must not be empty"),
+            "statistic error must interpolate the message: {value}"
+        );
+
+        let en = dbflux_i18n::t!(
+            "document.chart.metric_picker.statistic.error",
+            locale = "en"
+        );
+        let es = dbflux_i18n::t!(
+            "document.chart.metric_picker.statistic.error",
+            locale = "es"
+        );
+        assert_ne!(en, es);
+    }
+
+    /// PR 25: `validate_period`'s non-numeric error interpolates the raw
+    /// input, debug-formatted as it was in the pre-i18n literal.
+    #[test]
+    fn metric_picker_period_not_a_number_error_interpolates_raw_input() {
+        let value = metric_picker_period_not_a_number_error("abc");
+        assert!(
+            value.contains("\"abc\""),
+            "non-numeric error must interpolate the debug-formatted input: {value}"
+        );
+    }
+
+    /// PR 25: `document.chart.metric_picker.dimensions.title` matches the
+    /// pre-i18n "DIMENSIONS" literal in English (an uppercase section
+    /// label, same convention as `document.chart.toolbar.type_label`).
+    #[test]
+    fn metric_picker_dimensions_title_matches_english_catalog() {
+        assert_eq!(
+            dbflux_i18n::t!(
+                "document.chart.metric_picker.dimensions.title",
+                locale = "en"
+            ),
+            "DIMENSIONS"
+        );
+    }
+
+    /// PR 25: the period/statistic validation errors and the apply button
+    /// label diverge between locales.
+    #[test]
+    fn metric_picker_validation_and_apply_labels_differ_between_locales() {
+        for key in [
+            "document.chart.metric_picker.apply",
+            "document.chart.metric_picker.period.validation.too_low",
+            "document.chart.metric_picker.period.validation.too_high",
+            "document.chart.metric_picker.statistic.validation.empty",
+            "document.chart.metric_picker.dimensions.retry",
+            "document.chart.metric_picker.dimensions.aggregate_all",
+            "document.chart.metric_picker.dimensions.empty",
+            "document.chart.metric_picker.dimensions.connection_not_found",
+            "document.chart.metric_picker.dimensions.catalog_unsupported",
+            "document.chart.metric_picker.period.placeholder",
+            "document.chart.metric_picker.statistic.placeholder",
+        ] {
+            let en = dbflux_i18n::t!(key, locale = "en");
+            let es = dbflux_i18n::t!(key, locale = "es");
+            assert_ne!(en, es, "{key} must differ between en and es");
+        }
     }
 }
