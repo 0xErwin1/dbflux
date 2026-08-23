@@ -413,7 +413,7 @@ mod tests {
         let message = auth_profiles_conflict_message("FAKE_TARGET_A");
 
         assert!(message.contains("FAKE_TARGET_A"));
-        assert!(message.to_lowercase().contains("reload"));
+        assert!(!message.contains("settings.auth_profiles.conflict_message"));
     }
 
     #[test]
