@@ -71,6 +71,26 @@ pub(crate) fn profile_updated_label(name: &str) -> String {
     dbflux_i18n::t!("sidebar.toast.edit_reconnect_updated", name = name)
 }
 
+/// Translated label for the Export Table(s) context menu item, e.g.
+/// `"Export Table…"` for a single table or `"Export 3 Tables…"` for many.
+pub(crate) fn export_tables_label(count: usize) -> String {
+    if count > 1 {
+        dbflux_i18n::t!("sidebar.menu.export_tables_many", count = count)
+    } else {
+        dbflux_i18n::t!("sidebar.menu.export_table")
+    }
+}
+
+/// Translated label for the Migrate Table(s) context menu item, e.g.
+/// `"Migrate Table…"` for a single table or `"Migrate 3 Tables…"` for many.
+pub(crate) fn migrate_tables_label(count: usize) -> String {
+    if count > 1 {
+        dbflux_i18n::t!("sidebar.menu.migrate_tables_many", count = count)
+    } else {
+        dbflux_i18n::t!("sidebar.menu.migrate_table")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use dbflux_core::DatabaseCategory;
@@ -283,5 +303,33 @@ mod tests {
             label,
             dbflux_i18n::t!("sidebar.toast.edit_reconnect_updated", name = "prod-db")
         );
+    }
+
+    #[test]
+    fn export_tables_label_one_vs_many() {
+        let singular = super::export_tables_label(1);
+        let plural = super::export_tables_label(3);
+
+        assert_eq!(singular, dbflux_i18n::t!("sidebar.menu.export_table"));
+        assert_eq!(
+            plural,
+            dbflux_i18n::t!("sidebar.menu.export_tables_many", count = 3)
+        );
+        assert!(plural.contains('3'));
+        assert_ne!(singular, plural);
+    }
+
+    #[test]
+    fn migrate_tables_label_one_vs_many() {
+        let singular = super::migrate_tables_label(1);
+        let plural = super::migrate_tables_label(3);
+
+        assert_eq!(singular, dbflux_i18n::t!("sidebar.menu.migrate_table"));
+        assert_eq!(
+            plural,
+            dbflux_i18n::t!("sidebar.menu.migrate_tables_many", count = 3)
+        );
+        assert!(plural.contains('3'));
+        assert_ne!(singular, plural);
     }
 }

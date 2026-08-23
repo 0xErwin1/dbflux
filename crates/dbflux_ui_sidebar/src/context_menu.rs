@@ -269,14 +269,17 @@ impl Sidebar {
 
                 Self::append_menu_section(
                     &mut items,
-                    [ContextMenuItem::item("Open", ContextMenuAction::Open)],
+                    [ContextMenuItem::item(
+                        dbflux_i18n::t!("sidebar.menu.open"),
+                        ContextMenuAction::Open,
+                    )],
                 );
 
                 if self.collection_supports_child_picker(item_id, cx) {
                     Self::append_menu_section(
                         &mut items,
                         [ContextMenuItem::item(
-                            "Browse Event Streams",
+                            dbflux_i18n::t!("sidebar.menu.browse_event_streams"),
                             ContextMenuAction::OpenChildPicker,
                         )],
                     );
@@ -285,8 +288,14 @@ impl Sidebar {
                 Self::append_menu_section(
                     &mut items,
                     [
-                        ContextMenuItem::item("View Schema", ContextMenuAction::ViewSchema),
-                        ContextMenuItem::item("Refresh", ContextMenuAction::RefreshObject),
+                        ContextMenuItem::item(
+                            dbflux_i18n::t!("sidebar.menu.view_schema"),
+                            ContextMenuAction::ViewSchema,
+                        ),
+                        ContextMenuItem::item(
+                            dbflux_i18n::t!("sidebar.menu.refresh"),
+                            ContextMenuAction::RefreshObject,
+                        ),
                     ],
                 );
 
@@ -296,7 +305,7 @@ impl Sidebar {
                     Self::append_menu_section(
                         &mut items,
                         [ContextMenuItem::item(
-                            "Generate SQL",
+                            dbflux_i18n::t!("sidebar.menu.generate_sql"),
                             ContextMenuAction::Submenu(generators),
                         )
                         .with_icon(AppIcon::Code)],
@@ -310,11 +319,7 @@ impl Sidebar {
                 // chosen in the wizard, not from this menu.
                 if node_kind == SchemaNodeKind::Table && self.table_supports_transfer(item_id, cx) {
                     let count = self.export_table_selection_count(item_id);
-                    let label = if count > 1 {
-                        format!("Export {count} Tables…")
-                    } else {
-                        "Export Table…".to_string()
-                    };
+                    let label = crate::labels::export_tables_label(count);
 
                     Self::append_menu_section(
                         &mut items,
@@ -332,11 +337,7 @@ impl Sidebar {
                 // targets to connected + transfer-compatible connections.
                 if node_kind == SchemaNodeKind::Table && self.table_supports_transfer(item_id, cx) {
                     let count = self.migrate_table_selection_count(item_id);
-                    let label = if count > 1 {
-                        format!("Migrate {count} Tables…")
-                    } else {
-                        "Migrate Table…".to_string()
-                    };
+                    let label = crate::labels::migrate_tables_label(count);
 
                     Self::append_menu_section(
                         &mut items,
@@ -356,8 +357,8 @@ impl Sidebar {
                     };
                     if drop_allowed {
                         let label = match node_kind {
-                            SchemaNodeKind::View => "Drop View",
-                            _ => "Drop Table",
+                            SchemaNodeKind::View => dbflux_i18n::t!("sidebar.menu.drop_view"),
+                            _ => dbflux_i18n::t!("sidebar.menu.drop_table"),
                         };
                         Self::append_menu_section(
                             &mut items,
@@ -373,14 +374,17 @@ impl Sidebar {
 
                 Self::append_menu_section(
                     &mut items,
-                    [ContextMenuItem::item("Open", ContextMenuAction::Open)],
+                    [ContextMenuItem::item(
+                        dbflux_i18n::t!("sidebar.menu.open"),
+                        ContextMenuAction::Open,
+                    )],
                 );
 
                 if self.collection_supports_child_picker(item_id, cx) {
                     Self::append_menu_section(
                         &mut items,
                         [ContextMenuItem::item(
-                            "Browse Event Streams",
+                            dbflux_i18n::t!("sidebar.menu.browse_event_streams"),
                             ContextMenuAction::OpenChildPicker,
                         )],
                     );
@@ -389,7 +393,7 @@ impl Sidebar {
                 Self::append_menu_section(
                     &mut items,
                     [ContextMenuItem::item(
-                        "Refresh",
+                        dbflux_i18n::t!("sidebar.menu.refresh"),
                         ContextMenuAction::RefreshObject,
                     )],
                 );
@@ -404,7 +408,7 @@ impl Sidebar {
                     Self::append_menu_section(
                         &mut items,
                         [ContextMenuItem::item(
-                            "Query Measurement",
+                            dbflux_i18n::t!("sidebar.menu.query_measurement"),
                             ContextMenuAction::QueryCollection,
                         )],
                     );
@@ -419,7 +423,7 @@ impl Sidebar {
                     Self::append_menu_section(
                         &mut items,
                         [ContextMenuItem::item(
-                            "Generate Query",
+                            dbflux_i18n::t!("sidebar.menu.generate_query"),
                             ContextMenuAction::Submenu(vec![
                                 ContextMenuItem::item(
                                     "find",
@@ -461,7 +465,7 @@ impl Sidebar {
                     Self::append_menu_section(
                         &mut items,
                         [ContextMenuItem::danger(
-                            "Drop Collection",
+                            dbflux_i18n::t!("sidebar.menu.drop_collection"),
                             ContextMenuAction::DropCollection,
                         )],
                     );
@@ -1837,5 +1841,51 @@ mod parent_hover_tests {
         state.parent_stack.clear();
 
         assert!(!state.hover_parent_item(1));
+    }
+}
+
+#[cfg(test)]
+mod menu_i18n_tests {
+    const B1_KEYS: [&str; 14] = [
+        "sidebar.menu.open",
+        "sidebar.menu.browse_event_streams",
+        "sidebar.menu.view_schema",
+        "sidebar.menu.refresh",
+        "sidebar.menu.generate_sql",
+        "sidebar.menu.export_table",
+        "sidebar.menu.export_tables_many",
+        "sidebar.menu.migrate_table",
+        "sidebar.menu.migrate_tables_many",
+        "sidebar.menu.drop_view",
+        "sidebar.menu.drop_table",
+        "sidebar.menu.query_measurement",
+        "sidebar.menu.generate_query",
+        "sidebar.menu.drop_collection",
+    ];
+
+    #[test]
+    fn menu_b1_keys_resolve_in_both_locales() {
+        for key in B1_KEYS {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert_ne!(value, key, "missing translation for {locale}.{key}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "translation fell back to the miss sentinel for {locale}.{key}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn menu_open_differs_between_locales() {
+        let english = dbflux_i18n::t!("sidebar.menu.open", locale = "en");
+        let spanish = dbflux_i18n::t!("sidebar.menu.open", locale = "es");
+
+        assert_eq!(english, "Open");
+        assert_eq!(spanish, "Abrir");
+        assert_ne!(english, spanish);
     }
 }
