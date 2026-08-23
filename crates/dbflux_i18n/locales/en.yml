@@ -432,6 +432,52 @@ document:
       toast:
         created: "Created bucket \"%{name}\""
         created_with_limitations: "Created bucket \"%{name}\" with limitations"
+  chart:
+    toolbar:
+      type_label: TYPE
+      stats: Stats
+      save_chart: Save chart
+      points:
+        one: "%{count} pt"
+        many: "%{count} pts"
+    shell:
+      run: Run
+      running: "Running…"
+      save: Save
+      cancel: Cancel
+      name_placeholder: Chart name
+      degraded:
+        loading_metric: "Loading metric data…"
+        no_data_points: "No data points for the selected window."
+        run_query: "Run the query to populate the chart."
+        no_time_column: "No time column detected in result."
+        no_numeric_series: "No numeric series detected in result."
+        build_failed: "Chart build failed."
+      custom_range:
+        apply: Apply
+      stats_rail:
+        rebuilding: "Rebuilding chart…"
+        no_stats: "No stats available for this series."
+        unavailable: unavailable
+        window_title: Window
+        window:
+          start: Start
+          end: End
+          span: Span
+          points: Points
+        source_title: Source
+    status:
+      task_label: Chart query
+    toast:
+      chart_saved: Chart saved
+      save_failed: "Failed to save chart: %{error}"
+      png_export_coming: "PNG export coming in v0.7"
+    error:
+      source: "Chart source error: %{error}"
+      no_connection_selected: No connection selected
+      connection_not_found: Connection not found
+      connection_error: "Connection error: %{error}"
+      collection_source_unsupported: "Collection source not supported in ChartDocument; open via DataDocument"
   code:
     toolbar:
       refresh: Refresh

@@ -1361,6 +1361,16 @@ pub(crate) fn configure_chart_kind_label(kind: dbflux_components::chart::ChartKi
     }
 }
 
+/// Point-count label for the standalone `ChartDocument` toolbar's
+/// clock/resolution segment (e.g. "1 pt" / "240 pts").
+pub(crate) fn chart_toolbar_points_label(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!("document.chart.toolbar.points.one", count = count)
+    } else {
+        dbflux_i18n::t!("document.chart.toolbar.points.many", count = count)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1369,19 +1379,20 @@ mod tests {
         audit_actor_type_label, audit_category_label, audit_level_label, audit_outcome_label,
         bool_op_label, bucket_encryption_choice_label, buckets_table_summary_line,
         builder_mode_label, bulk_delete_success_label, chart_degraded_copy, chart_dock_shape_label,
-        chart_rail_why_text, code_toolbar_shortcut_hint_label, comparator_label,
-        configure_chart_kind_label, copy_query_language_label, dangerous_query_body,
-        dangerous_query_title, delete_confirm_copy, delete_prefix_delete_button_label,
-        delete_prefix_deleted_toast, delete_prefix_probe_totals, delete_rows_label,
-        execution_count_state_label, execution_mode_label, history_items_count_label,
-        history_tab_label, image_decode_error, image_header_error, incomplete_aggregate_rows_label,
-        join_kind_label, live_output_lines_label, live_output_truncated_label,
-        object_browser_status_summary, object_browser_versions_count_label, partial_delete_label,
-        pending_change_count_label, pending_edits_summary, presign_expiry_label,
-        presign_method_label, preview_gate_message, refresh_policy_label, result_tab_count_label,
-        row_count_label, schema_change_description, script_confirm_message_label,
-        sort_direction_label, table_action_description, unsaved_changes_label,
-        update_columns_label, valid_lines_label, versioning_off_label, versioning_status_label,
+        chart_rail_why_text, chart_toolbar_points_label, code_toolbar_shortcut_hint_label,
+        comparator_label, configure_chart_kind_label, copy_query_language_label,
+        dangerous_query_body, dangerous_query_title, delete_confirm_copy,
+        delete_prefix_delete_button_label, delete_prefix_deleted_toast, delete_prefix_probe_totals,
+        delete_rows_label, execution_count_state_label, execution_mode_label,
+        history_items_count_label, history_tab_label, image_decode_error, image_header_error,
+        incomplete_aggregate_rows_label, join_kind_label, live_output_lines_label,
+        live_output_truncated_label, object_browser_status_summary,
+        object_browser_versions_count_label, partial_delete_label, pending_change_count_label,
+        pending_edits_summary, presign_expiry_label, presign_method_label, preview_gate_message,
+        refresh_policy_label, result_tab_count_label, row_count_label, schema_change_description,
+        script_confirm_message_label, sort_direction_label, table_action_description,
+        unsaved_changes_label, update_columns_label, valid_lines_label, versioning_off_label,
+        versioning_status_label,
     };
     use crate::buckets_table::BucketEncryptionChoice;
     use crate::object_browser::{PresignExpiry, PresignMethodChoice, PreviewGate};
@@ -3637,6 +3648,107 @@ mod tests {
         );
         let es = dbflux_i18n::t!(
             "document.dashboard.configure.chart_kind.line",
+            locale = "es"
+        );
+        assert_ne!(en, es);
+    }
+
+    /// PR 24: every `document.chart.*` key introduced by the standalone
+    /// `ChartDocument` toolbar/shell/host translation resolves in both
+    /// locales. Includes keys reused from PR 23 (`document.dashboard.configure.
+    /// chart_kind.*`) so a reviewer sees the full reuse list in this diff.
+    #[test]
+    fn chart_document_keys_resolve_in_both_locales() {
+        let keys = [
+            "document.chart.toolbar.type_label",
+            "document.chart.toolbar.stats",
+            "document.chart.toolbar.save_chart",
+            "document.chart.toolbar.points.one",
+            "document.chart.toolbar.points.many",
+            "document.chart.shell.run",
+            "document.chart.shell.running",
+            "document.chart.shell.save",
+            "document.chart.shell.cancel",
+            "document.chart.shell.name_placeholder",
+            "document.chart.shell.degraded.loading_metric",
+            "document.chart.shell.degraded.no_data_points",
+            "document.chart.shell.degraded.run_query",
+            "document.chart.shell.degraded.no_time_column",
+            "document.chart.shell.degraded.no_numeric_series",
+            "document.chart.shell.degraded.build_failed",
+            "document.chart.shell.custom_range.apply",
+            "document.chart.shell.stats_rail.rebuilding",
+            "document.chart.shell.stats_rail.no_stats",
+            "document.chart.shell.stats_rail.unavailable",
+            "document.chart.shell.stats_rail.window_title",
+            "document.chart.shell.stats_rail.window.start",
+            "document.chart.shell.stats_rail.window.end",
+            "document.chart.shell.stats_rail.window.span",
+            "document.chart.shell.stats_rail.window.points",
+            "document.chart.shell.stats_rail.source_title",
+            "document.chart.status.task_label",
+            "document.chart.toast.chart_saved",
+            "document.chart.toast.save_failed",
+            "document.chart.toast.png_export_coming",
+            "document.chart.error.source",
+            "document.chart.error.no_connection_selected",
+            "document.chart.error.connection_not_found",
+            "document.chart.error.connection_error",
+            "document.chart.error.collection_source_unsupported",
+            // Reused from PR 23 — the toolbar's kind chips route through
+            // `configure_chart_kind_label` instead of a duplicate key set.
+            "document.dashboard.configure.chart_kind.line",
+            "document.dashboard.configure.chart_kind.bar",
+            "document.dashboard.configure.chart_kind.scatter",
+            "document.dashboard.configure.chart_kind.area",
+            "document.dashboard.configure.chart_kind.stacked",
+            "document.dashboard.configure.chart_kind.pie",
+        ];
+
+        for key in keys {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+    }
+
+    /// PR 24: `document.chart.toolbar.type_label` exact-value check against
+    /// the English catalog.
+    #[test]
+    fn chart_toolbar_type_label_matches_english_catalog() {
+        assert_eq!(
+            dbflux_i18n::t!("document.chart.toolbar.type_label", locale = "en"),
+            "TYPE"
+        );
+    }
+
+    /// PR 24: `chart_toolbar_points_label` pluralizes independently of the
+    /// generic `pending_change_count_label` bucket (own catalog entries).
+    #[test]
+    fn chart_toolbar_points_label_one_many() {
+        assert_eq!(chart_toolbar_points_label(1), "1 pt");
+        assert_eq!(chart_toolbar_points_label(0), "0 pts");
+        assert_eq!(chart_toolbar_points_label(240), "240 pts");
+    }
+
+    /// PR 24: the standalone chart's degraded-state copy diverges between
+    /// locales (spot-checks one of the six branches).
+    #[test]
+    fn chart_shell_degraded_no_data_points_differs_between_locales() {
+        let en = dbflux_i18n::t!(
+            "document.chart.shell.degraded.no_data_points",
+            locale = "en"
+        );
+        let es = dbflux_i18n::t!(
+            "document.chart.shell.degraded.no_data_points",
             locale = "es"
         );
         assert_ne!(en, es);
