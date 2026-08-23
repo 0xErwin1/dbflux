@@ -698,26 +698,17 @@ impl CodeDocument {
             .dangerous_query
             .as_ref()
             .map(|p| {
-                let title = match p.kind {
-                    DangerousQueryKind::DeleteNoWhere => "DELETE without WHERE",
-                    DangerousQueryKind::UpdateNoWhere => "UPDATE without WHERE",
-                    DangerousQueryKind::Truncate => "TRUNCATE",
-                    DangerousQueryKind::Drop => "DROP",
-                    DangerousQueryKind::Alter => "ALTER",
-                    DangerousQueryKind::Script => "Dangerous Script",
-                    DangerousQueryKind::MongoDeleteMany => "deleteMany with empty filter",
-                    DangerousQueryKind::MongoUpdateMany => "updateMany with empty filter",
-                    DangerousQueryKind::MongoDropCollection => "drop() collection",
-                    DangerousQueryKind::MongoDropDatabase => "dropDatabase()",
-                    DangerousQueryKind::RedisFlushAll => "FLUSHALL",
-                    DangerousQueryKind::RedisFlushDb => "FLUSHDB",
-                    DangerousQueryKind::RedisMultiDelete => "DEL (multiple keys)",
-                    DangerousQueryKind::RedisKeysPattern => "KEYS pattern",
-                    DangerousQueryKind::RawExpressionInSet => "Raw SQL expression in SET",
-                };
-                (title, p.kind.message())
+                (
+                    crate::labels::dangerous_query_title(p.kind),
+                    crate::labels::dangerous_query_body(p.kind),
+                )
             })
-            .unwrap_or(("Warning", "This query may be dangerous."));
+            .unwrap_or_else(|| {
+                (
+                    dbflux_i18n::t!("document.code.dangerous_query.fallback.title"),
+                    dbflux_i18n::t!("document.code.dangerous_query.fallback.body"),
+                )
+            });
 
         let body = Text::caption(message).into_any_element();
 
@@ -736,21 +727,30 @@ impl CodeDocument {
                     doc.confirm_dangerous_query(true, window, cx);
                 });
             })
-            .child(Text::caption("Don't ask again"));
+            .child(Text::caption(dbflux_i18n::t!(
+                "document.code.dangerous_query.dont_ask_again"
+            )));
 
-        let cancel_btn = Button::new("dangerous-cancel-btn", "Cancel").on_click(move |_, _, cx| {
+        let cancel_btn = Button::new(
+            "dangerous-cancel-btn",
+            dbflux_i18n::t!("document.code.dangerous_query.cancel"),
+        )
+        .on_click(move |_, _, cx| {
             entity_cancel.update(cx, |doc, cx| {
                 doc.cancel_dangerous_query(cx);
             });
         });
 
-        let run_anyway_btn = Button::new("dangerous-confirm-btn", "Run Anyway")
-            .danger()
-            .on_click(move |_, window, cx| {
-                entity_run.update(cx, |doc, cx| {
-                    doc.confirm_dangerous_query(false, window, cx);
-                });
+        let run_anyway_btn = Button::new(
+            "dangerous-confirm-btn",
+            dbflux_i18n::t!("document.code.dangerous_query.run_anyway"),
+        )
+        .danger()
+        .on_click(move |_, window, cx| {
+            entity_run.update(cx, |doc, cx| {
+                doc.confirm_dangerous_query(false, window, cx);
             });
+        });
 
         // Footer: "Don't ask again" left-aligned, Cancel + Run Anyway right-aligned.
         // The flex_1 spacer pushes the buttons to the right within the single footer AnyElement.
