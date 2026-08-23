@@ -264,6 +264,112 @@ connection_manager:
     cancel: Cancel
     configure: Configure
     configure_named: "Configure %{name}"
+  import:
+    placeholder:
+      bundle_passphrase: Bundle passphrase
+      bundle_path: "Path to TOML bundle…"
+      secret_value: Enter secret value
+    dialog:
+      open_title: Open Connection Bundle
+    filter:
+      toml: TOML bundle
+      all: All files
+    error:
+      choose_file: Choose a bundle file to import.
+      cannot_read_file: "Cannot read file: %{error}"
+      parse_error: "Parse error: %{error}"
+      encrypted_needs_passphrase: This bundle is encrypted. Enter the passphrase and try again.
+      encryption_unavailable: This bundle is passphrase-encrypted but the encryption feature is not available in this build of DBFlux.
+      wrong_passphrase: Passphrase incorrect or bundle corrupted.
+      decryption_error: "Decryption error: %{error}"
+      import_failed: "Import failed: %{error}"
+      secret_failures_toast:
+        one: "%{count} secret could not be written to the keyring during import. The keyring may be locked or unavailable."
+        many: "%{count} secrets could not be written to the keyring during import. The keyring may be locked or unavailable."
+    field:
+      bundle_file: Bundle file
+      bundle_encrypted: Bundle is encrypted
+      passphrase: Passphrase
+    hint:
+      no_native_picker: No native file picker on this system — type or paste the bundle path above.
+      external_refs: External value references travel as-is
+      external_refs_body: SSM, Secrets Manager, and environment references are imported unchanged and resolved against this machine at connect time.
+      leave_empty_skip: Leave empty to skip.
+      select_profile_or_skip: "Select a profile or skip:"
+    modal_title: Import
+    preview:
+      intro: "This bundle will import the following:"
+      count:
+        connections:
+          one: "%{count} connection"
+          many: "%{count} connections"
+        auth_profiles:
+          one: "%{count} auth profile"
+          many: "%{count} auth profiles"
+        ssh_tunnels:
+          one: "%{count} SSH tunnel"
+          many: "%{count} SSH tunnels"
+        proxies:
+          one: "%{count} proxy profile"
+          many: "%{count} proxy profiles"
+      conflicts_banner:
+        one: "%{count} profile already exists at the destination — you will choose how to resolve it."
+        many: "%{count} profiles already exist at the destination — you will choose how to resolve each."
+      required_banner:
+        one: "%{count} value may be required after import — secrets omitted from the bundle can be entered or skipped."
+        many: "%{count} values may be required after import — secrets omitted from the bundle can be entered or skipped."
+      driver_not_installed_banner: One or more connections reference a driver not installed on this machine and will be skipped.
+    conflict_kind:
+      auth_profile: Auth profile
+      ssh_tunnel: SSH tunnel
+      proxy: Proxy
+      connection: Connection
+    conflicts:
+      intro: Some profiles in this bundle already exist. Choose how to handle each conflict.
+      row_label: "%{kind}: \"%{bundle_name}\" conflicts with \"%{existing_name}\""
+    required:
+      intro: The following values may be required. Leave a secret empty to skip it — the connection still imports without it.
+      secret_label: "Secret for \"%{owner}\": %{field}"
+      aws_reference_label: "AWS auth profile \"%{name}\" (%{provider_id}) for \"%{owner}\""
+      auth_profile_ref_label: "Auth profile for \"%{owner}\": %{field}"
+      no_matching_auth_profile: No matching auth profile on this machine. The connection imports without one; assign it later in Settings > Auth Profiles.
+    status:
+      complete: Import complete.
+      loading: "Loading…"
+      importing: "Importing…"
+      imported_toast:
+        one: "Imported %{count} entity."
+        many: "Imported %{count} entities."
+    banner:
+      failed: Import failed
+    outcome:
+      succeeded:
+        one: "%{count} entity imported."
+        many: "%{count} entities imported."
+      needs_driver:
+        one: "%{count} connection skipped — driver not installed."
+        many: "%{count} connections skipped — driver not installed."
+      config_failures:
+        one: "%{count} connection could not be configured."
+        many: "%{count} connections could not be configured."
+      unresolved_refs:
+        one: "%{count} connection had unresolvable references and was not imported."
+        many: "%{count} connections had unresolvable references and were not imported."
+      secret_failures:
+        one: "%{count} secret could not be written to the keyring. Enter it manually for the affected connection."
+        many: "%{count} secrets could not be written to the keyring. Enter them manually for each affected connection."
+    action:
+      reuse_existing: Reuse existing
+      create_new: Create new
+      map_to: "Map to: %{name}"
+      skip: Skip
+      use_profile: "Use: %{name}"
+      cancel: Cancel
+      back: Back
+      done: Done
+      load: Load
+      continue_: Continue
+      import: Import
 connections:
   window:
     manager_title: Connection Manager

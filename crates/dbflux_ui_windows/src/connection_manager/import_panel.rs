@@ -14,8 +14,7 @@ use dbflux_components::tokens::{FontSizes, Heights, Spacing};
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::{AuthProfile, ConnectionProfile, ProxyProfile, SshTunnelProfile};
 use dbflux_portability::{
-    ConflictChoice, ConflictKind, ImportPlan, ParsedBundle, RequiredResolutionKind,
-    ResolutionChoices,
+    ConflictChoice, ImportPlan, ParsedBundle, RequiredResolutionKind, ResolutionChoices,
 };
 use dbflux_ui_base::AppStateEntity;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
@@ -207,7 +206,9 @@ impl ImportConnectionsPanel {
     ) -> Self {
         let passphrase_input = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("Bundle passphrase")
+                .placeholder(dbflux_i18n::t!(
+                    "connection_manager.import.placeholder.bundle_passphrase"
+                ))
                 .masked(true)
         });
 
@@ -218,8 +219,11 @@ impl ImportConnectionsPanel {
             }
         });
 
-        let file_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Path to TOML bundle\u{2026}"));
+        let file_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(dbflux_i18n::t!(
+                "connection_manager.import.placeholder.bundle_path"
+            ))
+        });
 
         let file_sub = cx.subscribe(&file_input, |this, _, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Change | InputEvent::Blur) {
@@ -294,9 +298,17 @@ impl ImportConnectionsPanel {
             let this = cx.entity().clone();
             let task = cx.background_executor().spawn(async move {
                 rfd::FileDialog::new()
-                    .set_title("Open Connection Bundle")
-                    .add_filter("TOML bundle", &["toml"])
-                    .add_filter("All files", &["*"])
+                    .set_title(dbflux_i18n::t!(
+                        "connection_manager.import.dialog.open_title"
+                    ))
+                    .add_filter(
+                        dbflux_i18n::t!("connection_manager.import.filter.toml"),
+                        &["toml"],
+                    )
+                    .add_filter(
+                        dbflux_i18n::t!("connection_manager.import.filter.all"),
+                        &["*"],
+                    )
                     .pick_file()
             });
 
@@ -340,7 +352,9 @@ impl ImportConnectionsPanel {
     fn do_parse_and_plan(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let path = self.file_input.read(cx).value().trim().to_string();
         if path.is_empty() {
-            self.parse_error = Some("Choose a bundle file to import.".to_string());
+            self.parse_error = Some(dbflux_i18n::t!(
+                "connection_manager.import.error.choose_file"
+            ));
             cx.notify();
             return;
         }
@@ -361,12 +375,22 @@ impl ImportConnectionsPanel {
                 .spawn(async move {
                     let bytes = match std::fs::read(&path) {
                         Ok(b) => b,
-                        Err(e) => return (false, Err(format!("Cannot read file: {e}"))),
+                        Err(e) => {
+                            return (
+                                false,
+                                Err(crate::labels::import_error_cannot_read_file(&e.to_string())),
+                            );
+                        }
                     };
 
                     let mut parsed = match dbflux_portability::import::parse(&bytes) {
                         Ok(p) => p,
-                        Err(e) => return (false, Err(format!("Parse error: {e}"))),
+                        Err(e) => {
+                            return (
+                                false,
+                                Err(crate::labels::import_error_parse_error(&e.to_string())),
+                            );
+                        }
                     };
 
                     use dbflux_portability::bundle::EncryptionMode;
@@ -377,23 +401,22 @@ impl ImportConnectionsPanel {
                     if is_encrypted && passphrase.expose_secret().is_empty() {
                         return (
                             true,
-                            Err(
-                                "This bundle is encrypted. Enter the passphrase and try again."
-                                    .to_string(),
-                            ),
+                            Err(dbflux_i18n::t!(
+                                "connection_manager.import.error.encrypted_needs_passphrase"
+                            )),
                         );
                     }
 
                     if let Err(e) = dbflux_portability::import::decrypt(&mut parsed, &passphrase) {
                         use dbflux_portability::PortabilityError;
                         let msg = if e.is_encryption_unavailable() {
-                            "This bundle is passphrase-encrypted but the encryption \
-                             feature is not available in this build of DBFlux."
-                                .to_string()
+                            dbflux_i18n::t!(
+                                "connection_manager.import.error.encryption_unavailable"
+                            )
                         } else if matches!(&e, PortabilityError::Decryption(_)) {
-                            "Passphrase incorrect or bundle corrupted.".to_string()
+                            dbflux_i18n::t!("connection_manager.import.error.wrong_passphrase")
                         } else {
-                            format!("Decryption error: {e}")
+                            crate::labels::import_error_decryption_error(&e.to_string())
                         };
                         return (is_encrypted, Err(msg));
                     }
@@ -462,7 +485,9 @@ impl ImportConnectionsPanel {
 
             let input = cx.new(|cx| {
                 InputState::new(window, cx)
-                    .placeholder("Enter secret value")
+                    .placeholder(dbflux_i18n::t!(
+                        "connection_manager.import.placeholder.secret_value"
+                    ))
                     .masked(true)
             });
 
@@ -576,8 +601,9 @@ impl ImportConnectionsPanel {
                 Err(e) => {
                     this.update(cx, |this, cx| {
                         this.is_applying = false;
-                        this.run_result =
-                            Some(ImportRunResult::Failed(format!("Import failed: {e}")));
+                        this.run_result = Some(ImportRunResult::Failed(
+                            crate::labels::import_error_import_failed(&e.to_string()),
+                        ));
                         this.step = Step::Outcome;
                         cx.notify();
                     });
@@ -596,10 +622,7 @@ impl ImportConnectionsPanel {
                     // Only the first catch site reports through the user-error seam.
                     if !outcome.secret_failures.is_empty() {
                         let count = outcome.secret_failures.len();
-                        let msg = format!(
-                            "{count} secret(s) could not be written to the keyring \
-                             during import. The keyring may be locked or unavailable."
-                        );
+                        let msg = crate::labels::import_error_secret_failures_toast(count);
                         report_error(UserFacingError::new(ErrorKind::Storage, msg), cx);
                     }
 
@@ -612,9 +635,9 @@ impl ImportConnectionsPanel {
                             || !outcome.unresolved_refs.is_empty();
 
                         if !has_failures {
-                            dbflux_ui_base::toast::Toast::success(format!(
-                                "Imported {succeeded} entity/entities."
-                            ))
+                            dbflux_ui_base::toast::Toast::success(
+                                crate::labels::import_status_imported_toast(succeeded),
+                            )
                             .push(cx);
                         }
 
@@ -671,14 +694,18 @@ impl Render for ImportConnectionsPanel {
 
         let close_for_x = cx.entity().clone();
 
-        ModalShell::new("Import", body, self.render_footer(cx))
-            .width(px(640.0))
-            .on_close(move |_window, cx| {
-                close_for_x.update(cx, |_this, cx| {
-                    cx.emit(ImportConnectionsPanelEvent::Cancelled);
-                });
-            })
-            .into_any_element()
+        ModalShell::new(
+            dbflux_i18n::t!("connection_manager.import.modal_title"),
+            body,
+            self.render_footer(cx),
+        )
+        .width(px(640.0))
+        .on_close(move |_window, cx| {
+            close_for_x.update(cx, |_this, cx| {
+                cx.emit(ImportConnectionsPanelEvent::Cancelled);
+            });
+        })
+        .into_any_element()
     }
 }
 
@@ -704,14 +731,19 @@ impl ImportConnectionsPanel {
             .flex()
             .flex_col()
             .gap(Spacing::XS)
-            .child(Text::body("Bundle file").color(theme.muted_foreground))
+            .child(
+                Text::body(dbflux_i18n::t!(
+                    "connection_manager.import.field.bundle_file"
+                ))
+                .color(theme.muted_foreground),
+            )
             .child(file_row);
 
         if self.native_picker_unavailable {
             file_block = file_block.child(
-                Text::muted(
-                    "No native file picker on this system — type or paste the bundle path above.",
-                )
+                Text::muted(dbflux_i18n::t!(
+                    "connection_manager.import.hint.no_native_picker"
+                ))
                 .font_size(FontSizes::XS),
             );
         }
@@ -724,7 +756,9 @@ impl ImportConnectionsPanel {
             .child(
                 Checkbox::new("import-encrypted-toggle")
                     .checked(self.bundle_encrypted)
-                    .label("Bundle is encrypted")
+                    .label(dbflux_i18n::t!(
+                        "connection_manager.import.field.bundle_encrypted"
+                    ))
                     .on_click(cx.listener(|this, checked: &bool, _, cx| {
                         this.bundle_encrypted = *checked;
                         cx.notify();
@@ -753,7 +787,12 @@ impl ImportConnectionsPanel {
                     .flex()
                     .flex_col()
                     .gap(Spacing::XS)
-                    .child(Text::body("Passphrase").color(theme.muted_foreground))
+                    .child(
+                        Text::body(dbflux_i18n::t!(
+                            "connection_manager.import.field.passphrase"
+                        ))
+                        .color(theme.muted_foreground),
+                    )
                     .child(
                         div()
                             .flex()
@@ -787,10 +826,10 @@ impl ImportConnectionsPanel {
             .gap(Spacing::XS);
 
         for line in [
-            format!("{} connection(s)", summary.connection_count),
-            format!("{} auth profile(s)", summary.auth_profile_count),
-            format!("{} SSH tunnel(s)", summary.ssh_tunnel_count),
-            format!("{} proxy profile(s)", summary.proxy_count),
+            crate::labels::import_preview_count_connections(summary.connection_count),
+            crate::labels::import_preview_count_auth_profiles(summary.auth_profile_count),
+            crate::labels::import_preview_count_ssh_tunnels(summary.ssh_tunnel_count),
+            crate::labels::import_preview_count_proxies(summary.proxy_count),
         ] {
             counts = counts.child(
                 div()
@@ -805,49 +844,40 @@ impl ImportConnectionsPanel {
             .flex_col()
             .gap(Spacing::SM)
             .child(
-                Text::body("This bundle will import the following:").color(theme.muted_foreground),
+                Text::body(dbflux_i18n::t!("connection_manager.import.preview.intro"))
+                    .color(theme.muted_foreground),
             )
             .child(counts);
 
         if summary.conflict_count > 0 {
             col = col.child(BannerBlock::new(
                 BannerVariant::Warning,
-                format!(
-                    "{} profile(s) already exist at the destination — you will choose how to \
-                     resolve each.",
-                    summary.conflict_count
-                ),
+                crate::labels::import_preview_conflicts_banner(summary.conflict_count),
             ));
         }
 
         if summary.required_resolution_count > 0 {
             col = col.child(BannerBlock::new(
                 BannerVariant::Info,
-                format!(
-                    "{} value(s) may be required after import — secrets omitted from the bundle \
-                     can be entered or skipped.",
-                    summary.required_resolution_count
-                ),
+                crate::labels::import_preview_required_banner(summary.required_resolution_count),
             ));
         }
 
         if summary.has_driver_not_installed {
             col = col.child(BannerBlock::new(
                 BannerVariant::Warning,
-                "One or more connections reference a driver not installed on this machine and \
-                 will be skipped.",
+                dbflux_i18n::t!("connection_manager.import.preview.driver_not_installed_banner"),
             ));
         }
 
         col = col.child(
             BannerBlock::new(
                 BannerVariant::Info,
-                "External value references travel as-is",
+                dbflux_i18n::t!("connection_manager.import.hint.external_refs"),
             )
-            .with_body(
-                "SSM, Secrets Manager, and environment references are imported unchanged and \
-                     resolved against this machine at connect time.",
-            ),
+            .with_body(dbflux_i18n::t!(
+                "connection_manager.import.hint.external_refs_body"
+            )),
         );
 
         col.into_any_element()
@@ -862,10 +892,8 @@ impl ImportConnectionsPanel {
         let dest = self.dest_snapshot(cx);
 
         let mut col = div().flex().flex_col().gap(Spacing::SM).child(
-            Text::body(
-                "Some profiles in this bundle already exist. Choose how to handle each conflict.",
-            )
-            .color(theme.muted_foreground),
+            Text::body(dbflux_i18n::t!("connection_manager.import.conflicts.intro"))
+                .color(theme.muted_foreground),
         );
 
         for conflict in &plan.conflicts {
@@ -883,12 +911,7 @@ impl ImportConnectionsPanel {
     ) -> AnyElement {
         let theme = cx.theme().clone();
 
-        let kind_label = match conflict.kind {
-            ConflictKind::AuthProfile => "Auth profile",
-            ConflictKind::SshTunnel => "SSH tunnel",
-            ConflictKind::Proxy => "Proxy",
-            ConflictKind::Connection => "Connection",
-        };
+        let kind_label = crate::labels::import_conflict_kind_label(conflict.kind);
 
         let candidates = mapto_candidates(conflict.kind, dest);
         let current = self
@@ -897,13 +920,19 @@ impl ImportConnectionsPanel {
             .cloned();
 
         let mut items = vec![
-            SegmentedItem::new(CHOICE_REUSE, "Reuse existing"),
-            SegmentedItem::new(CHOICE_CREATE, "Create new"),
+            SegmentedItem::new(
+                CHOICE_REUSE,
+                dbflux_i18n::t!("connection_manager.import.action.reuse_existing"),
+            ),
+            SegmentedItem::new(
+                CHOICE_CREATE,
+                dbflux_i18n::t!("connection_manager.import.action.create_new"),
+            ),
         ];
         for (candidate_id, candidate_name) in &candidates {
             items.push(SegmentedItem::new(
                 format!("{CHOICE_MAP_PREFIX}{candidate_id}"),
-                format!("Map to: {candidate_name}"),
+                crate::labels::import_action_map_to(candidate_name),
             ));
         }
 
@@ -942,9 +971,10 @@ impl ImportConnectionsPanel {
                 div()
                     .text_size(FontSizes::SM)
                     .text_color(theme.foreground)
-                    .child(format!(
-                        "{kind_label}: \"{}\" conflicts with \"{}\"",
-                        conflict.bundle_name, conflict.existing_name
+                    .child(crate::labels::import_conflicts_row_label(
+                        &kind_label,
+                        &conflict.bundle_name,
+                        &conflict.existing_name,
                     )),
             )
             .child(control)
@@ -958,11 +988,8 @@ impl ImportConnectionsPanel {
         };
 
         let mut col = div().flex().flex_col().gap(Spacing::SM).child(
-            Text::body(
-                "The following values may be required. Leave a secret empty to skip it — the \
-                 connection still imports without it.",
-            )
-            .color(theme.muted_foreground),
+            Text::body(dbflux_i18n::t!("connection_manager.import.required.intro"))
+                .color(theme.muted_foreground),
         );
 
         for resolution in &plan.required_resolutions {
@@ -999,12 +1026,17 @@ impl ImportConnectionsPanel {
                         div()
                             .text_size(FontSizes::SM)
                             .text_color(theme.foreground)
-                            .child(format!(
-                                "Secret for \"{}\": {}",
-                                resolution.owner_name, resolution.field
+                            .child(crate::labels::import_required_secret_label(
+                                &resolution.owner_name,
+                                &resolution.field,
                             )),
                     )
-                    .child(Text::muted("Leave empty to skip.").font_size(FontSizes::XS));
+                    .child(
+                        Text::muted(dbflux_i18n::t!(
+                            "connection_manager.import.hint.leave_empty_skip"
+                        ))
+                        .font_size(FontSizes::XS),
+                    );
 
                 if let Some(input) = self.secret_inputs.get(&key) {
                     row = row.child(Input::new(input));
@@ -1023,9 +1055,10 @@ impl ImportConnectionsPanel {
                     div()
                         .text_size(FontSizes::SM)
                         .text_color(theme.foreground)
-                        .child(format!(
-                            "AWS auth profile \"{name}\" ({provider_id}) for \"{}\"",
-                            resolution.owner_name
+                        .child(crate::labels::import_required_aws_reference_label(
+                            name,
+                            provider_id,
+                            &resolution.owner_name,
                         )),
                 );
 
@@ -1043,9 +1076,9 @@ impl ImportConnectionsPanel {
                     div()
                         .text_size(FontSizes::SM)
                         .text_color(theme.foreground)
-                        .child(format!(
-                            "Auth profile for \"{}\": {}",
-                            resolution.owner_name, resolution.field
+                        .child(crate::labels::import_required_auth_profile_ref_label(
+                            &resolution.owner_name,
+                            &resolution.field,
                         )),
                 );
 
@@ -1064,21 +1097,23 @@ impl ImportConnectionsPanel {
         cx: &Context<Self>,
     ) -> AnyElement {
         if candidates.is_empty() {
-            return Text::muted(
-                "No matching auth profile on this machine. The connection imports without one; \
-                 assign it later in Settings > Auth Profiles.",
-            )
+            return Text::muted(dbflux_i18n::t!(
+                "connection_manager.import.required.no_matching_auth_profile"
+            ))
             .font_size(FontSizes::XS)
             .into_any_element();
         }
 
         let current = self.auth_profile_choices.get(key).copied();
 
-        let mut items = vec![SegmentedItem::new(AUTH_SKIP, "Skip")];
+        let mut items = vec![SegmentedItem::new(
+            AUTH_SKIP,
+            dbflux_i18n::t!("connection_manager.import.action.skip"),
+        )];
         for (id, name) in candidates {
             items.push(SegmentedItem::new(
                 format!("{AUTH_USE_PREFIX}{id}"),
-                format!("Use: {name}"),
+                crate::labels::import_action_use_profile(name),
             ));
         }
 
@@ -1109,7 +1144,12 @@ impl ImportConnectionsPanel {
             .flex()
             .flex_col()
             .gap(Spacing::XS)
-            .child(Text::muted("Select a profile or skip:").font_size(FontSizes::XS))
+            .child(
+                Text::muted(dbflux_i18n::t!(
+                    "connection_manager.import.hint.select_profile_or_skip"
+                ))
+                .font_size(FontSizes::XS),
+            )
             .child(control)
             .into_any_element()
     }
@@ -1121,18 +1161,25 @@ impl ImportConnectionsPanel {
 
         match self.run_result.as_ref() {
             None => {
-                col = col.child(Text::body("Import complete.").color(theme.foreground));
+                col = col.child(
+                    Text::body(dbflux_i18n::t!("connection_manager.import.status.complete"))
+                        .color(theme.foreground),
+                );
             }
             Some(ImportRunResult::Failed(msg)) => {
                 col = col.child(
-                    BannerBlock::new(BannerVariant::Danger, "Import failed").with_body(msg.clone()),
+                    BannerBlock::new(
+                        BannerVariant::Danger,
+                        dbflux_i18n::t!("connection_manager.import.banner.failed"),
+                    )
+                    .with_body(msg.clone()),
                 );
             }
             Some(ImportRunResult::Outcome(outcome)) => {
                 if !outcome.succeeded.is_empty() {
                     col = col.child(BannerBlock::new(
                         BannerVariant::Success,
-                        format!("{} entity/entities imported.", outcome.succeeded.len()),
+                        crate::labels::import_outcome_succeeded(outcome.succeeded.len()),
                     ));
                 }
 
@@ -1146,10 +1193,7 @@ impl ImportConnectionsPanel {
                     col = col.child(
                         BannerBlock::new(
                             BannerVariant::Warning,
-                            format!(
-                                "{} connection(s) skipped — driver not installed.",
-                                outcome.needs_driver.len()
-                            ),
+                            crate::labels::import_outcome_needs_driver(outcome.needs_driver.len()),
                         )
                         .with_body(body),
                     );
@@ -1165,9 +1209,8 @@ impl ImportConnectionsPanel {
                     col = col.child(
                         BannerBlock::new(
                             BannerVariant::Warning,
-                            format!(
-                                "{} connection(s) could not be configured.",
-                                outcome.config_failures.len()
+                            crate::labels::import_outcome_config_failures(
+                                outcome.config_failures.len(),
                             ),
                         )
                         .with_body(body),
@@ -1184,9 +1227,8 @@ impl ImportConnectionsPanel {
                     col = col.child(
                         BannerBlock::new(
                             BannerVariant::Warning,
-                            format!(
-                                "{} connection(s) had unresolvable references and were not imported.",
-                                outcome.unresolved_refs.len()
+                            crate::labels::import_outcome_unresolved_refs(
+                                outcome.unresolved_refs.len(),
                             ),
                         )
                         .with_body(body),
@@ -1196,10 +1238,8 @@ impl ImportConnectionsPanel {
                 if !outcome.secret_failures.is_empty() {
                     col = col.child(BannerBlock::new(
                         BannerVariant::Warning,
-                        format!(
-                            "{} secret(s) could not be written to the keyring. \
-                             Enter them manually for each affected connection.",
-                            outcome.secret_failures.len()
+                        crate::labels::import_outcome_secret_failures(
+                            outcome.secret_failures.len(),
                         ),
                     ));
                 }
@@ -1211,42 +1251,53 @@ impl ImportConnectionsPanel {
 
     fn render_footer(&self, cx: &Context<Self>) -> AnyElement {
         let left = match self.step {
-            Step::SelectFile => {
-                Button::new("import-cancel", "Cancel")
-                    .ghost()
-                    .on_click(cx.listener(|_this, _: &gpui::ClickEvent, _, cx| {
-                        cx.emit(ImportConnectionsPanelEvent::Cancelled);
-                    }))
-            }
-            Step::Preview => Button::new("import-back", "Back")
-                .ghost()
-                .on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
-                    this.step = Step::SelectFile;
-                    cx.notify();
-                })),
-            Step::Conflicts => Button::new("import-back", "Back")
-                .ghost()
-                .on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
-                    this.step = Step::Preview;
-                    cx.notify();
-                })),
-            Step::RequiredReferences => {
-                Button::new("import-back", "Back")
-                    .ghost()
-                    .on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
-                        this.step = if this.has_conflicts() {
-                            Step::Conflicts
-                        } else {
-                            Step::Preview
-                        };
-                        cx.notify();
-                    }))
-            }
-            Step::Outcome => Button::new("import-done", "Done")
-                .ghost()
-                .on_click(cx.listener(|_this, _: &gpui::ClickEvent, _, cx| {
-                    cx.emit(ImportConnectionsPanelEvent::Completed);
-                })),
+            Step::SelectFile => Button::new(
+                "import-cancel",
+                dbflux_i18n::t!("connection_manager.import.action.cancel"),
+            )
+            .ghost()
+            .on_click(cx.listener(|_this, _: &gpui::ClickEvent, _, cx| {
+                cx.emit(ImportConnectionsPanelEvent::Cancelled);
+            })),
+            Step::Preview => Button::new(
+                "import-back",
+                dbflux_i18n::t!("connection_manager.import.action.back"),
+            )
+            .ghost()
+            .on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
+                this.step = Step::SelectFile;
+                cx.notify();
+            })),
+            Step::Conflicts => Button::new(
+                "import-back",
+                dbflux_i18n::t!("connection_manager.import.action.back"),
+            )
+            .ghost()
+            .on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
+                this.step = Step::Preview;
+                cx.notify();
+            })),
+            Step::RequiredReferences => Button::new(
+                "import-back",
+                dbflux_i18n::t!("connection_manager.import.action.back"),
+            )
+            .ghost()
+            .on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
+                this.step = if this.has_conflicts() {
+                    Step::Conflicts
+                } else {
+                    Step::Preview
+                };
+                cx.notify();
+            })),
+            Step::Outcome => Button::new(
+                "import-done",
+                dbflux_i18n::t!("connection_manager.import.action.done"),
+            )
+            .ghost()
+            .on_click(cx.listener(|_this, _: &gpui::ClickEvent, _, cx| {
+                cx.emit(ImportConnectionsPanelEvent::Completed);
+            })),
         };
 
         let primary = self.render_primary_button(cx);
@@ -1267,9 +1318,9 @@ impl ImportConnectionsPanel {
                 let can_load =
                     !self.file_input.read(cx).value().trim().is_empty() && !self.is_parsing;
                 let label = if self.is_parsing {
-                    "Loading\u{2026}"
+                    dbflux_i18n::t!("connection_manager.import.status.loading")
                 } else {
-                    "Load"
+                    dbflux_i18n::t!("connection_manager.import.action.load")
                 };
                 Some(
                     Button::new("import-load", label)
@@ -1282,32 +1333,38 @@ impl ImportConnectionsPanel {
                 )
             }
             Step::Preview => Some(
-                Button::new("import-preview-next", "Continue")
-                    .primary()
-                    .on_click(cx.listener(|this, _: &gpui::ClickEvent, window, cx| {
-                        this.advance_from_preview(window, cx);
-                    }))
-                    .into_any_element(),
+                Button::new(
+                    "import-preview-next",
+                    dbflux_i18n::t!("connection_manager.import.action.continue_"),
+                )
+                .primary()
+                .on_click(cx.listener(|this, _: &gpui::ClickEvent, window, cx| {
+                    this.advance_from_preview(window, cx);
+                }))
+                .into_any_element(),
             ),
             Step::Conflicts => {
                 let resolved = self.all_conflicts_resolved();
                 Some(
-                    Button::new("import-conflicts-next", "Continue")
-                        .primary()
-                        .disabled(!resolved)
-                        .on_click(cx.listener(|this, _: &gpui::ClickEvent, window, cx| {
-                            if this.all_conflicts_resolved() {
-                                this.advance_from_conflicts(window, cx);
-                            }
-                        }))
-                        .into_any_element(),
+                    Button::new(
+                        "import-conflicts-next",
+                        dbflux_i18n::t!("connection_manager.import.action.continue_"),
+                    )
+                    .primary()
+                    .disabled(!resolved)
+                    .on_click(cx.listener(|this, _: &gpui::ClickEvent, window, cx| {
+                        if this.all_conflicts_resolved() {
+                            this.advance_from_conflicts(window, cx);
+                        }
+                    }))
+                    .into_any_element(),
                 )
             }
             Step::RequiredReferences => {
                 let label = if self.is_applying {
-                    "Importing\u{2026}"
+                    dbflux_i18n::t!("connection_manager.import.status.importing")
                 } else {
-                    "Import"
+                    dbflux_i18n::t!("connection_manager.import.action.import")
                 };
                 Some(
                     Button::new("import-required-apply", label)
@@ -1344,4 +1401,148 @@ fn parse_conflict_choice(id: &str) -> Option<ConflictChoice> {
 fn parse_auth_choice(id: &str) -> Option<Uuid> {
     id.strip_prefix(AUTH_USE_PREFIX)
         .and_then(|uuid_str| Uuid::parse_str(uuid_str).ok())
+}
+
+#[cfg(test)]
+mod tests {
+    /// Every `connection_manager.import.*` key this panel resolves directly via
+    /// `dbflux_i18n::t!`, including the plural `.one`/`.many` variants. Keys backed
+    /// by `crate::labels` helpers are exercised separately by `labels.rs`'s own
+    /// test module, but every leaf key they resolve is still listed here so this
+    /// slice's key coverage is self-contained in one place.
+    const IMPORT_PANEL_KEYS: &[&str] = &[
+        "connection_manager.import.placeholder.bundle_passphrase",
+        "connection_manager.import.placeholder.bundle_path",
+        "connection_manager.import.placeholder.secret_value",
+        "connection_manager.import.dialog.open_title",
+        "connection_manager.import.filter.toml",
+        "connection_manager.import.filter.all",
+        "connection_manager.import.error.choose_file",
+        "connection_manager.import.error.cannot_read_file",
+        "connection_manager.import.error.parse_error",
+        "connection_manager.import.error.encrypted_needs_passphrase",
+        "connection_manager.import.error.encryption_unavailable",
+        "connection_manager.import.error.wrong_passphrase",
+        "connection_manager.import.error.decryption_error",
+        "connection_manager.import.error.import_failed",
+        "connection_manager.import.error.secret_failures_toast.one",
+        "connection_manager.import.error.secret_failures_toast.many",
+        "connection_manager.import.field.bundle_file",
+        "connection_manager.import.field.bundle_encrypted",
+        "connection_manager.import.field.passphrase",
+        "connection_manager.import.hint.no_native_picker",
+        "connection_manager.import.hint.external_refs",
+        "connection_manager.import.hint.external_refs_body",
+        "connection_manager.import.hint.leave_empty_skip",
+        "connection_manager.import.hint.select_profile_or_skip",
+        "connection_manager.import.modal_title",
+        "connection_manager.import.preview.intro",
+        "connection_manager.import.preview.count.connections.one",
+        "connection_manager.import.preview.count.connections.many",
+        "connection_manager.import.preview.count.auth_profiles.one",
+        "connection_manager.import.preview.count.auth_profiles.many",
+        "connection_manager.import.preview.count.ssh_tunnels.one",
+        "connection_manager.import.preview.count.ssh_tunnels.many",
+        "connection_manager.import.preview.count.proxies.one",
+        "connection_manager.import.preview.count.proxies.many",
+        "connection_manager.import.preview.conflicts_banner.one",
+        "connection_manager.import.preview.conflicts_banner.many",
+        "connection_manager.import.preview.required_banner.one",
+        "connection_manager.import.preview.required_banner.many",
+        "connection_manager.import.preview.driver_not_installed_banner",
+        "connection_manager.import.conflict_kind.auth_profile",
+        "connection_manager.import.conflict_kind.ssh_tunnel",
+        "connection_manager.import.conflict_kind.proxy",
+        "connection_manager.import.conflict_kind.connection",
+        "connection_manager.import.conflicts.intro",
+        "connection_manager.import.conflicts.row_label",
+        "connection_manager.import.required.intro",
+        "connection_manager.import.required.secret_label",
+        "connection_manager.import.required.aws_reference_label",
+        "connection_manager.import.required.auth_profile_ref_label",
+        "connection_manager.import.required.no_matching_auth_profile",
+        "connection_manager.import.status.complete",
+        "connection_manager.import.status.loading",
+        "connection_manager.import.status.importing",
+        "connection_manager.import.status.imported_toast.one",
+        "connection_manager.import.status.imported_toast.many",
+        "connection_manager.import.banner.failed",
+        "connection_manager.import.outcome.succeeded.one",
+        "connection_manager.import.outcome.succeeded.many",
+        "connection_manager.import.outcome.needs_driver.one",
+        "connection_manager.import.outcome.needs_driver.many",
+        "connection_manager.import.outcome.config_failures.one",
+        "connection_manager.import.outcome.config_failures.many",
+        "connection_manager.import.outcome.unresolved_refs.one",
+        "connection_manager.import.outcome.unresolved_refs.many",
+        "connection_manager.import.outcome.secret_failures.one",
+        "connection_manager.import.outcome.secret_failures.many",
+        "connection_manager.import.action.reuse_existing",
+        "connection_manager.import.action.create_new",
+        "connection_manager.import.action.map_to",
+        "connection_manager.import.action.skip",
+        "connection_manager.import.action.use_profile",
+        "connection_manager.import.action.cancel",
+        "connection_manager.import.action.back",
+        "connection_manager.import.action.done",
+        "connection_manager.import.action.load",
+        "connection_manager.import.action.continue_",
+        "connection_manager.import.action.import",
+    ];
+
+    #[test]
+    fn import_panel_keys_resolve_in_both_locales() {
+        for locale in ["en", "es"] {
+            for key in IMPORT_PANEL_KEYS {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(
+                    !value.is_empty(),
+                    "key {key} resolved empty for locale {locale}"
+                );
+                assert_ne!(value, *key, "key {key} did not resolve for locale {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "key {key} fell back to the raw locale-qualified form for locale {locale}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn import_panel_keys_diverge_between_locales() {
+        // "Proxy" is a proper noun kept identical in both locales, matching the
+        // convention already used for other proxy-facing keys in this catalog.
+        const UNTRANSLATED: &[&str] = &["connection_manager.import.conflict_kind.proxy"];
+
+        for key in IMPORT_PANEL_KEYS {
+            if UNTRANSLATED.contains(key) {
+                continue;
+            }
+
+            let english = dbflux_i18n::t!(key, locale = "en");
+            let spanish = dbflux_i18n::t!(key, locale = "es");
+
+            assert_ne!(
+                english, spanish,
+                "key {key} did not diverge between locales"
+            );
+        }
+    }
+
+    #[test]
+    fn conflict_kind_labels_are_exhaustive_over_the_enum() {
+        use dbflux_portability::ConflictKind;
+
+        for kind in [
+            ConflictKind::AuthProfile,
+            ConflictKind::SshTunnel,
+            ConflictKind::Proxy,
+            ConflictKind::Connection,
+        ] {
+            let label = crate::labels::import_conflict_kind_label(kind);
+            assert!(!label.is_empty(), "{kind:?} resolved an empty label");
+        }
+    }
 }
