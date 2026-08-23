@@ -738,9 +738,11 @@ impl CodeDocument {
                     this.refresh.refresh_dropdown.update(cx, |dd, cx| {
                         dd.set_selected_index(Some(RefreshPolicy::Manual.index()), cx);
                     });
-                    Toast::warning("Auto-refresh blocked: query modifies data")
-                        .meta_right(now_hms())
-                        .push(cx);
+                    Toast::warning(dbflux_i18n::t!(
+                        "document.code.execution.toast.auto_refresh_blocked"
+                    ))
+                    .meta_right(now_hms())
+                    .push(cx);
                     return;
                 }
 
@@ -805,7 +807,7 @@ impl CodeDocument {
             Self::create_schema_dropdown(&app_state, &exec_ctx, window, cx);
         let source_query_mode_dropdown = cx.new(|_cx| {
             Dropdown::new("ctx-source-query-mode")
-                .placeholder("Syntax")
+                .placeholder(dbflux_i18n::t!("document.code.context_bar.fallback.syntax"))
                 .toolbar_style(true)
         });
         // bare() suppresses the trigger's own border/background because the
@@ -813,7 +815,9 @@ impl CodeDocument {
         let source_targets = cx.new(|_cx| {
             MultiSelect::new("ctx-source-targets")
                 .bare()
-                .placeholder("Sources")
+                .placeholder(dbflux_i18n::t!(
+                    "document.code.context_bar.fallback.sources"
+                ))
         });
         let source_start_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("2026-04-24T00:00:00Z"));
@@ -986,9 +990,11 @@ impl CodeDocument {
     /// surfaces a toast instead of emitting so the user gets feedback.
     pub fn emit_chart_this_query(&mut self, cx: &mut Context<Self>) {
         let Some(query) = self.current_query_text(cx) else {
-            Toast::warning("Write a query first to open it in a chart")
-                .meta_right(now_hms())
-                .push(cx);
+            Toast::warning(dbflux_i18n::t!(
+                "document.code.execution.toast.write_query_first"
+            ))
+            .meta_right(now_hms())
+            .push(cx);
             return;
         };
 
@@ -1252,10 +1258,11 @@ impl CodeDocument {
 
     pub fn title(&self) -> String {
         if let Some(path) = &self.editor.path {
+            let untitled = dbflux_i18n::t!("document.code.title.untitled");
             let name = path
                 .file_name()
                 .and_then(|n| n.to_str())
-                .unwrap_or("Untitled");
+                .unwrap_or(untitled.as_str());
 
             if self.editor.is_dirty {
                 format!("{}*", name)
@@ -1914,5 +1921,29 @@ mod tests {
 
         assert_eq!(values.0, "2024-01-01T00:00:00Z");
         assert_eq!(values.1, "2024-01-01T01:00:00Z");
+    }
+
+    #[test]
+    fn code_title_untitled_key_resolves_in_both_locales() {
+        for locale in ["en", "es"] {
+            let key = "document.code.title.untitled";
+            let value = dbflux_i18n::t!(key, locale = locale);
+
+            assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+            assert_ne!(value, key, "{key} resolved to its own key in {locale}");
+            assert_ne!(
+                value,
+                format!("{locale}.{key}"),
+                "{key} missing from {locale} catalog"
+            );
+        }
+    }
+
+    #[test]
+    fn code_title_untitled_differs_between_locales() {
+        let en = dbflux_i18n::t!("document.code.title.untitled", locale = "en");
+        let es = dbflux_i18n::t!("document.code.title.untitled", locale = "es");
+
+        assert_ne!(en, es);
     }
 }

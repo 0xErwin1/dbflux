@@ -58,7 +58,7 @@ impl CodeDocument {
                     report_error_async(
                         UserFacingError::new(
                             ErrorKind::Storage,
-                            format!("Failed to save file: {e}"),
+                            dbflux_i18n::t!("document.code.file_ops.error.save_failed", error = e),
                         ),
                         cx,
                     );
@@ -97,10 +97,13 @@ impl CodeDocument {
         self._pending_save = Some(cx.spawn(async move |_this, cx| {
             let target: Option<(std::path::PathBuf, bool)> = if dialog_available {
                 let file_handle = rfd::AsyncFileDialog::new()
-                    .set_title("Save Script As")
+                    .set_title(dbflux_i18n::t!("document.code.file_ops.save_as.title"))
                     .set_file_name(&suggested_name)
                     .add_filter(&language_name, &[&default_ext])
-                    .add_filter("All Files", &["*"])
+                    .add_filter(
+                        dbflux_i18n::t!("document.code.file_ops.save_as.all_files"),
+                        &["*"],
+                    )
                     .save_file()
                     .await;
 
@@ -115,8 +118,9 @@ impl CodeDocument {
                         report_error_async(
                             UserFacingError::new(
                                 ErrorKind::Storage,
-                                format!(
-                                    "Save failed — file dialog unavailable and fallback directory could not be created: {err}"
+                                dbflux_i18n::t!(
+                                    "document.code.file_ops.error.dialog_unavailable",
+                                    error = err
                                 ),
                             ),
                             cx,
@@ -152,9 +156,9 @@ impl CodeDocument {
                         });
 
                         if used_fallback {
-                            dbflux_ui_base::toast::Toast::warning(format!(
-                                "Native file picker unavailable — script saved to {} instead. Install xdg-desktop-portal, zenity, or kdialog for a save dialog.",
-                                path_for_update.display()
+                            dbflux_ui_base::toast::Toast::warning(dbflux_i18n::t!(
+                                "document.code.file_ops.native_picker_fallback",
+                                path = path_for_update.display().to_string()
                             ))
                             .meta_right(dbflux_ui_base::toast::now_hms())
                             .push(cx);
@@ -164,7 +168,13 @@ impl CodeDocument {
                 }
                 Err(e) => {
                     report_error_async(
-                        UserFacingError::new(ErrorKind::Storage, format!("Failed to save script: {e}")),
+                        UserFacingError::new(
+                            ErrorKind::Storage,
+                            dbflux_i18n::t!(
+                                "document.code.file_ops.error.save_script_failed",
+                                error = e
+                            ),
+                        ),
                         cx,
                     );
                 }
@@ -238,7 +248,10 @@ impl CodeDocument {
                     report_error_async(
                         UserFacingError::new(
                             ErrorKind::Storage,
-                            format!("Auto-save failed for {}", target.display()),
+                            dbflux_i18n::t!(
+                                "document.code.file_ops.error.auto_save_failed",
+                                path = target.display().to_string()
+                            ),
                         )
                         .with_cause(format!("{e}")),
                         cx,
@@ -385,5 +398,51 @@ mod tests {
         let content = build_file_content_for_language("print('hi')", &exec_ctx, false, "#");
 
         assert_eq!(content, "print('hi')");
+    }
+
+    #[test]
+    fn file_ops_keys_resolve_in_both_locales() {
+        let keys = [
+            "document.code.file_ops.save_as.title",
+            "document.code.file_ops.save_as.all_files",
+            "document.code.file_ops.error.save_failed",
+            "document.code.file_ops.error.dialog_unavailable",
+            "document.code.file_ops.error.save_script_failed",
+            "document.code.file_ops.error.auto_save_failed",
+            "document.code.file_ops.native_picker_fallback",
+        ];
+
+        for key in keys {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn file_ops_save_failed_interpolates_error() {
+        let en = dbflux_i18n::t!(
+            "document.code.file_ops.error.save_failed",
+            locale = "en",
+            error = "disk full"
+        );
+
+        assert_eq!(en, "Failed to save file: disk full");
+    }
+
+    #[test]
+    fn file_ops_save_as_title_differs_between_locales() {
+        let en = dbflux_i18n::t!("document.code.file_ops.save_as.title", locale = "en");
+        let es = dbflux_i18n::t!("document.code.file_ops.save_as.title", locale = "es");
+
+        assert_ne!(en, es);
     }
 }

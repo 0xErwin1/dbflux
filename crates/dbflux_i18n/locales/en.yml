@@ -763,6 +763,55 @@ document:
         raw_expression_in_set:
           title: Raw SQL expression in SET
           body: SET clause contains a raw SQL expression — bypasses parameter binding
+    context_bar:
+      placeholder:
+        connection: No connection
+        database: Database
+        schema: Schema
+      label:
+        connection: "Connection:"
+        source: "Source:"
+        database: "Database:"
+        schema: "Schema:"
+      fallback:
+        syntax: Syntax
+        sources: Sources
+        time: Time
+        start: Start
+        end: End
+      apply: Apply
+      connect_error: "Cannot connect to database '%{database}'"
+      connect_failed: "Failed to connect to database '%{database}': %{error}"
+    execution:
+      toast:
+        select_query: Select query text to run
+        enter_query: Enter a query to run
+        no_active_connection: No active connection
+        connection_not_found: Connection not found
+        auto_refresh_blocked: "Auto-refresh blocked: query modifies data"
+        explain_unavailable: Explain is not available for scripts
+        enter_query_to_explain: Enter a query to explain
+        enter_script_content: Enter script content to run
+        write_query_first: Write a query first to open it in a chart
+        connecting: "Connecting to database '%{database}', please wait..."
+        redis_flush_disabled: FLUSHALL / FLUSHDB is disabled in settings
+      result_title:
+        query_failed: Query failed
+        script_failed: Script failed
+      copy_error: Copy error
+      result_tab_title: "Result %{index}"
+    file_ops:
+      save_as:
+        title: Save Script As
+        all_files: All Files
+      error:
+        save_failed: "Failed to save file: %{error}"
+        dialog_unavailable: "Save failed — file dialog unavailable and fallback directory could not be created: %{error}"
+        save_script_failed: "Failed to save script: %{error}"
+        auto_save_failed: "Auto-save failed for %{path}"
+      native_picker_fallback: "Native file picker unavailable — script saved to %{path} instead. Install xdg-desktop-portal, zenity, or kdialog for a save dialog."
+    title:
+      untitled: Untitled
   dashboard:
     builder:
       preset:

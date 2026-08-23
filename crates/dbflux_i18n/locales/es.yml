@@ -763,6 +763,55 @@ document:
         raw_expression_in_set:
           title: Expresión SQL cruda en SET
           body: "La cláusula SET contiene una expresión SQL cruda — evita el enlace de parámetros"
+    context_bar:
+      placeholder:
+        connection: Sin conexión
+        database: Base de datos
+        schema: Esquema
+      label:
+        connection: "Conexión:"
+        source: "Origen:"
+        database: "Base de datos:"
+        schema: "Esquema:"
+      fallback:
+        syntax: Sintaxis
+        sources: Orígenes
+        time: Hora
+        start: Inicio
+        end: Fin
+      apply: Aplicar
+      connect_error: "No se puede conectar a la base de datos '%{database}'"
+      connect_failed: "No se pudo conectar a la base de datos '%{database}': %{error}"
+    execution:
+      toast:
+        select_query: Selecciona el texto de la consulta a ejecutar
+        enter_query: Escribe una consulta para ejecutar
+        no_active_connection: No hay ninguna conexión activa
+        connection_not_found: Conexión no encontrada
+        auto_refresh_blocked: "Actualización automática bloqueada: la consulta modifica datos"
+        explain_unavailable: Explain no está disponible para scripts
+        enter_query_to_explain: Escribe una consulta para analizar con Explain
+        enter_script_content: Escribe contenido del script para ejecutar
+        write_query_first: Escribe primero una consulta para abrirla en una gráfica
+        connecting: "Conectando a la base de datos '%{database}', espera..."
+        redis_flush_disabled: FLUSHALL / FLUSHDB está deshabilitado en la configuración
+      result_title:
+        query_failed: Consulta fallida
+        script_failed: Script fallido
+      copy_error: Copiar error
+      result_tab_title: "Resultado %{index}"
+    file_ops:
+      save_as:
+        title: Guardar script como
+        all_files: Todos los archivos
+      error:
+        save_failed: "No se pudo guardar el archivo: %{error}"
+        dialog_unavailable: "Error al guardar — el selector de archivos no está disponible y no se pudo crear el directorio alternativo: %{error}"
+        save_script_failed: "No se pudo guardar el script: %{error}"
+        auto_save_failed: "El guardado automático falló para %{path}"
+      native_picker_fallback: "Selector de archivos nativo no disponible — el script se guardó en %{path}. Instala xdg-desktop-portal, zenity o kdialog para tener un selector de guardado."
+    title:
+      untitled: Sin título
   dashboard:
     builder:
       preset:
