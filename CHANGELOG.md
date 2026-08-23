@@ -6,6 +6,20 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Added
 
+* **Spanish website and documentation (#360)** — dbflux.dev gains a Spanish
+  edition under `/es/`: the landing page, about page, navigation, search
+  dialog, install tabs and footer read from typed dictionaries with a
+  language switcher in the nav; every documentation page exists under
+  `/es/docs/…` per version, rendering the Spanish translation when a
+  `docs/es/<NAME>.md` sibling exists and the English page with a visible
+  "not yet translated" notice (and `noindex`) when it does not. The install,
+  usage and connections guides ship translated. Search engines get
+  reciprocal `hreflang` pairs, per-locale canonicals and localized sitemap
+  entries. Along the way two long-standing link bugs were fixed: relative
+  markdown links in the published docs resolved against the wrong root
+  (broken GitHub URLs), and links between version-exclusive pages crossed
+  into the wrong version.
+
 * **Spanish user interface (#360)** — Settings → General gains a Language
   control with System, English, and Spanish. System follows the OS locale
   and falls back to English when that locale is not supported; the choice
