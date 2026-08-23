@@ -194,11 +194,12 @@ where
     };
 
     // Group pill
+    let group_role = dbflux_i18n::t!("chart.axis_bar.group");
     let group_pill = {
         let handler = on_pill_click.clone();
         pill_element(
             "axis-pill-group",
-            "Group",
+            &group_role,
             group_label,
             group_open,
             colors,
@@ -299,7 +300,7 @@ where
 /// When `active`, the pill border is highlighted.
 fn pill_element(
     id: impl Into<ElementId>,
-    role: &'static str,
+    role: &str,
     value: SharedString,
     active: bool,
     colors: &ChartColors,
@@ -344,7 +345,7 @@ fn pill_element(
                 .text_size(ChartGeometry::FONT_TINY)
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(colors.label_fg)
-                .child(SharedString::from(role)),
+                .child(SharedString::from(role.to_string())),
         )
         .child(
             div()
@@ -791,5 +792,14 @@ mod tests {
 
         // cpu (1) and count (3) qualify; ts and host do not.
         assert_eq!(candidates, vec![1, 3]);
+    }
+
+    #[test]
+    fn axis_bar_group_key_resolves() {
+        let en = dbflux_i18n::t!("chart.axis_bar.group", locale = "en");
+        let es = dbflux_i18n::t!("chart.axis_bar.group", locale = "es");
+        assert_eq!(en, "Group");
+        assert_eq!(es, "Grupo");
+        assert_ne!(en, es);
     }
 }
