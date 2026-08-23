@@ -25,6 +25,8 @@ interface Props {
   description: string;
   editPath?: string;
   locale?: Locale;
+  /** Forwarded to `Base` — see its `translated` prop. Only the docs index is today. */
+  translated?: boolean;
 }
 
 const {
@@ -36,6 +38,7 @@ const {
   description,
   editPath,
   locale = localeFromPathname(Astro.url.pathname),
+  translated = false,
 } = Astro.props;
 const onThisPage = headings.filter((heading) => heading.depth === 2);
 
@@ -45,8 +48,10 @@ const suffix = isCurrent ? '' : ` (${versionLabel(version)})`;
 /**
  * Older and unreleased versions point at the current release, so a search engine
  * ranks the version most readers are running rather than whichever it crawled.
+ * The version canonical and the locale prefix are independent axes, so the
+ * active locale is passed through rather than always resolving to English.
  */
-const canonicalPath = isCurrent ? undefined : docsUrl(currentPath ?? '');
+const canonicalPath = isCurrent ? undefined : docsUrl(currentPath ?? '', undefined, locale);
 ---
 
 <Base
@@ -58,6 +63,7 @@ const canonicalPath = isCurrent ? undefined : docsUrl(currentPath ?? '');
   canonicalPath={canonicalPath}
   searchIndex={isCurrent ? '/search-index.json' : `/${version.id}/search-index.json`}
   locale={locale}
+  translated={translated}
 >
   <div class="docs">
     <button

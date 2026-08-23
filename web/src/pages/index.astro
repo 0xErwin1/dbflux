@@ -22,6 +22,7 @@ const available = DOCS_AT_ROOT ? pathsForVersion(await getCollection('docs'), CU
       available={available}
       title="Documentation"
       description="Guides for installing, connecting, querying, charting and governing DBFlux."
+      translated
     >
       <DocsIndex versionId={CURRENT.id} available={available} />
     </DocsLayout>
@@ -30,6 +31,7 @@ const available = DOCS_AT_ROOT ? pathsForVersion(await getCollection('docs'), CU
       title="DBFlux — a keyboard-first database client"
       description="An extensible, keyboard-first data platform for Postgres, MySQL, SQL Server, MongoDB, Redis, DynamoDB and more. Open source, built in Rust on GPUI."
       current="home"
+      translated
     >
       <Landing />
     </Base>

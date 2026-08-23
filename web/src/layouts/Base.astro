@@ -5,7 +5,7 @@ import BackToTop from '../components/BackToTop.astro';
 import Mermaid from '../components/Mermaid.astro';
 import SearchDialog from '../components/SearchDialog.astro';
 import { ORIGIN } from '../data/site';
-import { localeFromPathname, t } from '../i18n';
+import { DEFAULT_LOCALE, LOCALES, localeFromPathname, t, withLocale } from '../i18n';
 import type { Locale } from '../i18n';
 import '../styles/global.css';
 
@@ -22,6 +22,13 @@ interface Props {
   searchIndex?: string;
   /** Active locale. Derived from the URL when the caller does not know it yet. */
   locale?: Locale;
+  /**
+   * Whether this exact page exists in every locale, not just as an English
+   * fallback. Only `true` for `/` and `/es/` today — doc pages get this once
+   * the locale-aware docs pipeline (W2a) can say per page whether a Spanish
+   * translation exists.
+   */
+  translated?: boolean;
 }
 
 const {
@@ -33,6 +40,7 @@ const {
   canonicalPath,
   searchIndex = '/search-index.json',
   locale = localeFromPathname(Astro.url.pathname),
+  translated = false,
 } = Astro.props;
 // Astro.site is unset when the config fails to load, and a crashed canonical tag
 // should not take the whole page down with it.
@@ -45,6 +53,20 @@ const canonical = canonicalPath?.startsWith('http')
 // Open Graph rejects a relative image: the crawler resolves it against nothing
 // and the preview falls back to a blank card.
 const socialImage = new URL('/brand/og-card.jpg', ORIGIN).href;
+
+/**
+ * hreflang pairs, only for a page the caller has confirmed exists in every
+ * locale (`translated`). hreflang requires absolute URLs, so this stays empty
+ * without `Astro.site` — same guard as `canonical` above.
+ */
+const alternateHref = (target: Locale) =>
+  Astro.site ? new URL(withLocale(Astro.url.pathname, target), Astro.site).href : undefined;
+
+const alternates =
+  translated && Astro.site
+    ? LOCALES.map((target) => ({ hreflang: target, href: alternateHref(target)! }))
+    : [];
+const xDefaultHref = translated ? alternateHref(DEFAULT_LOCALE) : undefined;
 ---
 
 <!doctype html>
@@ -55,6 +77,8 @@ const socialImage = new URL('/brand/og-card.jpg', ORIGIN).href;
     <title>{title}</title>
     <meta name="description" content={description} />
     {canonical && <link rel="canonical" href={canonical} />}
+    {alternates.map((alt) => <link rel="alternate" hreflang={alt.hreflang} href={alt.href} />)}
+    {xDefaultHref && <link rel="alternate" hreflang="x-default" href={xDefaultHref} />}
     {noindex && <meta name="robots" content="noindex, follow" />}
     <meta property="og:title" content={title} />
     <meta property="og:description" content={description} />

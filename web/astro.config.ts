@@ -127,6 +127,13 @@ export default defineConfig({
       // The documentation build emits it only because one source tree builds
       // both hosts, so keep it out of this host's sitemap.
       filter: (page) => !(DOCS_MODE === 'docs' && new URL(page).pathname.startsWith('/about')),
+      // Mirrors `i18n.locales` above so the generator can pair each page with
+      // its counterpart in the other locale and emit hreflang alternates,
+      // matching `routing: 'manual'`'s unprefixed default locale.
+      i18n: {
+        defaultLocale: 'en',
+        locales: { en: 'en', es: 'es' },
+      },
     }),
     hostRedirects(),
   ],

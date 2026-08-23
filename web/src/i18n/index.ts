@@ -221,3 +221,20 @@ export function localeFromPathname(pathname: string): Locale {
 
   return (LOCALES as readonly string[]).includes(first) ? (first as Locale) : DEFAULT_LOCALE;
 }
+
+/**
+ * The same pathname with its locale segment swapped, e.g. `/about/` becomes
+ * `/es/about/` for `'es'`, and `/es/about/` becomes `/about/` for `'en'`.
+ *
+ * Used to compute hreflang alternates and the locale switcher target — both
+ * need the equivalent path in another locale without knowing anything about
+ * what kind of page it is.
+ */
+export function withLocale(pathname: string, locale: Locale): string {
+  const current = localeFromPathname(pathname);
+  const rest = current === DEFAULT_LOCALE ? pathname : pathname.slice(current.length + 1) || '/';
+
+  if (locale === DEFAULT_LOCALE) return rest;
+
+  return `/${locale}${rest}`.replace(/\/+/g, '/');
+}
