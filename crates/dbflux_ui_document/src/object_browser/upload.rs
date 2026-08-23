@@ -30,7 +30,7 @@ impl ObjectBrowserDocument {
             report_error(
                 UserFacingError::new(
                     ErrorKind::Storage,
-                    "No file picker is available on this platform",
+                    dbflux_i18n::t!("document.object_browser.upload.error.no_file_picker"),
                 ),
                 cx,
             );
@@ -39,7 +39,10 @@ impl ObjectBrowserDocument {
 
         let Some(connection) = self.get_connection(cx) else {
             report_error(
-                UserFacingError::new(ErrorKind::Storage, "Connection is no longer active"),
+                UserFacingError::new(
+                    ErrorKind::Storage,
+                    dbflux_i18n::t!("document.object_browser.error.connection_unavailable"),
+                ),
                 cx,
             );
             return;
@@ -53,7 +56,9 @@ impl ObjectBrowserDocument {
 
         cx.spawn(async move |_this, cx| {
             let handles = rfd::AsyncFileDialog::new()
-                .set_title("Upload Objects")
+                .set_title(dbflux_i18n::t!(
+                    "document.object_browser.upload.dialog_title"
+                ))
                 .pick_files()
                 .await;
 
@@ -87,7 +92,9 @@ impl ObjectBrowserDocument {
                     .background_executor()
                     .spawn(async move {
                         let api = connection.object_store_api().ok_or_else(|| {
-                            DbError::NotSupported("Object-store API unavailable".to_string())
+                            DbError::NotSupported(dbflux_i18n::t!(
+                                "document.object_browser.error.api_unavailable"
+                            ))
                         })?;
 
                         api.upload_object(&bucket_for_task, &key_for_task, &path_for_task, None)
@@ -113,13 +120,34 @@ impl ObjectBrowserDocument {
 
             cx.update(|cx| {
                 if uploaded > 0 {
-                    let word = if uploaded == 1 { "object" } else { "objects" };
-                    let mut message =
-                        format!("Uploaded {uploaded} {word} to s3://{bucket}/{prefix}");
+                    let uri = format!("s3://{bucket}/{prefix}");
+                    let mut message = if uploaded == 1 {
+                        dbflux_i18n::t!(
+                            "document.object_browser.upload.toast.uploaded.one",
+                            count = uploaded,
+                            uri = uri.as_str()
+                        )
+                    } else {
+                        dbflux_i18n::t!(
+                            "document.object_browser.upload.toast.uploaded.many",
+                            count = uploaded,
+                            uri = uri.as_str()
+                        )
+                    };
 
                     if failed > 0 {
-                        let failed_word = if failed == 1 { "upload" } else { "uploads" };
-                        message.push_str(&format!(" ({failed} failed {failed_word})"));
+                        let suffix = if failed == 1 {
+                            dbflux_i18n::t!(
+                                "document.object_browser.upload.toast.failed_suffix.one",
+                                count = failed
+                            )
+                        } else {
+                            dbflux_i18n::t!(
+                                "document.object_browser.upload.toast.failed_suffix.many",
+                                count = failed
+                            )
+                        };
+                        message.push_str(&suffix);
                     }
 
                     Toast::success(message).meta_right(now_hms()).push(cx);

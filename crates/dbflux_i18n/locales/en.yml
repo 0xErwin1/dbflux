@@ -762,6 +762,20 @@ document:
       key: Key
       last_modified: Last modified
       size: Size
+    context_menu:
+      item:
+        preview: Preview
+        open_in_editor: Open in editor
+        download: Download
+        rename: Rename
+        presign: Presign
+        copy_uri: Copy S3 URI
+        delete: Delete
+        collapse: Collapse
+        expand: Expand
+        open: Open
+        new_folder_inside: New folder inside
+        delete_folder: Delete folder
     create_folder:
       cancel: Cancel
       confirm: Create
@@ -787,6 +801,45 @@ document:
       deleted_toast:
         one: "Deleted %{count} object under %{uri}"
         many: "Deleted %{count} objects under %{uri}"
+    delete_prefix_modal:
+      title: Delete folder — recursive
+      body_intro: Everything under this path will be deleted.
+      counting: "Counting objects…"
+      counting_progress: "Counting… %{totals} so far (%{pages} pages)"
+      cancelled: "%{totals} counted before cancelling"
+      capped: "at least %{totals} (stopped at %{pages} pages)"
+      error: "Could not count objects: %{error}"
+      cancel_probe: Stop counting
+      first_keys_label: First keys affected
+      remaining_keys: "… %{count} more"
+      confirm_hint: 'Type "%{phrase}" to confirm'
+      batched_caption: "DeleteObjects · batched ×1000"
+      cancel: Cancel
+      delete_button:
+        default: Delete objects
+        one: "Delete %{count} object"
+        many: "Delete %{count} objects"
+    editor:
+      nav:
+        open: "open %{key}"
+        leave_bucket_root: leave for the bucket root
+        leave_for: "leave for %{prefix}"
+        close_preview: close this preview
+        delete: "delete %{key}"
+        rename: "rename %{key}"
+      unsaved_summary: "Unsaved edits to %{key}"
+      toast:
+        saved: "Saved %{uri}"
+      footer:
+        saving: "Saving…"
+        save: Save
+        discard: Discard
+        find: Find
+      dirty_badge: modified
+      unsaved_confirm:
+        title: Unsaved edits
+        body: '"%{key}" has unsaved edits. Save them before you %{action}?'
+        cancel: Cancel
     empty:
       bucket: This bucket is empty
       filtered: No keys match this filter
@@ -893,6 +946,26 @@ document:
       refresh: Refresh
       tree: Tree
       upload: Upload
+    transfer:
+      dialog_title: Save Object As
+      dialog_filter_all_files: All Files
+      error:
+        fallback_dir_failed: "File dialog unavailable and the fallback directory could not be created: %{error}"
+      toast:
+        saved: "Saved %{name} (%{size}) to %{path}"
+        opened: "Opened %{name} in the system viewer"
+        no_handler: "No system handler could be started for %{name}; it was saved to %{path}"
+    upload:
+      dialog_title: Upload Objects
+      error:
+        no_file_picker: No file picker is available on this platform
+      toast:
+        uploaded:
+          one: "Uploaded %{count} object to %{uri}"
+          many: "Uploaded %{count} objects to %{uri}"
+        failed_suffix:
+          one: " (%{count} failed upload)"
+          many: " (%{count} failed uploads)"
   query_builder:
     aggregate:
       fn:

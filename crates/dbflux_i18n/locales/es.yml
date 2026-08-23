@@ -762,6 +762,20 @@ document:
       key: Clave
       last_modified: Última modificación
       size: Tamaño
+    context_menu:
+      item:
+        preview: Vista previa
+        open_in_editor: Abrir en el editor
+        download: Descargar
+        rename: Renombrar
+        presign: Prefirmar
+        copy_uri: Copiar URI de S3
+        delete: Eliminar
+        collapse: Colapsar
+        expand: Expandir
+        open: Abrir
+        new_folder_inside: Nueva carpeta dentro
+        delete_folder: Eliminar carpeta
     create_folder:
       cancel: Cancelar
       confirm: Crear
@@ -787,6 +801,45 @@ document:
       deleted_toast:
         one: "Se eliminó %{count} objeto bajo %{uri}"
         many: "Se eliminaron %{count} objetos bajo %{uri}"
+    delete_prefix_modal:
+      title: Eliminar carpeta — recursivo
+      body_intro: Todo lo que esté bajo esta ruta se eliminará.
+      counting: "Contando objetos…"
+      counting_progress: "Contando… %{totals} hasta ahora (%{pages} páginas)"
+      cancelled: "%{totals} contados antes de cancelar"
+      capped: "al menos %{totals} (detenido en %{pages} páginas)"
+      error: "No se pudieron contar los objetos: %{error}"
+      cancel_probe: Detener el conteo
+      first_keys_label: Primeras claves afectadas
+      remaining_keys: "… %{count} más"
+      confirm_hint: 'Escribe "%{phrase}" para confirmar'
+      batched_caption: "DeleteObjects · en lotes de ×1000"
+      cancel: Cancelar
+      delete_button:
+        default: Eliminar objetos
+        one: "Eliminar %{count} objeto"
+        many: "Eliminar %{count} objetos"
+    editor:
+      nav:
+        open: "abrir %{key}"
+        leave_bucket_root: salir hacia la raíz del bucket
+        leave_for: "salir hacia %{prefix}"
+        close_preview: cerrar esta vista previa
+        delete: "eliminar %{key}"
+        rename: "renombrar %{key}"
+      unsaved_summary: "Cambios sin guardar en %{key}"
+      toast:
+        saved: "Guardado %{uri}"
+      footer:
+        saving: "Guardando…"
+        save: Guardar
+        discard: Descartar
+        find: Buscar
+      dirty_badge: modificado
+      unsaved_confirm:
+        title: Cambios sin guardar
+        body: '"%{key}" tiene cambios sin guardar. ¿Guardarlos antes de %{action}?'
+        cancel: Cancelar
     empty:
       bucket: Este bucket está vacío
       filtered: Ninguna clave coincide con este filtro
@@ -893,6 +946,26 @@ document:
       refresh: Actualizar
       tree: Árbol
       upload: Subir
+    transfer:
+      dialog_title: Guardar objeto como
+      dialog_filter_all_files: Todos los archivos
+      error:
+        fallback_dir_failed: "El selector de archivos no está disponible y no se pudo crear el directorio alternativo: %{error}"
+      toast:
+        saved: "Guardado %{name} (%{size}) en %{path}"
+        opened: "Se abrió %{name} en el visor del sistema"
+        no_handler: "No se pudo iniciar ningún controlador del sistema para %{name}; se guardó en %{path}"
+    upload:
+      dialog_title: Subir objetos
+      error:
+        no_file_picker: No hay un selector de archivos disponible en esta plataforma
+      toast:
+        uploaded:
+          one: "Se subió %{count} objeto a %{uri}"
+          many: "Se subieron %{count} objetos a %{uri}"
+        failed_suffix:
+          one: " (%{count} subida fallida)"
+          many: " (%{count} subidas fallidas)"
   query_builder:
     aggregate:
       fn:

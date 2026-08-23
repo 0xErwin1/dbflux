@@ -95,14 +95,28 @@ pub(super) enum GuardedNavigation {
 impl GuardedNavigation {
     fn description(&self) -> String {
         match self {
-            GuardedNavigation::OpenPreview(key) => format!("open {key}"),
+            GuardedNavigation::OpenPreview(key) => dbflux_i18n::t!(
+                "document.object_browser.editor.nav.open",
+                key = key.as_str()
+            ),
             GuardedNavigation::NavigateToPrefix(prefix) if prefix.is_empty() => {
-                "leave for the bucket root".to_string()
+                dbflux_i18n::t!("document.object_browser.editor.nav.leave_bucket_root")
             }
-            GuardedNavigation::NavigateToPrefix(prefix) => format!("leave for {prefix}"),
-            GuardedNavigation::ClosePreview => "close this preview".to_string(),
-            GuardedNavigation::DeleteObject(key) => format!("delete {key}"),
-            GuardedNavigation::RenameObject(key) => format!("rename {key}"),
+            GuardedNavigation::NavigateToPrefix(prefix) => dbflux_i18n::t!(
+                "document.object_browser.editor.nav.leave_for",
+                prefix = prefix.as_str()
+            ),
+            GuardedNavigation::ClosePreview => {
+                dbflux_i18n::t!("document.object_browser.editor.nav.close_preview")
+            }
+            GuardedNavigation::DeleteObject(key) => dbflux_i18n::t!(
+                "document.object_browser.editor.nav.delete",
+                key = key.as_str()
+            ),
+            GuardedNavigation::RenameObject(key) => dbflux_i18n::t!(
+                "document.object_browser.editor.nav.rename",
+                key = key.as_str()
+            ),
         }
     }
 }
@@ -124,9 +138,12 @@ impl ObjectBrowserDocument {
     pub fn change_summary(&self) -> Option<String> {
         let editor = self.editor.as_ref()?;
 
-        editor
-            .dirty
-            .then(|| format!("Unsaved edits to {}", editor.key))
+        editor.dirty.then(|| {
+            dbflux_i18n::t!(
+                "document.object_browser.editor.unsaved_summary",
+                key = editor.key.as_str()
+            )
+        })
     }
 
     /// Builds the buffer for a freshly fetched body. Called from `render`,
@@ -247,7 +264,7 @@ impl ObjectBrowserDocument {
             report_error(
                 UserFacingError::new(
                     ErrorKind::Driver,
-                    "Connection is no longer active".to_string(),
+                    dbflux_i18n::t!("document.object_browser.error.connection_unavailable"),
                 ),
                 cx,
             );
@@ -276,9 +293,9 @@ impl ObjectBrowserDocument {
                     bytes,
                     content_type.as_deref(),
                 ),
-                None => Err(DbError::NotSupported(
-                    "Object-store API unavailable".to_string(),
-                )),
+                None => Err(DbError::NotSupported(dbflux_i18n::t!(
+                    "document.object_browser.error.api_unavailable"
+                ))),
             };
 
             (result, started.elapsed().as_millis())
@@ -346,9 +363,12 @@ impl ObjectBrowserDocument {
         editor.dirty = false;
         editor.byte_len = byte_len;
 
-        Toast::success(format!("Saved s3://{}/{key}", self.bucket))
-            .meta_right(now_hms())
-            .push(cx);
+        Toast::success(dbflux_i18n::t!(
+            "document.object_browser.editor.toast.saved",
+            uri = format!("s3://{}/{key}", self.bucket).as_str()
+        ))
+        .meta_right(now_hms())
+        .push(cx);
 
         // Size, last-modified, and ETag all changed server-side.
         self.load_object_metadata(key, cx);
@@ -534,8 +554,12 @@ impl ObjectBrowserDocument {
                                 .color(theme.primary_foreground),
                             )
                             .child(
-                                Text::caption(if is_saving { "Saving…" } else { "Save" })
-                                    .color(theme.primary_foreground),
+                                Text::caption(if is_saving {
+                                    dbflux_i18n::t!("document.object_browser.editor.footer.saving")
+                                } else {
+                                    dbflux_i18n::t!("document.object_browser.editor.footer.save")
+                                })
+                                .color(theme.primary_foreground),
                             )
                             .child(
                                 Text::key_hint(SAVE_SHORTCUT_HINT).color(theme.primary_foreground),
@@ -559,7 +583,9 @@ impl ObjectBrowserDocument {
                                     }))
                             })
                             .child(Icon::new(AppIcon::RotateCcw).small().muted())
-                            .child(Text::caption("Discard")),
+                            .child(Text::caption(dbflux_i18n::t!(
+                                "document.object_browser.editor.footer.discard"
+                            ))),
                     )
                     .child(
                         div()
@@ -576,7 +602,9 @@ impl ObjectBrowserDocument {
                                 this.open_editor_find(window, cx);
                             }))
                             .child(Icon::new(AppIcon::Search).small().muted())
-                            .child(Text::caption("Find"))
+                            .child(Text::caption(dbflux_i18n::t!(
+                                "document.object_browser.editor.footer.find"
+                            )))
                             .child(Text::key_hint(FIND_SHORTCUT_HINT)),
                     ),
             )
@@ -616,7 +644,12 @@ impl ObjectBrowserDocument {
             .border_1()
             .border_color(theme.warning)
             .child(div().size(DIRTY_DOT).rounded(Radii::FULL).bg(theme.warning))
-            .child(Text::caption("modified").warning())
+            .child(
+                Text::caption(dbflux_i18n::t!(
+                    "document.object_browser.editor.dirty_badge"
+                ))
+                .warning(),
+            )
             .into_any_element()
     }
 
@@ -663,11 +696,14 @@ impl ObjectBrowserDocument {
                                     .size(Heights::ICON_MD)
                                     .warning(),
                             )
-                            .child(Text::heading("Unsaved edits")),
+                            .child(Text::heading(dbflux_i18n::t!(
+                                "document.object_browser.editor.unsaved_confirm.title"
+                            ))),
                     )
-                    .child(Text::muted(format!(
-                        "\"{key}\" has unsaved edits. Save them before you {}?",
-                        navigation.description()
+                    .child(Text::muted(dbflux_i18n::t!(
+                        "document.object_browser.editor.unsaved_confirm.body",
+                        key = key.as_str(),
+                        action = navigation.description().as_str()
                     )))
                     .child(
                         div()
@@ -688,7 +724,9 @@ impl ObjectBrowserDocument {
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.cancel_guarded_navigation(cx);
                                     }))
-                                    .child(Text::caption("Cancel")),
+                                    .child(Text::caption(dbflux_i18n::t!(
+                                        "document.object_browser.editor.unsaved_confirm.cancel"
+                                    ))),
                             )
                             .child(
                                 div()
@@ -706,7 +744,9 @@ impl ObjectBrowserDocument {
                                         this.discard_and_navigate(window, cx);
                                     }))
                                     .child(Icon::new(AppIcon::RotateCcw).small().muted())
-                                    .child(Text::caption("Discard")),
+                                    .child(Text::caption(dbflux_i18n::t!(
+                                        "document.object_browser.editor.footer.discard"
+                                    ))),
                             )
                             .child(
                                 div()
@@ -728,7 +768,12 @@ impl ObjectBrowserDocument {
                                             .small()
                                             .color(theme.primary_foreground),
                                     )
-                                    .child(Text::caption("Save").color(theme.primary_foreground)),
+                                    .child(
+                                        Text::caption(dbflux_i18n::t!(
+                                            "document.object_browser.editor.footer.save"
+                                        ))
+                                        .color(theme.primary_foreground),
+                                    ),
                             ),
                     ),
             )

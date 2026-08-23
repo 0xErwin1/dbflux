@@ -106,8 +106,9 @@ impl ObjectBrowserDocument {
         cx: &mut Context<Self>,
     ) {
         let Some(connection) = self.get_connection(cx) else {
-            self.preview_content =
-                PreviewContentState::Failed("Connection is no longer active".to_string());
+            self.preview_content = PreviewContentState::Failed(dbflux_i18n::t!(
+                "document.object_browser.error.connection_unavailable"
+            ));
             cx.notify();
             return;
         };
@@ -197,17 +198,20 @@ impl ObjectBrowserDocument {
                 let name = object_file_name(&key);
 
                 match (purpose, handler_started) {
-                    (TransferPurpose::Download, _) => Toast::success(format!(
-                        "Saved {name} ({}) to {}",
-                        format_bytes(byte_len),
-                        destination.display()
+                    (TransferPurpose::Download, _) => Toast::success(dbflux_i18n::t!(
+                        "document.object_browser.transfer.toast.saved",
+                        name = name.as_str(),
+                        size = format_bytes(byte_len).as_str(),
+                        path = destination.display().to_string().as_str()
                     )),
-                    (TransferPurpose::OpenExternally, true) => {
-                        Toast::success(format!("Opened {name} in the system viewer"))
-                    }
-                    (TransferPurpose::OpenExternally, false) => Toast::error(format!(
-                        "No system handler could be started for {name}; it was saved to {}",
-                        destination.display()
+                    (TransferPurpose::OpenExternally, true) => Toast::success(dbflux_i18n::t!(
+                        "document.object_browser.transfer.toast.opened",
+                        name = name.as_str()
+                    )),
+                    (TransferPurpose::OpenExternally, false) => Toast::error(dbflux_i18n::t!(
+                        "document.object_browser.transfer.toast.no_handler",
+                        name = name.as_str(),
+                        path = destination.display().to_string().as_str()
                     )),
                 }
                 .meta_right(now_hms())
@@ -228,8 +232,9 @@ async fn choose_download_path(
 ) -> Result<Option<PathBuf>, String> {
     if !dialog_available {
         let dir = file_dialog::fallback_export_dir().map_err(|err| {
-            format!(
-                "File dialog unavailable and the fallback directory could not be created: {err}"
+            dbflux_i18n::t!(
+                "document.object_browser.transfer.error.fallback_dir_failed",
+                error = err.as_str()
             )
         })?;
 
@@ -240,9 +245,14 @@ async fn choose_download_path(
     }
 
     let handle = rfd::AsyncFileDialog::new()
-        .set_title("Save Object As")
+        .set_title(dbflux_i18n::t!(
+            "document.object_browser.transfer.dialog_title"
+        ))
         .set_file_name(suggested_name)
-        .add_filter("All Files", &["*"])
+        .add_filter(
+            dbflux_i18n::t!("document.object_browser.transfer.dialog_filter_all_files"),
+            &["*"],
+        )
         .save_file()
         .await;
 
@@ -256,9 +266,9 @@ fn fetch_and_write(
     destination: &Path,
 ) -> Result<u64, TransferError> {
     let api = connection.object_store_api().ok_or_else(|| {
-        TransferError::Driver(Box::new(DbError::NotSupported(
-            "Object-store API unavailable".to_string(),
-        )))
+        TransferError::Driver(Box::new(DbError::NotSupported(dbflux_i18n::t!(
+            "document.object_browser.error.api_unavailable"
+        ))))
     })?;
 
     api.download_object(bucket, key, destination)

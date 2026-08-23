@@ -8,7 +8,7 @@
 use super::delete_prefix::{DeletePrefixConfirmState, DeletePrefixProbeState, PrefixDeleteProbe};
 use super::tree::ObjectTreeNodeId;
 use super::{ObjectBrowserDocument, ObjectBrowserFocusMode};
-use crate::buckets_table::{BucketDetailsState, format_bytes};
+use crate::buckets_table::BucketDetailsState;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Text, TypeToConfirm};
 use dbflux_components::tokens::{Heights, Radii, Spacing};
@@ -19,31 +19,31 @@ use gpui_component::ActiveTheme;
 
 /// What the probe has established so far, as one line of modal copy.
 pub(super) fn probe_summary_line(probe: &PrefixDeleteProbe) -> String {
-    let totals = format!(
-        "{} {} · {}",
-        probe.object_count,
-        if probe.object_count == 1 {
-            "object"
-        } else {
-            "objects"
-        },
-        format_bytes(probe.total_bytes)
-    );
+    let totals = crate::labels::delete_prefix_probe_totals(probe.object_count, probe.total_bytes);
 
     match &probe.state {
-        DeletePrefixProbeState::Idle => "Counting objects…".to_string(),
-        DeletePrefixProbeState::Running => {
-            format!("Counting… {totals} so far ({} pages)", probe.pages_walked)
+        DeletePrefixProbeState::Idle => {
+            dbflux_i18n::t!("document.object_browser.delete_prefix_modal.counting")
         }
+        DeletePrefixProbeState::Running => dbflux_i18n::t!(
+            "document.object_browser.delete_prefix_modal.counting_progress",
+            totals = totals,
+            pages = probe.pages_walked
+        ),
         DeletePrefixProbeState::Done => totals,
-        DeletePrefixProbeState::Cancelled => format!("{totals} counted before cancelling"),
-        DeletePrefixProbeState::Capped => {
-            format!(
-                "at least {totals} (stopped at {} pages)",
-                probe.pages_walked
-            )
-        }
-        DeletePrefixProbeState::Error(message) => format!("Could not count objects: {message}"),
+        DeletePrefixProbeState::Cancelled => dbflux_i18n::t!(
+            "document.object_browser.delete_prefix_modal.cancelled",
+            totals = totals
+        ),
+        DeletePrefixProbeState::Capped => dbflux_i18n::t!(
+            "document.object_browser.delete_prefix_modal.capped",
+            totals = totals,
+            pages = probe.pages_walked
+        ),
+        DeletePrefixProbeState::Error(message) => dbflux_i18n::t!(
+            "document.object_browser.delete_prefix_modal.error",
+            error = message.as_str()
+        ),
     }
 }
 
@@ -56,7 +56,10 @@ pub(super) fn remaining_keys_line(probe: &PrefixDeleteProbe) -> Option<String> {
         return None;
     }
 
-    Some(format!("… {} more", probe.object_count - previewed))
+    Some(dbflux_i18n::t!(
+        "document.object_browser.delete_prefix_modal.remaining_keys",
+        count = probe.object_count - previewed
+    ))
 }
 
 /// Label of the danger button. The count is omitted while the probe is still
@@ -64,14 +67,9 @@ pub(super) fn remaining_keys_line(probe: &PrefixDeleteProbe) -> Option<String> {
 pub(super) fn delete_button_label(probe: &PrefixDeleteProbe) -> String {
     match probe.state {
         DeletePrefixProbeState::Done | DeletePrefixProbeState::Cancelled => {
-            let word = if probe.object_count == 1 {
-                "object"
-            } else {
-                "objects"
-            };
-            format!("Delete {} {word}", probe.object_count)
+            crate::labels::delete_prefix_delete_button_label(Some(probe.object_count))
         }
-        _ => "Delete objects".to_string(),
+        _ => crate::labels::delete_prefix_delete_button_label(None),
     }
 }
 
@@ -180,7 +178,9 @@ impl ObjectBrowserDocument {
                     .flex()
                     .flex_col()
                     .gap(Spacing::XS)
-                    .child(Text::body("Everything under this path will be deleted."))
+                    .child(Text::body(dbflux_i18n::t!(
+                        "document.object_browser.delete_prefix_modal.body_intro"
+                    )))
                     .child(Text::code(scope).primary())
                     .child(
                         div()
@@ -209,7 +209,9 @@ impl ObjectBrowserDocument {
                         this.cancel_delete_prefix_probe(cx);
                     }))
                     .child(Icon::new(AppIcon::X).small().muted())
-                    .child(Text::caption("Stop counting")),
+                    .child(Text::caption(dbflux_i18n::t!(
+                        "document.object_browser.delete_prefix_modal.cancel_probe"
+                    ))),
             );
         }
 
@@ -223,7 +225,12 @@ impl ObjectBrowserDocument {
                 .border_l_2()
                 .border_color(theme.border)
                 .bg(theme.secondary)
-                .child(Text::caption("First keys affected").muted_foreground())
+                .child(
+                    Text::caption(dbflux_i18n::t!(
+                        "document.object_browser.delete_prefix_modal.first_keys_label"
+                    ))
+                    .muted_foreground(),
+                )
                 .children(
                     confirm
                         .probe
@@ -254,9 +261,9 @@ impl ObjectBrowserDocument {
             .flex()
             .flex_col()
             .gap(Spacing::XS)
-            .child(Text::caption(format!(
-                "Type \"{}\" to confirm",
-                confirm.expected_phrase
+            .child(Text::caption(dbflux_i18n::t!(
+                "document.object_browser.delete_prefix_modal.confirm_hint",
+                phrase = confirm.expected_phrase.as_str()
             )));
 
         if let Some(input) = self.delete_prefix_input.as_ref() {
@@ -269,7 +276,12 @@ impl ObjectBrowserDocument {
                 .items_center()
                 .justify_between()
                 .gap(Spacing::MD)
-                .child(Text::caption("DeleteObjects · batched ×1000").muted_foreground())
+                .child(
+                    Text::caption(dbflux_i18n::t!(
+                        "document.object_browser.delete_prefix_modal.batched_caption"
+                    ))
+                    .muted_foreground(),
+                )
                 .child(
                     div()
                         .flex()
@@ -289,7 +301,9 @@ impl ObjectBrowserDocument {
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.close_delete_prefix_confirm(cx);
                                 }))
-                                .child(Text::caption("Cancel")),
+                                .child(Text::caption(dbflux_i18n::t!(
+                                    "document.object_browser.delete_prefix_modal.cancel"
+                                ))),
                         )
                         .child(
                             div()
@@ -324,7 +338,9 @@ impl ObjectBrowserDocument {
             &self.focus_handle,
             close,
         )
-        .title("Delete folder — recursive")
+        .title(dbflux_i18n::t!(
+            "document.object_browser.delete_prefix_modal.title"
+        ))
         .icon(AppIcon::TriangleAlert)
         .width(px(560.0))
         .max_height(px(560.0))
