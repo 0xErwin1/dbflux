@@ -541,6 +541,22 @@ document:
         references: REFERENCES
         row: ROW
   key_value:
+    add_member_modal:
+      cancel: Cancel
+      error:
+        at_least_one_entry: At least one entry is required
+        prefix: "Error: %{error}"
+      section:
+        fields: Fields
+        members: Members
+      submit: Add
+      title:
+        default: Add Member
+        hash: Add Hash Fields
+        list: Add List Members
+        set: Add Set Members
+        sorted_set: Add Sorted Set Members
+        stream: Add Stream Entry
     context_menu:
       add_entry: Add Entry
       add_member: Add Member
@@ -556,6 +572,23 @@ document:
       edit_value: Edit Value
       new_key: New Key
       rename: Rename
+    history_modal:
+      empty:
+        recent: No history yet
+        saved: No saved queries
+      footer:
+        items:
+          one: "%{count} item"
+          many: "%{count} items"
+      save:
+        name_placeholder: Query name
+        name_required: Enter a name for the query
+        success_toast: Saved query
+        title: Save Query
+      search_placeholder: "Search..."
+      tabs:
+        recent: Recent
+        saved: Saved
     mutation:
       error:
         connection_inactive: Connection is no longer active

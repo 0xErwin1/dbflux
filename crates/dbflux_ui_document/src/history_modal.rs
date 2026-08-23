@@ -95,9 +95,17 @@ impl HistoryModal {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("Search..."));
+        let search_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(dbflux_i18n::t!(
+                "document.key_value.history_modal.search_placeholder"
+            ))
+        });
         let rename_input = cx.new(|cx| InputState::new(window, cx));
-        let save_name_input = cx.new(|cx| InputState::new(window, cx).placeholder("Query name"));
+        let save_name_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(dbflux_i18n::t!(
+                "document.key_value.history_modal.save.name_placeholder"
+            ))
+        });
 
         cx.subscribe_in(
             &search_input,
@@ -402,9 +410,11 @@ impl HistoryModal {
 
         let name = self.save_name_input.read(cx).value();
         if name.trim().is_empty() {
-            Toast::warning("Enter a name for the query")
-                .meta_right(now_hms())
-                .push(cx);
+            Toast::warning(dbflux_i18n::t!(
+                "document.key_value.history_modal.save.name_required"
+            ))
+            .meta_right(now_hms())
+            .push(cx);
             return;
         }
 
@@ -413,7 +423,11 @@ impl HistoryModal {
         let id = query.id;
         (self.callbacks.on_save)(query, cx);
         cx.emit(QuerySaved { id, name });
-        Toast::success("Saved query").meta_right(now_hms()).push(cx);
+        Toast::success(dbflux_i18n::t!(
+            "document.key_value.history_modal.save.success_toast"
+        ))
+        .meta_right(now_hms())
+        .push(cx);
         self.close(cx);
     }
 
@@ -540,9 +554,14 @@ impl HistoryModal {
                                 theme,
                             )),
                     )
-                    .child(Text::body("Recent").font_size(FontSizes::SM).color(
-                        text_color_for_active(self.active_tab == HistoryTab::Recent, theme),
-                    ))
+                    .child(
+                        Text::body(crate::labels::history_tab_label(HistoryTab::Recent))
+                            .font_size(FontSizes::SM)
+                            .color(text_color_for_active(
+                                self.active_tab == HistoryTab::Recent,
+                                theme,
+                            )),
+                    )
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, _, _, cx| {
@@ -576,9 +595,14 @@ impl HistoryModal {
                                 theme,
                             )),
                     )
-                    .child(Text::body("Saved").font_size(FontSizes::SM).color(
-                        text_color_for_active(self.active_tab == HistoryTab::Saved, theme),
-                    ))
+                    .child(
+                        Text::body(crate::labels::history_tab_label(HistoryTab::Saved))
+                            .font_size(FontSizes::SM)
+                            .color(text_color_for_active(
+                                self.active_tab == HistoryTab::Saved,
+                                theme,
+                            )),
+                    )
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, _, _, cx| {
@@ -601,67 +625,69 @@ impl HistoryModal {
         match self.active_tab {
             HistoryTab::Recent => {
                 let entries = self.filtered_history_entries(cx);
+                let row_count_labels: Vec<Option<String>> = entries
+                    .iter()
+                    .map(|entry| entry.row_count.map(crate::labels::row_count_label))
+                    .collect();
+
                 div()
                     .flex_1()
                     .overflow_y_hidden()
-                    .children(entries.iter().enumerate().map(|(idx, entry)| {
-                        let is_selected = idx == selected;
-                        let sql = entry.sql.clone();
+                    .children(entries.iter().zip(row_count_labels).enumerate().map(
+                        |(idx, (entry, row_count_label))| {
+                            let is_selected = idx == selected;
+                            let sql = entry.sql.clone();
 
-                        div()
-                            .id(("history-entry", idx))
-                            .flex()
-                            .flex_col()
-                            .px(Spacing::SM)
-                            .py(Spacing::XS)
-                            .border_b_1()
-                            .border_color(theme.border)
-                            .cursor_pointer()
-                            .when(is_selected, |d| d.bg(theme.secondary))
-                            .hover(|d| d.bg(theme.secondary))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                cx.emit(HistoryQuerySelected {
-                                    sql: sql.clone(),
-                                    name: None,
-                                    saved_query_id: None,
-                                });
-                                this.close(cx);
-                            }))
-                            .child(
-                                div()
-                                    .overflow_hidden()
-                                    .text_ellipsis()
-                                    .child(Text::body(entry.sql_preview(60))),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(Spacing::SM)
-                                    .child(
-                                        Text::caption(entry.formatted_timestamp())
-                                            .font_size(FontSizes::XS),
-                                    )
-                                    .when_some(entry.row_count, |d, count| {
-                                        d.child(
-                                            Text::caption(format!("{} rows", count))
+                            div()
+                                .id(("history-entry", idx))
+                                .flex()
+                                .flex_col()
+                                .px(Spacing::SM)
+                                .py(Spacing::XS)
+                                .border_b_1()
+                                .border_color(theme.border)
+                                .cursor_pointer()
+                                .when(is_selected, |d| d.bg(theme.secondary))
+                                .hover(|d| d.bg(theme.secondary))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    cx.emit(HistoryQuerySelected {
+                                        sql: sql.clone(),
+                                        name: None,
+                                        saved_query_id: None,
+                                    });
+                                    this.close(cx);
+                                }))
+                                .child(
+                                    div()
+                                        .overflow_hidden()
+                                        .text_ellipsis()
+                                        .child(Text::body(entry.sql_preview(60))),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap(Spacing::SM)
+                                        .child(
+                                            Text::caption(entry.formatted_timestamp())
                                                 .font_size(FontSizes::XS),
                                         )
-                                    })
-                                    .child(
-                                        Text::caption(format!("{}ms", entry.execution_time_ms))
-                                            .font_size(FontSizes::XS),
-                                    ),
-                            )
-                    }))
+                                        .when_some(row_count_label, |d, label| {
+                                            d.child(Text::caption(label).font_size(FontSizes::XS))
+                                        })
+                                        .child(
+                                            Text::caption(format!("{}ms", entry.execution_time_ms))
+                                                .font_size(FontSizes::XS),
+                                        ),
+                                )
+                        },
+                    ))
                     .when(entries.is_empty(), |d| {
-                        d.child(
-                            div()
-                                .px(Spacing::SM)
-                                .py(Spacing::LG)
-                                .text_center()
-                                .child(Text::muted("No history yet")),
-                        )
+                        d.child(div().px(Spacing::SM).py(Spacing::LG).text_center().child(
+                            Text::muted(dbflux_i18n::t!(
+                                "document.key_value.history_modal.empty.recent"
+                            )),
+                        ))
                     })
                     .into_any_element()
             }
@@ -760,13 +786,11 @@ impl HistoryModal {
                             )
                     }))
                     .when(entries.is_empty(), |d| {
-                        d.child(
-                            div()
-                                .px(Spacing::SM)
-                                .py(Spacing::LG)
-                                .text_center()
-                                .child(Text::muted("No saved queries")),
-                        )
+                        d.child(div().px(Spacing::SM).py(Spacing::LG).text_center().child(
+                            Text::muted(dbflux_i18n::t!(
+                                "document.key_value.history_modal.empty.saved"
+                            )),
+                        ))
                     })
                     .into_any_element()
             }
@@ -793,7 +817,9 @@ impl HistoryModal {
             .items_center()
             .justify_between()
             .child(Text::caption(shortcuts))
-            .child(Text::caption(format!("{} items", count)))
+            .child(Text::caption(crate::labels::history_items_count_label(
+                count,
+            )))
     }
 
     fn render_save(&self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -837,7 +863,9 @@ impl HistoryModal {
                             .py(Spacing::SM)
                             .border_b_1()
                             .border_color(theme.border)
-                            .child(Text::body("Save Query")),
+                            .child(Text::body(dbflux_i18n::t!(
+                                "document.key_value.history_modal.save.title"
+                            ))),
                     )
                     .child(div().p(Spacing::MD).child(Input::new(&input).w_full()))
                     .child(

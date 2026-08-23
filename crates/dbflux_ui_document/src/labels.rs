@@ -773,17 +773,112 @@ pub(crate) fn execution_count_state_label(
     }
 }
 
+/// Label for a [`crate::history_modal::HistoryTab`] shown on the history
+/// modal's tab bar.
+pub(crate) fn history_tab_label(tab: crate::history_modal::HistoryTab) -> String {
+    use crate::history_modal::HistoryTab;
+
+    match tab {
+        HistoryTab::Recent => dbflux_i18n::t!("document.key_value.history_modal.tabs.recent"),
+        HistoryTab::Saved => dbflux_i18n::t!("document.key_value.history_modal.tabs.saved"),
+    }
+}
+
+/// Label for the history modal footer's visible-item count.
+///
+/// Uses the singular catalog bucket only for exactly one item; every other
+/// count, including zero, uses the plural bucket.
+pub(crate) fn history_items_count_label(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!(
+            "document.key_value.history_modal.footer.items.one",
+            count = count
+        )
+    } else {
+        dbflux_i18n::t!(
+            "document.key_value.history_modal.footer.items.many",
+            count = count
+        )
+    }
+}
+
+/// Title for the add-member modal, keyed by the target key's [`dbflux_core::KeyType`].
+///
+/// Every non-collection key type (`String`, `Bytes`, `Json`, `Unknown`)
+/// shares the generic fallback bucket, mirroring the pre-i18n wildcard arm.
+pub(crate) fn add_member_modal_title(key_type: dbflux_core::KeyType) -> String {
+    use dbflux_core::KeyType;
+
+    match key_type {
+        KeyType::Hash => dbflux_i18n::t!("document.key_value.add_member_modal.title.hash"),
+        KeyType::Stream => dbflux_i18n::t!("document.key_value.add_member_modal.title.stream"),
+        KeyType::List => dbflux_i18n::t!("document.key_value.add_member_modal.title.list"),
+        KeyType::Set => dbflux_i18n::t!("document.key_value.add_member_modal.title.set"),
+        KeyType::SortedSet => {
+            dbflux_i18n::t!("document.key_value.add_member_modal.title.sorted_set")
+        }
+        _ => dbflux_i18n::t!("document.key_value.add_member_modal.title.default"),
+    }
+}
+
+/// Label for the add-member modal's row-list section header, keyed by the
+/// target key's [`dbflux_core::KeyType`].
+pub(crate) fn add_member_modal_section_label(key_type: dbflux_core::KeyType) -> String {
+    use dbflux_core::KeyType;
+
+    match key_type {
+        KeyType::Hash | KeyType::Stream => {
+            dbflux_i18n::t!("document.key_value.add_member_modal.section.fields")
+        }
+        KeyType::SortedSet | KeyType::List | KeyType::Set => {
+            dbflux_i18n::t!("document.key_value.add_member_modal.section.members")
+        }
+        _ => dbflux_i18n::t!("document.key_value.add_member_modal.section.fields"),
+    }
+}
+
+/// Field/value input placeholders for a new add-member row, keyed by the
+/// target key's [`dbflux_core::KeyType`].
+///
+/// Reuses the same catalog entries as the new-key modal's field/member/score
+/// placeholders since both surfaces describe the same input concepts.
+/// `List`/`Set` rows have no second input, so the value placeholder is empty.
+pub(crate) fn add_member_modal_placeholders(key_type: dbflux_core::KeyType) -> (String, String) {
+    use dbflux_core::KeyType;
+
+    match key_type {
+        KeyType::Hash | KeyType::Stream => (
+            dbflux_i18n::t!("document.key_value.new_key.field_placeholder"),
+            dbflux_i18n::t!("document.key_value.new_key.value.placeholder"),
+        ),
+        KeyType::SortedSet => (
+            dbflux_i18n::t!("document.key_value.new_key.member_placeholder"),
+            dbflux_i18n::t!("document.key_value.new_key.score_placeholder"),
+        ),
+        KeyType::List | KeyType::Set => (
+            dbflux_i18n::t!("document.key_value.new_key.member_placeholder"),
+            String::new(),
+        ),
+        _ => (
+            dbflux_i18n::t!("document.key_value.new_key.field_placeholder"),
+            dbflux_i18n::t!("document.key_value.new_key.value.placeholder"),
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        MutationItemKind, agg_fn_display, assignment_value_kind_label, bool_op_label,
+        MutationItemKind, add_member_modal_placeholders, add_member_modal_section_label,
+        add_member_modal_title, agg_fn_display, assignment_value_kind_label, bool_op_label,
         builder_mode_label, bulk_delete_success_label, chart_degraded_copy, chart_dock_shape_label,
         chart_rail_why_text, code_toolbar_shortcut_hint_label, comparator_label,
         copy_query_language_label, dangerous_query_body, dangerous_query_title,
         delete_confirm_copy, delete_rows_label, execution_count_state_label, execution_mode_label,
-        incomplete_aggregate_rows_label, join_kind_label, live_output_lines_label,
-        live_output_truncated_label, partial_delete_label, pending_change_count_label,
-        pending_edits_summary, refresh_policy_label, result_tab_count_label, row_count_label,
+        history_items_count_label, history_tab_label, incomplete_aggregate_rows_label,
+        join_kind_label, live_output_lines_label, live_output_truncated_label,
+        partial_delete_label, pending_change_count_label, pending_edits_summary,
+        refresh_policy_label, result_tab_count_label, row_count_label,
         script_confirm_message_label, sort_direction_label, unsaved_changes_label,
         update_columns_label, valid_lines_label,
     };
@@ -1790,5 +1885,159 @@ mod tests {
         assert_ne!(done_one, done_many);
         assert!(timed_out.contains("chunked"));
         assert!(failed.contains("boom"));
+    }
+
+    #[test]
+    fn history_tab_label_covers_both_variants() {
+        use crate::history_modal::HistoryTab;
+
+        assert_eq!(history_tab_label(HistoryTab::Recent), "Recent");
+        assert_eq!(history_tab_label(HistoryTab::Saved), "Saved");
+        assert_ne!(
+            history_tab_label(HistoryTab::Recent),
+            history_tab_label(HistoryTab::Saved)
+        );
+    }
+
+    #[test]
+    fn history_items_count_label_one_many() {
+        assert_eq!(history_items_count_label(1), "1 item");
+        assert_eq!(history_items_count_label(2), "2 items");
+        assert_eq!(history_items_count_label(0), "0 items");
+    }
+
+    #[test]
+    fn history_modal_keys_resolve_in_both_locales() {
+        let keys = [
+            "document.key_value.history_modal.search_placeholder",
+            "document.key_value.history_modal.tabs.recent",
+            "document.key_value.history_modal.tabs.saved",
+            "document.key_value.history_modal.empty.recent",
+            "document.key_value.history_modal.empty.saved",
+            "document.key_value.history_modal.footer.items.one",
+            "document.key_value.history_modal.footer.items.many",
+            "document.key_value.history_modal.save.title",
+            "document.key_value.history_modal.save.name_placeholder",
+            "document.key_value.history_modal.save.name_required",
+            "document.key_value.history_modal.save.success_toast",
+        ];
+
+        for key in keys {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn history_modal_save_title_differs_between_locales() {
+        let en = dbflux_i18n::t!("document.key_value.history_modal.save.title", locale = "en");
+        let es = dbflux_i18n::t!("document.key_value.history_modal.save.title", locale = "es");
+
+        assert_eq!(en, "Save Query");
+        assert_ne!(en, es);
+    }
+
+    #[test]
+    fn add_member_modal_title_covers_every_key_type() {
+        use dbflux_core::KeyType;
+
+        assert_eq!(add_member_modal_title(KeyType::Hash), "Add Hash Fields");
+        assert_eq!(add_member_modal_title(KeyType::Stream), "Add Stream Entry");
+        assert_eq!(add_member_modal_title(KeyType::List), "Add List Members");
+        assert_eq!(add_member_modal_title(KeyType::Set), "Add Set Members");
+        assert_eq!(
+            add_member_modal_title(KeyType::SortedSet),
+            "Add Sorted Set Members"
+        );
+        assert_eq!(add_member_modal_title(KeyType::String), "Add Member");
+    }
+
+    #[test]
+    fn add_member_modal_section_label_covers_every_key_type() {
+        use dbflux_core::KeyType;
+
+        assert_eq!(add_member_modal_section_label(KeyType::Hash), "Fields");
+        assert_eq!(add_member_modal_section_label(KeyType::Stream), "Fields");
+        assert_eq!(
+            add_member_modal_section_label(KeyType::SortedSet),
+            "Members"
+        );
+        assert_eq!(add_member_modal_section_label(KeyType::List), "Members");
+        assert_eq!(add_member_modal_section_label(KeyType::Set), "Members");
+        assert_eq!(add_member_modal_section_label(KeyType::String), "Fields");
+    }
+
+    #[test]
+    fn add_member_modal_placeholders_cover_every_key_type() {
+        use dbflux_core::KeyType;
+
+        assert_eq!(
+            add_member_modal_placeholders(KeyType::Hash),
+            ("Enter Field".to_string(), "Enter Value".to_string())
+        );
+        assert_eq!(
+            add_member_modal_placeholders(KeyType::SortedSet),
+            ("Enter Member".to_string(), "Enter Score".to_string())
+        );
+        assert_eq!(
+            add_member_modal_placeholders(KeyType::List),
+            ("Enter Member".to_string(), String::new())
+        );
+    }
+
+    #[test]
+    fn add_member_modal_keys_resolve_in_both_locales() {
+        let keys = [
+            "document.key_value.add_member_modal.title.hash",
+            "document.key_value.add_member_modal.title.stream",
+            "document.key_value.add_member_modal.title.list",
+            "document.key_value.add_member_modal.title.set",
+            "document.key_value.add_member_modal.title.sorted_set",
+            "document.key_value.add_member_modal.title.default",
+            "document.key_value.add_member_modal.section.fields",
+            "document.key_value.add_member_modal.section.members",
+            "document.key_value.add_member_modal.error.at_least_one_entry",
+            "document.key_value.add_member_modal.error.prefix",
+            "document.key_value.add_member_modal.cancel",
+            "document.key_value.add_member_modal.submit",
+        ];
+
+        for key in keys {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn add_member_modal_title_differs_between_locales() {
+        let en = dbflux_i18n::t!(
+            "document.key_value.add_member_modal.title.hash",
+            locale = "en"
+        );
+        let es = dbflux_i18n::t!(
+            "document.key_value.add_member_modal.title.hash",
+            locale = "es"
+        );
+
+        assert_eq!(en, "Add Hash Fields");
+        assert_ne!(en, es);
     }
 }
