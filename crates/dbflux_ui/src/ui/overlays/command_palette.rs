@@ -35,8 +35,8 @@ pub fn command_palette_keybindings() -> Vec<KeyBinding> {
 pub enum PaletteItem {
     Action {
         id: &'static str,
-        name: &'static str,
-        category: &'static str,
+        name: SharedString,
+        category: SharedString,
         shortcut: Option<&'static str>,
     },
     Connection {
@@ -101,13 +101,33 @@ pub enum ResourceItem {
 
 impl PaletteItem {
     /// Text searched by `SkimMatcherV2`.
+    ///
+    /// Each kind arm embeds the English proxy word (so the filter always
+    /// matches on the English name, regardless of the active locale)
+    /// followed by the process-locale translated kind word (so it also
+    /// matches on the localized name).
     pub fn search_text(&self) -> String {
         match self {
-            Self::Action { category, name, .. } => format!("{} {}", category, name),
-            Self::Connection { name, .. } => format!("Connection {}", name),
+            Self::Action {
+                category, name, id, ..
+            } => {
+                format!("{} {} {}", category, name, id.replace('_', " "))
+            }
+            Self::Connection { name, .. } => {
+                format!(
+                    "Connection {} {}",
+                    dbflux_i18n::t!("palette.kind.connection"),
+                    name
+                )
+            }
             Self::SavedChart {
                 name, profile_name, ..
-            } => format!("Chart {} {}", name, profile_name),
+            } => format!(
+                "Chart {} {} {}",
+                dbflux_i18n::t!("palette.kind.chart"),
+                name,
+                profile_name
+            ),
             Self::Resource(r) => match r {
                 ResourceItem::Table {
                     profile_name,
@@ -116,7 +136,12 @@ impl PaletteItem {
                     name,
                     ..
                 } => {
-                    let mut parts = format!("Table {} {}", profile_name, name);
+                    let mut parts = format!(
+                        "Table {} {} {}",
+                        dbflux_i18n::t!("palette.kind.table"),
+                        profile_name,
+                        name
+                    );
                     if let Some(db) = database {
                         parts.push_str(&format!(" {}", db));
                     }
@@ -130,7 +155,13 @@ impl PaletteItem {
                     database,
                     name,
                     ..
-                } => format!("Collection {} {} {}", profile_name, name, database),
+                } => format!(
+                    "Collection {} {} {} {}",
+                    dbflux_i18n::t!("palette.kind.collection"),
+                    profile_name,
+                    name,
+                    database
+                ),
                 ResourceItem::View {
                     profile_name,
                     database,
@@ -138,7 +169,12 @@ impl PaletteItem {
                     name,
                     ..
                 } => {
-                    let mut parts = format!("View {} {}", profile_name, name);
+                    let mut parts = format!(
+                        "View {} {} {}",
+                        dbflux_i18n::t!("palette.kind.view"),
+                        profile_name,
+                        name
+                    );
                     if let Some(db) = database {
                         parts.push_str(&format!(" {}", db));
                     }
@@ -151,16 +187,31 @@ impl PaletteItem {
                     profile_name,
                     database,
                     ..
-                } => format!("Keyspace {} {}", profile_name, database),
+                } => format!(
+                    "Keyspace {} {} {}",
+                    dbflux_i18n::t!("palette.kind.keyspace"),
+                    profile_name,
+                    database
+                ),
             },
             Self::Script {
                 name,
                 relative_path,
                 ..
             } => {
-                format!("Script {} {}", name, relative_path)
+                format!(
+                    "Script {} {} {}",
+                    dbflux_i18n::t!("palette.kind.script"),
+                    name,
+                    relative_path
+                )
             }
-            Self::ImportDashboard => "Charts Import Dashboard from JSON".to_string(),
+            Self::ImportDashboard => {
+                format!(
+                    "Charts {}",
+                    dbflux_i18n::t!("palette.import_dashboard.name")
+                )
+            }
         }
     }
 
@@ -168,31 +219,43 @@ impl PaletteItem {
     pub fn display_label(&self) -> (String, String) {
         match self {
             Self::Action { category, name, .. } => (category.to_string(), name.to_string()),
-            Self::Connection { name, .. } => ("Connection".to_string(), name.clone()),
+            Self::Connection { name, .. } => {
+                (dbflux_i18n::t!("palette.kind.connection"), name.clone())
+            }
             Self::SavedChart {
                 name,
                 is_collection_source,
                 ..
             } => {
                 let display = if *is_collection_source {
-                    format!("{} [browse]", name)
+                    format!(
+                        "{} {}",
+                        name,
+                        dbflux_i18n::t!("palette.chart.browse_suffix")
+                    )
                 } else {
                     name.clone()
                 };
-                ("Chart".to_string(), display)
+                (dbflux_i18n::t!("palette.kind.chart"), display)
             }
             Self::Resource(r) => match r {
-                ResourceItem::Table { name, .. } => ("Table".to_string(), name.clone()),
-                ResourceItem::Collection { name, .. } => ("Collection".to_string(), name.clone()),
-                ResourceItem::View { name, .. } => ("View".to_string(), name.clone()),
+                ResourceItem::Table { name, .. } => {
+                    (dbflux_i18n::t!("palette.kind.table"), name.clone())
+                }
+                ResourceItem::Collection { name, .. } => {
+                    (dbflux_i18n::t!("palette.kind.collection"), name.clone())
+                }
+                ResourceItem::View { name, .. } => {
+                    (dbflux_i18n::t!("palette.kind.view"), name.clone())
+                }
                 ResourceItem::KeyValueDb { database, .. } => {
-                    ("Keyspace".to_string(), database.clone())
+                    (dbflux_i18n::t!("palette.kind.keyspace"), database.clone())
                 }
             },
-            Self::Script { name, .. } => ("Script".to_string(), name.clone()),
+            Self::Script { name, .. } => (dbflux_i18n::t!("palette.kind.script"), name.clone()),
             Self::ImportDashboard => (
-                "Charts".to_string(),
-                "Import Dashboard from JSON...".to_string(),
+                dbflux_i18n::t!("palette.section.charts"),
+                dbflux_i18n::t!("palette.import_dashboard.name"),
             ),
         }
     }
@@ -259,22 +322,26 @@ impl PaletteItem {
 #[derive(Clone)]
 pub struct PaletteCommand {
     pub id: &'static str,
-    pub name: &'static str,
-    pub category: &'static str,
+    pub name: SharedString,
+    pub category: SharedString,
     pub shortcut: Option<&'static str>,
 }
 
 impl PaletteCommand {
-    pub const fn new(id: &'static str, name: &'static str, category: &'static str) -> Self {
+    pub fn new(
+        id: &'static str,
+        name: impl Into<SharedString>,
+        category: impl Into<SharedString>,
+    ) -> Self {
         Self {
             id,
-            name,
-            category,
+            name: name.into(),
+            category: category.into(),
             shortcut: None,
         }
     }
 
-    pub const fn with_shortcut(mut self, shortcut: &'static str) -> Self {
+    pub fn with_shortcut(mut self, shortcut: &'static str) -> Self {
         self.shortcut = Some(shortcut);
         self
     }
@@ -313,13 +380,13 @@ enum PaletteSection {
 }
 
 impl PaletteSection {
-    fn label(self) -> &'static str {
+    fn label(self) -> String {
         match self {
-            Self::Connections => "Connections",
-            Self::Commands => "Commands",
-            Self::Charts => "Charts",
-            Self::Tables => "Tables",
-            Self::Scripts => "Scripts",
+            Self::Connections => dbflux_i18n::t!("palette.section.connections"),
+            Self::Commands => dbflux_i18n::t!("palette.section.commands"),
+            Self::Charts => dbflux_i18n::t!("palette.section.charts"),
+            Self::Tables => dbflux_i18n::t!("palette.section.tables"),
+            Self::Scripts => dbflux_i18n::t!("palette.section.scripts"),
         }
     }
 
@@ -503,8 +570,7 @@ pub struct CommandPaletteClosed;
 impl CommandPalette {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let input_state = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("Search commands, connections, tables, scripts...")
+            InputState::new(window, cx).placeholder(dbflux_i18n::t!("palette.search.placeholder"))
         });
 
         cx.subscribe_in(
@@ -1018,7 +1084,9 @@ impl Render for CommandPalette {
                                         .py(Spacing::LG)
                                         .flex()
                                         .justify_center()
-                                        .child(Body::new("No matching items").muted(cx)),
+                                        .child(
+                                            Body::new(dbflux_i18n::t!("palette.empty")).muted(cx),
+                                        ),
                                 )
                             }),
                     )
@@ -1089,13 +1157,16 @@ impl Render for CommandPalette {
 
 #[cfg(test)]
 mod tests {
-    use super::{PaletteCommand, PaletteItem, palette_qualifier_text, palette_shortcut_text};
+    use super::{
+        PaletteCommand, PaletteItem, ResourceItem, palette_qualifier_text, palette_shortcut_text,
+    };
     use dbflux_components::theme;
     use dbflux_components::tokens::FontSizes;
     use dbflux_components::typography::AppFonts;
     use gpui::TestAppContext;
     use gpui_component::theme::Theme;
     use std::fs;
+    use uuid::Uuid;
 
     fn command_palette_source() -> String {
         let source = fs::read_to_string(concat!(
@@ -1287,8 +1358,86 @@ mod tests {
             commands
                 .iter()
                 .filter(|c| c.name.contains("Import"))
-                .map(|c| c.name)
+                .map(|c| c.name.clone())
                 .collect::<Vec<_>>()
+        );
+    }
+
+    // i18n — command palette foundation
+
+    const PALETTE_CATALOG_KEYS: &[&str] = &[
+        "palette.search.placeholder",
+        "palette.empty",
+        "palette.section.connections",
+        "palette.section.commands",
+        "palette.section.charts",
+        "palette.section.tables",
+        "palette.section.scripts",
+        "palette.kind.connection",
+        "palette.kind.chart",
+        "palette.kind.table",
+        "palette.kind.collection",
+        "palette.kind.view",
+        "palette.kind.keyspace",
+        "palette.kind.script",
+        "palette.chart.browse_suffix",
+        "palette.import_dashboard.name",
+    ];
+
+    #[test]
+    fn palette_keys_resolve_in_both_locales() {
+        for locale in ["en", "es"] {
+            for key in PALETTE_CATALOG_KEYS {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(
+                    !value.is_empty(),
+                    "key {key} resolved empty for locale {locale}"
+                );
+                assert_ne!(value, *key, "key {key} did not resolve for locale {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "key {key} fell back to the raw locale-qualified form for locale {locale}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn palette_section_label_differs_between_locales() {
+        let english = dbflux_i18n::t!("palette.section.connections", locale = "en");
+        let spanish = dbflux_i18n::t!("palette.section.connections", locale = "es");
+
+        assert_eq!(english, "Connections");
+        assert_eq!(spanish, "Conexiones");
+        assert_ne!(english, spanish);
+    }
+
+    #[test]
+    fn search_text_matches_english_and_translated_kind() {
+        // `search_text` intentionally stays bilingual: the leading kind word
+        // is the English proxy the filter always understands, followed by
+        // the process-locale translated kind word so a table item also
+        // matches on the active-locale name. In the default "en" test
+        // locale the two words are identical, so a correct implementation
+        // embeds "Table" twice; a regression that drops the translated
+        // lookup only embeds it once.
+        let item = PaletteItem::Resource(ResourceItem::Table {
+            profile_id: Uuid::new_v4(),
+            profile_name: "prod".to_string(),
+            database: None,
+            schema: None,
+            name: "orders".to_string(),
+        });
+
+        let search_text = item.search_text();
+
+        assert!(search_text.contains("Table"));
+        assert_eq!(
+            search_text.matches("Table").count(),
+            2,
+            "expected the English proxy word and the translated kind word both present, got: {search_text:?}"
         );
     }
 }

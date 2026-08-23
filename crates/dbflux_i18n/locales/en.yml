@@ -166,6 +166,28 @@ modals:
       many: "Save selected (%{count})"
     dont_save: Don't save
     cancel: Cancel
+palette:
+  search:
+    placeholder: Search commands, connections, tables, scripts...
+  empty: No matching items
+  section:
+    connections: Connections
+    commands: Commands
+    charts: Charts
+    tables: Tables
+    scripts: Scripts
+  kind:
+    connection: Connection
+    chart: Chart
+    table: Table
+    collection: Collection
+    view: View
+    keyspace: Keyspace
+    script: Script
+  chart:
+    browse_suffix: "[browse]"
+  import_dashboard:
+    name: Import Dashboard from JSON...
 settings:
   general:
     header:

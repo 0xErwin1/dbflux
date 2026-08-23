@@ -166,6 +166,28 @@ modals:
       many: "Guardar seleccionados (%{count})"
     dont_save: No guardar
     cancel: Cancelar
+palette:
+  search:
+    placeholder: Buscar comandos, conexiones, tablas, scripts…
+  empty: No hay coincidencias
+  section:
+    connections: Conexiones
+    commands: Comandos
+    charts: Gráficos
+    tables: Tablas
+    scripts: Scripts
+  kind:
+    connection: Conexión
+    chart: Gráfico
+    table: Tabla
+    collection: Colección
+    view: Vista
+    keyspace: Keyspace
+    script: Script
+  chart:
+    browse_suffix: "[explorar]"
+  import_dashboard:
+    name: Importar dashboard desde JSON…
 settings:
   general:
     header:

@@ -235,8 +235,8 @@ mod tests {
     fn sample_action() -> PaletteItem {
         PaletteItem::Action {
             id: "new_query_tab",
-            name: "New Query Tab",
-            category: "Editor",
+            name: "New Query Tab".into(),
+            category: "Editor".into(),
             shortcut: Some("Ctrl+N"),
         }
     }
@@ -792,8 +792,8 @@ mod tests {
     fn selection_routing_action_produces_command() {
         let item = PaletteItem::Action {
             id: "new_query_tab",
-            name: "New Query Tab",
-            category: "Editor",
+            name: "New Query Tab".into(),
+            category: "Editor".into(),
             shortcut: Some("Ctrl+N"),
         };
 
@@ -1107,8 +1107,8 @@ mod tests {
         for i in 0..100 {
             items.push(PaletteItem::Action {
                 id: Box::leak(format!("cmd_{}", i).into_boxed_str()),
-                name: Box::leak(format!("Command {}", i).into_boxed_str()),
-                category: "Editor",
+                name: format!("Command {}", i).into(),
+                category: "Editor".into(),
                 shortcut: None,
             });
         }
