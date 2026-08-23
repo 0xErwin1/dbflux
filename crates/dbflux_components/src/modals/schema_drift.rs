@@ -119,7 +119,7 @@ impl Render for ModalSchemaDrift {
                         .text_size(FontSizes::XS)
                         .font_weight(gpui::FontWeight::BOLD)
                         .text_color(muted)
-                        .child("column"),
+                        .child(dbflux_i18n::t!("modals.schema_drift.column_header")),
                 )
                 .child(
                     div()
@@ -127,7 +127,7 @@ impl Render for ModalSchemaDrift {
                         .text_size(FontSizes::XS)
                         .font_weight(gpui::FontWeight::BOLD)
                         .text_color(muted)
-                        .child("local cache"),
+                        .child(dbflux_i18n::t!("modals.schema_drift.local_header")),
                 )
                 .child(
                     div()
@@ -135,7 +135,7 @@ impl Render for ModalSchemaDrift {
                         .text_size(FontSizes::XS)
                         .font_weight(gpui::FontWeight::BOLD)
                         .text_color(muted)
-                        .child("remote"),
+                        .child(dbflux_i18n::t!("modals.schema_drift.remote_header")),
                 );
 
             let mut diff_rows = div()
@@ -178,14 +178,14 @@ impl Render for ModalSchemaDrift {
             .gap(Spacing::SM)
             .child(
                 Button::new("drift-continue")
-                    .label("Continue with stale schema")
+                    .label(dbflux_i18n::t!("modals.schema_drift.continue_stale"))
                     .ghost()
                     .on_click(on_continue),
             )
             .child(div().flex_1())
             .child(
                 Button::new("drift-close")
-                    .label("Cancel")
+                    .label(dbflux_i18n::t!("modals.schema_drift.cancel"))
                     .on_click(on_close),
             )
             .child(if loading {
@@ -198,19 +198,19 @@ impl Render for ModalSchemaDrift {
                         div()
                             .text_size(FontSizes::SM)
                             .text_color(theme.muted_foreground)
-                            .child("Refreshing…"),
+                            .child(dbflux_i18n::t!("modals.schema_drift.refreshing")),
                     )
                     .into_any_element()
             } else {
                 Button::new("drift-refresh")
-                    .label("Refresh and re-run")
+                    .label(dbflux_i18n::t!("modals.schema_drift.refresh"))
                     .primary()
                     .on_click(on_refresh)
                     .into_any_element()
             });
 
         ModalShell::new(
-            "Schema has changed since this query was opened",
+            dbflux_i18n::t!("modals.schema_drift.title"),
             body.into_any_element(),
             footer.into_any_element(),
         )
@@ -245,7 +245,7 @@ fn render_change_row(
             "—",
             &snap.name,
             &snap_label(snap),
-            "new column",
+            &dbflux_i18n::t!("modals.schema_drift.change.new_column"),
             muted,
         ),
         SchemaChange::ColumnRemoved(snap) => drift_row(
@@ -253,7 +253,7 @@ fn render_change_row(
             &snap.name,
             &snap_label(snap),
             "—",
-            "removed",
+            &dbflux_i18n::t!("modals.schema_drift.change.removed"),
             muted,
         ),
         SchemaChange::ColumnTypeChanged { before, after } => drift_row(
@@ -261,7 +261,7 @@ fn render_change_row(
             &before.name,
             &snap_label(before),
             &snap_label(after),
-            "type changed",
+            &dbflux_i18n::t!("modals.schema_drift.change.type_changed"),
             muted,
         ),
         SchemaChange::NullabilityChanged {
@@ -276,24 +276,24 @@ fn render_change_row(
                 column,
                 before_label,
                 after_label,
-                "nullability changed",
+                &dbflux_i18n::t!("modals.schema_drift.change.nullability_changed"),
                 muted,
             )
         }
         SchemaChange::PrimaryKeyChanged { before, after } => drift_row(
             warning_bg,
-            "(primary key)",
+            &dbflux_i18n::t!("modals.schema_drift.change.primary_key"),
             &before.join(", "),
             &after.join(", "),
-            "PK changed",
+            &dbflux_i18n::t!("modals.schema_drift.change.pk_changed"),
             muted,
         ),
         SchemaChange::ForeignKeyChanged => drift_row(
             warning_bg,
-            "(foreign keys)",
-            "cached",
-            "changed",
-            "FK changed",
+            &dbflux_i18n::t!("modals.schema_drift.change.foreign_keys"),
+            &dbflux_i18n::t!("modals.schema_drift.change.cached"),
+            &dbflux_i18n::t!("modals.schema_drift.change.changed"),
+            &dbflux_i18n::t!("modals.schema_drift.change.fk_changed"),
             muted,
         ),
         SchemaChange::DefaultChanged {
@@ -305,7 +305,7 @@ fn render_change_row(
             column,
             before.as_deref().unwrap_or("—"),
             after.as_deref().unwrap_or("—"),
-            "default changed",
+            &dbflux_i18n::t!("modals.schema_drift.change.default_changed"),
             muted,
         ),
         SchemaChange::IndexAdded(snap) => drift_row(
@@ -313,7 +313,7 @@ fn render_change_row(
             &snap.name,
             "—",
             &index_label(snap),
-            "index added",
+            &dbflux_i18n::t!("modals.schema_drift.change.index_added"),
             muted,
         ),
         SchemaChange::IndexRemoved(snap) => drift_row(
@@ -321,7 +321,7 @@ fn render_change_row(
             &snap.name,
             &index_label(snap),
             "—",
-            "index removed",
+            &dbflux_i18n::t!("modals.schema_drift.change.index_removed"),
             muted,
         ),
     }
@@ -389,4 +389,60 @@ fn drift_row(
                         .child(format!("· {}", note)),
                 ),
         )
+}
+
+// ---------------------------------------------------------------------------
+// Tests — catalog key resolution
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn schema_drift_keys_resolve_in_both_locales() {
+        let keys = [
+            "modals.schema_drift.title",
+            "modals.schema_drift.column_header",
+            "modals.schema_drift.local_header",
+            "modals.schema_drift.remote_header",
+            "modals.schema_drift.change.new_column",
+            "modals.schema_drift.change.removed",
+            "modals.schema_drift.change.type_changed",
+            "modals.schema_drift.change.nullability_changed",
+            "modals.schema_drift.change.pk_changed",
+            "modals.schema_drift.change.fk_changed",
+            "modals.schema_drift.change.default_changed",
+            "modals.schema_drift.change.index_added",
+            "modals.schema_drift.change.index_removed",
+            "modals.schema_drift.change.cached",
+            "modals.schema_drift.change.changed",
+            "modals.schema_drift.change.primary_key",
+            "modals.schema_drift.change.foreign_keys",
+            "modals.schema_drift.continue_stale",
+            "modals.schema_drift.cancel",
+            "modals.schema_drift.refreshing",
+            "modals.schema_drift.refresh",
+        ];
+
+        for key in keys {
+            let en = dbflux_i18n::t!(key, locale = "en");
+            let es = dbflux_i18n::t!(key, locale = "es");
+            assert!(
+                !en.is_empty() && !en.starts_with("en."),
+                "en missing for {key}, got {en:?}"
+            );
+            assert!(
+                !es.is_empty() && !es.starts_with("es."),
+                "es missing for {key}, got {es:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn schema_drift_refresh_differs_between_locales() {
+        let en = dbflux_i18n::t!("modals.schema_drift.refresh", locale = "en");
+        let es = dbflux_i18n::t!("modals.schema_drift.refresh", locale = "es");
+        assert_eq!(en, "Refresh and re-run");
+        assert_eq!(es, "Actualizar y volver a ejecutar");
+        assert_ne!(en, es);
+    }
 }

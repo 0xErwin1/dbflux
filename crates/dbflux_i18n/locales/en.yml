@@ -108,6 +108,14 @@ modals:
     compact: Compact
     cancel: Cancel
     confirm: Import
+  mutation_confirm:
+    title: Confirm mutation
+    sample_unavailable: Sample preview unavailable
+    type_to_confirm_label: "Type the table name to confirm:"
+    type_to_confirm_placeholder: Type table name to confirm
+    opt_in_label: I understand this operation will modify data
+    cancel: Cancel
+    confirm: Confirm
   rename:
     placeholder: Enter a name
     title:
@@ -117,6 +125,29 @@ modals:
       empty_name: Name cannot be empty
     cancel: Cancel
     confirm: Rename
+  schema_drift:
+    title: Schema has changed since this query was opened
+    column_header: column
+    local_header: local cache
+    remote_header: remote
+    change:
+      new_column: new column
+      removed: removed
+      type_changed: type changed
+      nullability_changed: nullability changed
+      pk_changed: PK changed
+      fk_changed: FK changed
+      default_changed: default changed
+      index_added: index added
+      index_removed: index removed
+      cached: cached
+      changed: changed
+      primary_key: (primary key)
+      foreign_keys: (foreign keys)
+    continue_stale: Continue with stale schema
+    cancel: Cancel
+    refreshing: Refreshing…
+    refresh: Refresh and re-run
   tunnel_auth:
     title: SSH passphrase required
     prompt: 'Enter the passphrase for tunnel "%{tunnel}"'
