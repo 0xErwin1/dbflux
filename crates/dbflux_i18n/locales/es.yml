@@ -483,6 +483,13 @@ document:
       select: SELECT
       update: UPDATE
       delete: DELETE
+    section:
+      columns: COLUMNAS
+      execution: EJECUCIÓN
+      filters: FILTROS
+      filters_where: FILTROS (WHERE)
+      sort: ORDEN
+      sql_preview: VISTA PREVIA SQL
     status:
       limit: Límite
       offset: Desplazamiento
