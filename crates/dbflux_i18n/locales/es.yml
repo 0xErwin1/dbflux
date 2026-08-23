@@ -1354,6 +1354,34 @@ document:
       skipped: "%{table}: omitida"
       failed: "%{table}: FALLIDA — %{error}"
       not_attempted: "%{table}: no intentada"
+    mapping:
+      target_placeholder: Tabla destino
+      mode_placeholder: Modo
+      unset_option: "(sin asignar)"
+      set_all_label: "Establecer todo:"
+      columns_button: "Columnas…"
+      unmapped_count:
+        one: "%{count} columna sin asignar"
+        many: "%{count} columnas sin asignar"
+      column_mapping_title: "Mapeo de columnas — %{table}"
+      target_column_header: Columna destino
+      source_column_header: Columna origen
+      unmapped_columns: "Columnas de origen sin asignar: %{columns}"
+      header_source: Origen
+      header_target: Destino
+      header_mapping_mode: Modo de mapeo
+      header_transform: Transformación
+    source_target:
+      source_title: Origen
+      target_title: Destino
+      checked_count:
+        one: "%{count} marcada"
+        many: "%{count} marcadas"
+      no_target_selected: Ningún destino seleccionado
+      retry: "Reintentar — %{error}"
+      source_connection_gone: La conexión de origen ya no está disponible
+      target_connection_gone: La conexión de destino ya no está disponible
+      cross_database_error: "Una migración usa una única base de datos de origen. Solo se pueden seleccionar tablas de «%{source}»; las tablas de «%{other}» no se pueden combinar."
     footer:
       back: Atrás
       continue: Continuar

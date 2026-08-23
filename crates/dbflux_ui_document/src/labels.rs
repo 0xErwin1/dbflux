@@ -1680,6 +1680,44 @@ pub(crate) fn migrate_running_rows_label(rows_done: u64, estimated_total: Option
     }
 }
 
+/// Label for the Tables Mapping grid's per-row "N unmapped" warning, with the
+/// unmatched-source-column count interpolated.
+///
+/// Uses the singular catalog bucket only for exactly one unmapped column;
+/// every other count, including zero, uses the plural bucket.
+pub(crate) fn migrate_mapping_unmapped_count_label(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!(
+            "document.migrate_wizard.mapping.unmapped_count.one",
+            count = count
+        )
+    } else {
+        dbflux_i18n::t!(
+            "document.migrate_wizard.mapping.unmapped_count.many",
+            count = count
+        )
+    }
+}
+
+/// Label for the Source & Target phase's source-panel subtitle, with the
+/// checked-table count interpolated.
+///
+/// Uses the singular catalog bucket only for exactly one checked table;
+/// every other count, including zero, uses the plural bucket.
+pub(crate) fn migrate_source_target_checked_count_label(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!(
+            "document.migrate_wizard.source_target.checked_count.one",
+            count = count
+        )
+    } else {
+        dbflux_i18n::t!(
+            "document.migrate_wizard.source_target.checked_count.many",
+            count = count
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1700,8 +1738,9 @@ mod tests {
         live_output_lines_label, live_output_truncated_label, metric_picker_custom_dropdown_label,
         metric_picker_dimensions_error_label, metric_picker_period_error_label,
         metric_picker_period_not_a_number_error, metric_picker_statistic_error_label,
-        migrate_running_position_label, migrate_running_rows_label, migrate_summary_label,
-        migrate_table_status_line, object_browser_status_summary,
+        migrate_mapping_unmapped_count_label, migrate_running_position_label,
+        migrate_running_rows_label, migrate_source_target_checked_count_label,
+        migrate_summary_label, migrate_table_status_line, object_browser_status_summary,
         object_browser_versions_count_label, partial_delete_label, pending_change_count_label,
         pending_edits_summary, presign_expiry_label, presign_method_label, preview_gate_message,
         refresh_policy_label, result_tab_count_label, row_count_label, schema_change_description,
@@ -4640,6 +4679,35 @@ mod tests {
         "document.migrate_wizard.footer.close",
     ];
 
+    // ── PR 27a-2: migrate_wizard/{mapping,source_target}.rs ──
+
+    const MIGRATE_MAPPING_SOURCE_TARGET_KEYS: &[&str] = &[
+        "document.migrate_wizard.mapping.target_placeholder",
+        "document.migrate_wizard.mapping.mode_placeholder",
+        "document.migrate_wizard.mapping.unset_option",
+        "document.migrate_wizard.mapping.set_all_label",
+        "document.migrate_wizard.mapping.columns_button",
+        "document.migrate_wizard.mapping.unmapped_count.one",
+        "document.migrate_wizard.mapping.unmapped_count.many",
+        "document.migrate_wizard.mapping.column_mapping_title",
+        "document.migrate_wizard.mapping.target_column_header",
+        "document.migrate_wizard.mapping.source_column_header",
+        "document.migrate_wizard.mapping.unmapped_columns",
+        "document.migrate_wizard.mapping.header_source",
+        "document.migrate_wizard.mapping.header_target",
+        "document.migrate_wizard.mapping.header_mapping_mode",
+        "document.migrate_wizard.mapping.header_transform",
+        "document.migrate_wizard.source_target.source_title",
+        "document.migrate_wizard.source_target.target_title",
+        "document.migrate_wizard.source_target.checked_count.one",
+        "document.migrate_wizard.source_target.checked_count.many",
+        "document.migrate_wizard.source_target.no_target_selected",
+        "document.migrate_wizard.source_target.retry",
+        "document.migrate_wizard.source_target.source_connection_gone",
+        "document.migrate_wizard.source_target.target_connection_gone",
+        "document.migrate_wizard.source_target.cross_database_error",
+    ];
+
     /// PR 27a: every `document.migrate_wizard.*` key introduced by
     /// `phases.rs`/`mod.rs`/`options.rs`/`column_mapping.rs`/`confirm_run.rs`
     /// resolves to a non-empty, non-fallback value in both locales.
@@ -4676,6 +4744,111 @@ mod tests {
             let es = dbflux_i18n::t!(key, locale = "es");
             assert_ne!(en, es, "{key} must differ between en and es");
         }
+    }
+
+    /// PR 27a-2: every `document.migrate_wizard.{mapping,source_target}.*`
+    /// key introduced by `mapping.rs`/`source_target.rs` resolves to a
+    /// non-empty, non-fallback value in both locales.
+    #[test]
+    fn migrate_mapping_source_target_keys_resolve_in_both_locales() {
+        for key in MIGRATE_MAPPING_SOURCE_TARGET_KEYS {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, *key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+    }
+
+    /// PR 27a-2: a representative sample of
+    /// `document.migrate_wizard.{mapping,source_target}.*` keys diverges
+    /// between locales.
+    #[test]
+    fn migrate_mapping_source_target_keys_differ_between_locales() {
+        for key in [
+            "document.migrate_wizard.mapping.set_all_label",
+            "document.migrate_wizard.mapping.column_mapping_title",
+            "document.migrate_wizard.source_target.no_target_selected",
+            "document.migrate_wizard.source_target.cross_database_error",
+        ] {
+            let en = dbflux_i18n::t!(key, locale = "en");
+            let es = dbflux_i18n::t!(key, locale = "es");
+            assert_ne!(en, es, "{key} must differ between en and es");
+        }
+    }
+
+    /// PR 27a-2: `migrate_mapping_unmapped_count_label` uses the singular
+    /// catalog bucket only for exactly one unmapped column; every other
+    /// count, including zero, uses the plural bucket.
+    #[test]
+    fn migrate_mapping_unmapped_count_label_switches_bucket_on_count() {
+        let one = migrate_mapping_unmapped_count_label(1);
+        assert_eq!(
+            one,
+            dbflux_i18n::t!(
+                "document.migrate_wizard.mapping.unmapped_count.one",
+                count = 1
+            )
+        );
+
+        let many = migrate_mapping_unmapped_count_label(3);
+        assert_eq!(
+            many,
+            dbflux_i18n::t!(
+                "document.migrate_wizard.mapping.unmapped_count.many",
+                count = 3
+            )
+        );
+        assert_ne!(one, many);
+
+        let zero = migrate_mapping_unmapped_count_label(0);
+        assert_eq!(
+            zero,
+            dbflux_i18n::t!(
+                "document.migrate_wizard.mapping.unmapped_count.many",
+                count = 0
+            )
+        );
+    }
+
+    /// PR 27a-2: `migrate_source_target_checked_count_label` uses the
+    /// singular catalog bucket only for exactly one checked table; every
+    /// other count, including zero, uses the plural bucket.
+    #[test]
+    fn migrate_source_target_checked_count_label_switches_bucket_on_count() {
+        let one = migrate_source_target_checked_count_label(1);
+        assert_eq!(
+            one,
+            dbflux_i18n::t!(
+                "document.migrate_wizard.source_target.checked_count.one",
+                count = 1
+            )
+        );
+
+        let many = migrate_source_target_checked_count_label(3);
+        assert_eq!(
+            many,
+            dbflux_i18n::t!(
+                "document.migrate_wizard.source_target.checked_count.many",
+                count = 3
+            )
+        );
+        assert_ne!(one, many);
+
+        let zero = migrate_source_target_checked_count_label(0);
+        assert_eq!(
+            zero,
+            dbflux_i18n::t!(
+                "document.migrate_wizard.source_target.checked_count.many",
+                count = 0
+            )
+        );
     }
 
     /// PR 27a: `migrate_summary_label` picks the "with failures" bucket only
