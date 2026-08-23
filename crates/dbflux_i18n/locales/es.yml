@@ -110,6 +110,55 @@ settings:
       button: Guardar
       error: "No se pudo guardar la configuración general: %{error}"
       success: Configuración guardada. Algunos cambios se aplican al reiniciar.
+sql_preview:
+  title:
+    sql: Vista previa de SQL
+    query: Vista previa de consulta
+  options:
+    label: Opciones
+    fully_qualified: Nombres completamente calificados
+    compact: SQL compacto
+  action:
+    refresh: Actualizar
+    copy: Copiar
+    close: Cerrar
+sso_wizard:
+  title: Asistente de AWS SSO
+  step:
+    start: "Paso 1: URL de inicio"
+    account: "Paso 2: Cuenta"
+    role: "Paso 3: Rol"
+    confirm: "Paso 4: Confirmar"
+  account:
+    hint: Usa el ID de cuenta obtenido con el descubrimiento de cuentas de AWS SSO
+    discovering: Descubriendo cuentas...
+    discover_button: Iniciar sesión y descubrir cuentas
+    no_matches: No hay cuentas que coincidan con el filtro actual
+  role:
+    hint: Usa el nombre de rol del listado de roles de AWS SSO
+    discovering: Descubriendo roles...
+    discover_button: Descubrir roles para la cuenta seleccionada
+    no_matches: No hay roles que coincidan con el filtro actual
+  confirm:
+    profile: "Perfil: %{value}"
+    start_url: "URL de inicio: %{value}"
+    region: "Región: %{value}"
+    account: "Cuenta: %{value}"
+    role: "Rol: %{value}"
+  back: Atrás
+  next: Siguiente
+  save: Guardar
+  status:
+    missing_required: El nombre de perfil, la URL de inicio y la región son obligatorios
+    fill_before_account_discovery: Completa el nombre de perfil, la URL de inicio y la región antes de descubrir
+    discovering_accounts: Iniciando sesión y obteniendo cuentas de SSO...
+    accounts_discovered: Descubrimiento de cuentas de SSO completado
+    accounts_failed: "Error al descubrir cuentas: %{error}"
+    fill_before_role_discovery: Completa perfil, región y URL de inicio, y selecciona una cuenta primero
+    discovering_roles: Obteniendo roles de SSO...
+    roles_discovered: Descubrimiento de roles de SSO completado
+    roles_failed: "Error al descubrir roles: %{error}"
+    profile_created: Perfil de autenticación de AWS SSO creado
 toast:
   action:
     copy: Copiar

@@ -110,6 +110,55 @@ settings:
       button: Save
       error: "Failed to save general settings: %{error}"
       success: Settings saved. Some changes apply on next startup.
+sql_preview:
+  title:
+    sql: SQL Preview
+    query: Query Preview
+  options:
+    label: Options
+    fully_qualified: Fully qualified names
+    compact: Compact SQL
+  action:
+    refresh: Refresh
+    copy: Copy
+    close: Close
+sso_wizard:
+  title: AWS SSO Wizard
+  step:
+    start: "Step 1: Start URL"
+    account: "Step 2: Account"
+    role: "Step 3: Role"
+    confirm: "Step 4: Confirm"
+  account:
+    hint: Use account ID from AWS SSO account discovery
+    discovering: Discovering accounts...
+    discover_button: Login + Discover Accounts
+    no_matches: No matching accounts for current filter
+  role:
+    hint: Use role name from AWS SSO role listing
+    discovering: Discovering roles...
+    discover_button: Discover Roles for Selected Account
+    no_matches: No matching roles for current filter
+  confirm:
+    profile: "Profile: %{value}"
+    start_url: "Start URL: %{value}"
+    region: "Region: %{value}"
+    account: "Account: %{value}"
+    role: "Role: %{value}"
+  back: Back
+  next: Next
+  save: Save
+  status:
+    missing_required: Profile name, start URL, and region are required
+    fill_before_account_discovery: Fill profile name, start URL, and region before discovery
+    discovering_accounts: Logging in and fetching SSO accounts...
+    accounts_discovered: SSO account discovery completed
+    accounts_failed: "Failed to discover accounts: %{error}"
+    fill_before_role_discovery: Fill profile/region/start URL and select an account first
+    discovering_roles: Fetching SSO roles...
+    roles_discovered: SSO role discovery completed
+    roles_failed: "Failed to discover roles: %{error}"
+    profile_created: Created AWS SSO auth profile
 toast:
   action:
     copy: Copy
