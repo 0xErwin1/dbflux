@@ -1083,7 +1083,7 @@ impl AuditDocument {
                     self.expanded_event_ids.clear();
                     self.is_loading = false;
                     self.status_message =
-                        Some("Connection not found for this event source".to_string());
+                        Some(crate::labels::audit_event_source_connection_not_found());
                     cx.notify();
                     return;
                 };
@@ -1149,10 +1149,10 @@ impl AuditDocument {
                         doc.expanded_event_ids.clear();
                         doc.clear_external_inline_inputs();
                         doc.is_loading = false;
-                        doc.status_message = Some(format!("Error loading events: {}", error));
+                        doc.status_message = Some(crate::labels::audit_events_load_failed(&error));
 
                         if let Some(task_id) = task_id {
-                            let details = format!("Error loading events: {}", error);
+                            let details = crate::labels::audit_events_load_failed(&error);
                             doc.app_state.update(cx, |state, _| {
                                 state.fail_task_with_details(task_id, error.clone(), details);
                             });

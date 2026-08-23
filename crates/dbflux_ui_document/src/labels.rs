@@ -1101,6 +1101,18 @@ pub(crate) fn audit_export_failed_error(error: &str) -> String {
     dbflux_i18n::t!("document.audit.export.failed", error = error)
 }
 
+/// Status line for the audit viewer when an external event source points at
+/// a connection that no longer exists.
+pub(crate) fn audit_event_source_connection_not_found() -> String {
+    dbflux_i18n::t!("document.audit.source.connection_not_found")
+}
+
+/// Status line and task detail when loading events from an external source
+/// fails; `error` is the cause as reported and stays untranslated.
+pub(crate) fn audit_events_load_failed(error: &str) -> String {
+    dbflux_i18n::t!("document.audit.source.load_failed", error = error)
+}
+
 /// Qualifies a table name with its schema for the schema-diff description
 /// helpers, mirroring `schema_diff::view::qualified` (kept as a small local
 /// copy since that helper is private to its own module). Object names are
@@ -2209,6 +2221,7 @@ mod tests {
         MutationItemKind, VisualMutationTaskMode, add_member_modal_placeholders,
         add_member_modal_section_label, add_member_modal_title, agg_fn_display,
         assignment_value_kind_label, audit_actor_type_label, audit_category_label,
+        audit_event_source_connection_not_found, audit_events_load_failed,
         audit_export_exported_toast, audit_export_failed_error,
         audit_export_unsupported_source_toast, audit_export_write_failed_error, audit_level_label,
         audit_loading_event_stream_task_label, audit_outcome_label, auto_refresh_unavailable_toast,
@@ -6074,6 +6087,36 @@ mod tests {
 
         assert!(value.contains("query timeout"));
         assert_ne!(value, "document.audit.export.failed");
+    }
+
+    #[test]
+    fn audit_event_source_status_messages_resolve_in_both_locales() {
+        for key in [
+            "document.audit.source.connection_not_found",
+            "document.audit.source.load_failed",
+        ] {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty());
+                assert_ne!(value, key);
+                assert_ne!(value, format!("{locale}.{key}"));
+            }
+        }
+
+        assert_ne!(
+            dbflux_i18n::t!("document.audit.source.load_failed", locale = "en"),
+            dbflux_i18n::t!("document.audit.source.load_failed", locale = "es")
+        );
+    }
+
+    #[test]
+    fn audit_events_load_failed_interpolates_cause() {
+        let value = audit_events_load_failed("socket closed");
+
+        assert!(value.contains("socket closed"));
+        assert_ne!(value, "document.audit.source.load_failed");
+        assert!(!audit_event_source_connection_not_found().is_empty());
     }
 
     #[test]

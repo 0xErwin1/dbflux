@@ -535,6 +535,8 @@ document:
         events: eventos
         rows: filas
     source:
+      connection_not_found: No se encontró la conexión de esta fuente de eventos
+      load_failed: "Error al cargar los eventos: %{error}"
       empty:
         external: "Ningún evento coincide con los filtros actuales."
         internal: "Ningún evento de auditoría coincide con los filtros actuales."

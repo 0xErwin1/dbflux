@@ -535,6 +535,8 @@ document:
         events: events
         rows: rows
     source:
+      connection_not_found: Connection not found for this event source
+      load_failed: "Error loading events: %{error}"
       empty:
         external: "No events match the current filters."
         internal: "No audit events match the current filters."
