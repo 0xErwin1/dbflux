@@ -1,4 +1,7 @@
 use super::*;
+use crate::ui::labels::{
+    NoActiveConnectionKind, documents_default_title, documents_no_active_connection_message,
+};
 
 impl Workspace {
     /// Opens a table in a new DataDocument tab, or focuses the existing one.
@@ -31,9 +34,10 @@ impl Workspace {
 
         match decide_open_document(has_connection, existing_id) {
             OpenDocumentDecision::ErrorNoConnection => {
-                Toast::error("No active connection for this table")
+                let message = documents_no_active_connection_message(NoActiveConnectionKind::Table);
+                Toast::error(message.clone())
                     .meta_right(now_hms())
-                    .action(copy_action("No active connection for this table"))
+                    .action(copy_action(message))
                     .push(cx);
                 return;
             }
@@ -120,9 +124,11 @@ impl Workspace {
 
         match decide_open_document(has_connection, existing_id) {
             OpenDocumentDecision::ErrorNoConnection => {
-                Toast::error("No active connection for this collection")
+                let message =
+                    documents_no_active_connection_message(NoActiveConnectionKind::Collection);
+                Toast::error(message.clone())
                     .meta_right(now_hms())
-                    .action(copy_action("No active connection for this collection"))
+                    .action(copy_action(message))
                     .push(cx);
                 return;
             }
@@ -213,9 +219,11 @@ impl Workspace {
 
         match decide_open_document(has_connection, existing_id) {
             OpenDocumentDecision::ErrorNoConnection => {
-                Toast::error("No active connection for this event source")
+                let message =
+                    documents_no_active_connection_message(NoActiveConnectionKind::EventSource);
+                Toast::error(message.clone())
                     .meta_right(now_hms())
-                    .action(copy_action("No active connection for this event source"))
+                    .action(copy_action(message))
                     .push(cx);
                 return;
             }
@@ -272,11 +280,11 @@ impl Workspace {
 
         match decide_open_document(has_connection, existing_id) {
             OpenDocumentDecision::ErrorNoConnection => {
-                Toast::error("No active connection for this key-value database")
+                let message =
+                    documents_no_active_connection_message(NoActiveConnectionKind::KeyValueDb);
+                Toast::error(message.clone())
                     .meta_right(now_hms())
-                    .action(copy_action(
-                        "No active connection for this key-value database",
-                    ))
+                    .action(copy_action(message))
                     .push(cx);
                 return;
             }
@@ -332,11 +340,12 @@ impl Workspace {
 
         match decide_open_document(has_connection, existing_id) {
             OpenDocumentDecision::ErrorNoConnection => {
-                Toast::error("No active connection for this object-storage account")
+                let message = documents_no_active_connection_message(
+                    NoActiveConnectionKind::ObjectStorageAccount,
+                );
+                Toast::error(message.clone())
                     .meta_right(now_hms())
-                    .action(copy_action(
-                        "No active connection for this object-storage account",
-                    ))
+                    .action(copy_action(message))
                     .push(cx);
                 return;
             }
@@ -397,9 +406,11 @@ impl Workspace {
 
         match decide_open_document(has_connection, existing_id) {
             OpenDocumentDecision::ErrorNoConnection => {
-                Toast::error("No active connection for this bucket")
+                let message =
+                    documents_no_active_connection_message(NoActiveConnectionKind::Bucket);
+                Toast::error(message.clone())
                     .meta_right(now_hms())
-                    .action(copy_action("No active connection for this bucket"))
+                    .action(copy_action(message))
                     .push(cx);
                 return;
             }
@@ -462,9 +473,11 @@ impl Workspace {
 
         match decide_open_document(has_connection, existing_id) {
             OpenDocumentDecision::ErrorNoConnection => {
-                Toast::error("No active connection for this object")
+                let message =
+                    documents_no_active_connection_message(NoActiveConnectionKind::Object);
+                Toast::error(message.clone())
                     .meta_right(now_hms())
-                    .action(copy_action("No active connection for this object"))
+                    .action(copy_action(message))
                     .push(cx);
                 return;
             }
@@ -552,7 +565,7 @@ impl Workspace {
                 .read(cx)
                 .document(doc_id)
                 .map(|d| d.tab_title(cx))
-                .unwrap_or_else(|| "Untitled".to_string());
+                .unwrap_or_else(documents_default_title);
 
             use crate::ui::overlays::modals::{DirtySummaryEntry, UnsavedChangesRequest};
             let req = UnsavedChangesRequest {

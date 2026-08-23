@@ -1,4 +1,9 @@
 use super::*;
+use crate::ui::labels::{
+    documents_default_title, scripts_filter_all_files_label,
+    scripts_filter_javascript_mongodb_label, scripts_filter_redis_label, scripts_filter_sql_label,
+    scripts_open_dialog_title, scripts_read_file_failed_message,
+};
 
 impl Workspace {
     /// Opens a file dialog to pick a script file and opens it in a new tab.
@@ -10,12 +15,18 @@ impl Workspace {
         let tab_manager = self.tab_manager.clone();
 
         cx.spawn(async move |this, cx| {
+            let dialog_title = scripts_open_dialog_title();
+            let sql_filter_label = scripts_filter_sql_label();
+            let javascript_mongodb_filter_label = scripts_filter_javascript_mongodb_label();
+            let redis_filter_label = scripts_filter_redis_label();
+            let all_files_filter_label = scripts_filter_all_files_label();
+
             let file_handle = rfd::AsyncFileDialog::new()
-                .set_title("Open Script")
-                .add_filter("SQL Files", &["sql"])
-                .add_filter("JavaScript (MongoDB)", &["js", "mongodb"])
-                .add_filter("Redis", &["redis", "red"])
-                .add_filter("All Files", &["*"])
+                .set_title(&dialog_title)
+                .add_filter(&sql_filter_label, &["sql"])
+                .add_filter(&javascript_mongodb_filter_label, &["js", "mongodb"])
+                .add_filter(&redis_filter_label, &["redis", "red"])
+                .add_filter(&all_files_filter_label, &["*"])
                 .pick_file()
                 .await;
 
@@ -66,7 +77,7 @@ impl Workspace {
                     report_error_async(
                         UserFacingError::new(
                             ErrorKind::Storage,
-                            format!("Failed to read file {}: {e}", path.display()),
+                            scripts_read_file_failed_message(path.display(), e),
                         ),
                         cx,
                     );
@@ -124,7 +135,7 @@ impl Workspace {
                     report_error_async(
                         UserFacingError::new(
                             ErrorKind::Storage,
-                            format!("Failed to read file {}: {e}", path.display()),
+                            scripts_read_file_failed_message(path.display(), e),
                         ),
                         cx,
                     );
@@ -313,8 +324,8 @@ impl Workspace {
             title: path
                 .file_name()
                 .and_then(|name| name.to_str())
-                .unwrap_or("Untitled")
-                .to_string(),
+                .map(str::to_string)
+                .unwrap_or_else(documents_default_title),
             path: Some(path),
             body: body.to_string(),
             language,

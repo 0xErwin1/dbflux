@@ -1,4 +1,9 @@
 use super::*;
+use crate::ui::labels::{
+    connections_disconnecting_message, connections_edit_window_title,
+    connections_manager_window_title, connections_no_active_connection_message,
+    connections_refresh_schema_failed_message, connections_refreshing_schema_message,
+};
 
 impl Workspace {
     pub(in crate::ui::views::workspace) fn open_connection_manager(&self, cx: &mut Context<Self>) {
@@ -8,7 +13,7 @@ impl Workspace {
         let mut options = WindowOptions {
             app_id: Some(dbflux_core::ReleaseChannel::current().app_id().into()),
             titlebar: Some(TitlebarOptions {
-                title: Some("Connection Manager".into()),
+                title: Some(connections_manager_window_title().into()),
                 ..Default::default()
             }),
             window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -62,7 +67,7 @@ impl Workspace {
         let mut options = WindowOptions {
             app_id: Some(dbflux_core::ReleaseChannel::current().app_id().into()),
             titlebar: Some(TitlebarOptions {
-                title: Some("Edit Connection".into()),
+                title: Some(connections_edit_window_title().into()),
                 ..Default::default()
             }),
             window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -91,7 +96,7 @@ impl Workspace {
         let mut options = WindowOptions {
             app_id: Some(dbflux_core::ReleaseChannel::current().app_id().into()),
             titlebar: Some(TitlebarOptions {
-                title: Some("Connection Manager".into()),
+                title: Some(connections_manager_window_title().into()),
                 ..Default::default()
             }),
             window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -144,7 +149,7 @@ impl Workspace {
             });
 
             if let Some(name) = name {
-                Toast::info(format!("Disconnecting from {}...", name))
+                Toast::info(connections_disconnecting_message(&name))
                     .meta_right(now_hms())
                     .push(cx);
             }
@@ -159,7 +164,7 @@ impl Workspace {
         let active = self.app_state.read(cx).active_connection();
 
         let Some(active) = active else {
-            Toast::warning("No active connection")
+            Toast::warning(connections_no_active_connection_message())
                 .meta_right(now_hms())
                 .push(cx);
             return;
@@ -187,7 +192,7 @@ impl Workspace {
                     report_error(
                         UserFacingError::new(
                             ErrorKind::Driver,
-                            format!("Failed to refresh schema: {e}"),
+                            connections_refresh_schema_failed_message(e),
                         ),
                         cx,
                     );
@@ -201,7 +206,7 @@ impl Workspace {
         })
         .detach();
 
-        Toast::info("Refreshing schema...")
+        Toast::info(connections_refreshing_schema_message())
             .meta_right(now_hms())
             .push(cx);
     }

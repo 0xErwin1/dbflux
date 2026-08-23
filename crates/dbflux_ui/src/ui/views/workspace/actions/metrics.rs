@@ -1,4 +1,9 @@
 use super::*;
+use crate::ui::labels::{
+    charts_instance_overview_create_editable_failed_message,
+    charts_instance_overview_created_editable_message, charts_instance_overview_editable_name,
+    charts_instance_overview_no_dashboard_message,
+};
 
 impl Workspace {
     /// Opens a `ChartDocument` pre-populated with the metric selected in the
@@ -218,11 +223,9 @@ impl Workspace {
         };
 
         let Some(descriptor) = catalog_result else {
-            dbflux_ui_base::toast::Toast::info(
-                "This driver does not define an Instance Overview dashboard.",
-            )
-            .meta_right(now_hms())
-            .push(cx);
+            dbflux_ui_base::toast::Toast::info(charts_instance_overview_no_dashboard_message())
+                .meta_right(now_hms())
+                .push(cx);
             return;
         };
 
@@ -337,7 +340,7 @@ impl Workspace {
         use dbflux_core::chrono::Utc;
         use dbflux_ui_base::DashboardPanelDraft;
 
-        let new_name = format!("{} (editable)", source_title);
+        let new_name = charts_instance_overview_editable_name(&source_title);
 
         // Fetch the driver's default dashboard descriptor to enumerate panels.
         let descriptor: Option<dbflux_core::DefaultInstanceDashboard> = {
@@ -423,7 +426,7 @@ impl Workspace {
 
         match result {
             Ok(new_id) => {
-                Toast::info("Created editable dashboard with all overview panels.")
+                Toast::info(charts_instance_overview_created_editable_message())
                     .meta_right(now_hms())
                     .push(cx);
                 self.open_dashboard(new_id, window, cx);
@@ -432,7 +435,7 @@ impl Workspace {
                 report_error(
                     UserFacingError::new(
                         ErrorKind::Config,
-                        format!("Failed to create editable dashboard: {e}"),
+                        charts_instance_overview_create_editable_failed_message(e),
                     ),
                     cx,
                 );

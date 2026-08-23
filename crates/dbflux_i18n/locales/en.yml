@@ -38,6 +38,15 @@ access:
   ssh_failed: SSH connection failed
   save_as_tunnel: Save as tunnel
   ssh_disabled_hint: Enable SSH tunnel to configure connection through a bastion host
+audit:
+  toast:
+    focus_existing_viewer: Focusing existing audit viewer
+    opened_viewer: Opened audit viewer
+    opened_mcp_approvals: Opened MCP approvals
+    mcp_governance_persisted: MCP governance state persisted
+  error:
+    open_viewer_failed: "Cannot open audit viewer: %{error}"
+    persist_mcp_governance_failed: "Failed to persist MCP governance: %{error}"
 chart:
   axis_bar:
     group: Group
@@ -108,6 +117,13 @@ charts:
     add_panel_failed: "Failed to add panel: %{error}"
     persist_metric_chart_for_panel_failed: "Failed to persist metric chart '%{name}' for new panel"
     add_panels_failed: "Failed to add panels: %{error}"
+  instance_overview:
+    editable_name: "%{name} (editable)"
+    toast:
+      no_dashboard_defined: This driver does not define an Instance Overview dashboard.
+      created_editable: Created editable dashboard with all overview panels.
+    error:
+      create_editable_failed: "Failed to create editable dashboard: %{error}"
 components:
   json_editor:
     empty_error: Document cannot be empty
@@ -248,6 +264,16 @@ connection_manager:
     cancel: Cancel
     configure: Configure
     configure_named: "Configure %{name}"
+connections:
+  window:
+    manager_title: Connection Manager
+    edit_title: Edit Connection
+  toast:
+    disconnecting: "Disconnecting from %{name}..."
+    no_active_connection: No active connection
+    refreshing_schema: Refreshing schema...
+  error:
+    refresh_schema_failed: "Failed to refresh schema: %{error}"
 document:
   audit:
     actor:
@@ -1201,6 +1227,22 @@ document_tree:
     raw_json: Raw JSON
   no_matches: No matches
   document_label: "Document %{index}"
+documents:
+  default_title: Untitled
+  new_query_name: Query
+  toast:
+    schema_diff_opened: Opened schema diff
+    no_active_connection_for:
+      table: No active connection for this table
+      collection: No active connection for this collection
+      event_source: No active connection for this event source
+      key_value_db: No active connection for this key-value database
+      object_storage_account: No active connection for this object-storage account
+      bucket: No active connection for this bucket
+      object: No active connection for this object
+  error:
+    write_initial_script_failed: "Failed to write initial script content: %{error}"
+    save_session_failed: Failed to save session manifest
 errors:
   action:
     view_in_audit: View in Audit
@@ -1522,7 +1564,19 @@ palette:
     view: View
     charts: Charts
     dashboards: Dashboards
+scripts:
+  dialog:
+    title: Open Script
+    filter:
+      sql: SQL Files
+      javascript_mongodb: JavaScript (MongoDB)
+      redis: Redis
+      all_files: All Files
+  error:
+    read_file_failed: "Failed to read file %{path}: %{error}"
 settings:
+  action:
+    default_connection_name: connection
   general:
     header:
       title: General

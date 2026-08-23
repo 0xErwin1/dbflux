@@ -38,6 +38,15 @@ access:
   ssh_failed: Fallo en la conexión SSH
   save_as_tunnel: Guardar como túnel
   ssh_disabled_hint: Habilita el túnel SSH para configurar la conexión a través de un host bastión
+audit:
+  toast:
+    focus_existing_viewer: Se enfocó el visor de auditoría existente
+    opened_viewer: Se abrió el visor de auditoría
+    opened_mcp_approvals: Se abrieron las aprobaciones de MCP
+    mcp_governance_persisted: Se guardó el estado de gobernanza de MCP
+  error:
+    open_viewer_failed: "No se pudo abrir el visor de auditoría: %{error}"
+    persist_mcp_governance_failed: "No se pudo guardar la gobernanza de MCP: %{error}"
 chart:
   axis_bar:
     group: Grupo
@@ -108,6 +117,13 @@ charts:
     add_panel_failed: "No se pudo agregar el panel: %{error}"
     persist_metric_chart_for_panel_failed: "No se pudo guardar el gráfico de métrica '%{name}' del nuevo panel"
     add_panels_failed: "No se pudieron agregar los paneles: %{error}"
+  instance_overview:
+    editable_name: "%{name} (editable)"
+    toast:
+      no_dashboard_defined: Este controlador no define un dashboard de Vista general de instancia.
+      created_editable: Se creó un dashboard editable con todos los paneles de la vista general.
+    error:
+      create_editable_failed: "No se pudo crear el dashboard editable: %{error}"
 components:
   json_editor:
     empty_error: El documento no puede estar vacío
@@ -248,6 +264,16 @@ connection_manager:
     cancel: Cancelar
     configure: Configurar
     configure_named: "Configurar %{name}"
+connections:
+  window:
+    manager_title: Administrador de conexiones
+    edit_title: Editar conexión
+  toast:
+    disconnecting: "Desconectando de %{name}..."
+    no_active_connection: No hay conexión activa
+    refreshing_schema: Actualizando esquema...
+  error:
+    refresh_schema_failed: "No se pudo actualizar el esquema: %{error}"
 document:
   audit:
     actor:
@@ -1201,6 +1227,22 @@ document_tree:
     raw_json: JSON sin formato
   no_matches: Sin coincidencias
   document_label: "Documento %{index}"
+documents:
+  default_title: Sin título
+  new_query_name: Consulta
+  toast:
+    schema_diff_opened: Se abrió la comparación de esquemas
+    no_active_connection_for:
+      table: No hay conexión activa para esta tabla
+      collection: No hay conexión activa para esta colección
+      event_source: No hay conexión activa para esta fuente de eventos
+      key_value_db: No hay conexión activa para esta base clave-valor
+      object_storage_account: No hay conexión activa para esta cuenta de almacenamiento de objetos
+      bucket: No hay conexión activa para este bucket
+      object: No hay conexión activa para este objeto
+  error:
+    write_initial_script_failed: "No se pudo escribir el contenido inicial del script: %{error}"
+    save_session_failed: No se pudo guardar el manifiesto de la sesión
 errors:
   action:
     view_in_audit: Ver en auditoría
@@ -1522,7 +1564,19 @@ palette:
     view: Vista
     charts: Gráficos
     dashboards: Dashboards
+scripts:
+  dialog:
+    title: Abrir script
+    filter:
+      sql: Archivos SQL
+      javascript_mongodb: JavaScript (MongoDB)
+      redis: Redis
+      all_files: Todos los archivos
+  error:
+    read_file_failed: "No se pudo leer el archivo %{path}: %{error}"
 settings:
+  action:
+    default_connection_name: conexión
   general:
     header:
       title: General
