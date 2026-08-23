@@ -1247,6 +1247,42 @@ settings:
       saved: Hook guardado
       deleted: Hook eliminado
       unreadable_deleted: Fila de hook ilegible eliminada
+  auth_profiles:
+    profiles_label: Perfiles
+    new_profile: "Nuevo perfil de autenticación"
+    import: "Importar…"
+    source_label: Origen
+    leave_blank_hint: Déjalo en blanco para conservar el valor actual.
+    auth_profile_label: "Perfil de autenticación"
+    editor_subtitle: Perfil de autenticación reutilizable para el acceso y la resolución de valores
+    changed_on_disk: Perfil modificado en disco
+    reload: Recargar
+    name_label: Nombre
+    provider_label: Proveedor
+    placeholder_name: Nombre del perfil
+    select_provider_ellipsis: "Seleccionar proveedor…"
+    select_ellipsis: "Seleccionar..."
+    select_none: "— Ninguno —"
+    enabled: Habilitado
+    export: Exportar
+    delete: Eliminar
+    save_to_file: Guardar en archivo
+    cancel: Cancelar
+    update: Actualizar
+    create: Crear
+    section_title: "Perfiles de autenticación"
+    section_description: Gestiona perfiles de autenticación reutilizables para el acceso a conexiones
+    delete_dialog_title: "Eliminar perfil de autenticación"
+    delete_dialog:
+      body_none: '¿Seguro que quieres eliminar "%{name}"?'
+      body_one: '¿Seguro que quieres eliminar "%{name}"? 1 conexión que usa este perfil de autenticación se actualizará.'
+      body_many: '¿Seguro que quieres eliminar "%{name}"? %{count} conexiones que usan este perfil de autenticación se actualizarán.'
+    saved_fallback: Perfil guardado.
+    reference_invalid_title: Referencia de perfil no válida
+    reference_invalid_body: Este perfil no se puede cargar.
+    login_hint: Inicia sesión para cargar las opciones
+    inherited_from: "Heredado de %{trigger}."
+    inherited_from_named: "Heredado de %{trigger} '%{name}'."
   nav:
     general_group: General
     general: General

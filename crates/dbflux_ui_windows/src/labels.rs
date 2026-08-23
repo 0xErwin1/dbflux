@@ -164,6 +164,42 @@ pub(crate) fn driver_select_configure(name: &str) -> String {
     )
 }
 
+/// Builds the delete-confirmation body for an auth profile, embedding the
+/// profile name and pluralizing the affected-connections count.
+pub(crate) fn auth_profiles_delete_body(name: &str, affected_connections: usize) -> String {
+    match affected_connections {
+        0 => dbflux_i18n::t!(
+            "settings.auth_profiles.delete_dialog.body_none",
+            name = name
+        ),
+        1 => dbflux_i18n::t!("settings.auth_profiles.delete_dialog.body_one", name = name),
+        count => dbflux_i18n::t!(
+            "settings.auth_profiles.delete_dialog.body_many",
+            name = name,
+            count = count
+        ),
+    }
+}
+
+/// Formats the "Inherited from <field> ['<name>']." hint shown under a
+/// disabled auth profile field whose value is inherited from another field.
+pub(crate) fn auth_profiles_inherited_hint(
+    trigger_id: &str,
+    referenced_name: Option<&str>,
+) -> String {
+    match referenced_name {
+        Some(name) => dbflux_i18n::t!(
+            "settings.auth_profiles.inherited_from_named",
+            trigger = trigger_id,
+            name = name
+        ),
+        None => dbflux_i18n::t!(
+            "settings.auth_profiles.inherited_from",
+            trigger = trigger_id
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{

@@ -1247,6 +1247,42 @@ settings:
       saved: Hook saved
       deleted: Hook deleted
       unreadable_deleted: Unreadable hook row deleted
+  auth_profiles:
+    profiles_label: Profiles
+    new_profile: New Auth Profile
+    import: "Import…"
+    source_label: Source
+    leave_blank_hint: Leave blank to keep the current value.
+    auth_profile_label: Auth Profile
+    editor_subtitle: Reusable authentication profile for access and value resolution
+    changed_on_disk: Profile Changed on Disk
+    reload: Reload
+    name_label: Name
+    provider_label: Provider
+    placeholder_name: Profile name
+    select_provider_ellipsis: "Select provider…"
+    select_ellipsis: "Select..."
+    select_none: "— None —"
+    enabled: Enabled
+    export: Export
+    delete: Delete
+    save_to_file: Save to File
+    cancel: Cancel
+    update: Update
+    create: Create
+    section_title: Auth Profiles
+    section_description: Manage reusable authentication profiles for connection access
+    delete_dialog_title: Delete Auth Profile
+    delete_dialog:
+      body_none: 'Are you sure you want to delete "%{name}"?'
+      body_one: 'Are you sure you want to delete "%{name}"? 1 connection using this auth profile will be updated.'
+      body_many: 'Are you sure you want to delete "%{name}"? %{count} connections using this auth profile will be updated.'
+    saved_fallback: Profile saved.
+    reference_invalid_title: Profile reference invalid
+    reference_invalid_body: This profile cannot be loaded.
+    login_hint: Log in to load options
+    inherited_from: "Inherited from %{trigger}."
+    inherited_from_named: "Inherited from %{trigger} '%{name}'."
   nav:
     general_group: General
     general: General
