@@ -993,14 +993,16 @@ impl DataGridPanel {
                             false,
                             Some(&err),
                         );
-                        let message = format!(
-                            "Export failed — file dialog unavailable and fallback directory could not be created: {}",
-                            err
-                        );
+                        let message =
+                            crate::labels::context_menu_export_dialog_fallback_failed_error(
+                                &err.to_string(),
+                            );
                         cx.update(|cx| {
                             entity.update(cx, |panel, cx| {
-                                panel.pending.toast =
-                                    Some(PendingToast { message, is_error: true });
+                                panel.pending.toast = Some(PendingToast {
+                                    message,
+                                    is_error: true,
+                                });
                                 cx.notify();
                             });
                         })
@@ -1025,14 +1027,21 @@ impl DataGridPanel {
 
             let (message, is_error) = match &export_result {
                 Ok(()) if used_fallback => (
-                    format!(
-                        "Native file picker unavailable — exported to {} instead. Install xdg-desktop-portal, zenity, or kdialog for a save dialog.",
-                        target_path.display()
+                    crate::labels::context_menu_export_native_picker_fallback_toast(
+                        &target_path.display().to_string(),
                     ),
                     false,
                 ),
-                Ok(()) => (format!("Exported to {}", target_path.display()), false),
-                Err(e) => (format!("Export failed: {}", e), true),
+                Ok(()) => (
+                    crate::labels::context_menu_export_exported_toast(
+                        &target_path.display().to_string(),
+                    ),
+                    false,
+                ),
+                Err(e) => (
+                    crate::labels::context_menu_export_failed_error(&e.to_string()),
+                    true,
+                ),
             };
 
             record_export_audit(
@@ -1041,7 +1050,11 @@ impl DataGridPanel {
                 Some(&target_path),
                 is_error,
                 used_fallback,
-                export_result.as_ref().err().map(|e| e.to_string()).as_deref(),
+                export_result
+                    .as_ref()
+                    .err()
+                    .map(|e| e.to_string())
+                    .as_deref(),
             );
 
             cx.update(|cx| {
@@ -1065,9 +1078,9 @@ impl DataGridPanel {
 
         if matches!(format, ExportFormat::Binary) {
             self.pending.toast = Some(PendingToast {
-                message:
-                    "Raw binary cannot be copied to the clipboard — choose Hex or Base64 instead."
-                        .to_string(),
+                message: dbflux_i18n::t!(
+                    "document.data.context_menu.clipboard.error.binary_unsupported"
+                ),
                 is_error: true,
             });
             cx.notify();
@@ -1087,19 +1100,19 @@ impl DataGridPanel {
                     cx.write_to_clipboard(ClipboardItem::new_string(text));
                     record_clipboard_audit(&audit_service, format_name, Some(byte_len), None);
                     self.pending.toast = Some(PendingToast {
-                        message: format!(
-                            "Copied {} ({} bytes) to clipboard",
-                            format_name, byte_len
+                        message: crate::labels::context_menu_clipboard_copied_toast(
+                            format_name,
+                            byte_len,
                         ),
                         is_error: false,
                     });
                     cx.notify();
                 }
                 Err(e) => {
-                    let err_text = format!("Cannot copy non-UTF8 output: {}", e);
+                    let err_text = e.to_string();
                     record_clipboard_audit(&audit_service, format_name, None, Some(&err_text));
                     self.pending.toast = Some(PendingToast {
-                        message: err_text,
+                        message: crate::labels::context_menu_clipboard_non_utf8_error(&err_text),
                         is_error: true,
                     });
                     cx.notify();
@@ -1109,7 +1122,7 @@ impl DataGridPanel {
                 let err_text = e.to_string();
                 record_clipboard_audit(&audit_service, format_name, None, Some(&err_text));
                 self.pending.toast = Some(PendingToast {
-                    message: format!("Copy failed: {}", err_text),
+                    message: crate::labels::context_menu_clipboard_copy_failed_error(&err_text),
                     is_error: true,
                 });
                 cx.notify();
@@ -2169,14 +2182,19 @@ impl DataGridPanel {
                                     |warning| dbflux_ui_base::user_error::report_error(warning, cx),
                                 );
                                 panel.pending.toast = Some(PendingToast {
-                                    message: "Document inserted".to_string(),
+                                    message: dbflux_i18n::t!(
+                                        "document.data.context_menu.document.toast.inserted"
+                                    ),
                                     is_error: false,
                                 });
                                 panel.pending.refresh = true;
                             }
                             Err(e) => {
                                 panel.pending.toast = Some(PendingToast {
-                                    message: format!("Failed to insert document: {}", e),
+                                    message:
+                                        crate::labels::context_menu_document_insert_failed_error(
+                                            &e.to_string(),
+                                        ),
                                     is_error: true,
                                 });
                             }
@@ -2295,14 +2313,18 @@ impl DataGridPanel {
                                 |warning| dbflux_ui_base::user_error::report_error(warning, cx),
                             );
                             panel.pending.toast = Some(PendingToast {
-                                message: "Document updated".to_string(),
+                                message: dbflux_i18n::t!(
+                                    "document.data.context_menu.document.toast.updated"
+                                ),
                                 is_error: false,
                             });
                             panel.pending.refresh = true;
                         }
                         Err(e) => {
                             panel.pending.toast = Some(PendingToast {
-                                message: format!("Failed to update document: {}", e),
+                                message: crate::labels::context_menu_document_update_failed_error(
+                                    &e.to_string(),
+                                ),
                                 is_error: true,
                             });
                         }

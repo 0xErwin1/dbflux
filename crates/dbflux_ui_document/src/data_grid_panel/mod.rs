@@ -1339,11 +1339,11 @@ impl DataGridPanel {
 
         self.pending.toast = Some(match persist_result {
             Ok(_) => dbflux_ui_base::toast::PendingToast {
-                message: format!("Chart \"{}\" saved", name),
+                message: crate::labels::chart_saved_toast(&name),
                 is_error: false,
             },
             Err(e) => dbflux_ui_base::toast::PendingToast {
-                message: format!("Failed to save chart \"{name}\": {e}"),
+                message: crate::labels::chart_save_failed_error(&name, &e.to_string()),
                 is_error: true,
             },
         });
@@ -3552,15 +3552,17 @@ impl DataGridPanel {
                         p.loaded_id = Some(summary.id);
                     });
                 }
-                dbflux_ui_base::toast::Toast::success(format!("Saved as \"{}\"", name))
-                    .meta_right(dbflux_ui_base::toast::now_hms())
-                    .push(cx);
+                dbflux_ui_base::toast::Toast::success(crate::labels::saved_query_saved_as_toast(
+                    &name,
+                ))
+                .meta_right(dbflux_ui_base::toast::now_hms())
+                .push(cx);
             }
             Err(e) => {
                 dbflux_ui_base::user_error::report_error(
                     dbflux_ui_base::user_error::UserFacingError::new(
                         dbflux_ui_base::user_error::ErrorKind::Storage,
-                        format!("A saved query named \"{}\" already exists", name),
+                        crate::labels::saved_query_already_exists_error(&name),
                     )
                     .with_cause(e.to_string()),
                     cx,
@@ -3586,7 +3588,9 @@ impl DataGridPanel {
                 dbflux_ui_base::user_error::report_error(
                     dbflux_ui_base::user_error::UserFacingError::new(
                         dbflux_ui_base::user_error::ErrorKind::User,
-                        "Target connection not available",
+                        dbflux_i18n::t!(
+                            "document.data.saved_query.error.target_connection_unavailable"
+                        ),
                     ),
                     cx,
                 );
@@ -3622,7 +3626,7 @@ impl DataGridPanel {
                 dbflux_ui_base::user_error::report_error(
                     dbflux_ui_base::user_error::UserFacingError::new(
                         dbflux_ui_base::user_error::ErrorKind::User,
-                        "Import failed: source table not found on target connection",
+                        dbflux_i18n::t!("document.data.saved_query.error.import_failed"),
                     )
                     .with_cause(e.to_string()),
                     cx,
@@ -3681,7 +3685,7 @@ impl DataGridPanel {
                 dbflux_ui_base::user_error::report_error(
                     dbflux_ui_base::user_error::UserFacingError::new(
                         dbflux_ui_base::user_error::ErrorKind::User,
-                        "This connection is read-only. Mutations are not allowed.",
+                        dbflux_i18n::t!("document.data.mutation.error.read_only_connection"),
                     ),
                     cx,
                 );
@@ -3718,7 +3722,9 @@ impl DataGridPanel {
                             dbflux_ui_base::user_error::report_error(
                                 dbflux_ui_base::user_error::UserFacingError::new(
                                     dbflux_ui_base::user_error::ErrorKind::Driver,
-                                    format!("Failed to queue mutation for approval: {e}"),
+                                    crate::labels::mutation_approval_queue_failed_error(
+                                        &e.to_string(),
+                                    ),
                                 ),
                                 cx,
                             );
@@ -3732,7 +3738,7 @@ impl DataGridPanel {
                     dbflux_ui_base::user_error::report_error(
                         dbflux_ui_base::user_error::UserFacingError::new(
                             dbflux_ui_base::user_error::ErrorKind::User,
-                            "Mutations require approval for this connection. Enable the MCP feature to activate the approval workflow.",
+                            dbflux_i18n::t!("document.data.mutation.error.approval_requires_mcp"),
                         ),
                         cx,
                     );
@@ -3820,7 +3826,7 @@ impl DataGridPanel {
                     dbflux_ui_base::user_error::report_error(
                         dbflux_ui_base::user_error::UserFacingError::new(
                             dbflux_ui_base::user_error::ErrorKind::Driver,
-                            "Connection not found — cannot execute mutation.",
+                            dbflux_i18n::t!("document.data.mutation.error.connection_not_found"),
                         ),
                         cx,
                     );
@@ -3866,7 +3872,7 @@ impl DataGridPanel {
                     dbflux_ui_base::user_error::report_error(
                         dbflux_ui_base::user_error::UserFacingError::new(
                             dbflux_ui_base::user_error::ErrorKind::Driver,
-                            format!("Failed to queue mutation for approval: {e}"),
+                            crate::labels::mutation_approval_queue_failed_error(&e.to_string()),
                         ),
                         cx,
                     );
@@ -3901,7 +3907,9 @@ impl DataGridPanel {
                 dbflux_ui_base::user_error::report_error(
                     dbflux_ui_base::user_error::UserFacingError::new(
                         dbflux_ui_base::user_error::ErrorKind::User,
-                        "Chunked mode requires a primary key — none found for this table.",
+                        dbflux_i18n::t!(
+                            "document.data.mutation.error.chunked_requires_primary_key"
+                        ),
                     ),
                     cx,
                 );
@@ -3954,19 +3962,18 @@ impl DataGridPanel {
                     if let Some(original) = reduced_from {
                         const FLOOR: u32 = 1_000;
                         if effective < FLOOR {
-                            dbflux_ui_base::toast::Toast::warning(format!(
-                                "Chunk size reduced from {} to {} — driver parameter limit \
-                                 forced the chunk floor below {FLOOR}. Processing will be \
-                                 slower than expected.",
-                                original, effective
-                            ))
+                            dbflux_ui_base::toast::Toast::warning(
+                                crate::labels::mutation_chunk_size_reduced_toast(
+                                    original, effective, FLOOR,
+                                ),
+                            )
                             .push(cx);
                         } else {
-                            dbflux_ui_base::toast::Toast::info(format!(
-                                "Chunk size adjusted from {} to {} to stay within driver \
-                                 parameter limits.",
-                                original, effective
-                            ))
+                            dbflux_ui_base::toast::Toast::info(
+                                crate::labels::mutation_chunk_size_adjusted_toast(
+                                    original, effective,
+                                ),
+                            )
                             .push(cx);
                         }
                         opts.chunk_size = effective;
@@ -4007,7 +4014,10 @@ impl DataGridPanel {
                         report_error_async(
                             UserFacingError::new(
                                 ErrorKind::Driver,
-                                format!("Chunked mutation on '{}' failed: {}", table_name, e),
+                                crate::labels::mutation_chunked_execution_failed_error(
+                                    &table_name,
+                                    &e.to_string(),
+                                ),
                             ),
                             cx,
                         );
@@ -4018,11 +4028,9 @@ impl DataGridPanel {
                                 grid.runner.complete_mutation(task_id, cx);
                             })
                             .ok();
-                            dbflux_ui_base::toast::Toast::success(format!(
-                                "Mutation completed: {} row{} affected",
-                                rows_affected,
-                                if rows_affected == 1 { "" } else { "s" }
-                            ))
+                            dbflux_ui_base::toast::Toast::success(
+                                crate::labels::mutation_execution_completed_toast(rows_affected),
+                            )
                             .push(cx);
                         })
                         .ok();
@@ -4033,11 +4041,9 @@ impl DataGridPanel {
                                 grid.runner.cancel_mutation(task_id, cx);
                             })
                             .ok();
-                            dbflux_ui_base::toast::Toast::info(format!(
-                                "Mutation cancelled after {} row{} processed",
-                                rows_affected,
-                                if rows_affected == 1 { "" } else { "s" }
-                            ))
+                            dbflux_ui_base::toast::Toast::info(
+                                crate::labels::mutation_execution_cancelled_toast(rows_affected),
+                            )
                             .push(cx);
                         })
                         .ok();
@@ -4053,7 +4059,10 @@ impl DataGridPanel {
                         report_error_async(
                             UserFacingError::new(
                                 ErrorKind::Driver,
-                                format!("Chunked mutation on '{}' failed: {}", table_name, error),
+                                crate::labels::mutation_chunked_execution_failed_error(
+                                    &table_name,
+                                    &error,
+                                ),
                             ),
                             cx,
                         );
@@ -4097,7 +4106,10 @@ impl DataGridPanel {
                         report_error_async(
                             UserFacingError::new(
                                 ErrorKind::Driver,
-                                format!("Mutation on '{}' failed: {}", table_name, e),
+                                crate::labels::mutation_execution_failed_error(
+                                    &table_name,
+                                    &e.to_string(),
+                                ),
                             ),
                             cx,
                         );
@@ -4108,11 +4120,9 @@ impl DataGridPanel {
                                 grid.runner.complete_mutation(task_id, cx);
                             })
                             .ok();
-                            dbflux_ui_base::toast::Toast::success(format!(
-                                "Mutation completed: {} row{} affected",
-                                rows_affected,
-                                if rows_affected == 1 { "" } else { "s" }
-                            ))
+                            dbflux_ui_base::toast::Toast::success(
+                                crate::labels::mutation_execution_completed_toast(rows_affected),
+                            )
                             .push(cx);
                         })
                         .ok();
@@ -4123,11 +4133,9 @@ impl DataGridPanel {
                                 grid.runner.cancel_mutation(task_id, cx);
                             })
                             .ok();
-                            dbflux_ui_base::toast::Toast::info(format!(
-                                "Mutation cancelled after {} row{} processed",
-                                rows_affected,
-                                if rows_affected == 1 { "" } else { "s" }
-                            ))
+                            dbflux_ui_base::toast::Toast::info(
+                                crate::labels::mutation_execution_cancelled_toast(rows_affected),
+                            )
                             .push(cx);
                         })
                         .ok();
@@ -4143,7 +4151,7 @@ impl DataGridPanel {
                         report_error_async(
                             UserFacingError::new(
                                 ErrorKind::Driver,
-                                format!("Mutation on '{}' failed: {}", table_name, error),
+                                crate::labels::mutation_execution_failed_error(&table_name, &error),
                             ),
                             cx,
                         );
@@ -4184,7 +4192,10 @@ impl DataGridPanel {
                         report_error_async(
                             UserFacingError::new(
                                 ErrorKind::Driver,
-                                format!("Mutation on '{}' failed: {}", table_name, e),
+                                crate::labels::mutation_execution_failed_error(
+                                    &table_name,
+                                    &e.to_string(),
+                                ),
                             ),
                             cx,
                         );
@@ -4195,11 +4206,9 @@ impl DataGridPanel {
                                 grid.runner.complete_mutation(task_id, cx);
                             })
                             .ok();
-                            dbflux_ui_base::toast::Toast::success(format!(
-                                "Mutation completed: {} row{} affected",
-                                rows_affected,
-                                if rows_affected == 1 { "" } else { "s" }
-                            ))
+                            dbflux_ui_base::toast::Toast::success(
+                                crate::labels::mutation_execution_completed_toast(rows_affected),
+                            )
                             .push(cx);
                         })
                         .ok();
@@ -4210,11 +4219,9 @@ impl DataGridPanel {
                                 grid.runner.cancel_mutation(task_id, cx);
                             })
                             .ok();
-                            dbflux_ui_base::toast::Toast::info(format!(
-                                "Mutation cancelled after {} row{} processed",
-                                rows_affected,
-                                if rows_affected == 1 { "" } else { "s" }
-                            ))
+                            dbflux_ui_base::toast::Toast::info(
+                                crate::labels::mutation_execution_cancelled_toast(rows_affected),
+                            )
                             .push(cx);
                         })
                         .ok();
@@ -4230,7 +4237,7 @@ impl DataGridPanel {
                         report_error_async(
                             UserFacingError::new(
                                 ErrorKind::Driver,
-                                format!("Mutation on '{}' failed: {}", table_name, error),
+                                crate::labels::mutation_execution_failed_error(&table_name, &error),
                             ),
                             cx,
                         );

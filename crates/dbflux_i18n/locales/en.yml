@@ -1001,6 +1001,27 @@ document:
         document_missing_id: Document must have an _id field
         table_state_not_available: Table state not available
         primary_key_not_determined: Could not determine document primary key
+      export:
+        error:
+          dialog_unavailable_fallback_failed: "Export failed — file dialog unavailable and fallback directory could not be created: %{error}"
+          failed: "Export failed: %{error}"
+        toast:
+          native_picker_fallback: "Native file picker unavailable — exported to %{path} instead. Install xdg-desktop-portal, zenity, or kdialog for a save dialog."
+          exported: "Exported to %{path}"
+      clipboard:
+        error:
+          binary_unsupported: Raw binary cannot be copied to the clipboard — choose Hex or Base64 instead.
+          non_utf8: "Cannot copy non-UTF8 output: %{error}"
+          failed: "Copy failed: %{error}"
+        toast:
+          copied: "Copied %{format} (%{bytes} bytes) to clipboard"
+      document:
+        toast:
+          inserted: Document inserted
+          updated: Document updated
+        error:
+          insert_failed: "Failed to insert document: %{error}"
+          update_failed: "Failed to update document: %{error}"
     grid:
       edit_bar:
         clean: No unsaved changes
@@ -1067,11 +1088,22 @@ document:
         connection_not_found: Connection not found
         connection_not_available: Connection not available
         invalid_json_filter: Invalid JSON filter
+        chart_save_failed: 'Failed to save chart "%{name}": %{error}'
       placeholder:
         chart_name: Chart name
+      filter:
+        open_in_builder: Open in builder
       toast:
         query_imported: Query imported successfully
         mutation_queued: Mutation queued for approval.
+        chart_saved: 'Chart "%{name}" saved'
+    saved_query:
+      toast:
+        saved_as: 'Saved as "%{name}"'
+      error:
+        already_exists: 'A saved query named "%{name}" already exists'
+        target_connection_unavailable: Target connection not available
+        import_failed: "Import failed: source table not found on target connection"
     mutation:
       confirm:
         delete:
@@ -1099,6 +1131,13 @@ document:
         delete_identity_failed: "Cannot delete: failed to identify row"
         bulk_delete_no_rows_identified: "Cannot delete: failed to identify any rows"
         bulk_delete_no_documents_identified: "Cannot delete: failed to identify any documents"
+        read_only_connection: This connection is read-only. Mutations are not allowed.
+        approval_queue_failed: "Failed to queue mutation for approval: %{error}"
+        approval_requires_mcp: Mutations require approval for this connection. Enable the MCP feature to activate the approval workflow.
+        connection_not_found: "Connection not found — cannot execute mutation."
+        chunked_requires_primary_key: "Chunked mode requires a primary key — none found for this table."
+        chunked_execution_failed: "Chunked mutation on '%{table}' failed: %{error}"
+        execution_failed: "Mutation on '%{table}' failed: %{error}"
       toast:
         document_updated: Document updated
         saved: Saved
@@ -1111,6 +1150,14 @@ document:
         partial_delete:
           row: "Deleted %{done} of %{total} row(s), then failed: %{error}"
           document: "Deleted %{done} of %{total} document(s), then failed: %{error}"
+        chunk_size_reduced: "Chunk size reduced from %{original} to %{effective} — driver parameter limit forced the chunk floor below %{floor}. Processing will be slower than expected."
+        chunk_size_adjusted: "Chunk size adjusted from %{original} to %{effective} to stay within driver parameter limits."
+        execution_completed:
+          one: "Mutation completed: %{count} row affected"
+          many: "Mutation completed: %{count} rows affected"
+        execution_cancelled:
+          one: "Mutation cancelled after %{count} row processed"
+          many: "Mutation cancelled after %{count} rows processed"
     row_inspector:
       badge:
         primary_key: PK
@@ -1379,6 +1426,9 @@ document:
       delete_member:
         title: Delete member?
         message: 'Delete "%{member}"? This action cannot be undone.'
+      delete_confirm:
+        cancel: Cancel
+        delete: Delete
       unknown_type: Unknown
       value_header: Value
       id_header: ID
@@ -1481,6 +1531,8 @@ document:
       header_target: Target
       header_mapping_mode: Mapping mode
       header_transform: Transform
+      error:
+        target_schema_read_failed: "Could not read target table schema: %{error}"
     source_target:
       source_title: Source
       target_title: Target
@@ -1504,6 +1556,8 @@ document:
       key: Key
       last_modified: Last modified
       size: Size
+    toast:
+      copied: "Copied %{uri}"
     context_menu:
       item:
         preview: Preview
@@ -1899,10 +1953,14 @@ document:
         drop: Drop table
   shared:
     add: Add
+    error_prefix: "Error: %{message}"
     error_with_detail_clipboard: "%{title}: %{detail}"
+    hint:
+      enter_save_esc_cancel: "Enter to save, Esc to cancel"
     refresh:
       off: Off
       custom: Custom
+      on_open: On open
     result_warnings:
       context:
         query: query result

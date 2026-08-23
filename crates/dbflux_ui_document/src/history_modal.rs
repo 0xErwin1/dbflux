@@ -874,7 +874,9 @@ impl HistoryModal {
                             .py(Spacing::SM)
                             .border_t_1()
                             .border_color(theme.border)
-                            .child(Text::caption("Enter to save, Esc to cancel")),
+                            .child(Text::caption(dbflux_i18n::t!(
+                                "document.shared.hint.enter_save_esc_cancel"
+                            ))),
                     ),
             )
             .into_any_element()

@@ -41,7 +41,7 @@ pub(crate) use crate::refresh::REFRESH_POLICY_OPTIONS;
 pub(crate) fn refresh_policy_index(policy: SavedChartRefreshPolicy) -> usize {
     REFRESH_POLICY_OPTIONS
         .iter()
-        .position(|(p, _)| *p == policy)
+        .position(|p| *p == policy)
         .unwrap_or(0)
 }
 
@@ -50,7 +50,7 @@ pub(crate) fn refresh_policy_index(policy: SavedChartRefreshPolicy) -> usize {
 pub(crate) fn refresh_policy_from_index(index: usize) -> SavedChartRefreshPolicy {
     REFRESH_POLICY_OPTIONS
         .get(index)
-        .map(|(p, _)| *p)
+        .copied()
         .unwrap_or(SavedChartRefreshPolicy::Off)
 }
 
@@ -494,7 +494,9 @@ impl DashboardDocument {
         let refresh_dropdown = cx.new(|_cx| {
             let items: Vec<DropdownItem> = REFRESH_POLICY_OPTIONS
                 .iter()
-                .map(|(_, label)| DropdownItem::new(*label))
+                .map(|policy| {
+                    DropdownItem::new(crate::refresh::refresh_policy_option_label(*policy))
+                })
                 .collect();
             Dropdown::new("dashboard-refresh")
                 .items(items)
@@ -3079,7 +3081,7 @@ mod tests {
     /// in `REFRESH_POLICY_OPTIONS`.
     #[test]
     fn refresh_policy_index_round_trip() {
-        for (i, (policy, _)) in REFRESH_POLICY_OPTIONS.iter().enumerate() {
+        for (i, policy) in REFRESH_POLICY_OPTIONS.iter().enumerate() {
             assert_eq!(refresh_policy_index(*policy), i);
             assert_eq!(refresh_policy_from_index(i), *policy);
         }

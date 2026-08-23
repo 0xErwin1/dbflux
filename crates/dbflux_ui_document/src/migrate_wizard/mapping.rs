@@ -412,7 +412,9 @@ impl MappingPhase {
                             report_error(
                                 UserFacingError::new(
                                     ErrorKind::Driver,
-                                    format!("Could not read target table schema: {error}"),
+                                    crate::labels::migrate_wizard_target_schema_read_failed_error(
+                                        &error,
+                                    ),
                                 ),
                                 cx,
                             );
