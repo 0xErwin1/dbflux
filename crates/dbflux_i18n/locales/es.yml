@@ -767,6 +767,9 @@ document:
       filtered: Ninguna clave coincide con este filtro
       loading: "Cargando objetos…"
       prefix: Este prefijo está vacío
+    error:
+      api_unavailable: La API de almacenamiento de objetos no está disponible
+      connection_unavailable: La conexión ya no está activa
     gate:
       archived: "Este objeto está archivado y no se puede previsualizar. Restáuralo en tu consola de S3 para acceder a su contenido."
       too_large: "Este objeto pesa %{size} y supera el límite de %{limit} para la vista previa. Descárgalo para inspeccionar su contenido."
@@ -780,6 +783,30 @@ document:
       size: Tamaño
       storage_class: Clase de almacenamiento
       versions: Versiones
+    presign:
+      title: URL prefirmada
+      method_field_label: Método
+      expiry_field_label: Expira en
+      signing: "Firmando URL…"
+      close: Cerrar
+      copy_url: Copiar URL
+      copied_toast: URL prefirmada copiada al portapapeles
+      signing_identity_fallback: esta conexión
+      method:
+        get: Descarga GET
+        put: Carga PUT
+      expiry:
+        fifteen_minutes: 15 min
+        one_hour: 1 hora
+        twelve_hours: 12 horas
+        seven_days: 7 días
+      warning:
+        capability:
+          get: descargar este objeto
+          put: sobrescribir este objeto
+        until_instant: "hasta %{instant}"
+        until_it_expires: hasta que expire
+        body: 'Cualquiera que tenga esta URL puede %{capability} %{expiry}. Está firmada con las credenciales de "%{signed_by}" y conlleva sus permisos.'
     preview:
       action:
         copy_uri: Copiar URI
@@ -789,8 +816,12 @@ document:
         presign: Prefirmar
       body:
         fit_to_width: Ajustar al ancho
+        image_decode_error: "No se pudo decodificar la imagen: %{error}"
+        image_header_error: "No se pudo leer el encabezado de la imagen: %{error}"
         loading: "Cargando vista previa…"
         loading_metadata: "Cargando metadatos…"
+        svg_invalid_utf8: "Este objeto no es UTF-8 válido, por lo que no puede ser un SVG."
+        svg_missing_root: "Este objeto no contiene un elemento raíz <svg>."
         unpreviewable:
           generic: "Este tipo de archivo no tiene vista previa en la aplicación. Descarga este objeto o ábrelo en tu visor del sistema."
           pdf: "Los PDF no se renderizan en la aplicación. Descarga este objeto o ábrelo en tu visor del sistema."

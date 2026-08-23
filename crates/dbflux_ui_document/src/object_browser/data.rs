@@ -86,10 +86,14 @@ impl ObjectBrowserDocument {
         cx.notify();
 
         let Some(connection) = self.get_connection(cx) else {
-            self.tree
-                .apply_error(&prefix, "Connection is no longer active".to_string());
+            self.tree.apply_error(
+                &prefix,
+                dbflux_i18n::t!("document.object_browser.error.connection_unavailable"),
+            );
             self.state = DocumentState::Error;
-            self.last_error = Some("Connection is no longer active".to_string());
+            self.last_error = Some(dbflux_i18n::t!(
+                "document.object_browser.error.connection_unavailable"
+            ));
             cx.notify();
             return;
         };
@@ -105,9 +109,9 @@ impl ObjectBrowserDocument {
                 Some(api) => {
                     api.list_objects(&bucket, &prefix_for_task, continuation_token.as_deref())
                 }
-                None => Err(DbError::NotSupported(
-                    "Object-store API unavailable".to_string(),
-                )),
+                None => Err(DbError::NotSupported(dbflux_i18n::t!(
+                    "document.object_browser.error.api_unavailable"
+                ))),
             };
 
             (result, started.elapsed().as_millis())
@@ -168,9 +172,9 @@ impl ObjectBrowserDocument {
         self.metadata = Some(ObjectMetadataState::Loading);
 
         let Some(connection) = self.get_connection(cx) else {
-            self.metadata = Some(ObjectMetadataState::Error(
-                "Connection is no longer active".to_string(),
-            ));
+            self.metadata = Some(ObjectMetadataState::Error(dbflux_i18n::t!(
+                "document.object_browser.error.connection_unavailable"
+            )));
             cx.notify();
             return;
         };
@@ -184,9 +188,9 @@ impl ObjectBrowserDocument {
 
             let result = match connection.object_store_api() {
                 Some(api) => api.head_object(&bucket, &key_for_task),
-                None => Err(DbError::NotSupported(
-                    "Object-store API unavailable".to_string(),
-                )),
+                None => Err(DbError::NotSupported(dbflux_i18n::t!(
+                    "document.object_browser.error.api_unavailable"
+                ))),
             };
 
             (result, started.elapsed().as_millis())
@@ -291,8 +295,9 @@ impl ObjectBrowserDocument {
         self.preview_content = PreviewContentState::Loading;
 
         let Some(connection) = self.get_connection(cx) else {
-            self.preview_content =
-                PreviewContentState::Failed("Connection is no longer active".to_string());
+            self.preview_content = PreviewContentState::Failed(dbflux_i18n::t!(
+                "document.object_browser.error.connection_unavailable"
+            ));
             cx.notify();
             return;
         };
@@ -306,9 +311,9 @@ impl ObjectBrowserDocument {
 
             let bytes = match connection.object_store_api() {
                 Some(api) => api.get_object(&bucket, &key_for_task),
-                None => Err(DbError::NotSupported(
-                    "Object-store API unavailable".to_string(),
-                )),
+                None => Err(DbError::NotSupported(dbflux_i18n::t!(
+                    "document.object_browser.error.api_unavailable"
+                ))),
             };
 
             let elapsed_millis = started.elapsed().as_millis();
@@ -384,8 +389,9 @@ impl ObjectBrowserDocument {
         self.preview_content = PreviewContentState::Loading;
 
         let Some(connection) = self.get_connection(cx) else {
-            self.preview_content =
-                PreviewContentState::Failed("Connection is no longer active".to_string());
+            self.preview_content = PreviewContentState::Failed(dbflux_i18n::t!(
+                "document.object_browser.error.connection_unavailable"
+            ));
             cx.notify();
             return;
         };
@@ -399,9 +405,9 @@ impl ObjectBrowserDocument {
 
             let bytes = match connection.object_store_api() {
                 Some(api) => api.get_object(&bucket, &key_for_task),
-                None => Err(DbError::NotSupported(
-                    "Object-store API unavailable".to_string(),
-                )),
+                None => Err(DbError::NotSupported(dbflux_i18n::t!(
+                    "document.object_browser.error.api_unavailable"
+                ))),
             };
 
             let elapsed_millis = started.elapsed().as_millis();
@@ -507,8 +513,9 @@ impl ObjectBrowserDocument {
         self.bucket_details = BucketDetailsState::Loading;
 
         let Some(connection) = self.get_connection(cx) else {
-            self.bucket_details =
-                BucketDetailsState::Error("Connection is no longer active".to_string());
+            self.bucket_details = BucketDetailsState::Error(dbflux_i18n::t!(
+                "document.object_browser.error.connection_unavailable"
+            ));
             return;
         };
 
@@ -518,9 +525,9 @@ impl ObjectBrowserDocument {
         let task = cx.background_executor().spawn(async move {
             match connection.object_store_api() {
                 Some(api) => api.get_bucket_details(&bucket),
-                None => Err(DbError::NotSupported(
-                    "Object-store API unavailable".to_string(),
-                )),
+                None => Err(DbError::NotSupported(dbflux_i18n::t!(
+                    "document.object_browser.error.api_unavailable"
+                ))),
             }
         });
 
@@ -551,8 +558,9 @@ impl ObjectBrowserDocument {
         cx.notify();
 
         let Some(connection) = self.get_connection(cx) else {
-            self.versions =
-                ObjectVersionsState::Error("Connection is no longer active".to_string());
+            self.versions = ObjectVersionsState::Error(dbflux_i18n::t!(
+                "document.object_browser.error.connection_unavailable"
+            ));
             cx.notify();
             return;
         };
@@ -564,9 +572,9 @@ impl ObjectBrowserDocument {
         let task = cx.background_executor().spawn(async move {
             match connection.object_store_api() {
                 Some(api) => api.list_object_versions(&bucket, &key_for_task),
-                None => Err(DbError::NotSupported(
-                    "Object-store API unavailable".to_string(),
-                )),
+                None => Err(DbError::NotSupported(dbflux_i18n::t!(
+                    "document.object_browser.error.api_unavailable"
+                ))),
             }
         });
 

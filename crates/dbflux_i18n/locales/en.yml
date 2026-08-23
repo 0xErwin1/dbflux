@@ -767,6 +767,9 @@ document:
       filtered: No keys match this filter
       loading: "Loading objects…"
       prefix: This prefix is empty
+    error:
+      api_unavailable: Object-store API unavailable
+      connection_unavailable: Connection is no longer active
     gate:
       archived: "This object is archived and cannot be previewed. Restore it in your S3 console to access its contents."
       too_large: "This object is %{size} and exceeds the %{limit} preview limit. Download it to inspect its contents."
@@ -780,6 +783,30 @@ document:
       size: Size
       storage_class: Storage class
       versions: Versions
+    presign:
+      title: Presigned URL
+      method_field_label: Method
+      expiry_field_label: Expires in
+      signing: "Signing URL…"
+      close: Close
+      copy_url: Copy URL
+      copied_toast: Copied presigned URL to clipboard
+      signing_identity_fallback: this connection
+      method:
+        get: GET download
+        put: PUT upload
+      expiry:
+        fifteen_minutes: 15 min
+        one_hour: 1 hour
+        twelve_hours: 12 hours
+        seven_days: 7 days
+      warning:
+        capability:
+          get: download this object
+          put: overwrite this object
+        until_instant: "until %{instant}"
+        until_it_expires: until it expires
+        body: 'Anyone holding this URL can %{capability} %{expiry}. It is signed with the credentials of "%{signed_by}" and carries their permissions.'
     preview:
       action:
         copy_uri: Copy URI
@@ -789,8 +816,12 @@ document:
         presign: Presign
       body:
         fit_to_width: Fit to width
+        image_decode_error: "Could not decode the image: %{error}"
+        image_header_error: "Could not read the image header: %{error}"
         loading: "Loading preview…"
         loading_metadata: "Loading metadata…"
+        svg_invalid_utf8: "This object is not valid UTF-8, so it cannot be an SVG."
+        svg_missing_root: "This object does not contain an <svg> root element."
         unpreviewable:
           generic: "This file type has no in-app preview. Download this object or open it in your system viewer."
           pdf: "PDFs are not rendered in-app. Download this object or open it in your system viewer."

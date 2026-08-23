@@ -1132,6 +1132,60 @@ pub(crate) fn object_browser_versions_count_label(count: usize) -> String {
     }
 }
 
+/// Error shown in the preview pane when a fetched image's bytes fail the
+/// header-guess probe before any decode is attempted. `cause` is the
+/// underlying decoder error and is interpolated verbatim, never translated.
+pub(crate) fn image_header_error(cause: &str) -> String {
+    dbflux_i18n::t!(
+        "document.object_browser.preview.body.image_header_error",
+        error = cause
+    )
+}
+
+/// Error shown in the preview pane when a fetched image's bytes have a
+/// recognised header but fail to fully decode. `cause` is the underlying
+/// decoder error and is interpolated verbatim, never translated.
+pub(crate) fn image_decode_error(cause: &str) -> String {
+    dbflux_i18n::t!(
+        "document.object_browser.preview.body.image_decode_error",
+        error = cause
+    )
+}
+
+/// Segment label for a [`crate::object_browser::PresignMethodChoice`].
+/// Exhaustive by construction so a new method fails this crate's build until
+/// its catalog key is added here.
+pub(crate) fn presign_method_label(choice: crate::object_browser::PresignMethodChoice) -> String {
+    use crate::object_browser::PresignMethodChoice;
+
+    match choice {
+        PresignMethodChoice::Get => dbflux_i18n::t!("document.object_browser.presign.method.get"),
+        PresignMethodChoice::Put => dbflux_i18n::t!("document.object_browser.presign.method.put"),
+    }
+}
+
+/// Segment label for a [`crate::object_browser::PresignExpiry`].
+/// Exhaustive by construction so a new expiry choice fails this crate's
+/// build until its catalog key is added here.
+pub(crate) fn presign_expiry_label(expiry: crate::object_browser::PresignExpiry) -> String {
+    use crate::object_browser::PresignExpiry;
+
+    match expiry {
+        PresignExpiry::FifteenMinutes => {
+            dbflux_i18n::t!("document.object_browser.presign.expiry.fifteen_minutes")
+        }
+        PresignExpiry::OneHour => {
+            dbflux_i18n::t!("document.object_browser.presign.expiry.one_hour")
+        }
+        PresignExpiry::TwelveHours => {
+            dbflux_i18n::t!("document.object_browser.presign.expiry.twelve_hours")
+        }
+        PresignExpiry::SevenDays => {
+            dbflux_i18n::t!("document.object_browser.presign.expiry.seven_days")
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1142,15 +1196,16 @@ mod tests {
         chart_dock_shape_label, chart_rail_why_text, code_toolbar_shortcut_hint_label,
         comparator_label, copy_query_language_label, dangerous_query_body, dangerous_query_title,
         delete_confirm_copy, delete_rows_label, execution_count_state_label, execution_mode_label,
-        history_items_count_label, history_tab_label, incomplete_aggregate_rows_label,
-        join_kind_label, live_output_lines_label, live_output_truncated_label,
-        object_browser_status_summary, object_browser_versions_count_label, partial_delete_label,
-        pending_change_count_label, pending_edits_summary, preview_gate_message,
+        history_items_count_label, history_tab_label, image_decode_error, image_header_error,
+        incomplete_aggregate_rows_label, join_kind_label, live_output_lines_label,
+        live_output_truncated_label, object_browser_status_summary,
+        object_browser_versions_count_label, partial_delete_label, pending_change_count_label,
+        pending_edits_summary, presign_expiry_label, presign_method_label, preview_gate_message,
         refresh_policy_label, result_tab_count_label, row_count_label, schema_change_description,
         script_confirm_message_label, sort_direction_label, table_action_description,
         unsaved_changes_label, update_columns_label, valid_lines_label,
     };
-    use crate::object_browser::PreviewGate;
+    use crate::object_browser::{PresignExpiry, PresignMethodChoice, PreviewGate};
     use crate::schema_diff::apply::TableLevelAction;
     use dbflux_components::chart::ChartDetection;
     use dbflux_core::{
@@ -2757,6 +2812,12 @@ mod tests {
             "document.object_browser.metadata.storage_class",
             "document.object_browser.metadata.encryption",
             "document.object_browser.metadata.versions",
+            "document.object_browser.error.connection_unavailable",
+            "document.object_browser.error.api_unavailable",
+            "document.object_browser.preview.body.svg_invalid_utf8",
+            "document.object_browser.preview.body.svg_missing_root",
+            "document.object_browser.preview.body.image_header_error",
+            "document.object_browser.preview.body.image_decode_error",
         ];
 
         for key in keys {
@@ -2821,6 +2882,154 @@ mod tests {
         let archived_es = dbflux_i18n::t!("document.object_browser.gate.archived", locale = "es");
 
         assert_ne!(archived_en, archived_es);
+    }
+
+    /// T19: the "connection dropped" and "no object-store API" fallbacks
+    /// used across the object browser's background loaders translate and
+    /// diverge between locales.
+    #[test]
+    fn object_browser_error_keys_differ_between_locales() {
+        let connection_en = dbflux_i18n::t!(
+            "document.object_browser.error.connection_unavailable",
+            locale = "en"
+        );
+        let connection_es = dbflux_i18n::t!(
+            "document.object_browser.error.connection_unavailable",
+            locale = "es"
+        );
+        assert_ne!(connection_en, connection_es);
+
+        let api_en = dbflux_i18n::t!(
+            "document.object_browser.error.api_unavailable",
+            locale = "en"
+        );
+        let api_es = dbflux_i18n::t!(
+            "document.object_browser.error.api_unavailable",
+            locale = "es"
+        );
+        assert_ne!(api_en, api_es);
+    }
+
+    /// T19: the SVG body-validation refusals translate and diverge between
+    /// locales.
+    #[test]
+    fn object_browser_svg_validation_keys_differ_between_locales() {
+        let utf8_en = dbflux_i18n::t!(
+            "document.object_browser.preview.body.svg_invalid_utf8",
+            locale = "en"
+        );
+        let utf8_es = dbflux_i18n::t!(
+            "document.object_browser.preview.body.svg_invalid_utf8",
+            locale = "es"
+        );
+        assert_ne!(utf8_en, utf8_es);
+
+        let root_en = dbflux_i18n::t!(
+            "document.object_browser.preview.body.svg_missing_root",
+            locale = "en"
+        );
+        let root_es = dbflux_i18n::t!(
+            "document.object_browser.preview.body.svg_missing_root",
+            locale = "es"
+        );
+        assert_ne!(root_en, root_es);
+    }
+
+    /// T19: the image decode-failure helpers interpolate the underlying
+    /// decoder cause verbatim into the translated prefix.
+    #[test]
+    fn image_error_helpers_interpolate_the_cause() {
+        let header = image_header_error("truncated header");
+        assert!(header.contains("truncated header"));
+        assert_ne!(header, "truncated header");
+
+        let decode = image_decode_error("unsupported color type");
+        assert!(decode.contains("unsupported color type"));
+        assert_ne!(decode, "unsupported color type");
+    }
+
+    /// T19: every `PresignMethodChoice` variant has a translated segment
+    /// label, and no variant resolves to an empty or key-fallback string.
+    #[test]
+    fn presign_method_label_covers_all_variants() {
+        for choice in PresignMethodChoice::all() {
+            let label = presign_method_label(choice);
+            assert!(!label.is_empty(), "{choice:?} resolved empty");
+        }
+
+        assert_ne!(
+            presign_method_label(PresignMethodChoice::Get),
+            presign_method_label(PresignMethodChoice::Put)
+        );
+    }
+
+    /// T19: every `PresignExpiry` variant has a translated segment label.
+    #[test]
+    fn presign_expiry_label_covers_all_variants() {
+        for expiry in PresignExpiry::all() {
+            let label = presign_expiry_label(expiry);
+            assert!(!label.is_empty(), "{expiry:?} resolved empty");
+        }
+    }
+
+    /// T19: the presign method/expiry labels translate and diverge between
+    /// locales.
+    #[test]
+    fn presign_method_and_expiry_keys_differ_between_locales() {
+        let get_en = dbflux_i18n::t!("document.object_browser.presign.method.get", locale = "en");
+        let get_es = dbflux_i18n::t!("document.object_browser.presign.method.get", locale = "es");
+        assert_ne!(get_en, get_es);
+
+        let one_hour_en = dbflux_i18n::t!(
+            "document.object_browser.presign.expiry.one_hour",
+            locale = "en"
+        );
+        let one_hour_es = dbflux_i18n::t!(
+            "document.object_browser.presign.expiry.one_hour",
+            locale = "es"
+        );
+        assert_ne!(one_hour_en, one_hour_es);
+    }
+
+    /// T19: every `document.object_browser.presign.*` key resolves in both
+    /// locales.
+    #[test]
+    fn presign_keys_resolve_in_both_locales() {
+        let keys = [
+            "document.object_browser.presign.title",
+            "document.object_browser.presign.method_field_label",
+            "document.object_browser.presign.expiry_field_label",
+            "document.object_browser.presign.signing",
+            "document.object_browser.presign.close",
+            "document.object_browser.presign.copy_url",
+            "document.object_browser.presign.copied_toast",
+            "document.object_browser.presign.signing_identity_fallback",
+            "document.object_browser.presign.method.get",
+            "document.object_browser.presign.method.put",
+            "document.object_browser.presign.expiry.fifteen_minutes",
+            "document.object_browser.presign.expiry.one_hour",
+            "document.object_browser.presign.expiry.twelve_hours",
+            "document.object_browser.presign.expiry.seven_days",
+            "document.object_browser.presign.warning.capability.get",
+            "document.object_browser.presign.warning.capability.put",
+            "document.object_browser.presign.warning.until_instant",
+            "document.object_browser.presign.warning.until_it_expires",
+            "document.object_browser.presign.warning.body",
+        ];
+
+        for key in keys {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
     }
 
     /// T19: the footer summary covers the singular/plural boundary
