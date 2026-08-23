@@ -1060,7 +1060,7 @@ pub(crate) fn table_action_description(
 ///
 /// Exhaustive by construction (no wildcard arm) so a new `PreviewGate`
 /// variant fails this crate's build until its catalog key is added here.
-/// Sizes are S3 data and are interpolated verbatim, never translated.
+/// Sizes are object-store data and are interpolated verbatim, never translated.
 pub(crate) fn preview_gate_message(gate: &crate::object_browser::PreviewGate) -> Option<String> {
     use crate::buckets_table::format_bytes;
     use crate::object_browser::PreviewGate;
