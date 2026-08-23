@@ -101,7 +101,10 @@ impl Sidebar {
                         profile_id,
                         database,
                     },
-                    task_description: format!("Dropping table {}", name),
+                    task_description: crate::labels::dropping_task_label(
+                        &SchemaObjectKind::Table,
+                        &name,
+                    ),
                     target,
                     is_database: false,
                 })
@@ -133,7 +136,10 @@ impl Sidebar {
                         profile_id,
                         database,
                     },
-                    task_description: format!("Dropping view {}", name),
+                    task_description: crate::labels::dropping_task_label(
+                        &SchemaObjectKind::View,
+                        &name,
+                    ),
                     target,
                     is_database: false,
                 })
@@ -152,7 +158,10 @@ impl Sidebar {
                     profile_id,
                     database: Some(database),
                 },
-                task_description: format!("Dropping collection {}", name),
+                task_description: crate::labels::dropping_task_label(
+                    &SchemaObjectKind::Collection,
+                    &name,
+                ),
                 is_database: false,
             }),
             SchemaNodeId::Database { name, .. } => Some(SidebarDropOperation {
@@ -166,7 +175,10 @@ impl Sidebar {
                     profile_id,
                     database: Some(name.clone()),
                 },
-                task_description: format!("Dropping database {}", name),
+                task_description: crate::labels::dropping_task_label(
+                    &SchemaObjectKind::Database,
+                    &name,
+                ),
                 is_database: true,
             }),
             _ => None,
@@ -282,7 +294,7 @@ impl Sidebar {
 
         if self.app_state.read(cx).is_background_task_limit_reached() {
             self.pending_toast = Some(PendingToast {
-                message: "Too many background tasks running, please wait".to_string(),
+                message: crate::labels::background_task_limit_toast_label(),
                 is_error: true,
             });
             self.refresh_tree(cx);
@@ -513,7 +525,7 @@ impl Sidebar {
 
                     sidebar.update(cx, |sidebar, cx| {
                         sidebar.pending_toast = Some(PendingToast {
-                            message: format!("Failed to drop: {}", error),
+                            message: crate::labels::drop_failed_label(&error),
                             is_error: true,
                         });
                         sidebar.refresh_tree(cx);
@@ -543,14 +555,16 @@ impl Sidebar {
 
                     let details = build_drop_task_details(&operation.target, None);
 
+                    let cancelled_label = crate::labels::schema_drop_cancelled_label();
+
                     app_state.update(cx, |state, cx| {
-                        state.fail_task_with_details(task_id, "Schema drop cancelled", details);
+                        state.fail_task_with_details(task_id, cancelled_label.clone(), details);
                         cx.emit(AppStateChanged);
                     });
 
                     sidebar.update(cx, |sidebar, cx| {
                         sidebar.pending_toast = Some(PendingToast {
-                            message: "Schema drop cancelled".to_string(),
+                            message: cancelled_label,
                             is_error: true,
                         });
                         sidebar.refresh_tree(cx);

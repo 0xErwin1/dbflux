@@ -772,6 +772,12 @@ settings:
 sidebar:
   confirm:
     delete_hint: Press x to confirm delete, ESC to cancel
+    items:
+      one: 1 item
+      many: "%{count} items"
+  dialog:
+    import_script_title: Import Script
+    script_files_filter: Script files
   empty:
     connections_title: No connections yet
     connections_hint: Use + to add a new connection
@@ -841,6 +847,9 @@ sidebar:
       page_label: "Page %{current}/%{total} (%{start}-%{end})"
       page_label_empty: Page 0/0
       unsupported: Event streams are not available for this collection
+    skipped_tables:
+      one: 1 table outside the active profile/database was skipped
+      many: "%{count} tables outside the active profile/database were skipped"
   status:
     connection_summary: "%{connected} connected · %{idle} idle"
     profile_fallback_name: connection
@@ -854,6 +863,12 @@ sidebar:
     post_connect_hook_cancelled: Post-connect hook cancelled
     disconnect_hook_cancelled: Disconnect hook cancelled
     post_disconnect_hook_cancelled: Post-disconnect hook cancelled
+    loading_event_streams: "Loading event streams: %{name}"
+    dropping:
+      table: "Dropping table %{name}"
+      view: "Dropping view %{name}"
+      collection: "Dropping collection %{name}"
+      database: "Dropping database %{name}"
     pipeline:
       connecting: "Connecting to %{name} (pipeline)"
       cancelled: Pipeline cancelled
@@ -880,6 +895,13 @@ sidebar:
     disconnected_hook_cancelled: Disconnected, but post-disconnect hook was cancelled
     disconnected_hook_error: "Disconnected from %{name}, but %{error}"
     profile_not_found: Profile not found
+    schema_drop_cancelled: Schema drop cancelled
+    drop_failed: "Failed to drop: %{error}"
+    reveal_failed: "Failed to reveal in file manager: %{error}"
+    schema_snapshot_failed: "Failed to capture schema snapshot: %{error}"
+    load_failed:
+      table: "Failed to load %{name} schema: %{error}"
+      collection: "Failed to load event streams for %{name}: %{error}"
     connected:
       plain: "Connected to %{name}"
       one: "Connected to %{name} (with 1 hook warning)"

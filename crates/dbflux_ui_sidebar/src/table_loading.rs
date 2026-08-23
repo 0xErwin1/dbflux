@@ -181,7 +181,7 @@ impl Sidebar {
                 if error != "Collection children already fully cached" {
                     log::warn!("Cannot fetch collection children: {}", error);
                     self.pending_toast = Some(PendingToast {
-                        message: format!("Cannot load collection children: {}", error),
+                        message: crate::labels::collection_load_failed_label(collection, &error),
                         is_error: true,
                     });
                     cx.notify();
@@ -192,7 +192,7 @@ impl Sidebar {
         };
 
         let database_name = database.to_string();
-        let task_description = format!("Loading event streams: {}", collection);
+        let task_description = crate::labels::loading_event_streams_task_label(collection);
         let load_task_id = self.app_state.update(cx, |state, _| {
             let (task_id, _) = state.start_task_for_profile(
                 TaskKind::LoadSchema,
@@ -206,12 +206,14 @@ impl Sidebar {
             .background_executor()
             .spawn(async move { params.execute() });
 
+        let collection_name = collection.to_string();
+
         self.spawn_fetch_with_result(
             pending_action,
             Some(load_task_id),
             task,
             "Failed to fetch collection children",
-            "Failed to load collection children",
+            move |error| crate::labels::collection_load_failed_label(&collection_name, error),
             |app_state, res, cx| {
                 app_state.update(cx, |state, cx| {
                     state.set_collection_children_page(
@@ -234,13 +236,13 @@ impl Sidebar {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn spawn_fetch_with_result<R, F, G>(
+    fn spawn_fetch_with_result<R, F, G, M>(
         &mut self,
         pending_action: PendingAction,
         task_id: Option<TaskId>,
         task: Task<Result<R, String>>,
         error_log_prefix: &'static str,
-        error_toast_prefix: &'static str,
+        toast_message: M,
         on_success: F,
         on_finalize: G,
         cx: &mut Context<Self>,
@@ -251,6 +253,7 @@ impl Sidebar {
             + Send
             + 'static,
         G: Fn(&Entity<dbflux_ui_base::app_state_entity::AppStateEntity>, &mut App) + Send + 'static,
+        M: Fn(&str) -> String + Send + 'static,
     {
         let item_id = pending_action.item_id().to_string();
         self.pending_actions.insert(item_id.clone(), pending_action);
@@ -281,10 +284,11 @@ impl Sidebar {
                     Err(e) => {
                         log::error!("{}: {}", error_log_prefix, e);
 
+                        let message = toast_message(&e);
+
                         if let Some(task_id) = task_id {
-                            let details = format!("{}: {}", error_toast_prefix, e);
                             app_state.update(cx, |state, _| {
-                                state.fail_task_with_details(task_id, e.clone(), details);
+                                state.fail_task_with_details(task_id, e.clone(), message.clone());
                             });
                         }
 
@@ -293,7 +297,7 @@ impl Sidebar {
                             sidebar.pending_actions.remove(&item_id);
                             sidebar.expansion_overrides.remove(&item_id);
                             sidebar.pending_toast = Some(PendingToast {
-                                message: format!("{}: {}", error_toast_prefix, e),
+                                message,
                                 is_error: true,
                             });
                             sidebar.rebuild_tree_with_overrides(cx);
@@ -330,7 +334,7 @@ impl Sidebar {
                 if e != "Table details already cached" {
                     log::warn!("Cannot fetch table details: {}", e);
                     self.pending_toast = Some(PendingToast {
-                        message: format!("Cannot load table schema: {}", e),
+                        message: crate::labels::table_load_failed_label(&parts.object_name, &e),
                         is_error: true,
                     });
                     cx.notify();
@@ -344,7 +348,7 @@ impl Sidebar {
         let load_task_id = self.app_state.update(cx, |state, _| {
             let (task_id, _) = state.start_task_for_profile(
                 TaskKind::LoadSchema,
-                format!("Loading event streams: {}", parts.object_name),
+                crate::labels::loading_event_streams_task_label(&parts.object_name),
                 Some(parts.profile_id),
             );
             task_id
@@ -354,12 +358,14 @@ impl Sidebar {
             .background_executor()
             .spawn(async move { params.execute().map_err(|e| e.to_string()) });
 
+        let table_name = parts.object_name.clone();
+
         self.spawn_fetch_with_result(
             pending_action,
             Some(load_task_id),
             task,
             "Failed to fetch table details",
-            "Failed to load table schema",
+            move |error| crate::labels::table_load_failed_label(&table_name, error),
             |app_state, res, cx| {
                 app_state.update(cx, |state, cx| {
                     state.set_table_details(
@@ -425,7 +431,7 @@ impl Sidebar {
             None,
             task,
             "Failed to fetch schema types",
-            "Failed to load data types",
+            |error| format!("Failed to load data types: {}", error),
             |app_state, res, cx| {
                 app_state.update(cx, |state, cx| {
                     state.set_schema_types(res.profile_id, res.database, res.schema, res.types);
@@ -473,7 +479,7 @@ impl Sidebar {
             None,
             task,
             "Failed to fetch schema indexes",
-            "Failed to load indexes",
+            |error| format!("Failed to load indexes: {}", error),
             |app_state, res, cx| {
                 app_state.update(cx, |state, cx| {
                     state.set_schema_indexes(res.profile_id, res.database, res.schema, res.indexes);
@@ -521,7 +527,7 @@ impl Sidebar {
             None,
             task,
             "Failed to fetch schema foreign keys",
-            "Failed to load foreign keys",
+            |error| format!("Failed to load foreign keys: {}", error),
             |app_state, res, cx| {
                 app_state.update(cx, |state, cx| {
                     state.set_schema_foreign_keys(
@@ -573,7 +579,7 @@ impl Sidebar {
             None,
             task,
             "Failed to fetch schema routines",
-            "Failed to load routines",
+            |error| format!("Failed to load routines: {}", error),
             |app_state, res, cx| {
                 app_state.update(cx, |state, cx| {
                     state.set_schema_routines(
