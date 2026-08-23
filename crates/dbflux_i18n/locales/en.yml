@@ -380,6 +380,28 @@ sidebar:
     query_measurement: Query Measurement
     generate_query: Generate Query
     drop_collection: Drop Collection
+    connect: Connect
+    disconnect: Disconnect
+    edit: Edit
+    duplicate: Duplicate
+    rename: Rename
+    export_ellipsis: Export…
+    import_ellipsis: Import…
+    compare_schema: Compare Schema…
+    move_to: Move to...
+    delete: Delete
+    delete_count: "Delete %{count} items"
+    close: Close
+    new_query: New Query
+    drop_database: Drop Database
+    new_connection: New Connection
+    new_folder: New Folder
+    root: Root
+    new_script_file: New File
+    new_script_folder: New Folder
+    reveal_file_manager: Reveal in File Manager
+    copy_path: Copy Path
+    schema_diff_unsupported: Schema diff is only available for relational connections.
   overlay:
     add_folder: New Folder
     add_connection: New Connection

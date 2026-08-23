@@ -91,6 +91,16 @@ pub(crate) fn migrate_tables_label(count: usize) -> String {
     }
 }
 
+/// Translated label for the batch/single Delete context menu item, e.g.
+/// `"Delete"` for a single item or `"Delete 3 items"` for a multi-selection.
+pub(crate) fn delete_items_label(count: usize) -> String {
+    if count > 1 {
+        dbflux_i18n::t!("sidebar.menu.delete_count", count = count)
+    } else {
+        dbflux_i18n::t!("sidebar.menu.delete")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use dbflux_core::DatabaseCategory;
@@ -314,6 +324,20 @@ mod tests {
         assert_eq!(
             plural,
             dbflux_i18n::t!("sidebar.menu.export_tables_many", count = 3)
+        );
+        assert!(plural.contains('3'));
+        assert_ne!(singular, plural);
+    }
+
+    #[test]
+    fn delete_items_label_one_vs_many() {
+        let singular = super::delete_items_label(1);
+        let plural = super::delete_items_label(3);
+
+        assert_eq!(singular, dbflux_i18n::t!("sidebar.menu.delete"));
+        assert_eq!(
+            plural,
+            dbflux_i18n::t!("sidebar.menu.delete_count", count = 3)
         );
         assert!(plural.contains('3'));
         assert_ne!(singular, plural);

@@ -217,9 +217,9 @@ impl Sidebar {
         };
 
         if !self.node_supports_schema_diff(item_id, cx) {
-            dbflux_ui_base::toast::Toast::warning(
-                "Schema diff is only available for relational connections.",
-            )
+            dbflux_ui_base::toast::Toast::warning(dbflux_i18n::t!(
+                "sidebar.menu.schema_diff_unsupported"
+            ))
             .push(cx);
             return;
         }
@@ -239,7 +239,7 @@ impl Sidebar {
             return None;
         }
         let count = self.deletable_multi_selection().len();
-        (count > 1).then(|| format!("Delete {count} items"))
+        (count > 1).then(|| crate::labels::delete_items_label(count))
     }
 
     /// If the right-clicked item is part of a deletable multi-selection of >1
@@ -490,24 +490,45 @@ impl Sidebar {
                     Self::append_menu_section(
                         &mut items,
                         [
-                            ContextMenuItem::item("Disconnect", ContextMenuAction::Disconnect),
-                            ContextMenuItem::item("Refresh", ContextMenuAction::Refresh),
+                            ContextMenuItem::item(
+                                dbflux_i18n::t!("sidebar.menu.disconnect"),
+                                ContextMenuAction::Disconnect,
+                            ),
+                            ContextMenuItem::item(
+                                dbflux_i18n::t!("sidebar.menu.refresh"),
+                                ContextMenuAction::Refresh,
+                            ),
                         ],
                     );
                 } else {
                     Self::append_menu_section(
                         &mut items,
-                        [ContextMenuItem::item("Connect", ContextMenuAction::Connect)],
+                        [ContextMenuItem::item(
+                            dbflux_i18n::t!("sidebar.menu.connect"),
+                            ContextMenuAction::Connect,
+                        )],
                     );
                 }
 
                 Self::append_menu_section(
                     &mut items,
                     [
-                        ContextMenuItem::item("Edit", ContextMenuAction::Edit),
-                        ContextMenuItem::item("Duplicate", ContextMenuAction::Duplicate),
-                        ContextMenuItem::item("Rename", ContextMenuAction::RenameFolder),
-                        ContextMenuItem::item("Export\u{2026}", ContextMenuAction::Export),
+                        ContextMenuItem::item(
+                            dbflux_i18n::t!("sidebar.menu.edit"),
+                            ContextMenuAction::Edit,
+                        ),
+                        ContextMenuItem::item(
+                            dbflux_i18n::t!("sidebar.menu.duplicate"),
+                            ContextMenuAction::Duplicate,
+                        ),
+                        ContextMenuItem::item(
+                            dbflux_i18n::t!("sidebar.menu.rename"),
+                            ContextMenuAction::RenameFolder,
+                        ),
+                        ContextMenuItem::item(
+                            dbflux_i18n::t!("sidebar.menu.export_ellipsis"),
+                            ContextMenuAction::Export,
+                        ),
                     ],
                 );
 
@@ -518,7 +539,7 @@ impl Sidebar {
                     Self::append_menu_section(
                         &mut items,
                         [ContextMenuItem::item(
-                            "Import\u{2026}",
+                            dbflux_i18n::t!("sidebar.menu.import_ellipsis"),
                             ContextMenuAction::ImportTables,
                         )],
                     );
@@ -531,7 +552,7 @@ impl Sidebar {
                     Self::append_menu_section(
                         &mut items,
                         [ContextMenuItem::item(
-                            "Compare Schema\u{2026}",
+                            dbflux_i18n::t!("sidebar.menu.compare_schema"),
                             ContextMenuAction::CompareSchema,
                         )],
                     );
@@ -543,7 +564,7 @@ impl Sidebar {
                     Self::append_menu_section(
                         &mut items,
                         [ContextMenuItem::item(
-                            "Move to...",
+                            dbflux_i18n::t!("sidebar.menu.move_to"),
                             ContextMenuAction::Submenu(move_to_items),
                         )
                         .with_icon(AppIcon::Folder)],
@@ -552,7 +573,7 @@ impl Sidebar {
 
                 let delete_label = self
                     .batch_delete_label(item_id)
-                    .unwrap_or_else(|| "Delete".to_string());
+                    .unwrap_or_else(|| dbflux_i18n::t!("sidebar.menu.delete"));
                 Self::append_menu_section(
                     &mut items,
                     [ContextMenuItem::danger(
@@ -573,7 +594,7 @@ impl Sidebar {
                         Self::append_menu_section(
                             &mut items,
                             [ContextMenuItem::item(
-                                "Close",
+                                dbflux_i18n::t!("sidebar.menu.close"),
                                 ContextMenuAction::CloseDatabase,
                             )],
                         );
@@ -582,7 +603,7 @@ impl Sidebar {
                     Self::append_menu_section(
                         &mut items,
                         [ContextMenuItem::item(
-                            "Refresh",
+                            dbflux_i18n::t!("sidebar.menu.refresh"),
                             ContextMenuAction::RefreshDatabase,
                         )],
                     );
@@ -592,7 +613,7 @@ impl Sidebar {
                         Self::append_menu_section(
                             &mut items,
                             [ContextMenuItem::item(
-                                "Compare Schema\u{2026}",
+                                dbflux_i18n::t!("sidebar.menu.compare_schema"),
                                 ContextMenuAction::CompareSchema,
                             )],
                         );
@@ -605,7 +626,7 @@ impl Sidebar {
                         Self::append_menu_section(
                             &mut items,
                             [ContextMenuItem::item(
-                                "New Query",
+                                dbflux_i18n::t!("sidebar.menu.new_query"),
                                 ContextMenuAction::NewQueryForDatabase,
                             )],
                         );
@@ -619,7 +640,7 @@ impl Sidebar {
                         Self::append_menu_section(
                             &mut items,
                             [ContextMenuItem::danger(
-                                "Drop Database",
+                                dbflux_i18n::t!("sidebar.menu.drop_database"),
                                 ContextMenuAction::DropDatabase,
                             )],
                         );
@@ -628,7 +649,7 @@ impl Sidebar {
                     Self::append_menu_section(
                         &mut items,
                         [ContextMenuItem::item(
-                            "Open",
+                            dbflux_i18n::t!("sidebar.menu.open"),
                             ContextMenuAction::OpenDatabase,
                         )],
                     );
@@ -642,15 +663,21 @@ impl Sidebar {
                 Self::append_menu_section(
                     &mut items,
                     [
-                        ContextMenuItem::item("New Connection", ContextMenuAction::NewConnection),
-                        ContextMenuItem::item("New Folder", ContextMenuAction::NewFolder),
+                        ContextMenuItem::item(
+                            dbflux_i18n::t!("sidebar.menu.new_connection"),
+                            ContextMenuAction::NewConnection,
+                        ),
+                        ContextMenuItem::item(
+                            dbflux_i18n::t!("sidebar.menu.new_folder"),
+                            ContextMenuAction::NewFolder,
+                        ),
                     ],
                 );
 
                 Self::append_menu_section(
                     &mut items,
                     [ContextMenuItem::item(
-                        "Rename",
+                        dbflux_i18n::t!("sidebar.menu.rename"),
                         ContextMenuAction::RenameFolder,
                     )],
                 );
@@ -660,7 +687,7 @@ impl Sidebar {
                     Self::append_menu_section(
                         &mut items,
                         [ContextMenuItem::item(
-                            "Move to...",
+                            dbflux_i18n::t!("sidebar.menu.move_to"),
                             ContextMenuAction::Submenu(move_to_items),
                         )
                         .with_icon(AppIcon::Folder)],
@@ -669,7 +696,7 @@ impl Sidebar {
 
                 let delete_label = self
                     .batch_delete_label(item_id)
-                    .unwrap_or_else(|| "Delete".to_string());
+                    .unwrap_or_else(|| dbflux_i18n::t!("sidebar.menu.delete"));
                 Self::append_menu_section(
                     &mut items,
                     [ContextMenuItem::danger(
@@ -710,8 +737,11 @@ impl Sidebar {
                     vec![]
                 } else {
                     vec![
-                        ContextMenuItem::item("Generate SQL", ContextMenuAction::Submenu(submenu))
-                            .with_icon(AppIcon::Code),
+                        ContextMenuItem::item(
+                            dbflux_i18n::t!("sidebar.menu.generate_sql"),
+                            ContextMenuAction::Submenu(submenu),
+                        )
+                        .with_icon(AppIcon::Code),
                     ]
                 }
             }
@@ -742,8 +772,11 @@ impl Sidebar {
                     vec![]
                 } else {
                     vec![
-                        ContextMenuItem::item("Generate SQL", ContextMenuAction::Submenu(submenu))
-                            .with_icon(AppIcon::Code),
+                        ContextMenuItem::item(
+                            dbflux_i18n::t!("sidebar.menu.generate_sql"),
+                            ContextMenuAction::Submenu(submenu),
+                        )
+                        .with_icon(AppIcon::Code),
                     ]
                 }
             }
@@ -780,8 +813,11 @@ impl Sidebar {
                     vec![]
                 } else {
                     vec![
-                        ContextMenuItem::item("Generate SQL", ContextMenuAction::Submenu(submenu))
-                            .with_icon(AppIcon::Code),
+                        ContextMenuItem::item(
+                            dbflux_i18n::t!("sidebar.menu.generate_sql"),
+                            ContextMenuAction::Submenu(submenu),
+                        )
+                        .with_icon(AppIcon::Code),
                     ]
                 }
             }
@@ -792,8 +828,14 @@ impl Sidebar {
                 Self::append_menu_section(
                     &mut items,
                     [
-                        ContextMenuItem::item("New File", ContextMenuAction::NewScriptFile),
-                        ContextMenuItem::item("New Folder", ContextMenuAction::NewScriptFolder),
+                        ContextMenuItem::item(
+                            dbflux_i18n::t!("sidebar.menu.new_script_file"),
+                            ContextMenuAction::NewScriptFile,
+                        ),
+                        ContextMenuItem::item(
+                            dbflux_i18n::t!("sidebar.menu.new_script_folder"),
+                            ContextMenuAction::NewScriptFolder,
+                        ),
                     ],
                 );
 
@@ -803,14 +845,14 @@ impl Sidebar {
                     Self::append_menu_section(
                         &mut items,
                         [ContextMenuItem::item(
-                            "Rename",
+                            dbflux_i18n::t!("sidebar.menu.rename"),
                             ContextMenuAction::RenameScript,
                         )],
                     );
 
                     let delete_label = self
                         .batch_delete_label(item_id)
-                        .unwrap_or_else(|| "Delete".to_string());
+                        .unwrap_or_else(|| dbflux_i18n::t!("sidebar.menu.delete"));
                     Self::append_menu_section(
                         &mut items,
                         [ContextMenuItem::danger(
@@ -824,10 +866,13 @@ impl Sidebar {
                     &mut items,
                     [
                         ContextMenuItem::item(
-                            "Reveal in File Manager",
+                            dbflux_i18n::t!("sidebar.menu.reveal_file_manager"),
                             ContextMenuAction::RevealInFileManager,
                         ),
-                        ContextMenuItem::item("Copy Path", ContextMenuAction::CopyPath),
+                        ContextMenuItem::item(
+                            dbflux_i18n::t!("sidebar.menu.copy_path"),
+                            ContextMenuAction::CopyPath,
+                        ),
                     ],
                 );
 
@@ -839,13 +884,16 @@ impl Sidebar {
 
                 Self::append_menu_section(
                     &mut items,
-                    [ContextMenuItem::item("Open", ContextMenuAction::OpenScript)],
+                    [ContextMenuItem::item(
+                        dbflux_i18n::t!("sidebar.menu.open"),
+                        ContextMenuAction::OpenScript,
+                    )],
                 );
 
                 Self::append_menu_section(
                     &mut items,
                     [ContextMenuItem::item(
-                        "Rename",
+                        dbflux_i18n::t!("sidebar.menu.rename"),
                         ContextMenuAction::RenameScript,
                     )],
                 );
@@ -854,16 +902,19 @@ impl Sidebar {
                     &mut items,
                     [
                         ContextMenuItem::item(
-                            "Reveal in File Manager",
+                            dbflux_i18n::t!("sidebar.menu.reveal_file_manager"),
                             ContextMenuAction::RevealInFileManager,
                         ),
-                        ContextMenuItem::item("Copy Path", ContextMenuAction::CopyPath),
+                        ContextMenuItem::item(
+                            dbflux_i18n::t!("sidebar.menu.copy_path"),
+                            ContextMenuAction::CopyPath,
+                        ),
                     ],
                 );
 
                 let delete_label = self
                     .batch_delete_label(item_id)
-                    .unwrap_or_else(|| "Delete".to_string());
+                    .unwrap_or_else(|| dbflux_i18n::t!("sidebar.menu.delete"));
                 Self::append_menu_section(
                     &mut items,
                     [ContextMenuItem::danger(
@@ -1078,7 +1129,7 @@ impl Sidebar {
         // Add "Root" option if not already at root
         if current_parent.is_some() {
             items.push(ContextMenuItem::item(
-                "Root",
+                dbflux_i18n::t!("sidebar.menu.root"),
                 ContextMenuAction::MoveToFolder(None),
             ));
         }
@@ -1886,6 +1937,57 @@ mod menu_i18n_tests {
 
         assert_eq!(english, "Open");
         assert_eq!(spanish, "Abrir");
+        assert_ne!(english, spanish);
+    }
+
+    const B2_KEYS: [&str; 22] = [
+        "sidebar.menu.connect",
+        "sidebar.menu.disconnect",
+        "sidebar.menu.edit",
+        "sidebar.menu.duplicate",
+        "sidebar.menu.rename",
+        "sidebar.menu.export_ellipsis",
+        "sidebar.menu.import_ellipsis",
+        "sidebar.menu.compare_schema",
+        "sidebar.menu.move_to",
+        "sidebar.menu.delete",
+        "sidebar.menu.delete_count",
+        "sidebar.menu.close",
+        "sidebar.menu.new_query",
+        "sidebar.menu.drop_database",
+        "sidebar.menu.new_connection",
+        "sidebar.menu.new_folder",
+        "sidebar.menu.root",
+        "sidebar.menu.new_script_file",
+        "sidebar.menu.new_script_folder",
+        "sidebar.menu.reveal_file_manager",
+        "sidebar.menu.copy_path",
+        "sidebar.menu.schema_diff_unsupported",
+    ];
+
+    #[test]
+    fn menu_b2_keys_resolve_in_both_locales() {
+        for key in B2_KEYS {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert_ne!(value, key, "missing translation for {locale}.{key}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "translation fell back to the miss sentinel for {locale}.{key}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn menu_connect_differs_between_locales() {
+        let english = dbflux_i18n::t!("sidebar.menu.connect", locale = "en");
+        let spanish = dbflux_i18n::t!("sidebar.menu.connect", locale = "es");
+
+        assert_eq!(english, "Connect");
+        assert_eq!(spanish, "Conectar");
         assert_ne!(english, spanish);
     }
 }
