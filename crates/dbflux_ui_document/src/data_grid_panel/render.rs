@@ -443,7 +443,7 @@ impl DataGridPanel {
                                 .color(st.theme.muted_foreground),
                         )
                         .child(
-                            Text::caption("Aggregated results cannot be edited")
+                            Text::caption(dbflux_i18n::t!("document.data.grid.editing.aggregated"))
                                 .color(st.theme.muted_foreground),
                         ),
                 )
@@ -461,8 +461,10 @@ impl DataGridPanel {
                         .border_color(st.theme.warning.opacity(0.3))
                         .child(Icon::new(AppIcon::TriangleAlert).small().warning())
                         .child(
-                            Text::caption("This table has no primary key - editing is disabled")
-                                .warning(),
+                            Text::caption(dbflux_i18n::t!(
+                                "document.data.grid.editing.no_primary_key"
+                            ))
+                            .warning(),
                         ),
                 )
             })
@@ -483,9 +485,9 @@ impl DataGridPanel {
                                 .color(st.theme.muted_foreground),
                         )
                         .child(
-                            Text::caption(
-                                "Editing disabled: result is not bound to a single table.",
-                            )
+                            Text::caption(dbflux_i18n::t!(
+                                "document.data.grid.editing.not_single_table"
+                            ))
                             .color(st.theme.muted_foreground),
                         ),
                 )
@@ -597,10 +599,13 @@ impl DataGridPanel {
                                             .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
                                             .color(theme.muted_foreground),
                                     )
-                                    .child(Text::muted("Loading…"))
+                                    .child(Text::muted(dbflux_i18n::t!(
+                                        "document.data.grid.loading"
+                                    )))
                                     .into_any_element()
                             } else {
-                                Text::muted("No data").into_any_element()
+                                Text::muted(dbflux_i18n::t!("document.data.grid.empty"))
+                                    .into_any_element()
                             })
                     },
                 );
@@ -679,9 +684,9 @@ pub(super) fn render_filter_bar_as_segment(
     let theme = cx.theme().clone();
 
     let refresh_label = if refresh_policy.is_auto() {
-        refresh_policy.label()
+        crate::labels::refresh_policy_label(refresh_policy)
     } else {
-        "Refresh"
+        dbflux_i18n::t!("document.data.grid.toolbar.refresh")
     };
 
     let can_open_builder = g.can_open_builder(cx);
@@ -912,7 +917,9 @@ pub(super) fn render_filter_bar_as_segment(
                             });
                         })
                         .child(Icon::new(AppIcon::ListFilter).small().color(icon_color))
-                        .child(Text::muted("Builder")),
+                        .child(Text::muted(dbflux_i18n::t!(
+                            "document.data.grid.toolbar.builder"
+                        ))),
                 )
             }
         })
@@ -1718,9 +1725,9 @@ impl DataGridPanel {
                 if let Some(panel) = weak_panel.upgrade() {
                     panel.update(cx, |this, _cx| {
                         this.pending.toast = Some(dbflux_ui_base::toast::PendingToast {
-                            message: format!(
-                                "PNG export coming in v0.7 — {}",
-                                dbflux_ui_base::toast::now_hms()
+                            message: dbflux_i18n::t!(
+                                "document.data.grid.export.png_coming_soon",
+                                detail = dbflux_ui_base::toast::now_hms()
                             ),
                             is_error: false,
                         });
@@ -3318,7 +3325,10 @@ impl DataGridPanel {
             .bg(theme.background)
             .child(div().whitespace_nowrap().child(Text::code(display_text)))
             .when(truncated, |d| {
-                d.child(Text::caption(format!("(truncated at {} lines)", MAX_LINES)))
+                d.child(Text::caption(dbflux_i18n::t!(
+                    "document.data.grid.views.truncated",
+                    max_lines = MAX_LINES
+                )))
             })
     }
 
@@ -3334,7 +3344,7 @@ impl DataGridPanel {
         } else if let Some(text) = text_body {
             text.to_string()
         } else {
-            "(empty)".to_string()
+            dbflux_i18n::t!("document.data.grid.views.empty")
         };
 
         div()
@@ -3405,10 +3415,8 @@ impl DataGridPanel {
                     // Pending-change count — visible only when there are unsaved edits
                     .when(pending_change_count > 0, |d| {
                         d.child(
-                            Text::caption(format!(
-                                "{} pending change{}",
+                            Text::caption(crate::labels::pending_change_count_label(
                                 pending_change_count,
-                                if pending_change_count == 1 { "" } else { "s" }
                             ))
                             .color(theme.warning),
                         )
@@ -3444,7 +3452,10 @@ impl DataGridPanel {
                                                 .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
                                                 .color(icon_color),
                                         )
-                                        .child(Self::result_mode_label(mode.label(), is_active))
+                                        .child(Self::result_mode_label(
+                                            crate::labels::result_view_mode_label(mode),
+                                            is_active,
+                                        ))
                                 }),
                             ))
                         },
@@ -3469,7 +3480,7 @@ impl DataGridPanel {
                                     .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
                                     .color(theme.muted_foreground),
                             )
-                            .child(Text::caption(format!("{} rows", row_count))),
+                            .child(Text::caption(crate::labels::row_count_label(row_count))),
                     )
                     .when_some(sort_info, |d, (col_name, direction, is_server)| {
                         let arrow_icon = match direction {
@@ -3583,7 +3594,7 @@ impl DataGridPanel {
         }
     }
 
-    fn result_mode_label(label: &'static str, is_active: bool) -> Text {
+    fn result_mode_label(label: impl Into<SharedString>, is_active: bool) -> Text {
         if is_active {
             Text::label_sm(label).font_size(FontSizes::XS)
         } else {
@@ -3618,7 +3629,10 @@ impl DataGridPanel {
                     .small()
                     .color(theme.muted_foreground),
             )
-            .child(Text::caption("Export").muted_foreground())
+            .child(
+                Text::caption(dbflux_i18n::t!("document.data.grid.export.trigger"))
+                    .muted_foreground(),
+            )
             .child(
                 Icon::new(AppIcon::ChevronDown)
                     .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
@@ -3635,7 +3649,7 @@ impl DataGridPanel {
         theme: &gpui_component::theme::Theme,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let section_header = |label: &'static str| -> AnyElement {
+        let section_header = |label: SharedString| -> AnyElement {
             div()
                 .px(Spacing::SM)
                 .mx(Spacing::XS)
@@ -3651,7 +3665,9 @@ impl DataGridPanel {
 
         let mut items: Vec<AnyElement> = Vec::with_capacity(formats.len() * 2 + 3);
 
-        items.push(section_header("Save as file"));
+        items.push(section_header(
+            dbflux_i18n::t!("document.data.grid.export.save_as_file").into(),
+        ));
 
         for (idx, &format) in formats.iter().enumerate() {
             items.push(
@@ -3675,7 +3691,7 @@ impl DataGridPanel {
                             .small()
                             .color(theme.muted_foreground),
                     )
-                    .child(Text::body(format.name()))
+                    .child(Text::body(crate::labels::export_format_label(format)))
                     .into_any_element(),
             );
         }
@@ -3689,7 +3705,9 @@ impl DataGridPanel {
                 .into_any_element(),
         );
 
-        items.push(section_header("Copy to clipboard"));
+        items.push(section_header(
+            dbflux_i18n::t!("document.data.grid.export.copy_to_clipboard").into(),
+        ));
 
         for (idx, &format) in formats.iter().enumerate() {
             let copyable = !matches!(format, dbflux_export::ExportFormat::Binary);
@@ -3716,7 +3734,7 @@ impl DataGridPanel {
                         .small()
                         .color(theme.muted_foreground),
                 )
-                .child(Text::body(format.name()))
+                .child(Text::body(crate::labels::export_format_label(format)))
                 .into_any_element();
             items.push(row);
         }
@@ -3791,7 +3809,7 @@ fn format_hex_dump(data: &[u8]) -> String {
     }
 
     if lines.is_empty() {
-        "(empty)".to_string()
+        dbflux_i18n::t!("document.data.grid.views.empty")
     } else {
         lines.join("\n")
     }
@@ -3865,5 +3883,77 @@ mod tests {
         assert_eq!(english, "Refresh");
         assert_eq!(spanish, "Actualizar");
         assert_ne!(english, spanish);
+    }
+
+    const DATA_GRID_STATUS_EXPORT_KEYS: &[&str] = &[
+        "document.data.grid.editing.aggregated",
+        "document.data.grid.editing.no_primary_key",
+        "document.data.grid.editing.not_single_table",
+        "document.data.grid.loading",
+        "document.data.grid.empty",
+        "document.data.grid.views.table",
+        "document.data.grid.views.chart",
+        "document.data.grid.views.json",
+        "document.data.grid.views.text",
+        "document.data.grid.views.raw",
+        "document.data.grid.views.truncated",
+        "document.data.grid.views.empty",
+        "document.data.grid.status.rows.one",
+        "document.data.grid.status.rows.many",
+        "document.data.grid.status.pending_changes.one",
+        "document.data.grid.status.pending_changes.many",
+        "document.data.grid.export.trigger",
+        "document.data.grid.export.save_as_file",
+        "document.data.grid.export.copy_to_clipboard",
+        "document.data.grid.export.png_coming_soon",
+        "document.data.grid.export.format.csv",
+        "document.data.grid.export.format.json_pretty",
+        "document.data.grid.export.format.json_compact",
+        "document.data.grid.export.format.text",
+        "document.data.grid.export.format.binary",
+        "document.data.grid.export.format.hex",
+        "document.data.grid.export.format.base64",
+        "document.data.grid.pending.inserted.one",
+        "document.data.grid.pending.inserted.many",
+        "document.data.grid.pending.updated.one",
+        "document.data.grid.pending.updated.many",
+        "document.data.grid.pending.deleted.one",
+        "document.data.grid.pending.deleted.many",
+    ];
+
+    #[test]
+    fn data_grid_status_export_keys_resolve_in_both_locales() {
+        for key in DATA_GRID_STATUS_EXPORT_KEYS {
+            let english = dbflux_i18n::t!(*key, locale = "en");
+            let spanish = dbflux_i18n::t!(*key, locale = "es");
+
+            assert!(!english.is_empty(), "empty English translation for {key}");
+            assert!(!spanish.is_empty(), "empty Spanish translation for {key}");
+            assert_ne!(english, *key, "English translation missing for {key}");
+            assert_ne!(spanish, *key, "Spanish translation missing for {key}");
+            assert_ne!(
+                english,
+                format!("en.{key}"),
+                "English translation missing for {key}"
+            );
+            assert_ne!(
+                spanish,
+                format!("es.{key}"),
+                "Spanish translation missing for {key}"
+            );
+        }
+    }
+
+    #[test]
+    fn data_grid_export_menu_differs_between_locales() {
+        let save_en = dbflux_i18n::t!("document.data.grid.export.save_as_file", locale = "en");
+        let save_es = dbflux_i18n::t!("document.data.grid.export.save_as_file", locale = "es");
+        let copy_en = dbflux_i18n::t!("document.data.grid.export.copy_to_clipboard", locale = "en");
+        let copy_es = dbflux_i18n::t!("document.data.grid.export.copy_to_clipboard", locale = "es");
+
+        assert_eq!(save_en, "Save as file");
+        assert_ne!(save_en, save_es);
+        assert_eq!(copy_en, "Copy to clipboard");
+        assert_ne!(copy_en, copy_es);
     }
 }

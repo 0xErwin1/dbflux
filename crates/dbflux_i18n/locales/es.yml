@@ -67,6 +67,50 @@ document:
         builder: Constructor
         switch_to_document: Cambiar a vista de documento
         switch_to_table: Cambiar a vista de tabla
+      editing:
+        aggregated: Los resultados agregados no se pueden editar
+        no_primary_key: Esta tabla no tiene clave primaria; la edición está deshabilitada
+        not_single_table: "Edición deshabilitada: el resultado no está vinculado a una sola tabla."
+      loading: Cargando…
+      empty: Sin datos
+      views:
+        table: Datos
+        chart: Gráfico
+        json: JSON
+        text: Texto
+        raw: Sin procesar
+        truncated: "(truncado en %{max_lines} líneas)"
+        empty: "(vacío)"
+      status:
+        rows:
+          one: "%{count} fila"
+          many: "%{count} filas"
+        pending_changes:
+          one: "%{count} cambio pendiente"
+          many: "%{count} cambios pendientes"
+      export:
+        trigger: Exportar
+        save_as_file: Guardar como archivo
+        copy_to_clipboard: Copiar al portapapeles
+        png_coming_soon: "Exportación PNG disponible en v0.7 — %{detail}"
+        format:
+          csv: CSV
+          json_pretty: "JSON (con formato)"
+          json_compact: "JSON (compacto)"
+          text: Texto
+          binary: Binario
+          hex: Hex
+          base64: Base64
+      pending:
+        inserted:
+          one: "%{count} inserción"
+          many: "%{count} inserciones"
+        updated:
+          one: "%{count} actualización"
+          many: "%{count} actualizaciones"
+        deleted:
+          one: "%{count} eliminación"
+          many: "%{count} eliminaciones"
   shared:
     refresh:
       off: Apagado
