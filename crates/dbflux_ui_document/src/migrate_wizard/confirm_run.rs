@@ -63,16 +63,29 @@ pub fn decide_order(result: OrderResult) -> OrderDecision {
     }
 }
 
-/// The human-readable mode label shown in the Confirm summary — the same
-/// wording used by the mapping grid's mode picker, kept as a small pure map so
-/// the summary never has to reach back into the dropdown's option list.
-pub fn mapping_mode_label(mode: TableMappingMode) -> &'static str {
+/// The human-readable mode label shown in the Confirm summary — a shorter
+/// wording than the mapping grid's mode picker (see
+/// [`crate::migrate_wizard::column_mapping::mapping_mode_options`]), resolved
+/// through the translation catalog. Exhaustive by construction so a new
+/// [`TableMappingMode`] variant fails this crate's build until its
+/// `document.migrate_wizard.confirm.mode_label.*` entry is added here.
+pub fn mapping_mode_label(mode: TableMappingMode) -> String {
     match mode {
-        TableMappingMode::Create => "Create",
-        TableMappingMode::Existing => "Existing",
-        TableMappingMode::Recreate => "Recreate",
-        TableMappingMode::Skip => "Skip",
-        TableMappingMode::Truncate => "Truncate",
+        TableMappingMode::Create => {
+            dbflux_i18n::t!("document.migrate_wizard.confirm.mode_label.create")
+        }
+        TableMappingMode::Existing => {
+            dbflux_i18n::t!("document.migrate_wizard.confirm.mode_label.existing")
+        }
+        TableMappingMode::Recreate => {
+            dbflux_i18n::t!("document.migrate_wizard.confirm.mode_label.recreate")
+        }
+        TableMappingMode::Skip => {
+            dbflux_i18n::t!("document.migrate_wizard.confirm.mode_label.skip")
+        }
+        TableMappingMode::Truncate => {
+            dbflux_i18n::t!("document.migrate_wizard.confirm.mode_label.truncate")
+        }
     }
 }
 
@@ -80,7 +93,7 @@ pub fn mapping_mode_label(mode: TableMappingMode) -> &'static str {
 pub struct PlanSummaryRow {
     pub source: String,
     pub target: String,
-    pub mode_label: &'static str,
+    pub mode_label: String,
     pub destructive: bool,
 }
 
@@ -476,7 +489,8 @@ impl ConfirmRunPhase {
                     report_error(UserFacingError::new(ErrorKind::Driver, message.clone()), cx);
                 }
                 if toast_success {
-                    Toast::success("Migration completed").push(cx);
+                    Toast::success(dbflux_i18n::t!("document.migrate_wizard.toast.success"))
+                        .push(cx);
                 }
             })
             .ok();
@@ -525,7 +539,7 @@ fn resolve_run_outcome(
             task_action: RunTaskAction::Cancel,
             report: None,
             toast_success: false,
-            summary: "Migration cancelled".to_string(),
+            summary: dbflux_i18n::t!("document.migrate_wizard.status.cancelled"),
             warnings: Vec::new(),
         },
         Ok(MigrationOutcome::Completed(outcome)) => {
@@ -542,7 +556,11 @@ fn resolve_run_outcome(
             match failed_table {
                 Some((table, error)) => RunResolution {
                     task_action: RunTaskAction::Fail(format!("{table}: {error}")),
-                    report: Some(format!("Migration failed on table '{table}': {error}")),
+                    report: Some(dbflux_i18n::t!(
+                        "document.migrate_wizard.error.table_failed",
+                        table = table,
+                        error = error
+                    )),
                     toast_success: false,
                     summary,
                     warnings,
@@ -557,9 +575,9 @@ fn resolve_run_outcome(
             }
         }
         Ok(MigrationOutcome::CyclicOrderRequired { .. }) => {
-            let message = "Migration failed: FK order became cyclic mid-run".to_string();
+            let message = dbflux_i18n::t!("document.migrate_wizard.error.cyclic_order");
             RunResolution {
-                task_action: RunTaskAction::Fail("FK order became cyclic mid-run".to_string()),
+                task_action: RunTaskAction::Fail(message.clone()),
                 report: Some(message.clone()),
                 toast_success: false,
                 summary: message,
@@ -567,7 +585,7 @@ fn resolve_run_outcome(
             }
         }
         Err(e) => {
-            let message = format!("Migration failed: {e}");
+            let message = dbflux_i18n::t!("document.migrate_wizard.error.failed", error = e);
             RunResolution {
                 task_action: RunTaskAction::Fail(e.to_string()),
                 report: Some(message.clone()),
@@ -620,7 +638,9 @@ impl ConfirmRunPhase {
             .flex()
             .flex_col()
             .gap(Spacing::XS)
-            .child(Text::label("Review migration plan"))
+            .child(Text::label(dbflux_i18n::t!(
+                "document.migrate_wizard.confirm.review_plan"
+            )))
             .child(Text::caption(format!(
                 "{} → {}",
                 self.summary.source_container, self.summary.target_container
@@ -678,9 +698,14 @@ impl ConfirmRunPhase {
                         .overflow_hidden()
                         .child(Text::body(format!("{} → {}", row.source, row.target))),
                 )
-                .child(Text::caption(row.mode_label))
+                .child(Text::caption(row.mode_label.clone()))
                 .when(row.destructive, |el| {
-                    el.child(Text::caption("destructive").danger())
+                    el.child(
+                        Text::caption(dbflux_i18n::t!(
+                            "document.migrate_wizard.confirm.destructive_tag"
+                        ))
+                        .danger(),
+                    )
                 })
                 .into_any_element()
         });
@@ -700,9 +725,9 @@ impl ConfirmRunPhase {
                 parent.child(
                     Checkbox::new("migrate-confirm-destructive-ack")
                         .checked(self.destructive_ack)
-                        .label(
-                            "I understand this plan will drop or empty existing data in the target.",
-                        )
+                        .label(dbflux_i18n::t!(
+                            "document.migrate_wizard.confirm.destructive_ack"
+                        ))
                         .on_click(cx.listener(|this, checked: &bool, _, cx| {
                             this.destructive_ack = *checked;
                             cx.notify();
@@ -711,13 +736,14 @@ impl ConfirmRunPhase {
             })
             .child(
                 div().flex().justify_end().child(
-                    Button::new("migrate-confirm-start", "Start Migration")
-                        .small()
-                        .primary()
-                        .disabled(!start_enabled)
-                        .on_click(
-                            cx.listener(|this, _event, _window, cx| this.on_start_migration(cx)),
-                        ),
+                    Button::new(
+                        "migrate-confirm-start",
+                        dbflux_i18n::t!("document.migrate_wizard.confirm.start_migration"),
+                    )
+                    .small()
+                    .primary()
+                    .disabled(!start_enabled)
+                    .on_click(cx.listener(|this, _event, _window, cx| this.on_start_migration(cx))),
                 ),
             )
             .into_any_element()
@@ -744,7 +770,7 @@ impl ConfirmRunPhase {
                 .child(
                     Button::new(
                         SharedString::from(format!("migrate-reorder-up-{index}")),
-                        "Up",
+                        dbflux_i18n::t!("document.migrate_wizard.confirm.reorder.up"),
                     )
                     .small()
                     .ghost()
@@ -756,7 +782,7 @@ impl ConfirmRunPhase {
                 .child(
                     Button::new(
                         SharedString::from(format!("migrate-reorder-down-{index}")),
-                        "Down",
+                        dbflux_i18n::t!("document.migrate_wizard.confirm.reorder.down"),
                     )
                     .small()
                     .ghost()
@@ -773,19 +799,21 @@ impl ConfirmRunPhase {
             .flex_col()
             .gap(Spacing::SM)
             .child(
-                Text::caption(
-                    "These tables reference each other in a cycle and cannot be ordered \
-                     automatically. Choose the load order before starting:",
-                )
+                Text::caption(dbflux_i18n::t!(
+                    "document.migrate_wizard.confirm.reorder.warning"
+                ))
                 .warning(),
             )
             .children(rows)
             .child(
                 div().flex().justify_end().child(
-                    Button::new("migrate-reorder-accept", "Use this order")
-                        .small()
-                        .primary()
-                        .on_click(cx.listener(|this, _event, _window, cx| this.accept_reorder(cx))),
+                    Button::new(
+                        "migrate-reorder-accept",
+                        dbflux_i18n::t!("document.migrate_wizard.confirm.reorder.accept"),
+                    )
+                    .small()
+                    .primary()
+                    .on_click(cx.listener(|this, _event, _window, cx| this.accept_reorder(cx))),
                 ),
             )
             .into_any_element()
@@ -822,10 +850,8 @@ impl ConfirmRunPhase {
         let total_tables = names.len();
         let current_index = progress.table_index.min(total_tables.saturating_sub(1));
 
-        let rows_label = match progress.estimated_total {
-            Some(total) if total > 0 => format!("{} / {} rows", progress.rows_done, total),
-            _ => format!("{} rows", progress.rows_done),
-        };
+        let rows_label =
+            crate::labels::migrate_running_rows_label(progress.rows_done, progress.estimated_total);
         let determinate = matches!(progress.estimated_total, Some(total) if total > 0);
         let fraction = match progress.estimated_total {
             Some(total) if total > 0 => (progress.rows_done as f32 / total as f32).clamp(0.0, 1.0),
@@ -838,11 +864,8 @@ impl ConfirmRunPhase {
             .unwrap_or_default();
 
         let current_table = names.get(current_index).cloned().unwrap_or_default();
-        let position_label = if total_tables > 0 {
-            format!("Table {} of {}", current_index + 1, total_tables)
-        } else {
-            "Preparing".to_string()
-        };
+        let position_label =
+            crate::labels::migrate_running_position_label(current_index, total_tables);
 
         let steps_rows_label = rows_label.clone();
         let steps = names.iter().enumerate().map(move |(index, name)| {
@@ -903,7 +926,9 @@ impl ConfirmRunPhase {
                     .flex()
                     .items_center()
                     .justify_between()
-                    .child(Text::label("Migrating…"))
+                    .child(Text::label(dbflux_i18n::t!(
+                        "document.migrate_wizard.running.title"
+                    )))
                     .child(Text::caption(format_elapsed(elapsed)).muted_foreground()),
             )
             .child(
@@ -961,8 +986,11 @@ impl ConfirmRunPhase {
             })
             .when_some(self.run_elapsed, |el, elapsed| {
                 el.child(
-                    Text::caption(format!("Completed in {}", format_elapsed(elapsed)))
-                        .muted_foreground(),
+                    Text::caption(dbflux_i18n::t!(
+                        "document.migrate_wizard.done.completed_in",
+                        elapsed = format_elapsed(elapsed)
+                    ))
+                    .muted_foreground(),
                 )
             })
             .when(!self.result_warnings.is_empty(), |el| {
@@ -1054,11 +1082,63 @@ mod tests {
 
     #[test]
     fn mapping_mode_label_covers_every_mode() {
-        assert_eq!(mapping_mode_label(TableMappingMode::Create), "Create");
-        assert_eq!(mapping_mode_label(TableMappingMode::Existing), "Existing");
-        assert_eq!(mapping_mode_label(TableMappingMode::Recreate), "Recreate");
-        assert_eq!(mapping_mode_label(TableMappingMode::Skip), "Skip");
-        assert_eq!(mapping_mode_label(TableMappingMode::Truncate), "Truncate");
+        assert_eq!(
+            mapping_mode_label(TableMappingMode::Create),
+            dbflux_i18n::t!("document.migrate_wizard.confirm.mode_label.create")
+        );
+        assert_eq!(
+            mapping_mode_label(TableMappingMode::Existing),
+            dbflux_i18n::t!("document.migrate_wizard.confirm.mode_label.existing")
+        );
+        assert_eq!(
+            mapping_mode_label(TableMappingMode::Recreate),
+            dbflux_i18n::t!("document.migrate_wizard.confirm.mode_label.recreate")
+        );
+        assert_eq!(
+            mapping_mode_label(TableMappingMode::Skip),
+            dbflux_i18n::t!("document.migrate_wizard.confirm.mode_label.skip")
+        );
+        assert_eq!(
+            mapping_mode_label(TableMappingMode::Truncate),
+            dbflux_i18n::t!("document.migrate_wizard.confirm.mode_label.truncate")
+        );
+    }
+
+    /// Every `document.migrate_wizard.confirm.mode_label.*` key resolves to a
+    /// non-empty, non-fallback value in both locales, and diverges between
+    /// locales — exhaustive over every `TableMappingMode` variant.
+    #[test]
+    fn mapping_mode_label_resolves_and_differs_in_both_locales() {
+        for mode in [
+            TableMappingMode::Create,
+            TableMappingMode::Existing,
+            TableMappingMode::Recreate,
+            TableMappingMode::Skip,
+            TableMappingMode::Truncate,
+        ] {
+            let key = match mode {
+                TableMappingMode::Create => "document.migrate_wizard.confirm.mode_label.create",
+                TableMappingMode::Existing => "document.migrate_wizard.confirm.mode_label.existing",
+                TableMappingMode::Recreate => "document.migrate_wizard.confirm.mode_label.recreate",
+                TableMappingMode::Skip => "document.migrate_wizard.confirm.mode_label.skip",
+                TableMappingMode::Truncate => "document.migrate_wizard.confirm.mode_label.truncate",
+            };
+
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+
+            let en = dbflux_i18n::t!(key, locale = "en");
+            let es = dbflux_i18n::t!(key, locale = "es");
+            assert_ne!(en, es, "{key} must differ between en and es");
+        }
     }
 
     #[test]
@@ -1079,10 +1159,16 @@ mod tests {
         assert_eq!(summary.rows.len(), 2);
 
         assert_eq!(summary.rows[0].target, "users");
-        assert_eq!(summary.rows[0].mode_label, "Existing");
+        assert_eq!(
+            summary.rows[0].mode_label,
+            dbflux_i18n::t!("document.migrate_wizard.confirm.mode_label.existing")
+        );
         assert!(!summary.rows[0].destructive);
 
-        assert_eq!(summary.rows[1].mode_label, "Recreate");
+        assert_eq!(
+            summary.rows[1].mode_label,
+            dbflux_i18n::t!("document.migrate_wizard.confirm.mode_label.recreate")
+        );
         assert!(summary.rows[1].destructive);
 
         assert!(summary.has_destructive());

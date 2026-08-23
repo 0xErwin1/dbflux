@@ -1289,6 +1289,77 @@ document:
         no_limit: No limit
         missing: Missing
         expired: Expired
+  migrate_wizard:
+    title: Migrate Data
+    rail:
+      source_target: Source & Target
+      tables_mapping: Tables Mapping
+      options: Options
+      confirm: Confirm
+      run: Run
+    mapping_mode:
+      create: Create
+      existing: "Existing (insert only)"
+      recreate: "Recreate (drop + create)"
+      skip: Skip
+      truncate: "Truncate (empty + insert)"
+    options:
+      segment_size_label: Segment / commit size
+      segment_size_placeholder: Segment / commit size
+      segment_size_invalid: "Must be a whole number of 1 or more; kept the previous value."
+      disable_referential_integrity: Disable referential integrity during migration
+    confirm:
+      review_plan: Review migration plan
+      destructive_ack: "I understand this plan will drop or empty existing data in the target."
+      destructive_tag: destructive
+      start_migration: Start Migration
+      mode_label:
+        create: Create
+        existing: Existing
+        recreate: Recreate
+        skip: Skip
+        truncate: Truncate
+      reorder:
+        warning: "These tables reference each other in a cycle and cannot be ordered automatically. Choose the load order before starting:"
+        up: Up
+        down: Down
+        accept: Use this order
+    running:
+      title: "Migrating…"
+      position:
+        of_total: "Table %{index} of %{total}"
+        preparing: Preparing
+      progress:
+        of_total: "%{done} / %{total} rows"
+        only: "%{done} rows"
+    done:
+      completed_in: "Completed in %{elapsed}"
+    toast:
+      success: Migration completed
+    status:
+      cancelled: Migration cancelled
+    error:
+      no_source_connection: No active connection for the source profile
+      no_target_connection: No active connection for the target profile
+      table_schema_read_failed: "Could not read table schema: %{error}"
+      foreign_keys_read_failed: "Could not read foreign keys: %{error}"
+      table_failed: "Migration failed on table '%{table}': %{error}"
+      cyclic_order: "Migration failed: FK order became cyclic mid-run"
+      failed: "Migration failed: %{error}"
+    summary:
+      with_failures: "Migrated %{completed} table(s), %{rows} row(s) total (%{skipped} skipped, %{failed} failed)"
+      ok: "Migrated %{completed} table(s), %{rows} row(s) total (%{skipped} skipped)"
+    status_line:
+      completed: "%{table}: completed (%{rows} row(s))"
+      skipped: "%{table}: skipped"
+      failed: "%{table}: FAILED — %{error}"
+      not_attempted: "%{table}: not attempted"
+    footer:
+      back: Back
+      continue: Continue
+      loading: "Loading…"
+      cancel: Cancel
+      close: Close
   object_browser:
     columns:
       class: Class

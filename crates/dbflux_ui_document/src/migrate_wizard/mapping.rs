@@ -270,7 +270,7 @@ impl MappingPhase {
                 .position(|(_, mode)| *mode == config.mapping_mode);
             let mode_items: Vec<DropdownItem> = mode_options
                 .iter()
-                .map(|(label, _)| DropdownItem::new(*label))
+                .map(|(label, _)| DropdownItem::new(label.clone()))
                 .collect();
             let mode_dropdown = cx.new(|_cx| {
                 Dropdown::new(SharedString::from(format!("migrate-mode-{row_index}")))
@@ -352,7 +352,7 @@ impl MappingPhase {
 
     fn on_mode_changed(&mut self, row_index: usize, index: usize, cx: &mut Context<Self>) {
         let mode_options = mapping_mode_options(self.supports_truncate);
-        let Some((_, mode)) = mode_options.get(index).copied() else {
+        let Some((_, mode)) = mode_options.get(index).cloned() else {
             return;
         };
         if let Some(row) = self.rows.get_mut(row_index) {
