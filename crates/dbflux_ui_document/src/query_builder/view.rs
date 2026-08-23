@@ -128,29 +128,33 @@ fn render_header(
         })
         .child(div().flex_1())
         .child(
-            Button::new("qb-hdr-save", "Save")
-                .icon(AppIcon::Save)
-                .ghost()
-                .small()
-                .on_click(cx.listener(|this, _event, _window, cx| {
-                    use crate::query_builder::events::BuilderEvent;
-                    let name = this
-                        .loaded_id
-                        .as_deref()
-                        .unwrap_or("Untitled query")
-                        .to_string();
-                    cx.emit(BuilderEvent::SaveRequested { name });
-                })),
+            Button::new(
+                "qb-hdr-save",
+                dbflux_i18n::t!("document.query_builder.chrome.save"),
+            )
+            .icon(AppIcon::Save)
+            .ghost()
+            .small()
+            .on_click(cx.listener(|this, _event, _window, cx| {
+                use crate::query_builder::events::BuilderEvent;
+                let name = this.loaded_id.clone().unwrap_or_else(|| {
+                    dbflux_i18n::t!("document.query_builder.chrome.untitled_query")
+                });
+                cx.emit(BuilderEvent::SaveRequested { name });
+            })),
         )
         .child(
-            Button::new("qb-hdr-reset", "Reset")
-                .icon(AppIcon::RotateCcw)
-                .ghost()
-                .small()
-                .on_click(cx.listener(|_this, _event, _window, cx| {
-                    use crate::query_builder::events::BuilderEvent;
-                    cx.emit(BuilderEvent::ResetRequested);
-                })),
+            Button::new(
+                "qb-hdr-reset",
+                dbflux_i18n::t!("document.query_builder.chrome.reset"),
+            )
+            .icon(AppIcon::RotateCcw)
+            .ghost()
+            .small()
+            .on_click(cx.listener(|_this, _event, _window, cx| {
+                use crate::query_builder::events::BuilderEvent;
+                cx.emit(BuilderEvent::ResetRequested);
+            })),
         )
 }
 
@@ -171,12 +175,6 @@ fn render_mode_selector(
         .map(|s| s.mode)
         .unwrap_or(BuilderMode::Select);
 
-    let modes: [(BuilderMode, &'static str); 3] = [
-        (BuilderMode::Select, "SELECT"),
-        (BuilderMode::Update, "UPDATE"),
-        (BuilderMode::Delete, "DELETE"),
-    ];
-
     let mut row = div()
         .flex()
         .flex_row()
@@ -188,7 +186,7 @@ fn render_mode_selector(
         .border_color(theme.border)
         .bg(theme.background);
 
-    for (mode, label) in modes {
+    for (mode, label) in mode_selector_options() {
         let is_active = mode == current_mode;
         let variant = if is_active {
             ButtonVariant::Primary
@@ -206,6 +204,30 @@ fn render_mode_selector(
     }
 
     row
+}
+
+/// The mode-switch bar's (mode, label) options, translated through the
+/// catalog.
+///
+/// A function rather than a `const` array because `dbflux_i18n::t!` is not
+/// evaluable in a const context; every arm's translated value happens to
+/// stay byte-identical between locales since these are SQL statement
+/// names, not prose.
+fn mode_selector_options() -> [(BuilderMode, String); 3] {
+    [
+        (
+            BuilderMode::Select,
+            crate::labels::builder_mode_label(BuilderMode::Select),
+        ),
+        (
+            BuilderMode::Update,
+            crate::labels::builder_mode_label(BuilderMode::Update),
+        ),
+        (
+            BuilderMode::Delete,
+            crate::labels::builder_mode_label(BuilderMode::Delete),
+        ),
+    ]
 }
 
 // ---------------------------------------------------------------------------
@@ -407,6 +429,9 @@ fn section_card(
 fn render_limit_offset_body(panel: &mut QueryBuilderPanel) -> impl IntoElement {
     let row = div().flex().flex_row().gap(Spacing::MD).items_center();
 
+    let limit_label = dbflux_i18n::t!("document.query_builder.status.limit");
+    let offset_label = dbflux_i18n::t!("document.query_builder.status.offset");
+
     let row = if let Some(limit_state) = panel.limit_input_state.as_ref() {
         row.child(
             div()
@@ -414,14 +439,14 @@ fn render_limit_offset_body(panel: &mut QueryBuilderPanel) -> impl IntoElement {
                 .flex()
                 .flex_col()
                 .gap(Spacing::XXS)
-                .child(Text::caption(SharedString::from("Limit")))
+                .child(Text::caption(SharedString::from(limit_label)))
                 .child(Input::new(limit_state).small().w_full()),
         )
     } else {
         row.child(
             div()
                 .flex_1()
-                .child(Text::caption(SharedString::from("Limit"))),
+                .child(Text::caption(SharedString::from(limit_label))),
         )
     };
 
@@ -432,14 +457,14 @@ fn render_limit_offset_body(panel: &mut QueryBuilderPanel) -> impl IntoElement {
                 .flex()
                 .flex_col()
                 .gap(Spacing::XXS)
-                .child(Text::caption(SharedString::from("Offset")))
+                .child(Text::caption(SharedString::from(offset_label)))
                 .child(Input::new(offset_state).small().w_full()),
         )
     } else {
         row.child(
             div()
                 .flex_1()
-                .child(Text::caption(SharedString::from("Offset"))),
+                .child(Text::caption(SharedString::from(offset_label))),
         )
     }
 }
@@ -498,8 +523,7 @@ fn render_effective_select_preview(
 
 fn render_preview_body(panel: &mut QueryBuilderPanel, theme: &Theme) -> impl IntoElement {
     let line_count = panel.sql_preview.lines().count().max(1);
-    let line_label = if line_count == 1 { "line" } else { "lines" };
-    let status_text = format!("valid · {line_count} {line_label}");
+    let status_text = crate::labels::valid_lines_label(line_count);
 
     div()
         .flex()
@@ -564,12 +588,12 @@ fn render_footer(
     let run_label = if is_mutation_mode {
         let has_filter = panel.current_spec.filter.is_some();
         if current_mode == BuilderMode::Update && has_filter {
-            "Apply Update"
+            dbflux_i18n::t!("document.query_builder.status.apply_update")
         } else {
-            "Run"
+            dbflux_i18n::t!("document.query_builder.status.run")
         }
     } else {
-        "Run"
+        dbflux_i18n::t!("document.query_builder.status.run")
     };
 
     let sort_error = panel.sort_validation_error.clone();
@@ -602,16 +626,9 @@ fn render_footer(
             )
         })
         .when(is_grouped && incomplete_count > 0, |d| {
-            let label = if incomplete_count == 1 {
-                SharedString::from(
-                    "1 aggregate row is incomplete and will be excluded from the query",
-                )
-            } else {
-                SharedString::from(format!(
-                    "{} aggregate rows are incomplete and will be excluded from the query",
-                    incomplete_count
-                ))
-            };
+            let label = SharedString::from(crate::labels::incomplete_aggregate_rows_label(
+                incomplete_count,
+            ));
             d.child(
                 div()
                     .flex()
@@ -668,14 +685,19 @@ fn render_footer(
                 )
                 .when(!is_mutation_mode, |row| {
                     row.child(
-                        Button::new("qb-open-editor", "Open in Editor")
-                            .icon(AppIcon::ExternalLink)
-                            .variant(ButtonVariant::Ghost)
-                            .small()
-                            .on_click(cx.listener(|_this, _event, _window, cx| {
+                        Button::new(
+                            "qb-open-editor",
+                            dbflux_i18n::t!("document.query_builder.status.open_in_editor"),
+                        )
+                        .icon(AppIcon::ExternalLink)
+                        .variant(ButtonVariant::Ghost)
+                        .small()
+                        .on_click(cx.listener(
+                            |_this, _event, _window, cx| {
                                 use crate::query_builder::events::BuilderEvent;
                                 cx.emit(BuilderEvent::OpenInEditorRequested);
-                            })),
+                            },
+                        )),
                     )
                 })
                 .child(div().flex_1()),
@@ -864,5 +886,24 @@ fn literal_to_display_string(v: &dbflux_core::LiteralValue) -> String {
         LiteralValue::Bool(b) => b.to_string(),
         LiteralValue::Timestamp(t) => t.clone(),
         LiteralValue::Null => "NULL".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::mode_selector_options;
+    use crate::query_builder::mutation_state::BuilderMode;
+
+    #[test]
+    fn mode_selector_options_returns_translated_labels_for_every_mode() {
+        let options = mode_selector_options();
+
+        assert_eq!(options.len(), 3);
+        assert_eq!(options[0].0, BuilderMode::Select);
+        assert_eq!(options[0].1, "SELECT");
+        assert_eq!(options[1].0, BuilderMode::Update);
+        assert_eq!(options[1].1, "UPDATE");
+        assert_eq!(options[2].0, BuilderMode::Delete);
+        assert_eq!(options[2].1, "DELETE");
     }
 }
