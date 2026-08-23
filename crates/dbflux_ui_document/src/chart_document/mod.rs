@@ -305,10 +305,9 @@ impl ChartDocument {
             // Collection sources are not routed through ChartDocument in W0.
             // They still open via DataDocument.
             SavedChartSource::Collection { .. } => {
-                return Err(
-                    "Collection source not supported in ChartDocument; open via DataDocument"
-                        .to_string(),
-                );
+                return Err(dbflux_i18n::t!(
+                    "document.chart.error.collection_source_unsupported"
+                ));
             }
 
             // Metric sources bypass the query path and construct a MetricSource
@@ -548,10 +547,9 @@ impl ChartDocument {
             SavedChartSource::Query { .. }
             | SavedChartSource::Metric { .. }
             | SavedChartSource::InstanceMetric { .. } => Ok(()),
-            SavedChartSource::Collection { .. } => Err(
-                "Collection source not supported in ChartDocument; open via DataDocument"
-                    .to_string(),
-            ),
+            SavedChartSource::Collection { .. } => Err(dbflux_i18n::t!(
+                "document.chart.error.collection_source_unsupported"
+            )),
         }
     }
 
@@ -816,7 +814,7 @@ impl ChartDocument {
             Err(ChartSourceError::EmptyQuery) => return,
             Err(e) => {
                 self.pending_toast = Some(PendingToast {
-                    message: format!("Chart source error: {e}"),
+                    message: dbflux_i18n::t!("document.chart.error.source", error = e),
                     is_error: true,
                 });
                 cx.notify();
@@ -826,7 +824,7 @@ impl ChartDocument {
 
         let Some(profile_id) = self.profile_id else {
             self.pending_toast = Some(PendingToast {
-                message: "No connection selected".to_string(),
+                message: dbflux_i18n::t!("document.chart.error.no_connection_selected"),
                 is_error: true,
             });
             cx.notify();
@@ -838,7 +836,7 @@ impl ChartDocument {
             let state = self.app_state.read(cx);
             let Some(connected) = state.connections().get(&profile_id) else {
                 self.pending_toast = Some(PendingToast {
-                    message: "Connection not found".to_string(),
+                    message: dbflux_i18n::t!("document.chart.error.connection_not_found"),
                     is_error: true,
                 });
                 cx.notify();
@@ -848,7 +846,10 @@ impl ChartDocument {
                 Ok(c) => c,
                 Err(e) => {
                     self.pending_toast = Some(PendingToast {
-                        message: format!("Connection error: {:?}", e),
+                        message: dbflux_i18n::t!(
+                            "document.chart.error.connection_error",
+                            error = format!("{:?}", e)
+                        ),
                         is_error: true,
                     });
                     cx.notify();
@@ -870,9 +871,11 @@ impl ChartDocument {
         request.sql =
             dbflux_core::substitute_time_macros(&request.sql, macro_window, query_language);
 
-        let (task_id, cancel_token) =
-            self.runner
-                .start_primary(dbflux_core::TaskKind::Query, "Chart query", cx);
+        let (task_id, cancel_token) = self.runner.start_primary(
+            dbflux_core::TaskKind::Query,
+            dbflux_i18n::t!("document.chart.status.task_label"),
+            cx,
+        );
 
         self.exec_state = ExecState::Running;
         self.state = DocumentState::Executing;
@@ -1044,7 +1047,10 @@ impl ChartDocument {
             String::new()
         };
 
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Chart name"));
+        let input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(dbflux_i18n::t!("document.chart.shell.name_placeholder"))
+        });
 
         if !initial.is_empty() {
             input.update(cx, |state, cx| {
@@ -1142,13 +1148,13 @@ impl ChartDocument {
                 self.saved_chart_id = Some(id);
                 self.title = name;
                 self.pending_toast = Some(PendingToast {
-                    message: "Chart saved".to_string(),
+                    message: dbflux_i18n::t!("document.chart.toast.chart_saved"),
                     is_error: false,
                 });
             }
             Err(e) => {
                 self.pending_toast = Some(PendingToast {
-                    message: format!("Failed to save chart: {e}"),
+                    message: dbflux_i18n::t!("document.chart.toast.save_failed", error = e),
                     is_error: true,
                 });
             }
@@ -1273,7 +1279,7 @@ impl ChartDocument {
     /// loop drains `pending_toast` and surfaces it through the global toast host.
     pub fn schedule_png_export_toast(&mut self, cx: &mut Context<Self>) {
         self.pending_toast = Some(PendingToast {
-            message: "PNG export coming in v0.7".to_string(),
+            message: dbflux_i18n::t!("document.chart.toast.png_export_coming"),
             is_error: false,
         });
         cx.notify();
@@ -1333,7 +1339,7 @@ impl ChartDocument {
             }
             Err(e) => {
                 self.pending_toast = Some(PendingToast {
-                    message: format!("Failed to save chart: {e}"),
+                    message: dbflux_i18n::t!("document.chart.toast.save_failed", error = e),
                     is_error: true,
                 });
                 cx.notify();
@@ -1411,7 +1417,11 @@ impl ChartDocument {
                     let is_executing = e_run.read(cx).exec_state == ExecState::Running;
                     let e = e_run.clone();
                     Button::new("run-query")
-                        .label(if is_executing { "Running…" } else { "Run" })
+                        .label(if is_executing {
+                            dbflux_i18n::t!("document.chart.shell.running")
+                        } else {
+                            dbflux_i18n::t!("document.chart.shell.run")
+                        })
                         .small()
                         .with_variant(ButtonVariant::Primary)
                         .disabled(is_executing)
@@ -1429,7 +1439,7 @@ impl ChartDocument {
                 builder: Box::new(move |_window, _cx| {
                     let e = e_save.clone();
                     Button::new("save-chart")
-                        .label("Save")
+                        .label(dbflux_i18n::t!("document.chart.shell.save"))
                         .small()
                         .on_click(move |_, window, cx| {
                             e.update(cx, |this, cx| {
@@ -2682,5 +2692,55 @@ mod tests {
                 "Query-source chart must keep Manual refresh policy"
             );
         });
+    }
+
+    /// `validate_saved_source` routes its Collection-source rejection through
+    /// the translation catalog instead of a hardcoded English literal.
+    #[test]
+    fn validate_saved_source_collection_error_is_translated() {
+        let collection_saved = SavedChart::new_collection(
+            "unused".to_string(),
+            Uuid::nil(),
+            dbflux_core::CollectionRef::new("db", "table"),
+            None,
+            dbflux_components::chart::ChartSpec {
+                kind: dbflux_components::chart::ChartKind::Line,
+                x_axis: dbflux_components::chart::AxisSpec {
+                    column_index: 0,
+                    label: String::new(),
+                    kind: dbflux_components::chart::AxisKind::Time,
+                    unit: None,
+                },
+                series: Vec::new(),
+                legend_visible: false,
+                decimation_threshold: 10_000,
+                binding: dbflux_components::chart::BindingSpec::default(),
+                track_source_indices: false,
+                y_scale: dbflux_components::chart::YScale::Linear,
+            },
+            dbflux_components::chart::BindingSpec::default(),
+        );
+
+        let err = ChartDocument::validate_saved_source(&collection_saved)
+            .expect_err("Collection source must be rejected");
+
+        assert_eq!(
+            err,
+            dbflux_i18n::t!("document.chart.error.collection_source_unsupported")
+        );
+    }
+
+    /// `schedule_png_export_toast` routes its message through the translation
+    /// catalog instead of a hardcoded English literal.
+    #[test]
+    fn png_export_toast_message_is_translated() {
+        assert_eq!(
+            dbflux_i18n::t!("document.chart.toast.png_export_coming"),
+            dbflux_i18n::t!("document.chart.toast.png_export_coming", locale = "en")
+        );
+        assert_ne!(
+            dbflux_i18n::t!("document.chart.toast.png_export_coming", locale = "en"),
+            dbflux_i18n::t!("document.chart.toast.png_export_coming", locale = "es")
+        );
     }
 }

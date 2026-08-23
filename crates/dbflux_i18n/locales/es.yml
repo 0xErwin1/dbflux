@@ -432,6 +432,52 @@ document:
       toast:
         created: "Bucket \"%{name}\" creado"
         created_with_limitations: "Bucket \"%{name}\" creado con limitaciones"
+  chart:
+    toolbar:
+      type_label: TIPO
+      stats: Estadísticas
+      save_chart: Guardar gráfico
+      points:
+        one: "%{count} punto"
+        many: "%{count} puntos"
+    shell:
+      run: Ejecutar
+      running: "Ejecutando…"
+      save: Guardar
+      cancel: Cancelar
+      name_placeholder: Nombre del gráfico
+      degraded:
+        loading_metric: "Cargando datos de la métrica…"
+        no_data_points: "No hay puntos de datos para la ventana seleccionada."
+        run_query: "Ejecuta la consulta para generar el gráfico."
+        no_time_column: "No se detectó ninguna columna de tiempo en el resultado."
+        no_numeric_series: "No se detectó ninguna serie numérica en el resultado."
+        build_failed: "No se pudo generar el gráfico."
+      custom_range:
+        apply: Aplicar
+      stats_rail:
+        rebuilding: "Regenerando el gráfico…"
+        no_stats: "No hay estadísticas disponibles para esta serie."
+        unavailable: no disponible
+        window_title: Ventana
+        window:
+          start: Inicio
+          end: Fin
+          span: Duración
+          points: Puntos
+        source_title: Origen
+    status:
+      task_label: Consulta de gráfico
+    toast:
+      chart_saved: Gráfico guardado
+      save_failed: "No se pudo guardar el gráfico: %{error}"
+      png_export_coming: "La exportación a PNG llega en la v0.7"
+    error:
+      source: "Error del origen del gráfico: %{error}"
+      no_connection_selected: No hay ninguna conexión seleccionada
+      connection_not_found: Conexión no encontrada
+      connection_error: "Error de conexión: %{error}"
+      collection_source_unsupported: "El origen de colección no es compatible con ChartDocument; ábrelo desde DataDocument"
   code:
     toolbar:
       refresh: Actualizar
