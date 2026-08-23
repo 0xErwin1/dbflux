@@ -12,6 +12,19 @@ use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::scroll::ScrollableElement;
 
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn key_value_refresh_label_differs_between_locales() {
+        let english = dbflux_i18n::t!("document.data.grid.toolbar.refresh", locale = "en");
+        let spanish = dbflux_i18n::t!("document.data.grid.toolbar.refresh", locale = "es");
+
+        assert_eq!(english, "Refresh");
+        assert_eq!(spanish, "Actualizar");
+        assert_ne!(english, spanish);
+    }
+}
+
 impl Render for super::KeyValueDocument {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Handle deferred modal opens before borrowing theme
@@ -474,9 +487,9 @@ impl Render for super::KeyValueDocument {
         };
 
         let refresh_label = if self.refresh_policy.is_auto() {
-            self.refresh_policy.label()
+            crate::labels::refresh_policy_label(self.refresh_policy)
         } else {
-            "Refresh"
+            dbflux_i18n::t!("document.data.grid.toolbar.refresh")
         };
 
         // -- Left panel --

@@ -505,6 +505,22 @@ document:
         column: COLUMN
         references: REFERENCES
         row: ROW
+  key_value:
+    context_menu:
+      add_entry: Add Entry
+      add_member: Add Member
+      copy_as_command: Copy as Command
+      copy_entry: Copy Entry
+      copy_key: Copy Key
+      copy_member: Copy Member
+      copy_value: Copy Value
+      delete_entry: Delete Entry
+      delete_key: Delete Key
+      delete_member: Delete Member
+      edit_member: Edit Member
+      edit_value: Edit Value
+      new_key: New Key
+      rename: Rename
   query_builder:
     aggregate:
       fn:
