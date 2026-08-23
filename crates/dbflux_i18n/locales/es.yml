@@ -204,6 +204,78 @@ palette:
     browse_suffix: "[explorar]"
   import_dashboard:
     name: Importar dashboard desde JSON…
+  command:
+    new_query_tab:
+      name: Nueva pestaña de consulta
+    run_query:
+      name: Ejecutar consulta
+    run_query_in_new_tab:
+      name: Ejecutar consulta en nueva pestaña
+    save_query:
+      name: Guardar consulta
+    save_file_as:
+      name: Guardar archivo como
+    open_script_file:
+      name: Abrir archivo de script
+    open_history:
+      name: Abrir historial de consultas
+    cancel_query:
+      name: Cancelar consulta en ejecución
+    close_tab:
+      name: Cerrar pestaña actual
+    next_tab:
+      name: Pestaña siguiente
+    prev_tab:
+      name: Pestaña anterior
+    export_results:
+      name: Exportar resultados
+    open_connection_manager:
+      name: Abrir gestor de conexiones
+    disconnect:
+      name: Desconectar actual
+    refresh_schema:
+      name: Actualizar schema
+    focus_sidebar:
+      name: Enfocar barra lateral
+    focus_editor:
+      name: Enfocar editor
+    focus_results:
+      name: Enfocar resultados
+    focus_tasks:
+      name: Enfocar panel de tareas
+    toggle_sidebar:
+      name: Mostrar u ocultar barra lateral
+    toggle_editor:
+      name: Mostrar u ocultar panel del editor
+    toggle_results:
+      name: Mostrar u ocultar panel de resultados
+    toggle_tasks:
+      name: Mostrar u ocultar panel de tareas
+    open_settings:
+      name: Abrir configuración
+    open_login_modal:
+      name: Abrir inicio de sesión de Auth Profile
+    open_sso_wizard:
+      name: Abrir asistente de AWS SSO
+    open_mcp_approvals:
+      name: Abrir aprobaciones de MCP
+    refresh_mcp_governance:
+      name: Actualizar gobernanza de MCP
+    open_audit_viewer:
+      name: Abrir visor de auditoría
+    open_saved_chart:
+      name: "Abrir gráfico..."
+    new_dashboard:
+      name: "Nuevo dashboard..."
+  category:
+    editor: Editor
+    tabs: Pestañas
+    results: Resultados
+    connections: Conexiones
+    focus: Foco
+    view: Vista
+    charts: Gráficos
+    dashboards: Dashboards
 settings:
   general:
     header:

@@ -1333,9 +1333,11 @@ mod tests {
         use super::super::super::views::workspace::Workspace;
 
         let commands = Workspace::palette_commands_for_test();
+        let expected_name = dbflux_i18n::t!("palette.command.new_dashboard.name");
+        let expected_category = dbflux_i18n::t!("palette.category.dashboards");
         let found = commands
             .iter()
-            .any(|c| c.name == "New Dashboard..." && c.category == "Dashboards");
+            .any(|c| c.name == expected_name && c.category == expected_category);
         assert!(
             found,
             "Palette must include 'Dashboards: New Dashboard...' entry"
@@ -1439,5 +1441,69 @@ mod tests {
             2,
             "expected the English proxy word and the translated kind word both present, got: {search_text:?}"
         );
+    }
+
+    // i18n — command palette command copy
+
+    const PALETTE_COMMAND_CATEGORIES: &[&str] = &[
+        "editor",
+        "tabs",
+        "results",
+        "connections",
+        "focus",
+        "view",
+        "charts",
+        "dashboards",
+    ];
+
+    #[test]
+    fn palette_command_keys_resolve_in_both_locales() {
+        use super::super::super::views::workspace::Workspace;
+
+        let commands = Workspace::palette_commands_for_test();
+
+        for locale in ["en", "es"] {
+            for command in &commands {
+                let key = format!("palette.command.{}.name", command.id);
+                let value = dbflux_i18n::t!(&key, locale = locale);
+
+                assert!(
+                    !value.is_empty(),
+                    "key {key} resolved empty for locale {locale}"
+                );
+                assert_ne!(value, key, "key {key} did not resolve for locale {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "key {key} fell back to the raw locale-qualified form for locale {locale}"
+                );
+            }
+
+            for category in PALETTE_COMMAND_CATEGORIES {
+                let key = format!("palette.category.{category}");
+                let value = dbflux_i18n::t!(&key, locale = locale);
+
+                assert!(
+                    !value.is_empty(),
+                    "key {key} resolved empty for locale {locale}"
+                );
+                assert_ne!(value, key, "key {key} did not resolve for locale {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "key {key} fell back to the raw locale-qualified form for locale {locale}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn palette_command_name_differs_between_locales() {
+        let english = dbflux_i18n::t!("palette.command.run_query.name", locale = "en");
+        let spanish = dbflux_i18n::t!("palette.command.run_query.name", locale = "es");
+
+        assert_eq!(english, "Run Query");
+        assert_eq!(spanish, "Ejecutar consulta");
+        assert_ne!(english, spanish);
     }
 }

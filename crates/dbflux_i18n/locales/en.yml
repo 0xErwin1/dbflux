@@ -204,6 +204,78 @@ palette:
     browse_suffix: "[browse]"
   import_dashboard:
     name: Import Dashboard from JSON...
+  command:
+    new_query_tab:
+      name: New Query Tab
+    run_query:
+      name: Run Query
+    run_query_in_new_tab:
+      name: Run Query in New Tab
+    save_query:
+      name: Save Query
+    save_file_as:
+      name: Save File As
+    open_script_file:
+      name: Open Script File
+    open_history:
+      name: Open Query History
+    cancel_query:
+      name: Cancel Running Query
+    close_tab:
+      name: Close Current Tab
+    next_tab:
+      name: Next Tab
+    prev_tab:
+      name: Previous Tab
+    export_results:
+      name: Export Results
+    open_connection_manager:
+      name: Open Connection Manager
+    disconnect:
+      name: Disconnect Current
+    refresh_schema:
+      name: Refresh Schema
+    focus_sidebar:
+      name: Focus Sidebar
+    focus_editor:
+      name: Focus Editor
+    focus_results:
+      name: Focus Results
+    focus_tasks:
+      name: Focus Tasks Panel
+    toggle_sidebar:
+      name: Toggle Sidebar
+    toggle_editor:
+      name: Toggle Editor Panel
+    toggle_results:
+      name: Toggle Results Panel
+    toggle_tasks:
+      name: Toggle Tasks Panel
+    open_settings:
+      name: Open Settings
+    open_login_modal:
+      name: Open Auth Profile Login
+    open_sso_wizard:
+      name: Open AWS SSO Wizard
+    open_mcp_approvals:
+      name: Open MCP Approvals
+    refresh_mcp_governance:
+      name: Refresh MCP Governance
+    open_audit_viewer:
+      name: Open Audit Viewer
+    open_saved_chart:
+      name: "Open Chart..."
+    new_dashboard:
+      name: "New Dashboard..."
+  category:
+    editor: Editor
+    tabs: Tabs
+    results: Results
+    connections: Connections
+    focus: Focus
+    view: View
+    charts: Charts
+    dashboards: Dashboards
 settings:
   general:
     header:

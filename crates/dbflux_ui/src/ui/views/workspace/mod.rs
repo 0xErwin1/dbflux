@@ -1552,65 +1552,189 @@ impl Workspace {
 
         vec![
             // Editor
-            PaletteCommand::new("new_query_tab", "New Query Tab", "Editor")
-                .with_shortcut(SC.new_query_tab),
-            PaletteCommand::new("run_query", "Run Query", "Editor").with_shortcut(SC.run_query),
-            PaletteCommand::new("run_query_in_new_tab", "Run Query in New Tab", "Editor")
-                .with_shortcut(SC.run_query_in_new_tab),
-            PaletteCommand::new("save_query", "Save Query", "Editor").with_shortcut(SC.save_query),
-            PaletteCommand::new("save_file_as", "Save File As", "Editor")
-                .with_shortcut(SC.save_file_as),
-            PaletteCommand::new("open_script_file", "Open Script File", "Editor")
-                .with_shortcut(SC.open_script_file),
-            PaletteCommand::new("open_history", "Open Query History", "Editor")
-                .with_shortcut(SC.open_history),
-            PaletteCommand::new("cancel_query", "Cancel Running Query", "Editor")
-                .with_shortcut("esc"),
+            PaletteCommand::new(
+                "new_query_tab",
+                dbflux_i18n::t!("palette.command.new_query_tab.name"),
+                dbflux_i18n::t!("palette.category.editor"),
+            )
+            .with_shortcut(SC.new_query_tab),
+            PaletteCommand::new(
+                "run_query",
+                dbflux_i18n::t!("palette.command.run_query.name"),
+                dbflux_i18n::t!("palette.category.editor"),
+            )
+            .with_shortcut(SC.run_query),
+            PaletteCommand::new(
+                "run_query_in_new_tab",
+                dbflux_i18n::t!("palette.command.run_query_in_new_tab.name"),
+                dbflux_i18n::t!("palette.category.editor"),
+            )
+            .with_shortcut(SC.run_query_in_new_tab),
+            PaletteCommand::new(
+                "save_query",
+                dbflux_i18n::t!("palette.command.save_query.name"),
+                dbflux_i18n::t!("palette.category.editor"),
+            )
+            .with_shortcut(SC.save_query),
+            PaletteCommand::new(
+                "save_file_as",
+                dbflux_i18n::t!("palette.command.save_file_as.name"),
+                dbflux_i18n::t!("palette.category.editor"),
+            )
+            .with_shortcut(SC.save_file_as),
+            PaletteCommand::new(
+                "open_script_file",
+                dbflux_i18n::t!("palette.command.open_script_file.name"),
+                dbflux_i18n::t!("palette.category.editor"),
+            )
+            .with_shortcut(SC.open_script_file),
+            PaletteCommand::new(
+                "open_history",
+                dbflux_i18n::t!("palette.command.open_history.name"),
+                dbflux_i18n::t!("palette.category.editor"),
+            )
+            .with_shortcut(SC.open_history),
+            PaletteCommand::new(
+                "cancel_query",
+                dbflux_i18n::t!("palette.command.cancel_query.name"),
+                dbflux_i18n::t!("palette.category.editor"),
+            )
+            .with_shortcut("esc"),
             // Tabs — Ctrl+Tab / Ctrl+Shift+Tab stay literal Ctrl on every
             // platform (Cmd+Tab is the macOS app switcher).
-            PaletteCommand::new("close_tab", "Close Current Tab", "Tabs")
-                .with_shortcut(SC.close_tab),
-            PaletteCommand::new("next_tab", "Next Tab", "Tabs").with_shortcut("ctrl-tab"),
-            PaletteCommand::new("prev_tab", "Previous Tab", "Tabs").with_shortcut("ctrl-shift-tab"),
+            PaletteCommand::new(
+                "close_tab",
+                dbflux_i18n::t!("palette.command.close_tab.name"),
+                dbflux_i18n::t!("palette.category.tabs"),
+            )
+            .with_shortcut(SC.close_tab),
+            PaletteCommand::new(
+                "next_tab",
+                dbflux_i18n::t!("palette.command.next_tab.name"),
+                dbflux_i18n::t!("palette.category.tabs"),
+            )
+            .with_shortcut("ctrl-tab"),
+            PaletteCommand::new(
+                "prev_tab",
+                dbflux_i18n::t!("palette.command.prev_tab.name"),
+                dbflux_i18n::t!("palette.category.tabs"),
+            )
+            .with_shortcut("ctrl-shift-tab"),
             // Results
-            PaletteCommand::new("export_results", "Export Results", "Results")
-                .with_shortcut(SC.export_results),
+            PaletteCommand::new(
+                "export_results",
+                dbflux_i18n::t!("palette.command.export_results.name"),
+                dbflux_i18n::t!("palette.category.results"),
+            )
+            .with_shortcut(SC.export_results),
             // Connections
             PaletteCommand::new(
                 "open_connection_manager",
-                "Open Connection Manager",
-                "Connections",
+                dbflux_i18n::t!("palette.command.open_connection_manager.name"),
+                dbflux_i18n::t!("palette.category.connections"),
             ),
-            PaletteCommand::new("disconnect", "Disconnect Current", "Connections"),
-            PaletteCommand::new("refresh_schema", "Refresh Schema", "Connections"),
+            PaletteCommand::new(
+                "disconnect",
+                dbflux_i18n::t!("palette.command.disconnect.name"),
+                dbflux_i18n::t!("palette.category.connections"),
+            ),
+            PaletteCommand::new(
+                "refresh_schema",
+                dbflux_i18n::t!("palette.command.refresh_schema.name"),
+                dbflux_i18n::t!("palette.category.connections"),
+            ),
             // Focus — Ctrl+Shift+1..4 stay literal Ctrl on every platform
             // (Cmd+Shift+3/4 are macOS screenshot shortcuts).
-            PaletteCommand::new("focus_sidebar", "Focus Sidebar", "Focus")
-                .with_shortcut("ctrl-shift-1"),
-            PaletteCommand::new("focus_editor", "Focus Editor", "Focus")
-                .with_shortcut("ctrl-shift-2"),
-            PaletteCommand::new("focus_results", "Focus Results", "Focus")
-                .with_shortcut("ctrl-shift-3"),
-            PaletteCommand::new("focus_tasks", "Focus Tasks Panel", "Focus")
-                .with_shortcut("ctrl-shift-4"),
+            PaletteCommand::new(
+                "focus_sidebar",
+                dbflux_i18n::t!("palette.command.focus_sidebar.name"),
+                dbflux_i18n::t!("palette.category.focus"),
+            )
+            .with_shortcut("ctrl-shift-1"),
+            PaletteCommand::new(
+                "focus_editor",
+                dbflux_i18n::t!("palette.command.focus_editor.name"),
+                dbflux_i18n::t!("palette.category.focus"),
+            )
+            .with_shortcut("ctrl-shift-2"),
+            PaletteCommand::new(
+                "focus_results",
+                dbflux_i18n::t!("palette.command.focus_results.name"),
+                dbflux_i18n::t!("palette.category.focus"),
+            )
+            .with_shortcut("ctrl-shift-3"),
+            PaletteCommand::new(
+                "focus_tasks",
+                dbflux_i18n::t!("palette.command.focus_tasks.name"),
+                dbflux_i18n::t!("palette.category.focus"),
+            )
+            .with_shortcut("ctrl-shift-4"),
             // View
-            PaletteCommand::new("toggle_sidebar", "Toggle Sidebar", "View")
-                .with_shortcut(SC.toggle_sidebar),
-            PaletteCommand::new("toggle_editor", "Toggle Editor Panel", "View"),
-            PaletteCommand::new("toggle_results", "Toggle Results Panel", "View"),
-            PaletteCommand::new("toggle_tasks", "Toggle Tasks Panel", "View"),
-            PaletteCommand::new("open_settings", "Open Settings", "View"),
-            PaletteCommand::new("open_login_modal", "Open Auth Profile Login", "View"),
-            PaletteCommand::new("open_sso_wizard", "Open AWS SSO Wizard", "View"),
+            PaletteCommand::new(
+                "toggle_sidebar",
+                dbflux_i18n::t!("palette.command.toggle_sidebar.name"),
+                dbflux_i18n::t!("palette.category.view"),
+            )
+            .with_shortcut(SC.toggle_sidebar),
+            PaletteCommand::new(
+                "toggle_editor",
+                dbflux_i18n::t!("palette.command.toggle_editor.name"),
+                dbflux_i18n::t!("palette.category.view"),
+            ),
+            PaletteCommand::new(
+                "toggle_results",
+                dbflux_i18n::t!("palette.command.toggle_results.name"),
+                dbflux_i18n::t!("palette.category.view"),
+            ),
+            PaletteCommand::new(
+                "toggle_tasks",
+                dbflux_i18n::t!("palette.command.toggle_tasks.name"),
+                dbflux_i18n::t!("palette.category.view"),
+            ),
+            PaletteCommand::new(
+                "open_settings",
+                dbflux_i18n::t!("palette.command.open_settings.name"),
+                dbflux_i18n::t!("palette.category.view"),
+            ),
+            PaletteCommand::new(
+                "open_login_modal",
+                dbflux_i18n::t!("palette.command.open_login_modal.name"),
+                dbflux_i18n::t!("palette.category.view"),
+            ),
+            PaletteCommand::new(
+                "open_sso_wizard",
+                dbflux_i18n::t!("palette.command.open_sso_wizard.name"),
+                dbflux_i18n::t!("palette.category.view"),
+            ),
             #[cfg(feature = "mcp")]
-            PaletteCommand::new("open_mcp_approvals", "Open MCP Approvals", "View"),
+            PaletteCommand::new(
+                "open_mcp_approvals",
+                dbflux_i18n::t!("palette.command.open_mcp_approvals.name"),
+                dbflux_i18n::t!("palette.category.view"),
+            ),
             #[cfg(feature = "mcp")]
-            PaletteCommand::new("refresh_mcp_governance", "Refresh MCP Governance", "View"),
-            PaletteCommand::new("open_audit_viewer", "Open Audit Viewer", "View")
-                .with_shortcut(SC.open_audit_viewer),
+            PaletteCommand::new(
+                "refresh_mcp_governance",
+                dbflux_i18n::t!("palette.command.refresh_mcp_governance.name"),
+                dbflux_i18n::t!("palette.category.view"),
+            ),
+            PaletteCommand::new(
+                "open_audit_viewer",
+                dbflux_i18n::t!("palette.command.open_audit_viewer.name"),
+                dbflux_i18n::t!("palette.category.view"),
+            )
+            .with_shortcut(SC.open_audit_viewer),
             // Charts / Dashboards
-            PaletteCommand::new("open_saved_chart", "Open Chart...", "Charts"),
-            PaletteCommand::new("new_dashboard", "New Dashboard...", "Dashboards"),
+            PaletteCommand::new(
+                "open_saved_chart",
+                dbflux_i18n::t!("palette.command.open_saved_chart.name"),
+                dbflux_i18n::t!("palette.category.charts"),
+            ),
+            PaletteCommand::new(
+                "new_dashboard",
+                dbflux_i18n::t!("palette.command.new_dashboard.name"),
+                dbflux_i18n::t!("palette.category.dashboards"),
+            ),
         ]
     }
 
