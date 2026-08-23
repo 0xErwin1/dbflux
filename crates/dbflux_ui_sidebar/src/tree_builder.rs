@@ -389,7 +389,7 @@ impl Sidebar {
         let children = Self::build_dashboard_children(profile_id, state);
         TreeItem::new(
             SchemaNodeId::DashboardsFolder { profile_id }.to_string(),
-            "Dashboards".to_string(),
+            crate::labels::dashboards_folder_label(),
         )
         .expanded(false)
         .children(children)
@@ -414,14 +414,14 @@ impl Sidebar {
                     .dashboard_source()
                     .map(|s| s.container_label().to_string())
             })
-            .unwrap_or_else(|| "Dashboards".to_string());
+            .unwrap_or_else(crate::labels::dashboards_folder_label);
 
         let folder_id = SchemaNodeId::RemoteDashboardsFolder { profile_id }.to_string();
         let children =
             Self::build_remote_dashboard_children(profile_id, state, &folder_id, fetch_errors);
 
         let label = match state.remote_dashboard_cache().peek(profile_id) {
-            Some(list) => format!("{} ({})", label, list.len()),
+            Some(list) => crate::labels::remote_dashboards_count_label(&label, list.len()),
             None => label,
         };
 
@@ -446,7 +446,7 @@ impl Sidebar {
             if let Some(error) = fetch_errors.get(folder_id) {
                 return vec![TreeItem::new(
                     format!("remote_dashboards_error:{profile_id}"),
-                    format!("Error: {error} — collapse and expand to retry"),
+                    crate::labels::remote_dashboards_error_label(error),
                 )];
             }
             return vec![Self::loading_placeholder(
@@ -459,7 +459,7 @@ impl Sidebar {
         if dashboards.is_empty() {
             return vec![TreeItem::new(
                 format!("remote_dashboards_empty:{profile_id}"),
-                "No dashboards in this account/region".to_string(),
+                crate::labels::remote_dashboards_empty_label(),
             )];
         }
 
@@ -487,7 +487,7 @@ impl Sidebar {
         let children = Self::build_saved_chart_children(profile_id, state);
         TreeItem::new(
             SchemaNodeId::SavedChartsFolder { profile_id }.to_string(),
-            "Saved Charts".to_string(),
+            crate::labels::saved_charts_folder_label(),
         )
         .expanded(false)
         .children(children)
@@ -527,7 +527,7 @@ impl Sidebar {
     ) -> TreeItem {
         TreeItem::new(
             SchemaNodeId::InstanceMetricsFolder { profile_id }.to_string(),
-            "Instance Metrics".to_string(),
+            crate::labels::instance_metrics_folder_label(),
         )
         .expanded(false)
         .children(children)
@@ -545,7 +545,7 @@ impl Sidebar {
     ) -> TreeItem {
         TreeItem::new(
             SchemaNodeId::InstanceInspectorsFolder { profile_id }.to_string(),
-            "Instance Inspectors".to_string(),
+            crate::labels::instance_inspectors_folder_label(),
         )
         .expanded(false)
         .children(children)
@@ -564,14 +564,14 @@ impl Sidebar {
         let Some(metrics) = cache.get(&profile_id) else {
             return vec![TreeItem::new(
                 format!("instance-metrics-loading:{profile_id}"),
-                "Loading\u{2026}".to_string(),
+                dbflux_i18n::t!("sidebar.tree.status.loading"),
             )];
         };
 
         if metrics.is_empty() {
             return vec![TreeItem::new(
                 format!("instance-metrics-empty:{profile_id}"),
-                "No metrics available".to_string(),
+                crate::labels::no_metrics_available_label(),
             )];
         }
 
@@ -603,14 +603,14 @@ impl Sidebar {
         let Some(inspectors) = cache.get(&profile_id) else {
             return vec![TreeItem::new(
                 format!("instance-inspectors-loading:{profile_id}"),
-                "Loading\u{2026}".to_string(),
+                dbflux_i18n::t!("sidebar.tree.status.loading"),
             )];
         };
 
         if inspectors.is_empty() {
             return vec![TreeItem::new(
                 format!("instance-inspectors-empty:{profile_id}"),
-                "No inspectors available".to_string(),
+                crate::labels::no_inspectors_available_label(),
             )];
         }
 
@@ -637,7 +637,7 @@ impl Sidebar {
     pub(crate) fn build_instance_overview_leaf(profile_id: Uuid) -> TreeItem {
         TreeItem::new(
             SchemaNodeId::InstanceOverviewLeaf { profile_id }.to_string(),
-            "Instance Overview".to_string(),
+            crate::labels::instance_overview_label(),
         )
     }
 
@@ -660,15 +660,9 @@ impl Sidebar {
                     caps.contains(dbflux_core::DriverCapabilities::DASHBOARD_IMPORT)
                 });
 
-            let hint = if can_import {
-                "No dashboards yet — right-click to create or import"
-            } else {
-                "No dashboards yet — right-click to create"
-            };
-
             return vec![TreeItem::new(
                 format!("dashboards_empty:{profile_id}"),
-                hint.to_string(),
+                crate::labels::no_dashboards_yet_label(can_import),
             )];
         }
 
@@ -699,7 +693,7 @@ impl Sidebar {
         if charts.is_empty() {
             return vec![TreeItem::new(
                 format!("saved_charts_empty:{profile_id}"),
-                "No saved charts yet — save a chart from a query result".to_string(),
+                crate::labels::no_saved_charts_yet_label(),
             )];
         }
 
@@ -742,7 +736,7 @@ impl Sidebar {
             }
         }
 
-        "Untitled chart".to_string()
+        crate::labels::untitled_chart_label()
     }
 
     pub(super) fn count_visible_entries(items: &[TreeItem]) -> usize {
@@ -1936,7 +1930,7 @@ fn build_metrics_folder(
     };
 
     Some(
-        TreeItem::new(parent_id, "Metrics".to_string())
+        TreeItem::new(parent_id, crate::labels::metrics_folder_label())
             .expanded(false)
             .children(children),
     )
@@ -2958,7 +2952,7 @@ mod tests {
             "Metrics folder must appear when METRIC_CATALOG capability is set"
         );
         let folder = metrics_folder.unwrap();
-        assert_eq!(folder.label.as_ref(), "Metrics");
+        assert_eq!(folder.label.as_ref(), crate::labels::metrics_folder_label());
         assert!(!folder.is_expanded());
     }
 
@@ -3539,6 +3533,96 @@ mod tests {
     }
 
     #[test]
+    fn test_build_dashboards_folder_item_uses_translated_label() {
+        let (state, profile_id) = make_state_with_profile();
+        let item = Sidebar::build_dashboards_folder_item(profile_id, &state);
+        assert_eq!(
+            item.label.as_ref(),
+            crate::labels::dashboards_folder_label()
+        );
+    }
+
+    #[test]
+    fn test_build_saved_charts_folder_item_uses_translated_label() {
+        let (state, profile_id) = make_state_with_profile();
+        let item = Sidebar::build_saved_charts_folder_item(profile_id, &state);
+        assert_eq!(
+            item.label.as_ref(),
+            crate::labels::saved_charts_folder_label()
+        );
+    }
+
+    #[test]
+    fn tree_folder_saved_charts_differs_between_locales() {
+        let english = dbflux_i18n::t!("sidebar.tree.folder.saved_charts", locale = "en");
+        let spanish = dbflux_i18n::t!("sidebar.tree.folder.saved_charts", locale = "es");
+
+        assert_ne!(english, spanish);
+    }
+
+    const C2_TREE_KEYS: [&str; 4] = [
+        "sidebar.tree.folder.instance_metrics",
+        "sidebar.tree.folder.instance_inspectors",
+        "sidebar.tree.folder.metrics",
+        "sidebar.tree.node.instance_overview",
+    ];
+
+    #[test]
+    fn tree_c2_keys_resolve_in_both_locales() {
+        for key in C2_TREE_KEYS {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert_ne!(value, key, "missing translation for {locale}.{key}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "translation fell back to the miss sentinel for {locale}.{key}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_build_remote_dashboards_folder_item_falls_back_to_translated_label() {
+        let (state, profile_id) = make_state_with_profile();
+        let item =
+            Sidebar::build_remote_dashboards_folder_item(profile_id, &state, &HashMap::new());
+        assert_eq!(
+            item.label.as_ref(),
+            crate::labels::dashboards_folder_label()
+        );
+    }
+
+    #[test]
+    fn test_build_remote_dashboards_folder_item_appends_cached_count() {
+        let (state, profile_id) = make_state_with_profile();
+        state.remote_dashboard_cache().store(
+            profile_id,
+            vec![
+                dbflux_core::DashboardRef {
+                    name: "prod".to_string(),
+                    last_modified: None,
+                },
+                dbflux_core::DashboardRef {
+                    name: "staging".to_string(),
+                    last_modified: None,
+                },
+            ],
+        );
+
+        let item =
+            Sidebar::build_remote_dashboards_folder_item(profile_id, &state, &HashMap::new());
+        assert_eq!(
+            item.label.as_ref(),
+            crate::labels::remote_dashboards_count_label(
+                &crate::labels::dashboards_folder_label(),
+                2
+            )
+        );
+    }
+
+    #[test]
     fn test_remote_dashboard_children_show_loading_on_cache_miss() {
         let (state, profile_id) = make_state_with_profile();
         let folder_id =
@@ -3567,7 +3651,28 @@ mod tests {
             Sidebar::build_remote_dashboard_children(profile_id, &state, &folder_id, &errors);
 
         assert_eq!(children.len(), 1);
-        assert!(children[0].label.as_ref().contains("access denied"));
+        assert_eq!(
+            children[0].label.as_ref(),
+            crate::labels::remote_dashboards_error_label("access denied")
+        );
+    }
+
+    #[test]
+    fn test_remote_dashboard_children_show_placeholder_when_listing_is_empty() {
+        let (state, profile_id) = make_state_with_profile();
+        state.remote_dashboard_cache().store(profile_id, Vec::new());
+
+        let folder_id =
+            dbflux_core::SchemaNodeId::RemoteDashboardsFolder { profile_id }.to_string();
+        let errors = HashMap::new();
+        let children =
+            Sidebar::build_remote_dashboard_children(profile_id, &state, &folder_id, &errors);
+
+        assert_eq!(children.len(), 1);
+        assert_eq!(
+            children[0].label.as_ref(),
+            crate::labels::remote_dashboards_empty_label()
+        );
     }
 
     #[test]
@@ -3607,7 +3712,10 @@ mod tests {
             children[0].id.as_ref(),
             format!("dashboards_empty:{profile_id}")
         );
-        assert!(children[0].label.to_string().contains("No dashboards yet"));
+        assert_eq!(
+            children[0].label.as_ref(),
+            crate::labels::no_dashboards_yet_label(false)
+        );
     }
 
     #[test]
@@ -3619,12 +3727,45 @@ mod tests {
             children[0].id.as_ref(),
             format!("saved_charts_empty:{profile_id}")
         );
-        assert!(
-            children[0]
-                .label
-                .to_string()
-                .contains("No saved charts yet")
+        assert_eq!(
+            children[0].label.as_ref(),
+            crate::labels::no_saved_charts_yet_label()
         );
+    }
+
+    #[test]
+    fn saved_chart_display_label_falls_back_to_untitled_chart_for_a_blank_name() {
+        use dbflux_components::chart::{
+            AxisKind, AxisSpec, BindingSpec, ChartKind, ChartSpec, YScale,
+        };
+
+        let placeholder_spec = ChartSpec {
+            kind: ChartKind::Line,
+            x_axis: AxisSpec {
+                column_index: 0,
+                label: String::new(),
+                kind: AxisKind::Time,
+                unit: None,
+            },
+            series: Vec::new(),
+            legend_visible: false,
+            decimation_threshold: 10_000,
+            binding: BindingSpec::default(),
+            track_source_indices: false,
+            y_scale: YScale::Linear,
+        };
+
+        let chart = dbflux_components::SavedChart::new_query(
+            "   ".to_string(),
+            Uuid::new_v4(),
+            "SELECT 1".to_string(),
+            placeholder_spec,
+            BindingSpec::default(),
+        );
+
+        let label = Sidebar::saved_chart_display_label(&chart);
+
+        assert_eq!(label, crate::labels::untitled_chart_label());
     }
 
     #[test]
@@ -3836,10 +3977,10 @@ mod tests {
             1,
             "empty state must produce one placeholder"
         );
-        let label = children[0].label.to_string().to_ascii_lowercase();
-        assert!(
-            label.contains("import"),
-            "hint must mention 'import' when driver has DASHBOARD_IMPORT: {label:?}"
+        assert_eq!(
+            children[0].label.as_ref(),
+            crate::labels::no_dashboards_yet_label(true),
+            "hint must use the import-capable variant when driver has DASHBOARD_IMPORT"
         );
     }
 
@@ -3854,10 +3995,10 @@ mod tests {
             1,
             "empty state must produce one placeholder"
         );
-        let label = children[0].label.to_string().to_ascii_lowercase();
-        assert!(
-            !label.contains("import"),
-            "hint must not mention 'import' without DASHBOARD_IMPORT: {label:?}"
+        assert_eq!(
+            children[0].label.as_ref(),
+            crate::labels::no_dashboards_yet_label(false),
+            "hint must use the non-import variant without DASHBOARD_IMPORT"
         );
     }
 
@@ -3893,6 +4034,10 @@ mod tests {
             ),
             "folder item must carry InstanceMetricsFolder node ID: {node_id:?}"
         );
+        assert_eq!(
+            item.label.as_ref(),
+            crate::labels::instance_metrics_folder_label()
+        );
     }
 
     /// REQ-UI-1, REQ-UI-5: A driver with `INSTANCE_INSPECTOR` must produce an
@@ -3920,6 +4065,10 @@ mod tests {
                 } if pid == profile_id
             ),
             "folder item must carry InstanceInspectorsFolder node ID: {node_id:?}"
+        );
+        assert_eq!(
+            item.label.as_ref(),
+            crate::labels::instance_inspectors_folder_label()
         );
     }
 
@@ -4169,10 +4318,10 @@ mod tests {
             1,
             "must return one placeholder for empty entry"
         );
-        assert!(
-            leaves[0].label.to_string().contains("No metrics"),
-            "empty-cache placeholder must say 'No metrics available'; got {:?}",
-            leaves[0].label
+        assert_eq!(
+            leaves[0].label.as_ref(),
+            crate::labels::no_metrics_available_label(),
+            "empty-cache placeholder must use the translated 'no metrics available' label"
         );
     }
 
@@ -4191,10 +4340,10 @@ mod tests {
             1,
             "must return one placeholder for empty entry"
         );
-        assert!(
-            leaves[0].label.to_string().contains("No inspectors"),
-            "empty-cache placeholder must say 'No inspectors available'; got {:?}",
-            leaves[0].label
+        assert_eq!(
+            leaves[0].label.as_ref(),
+            crate::labels::no_inspectors_available_label(),
+            "empty-cache placeholder must use the translated 'no inspectors available' label"
         );
     }
 
@@ -4268,6 +4417,10 @@ mod tests {
                 SchemaNodeId::InstanceOverviewLeaf { profile_id: pid } if *pid == profile_id
             ),
             "leaf must carry InstanceOverviewLeaf node ID: {node_id:?}"
+        );
+        assert_eq!(
+            item.label.as_ref(),
+            crate::labels::instance_overview_label()
         );
     }
 

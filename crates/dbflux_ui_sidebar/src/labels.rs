@@ -216,6 +216,98 @@ pub(crate) fn storage_folder_label(count: usize) -> String {
     dbflux_i18n::t!("sidebar.tree.folder.storage", count = count)
 }
 
+/// Translated label for the Dashboards sidebar folder. Also used as the
+/// fallback label for the remote-dashboards folder when the driver does not
+/// supply its own `DashboardSource::container_label`.
+pub(crate) fn dashboards_folder_label() -> String {
+    dbflux_i18n::t!("sidebar.tree.folder.dashboards")
+}
+
+/// Translated label for a remote-dashboards folder base label, suffixed with
+/// the cached listing count once it resolves (the driver-supplied base
+/// followed by `(N)`). `base` stays untranslated.
+pub(crate) fn remote_dashboards_count_label(base: &str, count: usize) -> String {
+    dbflux_i18n::t!(
+        "sidebar.tree.status.remote_listing_count",
+        label = base,
+        count = count
+    )
+}
+
+/// Translated label for a retryable remote-dashboards fetch error, e.g.
+/// `"Error: access denied — collapse and expand to retry"`.
+pub(crate) fn remote_dashboards_error_label(error: &str) -> String {
+    dbflux_i18n::t!(
+        "sidebar.tree.status.remote_dashboards_error_retry",
+        error = error
+    )
+}
+
+/// Translated placeholder for a remote-dashboards folder whose listing
+/// resolved empty.
+pub(crate) fn remote_dashboards_empty_label() -> String {
+    dbflux_i18n::t!("sidebar.tree.empty.remote_dashboards")
+}
+
+/// Translated label for the Saved Charts sidebar folder.
+pub(crate) fn saved_charts_folder_label() -> String {
+    dbflux_i18n::t!("sidebar.tree.folder.saved_charts")
+}
+
+/// Translated placeholder for an empty Saved Charts folder.
+pub(crate) fn no_saved_charts_yet_label() -> String {
+    dbflux_i18n::t!("sidebar.tree.empty.saved_charts")
+}
+
+/// Translated fallback title for a saved chart persisted with a blank name.
+pub(crate) fn untitled_chart_label() -> String {
+    dbflux_i18n::t!("sidebar.tree.node.untitled_chart")
+}
+
+/// Translated placeholder for an empty Dashboards folder, e.g. `"No
+/// dashboards yet — right-click to create"`. `can_import` selects the
+/// variant that also mentions importing, gated on `DASHBOARD_IMPORT`.
+pub(crate) fn no_dashboards_yet_label(can_import: bool) -> String {
+    if can_import {
+        dbflux_i18n::t!("sidebar.tree.empty.dashboards_with_import")
+    } else {
+        dbflux_i18n::t!("sidebar.tree.empty.dashboards")
+    }
+}
+
+/// Translated label for the Instance Metrics sidebar folder.
+pub(crate) fn instance_metrics_folder_label() -> String {
+    dbflux_i18n::t!("sidebar.tree.folder.instance_metrics")
+}
+
+/// Translated label for the Instance Inspectors sidebar folder.
+pub(crate) fn instance_inspectors_folder_label() -> String {
+    dbflux_i18n::t!("sidebar.tree.folder.instance_inspectors")
+}
+
+/// Translated placeholder for an Instance Metrics folder whose probe
+/// resolved with no metrics.
+pub(crate) fn no_metrics_available_label() -> String {
+    dbflux_i18n::t!("sidebar.tree.empty.metrics")
+}
+
+/// Translated placeholder for an Instance Inspectors folder whose probe
+/// resolved with no inspectors.
+pub(crate) fn no_inspectors_available_label() -> String {
+    dbflux_i18n::t!("sidebar.tree.empty.inspectors")
+}
+
+/// Translated label for the Instance Overview sidebar leaf.
+pub(crate) fn instance_overview_label() -> String {
+    dbflux_i18n::t!("sidebar.tree.node.instance_overview")
+}
+
+/// Translated label for a database-level Metrics folder (metric catalog
+/// browsing, e.g. CloudWatch namespaces).
+pub(crate) fn metrics_folder_label() -> String {
+    dbflux_i18n::t!("sidebar.tree.folder.metrics")
+}
+
 #[cfg(test)]
 mod tests {
     use dbflux_core::DatabaseCategory;
@@ -530,6 +622,92 @@ mod tests {
             dbflux_i18n::t!("sidebar.tree.status.used_by_objects.many", locale = "es");
 
         assert_ne!(english_template, spanish_template);
+    }
+
+    const C2_KEYS: [&str; 13] = [
+        "sidebar.tree.folder.dashboards",
+        "sidebar.tree.folder.saved_charts",
+        "sidebar.tree.folder.instance_metrics",
+        "sidebar.tree.folder.instance_inspectors",
+        "sidebar.tree.folder.metrics",
+        "sidebar.tree.node.instance_overview",
+        "sidebar.tree.node.untitled_chart",
+        "sidebar.tree.empty.dashboards",
+        "sidebar.tree.empty.dashboards_with_import",
+        "sidebar.tree.empty.saved_charts",
+        "sidebar.tree.empty.metrics",
+        "sidebar.tree.empty.inspectors",
+        "sidebar.tree.empty.remote_dashboards",
+    ];
+
+    #[test]
+    fn c2_keys_resolve_in_both_locales() {
+        for key in C2_KEYS {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert_ne!(value, key, "missing translation for {locale}.{key}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "translation fell back to the miss sentinel for {locale}.{key}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn saved_charts_folder_label_diverges_between_locales() {
+        let english = dbflux_i18n::t!("sidebar.tree.folder.saved_charts", locale = "en");
+        let spanish = dbflux_i18n::t!("sidebar.tree.folder.saved_charts", locale = "es");
+
+        assert_ne!(english, spanish);
+    }
+
+    #[test]
+    fn remote_dashboards_count_label_includes_base_and_count() {
+        let label = super::remote_dashboards_count_label("CloudWatch Dashboards", 3);
+
+        assert!(label.contains("CloudWatch Dashboards"));
+        assert!(label.contains('3'));
+        assert_eq!(
+            label,
+            dbflux_i18n::t!(
+                "sidebar.tree.status.remote_listing_count",
+                label = "CloudWatch Dashboards",
+                count = 3
+            )
+        );
+    }
+
+    #[test]
+    fn remote_dashboards_error_label_includes_the_error_message() {
+        let label = super::remote_dashboards_error_label("access denied");
+
+        assert!(label.contains("access denied"));
+        assert_eq!(
+            label,
+            dbflux_i18n::t!(
+                "sidebar.tree.status.remote_dashboards_error_retry",
+                error = "access denied"
+            )
+        );
+    }
+
+    #[test]
+    fn no_dashboards_yet_label_differs_with_and_without_import() {
+        let with_import = super::no_dashboards_yet_label(true);
+        let without_import = super::no_dashboards_yet_label(false);
+
+        assert_eq!(
+            with_import,
+            dbflux_i18n::t!("sidebar.tree.empty.dashboards_with_import")
+        );
+        assert_eq!(
+            without_import,
+            dbflux_i18n::t!("sidebar.tree.empty.dashboards")
+        );
+        assert_ne!(with_import, without_import);
     }
 
     #[test]

@@ -712,11 +712,21 @@ sidebar:
       data_types_plain: Tipos de datos
       views: "Vistas (%{count})"
       storage: "Almacenamiento (%{count})"
+      dashboards: Dashboards
+      saved_charts: Gráficos guardados
+      instance_metrics: Métricas de instancia
+      instance_inspectors: Inspectores de instancia
+      metrics: Métricas
+    node:
+      instance_overview: Resumen de instancia
+      untitled_chart: Gráfico sin título
     status:
       loading: Cargando…
       profile_connecting: "Conectando a %{name}…"
       database_loading: "%{name} (cargando…)"
       error_retry: "Error: %{error} — clic para reintentar"
+      remote_listing_count: "%{label} (%{count})"
+      remote_dashboards_error_retry: "Error: %{error} — colapsa y expande para reintentar"
       used_by_objects:
         one: Usado por 1 objeto
         many: "Usado por %{count} objetos"
@@ -727,6 +737,12 @@ sidebar:
         trigger: Trigger
     empty:
       buckets: Sin buckets
+      dashboards: Aún no hay dashboards — clic derecho para crear
+      dashboards_with_import: Aún no hay dashboards — clic derecho para crear o importar
+      saved_charts: Aún no hay gráficos guardados — guarda un gráfico desde un resultado de consulta
+      metrics: No hay métricas disponibles
+      inspectors: No hay inspectores disponibles
+      remote_dashboards: No hay dashboards en esta cuenta/región
 sql_preview:
   title:
     sql: Vista previa de SQL

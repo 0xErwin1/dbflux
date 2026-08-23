@@ -712,11 +712,21 @@ sidebar:
       data_types_plain: Data Types
       views: "Views (%{count})"
       storage: "Storage (%{count})"
+      dashboards: Dashboards
+      saved_charts: Saved Charts
+      instance_metrics: Instance Metrics
+      instance_inspectors: Instance Inspectors
+      metrics: Metrics
+    node:
+      instance_overview: Instance Overview
+      untitled_chart: Untitled chart
     status:
       loading: Loading…
       profile_connecting: "Connecting to %{name}…"
       database_loading: "%{name} (loading…)"
       error_retry: "Error: %{error} — click to retry"
+      remote_listing_count: "%{label} (%{count})"
+      remote_dashboards_error_retry: "Error: %{error} — collapse and expand to retry"
       used_by_objects:
         one: Used by 1 object
         many: "Used by %{count} objects"
@@ -727,6 +737,12 @@ sidebar:
         trigger: Trigger
     empty:
       buckets: No buckets
+      dashboards: No dashboards yet — right-click to create
+      dashboards_with_import: No dashboards yet — right-click to create or import
+      saved_charts: No saved charts yet — save a chart from a query result
+      metrics: No metrics available
+      inspectors: No inspectors available
+      remote_dashboards: No dashboards in this account/region
 sql_preview:
   title:
     sql: SQL Preview
