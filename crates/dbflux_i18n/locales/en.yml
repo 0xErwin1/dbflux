@@ -556,6 +556,89 @@ document:
       edit_value: Edit Value
       new_key: New Key
       rename: Rename
+    mutation:
+      error:
+        connection_inactive: Connection is no longer active
+        member_target_unavailable: "Cannot delete member: connection or key unavailable"
+        key_not_deleted: Key was not deleted
+      task:
+        delete_member: "Delete member from %{key}"
+        edit_member: "Edit member in %{key}"
+        add_member: "Add member to %{key}"
+        create_key: "Create key %{key}"
+    new_key:
+      title: New Key
+      key_type:
+        label: Key Type*
+        placeholder: "Select type"
+      ttl:
+        label: TTL
+        placeholder: No limit
+      key_name:
+        label: Key Name*
+        placeholder: Enter Key Name
+      value:
+        label: Value
+        placeholder: Enter Value
+      field_placeholder: Enter Field
+      member_placeholder: Enter Member
+      score_placeholder: Enter Score
+      error:
+        key_name_required: Key name is required
+        ttl_invalid: TTL must be a positive integer
+        stream_requires_field: Stream requires at least one field/value pair
+        prefix: "Error: %{error}"
+      cancel: Cancel
+      create: Create
+      type:
+        string: String
+        hash: Hash
+        list: List
+        set: Set
+        sorted_set: Sorted Set
+        json: JSON
+        stream: Stream
+    pagination:
+      error:
+        background_task_limit: Too many background tasks running, please wait
+    parsing:
+      type:
+        string: String
+        bytes: Bytes
+        hash: Hash
+        list: List
+        set: Set
+        sorted_set: ZSet
+        json: JSON
+        stream: Stream
+        unknown: "?"
+    render:
+      delete_key:
+        title: Delete key?
+        message: 'Delete "%{key}"? This action cannot be undone.'
+      delete_member:
+        title: Delete member?
+        message: 'Delete "%{member}"? This action cannot be undone.'
+      unknown_type: Unknown
+      value_header: Value
+      id_header: ID
+      fields_header: Fields
+      field_score_header: Field/Score
+      click_to_edit: Click or press Enter to edit
+      select_key_prompt: Select a key to inspect
+      prev: Prev
+      next: Next
+      page: "Page %{page}"
+      keys_count:
+        one: "%{count} key"
+        many: "%{count} keys"
+      filter:
+        keys_placeholder: "Filter keys..."
+        members_placeholder: "Filter members..."
+      ttl:
+        no_limit: No limit
+        missing: Missing
+        expired: Expired
   query_builder:
     aggregate:
       fn:

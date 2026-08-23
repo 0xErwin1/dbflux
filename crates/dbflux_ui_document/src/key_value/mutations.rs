@@ -82,7 +82,9 @@ impl super::KeyValueDocument {
             || self.selected_key_type().is_none()
             || self.get_connection(cx).is_none()
         {
-            self.last_error = Some("Cannot delete member: connection or key unavailable".into());
+            self.last_error = Some(dbflux_i18n::t!(
+                "document.key_value.mutation.error.member_target_unavailable"
+            ));
             cx.notify();
             return;
         }
@@ -114,7 +116,9 @@ impl super::KeyValueDocument {
 
     fn delete_key_async(&mut self, key: String, cx: &mut Context<Self>) {
         let Some(connection) = self.get_connection(cx) else {
-            self.last_error = Some("Connection is no longer active".to_string());
+            self.last_error = Some(dbflux_i18n::t!(
+                "document.key_value.mutation.error.connection_inactive"
+            ));
             cx.notify();
             return;
         };
@@ -146,9 +150,11 @@ impl super::KeyValueDocument {
                             this.last_error = None;
                         }
                         Ok(false) => {
-                            this.runner
-                                .fail_mutation(task_id, "Key was not deleted", cx);
-                            this.last_error = Some("Key was not deleted".to_string());
+                            let message = dbflux_i18n::t!(
+                                "document.key_value.mutation.error.key_not_deleted"
+                            );
+                            this.runner.fail_mutation(task_id, message.clone(), cx);
+                            this.last_error = Some(message);
                             this.reload_keys(cx);
                             return;
                         }
@@ -180,9 +186,9 @@ impl super::KeyValueDocument {
 
         let (task_id, _cancel_token) = self.runner.start_mutation(
             TaskKind::KeyMutation,
-            format!(
-                "Delete member from {}",
-                dbflux_core::truncate_string_safe(&key, 40)
+            dbflux_i18n::t!(
+                "document.key_value.mutation.task.delete_member",
+                key = dbflux_core::truncate_string_safe(&key, 40)
             ),
             cx,
         );
@@ -329,7 +335,9 @@ impl super::KeyValueDocument {
         cx.notify();
 
         let Some(connection) = self.get_connection(cx) else {
-            self.last_error = Some("Connection is no longer active".to_string());
+            self.last_error = Some(dbflux_i18n::t!(
+                "document.key_value.mutation.error.connection_inactive"
+            ));
             cx.notify();
             return;
         };
@@ -610,9 +618,9 @@ impl super::KeyValueDocument {
 
         let (task_id, _cancel_token) = self.runner.start_mutation(
             TaskKind::KeyMutation,
-            format!(
-                "Edit member in {}",
-                dbflux_core::truncate_string_safe(&key, 40)
+            dbflux_i18n::t!(
+                "document.key_value.mutation.task.edit_member",
+                key = dbflux_core::truncate_string_safe(&key, 40)
             ),
             cx,
         );
@@ -735,16 +743,18 @@ impl super::KeyValueDocument {
             return;
         };
         let Some(connection) = self.get_connection(cx) else {
-            self.last_error = Some("Connection is no longer active".to_string());
+            self.last_error = Some(dbflux_i18n::t!(
+                "document.key_value.mutation.error.connection_inactive"
+            ));
             cx.notify();
             return;
         };
 
         let (task_id, _cancel_token) = self.runner.start_mutation(
             TaskKind::KeyMutation,
-            format!(
-                "Add member to {}",
-                dbflux_core::truncate_string_safe(&key, 40)
+            dbflux_i18n::t!(
+                "document.key_value.mutation.task.add_member",
+                key = dbflux_core::truncate_string_safe(&key, 40)
             ),
             cx,
         );
@@ -843,16 +853,18 @@ impl super::KeyValueDocument {
         cx: &mut Context<Self>,
     ) {
         let Some(connection) = self.get_connection(cx) else {
-            self.last_error = Some("Connection is no longer active".to_string());
+            self.last_error = Some(dbflux_i18n::t!(
+                "document.key_value.mutation.error.connection_inactive"
+            ));
             cx.notify();
             return;
         };
 
         let (task_id, _cancel_token) = self.runner.start_mutation(
             TaskKind::KeyMutation,
-            format!(
-                "Create key {}",
-                dbflux_core::truncate_string_safe(&event.key_name, 40)
+            dbflux_i18n::t!(
+                "document.key_value.mutation.task.create_key",
+                key = dbflux_core::truncate_string_safe(&event.key_name, 40)
             ),
             cx,
         );
@@ -981,5 +993,52 @@ impl super::KeyValueDocument {
             .log_if_dropped();
         })
         .detach();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn key_value_mutation_keys_resolve_in_both_locales() {
+        let keys = [
+            "document.key_value.mutation.error.connection_inactive",
+            "document.key_value.mutation.error.member_target_unavailable",
+            "document.key_value.mutation.error.key_not_deleted",
+            "document.key_value.mutation.task.delete_member",
+            "document.key_value.mutation.task.edit_member",
+            "document.key_value.mutation.task.add_member",
+            "document.key_value.mutation.task.create_key",
+        ];
+
+        for key in keys {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn key_value_mutation_task_descriptions_interpolate_key_name() {
+        let delete_member = dbflux_i18n::t!(
+            "document.key_value.mutation.task.delete_member",
+            locale = "en",
+            key = "session:42"
+        );
+        let create_key = dbflux_i18n::t!(
+            "document.key_value.mutation.task.create_key",
+            locale = "en",
+            key = "session:42"
+        );
+
+        assert!(delete_member.contains("session:42"));
+        assert!(create_key.contains("session:42"));
     }
 }

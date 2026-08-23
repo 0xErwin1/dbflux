@@ -27,17 +27,17 @@ pub(super) fn key_type_icon(key_type: Option<KeyType>) -> (AppIcon, Hsla) {
     }
 }
 
-pub(super) fn key_type_label(key_type: KeyType) -> &'static str {
+pub(super) fn key_type_label(key_type: KeyType) -> String {
     match key_type {
-        KeyType::String => "String",
-        KeyType::Bytes => "Bytes",
-        KeyType::Hash => "Hash",
-        KeyType::List => "List",
-        KeyType::Set => "Set",
-        KeyType::SortedSet => "ZSet",
-        KeyType::Json => "JSON",
-        KeyType::Stream => "Stream",
-        KeyType::Unknown => "?",
+        KeyType::String => dbflux_i18n::t!("document.key_value.parsing.type.string"),
+        KeyType::Bytes => dbflux_i18n::t!("document.key_value.parsing.type.bytes"),
+        KeyType::Hash => dbflux_i18n::t!("document.key_value.parsing.type.hash"),
+        KeyType::List => dbflux_i18n::t!("document.key_value.parsing.type.list"),
+        KeyType::Set => dbflux_i18n::t!("document.key_value.parsing.type.set"),
+        KeyType::SortedSet => dbflux_i18n::t!("document.key_value.parsing.type.sorted_set"),
+        KeyType::Json => dbflux_i18n::t!("document.key_value.parsing.type.json"),
+        KeyType::Stream => dbflux_i18n::t!("document.key_value.parsing.type.stream"),
+        KeyType::Unknown => dbflux_i18n::t!("document.key_value.parsing.type.unknown"),
     }
 }
 
@@ -276,6 +276,35 @@ mod tests {
         assert_eq!(key_type_label(KeyType::Stream), "Stream");
         assert_eq!(key_type_label(KeyType::Bytes), "Bytes");
         assert_eq!(key_type_label(KeyType::Unknown), "?");
+    }
+
+    #[test]
+    fn key_type_label_keys_resolve_in_both_locales() {
+        let keys = [
+            "document.key_value.parsing.type.string",
+            "document.key_value.parsing.type.bytes",
+            "document.key_value.parsing.type.hash",
+            "document.key_value.parsing.type.list",
+            "document.key_value.parsing.type.set",
+            "document.key_value.parsing.type.sorted_set",
+            "document.key_value.parsing.type.json",
+            "document.key_value.parsing.type.stream",
+            "document.key_value.parsing.type.unknown",
+        ];
+
+        for key in keys {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
     }
 
     // --- key_type_icon ---

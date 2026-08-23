@@ -167,9 +167,16 @@ impl KeyValueDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let filter_input = cx.new(|cx| InputState::new(window, cx).placeholder("Filter keys..."));
-        let members_filter_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Filter members..."));
+        let filter_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(dbflux_i18n::t!(
+                "document.key_value.render.filter.keys_placeholder"
+            ))
+        });
+        let members_filter_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(dbflux_i18n::t!(
+                "document.key_value.render.filter.members_placeholder"
+            ))
+        });
         let mut subscriptions = Vec::new();
 
         subscriptions.push(cx.subscribe_in(
@@ -377,15 +384,15 @@ impl KeyValueDocument {
         match entry.ttl_seconds {
             None | Some(-1) => {
                 self.ttl_state = TtlState::NoLimit;
-                self.ttl_display = "No limit".into();
+                self.ttl_display = dbflux_i18n::t!("document.key_value.render.ttl.no_limit");
             }
             Some(-2) => {
                 self.ttl_state = TtlState::Missing;
-                self.ttl_display = "Missing".into();
+                self.ttl_display = dbflux_i18n::t!("document.key_value.render.ttl.missing");
             }
             Some(0) => {
                 self.ttl_state = TtlState::Expired;
-                self.ttl_display = "Expired".into();
+                self.ttl_display = dbflux_i18n::t!("document.key_value.render.ttl.expired");
             }
             Some(secs) if secs > 0 => {
                 let deadline = Instant::now() + Duration::from_secs(secs as u64);
@@ -395,7 +402,7 @@ impl KeyValueDocument {
             }
             _ => {
                 self.ttl_state = TtlState::NoLimit;
-                self.ttl_display = "No limit".into();
+                self.ttl_display = dbflux_i18n::t!("document.key_value.render.ttl.no_limit");
             }
         }
     }
@@ -415,7 +422,7 @@ impl KeyValueDocument {
 
         if remaining.is_zero() {
             self.ttl_state = TtlState::Expired;
-            self.ttl_display = "Expired".into();
+            self.ttl_display = dbflux_i18n::t!("document.key_value.render.ttl.expired");
             self._ttl_countdown_timer = None;
         } else {
             self.ttl_display = format!("{}s", remaining.as_secs());
