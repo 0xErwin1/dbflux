@@ -8,7 +8,7 @@ An extensible, keyboard-first data platform delivered as a Rust + GPUI desktop c
 
 DBFlux is an open-source desktop client with built-in drivers for relational and non-relational databases. Its core contracts are driver-neutral, and external drivers can integrate over RPC.
 
-The client focuses on performance, a clean UX, and keyboard-first workflows. The long-term goal is to provide a fully open-source alternative to DBeaver.
+The client focuses on performance, a clean UX, and keyboard-first workflows. The long-term goal is one fully open-source client for every database you work with.
 
 ![DBFlux](resources/dbflux.png)
 

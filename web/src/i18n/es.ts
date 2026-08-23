@@ -24,7 +24,7 @@ export const es: Dictionary = {
     about: 'Acerca de',
     contributing: 'Cómo contribuir',
     source: 'Código fuente',
-    tagline: 'Una alternativa totalmente de código abierto a DBeaver, desarrollada en abierto.',
+    tagline: 'Un cliente de bases de datos keyboard-first y totalmente de código abierto, desarrollado en abierto.',
     license: 'MIT o Apache-2.0, a tu elección.',
   },
   search: {
@@ -185,7 +185,7 @@ export const es: Dictionary = {
     intro_p2:
       'Esa restricción se aplica en el código, no en una guía de estilo. La interfaz se adapta mediante flags de capacidades y metadatos, de modo que un almacén de documentos obtiene una vista de documentos y una fuente de series temporales obtiene un selector de rango sin una sola condición sobre el nombre del driver. Añadir una base de datos es escribir un driver, no parchear la aplicación.',
     intro_p3:
-      'El objetivo a largo plazo se declara sin rodeos en el README: una alternativa totalmente de código abierto a DBeaver. Rust y GPUI son lo que lo mantienen lo bastante rápido como para valer la pena cambiarse.',
+      'El objetivo a largo plazo se declara sin rodeos en el README: un único cliente totalmente de código abierto para todas las bases de datos con las que trabajas. Rust y GPUI son lo que lo mantienen lo bastante rápido como para valer la pena cambiarse.',
     principles_eyebrow: 'Principios',
     principle: {
       p01: {
