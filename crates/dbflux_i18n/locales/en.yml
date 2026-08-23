@@ -866,6 +866,31 @@ document:
       incomplete_aggregate_rows:
         one: "%{count} aggregate row is incomplete and will be excluded from the query"
         many: "%{count} aggregate rows are incomplete and will be excluded from the query"
+  schema_diff:
+    action:
+      apply: "Apply…"
+      compute_diff: Compute Diff
+      preview_ddl: Preview DDL
+    status:
+      computing: "Computing diff…"
+      empty: No differences found between the two schemas.
+      idle: Pick a source and run Compute Diff to see schema changes.
+      unsupported: Unsupported
+    view:
+      compare_against: Compare against
+      mode:
+        live: "Live ↔ Live"
+        snapshot: "Snapshot ↔ Live"
+      source:
+        connection_section: Other connections
+        database_section: Other databases on this connection
+        empty: Connect a second database or connection to compare against.
+        no_snapshots: No snapshots captured for this connection yet.
+      title: "Schema Diff — %{database}"
+      title_default: Schema Diff
+      unsupported_action:
+        create: Create table
+        drop: Drop table
   shared:
     add: Add
     refresh:

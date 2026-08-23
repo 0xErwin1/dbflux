@@ -177,8 +177,8 @@ impl SchemaDiffDocument {
         );
 
         let title = match &database {
-            Some(db) => format!("Schema Diff — {db}"),
-            None => "Schema Diff".to_string(),
+            Some(db) => dbflux_i18n::t!("document.schema_diff.view.title", database = db),
+            None => dbflux_i18n::t!("document.schema_diff.view.title_default"),
         };
 
         let mut document = Self {
@@ -1143,7 +1143,7 @@ impl SchemaDiffDocument {
     fn primary_button(
         &self,
         id: &'static str,
-        label: &'static str,
+        label: String,
         enabled: bool,
         cx: &mut Context<Self>,
         on_click: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
@@ -1170,7 +1170,7 @@ impl SchemaDiffDocument {
     fn secondary_button(
         &self,
         id: &'static str,
-        label: &'static str,
+        label: String,
         enabled: bool,
         cx: &mut Context<Self>,
         on_click: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
@@ -1203,14 +1203,14 @@ impl SchemaDiffDocument {
             .gap(Spacing::SM)
             .child(self.mode_chip(
                 "mode-live",
-                "Live ↔ Live",
+                dbflux_i18n::t!("document.schema_diff.view.mode.live"),
                 mode == DiffMode::LiveVsLive,
                 DiffMode::LiveVsLive,
                 cx,
             ))
             .child(self.mode_chip(
                 "mode-snapshot",
-                "Snapshot ↔ Live",
+                dbflux_i18n::t!("document.schema_diff.view.mode.snapshot"),
                 mode == DiffMode::SnapshotVsLive,
                 DiffMode::SnapshotVsLive,
                 cx,
@@ -1228,7 +1228,10 @@ impl SchemaDiffDocument {
             .p(Spacing::MD)
             .border_b_1()
             .border_color(border)
-            .child(Text::label_sm("Compare against").muted_foreground())
+            .child(
+                Text::label_sm(dbflux_i18n::t!("document.schema_diff.view.compare_against"))
+                    .muted_foreground(),
+            )
             .child(mode_toggle)
             .child(reference)
             .child(
@@ -1238,7 +1241,7 @@ impl SchemaDiffDocument {
                     .gap(Spacing::SM)
                     .child(self.primary_button(
                         "compute-diff",
-                        "Compute Diff",
+                        dbflux_i18n::t!("document.schema_diff.action.compute_diff"),
                         self.can_compute() && !self.is_busy(),
                         cx,
                         |this, _w, cx| this.compute_diff(cx),
@@ -1249,7 +1252,7 @@ impl SchemaDiffDocument {
     fn mode_chip(
         &self,
         id: &'static str,
-        label: &'static str,
+        label: String,
         active: bool,
         mode: DiffMode,
         cx: &mut Context<Self>,
@@ -1325,7 +1328,7 @@ impl SchemaDiffDocument {
         if database_candidates.is_empty() && connection_candidates.is_empty() {
             return div()
                 .child(
-                    Text::caption("Connect a second database or connection to compare against.")
+                    Text::caption(dbflux_i18n::t!("document.schema_diff.view.source.empty"))
                         .muted_foreground(),
                 )
                 .into_any_element();
@@ -1335,9 +1338,11 @@ impl SchemaDiffDocument {
 
         if !database_candidates.is_empty() {
             let mut rows: Vec<AnyElement> = vec![
-                Text::label_sm("Other databases on this connection")
-                    .muted_foreground()
-                    .into_any_element(),
+                Text::label_sm(dbflux_i18n::t!(
+                    "document.schema_diff.view.source.database_section"
+                ))
+                .muted_foreground()
+                .into_any_element(),
             ];
             for database in database_candidates {
                 let selected = matches!(
@@ -1367,9 +1372,11 @@ impl SchemaDiffDocument {
 
         if !connection_candidates.is_empty() {
             let mut rows: Vec<AnyElement> = vec![
-                Text::label_sm("Other connections")
-                    .muted_foreground()
-                    .into_any_element(),
+                Text::label_sm(dbflux_i18n::t!(
+                    "document.schema_diff.view.source.connection_section"
+                ))
+                .muted_foreground()
+                .into_any_element(),
             ];
             for (id, name) in connection_candidates {
                 let selected = matches!(
@@ -1411,8 +1418,10 @@ impl SchemaDiffDocument {
         if self.snapshots.is_empty() {
             return div()
                 .child(
-                    Text::caption("No snapshots captured for this connection yet.")
-                        .muted_foreground(),
+                    Text::caption(dbflux_i18n::t!(
+                        "document.schema_diff.view.source.no_snapshots"
+                    ))
+                    .muted_foreground(),
                 )
                 .into_any_element();
         }
@@ -1459,13 +1468,16 @@ impl SchemaDiffDocument {
         match &self.compute_state {
             ComputeState::Loading => {
                 return diff_message_container()
-                    .child(Text::body("Computing diff…").muted_foreground())
+                    .child(
+                        Text::body(dbflux_i18n::t!("document.schema_diff.status.computing"))
+                            .muted_foreground(),
+                    )
                     .into_any_element();
             }
             ComputeState::Idle => {
                 return diff_message_container()
                     .child(
-                        Text::body("Pick a source and run Compute Diff to see schema changes.")
+                        Text::body(dbflux_i18n::t!("document.schema_diff.status.idle"))
                             .muted_foreground(),
                     )
                     .into_any_element();
@@ -1478,7 +1490,7 @@ impl SchemaDiffDocument {
             ComputeState::Empty => {
                 return diff_message_container()
                     .child(
-                        Text::body("No differences found between the two schemas.")
+                        Text::body(dbflux_i18n::t!("document.schema_diff.status.empty"))
                             .muted_foreground(),
                     )
                     .into_any_element();
@@ -1642,9 +1654,9 @@ impl SchemaDiffDocument {
                 ..
             } => {
                 let description = if *is_create {
-                    "Create table"
+                    dbflux_i18n::t!("document.schema_diff.view.unsupported_action.create")
                 } else {
-                    "Drop table"
+                    dbflux_i18n::t!("document.schema_diff.view.unsupported_action.drop")
                 };
                 let mut reason_text = reason.clone();
                 if let Some(followup) = followup {
@@ -1656,7 +1668,10 @@ impl SchemaDiffDocument {
                     .items_center()
                     .gap(Spacing::SM)
                     .py(Spacing::XS)
-                    .child(Badge::new("Unsupported", BadgeVariant::Neutral))
+                    .child(Badge::new(
+                        dbflux_i18n::t!("document.schema_diff.status.unsupported"),
+                        BadgeVariant::Neutral,
+                    ))
                     .child(Text::body(description))
                     .child(Text::caption(reason_text).muted_foreground())
                     .into_any_element()
@@ -1679,14 +1694,14 @@ impl SchemaDiffDocument {
             .border_color(border)
             .child(self.secondary_button(
                 "preview-ddl",
-                "Preview DDL",
+                dbflux_i18n::t!("document.schema_diff.action.preview_ddl"),
                 has_selection && !self.is_busy(),
                 cx,
                 |this, _w, cx| this.open_preview(cx),
             ))
             .child(self.primary_button(
                 "apply-ddl",
-                "Apply…",
+                dbflux_i18n::t!("document.schema_diff.action.apply"),
                 has_selection && !self.is_busy(),
                 cx,
                 |this, _w, cx| this.request_apply(cx),
@@ -1715,7 +1730,10 @@ fn render_unsupported_row(unsupported: &UnsupportedChange) -> AnyElement {
         .items_center()
         .gap(Spacing::SM)
         .py(Spacing::XS)
-        .child(Badge::new("Unsupported", BadgeVariant::Neutral))
+        .child(Badge::new(
+            dbflux_i18n::t!("document.schema_diff.status.unsupported"),
+            BadgeVariant::Neutral,
+        ))
         .child(Text::body(describe_change(&unsupported.change)))
         .child(Text::caption(reason).muted_foreground())
         .into_any_element()
@@ -1945,5 +1963,81 @@ mod tests {
             resolved[0].columns.is_some(),
             "the resolved table must carry the fetched columns, not the column-less shallow entry"
         );
+    }
+
+    // ── i18n: schema-diff view chrome keys ──────────────────────────────────
+
+    const SCHEMA_DIFF_VIEW_KEYS: &[&str] = &[
+        "document.schema_diff.action.apply",
+        "document.schema_diff.action.compute_diff",
+        "document.schema_diff.action.preview_ddl",
+        "document.schema_diff.status.computing",
+        "document.schema_diff.status.empty",
+        "document.schema_diff.status.idle",
+        "document.schema_diff.status.unsupported",
+        "document.schema_diff.view.compare_against",
+        "document.schema_diff.view.mode.live",
+        "document.schema_diff.view.mode.snapshot",
+        "document.schema_diff.view.source.connection_section",
+        "document.schema_diff.view.source.database_section",
+        "document.schema_diff.view.source.empty",
+        "document.schema_diff.view.source.no_snapshots",
+        "document.schema_diff.view.title",
+        "document.schema_diff.view.title_default",
+        "document.schema_diff.view.unsupported_action.create",
+        "document.schema_diff.view.unsupported_action.drop",
+    ];
+
+    #[test]
+    fn schema_diff_view_keys_resolve_in_both_locales() {
+        for key in SCHEMA_DIFF_VIEW_KEYS {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(*key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, *key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn schema_diff_title_interpolates_database_name() {
+        let title = dbflux_i18n::t!("document.schema_diff.view.title", database = "app_db");
+
+        assert!(
+            title.contains("app_db"),
+            "title must interpolate the database name: {title}"
+        );
+    }
+
+    #[test]
+    fn schema_diff_title_differs_between_locales() {
+        let en = dbflux_i18n::t!("document.schema_diff.view.title", locale = "en");
+        let es = dbflux_i18n::t!("document.schema_diff.view.title", locale = "es");
+
+        assert_ne!(en, es);
+    }
+
+    #[test]
+    fn schema_diff_status_unsupported_differs_between_locales() {
+        let en = dbflux_i18n::t!("document.schema_diff.status.unsupported", locale = "en");
+        let es = dbflux_i18n::t!("document.schema_diff.status.unsupported", locale = "es");
+
+        assert_eq!(en, "Unsupported");
+        assert_ne!(en, es);
+    }
+
+    #[test]
+    fn schema_diff_action_compute_diff_differs_between_locales() {
+        let en = dbflux_i18n::t!("document.schema_diff.action.compute_diff", locale = "en");
+        let es = dbflux_i18n::t!("document.schema_diff.action.compute_diff", locale = "es");
+
+        assert_eq!(en, "Compute Diff");
+        assert_ne!(en, es);
     }
 }
