@@ -1,7 +1,7 @@
 //! Translated label helpers for sidebar chrome (tabs, footer, tree folders).
 
 use dbflux_app::ExternalDriverStage;
-use dbflux_core::{DatabaseCategory, PipelineState, RelationKind};
+use dbflux_core::{DatabaseCategory, PipelineState, RelationKind, SchemaObjectKind};
 
 /// Translated label for a schema-tree container folder, e.g. `"Tables (12)"`.
 pub(crate) fn container_folder_label(category: DatabaseCategory, count: usize) -> String {
@@ -470,6 +470,101 @@ pub(crate) fn pipeline_failed_detail_label(error: &str) -> String {
 /// completes successfully.
 pub(crate) fn pipeline_completed_detail_label() -> String {
     dbflux_i18n::t!("sidebar.task.pipeline.completed")
+}
+
+/// Translated task-panel label for a background schema fetch that loads
+/// event streams for a collection, e.g. `"Loading event streams: orders"`.
+pub(crate) fn loading_event_streams_task_label(name: &str) -> String {
+    dbflux_i18n::t!("sidebar.task.loading_event_streams", name = name)
+}
+
+/// Translated toast reported when loading a table's schema details fails,
+/// e.g. `"Failed to load orders schema: connection reset"`.
+pub(crate) fn table_load_failed_label(name: &str, error: &str) -> String {
+    dbflux_i18n::t!(
+        "sidebar.toast.load_failed.table",
+        name = name,
+        error = error
+    )
+}
+
+/// Translated toast reported when loading a collection's event streams
+/// fails, e.g. `"Failed to load event streams for orders: connection
+/// reset"`.
+pub(crate) fn collection_load_failed_label(name: &str, error: &str) -> String {
+    dbflux_i18n::t!(
+        "sidebar.toast.load_failed.collection",
+        name = name,
+        error = error
+    )
+}
+
+/// Translated label for the batch/single delete confirmation item count,
+/// e.g. `"1 item"` or `"3 items"`.
+pub(crate) fn items_label(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!("sidebar.confirm.items.one")
+    } else {
+        dbflux_i18n::t!("sidebar.confirm.items.many", count = count)
+    }
+}
+
+/// Translated task-panel label for a background DDL drop, e.g. `"Dropping
+/// table orders"`.
+pub(crate) fn dropping_task_label(kind: &SchemaObjectKind, name: &str) -> String {
+    let key = match kind {
+        SchemaObjectKind::Table => "sidebar.task.dropping.table",
+        SchemaObjectKind::View => "sidebar.task.dropping.view",
+        SchemaObjectKind::Collection => "sidebar.task.dropping.collection",
+        SchemaObjectKind::Database => "sidebar.task.dropping.database",
+    };
+
+    dbflux_i18n::t!(key, name = name)
+}
+
+/// Translated toast/task-error message for a schema drop cancelled by the
+/// user or a hook.
+pub(crate) fn schema_drop_cancelled_label() -> String {
+    dbflux_i18n::t!("sidebar.toast.schema_drop_cancelled")
+}
+
+/// Translated toast reported when a schema drop fails, e.g. `"Failed to
+/// drop: permission denied"`.
+pub(crate) fn drop_failed_label(error: &str) -> String {
+    dbflux_i18n::t!("sidebar.toast.drop_failed", error = error)
+}
+
+/// Translated toast reported when revealing a script file/folder in the
+/// system file manager fails.
+pub(crate) fn reveal_failed_label(error: &str) -> String {
+    dbflux_i18n::t!("sidebar.toast.reveal_failed", error = error)
+}
+
+/// Translated title for the rfd "Import Script" file picker dialog.
+pub(crate) fn import_script_dialog_title() -> String {
+    dbflux_i18n::t!("sidebar.dialog.import_script_title")
+}
+
+/// Translated filter label for the rfd "Import Script" file picker dialog.
+pub(crate) fn script_files_filter_label() -> String {
+    dbflux_i18n::t!("sidebar.dialog.script_files_filter")
+}
+
+/// Translated warning shown when an Export/Migrate Tables action skipped
+/// tables outside the active profile/database, e.g. `"3 tables outside the
+/// active profile/database were skipped"`.
+pub(crate) fn skipped_tables_label(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!("sidebar.overlay.skipped_tables.one")
+    } else {
+        dbflux_i18n::t!("sidebar.overlay.skipped_tables.many", count = count)
+    }
+}
+
+/// Translated toast reported when capturing a schema snapshot fails during
+/// a pipeline connect.
+pub(crate) fn schema_snapshot_failed_label(error: &str) -> String {
+    dbflux_i18n::t!("sidebar.toast.schema_snapshot_failed", error = error)
 }
 
 /// Translated task-panel label for the current pipeline stage, shown as a
@@ -1288,6 +1383,200 @@ mod tests {
         assert_eq!(
             label,
             dbflux_i18n::t!("sidebar.task.pipeline.failed", error = "connection refused")
+        );
+    }
+
+    const D2_KEYS: [&str; 15] = [
+        "sidebar.task.loading_event_streams",
+        "sidebar.toast.load_failed.table",
+        "sidebar.toast.load_failed.collection",
+        "sidebar.confirm.items.one",
+        "sidebar.confirm.items.many",
+        "sidebar.task.dropping.table",
+        "sidebar.task.dropping.view",
+        "sidebar.task.dropping.collection",
+        "sidebar.task.dropping.database",
+        "sidebar.toast.schema_drop_cancelled",
+        "sidebar.toast.drop_failed",
+        "sidebar.toast.reveal_failed",
+        "sidebar.dialog.import_script_title",
+        "sidebar.dialog.script_files_filter",
+        "sidebar.toast.schema_snapshot_failed",
+    ];
+
+    #[test]
+    fn d2_keys_resolve_in_both_locales() {
+        for key in D2_KEYS {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert_ne!(value, key, "missing translation for {locale}.{key}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "translation fell back to the miss sentinel for {locale}.{key}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn skipped_tables_label_keys_resolve_in_both_locales() {
+        for key in [
+            "sidebar.overlay.skipped_tables.one",
+            "sidebar.overlay.skipped_tables.many",
+        ] {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert_ne!(value, key, "missing translation for {locale}.{key}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "translation fell back to the miss sentinel for {locale}.{key}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn sidebar_task_dropping_table_diverges_between_locales() {
+        let english = dbflux_i18n::t!("sidebar.task.dropping.table", locale = "en");
+        let spanish = dbflux_i18n::t!("sidebar.task.dropping.table", locale = "es");
+
+        assert_ne!(english, spanish);
+    }
+
+    #[test]
+    fn loading_event_streams_task_label_includes_the_collection_name() {
+        let label = super::loading_event_streams_task_label("orders");
+
+        assert!(label.contains("orders"));
+        assert_eq!(
+            label,
+            dbflux_i18n::t!("sidebar.task.loading_event_streams", name = "orders")
+        );
+    }
+
+    #[test]
+    fn table_load_failed_label_includes_name_and_error() {
+        let label = super::table_load_failed_label("orders", "connection reset");
+
+        assert!(label.contains("orders"));
+        assert!(label.contains("connection reset"));
+        assert_eq!(
+            label,
+            dbflux_i18n::t!(
+                "sidebar.toast.load_failed.table",
+                name = "orders",
+                error = "connection reset"
+            )
+        );
+    }
+
+    #[test]
+    fn collection_load_failed_label_includes_name_and_error() {
+        let label = super::collection_load_failed_label("orders", "connection reset");
+
+        assert!(label.contains("orders"));
+        assert!(label.contains("connection reset"));
+        assert_ne!(
+            label,
+            super::table_load_failed_label("orders", "connection reset")
+        );
+    }
+
+    #[test]
+    fn items_label_one_vs_many() {
+        let singular = super::items_label(1);
+        let plural = super::items_label(3);
+
+        assert_eq!(singular, dbflux_i18n::t!("sidebar.confirm.items.one"));
+        assert_eq!(
+            plural,
+            dbflux_i18n::t!("sidebar.confirm.items.many", count = 3)
+        );
+        assert!(plural.contains('3'));
+        assert_ne!(singular, plural);
+    }
+
+    #[test]
+    fn dropping_task_label_covers_every_object_kind() {
+        use dbflux_core::SchemaObjectKind;
+
+        assert_eq!(
+            super::dropping_task_label(&SchemaObjectKind::Table, "orders"),
+            dbflux_i18n::t!("sidebar.task.dropping.table", name = "orders")
+        );
+        assert_eq!(
+            super::dropping_task_label(&SchemaObjectKind::View, "orders_v"),
+            dbflux_i18n::t!("sidebar.task.dropping.view", name = "orders_v")
+        );
+        assert_eq!(
+            super::dropping_task_label(&SchemaObjectKind::Collection, "logs"),
+            dbflux_i18n::t!("sidebar.task.dropping.collection", name = "logs")
+        );
+        assert_eq!(
+            super::dropping_task_label(&SchemaObjectKind::Database, "analytics"),
+            dbflux_i18n::t!("sidebar.task.dropping.database", name = "analytics")
+        );
+    }
+
+    #[test]
+    fn schema_drop_cancelled_label_is_stable() {
+        assert_eq!(
+            super::schema_drop_cancelled_label(),
+            dbflux_i18n::t!("sidebar.toast.schema_drop_cancelled")
+        );
+    }
+
+    #[test]
+    fn drop_failed_label_includes_the_error() {
+        let label = super::drop_failed_label("permission denied");
+
+        assert!(label.contains("permission denied"));
+        assert_eq!(
+            label,
+            dbflux_i18n::t!("sidebar.toast.drop_failed", error = "permission denied")
+        );
+    }
+
+    #[test]
+    fn reveal_failed_label_includes_the_error() {
+        let label = super::reveal_failed_label("no such file");
+
+        assert!(label.contains("no such file"));
+        assert_eq!(
+            label,
+            dbflux_i18n::t!("sidebar.toast.reveal_failed", error = "no such file")
+        );
+    }
+
+    #[test]
+    fn skipped_tables_label_one_vs_many() {
+        let singular = super::skipped_tables_label(1);
+        let plural = super::skipped_tables_label(3);
+
+        assert_eq!(
+            singular,
+            dbflux_i18n::t!("sidebar.overlay.skipped_tables.one")
+        );
+        assert_eq!(
+            plural,
+            dbflux_i18n::t!("sidebar.overlay.skipped_tables.many", count = 3)
+        );
+        assert!(plural.contains('3'));
+        assert_ne!(singular, plural);
+    }
+
+    #[test]
+    fn schema_snapshot_failed_label_includes_the_error() {
+        let label = super::schema_snapshot_failed_label("disk full");
+
+        assert!(label.contains("disk full"));
+        assert_eq!(
+            label,
+            dbflux_i18n::t!("sidebar.toast.schema_snapshot_failed", error = "disk full")
         );
     }
 }

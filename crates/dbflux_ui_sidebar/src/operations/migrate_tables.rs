@@ -94,10 +94,8 @@ impl Sidebar {
         let tables = resolution.tables;
 
         if resolution.skipped_other_profile_or_database > 0 {
-            let count = resolution.skipped_other_profile_or_database;
-            let noun = if count == 1 { "table" } else { "tables" };
-            dbflux_ui_base::toast::Toast::warning(format!(
-                "{count} {noun} outside the active profile/database were skipped"
+            dbflux_ui_base::toast::Toast::warning(crate::labels::skipped_tables_label(
+                resolution.skipped_other_profile_or_database,
             ))
             .push(cx);
         }

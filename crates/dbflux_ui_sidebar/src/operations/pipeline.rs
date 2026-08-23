@@ -726,7 +726,7 @@ impl Sidebar {
                     report_error_async(
                         UserFacingError::new(
                             ErrorKind::Storage,
-                            format!("Failed to capture schema snapshot: {e}"),
+                            crate::labels::schema_snapshot_failed_label(&e.to_string()),
                         ),
                         cx,
                     );

@@ -819,6 +819,12 @@ settings:
 sidebar:
   confirm:
     delete_hint: Presiona x para confirmar la eliminación, ESC para cancelar
+    items:
+      one: 1 elemento
+      many: "%{count} elementos"
+  dialog:
+    import_script_title: Importar script
+    script_files_filter: Archivos de script
   empty:
     connections_title: Aún no hay conexiones
     connections_hint: Usa + para agregar una nueva conexión
@@ -888,6 +894,9 @@ sidebar:
       page_label: "Página %{current}/%{total} (%{start}-%{end})"
       page_label_empty: Página 0/0
       unsupported: Los flujos de eventos no están disponibles para esta colección
+    skipped_tables:
+      one: Se omitió 1 tabla fuera del perfil/base de datos activos
+      many: "Se omitieron %{count} tablas fuera del perfil/base de datos activos"
   status:
     connection_summary: "%{connected} conectadas · %{idle} inactivas"
     profile_fallback_name: conexión
@@ -901,6 +910,12 @@ sidebar:
     post_connect_hook_cancelled: Hook posterior a la conexión cancelado
     disconnect_hook_cancelled: Hook de desconexión cancelado
     post_disconnect_hook_cancelled: Hook posterior a la desconexión cancelado
+    loading_event_streams: "Cargando flujos de eventos: %{name}"
+    dropping:
+      table: "Eliminando la tabla %{name}"
+      view: "Eliminando la vista %{name}"
+      collection: "Eliminando la colección %{name}"
+      database: "Eliminando la base de datos %{name}"
     pipeline:
       connecting: "Conectando a %{name} (pipeline)"
       cancelled: Pipeline cancelado
@@ -927,6 +942,13 @@ sidebar:
     disconnected_hook_cancelled: Desconectado, pero se canceló el hook posterior a la desconexión
     disconnected_hook_error: "Desconectado de %{name}, pero %{error}"
     profile_not_found: Perfil no encontrado
+    schema_drop_cancelled: Eliminación de esquema cancelada
+    drop_failed: "Error al eliminar: %{error}"
+    reveal_failed: "Error al mostrar en el explorador de archivos: %{error}"
+    schema_snapshot_failed: "Error al capturar la instantánea del esquema: %{error}"
+    load_failed:
+      table: "Error al cargar el esquema de %{name}: %{error}"
+      collection: "Error al cargar los flujos de eventos de %{name}: %{error}"
     connected:
       plain: "Conectado a %{name}"
       one: "Conectado a %{name} (con 1 advertencia de hook)"
