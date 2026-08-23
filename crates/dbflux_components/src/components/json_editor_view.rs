@@ -27,7 +27,7 @@ pub fn validate_json(s: &str, allow_empty: bool) -> Result<(), String> {
         return if allow_empty {
             Ok(())
         } else {
-            Err("Document cannot be empty".to_string())
+            Err(dbflux_i18n::t!("components.json_editor.empty_error"))
         };
     }
 
@@ -139,7 +139,7 @@ impl JsonEditorView {
             if let Some(on_format) = self.on_format {
                 left_buttons = left_buttons.child(
                     Button::new(SharedString::from(format!("{}-format", prefix)))
-                        .label("Format")
+                        .label(dbflux_i18n::t!("components.json_editor.format"))
                         .small()
                         .with_variant(ButtonVariant::Ghost)
                         .on_click(on_format),
@@ -148,7 +148,7 @@ impl JsonEditorView {
             if let Some(on_compact) = self.on_compact {
                 left_buttons = left_buttons.child(
                     Button::new(SharedString::from(format!("{}-compact", prefix)))
-                        .label("Compact")
+                        .label(dbflux_i18n::t!("components.json_editor.compact"))
                         .small()
                         .with_variant(ButtonVariant::Ghost)
                         .on_click(on_compact),
@@ -162,14 +162,14 @@ impl JsonEditorView {
             .gap(Spacing::SM)
             .child(
                 Button::new(SharedString::from(format!("{}-cancel", prefix)))
-                    .label("Cancel")
+                    .label(dbflux_i18n::t!("components.json_editor.cancel"))
                     .small()
                     .with_variant(ButtonVariant::Ghost)
                     .on_click(self.on_cancel),
             )
             .child(
                 Button::new(SharedString::from(format!("{}-save", prefix)))
-                    .label("Save")
+                    .label(dbflux_i18n::t!("components.json_editor.save"))
                     .small()
                     .with_variant(ButtonVariant::Primary)
                     .on_click(self.on_save),
@@ -189,5 +189,44 @@ impl JsonEditorView {
         );
 
         el.into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_json;
+
+    #[test]
+    fn validate_json_empty_error_matches_translated_catalog() {
+        let error = validate_json("", false).unwrap_err();
+        assert_eq!(
+            error,
+            dbflux_i18n::t!("components.json_editor.empty_error", locale = "en")
+        );
+    }
+
+    #[test]
+    fn validate_json_empty_error_diverges_between_locales() {
+        let en = dbflux_i18n::t!("components.json_editor.empty_error", locale = "en");
+        let es = dbflux_i18n::t!("components.json_editor.empty_error", locale = "es");
+        assert_ne!(en, es);
+    }
+
+    #[test]
+    fn json_editor_keys_resolve_in_both_locales() {
+        let keys = [
+            "components.json_editor.empty_error",
+            "components.json_editor.format",
+            "components.json_editor.compact",
+            "components.json_editor.cancel",
+            "components.json_editor.save",
+        ];
+
+        for key in keys {
+            let en = dbflux_i18n::t!(key, locale = "en");
+            let es = dbflux_i18n::t!(key, locale = "es");
+            assert!(!en.is_empty() && en != key, "en missing for {key}");
+            assert!(!es.is_empty() && es != key, "es missing for {key}");
+        }
     }
 }
