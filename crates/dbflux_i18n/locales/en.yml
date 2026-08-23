@@ -1,6 +1,12 @@
 chart:
   axis_bar:
     group: Group
+    aggregation:
+      none: none
+      sum: sum
+      avg: avg
+      min: min
+      max: max
   engine:
     no_data: No data
   point_inspector:
@@ -396,6 +402,11 @@ modals:
     confirm_prompt: 'Type "%{table}" to confirm'
     cascade_warning: "Dependent objects will also be dropped (CASCADE):"
     delete_warning: This will permanently delete the table and any dependent objects.
+    relation_kind:
+      view: View
+      materialized_view: MatView
+      foreign_key: FK
+      trigger: Trigger
   import_dashboard:
     title: Import Dashboard from JSON
     name_label: Dashboard name
@@ -443,6 +454,7 @@ modals:
       changed: changed
       primary_key: (primary key)
       foreign_keys: (foreign keys)
+      nullable: nullable
     continue_stale: Continue with stale schema
     cancel: Cancel
     refreshing: Refreshing…

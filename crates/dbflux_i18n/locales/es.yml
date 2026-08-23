@@ -1,6 +1,12 @@
 chart:
   axis_bar:
     group: Grupo
+    aggregation:
+      none: ninguna
+      sum: suma
+      avg: promedio
+      min: mín
+      max: máx
   engine:
     no_data: Sin datos
   point_inspector:
@@ -396,6 +402,11 @@ modals:
     confirm_prompt: 'Escribe "%{table}" para confirmar'
     cascade_warning: "También se eliminarán los objetos dependientes (CASCADE):"
     delete_warning: Esto eliminará de forma permanente la tabla y cualquier objeto dependiente.
+    relation_kind:
+      view: Vista
+      materialized_view: Vista mat.
+      foreign_key: FK
+      trigger: Trigger
   import_dashboard:
     title: Importar dashboard desde JSON
     name_label: Nombre del dashboard
@@ -443,6 +454,7 @@ modals:
       changed: modificado
       primary_key: (clave primaria)
       foreign_keys: (claves foráneas)
+      nullable: admite NULL
     continue_stale: Continuar con el esquema desactualizado
     cancel: Cancelar
     refreshing: Actualizando…

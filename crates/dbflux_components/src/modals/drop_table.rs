@@ -52,12 +52,16 @@ impl DropTableRequest {
     }
 }
 
-fn relation_kind_label(kind: &RelationKind) -> &'static str {
+fn relation_kind_label(kind: &RelationKind) -> String {
     match kind {
-        RelationKind::View => "View",
-        RelationKind::MaterializedView => "MatView",
-        RelationKind::ForeignKeyChild => "FK",
-        RelationKind::Trigger => "Trigger",
+        RelationKind::View => dbflux_i18n::t!("modals.drop_table.relation_kind.view"),
+        RelationKind::MaterializedView => {
+            dbflux_i18n::t!("modals.drop_table.relation_kind.materialized_view")
+        }
+        RelationKind::ForeignKeyChild => {
+            dbflux_i18n::t!("modals.drop_table.relation_kind.foreign_key")
+        }
+        RelationKind::Trigger => dbflux_i18n::t!("modals.drop_table.relation_kind.trigger"),
     }
 }
 
@@ -373,6 +377,10 @@ mod tests {
             "modals.drop_table.confirm_prompt",
             "modals.drop_table.cascade_warning",
             "modals.drop_table.delete_warning",
+            "modals.drop_table.relation_kind.view",
+            "modals.drop_table.relation_kind.materialized_view",
+            "modals.drop_table.relation_kind.foreign_key",
+            "modals.drop_table.relation_kind.trigger",
         ];
 
         for key in keys {
@@ -387,6 +395,26 @@ mod tests {
     fn drop_table_title_diverges_between_locales() {
         let en = dbflux_i18n::t!("modals.drop_table.title", locale = "en");
         let es = dbflux_i18n::t!("modals.drop_table.title", locale = "es");
+        assert_ne!(en, es);
+    }
+
+    #[test]
+    fn relation_kind_label_covers_every_kind() {
+        assert_eq!(relation_kind_label(&RelationKind::View), "View");
+        assert_eq!(
+            relation_kind_label(&RelationKind::MaterializedView),
+            "MatView"
+        );
+        assert_eq!(relation_kind_label(&RelationKind::ForeignKeyChild), "FK");
+        assert_eq!(relation_kind_label(&RelationKind::Trigger), "Trigger");
+    }
+
+    #[test]
+    fn relation_kind_label_view_diverges_between_locales() {
+        let en = dbflux_i18n::t!("modals.drop_table.relation_kind.view", locale = "en");
+        let es = dbflux_i18n::t!("modals.drop_table.relation_kind.view", locale = "es");
+        assert_eq!(en, "View");
+        assert_eq!(es, "Vista");
         assert_ne!(en, es);
     }
 
