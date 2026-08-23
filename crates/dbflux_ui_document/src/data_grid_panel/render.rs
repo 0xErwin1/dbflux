@@ -1784,17 +1784,20 @@ impl DataGridPanel {
                     .bg(theme.tab_bar)
                     .child(picker_row)
                     .child(
-                        Button::new("data-grid-chart-time-range-apply", "Apply")
-                            .small()
-                            .disabled(!can_apply)
-                            .on_click(move |_, _, cx| {
-                                panel_clone.update(cx, |p, cx| {
-                                    // The returned bounds are intentionally discarded:
-                                    // the parent CodeDocument's TimeRangeChanged
-                                    // subscription drives re-execution.
-                                    let _ = p.apply_custom_range(cx);
-                                });
-                            }),
+                        Button::new(
+                            "data-grid-chart-time-range-apply",
+                            dbflux_i18n::t!("document.data.chart_dock.toolbar.apply"),
+                        )
+                        .small()
+                        .disabled(!can_apply)
+                        .on_click(move |_, _, cx| {
+                            panel_clone.update(cx, |p, cx| {
+                                // The returned bounds are intentionally discarded:
+                                // the parent CodeDocument's TimeRangeChanged
+                                // subscription drives re-execution.
+                                let _ = p.apply_custom_range(cx);
+                            });
+                        }),
                     );
 
                 Some(row.into_any_element())
@@ -2234,8 +2237,12 @@ impl DataGridPanel {
                     .flex()
                     .flex_col()
                     .gap(Spacing::SM)
-                    .child(Text::label("Save chart"))
-                    .child(Input::new(&name_input).placeholder("Chart name"))
+                    .child(Text::label(dbflux_i18n::t!(
+                        "document.data.chart_dock.save.title"
+                    )))
+                    .child(Input::new(&name_input).placeholder(dbflux_i18n::t!(
+                        "document.data.chart_dock.save.name_placeholder"
+                    )))
                     .child(
                         div()
                             .flex()
@@ -2244,7 +2251,7 @@ impl DataGridPanel {
                             .justify_end()
                             .child(
                                 Button::new("cancel-collection-chart-save")
-                                    .label("Cancel")
+                                    .label(dbflux_i18n::t!("document.data.chart_dock.save.cancel"))
                                     .small()
                                     .on_click(cx.listener(|this, _, _window, cx| {
                                         this.cancel_collection_chart_save(cx);
@@ -2252,7 +2259,7 @@ impl DataGridPanel {
                             )
                             .child(
                                 Button::new("confirm-collection-chart-save")
-                                    .label("Save")
+                                    .label(dbflux_i18n::t!("document.data.chart_dock.save.save"))
                                     .small()
                                     .with_variant(ButtonVariant::Primary)
                                     .on_click(cx.listener(|this, _, _window, cx| {
@@ -2285,28 +2292,11 @@ impl DataGridPanel {
             })
             .unwrap_or((None, false));
 
-        let (title, body, can_pick) = match &detection {
-            Some(ChartDetection::NoTimeColumn) | None => (
-                "No time column detected",
-                "This result has no Timestamp column. Pick a column to use as the time axis.",
-                true,
-            ),
-            Some(ChartDetection::NoNumericSeries) => (
-                "No numeric series",
-                "This result has no Float or Integer columns to plot as series.",
-                true,
-            ),
-            Some(ChartDetection::EmptyResult) => (
-                "No data yet",
-                "Run the query to populate the chart view.",
-                false,
-            ),
-            Some(ChartDetection::Ok { .. }) => (
-                "Chart build failed",
-                "The query result has chartable columns but the chart could not be built.",
-                false,
-            ),
-        };
+        let (title, body) = crate::labels::chart_degraded_copy(&detection);
+        let can_pick = matches!(
+            &detection,
+            Some(ChartDetection::NoTimeColumn) | Some(ChartDetection::NoNumericSeries) | None
+        );
 
         // Column shape preview chips.
         let row_count = self.result.row_count();
@@ -2424,14 +2414,16 @@ impl DataGridPanel {
                                     this.set_result_view_mode(ResultViewMode::Table, cx);
                                 }),
                             )
-                            .child("Open Table tab"),
+                            .child(dbflux_i18n::t!(
+                                "document.data.chart_dock.degraded.open_table_tab"
+                            )),
                     )
                     // "Pick time column…" primary button (only when picker makes sense)
                     .when(can_pick, |d| {
                         let label = if picker_open {
-                            "Hide picker"
+                            dbflux_i18n::t!("document.data.chart_dock.degraded.hide_picker")
                         } else {
-                            "Pick time column…"
+                            dbflux_i18n::t!("document.data.chart_dock.degraded.pick_time_column")
                         };
                         let primary = cx.theme().primary;
                         d.child(
@@ -2552,7 +2544,9 @@ impl DataGridPanel {
                     .child(
                         div()
                             .text_size(FontSizes::SM)
-                            .child(Text::body("X axis (time / label column)")),
+                            .child(Text::body(dbflux_i18n::t!(
+                                "document.data.chart_dock.picker.x_axis_label"
+                            ))),
                     )
                     .child(div().flex().flex_wrap().gap(Spacing::XS).children(
                         x_candidates.iter().enumerate().map(
@@ -2598,7 +2592,9 @@ impl DataGridPanel {
                 .child(
                     div()
                         .text_size(FontSizes::SM)
-                        .child(Text::body("Y axis (numeric columns)")),
+                        .child(Text::body(dbflux_i18n::t!(
+                            "document.data.chart_dock.picker.y_axis_label"
+                        ))),
                 )
                 .child(
                     div().flex().flex_col().gap(Spacing::XS).children(
@@ -2689,7 +2685,7 @@ impl DataGridPanel {
                     ..chart_colors.muted_fg
                 })
             })
-            .child("Apply");
+            .child(dbflux_i18n::t!("document.data.chart_dock.picker.apply"));
 
         picker.child(apply_btn)
     }

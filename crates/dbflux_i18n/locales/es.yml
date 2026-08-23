@@ -54,6 +54,34 @@ controls:
       many: "+%{count} más"
 document:
   data:
+    chart_dock:
+      toolbar:
+        apply: Aplicar
+      save:
+        title: Guardar gráfico
+        name_placeholder: Nombre del gráfico
+        cancel: Cancelar
+        save: Guardar
+      degraded:
+        no_time_column:
+          title: No se detectó una columna de tiempo
+          body: Este resultado no tiene una columna Timestamp. Elige una columna para usarla como eje de tiempo.
+        no_numeric_series:
+          title: No hay series numéricas
+          body: Este resultado no tiene columnas Float ni Integer para graficar como series.
+        no_data:
+          title: Aún no hay datos
+          body: Ejecuta la consulta para poblar la vista de gráfico.
+        build_failed:
+          title: No se pudo construir el gráfico
+          body: El resultado de la consulta tiene columnas graficables, pero el gráfico no se pudo construir.
+        open_table_tab: Abrir pestaña de tabla
+        pick_time_column: "Elegir columna de tiempo…"
+        hide_picker: Ocultar selector
+      picker:
+        x_axis_label: Eje X (columna de tiempo o etiqueta)
+        y_axis_label: Eje Y (columnas numéricas)
+        apply: Aplicar
     grid:
       edit_bar:
         clean: Sin cambios pendientes
