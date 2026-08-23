@@ -51,13 +51,17 @@ impl super::KeyValueDocument {
         self.cancel_member_edit(cx);
 
         let Some(connection) = self.get_connection(cx) else {
-            self.last_error = Some("Connection is no longer active".to_string());
+            self.last_error = Some(dbflux_i18n::t!(
+                "document.key_value.mutation.error.connection_inactive"
+            ));
             cx.notify();
             return;
         };
 
         if self.app_state.read(cx).is_background_task_limit_reached() {
-            self.last_error = Some("Too many background tasks running, please wait".to_string());
+            self.last_error = Some(dbflux_i18n::t!(
+                "document.key_value.pagination.error.background_task_limit"
+            ));
             cx.notify();
             return;
         }
@@ -166,7 +170,9 @@ impl super::KeyValueDocument {
         };
 
         let Some(connection) = self.get_connection(cx) else {
-            self.last_error = Some("Connection is no longer active".to_string());
+            self.last_error = Some(dbflux_i18n::t!(
+                "document.key_value.mutation.error.connection_inactive"
+            ));
             cx.notify();
             return;
         };
@@ -235,5 +241,27 @@ impl super::KeyValueDocument {
             .log_if_dropped();
         })
         .detach();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn key_value_pagination_keys_resolve_in_both_locales() {
+        let keys = ["document.key_value.pagination.error.background_task_limit"];
+
+        for key in keys {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
     }
 }

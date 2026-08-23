@@ -23,6 +23,65 @@ mod tests {
         assert_eq!(spanish, "Actualizar");
         assert_ne!(english, spanish);
     }
+
+    #[test]
+    fn key_value_render_keys_resolve_in_both_locales() {
+        let keys = [
+            "document.key_value.render.delete_key.title",
+            "document.key_value.render.delete_key.message",
+            "document.key_value.render.delete_member.title",
+            "document.key_value.render.delete_member.message",
+            "document.key_value.render.unknown_type",
+            "document.key_value.render.value_header",
+            "document.key_value.render.id_header",
+            "document.key_value.render.fields_header",
+            "document.key_value.render.field_score_header",
+            "document.key_value.render.click_to_edit",
+            "document.key_value.render.select_key_prompt",
+            "document.key_value.render.prev",
+            "document.key_value.render.next",
+            "document.key_value.render.page",
+            "document.key_value.render.keys_count.one",
+            "document.key_value.render.keys_count.many",
+            "document.key_value.render.filter.keys_placeholder",
+            "document.key_value.render.filter.members_placeholder",
+            "document.key_value.render.ttl.no_limit",
+            "document.key_value.render.ttl.missing",
+            "document.key_value.render.ttl.expired",
+        ];
+
+        for key in keys {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn key_value_delete_key_message_interpolates_key_name() {
+        let message = dbflux_i18n::t!(
+            "document.key_value.render.delete_key.message",
+            locale = "en",
+            key = "session:42"
+        );
+
+        assert!(message.contains("session:42"));
+    }
+
+    #[test]
+    fn key_value_page_label_interpolates_page_number() {
+        let page = dbflux_i18n::t!("document.key_value.render.page", locale = "en", page = 3);
+
+        assert!(page.contains('3'));
+    }
 }
 
 impl Render for super::KeyValueDocument {
@@ -50,15 +109,18 @@ impl Render for super::KeyValueDocument {
             self.pending_key_delete.is_some() || self.pending_member_delete.is_some();
         let (delete_title, delete_message) = if let Some(pending) = &self.pending_key_delete {
             (
-                "Delete key?".to_string(),
-                format!("Delete \"{}\"? This action cannot be undone.", pending.key),
+                dbflux_i18n::t!("document.key_value.render.delete_key.title"),
+                dbflux_i18n::t!(
+                    "document.key_value.render.delete_key.message",
+                    key = pending.key
+                ),
             )
         } else if let Some(pending) = &self.pending_member_delete {
             (
-                "Delete member?".to_string(),
-                format!(
-                    "Delete \"{}\"? This action cannot be undone.",
-                    pending.member_display
+                dbflux_i18n::t!("document.key_value.render.delete_member.title"),
+                dbflux_i18n::t!(
+                    "document.key_value.render.delete_member.message",
+                    member = pending.member_display
                 ),
             )
         } else {
@@ -86,8 +148,8 @@ impl Render for super::KeyValueDocument {
             let type_label = value
                 .entry
                 .key_type
-                .map(|t| key_type_label(t).to_string())
-                .unwrap_or_else(|| "Unknown".to_string());
+                .map(key_type_label)
+                .unwrap_or_else(|| dbflux_i18n::t!("document.key_value.render.unknown_type"));
             let ttl_color = match self.ttl_state {
                 TtlState::Expired => theme.danger,
                 TtlState::Missing => theme.warning,
@@ -230,7 +292,7 @@ impl Render for super::KeyValueDocument {
                             .justify_center()
                             .border_l_1()
                             .border_color(theme.border)
-                            .child(Text::muted("No data")),
+                            .child(Text::muted(dbflux_i18n::t!("document.data.grid.empty"))),
                     );
                 }
             } else if is_structured {
@@ -283,15 +345,15 @@ impl Render for super::KeyValueDocument {
                 let is_stream = self.is_stream_type();
                 header = header.child(div().w(px(30.0)).child(Text::caption("#")));
                 header = header.child(div().flex_1().child(Text::caption(if is_stream {
-                    "ID"
+                    dbflux_i18n::t!("document.key_value.render.id_header")
                 } else {
-                    "Value"
+                    dbflux_i18n::t!("document.key_value.render.value_header")
                 })));
                 if needs_value_col {
                     header = header.child(div().w(px(200.0)).child(Text::caption(if is_stream {
-                        "Fields"
+                        dbflux_i18n::t!("document.key_value.render.fields_header")
                     } else {
-                        "Field/Score"
+                        dbflux_i18n::t!("document.key_value.render.field_score_header")
                     })));
                 }
                 header = header.child(div().w(Heights::ICON_MD));
@@ -450,11 +512,9 @@ impl Render for super::KeyValueDocument {
                         )
                         .child(value_preview)
                         .when(is_editable, |d| {
-                            d.child(
-                                div()
-                                    .pt(Spacing::SM)
-                                    .child(Text::caption("Click or press Enter to edit")),
-                            )
+                            d.child(div().pt(Spacing::SM).child(Text::caption(dbflux_i18n::t!(
+                                "document.key_value.render.click_to_edit"
+                            ))))
                         }),
                 );
             }
@@ -478,10 +538,13 @@ impl Render for super::KeyValueDocument {
                                 .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
                                 .color(theme.muted_foreground),
                         )
-                        .child(Text::muted("Loading…"))
+                        .child(Text::muted(dbflux_i18n::t!("document.data.grid.loading")))
                         .into_any_element()
                 } else {
-                    Text::muted("Select a key to inspect").into_any_element()
+                    Text::muted(dbflux_i18n::t!(
+                        "document.key_value.render.select_key_prompt"
+                    ))
+                    .into_any_element()
                 })
                 .into_any_element()
         };
@@ -626,9 +689,17 @@ impl Render for super::KeyValueDocument {
                                     .into_any_element()
                             })
                             .child(Text::caption(if self.runner.is_primary_active() {
-                                "Loading…".to_string()
+                                dbflux_i18n::t!("document.data.grid.loading")
+                            } else if key_count == 1 {
+                                dbflux_i18n::t!(
+                                    "document.key_value.render.keys_count.one",
+                                    count = key_count
+                                )
                             } else {
-                                format!("{} keys", key_count)
+                                dbflux_i18n::t!(
+                                    "document.key_value.render.keys_count.many",
+                                    count = key_count
+                                )
                             })),
                     )
                     .child(
@@ -663,13 +734,23 @@ impl Render for super::KeyValueDocument {
                                             .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
                                             .color(icon_color)
                                     })
-                                    .child(Text::caption("Prev").color(if can_prev {
-                                        theme.foreground
-                                    } else {
-                                        theme.muted_foreground
-                                    })),
+                                    .child(
+                                        Text::caption(dbflux_i18n::t!(
+                                            "document.key_value.render.prev"
+                                        ))
+                                        .color(
+                                            if can_prev {
+                                                theme.foreground
+                                            } else {
+                                                theme.muted_foreground
+                                            },
+                                        ),
+                                    ),
                             )
-                            .child(Text::caption(format!("Page {}", current_page)))
+                            .child(Text::caption(dbflux_i18n::t!(
+                                "document.key_value.render.page",
+                                page = current_page
+                            )))
                             .child(
                                 div()
                                     .id("kv-next-page")
@@ -687,11 +768,18 @@ impl Render for super::KeyValueDocument {
                                             }))
                                     })
                                     .when(!can_next, |d| d.opacity(0.5))
-                                    .child(Text::caption("Next").color(if can_next {
-                                        theme.foreground
-                                    } else {
-                                        theme.muted_foreground
-                                    }))
+                                    .child(
+                                        Text::caption(dbflux_i18n::t!(
+                                            "document.key_value.render.next"
+                                        ))
+                                        .color(
+                                            if can_next {
+                                                theme.foreground
+                                            } else {
+                                                theme.muted_foreground
+                                            },
+                                        ),
+                                    )
                                     .child({
                                         let icon_color = if can_next {
                                             theme.foreground
@@ -773,9 +861,9 @@ impl Render for super::KeyValueDocument {
                         );
 
                         row = row.child(Text::caption(
-                            key.key_type
-                                .map(|t| key_type_label(t).to_string())
-                                .unwrap_or_else(|| "?".to_string()),
+                            key.key_type.map(key_type_label).unwrap_or_else(|| {
+                                dbflux_i18n::t!("document.key_value.parsing.type.unknown")
+                            }),
                         ));
                     }
 

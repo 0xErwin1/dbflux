@@ -556,6 +556,89 @@ document:
       edit_value: Editar valor
       new_key: Nueva clave
       rename: Renombrar
+    mutation:
+      error:
+        connection_inactive: La conexión ya no está activa
+        member_target_unavailable: "No se puede eliminar el miembro: conexión o clave no disponible"
+        key_not_deleted: La clave no fue eliminada
+      task:
+        delete_member: "Eliminar miembro de %{key}"
+        edit_member: "Editar miembro en %{key}"
+        add_member: "Agregar miembro a %{key}"
+        create_key: "Crear clave %{key}"
+    new_key:
+      title: Nueva clave
+      key_type:
+        label: Tipo de clave*
+        placeholder: "Seleccionar tipo"
+      ttl:
+        label: TTL
+        placeholder: Sin límite
+      key_name:
+        label: Nombre de clave*
+        placeholder: Ingresar nombre de clave
+      value:
+        label: Valor
+        placeholder: Ingresar valor
+      field_placeholder: Ingresar campo
+      member_placeholder: Ingresar miembro
+      score_placeholder: Ingresar puntuación
+      error:
+        key_name_required: El nombre de la clave es obligatorio
+        ttl_invalid: El TTL debe ser un entero positivo
+        stream_requires_field: El stream requiere al menos un par campo/valor
+        prefix: "Error: %{error}"
+      cancel: Cancelar
+      create: Crear
+      type:
+        string: String
+        hash: Hash
+        list: List
+        set: Set
+        sorted_set: Sorted Set
+        json: JSON
+        stream: Stream
+    pagination:
+      error:
+        background_task_limit: Demasiadas tareas en segundo plano en ejecución, espere por favor
+    parsing:
+      type:
+        string: String
+        bytes: Bytes
+        hash: Hash
+        list: List
+        set: Set
+        sorted_set: ZSet
+        json: JSON
+        stream: Stream
+        unknown: "?"
+    render:
+      delete_key:
+        title: ¿Eliminar clave?
+        message: '¿Eliminar "%{key}"? Esta acción no se puede deshacer.'
+      delete_member:
+        title: ¿Eliminar miembro?
+        message: '¿Eliminar "%{member}"? Esta acción no se puede deshacer.'
+      unknown_type: Desconocido
+      value_header: Valor
+      id_header: ID
+      fields_header: Campos
+      field_score_header: Campo/Puntuación
+      click_to_edit: Clic o presiona Enter para editar
+      select_key_prompt: Selecciona una clave para inspeccionar
+      prev: Anterior
+      next: Siguiente
+      page: "Página %{page}"
+      keys_count:
+        one: "%{count} clave"
+        many: "%{count} claves"
+      filter:
+        keys_placeholder: "Filtrar claves..."
+        members_placeholder: "Filtrar miembros..."
+      ttl:
+        no_limit: Sin límite
+        missing: Ausente
+        expired: Expirado
   query_builder:
     aggregate:
       fn:
