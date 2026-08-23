@@ -1,5 +1,6 @@
 //! Translated label helpers for sidebar chrome (tabs, footer, tree folders).
 
+use dbflux_app::ExternalDriverStage;
 use dbflux_core::{DatabaseCategory, RelationKind};
 
 /// Translated label for a schema-tree container folder, e.g. `"Tables (12)"`.
@@ -306,6 +307,145 @@ pub(crate) fn instance_overview_label() -> String {
 /// browsing, e.g. CloudWatch namespaces).
 pub(crate) fn metrics_folder_label() -> String {
     dbflux_i18n::t!("sidebar.tree.folder.metrics")
+}
+
+/// Translated task-panel label for an in-flight connect attempt, e.g.
+/// `"Connecting to prod-db"`.
+pub(crate) fn connecting_task_label(name: &str) -> String {
+    dbflux_i18n::t!("sidebar.task.connecting", name = name)
+}
+
+/// Translated task-panel label for an in-flight disconnect, e.g.
+/// `"Disconnecting prod-db"`.
+pub(crate) fn disconnecting_task_label(name: &str) -> String {
+    dbflux_i18n::t!("sidebar.task.disconnecting", name = name)
+}
+
+/// Translated task failure message when a pre-connect hook is cancelled.
+pub(crate) fn connection_hook_cancelled_task_label() -> String {
+    dbflux_i18n::t!("sidebar.task.connection_hook_cancelled")
+}
+
+/// Translated task failure message when a post-connect hook is cancelled.
+pub(crate) fn post_connect_hook_cancelled_task_label() -> String {
+    dbflux_i18n::t!("sidebar.task.post_connect_hook_cancelled")
+}
+
+/// Translated task failure message when a pre-disconnect hook is cancelled.
+pub(crate) fn disconnect_hook_cancelled_task_label() -> String {
+    dbflux_i18n::t!("sidebar.task.disconnect_hook_cancelled")
+}
+
+/// Translated task failure message when a post-disconnect hook is cancelled.
+pub(crate) fn post_disconnect_hook_cancelled_task_label() -> String {
+    dbflux_i18n::t!("sidebar.task.post_disconnect_hook_cancelled")
+}
+
+/// Translated toast shown when a connect/disconnect request is rejected
+/// because an operation is already pending for the same profile.
+pub(crate) fn connection_already_pending_toast_label() -> String {
+    dbflux_i18n::t!("sidebar.toast.connection_already_pending")
+}
+
+/// Translated toast shown when a pending-operation slot was claimed by
+/// another thread between the check and the reservation.
+pub(crate) fn operation_started_elsewhere_toast_label() -> String {
+    dbflux_i18n::t!("sidebar.toast.operation_started_elsewhere")
+}
+
+/// Translated toast shown when the background task limit blocks a new
+/// connect or disconnect request.
+pub(crate) fn background_task_limit_toast_label() -> String {
+    dbflux_i18n::t!("sidebar.toast.background_task_limit")
+}
+
+/// Translated toast shown when a pre-connect hook cancels the connect flow.
+pub(crate) fn connection_cancelled_by_hook_toast_label() -> String {
+    dbflux_i18n::t!("sidebar.toast.connection_cancelled_by_hook")
+}
+
+/// Translated toast shown when a post-connect hook cancels the connect flow.
+pub(crate) fn connection_cancelled_by_post_connect_hook_toast_label() -> String {
+    dbflux_i18n::t!("sidebar.toast.connection_cancelled_by_post_connect_hook")
+}
+
+/// Translated toast shown when a pre-disconnect hook cancels the disconnect
+/// flow.
+pub(crate) fn disconnect_cancelled_by_hook_toast_label() -> String {
+    dbflux_i18n::t!("sidebar.toast.disconnect_cancelled_by_hook")
+}
+
+/// Translated toast shown when the disconnect itself completed but the
+/// post-disconnect hook was cancelled.
+pub(crate) fn disconnected_hook_cancelled_toast_label() -> String {
+    dbflux_i18n::t!("sidebar.toast.disconnected_hook_cancelled")
+}
+
+/// Translated error message for editing a connection profile that no longer
+/// exists.
+pub(crate) fn profile_not_found_label() -> String {
+    dbflux_i18n::t!("sidebar.toast.profile_not_found")
+}
+
+/// Translated toast reporting a successful connect, e.g. `"Connected to
+/// prod-db"`, optionally noting how many hook warnings were logged.
+pub(crate) fn connected_toast_label(name: &str, warning_count: usize) -> String {
+    match warning_count {
+        0 => dbflux_i18n::t!("sidebar.toast.connected.plain", name = name),
+        1 => dbflux_i18n::t!("sidebar.toast.connected.one", name = name),
+        _ => dbflux_i18n::t!(
+            "sidebar.toast.connected.many",
+            name = name,
+            count = warning_count
+        ),
+    }
+}
+
+/// Translated toast reporting a successful disconnect, e.g. `"Disconnected
+/// from prod-db"`, optionally noting how many hook warnings were logged.
+pub(crate) fn disconnected_toast_label(name: &str, warning_count: usize) -> String {
+    match warning_count {
+        0 => dbflux_i18n::t!("sidebar.toast.disconnected.plain", name = name),
+        1 => dbflux_i18n::t!("sidebar.toast.disconnected.one", name = name),
+        _ => dbflux_i18n::t!(
+            "sidebar.toast.disconnected.many",
+            name = name,
+            count = warning_count
+        ),
+    }
+}
+
+/// Translated toast reporting a disconnect that completed despite a
+/// post-disconnect hook error, e.g. `"Disconnected from prod-db, but the
+/// hook timed out"`.
+pub(crate) fn disconnected_hook_error_toast_label(name: &str, error: &str) -> String {
+    dbflux_i18n::t!(
+        "sidebar.toast.disconnected_hook_error",
+        name = name,
+        error = error
+    )
+}
+
+/// Translated toast for an external (RPC-backed) driver that failed to
+/// become available, with wording specific to which stage failed.
+pub(crate) fn external_driver_unavailable_label(
+    stage: &ExternalDriverStage,
+    driver_id: &str,
+    socket_id: &str,
+    summary: &str,
+) -> String {
+    let key = match stage {
+        ExternalDriverStage::Config => "sidebar.toast.external_driver_unavailable.config",
+        ExternalDriverStage::Launch => "sidebar.toast.external_driver_unavailable.launch",
+        ExternalDriverStage::Probe => "sidebar.toast.external_driver_unavailable.probe",
+    };
+
+    dbflux_i18n::t!(
+        key,
+        driver_id = driver_id,
+        socket_id = socket_id,
+        summary = summary
+    )
 }
 
 #[cfg(test)]
@@ -730,5 +870,219 @@ mod tests {
             super::dependent_kind_label(&RelationKind::Trigger),
             dbflux_i18n::t!("sidebar.tree.status.dependent_kind.trigger")
         );
+    }
+
+    const D1A_KEYS: [&str; 18] = [
+        "sidebar.task.connecting",
+        "sidebar.task.disconnecting",
+        "sidebar.task.connection_hook_cancelled",
+        "sidebar.task.post_connect_hook_cancelled",
+        "sidebar.task.disconnect_hook_cancelled",
+        "sidebar.task.post_disconnect_hook_cancelled",
+        "sidebar.toast.connection_already_pending",
+        "sidebar.toast.operation_started_elsewhere",
+        "sidebar.toast.background_task_limit",
+        "sidebar.toast.connection_cancelled_by_hook",
+        "sidebar.toast.connection_cancelled_by_post_connect_hook",
+        "sidebar.toast.disconnect_cancelled_by_hook",
+        "sidebar.toast.disconnected_hook_cancelled",
+        "sidebar.toast.profile_not_found",
+        "sidebar.toast.connected.plain",
+        "sidebar.toast.connected.one",
+        "sidebar.toast.connected.many",
+        "sidebar.toast.disconnected_hook_error",
+    ];
+
+    #[test]
+    fn d1a_keys_resolve_in_both_locales() {
+        for key in D1A_KEYS {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert_ne!(value, key, "missing translation for {locale}.{key}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "translation fell back to the miss sentinel for {locale}.{key}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn disconnected_toast_keys_resolve_in_both_locales() {
+        for key in [
+            "sidebar.toast.disconnected.plain",
+            "sidebar.toast.disconnected.one",
+            "sidebar.toast.disconnected.many",
+        ] {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert_ne!(value, key, "missing translation for {locale}.{key}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "translation fell back to the miss sentinel for {locale}.{key}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn external_driver_unavailable_keys_resolve_in_both_locales() {
+        for key in [
+            "sidebar.toast.external_driver_unavailable.config",
+            "sidebar.toast.external_driver_unavailable.launch",
+            "sidebar.toast.external_driver_unavailable.probe",
+        ] {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert_ne!(value, key, "missing translation for {locale}.{key}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "translation fell back to the miss sentinel for {locale}.{key}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn connecting_task_label_includes_the_profile_name() {
+        let label = super::connecting_task_label("prod-db");
+
+        assert!(label.contains("prod-db"));
+        assert_eq!(
+            label,
+            dbflux_i18n::t!("sidebar.task.connecting", name = "prod-db")
+        );
+    }
+
+    #[test]
+    fn disconnecting_task_label_includes_the_profile_name() {
+        let label = super::disconnecting_task_label("prod-db");
+
+        assert!(label.contains("prod-db"));
+        assert_eq!(
+            label,
+            dbflux_i18n::t!("sidebar.task.disconnecting", name = "prod-db")
+        );
+        assert_ne!(label, super::connecting_task_label("prod-db"));
+    }
+
+    #[test]
+    fn connected_toast_label_plain_one_and_many_diverge() {
+        let plain = super::connected_toast_label("prod-db", 0);
+        let one = super::connected_toast_label("prod-db", 1);
+        let many = super::connected_toast_label("prod-db", 3);
+
+        assert_eq!(
+            plain,
+            dbflux_i18n::t!("sidebar.toast.connected.plain", name = "prod-db")
+        );
+        assert_eq!(
+            one,
+            dbflux_i18n::t!("sidebar.toast.connected.one", name = "prod-db")
+        );
+        assert_eq!(
+            many,
+            dbflux_i18n::t!("sidebar.toast.connected.many", name = "prod-db", count = 3)
+        );
+        assert!(many.contains('3'));
+        assert_ne!(plain, one);
+        assert_ne!(one, many);
+        assert_ne!(plain, many);
+    }
+
+    #[test]
+    fn disconnected_toast_label_plain_one_and_many_diverge() {
+        let plain = super::disconnected_toast_label("prod-db", 0);
+        let one = super::disconnected_toast_label("prod-db", 1);
+        let many = super::disconnected_toast_label("prod-db", 2);
+
+        assert_eq!(
+            plain,
+            dbflux_i18n::t!("sidebar.toast.disconnected.plain", name = "prod-db")
+        );
+        assert_eq!(
+            one,
+            dbflux_i18n::t!("sidebar.toast.disconnected.one", name = "prod-db")
+        );
+        assert_eq!(
+            many,
+            dbflux_i18n::t!(
+                "sidebar.toast.disconnected.many",
+                name = "prod-db",
+                count = 2
+            )
+        );
+        assert!(many.contains('2'));
+        assert_ne!(plain, one);
+        assert_ne!(one, many);
+    }
+
+    #[test]
+    fn disconnected_hook_error_toast_label_includes_name_and_error() {
+        let label = super::disconnected_hook_error_toast_label("prod-db", "hook timed out");
+
+        assert!(label.contains("prod-db"));
+        assert!(label.contains("hook timed out"));
+        assert_eq!(
+            label,
+            dbflux_i18n::t!(
+                "sidebar.toast.disconnected_hook_error",
+                name = "prod-db",
+                error = "hook timed out"
+            )
+        );
+    }
+
+    #[test]
+    fn external_driver_unavailable_label_uses_the_stage_specific_key() {
+        use dbflux_app::ExternalDriverStage;
+
+        let config = super::external_driver_unavailable_label(
+            &ExternalDriverStage::Config,
+            "rpc:missing.sock",
+            "missing.sock",
+            "bad config",
+        );
+        let launch = super::external_driver_unavailable_label(
+            &ExternalDriverStage::Launch,
+            "rpc:missing.sock",
+            "missing.sock",
+            "did not start",
+        );
+        let probe = super::external_driver_unavailable_label(
+            &ExternalDriverStage::Probe,
+            "rpc:missing.sock",
+            "missing.sock",
+            "probe failed",
+        );
+
+        assert!(config.contains("rpc:missing.sock"));
+        assert!(config.contains("bad config"));
+        assert!(launch.contains("did not start"));
+        assert!(probe.contains("probe failed"));
+        assert_ne!(config, launch);
+        assert_ne!(launch, probe);
+    }
+
+    #[test]
+    fn sidebar_task_connecting_diverges_between_locales() {
+        let english = dbflux_i18n::t!("sidebar.task.connecting", locale = "en");
+        let spanish = dbflux_i18n::t!("sidebar.task.connecting", locale = "es");
+
+        assert_ne!(english, spanish);
+    }
+
+    #[test]
+    fn sidebar_toast_connected_many_diverges_between_locales() {
+        let english = dbflux_i18n::t!("sidebar.toast.connected.many", locale = "en");
+        let spanish = dbflux_i18n::t!("sidebar.toast.connected.many", locale = "es");
+
+        assert_ne!(english, spanish);
     }
 }
