@@ -966,6 +966,17 @@ document:
         failed_suffix:
           one: " (%{count} subida fallida)"
           many: " (%{count} subidas fallidas)"
+  object_editor:
+    error:
+      not_previewable_fallback: Este objeto no se puede abrir en la aplicación.
+      not_text: Este objeto no es de texto y no se puede editar en la aplicación.
+      not_utf8: Este objeto no es texto UTF-8 válido y no se puede editar en la aplicación.
+    status:
+      bucket_tooltip: Bucket
+      key_tooltip: Clave del objeto
+      loading: "Cargando objeto…"
+      preparing: "Preparando editor…"
+      size_tooltip: Tamaño del objeto tal como se cargó o guardó por última vez
   query_builder:
     aggregate:
       fn:

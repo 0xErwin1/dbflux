@@ -79,7 +79,12 @@ impl ObjectEditorDocument {
                         .border_1()
                         .border_color(theme.warning)
                         .child(div().size(DIRTY_DOT).rounded(Radii::FULL).bg(theme.warning))
-                        .child(Text::caption("modified").warning()),
+                        .child(
+                            Text::caption(dbflux_i18n::t!(
+                                "document.object_browser.editor.dirty_badge"
+                            ))
+                            .warning(),
+                        ),
                 )
             })
     }
@@ -101,12 +106,16 @@ impl ObjectEditorDocument {
                         .h_full(),
                 )
                 .into_any_element(),
-            (LoadState::Loading, None) => {
-                self.render_notice("Loading object…".to_string(), false, cx)
-            }
-            (LoadState::Ready, None) => {
-                self.render_notice("Preparing editor…".to_string(), false, cx)
-            }
+            (LoadState::Loading, None) => self.render_notice(
+                dbflux_i18n::t!("document.object_editor.status.loading"),
+                false,
+                cx,
+            ),
+            (LoadState::Ready, None) => self.render_notice(
+                dbflux_i18n::t!("document.object_editor.status.preparing"),
+                false,
+                cx,
+            ),
         }
     }
 
@@ -203,8 +212,12 @@ impl ObjectEditorDocument {
                                 .color(theme.primary_foreground),
                             )
                             .child(
-                                Text::caption(if is_saving { "Saving…" } else { "Save" })
-                                    .color(theme.primary_foreground),
+                                Text::caption(if is_saving {
+                                    dbflux_i18n::t!("document.object_browser.editor.footer.saving")
+                                } else {
+                                    dbflux_i18n::t!("document.object_browser.editor.footer.save")
+                                })
+                                .color(theme.primary_foreground),
                             )
                             .child(
                                 Text::key_hint(SAVE_SHORTCUT_HINT).color(theme.primary_foreground),
@@ -228,7 +241,9 @@ impl ObjectEditorDocument {
                                     }))
                             })
                             .child(Icon::new(AppIcon::RotateCcw).small().muted())
-                            .child(Text::caption("Discard")),
+                            .child(Text::caption(dbflux_i18n::t!(
+                                "document.object_browser.editor.footer.discard"
+                            ))),
                     )
                     .when(has_buffer, |this| {
                         this.child(
@@ -246,7 +261,9 @@ impl ObjectEditorDocument {
                                     this.open_find(window, cx);
                                 }))
                                 .child(Icon::new(AppIcon::Search).small().muted())
-                                .child(Text::caption("Find"))
+                                .child(Text::caption(dbflux_i18n::t!(
+                                    "document.object_browser.editor.footer.find"
+                                )))
                                 .child(Text::key_hint(FIND_SHORTCUT_HINT)),
                         )
                     }),
@@ -263,5 +280,46 @@ impl ObjectEditorDocument {
                         this.child(Text::caption(cursor_label(position)).muted_foreground())
                     }),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// The tab's own loading/preparing notices resolve in both locales and
+    /// diverge from English to Spanish.
+    #[test]
+    fn status_keys_resolve_in_both_locales() {
+        for key in [
+            "document.object_editor.status.loading",
+            "document.object_editor.status.preparing",
+        ] {
+            let en = dbflux_i18n::t!(key, locale = "en");
+            let es = dbflux_i18n::t!(key, locale = "es");
+
+            assert!(!en.is_empty());
+            assert_ne!(en, key);
+            assert_ne!(en, format!("en.{key}"));
+            assert_ne!(en, es);
+        }
+    }
+
+    /// The footer, dirty-badge, and toolbar controls reuse the same
+    /// `document.object_browser.editor.*` catalog entries the pinned
+    /// preview-pane editor uses, so the two surfaces read identically.
+    #[test]
+    fn footer_and_dirty_badge_reuse_the_shared_editor_catalog_entries() {
+        for key in [
+            "document.object_browser.editor.dirty_badge",
+            "document.object_browser.editor.footer.saving",
+            "document.object_browser.editor.footer.save",
+            "document.object_browser.editor.footer.discard",
+            "document.object_browser.editor.footer.find",
+        ] {
+            let en = dbflux_i18n::t!(key, locale = "en");
+            let es = dbflux_i18n::t!(key, locale = "es");
+
+            assert!(!en.is_empty());
+            assert_ne!(en, es);
+        }
     }
 }

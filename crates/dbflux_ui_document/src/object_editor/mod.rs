@@ -174,8 +174,12 @@ impl ObjectEditorDocument {
 
     /// Summary for the tab's dirty-dot tooltip and the unsaved-changes modal.
     pub fn change_summary(&self) -> Option<String> {
-        self.is_dirty()
-            .then(|| format!("Unsaved edits to {}", self.key))
+        self.is_dirty().then(|| {
+            dbflux_i18n::t!(
+                "document.object_browser.editor.unsaved_summary",
+                key = self.key.as_str()
+            )
+        })
     }
 
     pub fn refresh_policy(&self) -> RefreshPolicy {
@@ -229,7 +233,9 @@ impl ObjectEditorDocument {
         cx.notify();
 
         let Some(connection) = self.get_connection(cx) else {
-            self.load = LoadState::Failed("Connection is no longer active".to_string());
+            self.load = LoadState::Failed(dbflux_i18n::t!(
+                "document.object_browser.error.connection_unavailable"
+            ));
             cx.notify();
             return;
         };
@@ -383,7 +389,7 @@ impl ObjectEditorDocument {
             report_error(
                 UserFacingError::new(
                     ErrorKind::Driver,
-                    "Connection is no longer active".to_string(),
+                    dbflux_i18n::t!("document.object_browser.error.connection_unavailable"),
                 ),
                 cx,
             );
@@ -409,9 +415,9 @@ impl ObjectEditorDocument {
                     bytes,
                     content_type.as_deref(),
                 ),
-                None => Err(DbError::NotSupported(
-                    "Object-store API unavailable".to_string(),
-                )),
+                None => Err(DbError::NotSupported(dbflux_i18n::t!(
+                    "document.object_browser.error.api_unavailable"
+                ))),
             }
         });
 
@@ -462,9 +468,12 @@ impl ObjectEditorDocument {
             buffer.byte_len = byte_len;
         }
 
-        Toast::success(format!("Saved s3://{}/{}", self.bucket, self.key))
-            .meta_right(now_hms())
-            .push(cx);
+        Toast::success(dbflux_i18n::t!(
+            "document.object_browser.editor.toast.saved",
+            uri = format!("s3://{}/{}", self.bucket, self.key).as_str()
+        ))
+        .meta_right(now_hms())
+        .push(cx);
 
         let notify_opener = self.on_saved.clone();
         let key = self.key.clone();
@@ -581,9 +590,9 @@ fn load_editable_body(
     limit_bytes: u64,
 ) -> Result<Result<LoadedBody, LoadRefusal>, DbError> {
     let Some(api) = connection.object_store_api() else {
-        return Err(DbError::NotSupported(
-            "Object-store API unavailable".to_string(),
-        ));
+        return Err(DbError::NotSupported(dbflux_i18n::t!(
+            "document.object_browser.error.api_unavailable"
+        )));
     };
 
     let metadata: ObjectMetadata = api.head_object(bucket, key)?;
@@ -647,6 +656,34 @@ mod tests {
             .expect_err("not text");
 
         assert!(refusal.contains("text"));
+    }
+
+    /// The "not text" refusal routes through the catalog and diverges between
+    /// locales, matching the reused `PreviewGate::message()` pattern from
+    /// PR 19: both refusal paths in `detect_editable_text` are translated,
+    /// not just the gate check.
+    #[test]
+    fn non_text_refusal_message_resolves_in_both_locales() {
+        let refusal = detect_editable_text(&metadata("a.png", 10, Some("image/png")), 1024)
+            .expect_err("not text");
+
+        assert_ne!(refusal, "document.object_editor.error.not_text");
+
+        let es = dbflux_i18n::t!("document.object_editor.error.not_text", locale = "es");
+        assert_ne!(refusal, es);
+    }
+
+    /// The size-refusal path reuses `PreviewGate::message()` exactly as the
+    /// object browser preview pane does (PR 19) — the editor never carries
+    /// its own copy of the gate's explanation.
+    #[test]
+    fn oversized_refusal_message_matches_the_shared_gate_mapping() {
+        let metadata = metadata("a.txt", 4096, Some("text/plain"));
+        let gate = crate::object_browser::evaluate_preview_gate(&metadata, 1024);
+
+        let refusal = detect_editable_text(&metadata, 1024).expect_err("over the limit");
+
+        assert_eq!(Some(refusal), gate.message());
     }
 
     /// An archived object is refused even when it would fit under the limit.
@@ -838,6 +875,50 @@ mod tests {
         });
 
         assert!(saved.borrow().is_empty());
+    }
+
+    /// The dirty-tab summary reuses the object browser preview editor's
+    /// `editor.unsaved_summary` catalog entry — the two editing surfaces
+    /// describe an unsaved buffer with the same translated sentence.
+    ///
+    /// The `t!` macro has no arm combining named interpolation with an
+    /// explicit `locale =` override (only `(key)` / `(key, locale=)` /
+    /// `(key, name=value+)`), so the interpolated-value check and the
+    /// locale-divergence check stay two separate assertions, matching the
+    /// schema_diff PR 17 precedent.
+    #[test]
+    fn change_summary_reuses_the_shared_editor_catalog_entry() {
+        let en = dbflux_i18n::t!(
+            "document.object_browser.editor.unsaved_summary",
+            key = "notes.md"
+        );
+        assert_eq!(en, "Unsaved edits to notes.md");
+
+        let template_en = dbflux_i18n::t!(
+            "document.object_browser.editor.unsaved_summary",
+            locale = "en"
+        );
+        let template_es = dbflux_i18n::t!(
+            "document.object_browser.editor.unsaved_summary",
+            locale = "es"
+        );
+        assert_ne!(template_en, template_es);
+    }
+
+    /// The save toast reuses the shared `editor.toast.saved` catalog entry.
+    #[test]
+    fn save_toast_reuses_the_shared_editor_catalog_entry() {
+        let en = dbflux_i18n::t!(
+            "document.object_browser.editor.toast.saved",
+            uri = "s3://my-bucket/notes.md"
+        );
+        assert_eq!(en, "Saved s3://my-bucket/notes.md");
+
+        let template_en =
+            dbflux_i18n::t!("document.object_browser.editor.toast.saved", locale = "en");
+        let template_es =
+            dbflux_i18n::t!("document.object_browser.editor.toast.saved", locale = "es");
+        assert_ne!(template_en, template_es);
     }
 
     /// A refused object reports `Error` and keeps no buffer, so the tab shows

@@ -80,7 +80,7 @@ pub fn decode_text_body(bytes: Vec<u8>) -> Result<TextBody, String> {
     let byte_len = bytes.len() as u64;
 
     let text = String::from_utf8(bytes)
-        .map_err(|_| "This object is not valid UTF-8 text and cannot be edited in-app.")?;
+        .map_err(|_| dbflux_i18n::t!("document.object_editor.error.not_utf8"))?;
 
     let line_ending = LineEnding::detect(&text);
     let normalised = text.replace("\r\n", "\n");
@@ -193,13 +193,13 @@ pub fn detect_editable_text(
     let gate = crate::object_browser::evaluate_preview_gate(metadata, limit_bytes);
 
     if gate != PreviewGate::Allowed {
-        return Err(gate
-            .message()
-            .unwrap_or_else(|| "This object cannot be opened in-app.".to_string()));
+        return Err(gate.message().unwrap_or_else(|| {
+            dbflux_i18n::t!("document.object_editor.error.not_previewable_fallback")
+        }));
     }
 
     if detect_preview_kind(metadata.content_type.as_deref(), &metadata.key) != PreviewKind::Text {
-        return Err("This object is not text and cannot be edited in-app.".to_string());
+        return Err(dbflux_i18n::t!("document.object_editor.error.not_text"));
     }
 
     Ok(())
@@ -316,6 +316,23 @@ mod tests {
     #[test]
     fn decoding_refuses_non_utf8_bodies() {
         assert!(decode_text_body(vec![0xff, 0xfe, 0x00]).is_err());
+    }
+
+    /// The UTF-8 refusal message routes through the catalog rather than
+    /// staying a literal, so it renders in the active locale.
+    #[test]
+    fn decoding_refusal_message_resolves_in_both_locales() {
+        let message = decode_text_body(vec![0xff, 0xfe, 0x00]).expect_err("not UTF-8");
+
+        assert!(!message.is_empty());
+        assert_ne!(message, "document.object_editor.error.not_utf8");
+        assert_ne!(
+            message,
+            format!("en.{}", "document.object_editor.error.not_utf8")
+        );
+
+        let es = dbflux_i18n::t!("document.object_editor.error.not_utf8", locale = "es");
+        assert_ne!(message, es);
     }
 
     /// T30: the highlighter language comes from the extension, with a plain

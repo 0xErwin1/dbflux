@@ -966,6 +966,17 @@ document:
         failed_suffix:
           one: " (%{count} failed upload)"
           many: " (%{count} failed uploads)"
+  object_editor:
+    error:
+      not_previewable_fallback: This object cannot be opened in-app.
+      not_text: This object is not text and cannot be edited in-app.
+      not_utf8: This object is not valid UTF-8 text and cannot be edited in-app.
+    status:
+      bucket_tooltip: Bucket
+      key_tooltip: Object key
+      loading: "Loading object…"
+      preparing: "Preparing editor…"
+      size_tooltip: Size of the object as last loaded or saved
   query_builder:
     aggregate:
       fn:
