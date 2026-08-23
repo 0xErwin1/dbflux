@@ -261,6 +261,12 @@ pub(crate) fn mcp_policy_tools_classes_summary(tools: usize, classes: usize) -> 
     )
 }
 
+/// Formats the validation error shown when saving an RPC service with a
+/// socket ID already used by another configured service.
+pub(crate) fn rpc_services_duplicate_socket_id(id: &str) -> String {
+    dbflux_i18n::t!("settings.rpc_services.error.duplicate_socket_id", id = id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
