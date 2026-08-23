@@ -277,6 +277,21 @@ sidebar:
     connections_placeholder: Filtrar conexiones y esquema...
     scripts_placeholder: Filtrar scripts...
     stream_placeholder: Filtrar nombres de streams...
+  menu:
+    open: Abrir
+    browse_event_streams: Explorar flujos de eventos
+    view_schema: Ver esquema
+    refresh: Actualizar
+    generate_sql: Generar SQL
+    export_table: Exportar tabla…
+    export_tables_many: "Exportar %{count} tablas…"
+    migrate_table: Migrar tabla…
+    migrate_tables_many: "Migrar %{count} tablas…"
+    drop_view: Eliminar vista
+    drop_table: Eliminar tabla
+    query_measurement: Consultar medición
+    generate_query: Generar consulta
+    drop_collection: Eliminar colección
   overlay:
     add_folder: Nueva carpeta
     add_connection: Nueva conexión
