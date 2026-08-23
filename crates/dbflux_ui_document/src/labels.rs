@@ -3083,6 +3083,8 @@ mod tests {
     #[test]
     fn object_browser_modal_keys_resolve_in_both_locales() {
         let keys = [
+            "document.object_browser.error.connection_unavailable",
+            "document.object_browser.error.api_unavailable",
             "document.object_browser.create_folder.title",
             "document.object_browser.create_folder.name_placeholder",
             "document.object_browser.create_folder.location",
