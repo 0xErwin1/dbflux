@@ -273,9 +273,11 @@ impl DataGridPanel {
         let update = DocumentUpdate::new(collection.name.clone(), filter, update_doc)
             .with_database(collection.database.clone());
 
-        let (task_id, _cancel_token) =
-            self.runner
-                .start_mutation(TaskKind::Query, "Update document field", cx);
+        let (task_id, _cancel_token) = self.runner.start_mutation(
+            TaskKind::Query,
+            crate::labels::mutation_update_document_field_task_label(),
+            cx,
+        );
 
         let app_state = self.app_state.clone();
         let entity = cx.entity().clone();
@@ -521,7 +523,11 @@ impl DataGridPanel {
             cx.notify();
         });
 
-        let (task_id, _cancel_token) = self.runner.start_mutation(TaskKind::Query, "Save row", cx);
+        let (task_id, _cancel_token) = self.runner.start_mutation(
+            TaskKind::Query,
+            crate::labels::mutation_save_row_task_label(),
+            cx,
+        );
 
         let app_state = self.app_state.clone();
         let entity = cx.entity().clone();
@@ -657,9 +663,11 @@ impl DataGridPanel {
             cx.notify();
         });
 
-        let (task_id, _cancel_token) =
-            self.runner
-                .start_mutation(TaskKind::Query, "Save document", cx);
+        let (task_id, _cancel_token) = self.runner.start_mutation(
+            TaskKind::Query,
+            crate::labels::mutation_save_document_task_label(),
+            cx,
+        );
 
         let app_state = self.app_state.clone();
         let entity = cx.entity().clone();
@@ -832,9 +840,11 @@ impl DataGridPanel {
         let insert = dbflux_core::DocumentInsert::one(collection.name.clone(), doc.into())
             .with_database(collection.database.clone());
 
-        let (task_id, _cancel_token) =
-            self.runner
-                .start_mutation(TaskKind::Query, "Insert document", cx);
+        let (task_id, _cancel_token) = self.runner.start_mutation(
+            TaskKind::Query,
+            crate::labels::mutation_insert_document_task_label(),
+            cx,
+        );
 
         let app_state = self.app_state.clone();
         let entity = cx.entity().clone();
@@ -979,9 +989,11 @@ impl DataGridPanel {
             assignments,
         );
 
-        let (task_id, _cancel_token) =
-            self.runner
-                .start_mutation(TaskKind::Query, "Insert row", cx);
+        let (task_id, _cancel_token) = self.runner.start_mutation(
+            TaskKind::Query,
+            crate::labels::mutation_insert_row_task_label(),
+            cx,
+        );
 
         let app_state = self.app_state.clone();
         let entity = cx.entity().clone();
@@ -1203,9 +1215,11 @@ impl DataGridPanel {
         let delete = dbflux_core::DocumentDelete::new(collection.name.clone(), filter)
             .with_database(collection.database.clone());
 
-        let (task_id, _cancel_token) =
-            self.runner
-                .start_mutation(TaskKind::Query, "Delete document", cx);
+        let (task_id, _cancel_token) = self.runner.start_mutation(
+            TaskKind::Query,
+            crate::labels::mutation_delete_document_task_label(),
+            cx,
+        );
 
         let app_state = self.app_state.clone();
         let entity = cx.entity().clone();
@@ -1345,9 +1359,11 @@ impl DataGridPanel {
         let identity = RowIdentity::new(pk_columns, pk_values);
         let delete = RowDelete::new(identity, table_ref.name.clone(), table_ref.schema.clone());
 
-        let (task_id, _cancel_token) =
-            self.runner
-                .start_mutation(TaskKind::Query, "Delete row", cx);
+        let (task_id, _cancel_token) = self.runner.start_mutation(
+            TaskKind::Query,
+            crate::labels::mutation_delete_row_task_label(),
+            cx,
+        );
 
         let app_state = self.app_state.clone();
         let entity = cx.entity().clone();
@@ -1601,7 +1617,10 @@ impl DataGridPanel {
 
         let (task_id, _cancel_token) = self.runner.start_mutation(
             TaskKind::Query,
-            format!("Delete {} row(s)", identities.len()),
+            crate::labels::mutation_delete_task_label(
+                crate::labels::MutationItemKind::Row,
+                identities.len(),
+            ),
             cx,
         );
 
@@ -1796,7 +1815,10 @@ impl DataGridPanel {
 
         let (task_id, _cancel_token) = self.runner.start_mutation(
             TaskKind::Query,
-            format!("Delete {} document(s)", filters.len()),
+            crate::labels::mutation_delete_task_label(
+                crate::labels::MutationItemKind::Document,
+                filters.len(),
+            ),
             cx,
         );
 

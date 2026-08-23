@@ -971,7 +971,7 @@ impl DataGridPanel {
         cx.spawn(async move |_this, cx| {
             let target: Option<(std::path::PathBuf, bool)> = if dialog_available {
                 let file_handle = rfd::AsyncFileDialog::new()
-                    .set_title(format!("Export as {}", format_name))
+                    .set_title(crate::labels::context_menu_export_dialog_title(format_name))
                     .set_file_name(&suggested_name)
                     .add_filter(format_name, &[extension])
                     .save_file()
@@ -1566,7 +1566,7 @@ impl DataGridPanel {
             })
             .collect();
 
-        let row_label = format!("Row {}", row + 1);
+        let row_label = crate::labels::row_inspector_title(row + 1);
         let snapshot = InspectorSnapshot {
             cells: cells.clone(),
             focused_col: col,

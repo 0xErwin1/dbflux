@@ -52,6 +52,26 @@ pub(crate) fn result_view_mode_label(mode: crate::result_view::ResultViewMode) -
     }
 }
 
+/// Toast text shown when the user tries to enable auto-refresh on a result
+/// that has no backing table (a raw query result or a builder query).
+pub(crate) fn auto_refresh_unavailable_toast() -> String {
+    dbflux_i18n::t!("document.data.grid.toast.auto_refresh_unavailable")
+}
+
+/// Error text when the data grid fails to fetch a table's primary-key
+/// details in the background.
+pub(crate) fn pk_details_fetch_failed_error(error: &str) -> String {
+    dbflux_i18n::t!(
+        "document.data.grid.error.pk_details_fetch_failed",
+        error = error
+    )
+}
+
+/// Error/toast text for a failed query run against the data grid.
+pub(crate) fn query_failed_error(error: &str) -> String {
+    dbflux_i18n::t!("document.data.grid.error.query_failed", error = error)
+}
+
 /// Label for a [`dbflux_export::ExportFormat`] shown in the export menu and
 /// the export trigger button.
 pub(crate) fn export_format_label(format: dbflux_export::ExportFormat) -> String {
@@ -329,6 +349,82 @@ pub(crate) fn bulk_delete_success_label(kind: MutationItemKind, count: usize) ->
     dbflux_i18n::t!(key, count = count)
 }
 
+/// Task-panel description for a bulk row/document delete mutation, with the
+/// affected item count interpolated.
+///
+/// Uses the singular catalog bucket only for exactly one item; every other
+/// count, including zero, uses the plural bucket.
+pub(crate) fn mutation_delete_task_label(kind: MutationItemKind, count: usize) -> String {
+    let bucket = if count == 1 { "one" } else { "many" };
+    let key = match kind {
+        MutationItemKind::Row => format!("document.data.mutation.task.delete_rows.{bucket}"),
+        MutationItemKind::Document => {
+            format!("document.data.mutation.task.delete_documents.{bucket}")
+        }
+    };
+
+    dbflux_i18n::t!(&key, count = count)
+}
+
+/// Kind of single-item visual mutation run through the query builder, used to
+/// select the task-panel description.
+pub(crate) enum VisualMutationTaskMode {
+    Chunked,
+    Direct,
+    SingleTransaction,
+}
+
+/// Task-panel description for a visual-mutation run, keyed by its execution
+/// mode.
+pub(crate) fn visual_mutation_task_label(mode: VisualMutationTaskMode) -> String {
+    match mode {
+        VisualMutationTaskMode::Chunked => {
+            dbflux_i18n::t!("document.data.mutation.task.visual_mutation_chunked")
+        }
+        VisualMutationTaskMode::Direct => {
+            dbflux_i18n::t!("document.data.mutation.task.visual_mutation_direct")
+        }
+        VisualMutationTaskMode::SingleTransaction => {
+            dbflux_i18n::t!("document.data.mutation.task.visual_mutation_single_transaction")
+        }
+    }
+}
+
+/// Task-panel description for updating a single document field in place.
+pub(crate) fn mutation_update_document_field_task_label() -> String {
+    dbflux_i18n::t!("document.data.mutation.task.update_document_field")
+}
+
+/// Task-panel description for saving a single edited row.
+pub(crate) fn mutation_save_row_task_label() -> String {
+    dbflux_i18n::t!("document.data.mutation.task.save_row")
+}
+
+/// Task-panel description for saving a single edited document.
+pub(crate) fn mutation_save_document_task_label() -> String {
+    dbflux_i18n::t!("document.data.mutation.task.save_document")
+}
+
+/// Task-panel description for inserting a single new document.
+pub(crate) fn mutation_insert_document_task_label() -> String {
+    dbflux_i18n::t!("document.data.mutation.task.insert_document")
+}
+
+/// Task-panel description for inserting a single new row.
+pub(crate) fn mutation_insert_row_task_label() -> String {
+    dbflux_i18n::t!("document.data.mutation.task.insert_row")
+}
+
+/// Task-panel description for deleting a single document.
+pub(crate) fn mutation_delete_document_task_label() -> String {
+    dbflux_i18n::t!("document.data.mutation.task.delete_document")
+}
+
+/// Task-panel description for deleting a single row.
+pub(crate) fn mutation_delete_row_task_label() -> String {
+    dbflux_i18n::t!("document.data.mutation.task.delete_row")
+}
+
 /// Label for the context menu's "Copy as ..." submenu trigger, keyed by the
 /// active connection's query language.
 ///
@@ -390,6 +486,15 @@ pub(crate) fn code_toolbar_shortcut_hint_label(shortcut: &str, with_selection: b
     } else {
         shortcut.to_string()
     }
+}
+
+/// Task-panel description for a running script, with the query language's
+/// display name interpolated.
+pub(crate) fn run_script_task_label(language_name: &str) -> String {
+    dbflux_i18n::t!(
+        "document.code.execution.task.run_script",
+        name = language_name
+    )
 }
 
 /// Label for the live script output header's line count.
@@ -951,6 +1056,51 @@ pub(crate) fn audit_actor_type_label(actor_type: dbflux_core::EventActorType) ->
     }
 }
 
+/// Task-panel description for loading an external audit event stream, with
+/// the document's tab title interpolated.
+pub(crate) fn audit_loading_event_stream_task_label(title: &str) -> String {
+    dbflux_i18n::t!("document.audit.task.loading_event_stream", title = title)
+}
+
+/// Toast text when export is attempted on an audit document source that does
+/// not support it (an external event stream, not the built-in viewer).
+pub(crate) fn audit_export_unsupported_source_toast() -> String {
+    dbflux_i18n::t!("document.audit.export.unsupported_source")
+}
+
+/// Toast text after a successful audit export, with the exported event count
+/// and destination path interpolated.
+///
+/// Uses the singular catalog bucket only for exactly one exported event;
+/// every other count, including zero, uses the plural bucket.
+pub(crate) fn audit_export_exported_toast(count: u64, path: &str) -> String {
+    if count == 1 {
+        dbflux_i18n::t!(
+            "document.audit.export.exported.one",
+            count = count,
+            path = path
+        )
+    } else {
+        dbflux_i18n::t!(
+            "document.audit.export.exported.many",
+            count = count,
+            path = path
+        )
+    }
+}
+
+/// Toast text when an audit export fails while writing the destination
+/// file.
+pub(crate) fn audit_export_write_failed_error(error: &str) -> String {
+    dbflux_i18n::t!("document.audit.export.write_failed", error = error)
+}
+
+/// Toast text when an audit export fails before reaching the write step
+/// (for example, fetching events from the source failed).
+pub(crate) fn audit_export_failed_error(error: &str) -> String {
+    dbflux_i18n::t!("document.audit.export.failed", error = error)
+}
+
 /// Qualifies a table name with its schema for the schema-diff description
 /// helpers, mirroring `schema_diff::view::qualified` (kept as a small local
 /// copy since that helper is private to its own module). Object names are
@@ -1445,6 +1595,19 @@ pub(crate) fn import_rail_labels() -> [String; 4] {
     ]
 }
 
+/// Task-panel description for a running import, with the table count
+/// interpolated.
+///
+/// Uses the singular catalog bucket only for exactly one table; every other
+/// count, including zero, uses the plural bucket.
+pub(crate) fn import_wizard_task_label(table_count: usize) -> String {
+    if table_count == 1 {
+        dbflux_i18n::t!("document.import_wizard.task.one", count = table_count)
+    } else {
+        dbflux_i18n::t!("document.import_wizard.task.many", count = table_count)
+    }
+}
+
 /// Terminal summary line for a finished import run, with every count
 /// interpolated. Uses the "with failures" bucket only when at least one
 /// table failed; otherwise the plain bucket.
@@ -1499,6 +1662,27 @@ pub(crate) fn import_table_status_line(table: &dbflux_transfer::import::Imported
             "document.import_wizard.status_line.not_attempted",
             table = table.source_table
         ),
+    }
+}
+
+/// Task-panel description for a running export, with the table count and
+/// source profile name interpolated.
+///
+/// Uses the singular catalog bucket only for exactly one table; every other
+/// count, including zero, uses the plural bucket.
+pub(crate) fn export_wizard_task_label(table_count: usize, profile: &str) -> String {
+    if table_count == 1 {
+        dbflux_i18n::t!(
+            "document.export_wizard.task.one",
+            count = table_count,
+            profile = profile
+        )
+    } else {
+        dbflux_i18n::t!(
+            "document.export_wizard.task.many",
+            count = table_count,
+            profile = profile
+        )
     }
 }
 
@@ -1588,6 +1772,19 @@ pub(crate) fn export_running_rows_label(rows_done: u64, estimated_total: Option<
             "document.export_wizard.running.progress.only",
             done = rows_done
         ),
+    }
+}
+
+/// Task-panel description for a running migration, with the table count
+/// interpolated.
+///
+/// Uses the singular catalog bucket only for exactly one table; every other
+/// count, including zero, uses the plural bucket.
+pub(crate) fn migrate_wizard_task_label(table_count: usize) -> String {
+    if table_count == 1 {
+        dbflux_i18n::t!("document.migrate_wizard.task.one", count = table_count)
+    } else {
+        dbflux_i18n::t!("document.migrate_wizard.task.many", count = table_count)
     }
 }
 
@@ -1892,6 +2089,27 @@ pub(crate) fn chart_save_failed_error(name: &str, error: &str) -> String {
     )
 }
 
+/// Toast text when the user tries to save a chart from a raw query result
+/// that has no connection profile bound to it.
+pub(crate) fn chart_save_no_profile_binding_error() -> String {
+    dbflux_i18n::t!("document.data.grid.error.chart_save_no_profile_binding")
+}
+
+/// Title for the native "Export as ..." save-file dialog, with the format
+/// name interpolated.
+pub(crate) fn context_menu_export_dialog_title(format_name: &str) -> String {
+    dbflux_i18n::t!(
+        "document.data.context_menu.export.dialog_title",
+        format = format_name
+    )
+}
+
+/// Title for the row-inspector rail, with the 1-based row number
+/// interpolated.
+pub(crate) fn row_inspector_title(row_number: usize) -> String {
+    dbflux_i18n::t!("document.data.row_inspector.title", row = row_number)
+}
+
 /// Error text when the native export file dialog is unavailable and the
 /// fallback export directory could not be created either.
 pub(crate) fn context_menu_export_dialog_fallback_failed_error(error: &str) -> String {
@@ -1988,44 +2206,54 @@ mod tests {
     #[cfg(feature = "mcp")]
     use super::mutation_approval_queue_failed_error;
     use super::{
-        MutationItemKind, add_member_modal_placeholders, add_member_modal_section_label,
-        add_member_modal_title, agg_fn_display, assignment_value_kind_label,
-        audit_actor_type_label, audit_category_label, audit_level_label, audit_outcome_label,
+        MutationItemKind, VisualMutationTaskMode, add_member_modal_placeholders,
+        add_member_modal_section_label, add_member_modal_title, agg_fn_display,
+        assignment_value_kind_label, audit_actor_type_label, audit_category_label,
+        audit_export_exported_toast, audit_export_failed_error,
+        audit_export_unsupported_source_toast, audit_export_write_failed_error, audit_level_label,
+        audit_loading_event_stream_task_label, audit_outcome_label, auto_refresh_unavailable_toast,
         bool_op_label, bucket_encryption_choice_label, buckets_table_summary_line,
         builder_mode_label, bulk_delete_success_label, chart_degraded_copy, chart_dock_shape_label,
-        chart_rail_why_text, chart_save_failed_error, chart_saved_toast,
-        chart_toolbar_points_label, code_toolbar_shortcut_hint_label, comparator_label,
-        configure_chart_kind_label, context_menu_clipboard_copied_toast,
+        chart_rail_why_text, chart_save_failed_error, chart_save_no_profile_binding_error,
+        chart_saved_toast, chart_toolbar_points_label, code_toolbar_shortcut_hint_label,
+        comparator_label, configure_chart_kind_label, context_menu_clipboard_copied_toast,
         context_menu_clipboard_copy_failed_error, context_menu_clipboard_non_utf8_error,
         context_menu_document_insert_failed_error, context_menu_document_update_failed_error,
-        context_menu_export_dialog_fallback_failed_error, context_menu_export_exported_toast,
-        context_menu_export_failed_error, context_menu_export_native_picker_fallback_toast,
-        copy_query_language_label, dangerous_query_body, dangerous_query_title,
-        delete_confirm_copy, delete_prefix_delete_button_label, delete_prefix_deleted_toast,
-        delete_prefix_probe_totals, delete_rows_label, error_with_detail_clipboard,
-        execution_count_state_label, execution_mode_label, export_running_position_label,
-        export_running_rows_label, export_summary_label, export_table_status_line,
+        context_menu_export_dialog_fallback_failed_error, context_menu_export_dialog_title,
+        context_menu_export_exported_toast, context_menu_export_failed_error,
+        context_menu_export_native_picker_fallback_toast, copy_query_language_label,
+        dangerous_query_body, dangerous_query_title, delete_confirm_copy,
+        delete_prefix_delete_button_label, delete_prefix_deleted_toast, delete_prefix_probe_totals,
+        delete_rows_label, error_with_detail_clipboard, execution_count_state_label,
+        execution_mode_label, export_running_position_label, export_running_rows_label,
+        export_summary_label, export_table_status_line, export_wizard_task_label,
         history_items_count_label, history_tab_label, image_decode_error, image_header_error,
         import_mapping_mode_label, import_rail_labels, import_summary_label,
-        import_table_status_line, incomplete_aggregate_rows_label, join_kind_label,
-        live_output_lines_label, live_output_truncated_label, metric_picker_custom_dropdown_label,
-        metric_picker_dimensions_error_label, metric_picker_period_error_label,
-        metric_picker_period_not_a_number_error, metric_picker_statistic_error_label,
-        migrate_mapping_unmapped_count_label, migrate_running_position_label,
-        migrate_running_rows_label, migrate_source_target_checked_count_label,
-        migrate_summary_label, migrate_table_status_line,
-        migrate_wizard_target_schema_read_failed_error, mutation_chunk_size_adjusted_toast,
+        import_table_status_line, import_wizard_task_label, incomplete_aggregate_rows_label,
+        join_kind_label, live_output_lines_label, live_output_truncated_label,
+        metric_picker_custom_dropdown_label, metric_picker_dimensions_error_label,
+        metric_picker_period_error_label, metric_picker_period_not_a_number_error,
+        metric_picker_statistic_error_label, migrate_mapping_unmapped_count_label,
+        migrate_running_position_label, migrate_running_rows_label,
+        migrate_source_target_checked_count_label, migrate_summary_label,
+        migrate_table_status_line, migrate_wizard_target_schema_read_failed_error,
+        migrate_wizard_task_label, mutation_chunk_size_adjusted_toast,
         mutation_chunk_size_reduced_toast, mutation_chunked_execution_failed_error,
-        mutation_execution_cancelled_toast, mutation_execution_completed_toast,
-        mutation_execution_failed_error, object_browser_copied_uri_toast,
+        mutation_delete_document_task_label, mutation_delete_row_task_label,
+        mutation_delete_task_label, mutation_execution_cancelled_toast,
+        mutation_execution_completed_toast, mutation_execution_failed_error,
+        mutation_insert_document_task_label, mutation_insert_row_task_label,
+        mutation_save_document_task_label, mutation_save_row_task_label,
+        mutation_update_document_field_task_label, object_browser_copied_uri_toast,
         object_browser_status_summary, object_browser_versions_count_label, partial_delete_label,
-        pending_change_count_label, pending_edits_summary, presign_expiry_label,
-        presign_method_label, preview_gate_message, refresh_policy_label, result_tab_count_label,
-        row_count_label, saved_query_already_exists_error, saved_query_saved_as_toast,
+        pending_change_count_label, pending_edits_summary, pk_details_fetch_failed_error,
+        presign_expiry_label, presign_method_label, preview_gate_message, query_failed_error,
+        refresh_policy_label, result_tab_count_label, row_count_label, row_inspector_title,
+        run_script_task_label, saved_query_already_exists_error, saved_query_saved_as_toast,
         schema_change_description, script_confirm_message_label, shared_error_prefix,
         sort_direction_label, source_window_error_message, syntax_error_with_hint,
         table_action_description, unsaved_changes_label, update_columns_label, valid_lines_label,
-        versioning_off_label, versioning_status_label,
+        versioning_off_label, versioning_status_label, visual_mutation_task_label,
     };
     use crate::buckets_table::BucketEncryptionChoice;
     use crate::object_browser::{PresignExpiry, PresignMethodChoice, PreviewGate};
@@ -5729,5 +5957,262 @@ mod tests {
         assert!(value.contains("connection lost"));
         assert!(value.starts_with("Error"));
         assert_ne!(value, "document.shared.error_prefix");
+    }
+
+    #[test]
+    fn import_wizard_task_label_one_and_many() {
+        let one = import_wizard_task_label(1);
+        let many = import_wizard_task_label(3);
+
+        assert!(one.contains('1'));
+        assert!(many.contains('3'));
+        assert_ne!(one, many);
+        assert_ne!(one, "document.import_wizard.task.one");
+        assert_ne!(many, "document.import_wizard.task.many");
+    }
+
+    #[test]
+    fn export_wizard_task_label_interpolates_count_and_profile() {
+        let one = export_wizard_task_label(1, "prod-db");
+        let many = export_wizard_task_label(4, "prod-db");
+
+        assert!(one.contains('1'));
+        assert!(one.contains("prod-db"));
+        assert!(many.contains('4'));
+        assert_ne!(one, many);
+        assert_ne!(one, "document.export_wizard.task.one");
+        assert_ne!(many, "document.export_wizard.task.many");
+    }
+
+    #[test]
+    fn migrate_wizard_task_label_one_and_many() {
+        let one = migrate_wizard_task_label(1);
+        let many = migrate_wizard_task_label(2);
+
+        assert!(one.contains('1'));
+        assert!(many.contains('2'));
+        assert_ne!(one, many);
+        assert_ne!(one, "document.migrate_wizard.task.one");
+        assert_ne!(many, "document.migrate_wizard.task.many");
+    }
+
+    #[test]
+    fn mutation_delete_task_label_covers_rows_and_documents() {
+        let one_row = mutation_delete_task_label(MutationItemKind::Row, 1);
+        let many_rows = mutation_delete_task_label(MutationItemKind::Row, 5);
+        let one_document = mutation_delete_task_label(MutationItemKind::Document, 1);
+        let many_documents = mutation_delete_task_label(MutationItemKind::Document, 5);
+
+        assert!(one_row.contains('1'));
+        assert!(many_rows.contains('5'));
+        assert!(one_document.contains('1'));
+        assert!(many_documents.contains('5'));
+        assert_ne!(one_row, one_document);
+        assert_ne!(many_rows, many_documents);
+        assert_ne!(one_row, "document.data.mutation.task.delete_rows.one");
+        assert_ne!(
+            one_document,
+            "document.data.mutation.task.delete_documents.one"
+        );
+    }
+
+    #[test]
+    fn run_script_task_label_interpolates_language_name() {
+        let value = run_script_task_label("SQL");
+
+        assert!(value.contains("SQL"));
+        assert_ne!(value, "document.code.execution.task.run_script");
+    }
+
+    #[test]
+    fn auto_refresh_unavailable_toast_resolves() {
+        let value = auto_refresh_unavailable_toast();
+
+        assert_ne!(value, "document.data.grid.toast.auto_refresh_unavailable");
+    }
+
+    #[test]
+    fn pk_details_fetch_failed_error_interpolates_cause() {
+        let value = pk_details_fetch_failed_error("timeout");
+
+        assert!(value.contains("timeout"));
+        assert_ne!(value, "document.data.grid.error.pk_details_fetch_failed");
+    }
+
+    #[test]
+    fn query_failed_error_interpolates_cause() {
+        let value = query_failed_error("syntax error");
+
+        assert!(value.contains("syntax error"));
+        assert_ne!(value, "document.data.grid.error.query_failed");
+    }
+
+    #[test]
+    fn audit_export_exported_toast_one_and_many() {
+        let one = audit_export_exported_toast(1, "/tmp/audit.csv");
+        let many = audit_export_exported_toast(20, "/tmp/audit.csv");
+
+        assert!(one.contains('1'));
+        assert!(one.contains("/tmp/audit.csv"));
+        assert!(many.contains("20"));
+        assert_ne!(one, many);
+        assert_ne!(one, "document.audit.export.exported.one");
+        assert_ne!(many, "document.audit.export.exported.many");
+    }
+
+    #[test]
+    fn audit_export_write_failed_error_interpolates_cause() {
+        let value = audit_export_write_failed_error("disk full");
+
+        assert!(value.contains("disk full"));
+        assert_ne!(value, "document.audit.export.write_failed");
+    }
+
+    #[test]
+    fn audit_export_failed_error_interpolates_cause() {
+        let value = audit_export_failed_error("query timeout");
+
+        assert!(value.contains("query timeout"));
+        assert_ne!(value, "document.audit.export.failed");
+    }
+
+    #[test]
+    fn context_menu_export_dialog_title_interpolates_format() {
+        let value = context_menu_export_dialog_title("CSV");
+
+        assert!(value.contains("CSV"));
+        assert_ne!(value, "document.data.context_menu.export.dialog_title");
+    }
+
+    #[test]
+    fn row_inspector_title_interpolates_row_number() {
+        let value = row_inspector_title(1);
+
+        assert!(value.contains('1'));
+        assert_ne!(value, "document.data.row_inspector.title");
+    }
+
+    /// Divergence check across the new reverify-findings keys: proves the
+    /// English and Spanish catalog bytes actually differ, not just that the
+    /// key resolves. Runs through `translate_in` directly since `t!` cannot
+    /// combine `locale = ` with named-argument interpolation.
+    #[test]
+    fn reverify_findings_keys_resolve_in_both_locales() {
+        let plain_keys = [
+            "document.data.grid.toast.auto_refresh_unavailable",
+            "document.data.context_menu.export.dialog_title",
+            "document.data.row_inspector.title",
+            "document.data.grid.error.pk_details_fetch_failed",
+            "document.data.grid.error.query_failed",
+            "document.audit.export.write_failed",
+            "document.audit.export.failed",
+            "document.import_wizard.task.one",
+            "document.import_wizard.task.many",
+            "document.export_wizard.task.one",
+            "document.export_wizard.task.many",
+            "document.migrate_wizard.task.one",
+            "document.migrate_wizard.task.many",
+            "document.data.mutation.task.delete_rows.one",
+            "document.data.mutation.task.delete_rows.many",
+            "document.data.mutation.task.delete_documents.one",
+            "document.data.mutation.task.delete_documents.many",
+            "document.code.execution.task.run_script",
+            "document.audit.export.exported.one",
+            "document.audit.export.exported.many",
+        ];
+
+        for key in plain_keys {
+            let english = dbflux_i18n::translate_in("en", key);
+            let spanish = dbflux_i18n::translate_in("es", key);
+
+            assert_ne!(english, key, "key {key} did not resolve in en");
+            assert_ne!(spanish, key, "key {key} did not resolve in es");
+            assert_ne!(spanish, english, "key {key} has identical en/es text");
+        }
+    }
+
+    /// Additional task-panel descriptions found while sweeping every
+    /// `start_task*`/`start_mutation`/`start_primary` call site in this
+    /// crate for hardcoded English prose, beyond the findings' explicit
+    /// list.
+    #[test]
+    fn mutation_single_item_task_labels_resolve_and_differ() {
+        let cases: &[(fn() -> String, &str)] = &[
+            (
+                mutation_update_document_field_task_label,
+                "document.data.mutation.task.update_document_field",
+            ),
+            (
+                mutation_save_row_task_label,
+                "document.data.mutation.task.save_row",
+            ),
+            (
+                mutation_save_document_task_label,
+                "document.data.mutation.task.save_document",
+            ),
+            (
+                mutation_insert_document_task_label,
+                "document.data.mutation.task.insert_document",
+            ),
+            (
+                mutation_insert_row_task_label,
+                "document.data.mutation.task.insert_row",
+            ),
+            (
+                mutation_delete_document_task_label,
+                "document.data.mutation.task.delete_document",
+            ),
+            (
+                mutation_delete_row_task_label,
+                "document.data.mutation.task.delete_row",
+            ),
+            (
+                audit_export_unsupported_source_toast,
+                "document.audit.export.unsupported_source",
+            ),
+        ];
+
+        for (label_fn, key) in cases {
+            let value = label_fn();
+            assert_ne!(value, *key, "key {key} did not resolve");
+        }
+    }
+
+    #[test]
+    fn visual_mutation_task_label_covers_every_mode_and_differs() {
+        let chunked = visual_mutation_task_label(VisualMutationTaskMode::Chunked);
+        let direct = visual_mutation_task_label(VisualMutationTaskMode::Direct);
+        let single = visual_mutation_task_label(VisualMutationTaskMode::SingleTransaction);
+
+        assert_ne!(
+            chunked,
+            "document.data.mutation.task.visual_mutation_chunked"
+        );
+        assert_ne!(direct, "document.data.mutation.task.visual_mutation_direct");
+        assert_ne!(
+            single,
+            "document.data.mutation.task.visual_mutation_single_transaction"
+        );
+        assert_ne!(chunked, direct);
+        assert_ne!(direct, single);
+        assert_ne!(chunked, single);
+    }
+
+    #[test]
+    fn audit_loading_event_stream_task_label_interpolates_title() {
+        let value = audit_loading_event_stream_task_label("Application Logs");
+
+        assert!(value.contains("Application Logs"));
+        assert_ne!(value, "document.audit.task.loading_event_stream");
+    }
+
+    #[test]
+    fn chart_save_no_profile_binding_error_resolves() {
+        let value = chart_save_no_profile_binding_error();
+
+        assert_ne!(
+            value,
+            "document.data.grid.error.chart_save_no_profile_binding"
+        );
     }
 }

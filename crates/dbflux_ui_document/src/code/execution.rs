@@ -1595,7 +1595,8 @@ impl CodeDocument {
             phase: None,
         };
 
-        let description = format!("Run {} script", self.editor.query_language.display_name());
+        let description =
+            crate::labels::run_script_task_label(self.editor.query_language.display_name());
         let (output_sender, output_receiver) = dbflux_core::output_channel();
         let (task_id, cancel_token) =
             self.runner

@@ -28,7 +28,7 @@ use gpui::*;
 
 use crate::export_wizard::ExportWizard;
 use crate::export_wizard::phases::{ExportPhase, RunState};
-use crate::labels::{export_summary_label, export_table_status_line};
+use crate::labels::{export_summary_label, export_table_status_line, export_wizard_task_label};
 
 /// Live counters for the running export: which table (by the wizard's fixed
 /// table order) is currently streaming, and its row progress — mirrors the
@@ -300,7 +300,7 @@ impl ExportWizard {
             "dbflux-export-{}",
             dbflux_core::chrono::Utc::now().format("%Y%m%d-%H%M%S%.3f")
         ));
-        let description = format!("Export {} table(s) from {profile_label}", table_specs.len());
+        let description = export_wizard_task_label(table_specs.len(), &profile_label);
 
         let app_state = self.app_state.clone();
         let (task_id, cancel_token) = app_state.update(cx, |state, cx| {

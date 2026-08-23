@@ -466,7 +466,7 @@ impl ImportWizard {
         self.result_warnings.clear();
         *self.progress.lock().unwrap_or_else(|p| p.into_inner()) = (0, None);
 
-        let description = format!("Import {} table(s)", plans.len());
+        let description = crate::labels::import_wizard_task_label(plans.len());
         let (task_id, cancel_token) = self.app_state.update(cx, |state, cx| {
             let pair = state.start_task_for_target(
                 TaskKind::Import,
