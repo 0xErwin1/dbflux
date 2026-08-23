@@ -442,6 +442,42 @@ settings:
       title: "Conflict: %{chord} also bound to %{others}"
       body: Two or more commands share this chord in this context.
       unknown_other: another binding
+  hooks:
+    header:
+      title: Hooks
+      subtitle: Create reusable hooks and associate them from connection settings
+    list:
+      new: New Hook
+      empty: No hooks defined
+      unreadable:
+        title: Unreadable hook rows
+        hint: Unreadable — cannot be edited
+    status:
+      unsupported_platform: Unsupported on this platform
+      script_missing: Script file does not exist yet
+      interpreter_missing: "Interpreter '%{interpreter}' was not found in PATH"
+      language_unsupported: Selected language is unsupported on this platform
+    error:
+      open_script: "Failed to open script: %{error}"
+      command_not_editable: Commands do not open in the script editor
+      write_script: "Failed to write script file: %{error}"
+      no_scripts_dir: Scripts directory is not available in this session
+      create_dir: "Failed to create hooks directory: %{error}"
+      save: Failed to save hooks
+      delete_unreadable: Failed to delete unreadable hook row
+    validation:
+      id_required: Hook ID is required
+      timeout: Timeout must be a valid number (milliseconds)
+      command_required: Command is required
+      script_path_required: Script file path is required
+      lua_path_required: Lua script file path is required
+      duplicate_id: "A hook with ID '%{id}' already exists"
+      env_pair: "Invalid env pair '%{pair}'. Expected KEY=value format"
+      env_key_empty: Environment variable key cannot be empty
+    toast:
+      saved: Hook saved
+      deleted: Hook deleted
+      unreadable_deleted: Unreadable hook row deleted
   nav:
     general_group: General
     general: General

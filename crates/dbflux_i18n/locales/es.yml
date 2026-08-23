@@ -442,6 +442,42 @@ settings:
       title: "Conflicto: %{chord} también está asignado a %{others}"
       body: Dos o más comandos comparten este atajo en este contexto.
       unknown_other: otro atajo
+  hooks:
+    header:
+      title: Hooks
+      subtitle: Crea hooks reutilizables y asócialos desde la configuración de conexión
+    list:
+      new: Nuevo hook
+      empty: No hay hooks definidos
+      unreadable:
+        title: Filas de hooks ilegibles
+        hint: Ilegible — no se puede editar
+    status:
+      unsupported_platform: No compatible en esta plataforma
+      script_missing: El archivo del script aún no existe
+      interpreter_missing: "No se encontró el intérprete '%{interpreter}' en PATH"
+      language_unsupported: El lenguaje seleccionado no es compatible en esta plataforma
+    error:
+      open_script: "No se pudo abrir el script: %{error}"
+      command_not_editable: Los comandos no se abren en el editor de scripts
+      write_script: "No se pudo escribir el archivo del script: %{error}"
+      no_scripts_dir: El directorio de scripts no está disponible en esta sesión
+      create_dir: "No se pudo crear el directorio de hooks: %{error}"
+      save: Error al guardar los hooks
+      delete_unreadable: Error al eliminar la fila de hook ilegible
+    validation:
+      id_required: El ID del hook es obligatorio
+      timeout: El tiempo de espera debe ser un número válido (milisegundos)
+      command_required: El comando es obligatorio
+      script_path_required: La ruta del archivo del script es obligatoria
+      lua_path_required: La ruta del archivo del script Lua es obligatoria
+      duplicate_id: "Ya existe un hook con el ID '%{id}'"
+      env_pair: "Par de entorno inválido '%{pair}'. Se espera el formato CLAVE=valor"
+      env_key_empty: La clave de la variable de entorno no puede estar vacía
+    toast:
+      saved: Hook guardado
+      deleted: Hook eliminado
+      unreadable_deleted: Fila de hook ilegible eliminada
   nav:
     general_group: General
     general: General
