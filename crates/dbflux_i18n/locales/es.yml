@@ -540,6 +540,22 @@ document:
         column: COLUMNA
         references: REFERENCIAS
         row: FILA
+  key_value:
+    context_menu:
+      add_entry: Agregar entrada
+      add_member: Agregar miembro
+      copy_as_command: Copiar como comando
+      copy_entry: Copiar entrada
+      copy_key: Copiar clave
+      copy_member: Copiar miembro
+      copy_value: Copiar valor
+      delete_entry: Eliminar entrada
+      delete_key: Eliminar clave
+      delete_member: Eliminar miembro
+      edit_member: Editar miembro
+      edit_value: Editar valor
+      new_key: Nueva clave
+      rename: Renombrar
   query_builder:
     aggregate:
       fn:

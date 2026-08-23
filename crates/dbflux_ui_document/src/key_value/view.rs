@@ -160,7 +160,7 @@ pub(super) fn render_kv_context_menu(
         .map(|(idx, item)| {
             let is_selected = idx == selected_index;
             let is_danger = item.is_danger;
-            let label = item.label;
+            let label = item.label.clone();
             let icon = item.icon;
             let action = item.action;
 
@@ -173,7 +173,7 @@ pub(super) fn render_kv_context_menu(
             };
 
             div()
-                .id(SharedString::from(label))
+                .id(label.clone())
                 .flex()
                 .items_center()
                 .gap(Spacing::SM)
