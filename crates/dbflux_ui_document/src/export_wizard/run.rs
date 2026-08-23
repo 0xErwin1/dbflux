@@ -28,6 +28,7 @@ use gpui::*;
 
 use crate::export_wizard::ExportWizard;
 use crate::export_wizard::phases::{ExportPhase, RunState};
+use crate::labels::{export_summary_label, export_table_status_line};
 
 /// Live counters for the running export: which table (by the wizard's fixed
 /// table order) is currently streaming, and its row progress — mirrors the
@@ -140,7 +141,7 @@ fn resolve_run_outcome(result: Result<ExportOutcome, TransferError>) -> RunResol
             task_action_details: None,
             report: None,
             toast_success: false,
-            summary: "Export cancelled".to_string(),
+            summary: dbflux_i18n::t!("document.export_wizard.toast.cancelled"),
             warnings: Vec::new(),
         },
         Ok(outcome) => {
@@ -156,7 +157,11 @@ fn resolve_run_outcome(result: Result<ExportOutcome, TransferError>) -> RunResol
                 Some((table, error)) => RunResolution {
                     task_action: RunTaskAction::Fail(format!("{table}: {error}")),
                     task_action_details: Some(itemized_table_details(&outcome.tables)),
-                    report: Some(format!("Export failed on table '{table}': {error}")),
+                    report: Some(dbflux_i18n::t!(
+                        "document.export_wizard.toast.table_failed",
+                        table = table,
+                        error = error
+                    )),
                     toast_success: false,
                     summary,
                     warnings,
@@ -172,7 +177,7 @@ fn resolve_run_outcome(result: Result<ExportOutcome, TransferError>) -> RunResol
             }
         }
         Err(e) => {
-            let message = format!("Export failed: {e}");
+            let message = dbflux_i18n::t!("document.export_wizard.toast.failed", error = e);
             RunResolution {
                 task_action: RunTaskAction::Fail(e.to_string()),
                 task_action_details: None,
@@ -210,13 +215,7 @@ fn summarize(outcome: &ExportOutcome) -> String {
         })
         .sum();
 
-    if failed > 0 {
-        format!(
-            "Exported {completed} table(s), {rows} row(s) total ({skipped} skipped, {failed} failed)"
-        )
-    } else {
-        format!("Exported {completed} table(s), {rows} row(s) total ({skipped} skipped)")
-    }
+    export_summary_label(completed, rows, skipped, failed)
 }
 
 /// Renders one status line per planned table when the run left any table
@@ -243,12 +242,7 @@ fn itemized_status_lines(tables: &[ExportedTable], engine_warnings: &[String]) -
 
 fn table_status_line(table: &ExportedTable) -> String {
     let label = table_label(&table.schema, &table.name);
-    match &table.status {
-        TableTransferStatus::Completed { rows } => format!("{label}: completed ({rows} row(s))"),
-        TableTransferStatus::Skipped => format!("{label}: skipped"),
-        TableTransferStatus::Failed { error } => format!("{label}: FAILED — {error}"),
-        TableTransferStatus::NotStarted => format!("{label}: not attempted"),
-    }
+    export_table_status_line(&label, &table.status)
 }
 
 /// Renders the Tasks panel's expandable per-table details for a failed run.
@@ -272,7 +266,10 @@ impl ExportWizard {
 
         let Some(connection) = self.resolve_connection(cx) else {
             report_error(
-                UserFacingError::new(ErrorKind::Storage, "No active connection for this export"),
+                UserFacingError::new(
+                    ErrorKind::Storage,
+                    dbflux_i18n::t!("document.export_wizard.error.no_connection"),
+                ),
                 cx,
             );
             return;
@@ -334,7 +331,10 @@ impl ExportWizard {
                             report_error(
                                 UserFacingError::new(
                                     ErrorKind::Driver,
-                                    format!("Export failed while reading table schema: {err}"),
+                                    dbflux_i18n::t!(
+                                        "document.export_wizard.toast.schema_fetch_failed",
+                                        error = err
+                                    ),
                                 ),
                                 cx,
                             );
@@ -344,7 +344,10 @@ impl ExportWizard {
                         this.update(cx, |this, cx| {
                             this.run_state = RunState::Done;
                             this.cancel_token = None;
-                            this.result_summary = Some(format!("Export failed: {err}"));
+                            this.result_summary = Some(dbflux_i18n::t!(
+                                "document.export_wizard.toast.failed",
+                                error = err
+                            ));
                             cx.notify();
                         })
                         .ok();
@@ -507,9 +510,10 @@ impl ExportWizard {
                     report_error(UserFacingError::new(ErrorKind::Driver, message.clone()), cx);
                 }
                 if toast_success {
-                    Toast::success(format!(
-                        "{summary}. Saved to {}",
-                        output_dir_for_toast.display()
+                    Toast::success(dbflux_i18n::t!(
+                        "document.export_wizard.toast.success",
+                        summary = summary,
+                        folder = output_dir_for_toast.display().to_string()
                     ))
                     .push(cx);
                 }

@@ -986,6 +986,61 @@ document:
         column: COLUMN
         references: REFERENCES
         row: ROW
+  export_wizard:
+    title: Export Data
+    rail:
+      tables: Tables
+      format_options: Format & Options
+      confirm: Confirm
+      run: Run
+    tables:
+      selected_count: "%{count} table(s) selected for export"
+    format_options:
+      format_label: Format
+      output_folder_label: Output folder
+      no_folder_chosen: No folder chosen
+      choose_folder: "Choose Folder..."
+      choosing: "Choosing..."
+      dialog_title: Choose Export Folder
+      segment_size_label: Segment / chunk size (advanced)
+      segment_size_placeholder: Segment / chunk size
+      segment_size_invalid: "Must be a whole number of 1 or more; kept the previous value."
+      error:
+        no_dialog_fallback_failed: "No folder picker available and the fallback export directory could not be created: %{error}"
+    confirm:
+      title: Review export plan
+      summary: "%{count} table(s) as %{format} to %{folder}"
+      segment_size: "Segment / chunk size: %{size}"
+      start_export: Start Export
+    running:
+      title: "Exporting..."
+      position:
+        of_total: "Table %{index} of %{total}"
+        preparing: Preparing
+      progress:
+        of_total: "%{done} / %{total} rows"
+        only: "%{done} rows"
+      cancel: Cancel
+    error:
+      no_connection: No active connection for this export
+    toast:
+      cancelled: Export cancelled
+      success: "%{summary}. Saved to %{folder}"
+      schema_fetch_failed: "Export failed while reading table schema: %{error}"
+      table_failed: "Export failed on table '%{table}': %{error}"
+      failed: "Export failed: %{error}"
+    summary:
+      with_failures: "Exported %{completed} table(s), %{rows} row(s) total (%{skipped} skipped, %{failed} failed)"
+      ok: "Exported %{completed} table(s), %{rows} row(s) total (%{skipped} skipped)"
+    status_line:
+      completed: "%{table}: completed (%{rows} row(s))"
+      skipped: "%{table}: skipped"
+      failed: "%{table}: FAILED — %{error}"
+      not_attempted: "%{table}: not attempted"
+    footer:
+      back: Back
+      continue: Continue
+      close: Close
   import_wizard:
     title: Import Data
     rail:

@@ -986,6 +986,61 @@ document:
         column: COLUMNA
         references: REFERENCIAS
         row: FILA
+  export_wizard:
+    title: Exportar datos
+    rail:
+      tables: Tablas
+      format_options: Formato y opciones
+      confirm: Confirmar
+      run: Ejecutar
+    tables:
+      selected_count: "%{count} tabla(s) seleccionada(s) para exportar"
+    format_options:
+      format_label: Formato
+      output_folder_label: Carpeta de destino
+      no_folder_chosen: Ninguna carpeta elegida
+      choose_folder: "Elegir carpeta…"
+      choosing: "Eligiendo…"
+      dialog_title: Elegir carpeta de exportación
+      segment_size_label: Tamaño de segmento / bloque (avanzado)
+      segment_size_placeholder: Tamaño de segmento / bloque
+      segment_size_invalid: "Debe ser un número entero de 1 o más; se mantuvo el valor anterior."
+      error:
+        no_dialog_fallback_failed: "No hay selector de carpetas disponible y no se pudo crear la carpeta de exportación de respaldo: %{error}"
+    confirm:
+      title: Revisar plan de exportación
+      summary: "%{count} tabla(s) como %{format} hacia %{folder}"
+      segment_size: "Tamaño de segmento / bloque: %{size}"
+      start_export: Iniciar exportación
+    running:
+      title: "Exportando…"
+      position:
+        of_total: "Tabla %{index} de %{total}"
+        preparing: Preparando
+      progress:
+        of_total: "%{done} / %{total} filas"
+        only: "%{done} filas"
+      cancel: Cancelar
+    error:
+      no_connection: No hay una conexión activa para esta exportación
+    toast:
+      cancelled: Exportación cancelada
+      success: "%{summary}. Guardado en %{folder}"
+      schema_fetch_failed: "La exportación falló al leer el esquema de la tabla: %{error}"
+      table_failed: "La exportación falló en la tabla «%{table}»: %{error}"
+      failed: "Error al exportar: %{error}"
+    summary:
+      with_failures: "Se exportaron %{completed} tabla(s), %{rows} fila(s) en total (%{skipped} omitida(s), %{failed} fallida(s))"
+      ok: "Se exportaron %{completed} tabla(s), %{rows} fila(s) en total (%{skipped} omitida(s))"
+    status_line:
+      completed: "%{table}: completada (%{rows} fila(s))"
+      skipped: "%{table}: omitida"
+      failed: "%{table}: FALLIDA — %{error}"
+      not_attempted: "%{table}: no intentada"
+    footer:
+      back: Atrás
+      continue: Continuar
+      close: Cerrar
   import_wizard:
     title: Importar datos
     rail:

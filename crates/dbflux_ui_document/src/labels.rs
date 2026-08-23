@@ -1502,6 +1502,95 @@ pub(crate) fn import_table_status_line(table: &dbflux_transfer::import::Imported
     }
 }
 
+/// Terminal summary line for a finished export run, with every count
+/// interpolated. Uses the "with failures" bucket only when at least one
+/// table failed; otherwise the plain bucket.
+pub(crate) fn export_summary_label(
+    completed: usize,
+    rows: u64,
+    skipped: usize,
+    failed: usize,
+) -> String {
+    if failed > 0 {
+        dbflux_i18n::t!(
+            "document.export_wizard.summary.with_failures",
+            completed = completed,
+            rows = rows,
+            skipped = skipped,
+            failed = failed
+        )
+    } else {
+        dbflux_i18n::t!(
+            "document.export_wizard.summary.ok",
+            completed = completed,
+            rows = rows,
+            skipped = skipped
+        )
+    }
+}
+
+/// One itemized per-table status line shown when an export run left any
+/// table failed or not started (see
+/// [`crate::export_wizard::run::itemized_status_lines`]). Exhaustive by
+/// construction so a new [`dbflux_transfer::TableTransferStatus`] variant
+/// fails this crate's build until its catalog key is added here.
+pub(crate) fn export_table_status_line(
+    label: &str,
+    status: &dbflux_transfer::TableTransferStatus,
+) -> String {
+    use dbflux_transfer::TableTransferStatus;
+
+    match status {
+        TableTransferStatus::Completed { rows } => dbflux_i18n::t!(
+            "document.export_wizard.status_line.completed",
+            table = label,
+            rows = rows
+        ),
+        TableTransferStatus::Skipped => {
+            dbflux_i18n::t!("document.export_wizard.status_line.skipped", table = label)
+        }
+        TableTransferStatus::Failed { error } => dbflux_i18n::t!(
+            "document.export_wizard.status_line.failed",
+            table = label,
+            error = error
+        ),
+        TableTransferStatus::NotStarted => dbflux_i18n::t!(
+            "document.export_wizard.status_line.not_attempted",
+            table = label
+        ),
+    }
+}
+
+/// The export wizard's running phase "Table N of M" position line, or the
+/// "Preparing" fallback before the first table starts (`total_tables == 0`).
+pub(crate) fn export_running_position_label(current_index: usize, total_tables: usize) -> String {
+    if total_tables > 0 {
+        dbflux_i18n::t!(
+            "document.export_wizard.running.position.of_total",
+            index = current_index + 1,
+            total = total_tables
+        )
+    } else {
+        dbflux_i18n::t!("document.export_wizard.running.position.preparing")
+    }
+}
+
+/// The export wizard's running phase row-count line: `"done / total rows"`
+/// once the engine reports an estimate, otherwise just `"done rows"`.
+pub(crate) fn export_running_rows_label(rows_done: u64, estimated_total: Option<u64>) -> String {
+    match estimated_total {
+        Some(total) if total > 0 => dbflux_i18n::t!(
+            "document.export_wizard.running.progress.of_total",
+            done = rows_done,
+            total = total
+        ),
+        _ => dbflux_i18n::t!(
+            "document.export_wizard.running.progress.only",
+            done = rows_done
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1515,8 +1604,9 @@ mod tests {
         dangerous_query_body, dangerous_query_title, delete_confirm_copy,
         delete_prefix_delete_button_label, delete_prefix_deleted_toast, delete_prefix_probe_totals,
         delete_rows_label, execution_count_state_label, execution_mode_label,
-        history_items_count_label, history_tab_label, image_decode_error, image_header_error,
-        import_mapping_mode_label, import_rail_labels, import_summary_label,
+        export_running_position_label, export_running_rows_label, export_summary_label,
+        export_table_status_line, history_items_count_label, history_tab_label, image_decode_error,
+        image_header_error, import_mapping_mode_label, import_rail_labels, import_summary_label,
         import_table_status_line, incomplete_aggregate_rows_label, join_kind_label,
         live_output_lines_label, live_output_truncated_label, metric_picker_custom_dropdown_label,
         metric_picker_dimensions_error_label, metric_picker_period_error_label,
@@ -4249,5 +4339,154 @@ mod tests {
             labels[0],
             dbflux_i18n::t!("document.import_wizard.rail.pick_folder")
         );
+    }
+
+    // ── PR 26b: export_wizard/*.rs ───────────────────────────────────────
+
+    const EXPORT_WIZARD_KEYS: &[&str] = &[
+        "document.export_wizard.title",
+        "document.export_wizard.rail.tables",
+        "document.export_wizard.rail.format_options",
+        "document.export_wizard.rail.confirm",
+        "document.export_wizard.rail.run",
+        "document.export_wizard.tables.selected_count",
+        "document.export_wizard.format_options.format_label",
+        "document.export_wizard.format_options.output_folder_label",
+        "document.export_wizard.format_options.no_folder_chosen",
+        "document.export_wizard.format_options.choose_folder",
+        "document.export_wizard.format_options.choosing",
+        "document.export_wizard.format_options.dialog_title",
+        "document.export_wizard.format_options.segment_size_label",
+        "document.export_wizard.format_options.segment_size_placeholder",
+        "document.export_wizard.format_options.segment_size_invalid",
+        "document.export_wizard.format_options.error.no_dialog_fallback_failed",
+        "document.export_wizard.confirm.title",
+        "document.export_wizard.confirm.summary",
+        "document.export_wizard.confirm.segment_size",
+        "document.export_wizard.confirm.start_export",
+        "document.export_wizard.running.title",
+        "document.export_wizard.running.position.of_total",
+        "document.export_wizard.running.position.preparing",
+        "document.export_wizard.running.progress.of_total",
+        "document.export_wizard.running.progress.only",
+        "document.export_wizard.running.cancel",
+        "document.export_wizard.error.no_connection",
+        "document.export_wizard.toast.cancelled",
+        "document.export_wizard.toast.success",
+        "document.export_wizard.toast.schema_fetch_failed",
+        "document.export_wizard.toast.table_failed",
+        "document.export_wizard.toast.failed",
+        "document.export_wizard.summary.with_failures",
+        "document.export_wizard.summary.ok",
+        "document.export_wizard.status_line.completed",
+        "document.export_wizard.status_line.skipped",
+        "document.export_wizard.status_line.failed",
+        "document.export_wizard.status_line.not_attempted",
+        "document.export_wizard.footer.back",
+        "document.export_wizard.footer.continue",
+        "document.export_wizard.footer.close",
+    ];
+
+    /// PR 26b: every `document.export_wizard.*` key resolves to a
+    /// non-empty, non-fallback value in both locales.
+    #[test]
+    fn export_wizard_keys_resolve_in_both_locales() {
+        for key in EXPORT_WIZARD_KEYS {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, *key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+    }
+
+    /// PR 26b: a representative sample of `document.export_wizard.*` keys
+    /// diverges between locales.
+    #[test]
+    fn export_wizard_keys_differ_between_locales() {
+        for key in [
+            "document.export_wizard.title",
+            "document.export_wizard.format_options.choose_folder",
+            "document.export_wizard.confirm.start_export",
+            "document.export_wizard.running.title",
+            "document.export_wizard.footer.continue",
+            "document.export_wizard.toast.cancelled",
+        ] {
+            let en = dbflux_i18n::t!(key, locale = "en");
+            let es = dbflux_i18n::t!(key, locale = "es");
+            assert_ne!(en, es, "{key} must differ between en and es");
+        }
+    }
+
+    /// PR 26b: `export_summary_label` picks the "with failures" bucket only
+    /// when `failed > 0`, and interpolates every count.
+    #[test]
+    fn export_summary_label_switches_bucket_on_failed_count() {
+        let ok = export_summary_label(3, 120, 1, 0);
+        assert!(ok.contains('3') && ok.contains("120") && ok.contains('1'));
+        assert!(!ok.to_lowercase().contains("fail"));
+
+        let with_failures = export_summary_label(2, 40, 1, 1);
+        assert!(with_failures.contains('2') && with_failures.contains("40"));
+        assert!(with_failures.to_lowercase().contains("fail"));
+    }
+
+    /// PR 26b: `export_table_status_line` covers every `TableTransferStatus`
+    /// variant (exhaustive match, no wildcard arm).
+    #[test]
+    fn export_table_status_line_covers_all_variants() {
+        use dbflux_transfer::TableTransferStatus;
+
+        let statuses = [
+            TableTransferStatus::Completed { rows: 5 },
+            TableTransferStatus::Skipped,
+            TableTransferStatus::Failed {
+                error: "boom".to_string(),
+            },
+            TableTransferStatus::NotStarted,
+        ];
+        for status in statuses {
+            let line = export_table_status_line("public.users", &status);
+            assert!(!line.is_empty());
+            assert!(line.contains("public.users"));
+        }
+    }
+
+    /// PR 26b: `export_running_position_label` reports "Table N of M" once
+    /// tables are known, and falls back to "Preparing" beforehand.
+    #[test]
+    fn export_running_position_label_falls_back_to_preparing_before_tables_are_known() {
+        let preparing = export_running_position_label(0, 0);
+        assert_eq!(
+            preparing,
+            dbflux_i18n::t!("document.export_wizard.running.position.preparing")
+        );
+
+        let positioned = export_running_position_label(1, 3);
+        assert!(positioned.contains('2'));
+        assert!(positioned.contains('3'));
+    }
+
+    /// PR 26b: `export_running_rows_label` switches between "done / total"
+    /// and a bare "done rows" once no estimate is available.
+    #[test]
+    fn export_running_rows_label_switches_on_estimated_total() {
+        let with_total = export_running_rows_label(10, Some(100));
+        assert!(with_total.contains("10"));
+        assert!(with_total.contains("100"));
+
+        let without_total = export_running_rows_label(10, None);
+        assert!(without_total.contains("10"));
+        assert!(!without_total.contains("100"));
+
+        let zero_total = export_running_rows_label(10, Some(0));
+        assert!(zero_total.contains("10"));
+        assert!(!zero_total.contains('/'));
     }
 }
