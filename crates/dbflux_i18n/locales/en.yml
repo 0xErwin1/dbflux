@@ -359,6 +359,79 @@ document:
       loading:
         external: "Loading events…"
         internal: "Loading audit events…"
+  buckets_table:
+    title: "Buckets — %{connection}"
+    search_placeholder: "Find buckets by name…"
+    toolbar:
+      refresh: Refresh
+      new_bucket: New bucket
+    columns:
+      name: Name
+      region: Region
+      objects: Objects
+      size: Size
+      versioning: Versioning
+      created: Created
+    versioning:
+      on: "On"
+      suspended: Suspended
+      off: "Off"
+    details:
+      calculate_size: Calculate size
+      calculating: "Calculating…"
+    footer:
+      buckets:
+        one: "%{count} bucket"
+        many: "%{count} buckets"
+      regions:
+        one: "%{count} region"
+        many: "%{count} regions"
+      hint:
+        open: Enter browse
+        properties: Space properties
+        delete: x delete (empty only)
+    empty:
+      loading: "Loading buckets…"
+      error: Failed to list buckets
+      error_detail: "Failed to list buckets: %{error}"
+      no_match: "No buckets match \"%{query}\""
+      no_buckets: This connection has no buckets
+      hint_refresh: r refresh
+    delete_confirm:
+      title: Delete bucket?
+      body: "\"%{bucket}\" is empty and will be removed. This cannot be undone."
+      cancel: Cancel
+      confirm: Delete
+    error:
+      bucket_not_empty: "Bucket \"%{bucket}\" is not empty. Delete its objects with a recursive prefix delete before removing the bucket."
+    status:
+      duration_tooltip: Client-side duration of the last object-store call
+    new_bucket:
+      title: New Bucket
+      field:
+        name: Name
+        name_hint: "3-63 characters · lowercase letters, digits, dots and hyphens"
+        region: Region
+        encryption: Default encryption
+      section:
+        options: Options
+      option:
+        versioning: Enable versioning
+        block_public_access: Block all public access
+        object_lock: Object lock
+        object_lock_warning: "Object lock cannot be disabled after the bucket is created."
+      encryption:
+        none: None
+      applied_immediately: applied immediately
+      cancel: Cancel
+      create: Create
+      creating: "Creating…"
+      error:
+        length: "Bucket names must be 3-63 characters long."
+        charset: "Bucket names may only contain lowercase letters, digits, dots and hyphens."
+      toast:
+        created: "Created bucket \"%{name}\""
+        created_with_limitations: "Created bucket \"%{name}\" with limitations"
   code:
     toolbar:
       refresh: Refresh

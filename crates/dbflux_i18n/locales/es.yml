@@ -359,6 +359,79 @@ document:
       loading:
         external: "Cargando eventos…"
         internal: "Cargando eventos de auditoría…"
+  buckets_table:
+    title: "Buckets — %{connection}"
+    search_placeholder: "Buscar buckets por nombre…"
+    toolbar:
+      refresh: Actualizar
+      new_bucket: Nuevo bucket
+    columns:
+      name: Nombre
+      region: Región
+      objects: Objetos
+      size: Tamaño
+      versioning: Versionado
+      created: Creado
+    versioning:
+      on: Activado
+      suspended: Suspendido
+      off: Desactivado
+    details:
+      calculate_size: Calcular tamaño
+      calculating: "Calculando…"
+    footer:
+      buckets:
+        one: "%{count} bucket"
+        many: "%{count} buckets"
+      regions:
+        one: "%{count} región"
+        many: "%{count} regiones"
+      hint:
+        open: Enter para abrir
+        properties: Espacio para propiedades
+        delete: x eliminar (solo vacíos)
+    empty:
+      loading: "Cargando buckets…"
+      error: Error al listar buckets
+      error_detail: "Error al listar buckets: %{error}"
+      no_match: "Ningún bucket coincide con \"%{query}\""
+      no_buckets: Esta conexión no tiene buckets
+      hint_refresh: r para actualizar
+    delete_confirm:
+      title: ¿Eliminar bucket?
+      body: "\"%{bucket}\" está vacío y se eliminará. Esta acción no se puede deshacer."
+      cancel: Cancelar
+      confirm: Eliminar
+    error:
+      bucket_not_empty: "El bucket \"%{bucket}\" no está vacío. Elimina sus objetos con una eliminación recursiva de prefijo antes de eliminar el bucket."
+    status:
+      duration_tooltip: Duración local de la última llamada al almacenamiento de objetos
+    new_bucket:
+      title: Nuevo bucket
+      field:
+        name: Nombre
+        name_hint: "3-63 caracteres · letras minúsculas, dígitos, puntos y guiones"
+        region: Región
+        encryption: Cifrado predeterminado
+      section:
+        options: Opciones
+      option:
+        versioning: Habilitar versionado
+        block_public_access: Bloquear todo acceso público
+        object_lock: Bloqueo de objetos
+        object_lock_warning: "El bloqueo de objetos no se puede deshabilitar después de crear el bucket."
+      encryption:
+        none: Ninguno
+      applied_immediately: se aplica de inmediato
+      cancel: Cancelar
+      create: Crear
+      creating: "Creando…"
+      error:
+        length: "Los nombres de bucket deben tener entre 3 y 63 caracteres."
+        charset: "Los nombres de bucket solo pueden contener letras minúsculas, dígitos, puntos y guiones."
+      toast:
+        created: "Bucket \"%{name}\" creado"
+        created_with_limitations: "Bucket \"%{name}\" creado con limitaciones"
   code:
     toolbar:
       refresh: Actualizar

@@ -22,14 +22,16 @@ impl BucketsTableDocument {
         }
 
         segments.push(StatusSegment {
-            text: format!("{} buckets", self.buckets().len()).into(),
+            text: crate::labels::buckets_table_bucket_count_label(self.buckets().len()).into(),
             tooltip: None,
         });
 
         if let Some(timing) = self.last_operation {
             segments.push(StatusSegment {
                 text: timing.display().into(),
-                tooltip: Some("Client-side duration of the last object-store call".into()),
+                tooltip: Some(
+                    dbflux_i18n::t!("document.buckets_table.status.duration_tooltip").into(),
+                ),
             });
         }
 

@@ -1252,15 +1252,102 @@ pub(crate) fn delete_prefix_delete_button_label(object_count: Option<u64>) -> St
     }
 }
 
+/// Label for a bucket's active versioning status
+/// ([`dbflux_core::VersioningStatus`]), as shown on a bucket row and in the
+/// details strip. `Disabled` has no label of its own — callers fall back to
+/// the placeholder dash or [`versioning_off_label`] instead — so this only
+/// covers the two active statuses.
+pub(crate) fn versioning_status_label(status: dbflux_core::VersioningStatus) -> Option<String> {
+    use dbflux_core::VersioningStatus;
+
+    match status {
+        VersioningStatus::Enabled => Some(dbflux_i18n::t!("document.buckets_table.versioning.on")),
+        VersioningStatus::Suspended => Some(dbflux_i18n::t!(
+            "document.buckets_table.versioning.suspended"
+        )),
+        VersioningStatus::Disabled => None,
+    }
+}
+
+/// Label for the "no versioning configured" state shown in the bucket
+/// details strip, used when [`versioning_status_label`] returns `None`.
+pub(crate) fn versioning_off_label() -> String {
+    dbflux_i18n::t!("document.buckets_table.versioning.off")
+}
+
+/// Label for how many buckets are listed, shared by the table footer and the
+/// status-bar segment.
+///
+/// Uses the singular catalog bucket only for exactly one bucket; every other
+/// count, including zero, uses the plural bucket.
+pub(crate) fn buckets_table_bucket_count_label(bucket_count: usize) -> String {
+    if bucket_count == 1 {
+        dbflux_i18n::t!(
+            "document.buckets_table.footer.buckets.one",
+            count = bucket_count
+        )
+    } else {
+        dbflux_i18n::t!(
+            "document.buckets_table.footer.buckets.many",
+            count = bucket_count
+        )
+    }
+}
+
+/// Footer summary line for the buckets table: how many buckets are listed
+/// and how many distinct regions they span.
+///
+/// Uses the singular catalog bucket only for exactly one bucket/region;
+/// every other count, including zero, uses the plural bucket.
+pub(crate) fn buckets_table_summary_line(bucket_count: usize, region_count: usize) -> String {
+    let buckets = buckets_table_bucket_count_label(bucket_count);
+
+    let regions = if region_count == 1 {
+        dbflux_i18n::t!(
+            "document.buckets_table.footer.regions.one",
+            count = region_count
+        )
+    } else {
+        dbflux_i18n::t!(
+            "document.buckets_table.footer.regions.many",
+            count = region_count
+        )
+    };
+
+    format!("{buckets} · {regions}")
+}
+
+/// Label for a [`crate::buckets_table::BucketEncryptionChoice`] shown as a
+/// segmented-control option and echoed in the New Bucket modal. Exhaustive by
+/// construction so a new choice fails this crate's build until its catalog
+/// key is added here.
+///
+/// `SseS3`/`SseKms` are the AWS encryption algorithm names, not prose, and
+/// stay in English.
+pub(crate) fn bucket_encryption_choice_label(
+    choice: crate::buckets_table::BucketEncryptionChoice,
+) -> String {
+    use crate::buckets_table::BucketEncryptionChoice;
+
+    match choice {
+        BucketEncryptionChoice::SseS3 => "SSE-S3".to_string(),
+        BucketEncryptionChoice::SseKms => "SSE-KMS".to_string(),
+        BucketEncryptionChoice::None => {
+            dbflux_i18n::t!("document.buckets_table.new_bucket.encryption.none")
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         MutationItemKind, add_member_modal_placeholders, add_member_modal_section_label,
         add_member_modal_title, agg_fn_display, assignment_value_kind_label,
         audit_actor_type_label, audit_category_label, audit_level_label, audit_outcome_label,
-        bool_op_label, builder_mode_label, bulk_delete_success_label, chart_degraded_copy,
-        chart_dock_shape_label, chart_rail_why_text, code_toolbar_shortcut_hint_label,
-        comparator_label, copy_query_language_label, dangerous_query_body, dangerous_query_title,
+        bool_op_label, bucket_encryption_choice_label, buckets_table_summary_line,
+        builder_mode_label, bulk_delete_success_label, chart_degraded_copy, chart_dock_shape_label,
+        chart_rail_why_text, code_toolbar_shortcut_hint_label, comparator_label,
+        copy_query_language_label, dangerous_query_body, dangerous_query_title,
         delete_confirm_copy, delete_prefix_delete_button_label, delete_prefix_deleted_toast,
         delete_prefix_probe_totals, delete_rows_label, execution_count_state_label,
         execution_mode_label, history_items_count_label, history_tab_label, image_decode_error,
@@ -1270,15 +1357,17 @@ mod tests {
         pending_edits_summary, presign_expiry_label, presign_method_label, preview_gate_message,
         refresh_policy_label, result_tab_count_label, row_count_label, schema_change_description,
         script_confirm_message_label, sort_direction_label, table_action_description,
-        unsaved_changes_label, update_columns_label, valid_lines_label,
+        unsaved_changes_label, update_columns_label, valid_lines_label, versioning_off_label,
+        versioning_status_label,
     };
+    use crate::buckets_table::BucketEncryptionChoice;
     use crate::object_browser::{PresignExpiry, PresignMethodChoice, PreviewGate};
     use crate::schema_diff::apply::TableLevelAction;
     use dbflux_components::chart::ChartDetection;
     use dbflux_core::{
         ColumnSnapshot, DangerousQueryKind, EventActorType, EventCategory, EventOutcome,
         EventSeverity, IndexSnapshot, QueryLanguage, RefreshPolicy, SchemaChange, TableInfo,
-        TableRef,
+        TableRef, VersioningStatus,
     };
 
     const ALL_DANGEROUS_QUERY_KINDS: &[DangerousQueryKind] = &[
@@ -3324,5 +3413,165 @@ mod tests {
                 locale = "es"
             )
         );
+    }
+
+    /// T22: `versioning_status_label` (widened from `Option<&'static str>`)
+    /// covers every `VersioningStatus` variant, with `Disabled` staying
+    /// `None` for the caller's own placeholder.
+    #[test]
+    fn versioning_status_label_covers_all_variants() {
+        assert_eq!(
+            versioning_status_label(VersioningStatus::Enabled),
+            Some(dbflux_i18n::t!("document.buckets_table.versioning.on"))
+        );
+        assert_eq!(
+            versioning_status_label(VersioningStatus::Suspended),
+            Some(dbflux_i18n::t!(
+                "document.buckets_table.versioning.suspended"
+            ))
+        );
+        assert_eq!(versioning_status_label(VersioningStatus::Disabled), None);
+        assert_eq!(
+            versioning_off_label(),
+            dbflux_i18n::t!("document.buckets_table.versioning.off")
+        );
+    }
+
+    /// T22: the footer summary line routes both counts through the plural
+    /// catalog helper instead of a hand-rolled English-only word.
+    #[test]
+    fn buckets_table_summary_line_uses_zero_one_many() {
+        assert_eq!(
+            buckets_table_summary_line(0, 0),
+            format!(
+                "{} · {}",
+                dbflux_i18n::t!("document.buckets_table.footer.buckets.many", count = 0),
+                dbflux_i18n::t!("document.buckets_table.footer.regions.many", count = 0)
+            )
+        );
+        assert_eq!(
+            buckets_table_summary_line(1, 1),
+            format!(
+                "{} · {}",
+                dbflux_i18n::t!("document.buckets_table.footer.buckets.one", count = 1),
+                dbflux_i18n::t!("document.buckets_table.footer.regions.one", count = 1)
+            )
+        );
+        assert_eq!(
+            buckets_table_summary_line(4, 2),
+            format!(
+                "{} · {}",
+                dbflux_i18n::t!("document.buckets_table.footer.buckets.many", count = 4),
+                dbflux_i18n::t!("document.buckets_table.footer.regions.many", count = 2)
+            )
+        );
+    }
+
+    /// T22 (new_bucket.rs:65): `BucketEncryptionChoice::label` is widened
+    /// from `&'static str` to `String`. `SseS3`/`SseKms` stay the literal AWS
+    /// algorithm names in both locales; `None` routes through the catalog.
+    #[test]
+    fn bucket_encryption_choice_label_covers_all_variants() {
+        assert_eq!(
+            bucket_encryption_choice_label(BucketEncryptionChoice::SseS3),
+            "SSE-S3"
+        );
+        assert_eq!(
+            bucket_encryption_choice_label(BucketEncryptionChoice::SseKms),
+            "SSE-KMS"
+        );
+        assert_eq!(
+            bucket_encryption_choice_label(BucketEncryptionChoice::None),
+            dbflux_i18n::t!("document.buckets_table.new_bucket.encryption.none")
+        );
+    }
+
+    /// T22: the buckets-table keys resolve in both locales, including the
+    /// `document.object_browser.error.*` keys reused from PR 19/21 for the
+    /// "connection unavailable" / "API unavailable" driver messages.
+    #[test]
+    fn buckets_table_keys_resolve_in_both_locales() {
+        let keys = [
+            "document.buckets_table.title",
+            "document.buckets_table.search_placeholder",
+            "document.buckets_table.toolbar.refresh",
+            "document.buckets_table.toolbar.new_bucket",
+            "document.buckets_table.columns.name",
+            "document.buckets_table.columns.region",
+            "document.buckets_table.columns.objects",
+            "document.buckets_table.columns.size",
+            "document.buckets_table.columns.versioning",
+            "document.buckets_table.columns.created",
+            "document.buckets_table.versioning.on",
+            "document.buckets_table.versioning.suspended",
+            "document.buckets_table.versioning.off",
+            "document.buckets_table.details.calculate_size",
+            "document.buckets_table.details.calculating",
+            "document.buckets_table.footer.buckets.one",
+            "document.buckets_table.footer.buckets.many",
+            "document.buckets_table.footer.regions.one",
+            "document.buckets_table.footer.regions.many",
+            "document.buckets_table.footer.hint.open",
+            "document.buckets_table.footer.hint.properties",
+            "document.buckets_table.footer.hint.delete",
+            "document.buckets_table.empty.loading",
+            "document.buckets_table.empty.error",
+            "document.buckets_table.empty.error_detail",
+            "document.buckets_table.empty.no_match",
+            "document.buckets_table.empty.no_buckets",
+            "document.buckets_table.empty.hint_refresh",
+            "document.buckets_table.delete_confirm.title",
+            "document.buckets_table.delete_confirm.body",
+            "document.buckets_table.delete_confirm.cancel",
+            "document.buckets_table.delete_confirm.confirm",
+            "document.buckets_table.error.bucket_not_empty",
+            "document.buckets_table.status.duration_tooltip",
+            "document.buckets_table.new_bucket.title",
+            "document.buckets_table.new_bucket.field.name",
+            "document.buckets_table.new_bucket.field.name_hint",
+            "document.buckets_table.new_bucket.field.region",
+            "document.buckets_table.new_bucket.field.encryption",
+            "document.buckets_table.new_bucket.section.options",
+            "document.buckets_table.new_bucket.option.versioning",
+            "document.buckets_table.new_bucket.option.block_public_access",
+            "document.buckets_table.new_bucket.option.object_lock",
+            "document.buckets_table.new_bucket.option.object_lock_warning",
+            "document.buckets_table.new_bucket.encryption.none",
+            "document.buckets_table.new_bucket.applied_immediately",
+            "document.buckets_table.new_bucket.cancel",
+            "document.buckets_table.new_bucket.create",
+            "document.buckets_table.new_bucket.creating",
+            "document.buckets_table.new_bucket.error.length",
+            "document.buckets_table.new_bucket.error.charset",
+            "document.buckets_table.new_bucket.toast.created",
+            "document.buckets_table.new_bucket.toast.created_with_limitations",
+            "document.object_browser.error.connection_unavailable",
+            "document.object_browser.error.api_unavailable",
+        ];
+
+        for key in keys {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+    }
+
+    /// T22: at least one buckets-table key must actually diverge between
+    /// locales, so the parity loop above cannot pass on English fallbacks
+    /// copied verbatim into `es.yml`.
+    #[test]
+    fn buckets_table_versioning_on_differs_between_locales() {
+        let en = dbflux_i18n::t!("document.buckets_table.versioning.on", locale = "en");
+        let es = dbflux_i18n::t!("document.buckets_table.versioning.on", locale = "es");
+
+        assert_ne!(en, es);
     }
 }
