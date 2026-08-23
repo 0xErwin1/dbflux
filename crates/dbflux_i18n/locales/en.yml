@@ -1496,6 +1496,96 @@ settings:
       export_audit_logs:
         name: Export Audit Logs
         description: Download audit log entries as a file
+    class:
+      metadata:
+        label: Metadata
+        description: Schema inspection — listing databases, tables, and describing objects
+      read:
+        label: Read
+        description: Running read-only queries and fetching data
+      write:
+        label: Write
+        description: Inserting, updating, or running scripts that modify data
+      destructive:
+        label: Destructive
+        description: "DELETE, DROP, TRUNCATE and other irreversible operations"
+      admin:
+        label: Admin
+        description: Approving executions, exporting audit logs, and privileged actions
+    group:
+      discovery: Discovery
+      schema: Schema
+      query: Query
+      scripts: Scripts
+      approval: Approval
+      audit: Audit
+    trusted_clients_title: Trusted Clients
+    trusted_clients_description: Manage AI agent identities allowed to connect via MCP
+    trusted_clients_form_description: AI agent identities allowed to connect via MCP
+    roles_title: Roles
+    roles_description: Manage named role bundles for MCP governance
+    roles_form_description: Group policies into named roles assigned to actors per connection
+    policies_title: Policies
+    policies_description: Manage tool and execution-class policy rules for MCP governance
+    policies_form_description: Define which tools and execution classes are allowed
+    new_client: New Trusted Client
+    new_role: New Role
+    new_policy: New Policy
+    empty:
+      clients: No trusted clients configured.
+      roles: No roles configured.
+      policies: No policies configured.
+    field:
+      client_id: Client ID
+      name: Name
+      issuer_optional: Issuer (optional)
+      active: Active
+      role_id: Role ID
+      policies: Policies
+      policy_id: Policy ID
+      allowed_execution_classes: Allowed Execution Classes
+      allowed_tools: Allowed Tools
+      policy_count:
+        one: 1 policy
+        many: "%{count} policies"
+      tools_classes_summary: "%{tools} tools · %{classes} classes"
+      builtin_badge: built-in
+    placeholder:
+      client_name: Agent / integration name
+      no_policies_selected: No policies selected
+    hint:
+      select_policies: Select policies defined in the Policies tab
+    error:
+      client_id_name_required: Client ID and name are required
+      role_id_required: Role ID is required
+      builtin_role_readonly: Built-in roles cannot be modified
+      policy_id_required: Policy ID is required
+      builtin_policy_readonly: Built-in policies cannot be modified
+    toast:
+      client_saved: Trusted client saved
+      select_client_first: Select a trusted client first
+      client_deleted: Trusted client deleted
+      client_activated: Trusted client activated
+      client_deactivated: Trusted client deactivated
+      role_saved: Role saved
+      select_role_first: Select a role first
+      role_deleted: Role deleted
+      policy_saved: Policy saved
+      select_policy_first: Select a policy first
+      policy_deleted: Policy deleted
+    status:
+      unsaved: Unsaved form changes
+      saved: All changes applied
+    action:
+      update_client: Update Client
+      create_client: Create Client
+      activate: Activate
+      deactivate: Deactivate
+      delete: Delete
+      update_role: Update Role
+      create_role: Create Role
+      update_policy: Update Policy
+      create_policy: Create Policy
   nav:
     general_group: General
     general: General

@@ -1496,6 +1496,96 @@ settings:
       export_audit_logs:
         name: Exportar registros de auditoría
         description: Descargar las entradas del registro de auditoría como archivo
+    class:
+      metadata:
+        label: Metadatos
+        description: Inspección de esquema — listar bases de datos, tablas y describir objetos
+      read:
+        label: Lectura
+        description: Ejecutar consultas de solo lectura y obtener datos
+      write:
+        label: Escritura
+        description: Insertar, actualizar o ejecutar scripts que modifican datos
+      destructive:
+        label: Destructiva
+        description: "DELETE, DROP, TRUNCATE y otras operaciones irreversibles"
+      admin:
+        label: Administración
+        description: Aprobar ejecuciones, exportar registros de auditoría y acciones privilegiadas
+    group:
+      discovery: Descubrimiento
+      schema: Esquema
+      query: Consulta
+      scripts: Scripts
+      approval: Aprobación
+      audit: Auditoría
+    trusted_clients_title: Clientes de confianza
+    trusted_clients_description: Gestiona las identidades de agentes de IA autorizadas a conectarse por MCP
+    trusted_clients_form_description: Identidades de agentes de IA autorizadas a conectarse por MCP
+    roles_title: Roles
+    roles_description: Gestiona paquetes de roles con nombre para la gobernanza de MCP
+    roles_form_description: Agrupa políticas en roles con nombre asignados a actores por conexión
+    policies_title: Políticas
+    policies_description: Gestiona las reglas de política de herramientas y clases de ejecución para la gobernanza de MCP
+    policies_form_description: Define qué herramientas y clases de ejecución están permitidas
+    new_client: Nuevo cliente de confianza
+    new_role: Nuevo rol
+    new_policy: Nueva política
+    empty:
+      clients: No hay clientes de confianza configurados.
+      roles: No hay roles configurados.
+      policies: No hay políticas configuradas.
+    field:
+      client_id: ID de cliente
+      name: Nombre
+      issuer_optional: Emisor (opcional)
+      active: Activo
+      role_id: ID de rol
+      policies: Políticas
+      policy_id: ID de política
+      allowed_execution_classes: Clases de ejecución permitidas
+      allowed_tools: Herramientas permitidas
+      policy_count:
+        one: 1 política
+        many: "%{count} políticas"
+      tools_classes_summary: "%{tools} herramientas · %{classes} clases"
+      builtin_badge: integrado
+    placeholder:
+      client_name: Nombre del agente o integración
+      no_policies_selected: Ninguna política seleccionada
+    hint:
+      select_policies: Selecciona políticas definidas en la pestaña Políticas
+    error:
+      client_id_name_required: El ID y el nombre del cliente son obligatorios
+      role_id_required: El ID del rol es obligatorio
+      builtin_role_readonly: Los roles integrados no se pueden modificar
+      policy_id_required: El ID de la política es obligatorio
+      builtin_policy_readonly: Las políticas integradas no se pueden modificar
+    toast:
+      client_saved: Cliente de confianza guardado
+      select_client_first: Selecciona primero un cliente de confianza
+      client_deleted: Cliente de confianza eliminado
+      client_activated: Cliente de confianza activado
+      client_deactivated: Cliente de confianza desactivado
+      role_saved: Rol guardado
+      select_role_first: Selecciona primero un rol
+      role_deleted: Rol eliminado
+      policy_saved: Política guardada
+      select_policy_first: Selecciona primero una política
+      policy_deleted: Política eliminada
+    status:
+      unsaved: Cambios sin guardar
+      saved: Todos los cambios aplicados
+    action:
+      update_client: Actualizar cliente
+      create_client: Crear cliente
+      activate: Activar
+      deactivate: Desactivar
+      delete: Eliminar
+      update_role: Actualizar rol
+      create_role: Crear rol
+      update_policy: Actualizar política
+      create_policy: Crear política
   nav:
     general_group: General
     general: General
