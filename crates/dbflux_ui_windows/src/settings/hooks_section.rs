@@ -3,6 +3,7 @@ use super::SettingsSection;
 use super::SettingsSectionId;
 use super::form_section::FormSection;
 use super::section_trait::SectionFocusEvent;
+use crate::labels::{hooks_delete_message, hooks_delete_unreadable_message};
 use dbflux_app::config_loader::EditableGlobalHook;
 use dbflux_app::keymap::Modifiers;
 use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChanged};
@@ -287,15 +288,15 @@ impl HooksSection {
         let hook_kind_dropdown = cx.new(|_cx| {
             #[cfg(feature = "lua")]
             let items = vec![
-                DropdownItem::with_value("Command", "command"),
-                DropdownItem::with_value("Script", "script"),
+                DropdownItem::with_value(dbflux_i18n::t!("hooks.kind.command"), "command"),
+                DropdownItem::with_value(dbflux_i18n::t!("hooks.kind.script"), "script"),
                 DropdownItem::with_value("Lua", "lua"),
             ];
 
             #[cfg(not(feature = "lua"))]
             let items = vec![
-                DropdownItem::with_value("Command", "command"),
-                DropdownItem::with_value("Script", "script"),
+                DropdownItem::with_value(dbflux_i18n::t!("hooks.kind.command"), "command"),
+                DropdownItem::with_value(dbflux_i18n::t!("hooks.kind.script"), "script"),
             ];
 
             Dropdown::new("hook-kind")
@@ -318,7 +319,10 @@ impl HooksSection {
         });
         let script_source_dropdown = cx.new(|_cx| {
             Dropdown::new("hook-script-source")
-                .items(vec![DropdownItem::with_value("File", "file")])
+                .items(vec![DropdownItem::with_value(
+                    dbflux_i18n::t!("hooks.source.file"),
+                    "file",
+                )])
                 .selected_index(Some(0))
         });
         let input_hook_script_file_path =
@@ -328,14 +332,20 @@ impl HooksSection {
                 .code_editor("python")
                 .line_number(true)
                 .soft_wrap(true)
-                .placeholder("Enter script content...")
+                .placeholder(dbflux_i18n::t!("hooks.script.placeholder"))
         });
         let input_hook_interpreter = cx.new(|cx| InputState::new(window, cx).placeholder("auto"));
         let hook_execution_mode_dropdown = cx.new(|_cx| {
             Dropdown::new("hook-execution-mode")
                 .items(vec![
-                    DropdownItem::with_value("Blocking", "blocking"),
-                    DropdownItem::with_value("Detached", "detached"),
+                    DropdownItem::with_value(
+                        dbflux_i18n::t!("hooks.execution.blocking"),
+                        "blocking",
+                    ),
+                    DropdownItem::with_value(
+                        dbflux_i18n::t!("hooks.execution.detached"),
+                        "detached",
+                    ),
                 ])
                 .selected_index(Some(0))
         });
@@ -351,9 +361,12 @@ impl HooksSection {
         let hook_failure_dropdown = cx.new(|_cx| {
             Dropdown::new("hook-failure-mode")
                 .items(vec![
-                    DropdownItem::with_value("Disconnect", "disconnect"),
-                    DropdownItem::with_value("Warn", "warn"),
-                    DropdownItem::with_value("Ignore", "ignore"),
+                    DropdownItem::with_value(
+                        dbflux_i18n::t!("hooks.failure.disconnect"),
+                        "disconnect",
+                    ),
+                    DropdownItem::with_value(dbflux_i18n::t!("hooks.failure.warn"), "warn"),
+                    DropdownItem::with_value(dbflux_i18n::t!("hooks.failure.ignore"), "ignore"),
                 ])
                 .selected_index(Some(0))
         });
@@ -795,7 +808,7 @@ impl Render for HooksSection {
 
                 element.child(
                     Dialog::new(window, cx)
-                        .title("Delete Hook")
+                        .title(dbflux_i18n::t!("hooks.delete.title"))
                         .confirm()
                         .on_ok(move |_, window, cx| {
                             entity.update(cx, |section, cx| {
@@ -809,10 +822,11 @@ impl Render for HooksSection {
                             });
                             true
                         })
-                        .child(div().text_sm().child(format!(
-                            "Are you sure you want to delete hook \"{}\"?",
-                            hook_delete_name
-                        ))),
+                        .child(
+                            div()
+                                .text_sm()
+                                .child(hooks_delete_message(&hook_delete_name)),
+                        ),
                 )
             })
             .when(show_protected_delete, |element| {
@@ -821,7 +835,7 @@ impl Render for HooksSection {
 
                 element.child(
                     Dialog::new(window, cx)
-                        .title("Delete Unreadable Hook Row")
+                        .title(dbflux_i18n::t!("hooks.delete_unreadable.title"))
                         .confirm()
                         .on_ok(move |_, _, cx| {
                             entity.update(cx, |section, cx| {
@@ -835,11 +849,11 @@ impl Render for HooksSection {
                             });
                             true
                         })
-                        .child(div().text_sm().child(format!(
-                            "Permanently delete the unreadable hook row \"{}\"? Its stored data \
-                             cannot be recovered, but its name becomes reusable afterwards.",
-                            protected_delete_label
-                        ))),
+                        .child(
+                            div()
+                                .text_sm()
+                                .child(hooks_delete_unreadable_message(&protected_delete_label)),
+                        ),
                 )
             })
     }
@@ -949,5 +963,71 @@ mod tests {
         assert!(rows.contains(&vec![HookFormField::LuaLogging]));
         assert!(!rows.contains(&vec![HookFormField::ExecutionMode]));
         assert!(!rows.contains(&vec![HookFormField::ReadySignal]));
+    }
+
+    const HOOKS_CATALOG_KEYS: &[&str] = &[
+        "hooks.kind.command",
+        "hooks.kind.script",
+        "hooks.source.file",
+        "hooks.script.placeholder",
+        "hooks.execution.blocking",
+        "hooks.execution.detached",
+        "hooks.failure.disconnect",
+        "hooks.failure.warn",
+        "hooks.failure.ignore",
+        "hooks.delete.title",
+        "hooks.delete.message",
+        "hooks.delete_unreadable.title",
+        "hooks.delete_unreadable.message",
+        "hooks.action.delete",
+        "hooks.action.update",
+        "hooks.action.create",
+        "hooks.phase.pre_connect_hook",
+        "hooks.phase.extra_pre_connect",
+        "hooks.phase.post_connect_hook",
+        "hooks.phase.extra_post_connect",
+        "hooks.phase.pre_disconnect_hook",
+        "hooks.phase.extra_pre_disconnect",
+        "hooks.phase.post_disconnect_hook",
+        "hooks.phase.extra_post_disconnect",
+    ];
+
+    #[test]
+    fn hooks_vocabulary_keys_resolve_in_both_locales() {
+        for locale in ["en", "es"] {
+            for key in HOOKS_CATALOG_KEYS {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(
+                    !value.is_empty(),
+                    "key {key} resolved empty for locale {locale}"
+                );
+                assert_ne!(value, *key, "key {key} did not resolve for locale {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "key {key} fell back to the raw locale-qualified form for locale {locale}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn hooks_failure_warn_differs_between_locales() {
+        let english = dbflux_i18n::t!("hooks.failure.warn", locale = "en");
+        let spanish = dbflux_i18n::t!("hooks.failure.warn", locale = "es");
+
+        assert_eq!(english, "Warn");
+        assert_eq!(spanish, "Advertir");
+        assert_ne!(english, spanish);
+    }
+
+    #[test]
+    fn hooks_kind_script_is_script_in_both_locales() {
+        let english = dbflux_i18n::t!("hooks.kind.script", locale = "en");
+        let spanish = dbflux_i18n::t!("hooks.kind.script", locale = "es");
+
+        assert_eq!(english, "Script");
+        assert_eq!(spanish, "Script");
     }
 }
