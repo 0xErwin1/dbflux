@@ -731,7 +731,7 @@ impl DataGridPanel {
                         dbflux_ui_base::user_error::report_error(
                             dbflux_ui_base::user_error::UserFacingError::new(
                                 dbflux_ui_base::user_error::ErrorKind::Driver,
-                                format!("Failed to fetch table details for PK: {}", e),
+                                crate::labels::pk_details_fetch_failed_error(&e.to_string()),
                             ),
                             cx,
                         );
@@ -1057,7 +1057,7 @@ impl DataGridPanel {
                         dd.set_selected_index(Some(RefreshPolicy::Manual.index()), cx);
                     });
                     dbflux_ui_base::toast::Toast::warning(
-                        "Auto-refresh not available for query results",
+                        crate::labels::auto_refresh_unavailable_toast(),
                     )
                     .meta_right(dbflux_ui_base::toast::now_hms())
                     .push(cx);
@@ -1307,7 +1307,7 @@ impl DataGridPanel {
             } => {
                 let Some(profile_id) = profile_id else {
                     self.pending.toast = Some(dbflux_ui_base::toast::PendingToast {
-                        message: "Cannot save chart: query has no profile binding".into(),
+                        message: crate::labels::chart_save_no_profile_binding_error(),
                         is_error: true,
                     });
                     cx.notify();
@@ -3983,7 +3983,9 @@ impl DataGridPanel {
 
             let (task_id, cancel_handle) = self.runner.start_mutation(
                 dbflux_core::TaskKind::Query,
-                "Visual mutation (chunked)",
+                crate::labels::visual_mutation_task_label(
+                    crate::labels::VisualMutationTaskMode::Chunked,
+                ),
                 cx,
             );
 
@@ -4076,7 +4078,9 @@ impl DataGridPanel {
         ) {
             let (task_id, cancel_handle) = self.runner.start_mutation(
                 dbflux_core::TaskKind::Query,
-                "Visual mutation (direct)",
+                crate::labels::visual_mutation_task_label(
+                    crate::labels::VisualMutationTaskMode::Direct,
+                ),
                 cx,
             );
 
@@ -4162,7 +4166,9 @@ impl DataGridPanel {
         } else {
             let (task_id, cancel_handle) = self.runner.start_mutation(
                 dbflux_core::TaskKind::Query,
-                "Visual mutation (single transaction)",
+                crate::labels::visual_mutation_task_label(
+                    crate::labels::VisualMutationTaskMode::SingleTransaction,
+                ),
                 cx,
             );
 

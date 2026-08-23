@@ -469,6 +469,15 @@ document:
       query: Query
       script: Script
       system: System
+    export:
+      unsupported_source: Export is only available for the built-in audit viewer
+      exported:
+        one: "Exported %{count} event to %{path}"
+        many: "Exported %{count} events to %{path}"
+      write_failed: "Export failed to write file: %{error}"
+      failed: "Export failed: %{error}"
+    task:
+      loading_event_stream: "Loading event stream: %{title}"
     detail:
       action: Action
       actor: Actor
@@ -526,6 +535,8 @@ document:
         events: events
         rows: rows
     source:
+      connection_not_found: Connection not found for this event source
+      load_failed: "Error loading events: %{error}"
       empty:
         external: "No events match the current filters."
         internal: "No audit events match the current filters."
@@ -809,6 +820,8 @@ document:
       result_title:
         query_failed: Query failed
         script_failed: Script failed
+      task:
+        run_script: "Run %{name} script"
       copy_error: Copy error
       result_tab_title: "Result %{index}"
       error:
@@ -1002,6 +1015,7 @@ document:
         table_state_not_available: Table state not available
         primary_key_not_determined: Could not determine document primary key
       export:
+        dialog_title: "Export as %{format}"
         error:
           dialog_unavailable_fallback_failed: "Export failed — file dialog unavailable and fallback directory could not be created: %{error}"
           failed: "Export failed: %{error}"
@@ -1089,6 +1103,9 @@ document:
         connection_not_available: Connection not available
         invalid_json_filter: Invalid JSON filter
         chart_save_failed: 'Failed to save chart "%{name}": %{error}'
+        pk_details_fetch_failed: "Failed to fetch table details for PK: %{error}"
+        query_failed: "Query failed: %{error}"
+        chart_save_no_profile_binding: "Cannot save chart: query has no profile binding"
       placeholder:
         chart_name: Chart name
       filter:
@@ -1097,6 +1114,7 @@ document:
         query_imported: Query imported successfully
         mutation_queued: Mutation queued for approval.
         chart_saved: 'Chart "%{name}" saved'
+        auto_refresh_unavailable: Auto-refresh not available for query results
     saved_query:
       toast:
         saved_as: 'Saved as "%{name}"'
@@ -1115,6 +1133,23 @@ document:
           summary:
             one: 'Update %{count} column in "%{table}"'
             many: 'Update %{count} columns in "%{table}"'
+      task:
+        delete_rows:
+          one: "Delete %{count} row"
+          many: "Delete %{count} rows"
+        delete_documents:
+          one: "Delete %{count} document"
+          many: "Delete %{count} documents"
+        update_document_field: Update document field
+        save_row: Save row
+        save_document: Save document
+        insert_document: Insert document
+        insert_row: Insert row
+        delete_document: Delete document
+        delete_row: Delete row
+        visual_mutation_chunked: "Visual mutation (chunked)"
+        visual_mutation_direct: "Visual mutation (direct)"
+        visual_mutation_single_transaction: "Visual mutation (single transaction)"
       error:
         update_document_unsupported_id: "Cannot update document field: the document has an unsupported _id value"
         update_document_failed: "Failed to update document: %{error}"
@@ -1179,8 +1214,12 @@ document:
         column: COLUMN
         references: REFERENCES
         row: ROW
+      title: "Row %{row}"
   export_wizard:
     title: Export Data
+    task:
+      one: "Export %{count} table from %{profile}"
+      many: "Export %{count} tables from %{profile}"
     rail:
       tables: Tables
       format_options: Format & Options
@@ -1246,6 +1285,9 @@ document:
     load_failed: "Failed to load pending execution %{id}: %{error}"
   import_wizard:
     title: Import Data
+    task:
+      one: "Import %{count} table"
+      many: "Import %{count} tables"
     rail:
       pick_folder: Pick Folder
       configure: Configure
@@ -1451,6 +1493,9 @@ document:
         expired: Expired
   migrate_wizard:
     title: Migrate Data
+    task:
+      one: "Migrate %{count} table"
+      many: "Migrate %{count} tables"
     rail:
       source_target: Source & Target
       tables_mapping: Tables Mapping

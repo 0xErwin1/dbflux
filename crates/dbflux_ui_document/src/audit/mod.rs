@@ -1047,7 +1047,7 @@ impl AuditDocument {
                 Some(self.app_state.update(cx, |state, _| {
                     let (task_id, _) = state.start_task_for_profile(
                         dbflux_core::TaskKind::Query,
-                        format!("Loading event stream: {}", self.title),
+                        crate::labels::audit_loading_event_stream_task_label(&self.title),
                         Some(*profile_id),
                     );
                     task_id
@@ -1083,7 +1083,7 @@ impl AuditDocument {
                     self.expanded_event_ids.clear();
                     self.is_loading = false;
                     self.status_message =
-                        Some("Connection not found for this event source".to_string());
+                        Some(crate::labels::audit_event_source_connection_not_found());
                     cx.notify();
                     return;
                 };
@@ -1149,10 +1149,10 @@ impl AuditDocument {
                         doc.expanded_event_ids.clear();
                         doc.clear_external_inline_inputs();
                         doc.is_loading = false;
-                        doc.status_message = Some(format!("Error loading events: {}", error));
+                        doc.status_message = Some(crate::labels::audit_events_load_failed(&error));
 
                         if let Some(task_id) = task_id {
-                            let details = format!("Error loading events: {}", error);
+                            let details = crate::labels::audit_events_load_failed(&error);
                             doc.app_state.update(cx, |state, _| {
                                 state.fail_task_with_details(task_id, error.clone(), details);
                             });
@@ -1520,7 +1520,7 @@ impl AuditDocument {
     fn do_export(&mut self, format: String, cx: &mut Context<Self>) {
         let AuditDocumentSource::Internal { adapter } = &self.source else {
             self.pending_toast = Some(PendingToast {
-                message: "Export is only available for the built-in audit viewer".to_string(),
+                message: crate::labels::audit_export_unsupported_source_toast(),
                 is_error: true,
             });
             cx.notify();
@@ -1551,11 +1551,11 @@ impl AuditDocument {
 
                 let message = match write_export_file(std::path::Path::new(&path), &bytes) {
                     Ok(()) => PendingToast {
-                        message: format!("Exported {} events to {}", event_count, path),
+                        message: crate::labels::audit_export_exported_toast(event_count, &path),
                         is_error: false,
                     },
                     Err(error) => PendingToast {
-                        message: format!("Export failed to write file: {}", error),
+                        message: crate::labels::audit_export_write_failed_error(&error.to_string()),
                         is_error: true,
                     },
                 };
@@ -1571,7 +1571,7 @@ impl AuditDocument {
                 let _ = cx.update(|cx| {
                     this.update(cx, |doc, cx| {
                         doc.pending_toast = Some(PendingToast {
-                            message: format!("Export failed: {}", error),
+                            message: crate::labels::audit_export_failed_error(&error),
                             is_error: true,
                         });
                         cx.notify();

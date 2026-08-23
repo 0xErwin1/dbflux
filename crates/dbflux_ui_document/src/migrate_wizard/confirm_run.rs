@@ -36,6 +36,7 @@ use gpui::*;
 use gpui_component::ActiveTheme;
 use uuid::Uuid;
 
+use crate::labels::migrate_wizard_task_label;
 use crate::migrate_wizard::MigrateWizard;
 use crate::migrate_wizard::column_mapping::TableMigrationConfig;
 use crate::migrate_wizard::phases::{ReorderState, RunState};
@@ -320,7 +321,7 @@ impl ConfirmRunPhase {
         self.run_elapsed = None;
         *self.progress.lock().unwrap_or_else(|p| p.into_inner()) = RunProgress::default();
 
-        let description = format!("Migrate {} table(s)", plans.len());
+        let description = migrate_wizard_task_label(plans.len());
         let (task_id, cancel_token) = self.app_state.update(cx, |state, cx| {
             let pair = state.start_task_for_target(
                 TaskKind::Migrate,

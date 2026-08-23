@@ -283,7 +283,7 @@ impl DataGridPanel {
                             panel.runner.fail_primary(task_id, e.to_string(), cx);
                             panel.refresh.state = GridState::Error;
                             panel.pending.toast = Some(PendingToast {
-                                message: format!("Query failed: {}", e),
+                                message: crate::labels::query_failed_error(&e.to_string()),
                                 is_error: true,
                             });
                             cx.notify();
@@ -440,7 +440,7 @@ impl DataGridPanel {
                             panel.runner.fail_primary(task_id, e.to_string(), cx);
                             panel.refresh.state = GridState::Error;
                             panel.pending.toast = Some(PendingToast {
-                                message: format!("Query failed: {}", e),
+                                message: crate::labels::query_failed_error(&e.to_string()),
                                 is_error: true,
                             });
                             cx.notify();
@@ -617,7 +617,7 @@ impl DataGridPanel {
                             panel.runner.fail_primary(task_id, e.to_string(), cx);
                             panel.refresh.state = GridState::Error;
                             panel.pending.toast = Some(PendingToast {
-                                message: format!("Query failed: {}", e),
+                                message: crate::labels::query_failed_error(&e.to_string()),
                                 is_error: true,
                             });
                             cx.notify();

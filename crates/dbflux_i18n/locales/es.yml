@@ -469,6 +469,15 @@ document:
       query: Consulta
       script: Script
       system: Sistema
+    export:
+      unsupported_source: La exportación solo está disponible para el visor de auditoría integrado
+      exported:
+        one: "Se exportó %{count} evento a %{path}"
+        many: "Se exportaron %{count} eventos a %{path}"
+      write_failed: "La exportación falló al escribir el archivo: %{error}"
+      failed: "Exportación fallida: %{error}"
+    task:
+      loading_event_stream: "Cargando flujo de eventos: %{title}"
     detail:
       action: Acción
       actor: Actor
@@ -526,6 +535,8 @@ document:
         events: eventos
         rows: filas
     source:
+      connection_not_found: No se encontró la conexión de esta fuente de eventos
+      load_failed: "Error al cargar los eventos: %{error}"
       empty:
         external: "Ningún evento coincide con los filtros actuales."
         internal: "Ningún evento de auditoría coincide con los filtros actuales."
@@ -809,6 +820,8 @@ document:
       result_title:
         query_failed: Consulta fallida
         script_failed: Script fallido
+      task:
+        run_script: "Ejecutar script %{name}"
       copy_error: Copiar error
       result_tab_title: "Resultado %{index}"
       error:
@@ -1002,6 +1015,7 @@ document:
         table_state_not_available: Estado de la tabla no disponible
         primary_key_not_determined: No se pudo determinar la clave primaria del documento
       export:
+        dialog_title: "Exportar como %{format}"
         error:
           dialog_unavailable_fallback_failed: "Error al exportar — el selector de archivos no está disponible y no se pudo crear el directorio de reserva: %{error}"
           failed: "Error al exportar: %{error}"
@@ -1089,6 +1103,9 @@ document:
         connection_not_available: Conexión no disponible
         invalid_json_filter: Filtro JSON no válido
         chart_save_failed: 'No se pudo guardar el gráfico "%{name}": %{error}'
+        pk_details_fetch_failed: "Error al obtener los detalles de la tabla para la PK: %{error}"
+        query_failed: "Consulta fallida: %{error}"
+        chart_save_no_profile_binding: "No se puede guardar el gráfico: la consulta no tiene un perfil vinculado"
       placeholder:
         chart_name: Nombre del gráfico
       filter:
@@ -1097,6 +1114,7 @@ document:
         query_imported: Consulta importada correctamente
         mutation_queued: Mutación en cola para aprobación.
         chart_saved: 'Gráfico "%{name}" guardado'
+        auto_refresh_unavailable: La actualización automática no está disponible para resultados de consultas
     saved_query:
       toast:
         saved_as: 'Guardada como "%{name}"'
@@ -1115,6 +1133,23 @@ document:
           summary:
             one: 'Actualizar %{count} columna en "%{table}"'
             many: 'Actualizar %{count} columnas en "%{table}"'
+      task:
+        delete_rows:
+          one: "Eliminar %{count} fila"
+          many: "Eliminar %{count} filas"
+        delete_documents:
+          one: "Eliminar %{count} documento"
+          many: "Eliminar %{count} documentos"
+        update_document_field: Actualizar campo del documento
+        save_row: Guardar fila
+        save_document: Guardar documento
+        insert_document: Insertar documento
+        insert_row: Insertar fila
+        delete_document: Eliminar documento
+        delete_row: Eliminar fila
+        visual_mutation_chunked: "Mutación visual (por segmentos)"
+        visual_mutation_direct: "Mutación visual (directa)"
+        visual_mutation_single_transaction: "Mutación visual (transacción única)"
       error:
         update_document_unsupported_id: "No se puede actualizar el campo del documento: el documento tiene un valor de _id no admitido"
         update_document_failed: "No se pudo actualizar el documento: %{error}"
@@ -1179,8 +1214,12 @@ document:
         column: COLUMNA
         references: REFERENCIAS
         row: FILA
+      title: "Fila %{row}"
   export_wizard:
     title: Exportar datos
+    task:
+      one: "Exportar %{count} tabla desde %{profile}"
+      many: "Exportar %{count} tablas desde %{profile}"
     rail:
       tables: Tablas
       format_options: Formato y opciones
@@ -1246,6 +1285,9 @@ document:
     load_failed: "No se pudo cargar la ejecución pendiente %{id}: %{error}"
   import_wizard:
     title: Importar datos
+    task:
+      one: "Importar %{count} tabla"
+      many: "Importar %{count} tablas"
     rail:
       pick_folder: Elegir carpeta
       configure: Configurar
@@ -1451,6 +1493,9 @@ document:
         expired: Expirado
   migrate_wizard:
     title: Migrar datos
+    task:
+      one: "Migrar %{count} tabla"
+      many: "Migrar %{count} tablas"
     rail:
       source_target: Origen y destino
       tables_mapping: Mapeo de tablas
