@@ -395,8 +395,9 @@ impl SchemaDiffDocument {
         let state = self.app_state.read(cx);
 
         let Some(target) = state.connections().get(&self.profile_id) else {
-            self.compute_state =
-                ComputeState::Error("Target connection is no longer available.".to_string());
+            self.compute_state = ComputeState::Error(dbflux_i18n::t!(
+                "document.schema_diff.toast.connection_unavailable"
+            ));
             cx.notify();
             return;
         };
@@ -413,9 +414,9 @@ impl SchemaDiffDocument {
         let reference_plan = match self.picker.mode {
             DiffMode::LiveVsLive => match &reference {
                 None => {
-                    self.compute_state = ComputeState::Error(
-                        "Pick a reference database or connection to compare against.".to_string(),
-                    );
+                    self.compute_state = ComputeState::Error(dbflux_i18n::t!(
+                        "document.schema_diff.toast.reference_not_picked"
+                    ));
                     cx.notify();
                     return;
                 }
@@ -443,9 +444,9 @@ impl SchemaDiffDocument {
                     database,
                 }) => {
                     let Some(other) = state.connections().get(profile_id) else {
-                        self.compute_state = ComputeState::Error(
-                            "The chosen reference connection is not connected.".to_string(),
-                        );
+                        self.compute_state = ComputeState::Error(dbflux_i18n::t!(
+                            "document.schema_diff.toast.reference_connection_disconnected"
+                        ));
                         cx.notify();
                         return;
                     };
@@ -464,22 +465,26 @@ impl SchemaDiffDocument {
             },
             DiffMode::SnapshotVsLive => {
                 let Some(snapshot_id) = self.picker.selected_snapshot else {
-                    self.compute_state =
-                        ComputeState::Error("Pick a snapshot to compare against.".to_string());
+                    self.compute_state = ComputeState::Error(dbflux_i18n::t!(
+                        "document.schema_diff.toast.snapshot_not_picked"
+                    ));
                     cx.notify();
                     return;
                 };
                 match state.schema_snapshots.get(&snapshot_id.to_string()) {
                     Ok(Some(record)) => SidePlan::Resolved(record.tables),
                     Ok(None) => {
-                        self.compute_state =
-                            ComputeState::Error("Selected snapshot no longer exists.".to_string());
+                        self.compute_state = ComputeState::Error(dbflux_i18n::t!(
+                            "document.schema_diff.toast.snapshot_missing"
+                        ));
                         cx.notify();
                         return;
                     }
                     Err(e) => {
-                        self.compute_state =
-                            ComputeState::Error(format!("Failed to load snapshot: {e}"));
+                        self.compute_state = ComputeState::Error(dbflux_i18n::t!(
+                            "document.schema_diff.toast.snapshot_load_failed",
+                            error = e.to_string()
+                        ));
                         cx.notify();
                         return;
                     }
@@ -657,11 +662,15 @@ impl SchemaDiffDocument {
     fn build_selected_sql(&self, cx: &Context<Self>) -> Result<String, String> {
         let selected = self.selected_changes_by_table();
         if selected.is_empty() {
-            return Err("Select at least one change first.".to_string());
+            return Err(dbflux_i18n::t!(
+                "document.schema_diff.toast.select_at_least_one"
+            ));
         }
 
         let Some(connection) = self.app_state.read(cx).get_connection(self.profile_id) else {
-            return Err("Target connection is no longer available.".to_string());
+            return Err(dbflux_i18n::t!(
+                "document.schema_diff.toast.connection_unavailable"
+            ));
         };
 
         let mut statements: Vec<String> = Vec::new();
@@ -674,9 +683,12 @@ impl SchemaDiffDocument {
                     policy: MutationPolicy::Allowed,
                 },
             );
-            let stmts = executor
-                .preview_statements()
-                .map_err(|e| format!("Cannot build DDL: {e}"))?;
+            let stmts = executor.preview_statements().map_err(|e| {
+                dbflux_i18n::t!(
+                    "document.schema_diff.toast.ddl_build_failed",
+                    error = e.to_string()
+                )
+            })?;
             statements.extend(stmts);
         }
 
@@ -702,7 +714,7 @@ impl SchemaDiffDocument {
         let selected = self.selected_changes_by_table();
         if selected.is_empty() {
             self.pending_toast = Some(PendingToast {
-                message: "Select at least one change to apply.".to_string(),
+                message: dbflux_i18n::t!("document.schema_diff.toast.select_at_least_one_to_apply"),
                 is_error: true,
             });
             cx.notify();
@@ -713,9 +725,14 @@ impl SchemaDiffDocument {
             .iter()
             .map(|w| w.changes.len() + w.table_action.is_some() as usize)
             .sum();
-        let summary = format!(
-            "Apply {total} schema change(s) to {}",
-            self.database.as_deref().unwrap_or("this connection")
+        let target = self
+            .database
+            .clone()
+            .unwrap_or_else(|| dbflux_i18n::t!("document.schema_diff.summary.this_connection"));
+        let summary = dbflux_i18n::t!(
+            "document.schema_diff.summary.apply",
+            count = total,
+            target = target
         );
 
         // Build a read-only DDL preview string for the confirm body through the
@@ -762,7 +779,7 @@ impl SchemaDiffDocument {
             let state = self.app_state.read(cx);
             let Some(connected) = state.connections().get(&self.profile_id) else {
                 self.pending_toast = Some(PendingToast {
-                    message: "Target connection is no longer available.".to_string(),
+                    message: dbflux_i18n::t!("document.schema_diff.toast.connection_unavailable"),
                     is_error: true,
                 });
                 cx.notify();
@@ -781,8 +798,7 @@ impl SchemaDiffDocument {
 
         if matches!(policy, MutationPolicy::ReadOnly) {
             self.pending_toast = Some(PendingToast {
-                message: "This connection is read-only. Schema changes are not allowed."
-                    .to_string(),
+                message: dbflux_i18n::t!("document.schema_diff.toast.read_only"),
                 is_error: true,
             });
             cx.notify();
@@ -848,9 +864,10 @@ impl SchemaDiffDocument {
                     match result {
                         Ok(outcome) => {
                             doc.pending_toast = Some(PendingToast {
-                                message: format!(
-                                    "Applied {} DDL statement(s) across {} table(s).",
-                                    outcome.statements_applied, outcome.tables_applied
+                                message: dbflux_i18n::t!(
+                                    "document.schema_diff.toast.applied",
+                                    statements = outcome.statements_applied,
+                                    tables = outcome.tables_applied
                                 ),
                                 is_error: false,
                             });
@@ -861,17 +878,16 @@ impl SchemaDiffDocument {
                             doc.selected_table_actions.clear();
                         }
                         Err(failure) => {
-                            let not_attempted = total_tables
-                                .saturating_sub(failure.tables_applied + 1);
-                            let message = format!(
-                                "Applied {} of {} table(s) ({} DDL statement(s)) before failing on {}: {}. \
-                                 {} table(s) were not attempted.",
-                                failure.tables_applied,
-                                total_tables,
-                                failure.statements_applied,
-                                failure.failed_table,
-                                failure.message,
-                                not_attempted
+                            let not_attempted =
+                                total_tables.saturating_sub(failure.tables_applied + 1);
+                            let message = dbflux_i18n::t!(
+                                "document.schema_diff.toast.apply_partial_failure",
+                                applied = failure.tables_applied,
+                                total = total_tables,
+                                statements = failure.statements_applied,
+                                table = failure.failed_table.as_str(),
+                                error = failure.message.as_str(),
+                                remaining = not_attempted
                             );
                             // Keep the current diff visible so the user can retry
                             // the tables that did not apply.
@@ -928,13 +944,16 @@ impl SchemaDiffDocument {
         match enqueue {
             Ok(_) => {
                 self.pending_toast = Some(PendingToast {
-                    message: "Schema changes queued for approval.".to_string(),
+                    message: dbflux_i18n::t!("document.schema_diff.toast.approval_queued"),
                     is_error: false,
                 });
             }
             Err(e) => {
                 self.pending_toast = Some(PendingToast {
-                    message: format!("Failed to queue for approval: {e}"),
+                    message: dbflux_i18n::t!(
+                        "document.schema_diff.toast.approval_queue_failed",
+                        error = e.to_string()
+                    ),
                     is_error: true,
                 });
             }
@@ -945,8 +964,7 @@ impl SchemaDiffDocument {
     #[cfg(not(feature = "mcp"))]
     fn route_to_approval(&mut self, _selected: &[SelectedTableWork], cx: &mut Context<Self>) {
         self.pending_toast = Some(PendingToast {
-            message: "This connection requires approval, which is unavailable in this build."
-                .to_string(),
+            message: dbflux_i18n::t!("document.schema_diff.toast.approval_unavailable"),
             is_error: true,
         });
         cx.notify();
@@ -1071,48 +1089,6 @@ fn qualified(table: &TableRef) -> String {
     match &table.schema {
         Some(schema) => format!("{schema}.{}", table.name),
         None => table.name.clone(),
-    }
-}
-
-fn describe_table_action(action: &TableLevelAction) -> String {
-    match action {
-        TableLevelAction::Create(info) => format!(
-            "Create table {}",
-            qualified(&TableRef {
-                schema: info.schema.clone(),
-                name: info.name.clone(),
-            })
-        ),
-        TableLevelAction::Drop(table) => format!("Drop table {}", qualified(table)),
-    }
-}
-
-/// Short human description of a single change for the diff row.
-fn describe_change(change: &SchemaChange) -> String {
-    match change {
-        SchemaChange::ColumnAdded(c) => format!("Add column {} {}", c.name, c.type_name),
-        SchemaChange::ColumnRemoved(c) => format!("Drop column {}", c.name),
-        SchemaChange::ColumnTypeChanged { before, after } => {
-            format!(
-                "Change {} type {} → {}",
-                before.name, before.type_name, after.type_name
-            )
-        }
-        SchemaChange::NullabilityChanged { column, after, .. } => {
-            if *after {
-                format!("Make {column} nullable")
-            } else {
-                format!("Make {column} NOT NULL")
-            }
-        }
-        SchemaChange::DefaultChanged { column, after, .. } => match after {
-            Some(value) => format!("Set default on {column} to {value}"),
-            None => format!("Drop default on {column}"),
-        },
-        SchemaChange::PrimaryKeyChanged { .. } => "Change primary key".to_string(),
-        SchemaChange::ForeignKeyChanged => "Change foreign keys".to_string(),
-        SchemaChange::IndexAdded(index) => format!("Add index {}", index.name),
-        SchemaChange::IndexRemoved(index) => format!("Drop index {}", index.name),
     }
 }
 
@@ -1568,7 +1544,7 @@ impl SchemaDiffDocument {
         };
         let checked = self.selected.contains(&(group_index, change_index));
         let badge = RiskBadge::from_classification(change.risk);
-        let description = describe_change(&change.change);
+        let description = crate::labels::schema_change_description(&change.change);
 
         let checkbox = div()
             .id(SharedString::from(format!(
@@ -1616,7 +1592,7 @@ impl SchemaDiffDocument {
                 };
                 let checked = self.selected_table_actions.contains(&group_index);
                 let badge = RiskBadge::from_classification(*risk);
-                let description = describe_table_action(action);
+                let description = crate::labels::table_action_description(action);
 
                 let checkbox = div()
                     .id(SharedString::from(format!("chk-table-{group_index}")))
@@ -1734,7 +1710,9 @@ fn render_unsupported_row(unsupported: &UnsupportedChange) -> AnyElement {
             dbflux_i18n::t!("document.schema_diff.status.unsupported"),
             BadgeVariant::Neutral,
         ))
-        .child(Text::body(describe_change(&unsupported.change)))
+        .child(Text::body(crate::labels::schema_change_description(
+            &unsupported.change,
+        )))
         .child(Text::caption(reason).muted_foreground())
         .into_any_element()
 }
@@ -2038,6 +2016,124 @@ mod tests {
         let es = dbflux_i18n::t!("document.schema_diff.action.compute_diff", locale = "es");
 
         assert_eq!(en, "Compute Diff");
+        assert_ne!(en, es);
+    }
+
+    // ── i18n: apply.rs / diff_source.rs / pane.rs toasts and errors ────────
+
+    const SCHEMA_DIFF_TOAST_AND_SUMMARY_KEYS: &[&str] = &[
+        "document.schema_diff.apply.read_only",
+        "document.schema_diff.summary.apply",
+        "document.schema_diff.summary.this_connection",
+        "document.schema_diff.toast.applied",
+        "document.schema_diff.toast.apply_partial_failure",
+        "document.schema_diff.toast.approval_queue_failed",
+        "document.schema_diff.toast.approval_queued",
+        "document.schema_diff.toast.approval_unavailable",
+        "document.schema_diff.toast.connection_unavailable",
+        "document.schema_diff.toast.ddl_build_failed",
+        "document.schema_diff.toast.read_only",
+        "document.schema_diff.toast.reference_connection_disconnected",
+        "document.schema_diff.toast.reference_not_picked",
+        "document.schema_diff.toast.select_at_least_one",
+        "document.schema_diff.toast.select_at_least_one_to_apply",
+        "document.schema_diff.toast.snapshot_load_failed",
+        "document.schema_diff.toast.snapshot_missing",
+        "document.schema_diff.toast.snapshot_not_picked",
+    ];
+
+    #[test]
+    fn schema_diff_toast_keys_resolve_in_both_locales() {
+        for key in SCHEMA_DIFF_TOAST_AND_SUMMARY_KEYS {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(*key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, *key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn schema_diff_toast_read_only_differs_between_locales() {
+        let en = dbflux_i18n::t!("document.schema_diff.toast.read_only", locale = "en");
+        let es = dbflux_i18n::t!("document.schema_diff.toast.read_only", locale = "es");
+
+        assert_eq!(
+            en,
+            "This connection is read-only. Schema changes are not allowed."
+        );
+        assert_ne!(en, es);
+    }
+
+    #[test]
+    fn schema_diff_apply_read_only_matches_toast_read_only_in_english() {
+        // apply.rs and view.rs surface the same read-only refusal
+        // independently; both must resolve to the same English text.
+        let apply = dbflux_i18n::t!("document.schema_diff.apply.read_only", locale = "en");
+        let toast = dbflux_i18n::t!("document.schema_diff.toast.read_only", locale = "en");
+
+        assert_eq!(apply, toast);
+    }
+
+    #[test]
+    fn schema_diff_toast_applied_interpolates_counts() {
+        let message = dbflux_i18n::t!(
+            "document.schema_diff.toast.applied",
+            statements = 3,
+            tables = 2
+        );
+
+        assert!(message.contains('3'));
+        assert!(message.contains('2'));
+    }
+
+    #[test]
+    fn schema_diff_toast_applied_differs_between_locales() {
+        let en = dbflux_i18n::t!("document.schema_diff.toast.applied", locale = "en");
+        let es = dbflux_i18n::t!("document.schema_diff.toast.applied", locale = "es");
+
+        assert_ne!(en, es);
+    }
+
+    #[test]
+    fn schema_diff_toast_apply_partial_failure_interpolates_every_placeholder() {
+        let message = dbflux_i18n::t!(
+            "document.schema_diff.toast.apply_partial_failure",
+            applied = 1,
+            total = 3,
+            statements = 4,
+            table = "public.orders",
+            error = "connection reset",
+            remaining = 2
+        );
+
+        assert!(message.contains("public.orders"));
+        assert!(message.contains("connection reset"));
+    }
+
+    #[test]
+    fn schema_diff_summary_apply_interpolates_count_and_target() {
+        let message = dbflux_i18n::t!(
+            "document.schema_diff.summary.apply",
+            count = 5,
+            target = "app_db"
+        );
+
+        assert!(message.contains('5'));
+        assert!(message.contains("app_db"));
+    }
+
+    #[test]
+    fn schema_diff_summary_apply_differs_between_locales() {
+        let en = dbflux_i18n::t!("document.schema_diff.summary.apply", locale = "en");
+        let es = dbflux_i18n::t!("document.schema_diff.summary.apply", locale = "es");
+
         assert_ne!(en, es);
     }
 }

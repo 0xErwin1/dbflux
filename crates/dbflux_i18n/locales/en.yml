@@ -871,11 +871,53 @@ document:
       apply: "Apply…"
       compute_diff: Compute Diff
       preview_ddl: Preview DDL
+    apply:
+      read_only: This connection is read-only. Schema changes are not allowed.
+    change:
+      column_added: "Add column %{name} %{type_name}"
+      column_removed: "Drop column %{name}"
+      default_dropped: "Drop default on %{column}"
+      default_set: "Set default on %{column} to %{value}"
+      foreign_key_changed: Change foreign keys
+      index_added: "Add index %{name}"
+      index_removed: "Drop index %{name}"
+      not_null: "Make %{column} NOT NULL"
+      nullable: "Make %{column} nullable"
+      primary_key_changed: Change primary key
+      type_changed: "Change %{column} type %{before} → %{after}"
+    source:
+      risk:
+        destructive: Destructive
+        safe: Safe
+        warning: Warning
+      schema_not_loaded: "The schema for \"%{database}\" is not loaded yet. Expand that database in the sidebar first, then run Compute Diff again."
     status:
       computing: "Computing diff…"
       empty: No differences found between the two schemas.
       idle: Pick a source and run Compute Diff to see schema changes.
       unsupported: Unsupported
+    summary:
+      apply: "Apply %{count} schema change(s) to %{target}"
+      this_connection: this connection
+    table_action:
+      create: "Create table %{table}"
+      drop: "Drop table %{table}"
+    toast:
+      applied: "Applied %{statements} DDL statement(s) across %{tables} table(s)."
+      apply_partial_failure: "Applied %{applied} of %{total} table(s) (%{statements} DDL statement(s)) before failing on %{table}: %{error}. %{remaining} table(s) were not attempted."
+      approval_queue_failed: "Failed to queue for approval: %{error}"
+      approval_queued: Schema changes queued for approval.
+      approval_unavailable: This connection requires approval, which is unavailable in this build.
+      connection_unavailable: Target connection is no longer available.
+      ddl_build_failed: "Cannot build DDL: %{error}"
+      read_only: This connection is read-only. Schema changes are not allowed.
+      reference_connection_disconnected: The chosen reference connection is not connected.
+      reference_not_picked: Pick a reference database or connection to compare against.
+      select_at_least_one: Select at least one change first.
+      select_at_least_one_to_apply: Select at least one change to apply.
+      snapshot_load_failed: "Failed to load snapshot: %{error}"
+      snapshot_missing: Selected snapshot no longer exists.
+      snapshot_not_picked: Pick a snapshot to compare against.
     view:
       compare_against: Compare against
       mode:

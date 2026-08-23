@@ -86,9 +86,9 @@ pub fn resolve_same_connection_shallow(
 ) -> Result<Vec<TableInfo>, String> {
     match database_schemas.get(database) {
         Some(schema) => Ok(schema.tables.clone()),
-        None => Err(format!(
-            "The schema for \"{database}\" is not loaded yet. Expand that database \
-             in the sidebar first, then run Compute Diff again."
+        None => Err(dbflux_i18n::t!(
+            "document.schema_diff.source.schema_not_loaded",
+            database = database
         )),
     }
 }
@@ -118,11 +118,15 @@ impl RiskBadge {
         }
     }
 
-    pub fn label(self) -> &'static str {
+    /// Exhaustive by construction (no wildcard arm) so a new `RiskBadge`
+    /// variant fails this crate's build until its catalog key is added here.
+    pub fn label(self) -> String {
         match self {
-            RiskBadge::Safe => "Safe",
-            RiskBadge::Warning => "Warning",
-            RiskBadge::Destructive => "Destructive",
+            RiskBadge::Safe => dbflux_i18n::t!("document.schema_diff.source.risk.safe"),
+            RiskBadge::Warning => dbflux_i18n::t!("document.schema_diff.source.risk.warning"),
+            RiskBadge::Destructive => {
+                dbflux_i18n::t!("document.schema_diff.source.risk.destructive")
+            }
         }
     }
 }
@@ -589,5 +593,92 @@ mod tests {
             }
             other => panic!("expected Unsupported, got {other:?}"),
         }
+    }
+
+    // ── i18n: RiskBadge::label / schema_not_loaded message ──────────────
+
+    const RISK_BADGE_KEYS: &[&str] = &[
+        "document.schema_diff.source.risk.destructive",
+        "document.schema_diff.source.risk.safe",
+        "document.schema_diff.source.risk.warning",
+    ];
+
+    #[test]
+    fn risk_badge_label_covers_every_variant_and_keys_resolve_in_both_locales() {
+        for badge in [RiskBadge::Safe, RiskBadge::Warning, RiskBadge::Destructive] {
+            assert!(!badge.label().is_empty());
+        }
+
+        for key in RISK_BADGE_KEYS {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(*key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, *key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn risk_badge_label_differs_between_locales() {
+        let en = dbflux_i18n::t!(
+            "document.schema_diff.source.risk.destructive",
+            locale = "en"
+        );
+        let es = dbflux_i18n::t!(
+            "document.schema_diff.source.risk.destructive",
+            locale = "es"
+        );
+
+        assert_eq!(RiskBadge::Destructive.label(), en);
+        assert_eq!(en, "Destructive");
+        assert_ne!(en, es);
+    }
+
+    #[test]
+    fn schema_not_loaded_message_keys_resolve_in_both_locales_and_interpolates() {
+        for locale in ["en", "es"] {
+            let value = dbflux_i18n::t!(
+                "document.schema_diff.source.schema_not_loaded",
+                locale = locale
+            );
+
+            assert!(!value.is_empty(), "resolved empty in {locale}");
+            assert_ne!(
+                value, "document.schema_diff.source.schema_not_loaded",
+                "resolved to its own key in {locale}"
+            );
+        }
+
+        let mut schemas: HashMap<String, dbflux_core::DbSchemaInfo> = HashMap::new();
+        let err = resolve_same_connection_shallow(&schemas, "atlas_test")
+            .expect_err("an unloaded database must error");
+
+        assert!(err.contains("atlas_test"));
+
+        schemas.insert(
+            "atlas_test".to_string(),
+            db_schema_with_tables("atlas_test", &["users"]),
+        );
+        assert!(resolve_same_connection_shallow(&schemas, "atlas_test").is_ok());
+    }
+
+    #[test]
+    fn schema_not_loaded_message_differs_between_locales() {
+        let en = dbflux_i18n::t!(
+            "document.schema_diff.source.schema_not_loaded",
+            locale = "en"
+        );
+        let es = dbflux_i18n::t!(
+            "document.schema_diff.source.schema_not_loaded",
+            locale = "es"
+        );
+
+        assert_ne!(en, es);
     }
 }
