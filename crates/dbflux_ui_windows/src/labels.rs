@@ -591,6 +591,99 @@ pub(crate) fn import_action_use_profile(name: &str) -> String {
     dbflux_i18n::t!("connection_manager.import.action.use_profile", name = name)
 }
 
+/// Formats the "Export <kind>" window/dialog title for a resolved export target.
+pub(crate) fn export_title_with_kind(kind: &str) -> String {
+    dbflux_i18n::t!("connection_manager.export.title_with_kind", kind = kind)
+}
+
+/// Formats the "Auth profile: <name>" or "Auth profile: <name> (reference)"
+/// export-summary line for a referenced auth profile.
+pub(crate) fn export_summary_auth_profile_line(name: &str, locked: bool) -> String {
+    if locked {
+        dbflux_i18n::t!(
+            "connection_manager.export.summary.auth_profile_line_reference",
+            name = name
+        )
+    } else {
+        dbflux_i18n::t!(
+            "connection_manager.export.summary.auth_profile_line",
+            name = name
+        )
+    }
+}
+
+/// Formats the "Proxy: <name>" export-summary line.
+pub(crate) fn export_summary_proxy_line(name: &str) -> String {
+    dbflux_i18n::t!("connection_manager.export.summary.proxy_line", name = name)
+}
+
+/// Formats the "SSH tunnel: <name>" export-summary line.
+pub(crate) fn export_summary_ssh_line(name: &str) -> String {
+    dbflux_i18n::t!("connection_manager.export.summary.ssh_line", name = name)
+}
+
+/// Formats the "Cannot determine output path: <error>" export validation error.
+pub(crate) fn export_error_cannot_determine_output_path(error: &str) -> String {
+    dbflux_i18n::t!(
+        "connection_manager.export.error.cannot_determine_output_path",
+        error = error
+    )
+}
+
+/// Formats the "Export failed: <error>" export-run error.
+pub(crate) fn export_error_failed(error: &str) -> String {
+    dbflux_i18n::t!("connection_manager.export.error.failed", error = error)
+}
+
+/// Formats the "Failed to write export file: <error>" export-run error.
+pub(crate) fn export_error_write_failed(error: &str) -> String {
+    dbflux_i18n::t!(
+        "connection_manager.export.error.write_failed",
+        error = error
+    )
+}
+
+/// Formats the pluralized "N field(s) omitted — recipient must supply them on
+/// import." export-result line.
+pub(crate) fn export_result_omitted_fields(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!(
+            "connection_manager.export.result.omitted_fields.one",
+            count = count
+        )
+    } else {
+        dbflux_i18n::t!(
+            "connection_manager.export.result.omitted_fields.many",
+            count = count
+        )
+    }
+}
+
+/// Formats the "Warning: <message>" export-result line.
+pub(crate) fn export_result_warning_line(message: &str) -> String {
+    dbflux_i18n::t!(
+        "connection_manager.export.result.warning",
+        message = message
+    )
+}
+
+/// Formats the "Exported to <path>" export-result success banner title.
+pub(crate) fn export_result_success_title(path: &str) -> String {
+    dbflux_i18n::t!(
+        "connection_manager.export.result.success_title",
+        path = path
+    )
+}
+
+/// Formats the "Exported <kind> to <path>" export success toast.
+pub(crate) fn export_toast_success(kind: &str, path: &str) -> String {
+    dbflux_i18n::t!(
+        "connection_manager.export.toast.success",
+        kind = kind,
+        path = path
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -613,6 +706,12 @@ mod tests {
         import_required_aws_reference_label, import_required_secret_label,
         import_status_imported_toast, mcp_preview_summary, proxies_delete_body,
         ssh_private_key_with_path, ssh_tunnels_delete_body,
+    };
+    use super::{
+        export_error_cannot_determine_output_path, export_error_failed, export_error_write_failed,
+        export_result_omitted_fields, export_result_success_title, export_result_warning_line,
+        export_summary_auth_profile_line, export_summary_proxy_line, export_summary_ssh_line,
+        export_title_with_kind, export_toast_success,
     };
 
     #[test]
@@ -993,5 +1092,66 @@ mod tests {
     fn import_action_segment_labels_embed_their_names() {
         assert!(import_action_map_to("staging-db").contains("staging-db"));
         assert!(import_action_use_profile("prod-sso").contains("prod-sso"));
+    }
+
+    #[test]
+    fn export_title_with_kind_embeds_kind_and_diverges_between_locales() {
+        let message = export_title_with_kind("connection");
+
+        assert!(message.contains("connection"));
+        assert_ne!(
+            dbflux_i18n::t!("connection_manager.export.title_with_kind", locale = "en"),
+            dbflux_i18n::t!("connection_manager.export.title_with_kind", locale = "es"),
+        );
+    }
+
+    #[test]
+    fn export_summary_auth_profile_line_marks_locked_profiles_as_reference() {
+        let unlocked = export_summary_auth_profile_line("prod-mongo", false);
+        let locked = export_summary_auth_profile_line("prod-mongo", true);
+
+        assert!(unlocked.contains("prod-mongo"));
+        assert!(!unlocked.to_lowercase().contains("reference"));
+        assert!(locked.contains("prod-mongo"));
+        assert_ne!(unlocked, locked);
+    }
+
+    #[test]
+    fn export_summary_proxy_and_ssh_lines_embed_their_names() {
+        assert!(export_summary_proxy_line("corporate-proxy").contains("corporate-proxy"));
+        assert!(export_summary_ssh_line("bastion-prod").contains("bastion-prod"));
+    }
+
+    #[test]
+    fn export_error_helpers_embed_error_cause() {
+        assert!(
+            export_error_cannot_determine_output_path("no exports dir").contains("no exports dir")
+        );
+        assert!(export_error_failed("disk full").contains("disk full"));
+        assert!(export_error_write_failed("permission denied").contains("permission denied"));
+    }
+
+    #[test]
+    fn export_result_omitted_fields_pluralizes_by_count() {
+        let one = export_result_omitted_fields(1);
+        let many = export_result_omitted_fields(3);
+
+        assert!(one.contains('1'));
+        assert!(many.contains('3'));
+        assert_ne!(one, many);
+    }
+
+    #[test]
+    fn export_result_warning_and_success_title_embed_their_arguments() {
+        assert!(export_result_warning_line("disk almost full").contains("disk almost full"));
+        assert!(export_result_success_title("/tmp/bundle.toml").contains("/tmp/bundle.toml"));
+    }
+
+    #[test]
+    fn export_toast_success_embeds_kind_and_path() {
+        let message = export_toast_success("connection", "/tmp/bundle.toml");
+
+        assert!(message.contains("connection"));
+        assert!(message.contains("/tmp/bundle.toml"));
     }
 }

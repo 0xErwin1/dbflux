@@ -264,6 +264,65 @@ connection_manager:
     cancel: Cancelar
     configure: Configurar
     configure_named: "Configurar %{name}"
+  export:
+    target:
+      connection: conexión
+      auth_profile: perfil de autenticación
+      ssh_tunnel: túnel SSH
+      proxy: proxy
+      bundle: paquete
+    title: Exportar
+    title_with_kind: "Exportar %{kind}"
+    placeholder:
+      output_path: "Ruta al archivo de salida…"
+    field:
+      credentials: Credenciales
+      include_connection_password: Incluir contraseña de conexión
+      include_proxy_credentials: Incluir credenciales del proxy
+      include_ssh_password: Incluir contraseña SSH
+      embed_ssh_keys: Incrustar claves privadas SSH (requiere cifrado)
+      auth_export_mode: Modo de exportación del perfil de autenticación
+      reference_aws_profile: Referencia (perfil de AWS)
+      disable_encryption: Deshabilitar cifrado (forzar texto plano)
+      confirm_passphrase: Confirmar frase
+      encryption: Cifrado
+      output_file: Archivo de salida
+    auth_mode:
+      include: Incluir valores
+      reference: Referencia
+      required_on_import: Requerido al importar
+      exclude: Excluir
+    hint:
+      connection_scope: Esta conexión y sus perfiles se exportarán.
+      profile_scope: Este perfil se exportará.
+      plaintext_warning: "Los secretos se escribirán en texto plano. Úsalo solo si el archivo de salida se almacena de forma segura."
+    error:
+      choose_output_path: Elige una ruta de archivo de salida.
+      passphrase_or_plaintext: Introduce una frase o habilita el modo de texto plano forzado.
+      passphrase_mismatch: La frase y la confirmación no coinciden.
+      target_removed: Este perfil ya no se puede exportar; es posible que se haya eliminado.
+      cannot_determine_output_path: "No se puede determinar la ruta de salida: %{error}"
+      failed: "Fallo en la exportación: %{error}"
+      write_failed: "No se pudo escribir el archivo de exportación: %{error}"
+    summary:
+      auth_profile_line: "Perfil de autenticación: %{name}"
+      auth_profile_line_reference: "Perfil de autenticación: %{name} (referencia)"
+      proxy_line: "Proxy: %{name}"
+      ssh_line: "Túnel SSH: %{name}"
+    action:
+      export: Exportar
+    status:
+      exporting: "Exportando…"
+    banner:
+      failed: Fallo en la exportación
+    result:
+      omitted_fields:
+        one: "%{count} campo omitido — el destinatario debe proporcionarlo al importar."
+        many: "%{count} campos omitidos — el destinatario debe proporcionarlos al importar."
+      warning: "Advertencia: %{message}"
+      success_title: "Exportado a %{path}"
+    toast:
+      success: "Se exportó %{kind} a %{path}"
   import:
     placeholder:
       bundle_passphrase: Frase del paquete
