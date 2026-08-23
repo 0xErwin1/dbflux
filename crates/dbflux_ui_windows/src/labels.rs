@@ -788,6 +788,66 @@ mod tests {
         }
     }
 
+    /// Locale keys added or reused by the PR30 final leftover sweep: the
+    /// connection-form secret-field default label, the settings editor-panel
+    /// title template, and the `report_error`/status-banner messages across
+    /// connection policy assignment, SSH tunnels, RPC services, proxies,
+    /// driver settings, MCP governance persistence, and auth profiles.
+    const FINAL_LEFTOVER_KEYS: &[&str] = &[
+        "connection_manager.placeholder.password",
+        "connection_manager.placeholder.select_additional_roles",
+        "connection_manager.placeholder.select_additional_policies",
+        "settings.editor_panel.title.edit",
+        "settings.editor_panel.title.new",
+        "settings.auth_profiles.auth_profile_label",
+        "access.ssh_tunnel_label",
+        "settings.proxies.panel_title",
+        "connection_manager.mcp_governance_error.save_policy",
+        "connection_manager.mcp_governance_error.clear_policy",
+        "settings.ssh_tunnels.error.save_failed",
+        "settings.rpc_services.error.save_failed",
+        "settings.proxies.error.save_failed",
+        "settings.mcp_governance.persist_error",
+        "settings.drivers.error.save_failed",
+        "settings.auth_profiles.error.secret_store_failed",
+        "settings.auth_profiles.error.write_config_failed",
+    ];
+
+    #[test]
+    fn final_leftover_keys_resolve_in_both_locales() {
+        for locale in ["en", "es"] {
+            for key in FINAL_LEFTOVER_KEYS {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(
+                    !value.is_empty(),
+                    "key {key} resolved empty for locale {locale}"
+                );
+                assert_ne!(value, *key, "key {key} did not resolve for locale {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "key {key} fell back to the raw locale-qualified form for locale {locale}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn final_leftover_keys_differ_between_locales() {
+        // "Proxy" is a technical term kept identical in Spanish; every other
+        // key in this sweep carries a distinct Spanish translation.
+        for key in FINAL_LEFTOVER_KEYS
+            .iter()
+            .filter(|key| **key != "settings.proxies.panel_title")
+        {
+            let en = dbflux_i18n::t!(key, locale = "en");
+            let es = dbflux_i18n::t!(key, locale = "es");
+
+            assert_ne!(en, es, "key {key} should differ between en and es");
+        }
+    }
+
     #[test]
     fn form_unknown_hook_embeds_label_and_token() {
         let message = form_unknown_hook("pre-connect", "missing-hook");

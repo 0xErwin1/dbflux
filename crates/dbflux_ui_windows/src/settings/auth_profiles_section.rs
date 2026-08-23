@@ -1495,8 +1495,13 @@ impl AuthProfilesSection {
                 }
 
                 Some(Err(msg)) => {
-                    self.provider_login_status =
-                        Some((format!("Failed to write profile to config: {}", msg), false));
+                    self.provider_login_status = Some((
+                        dbflux_i18n::t!(
+                            "settings.auth_profiles.error.write_config_failed",
+                            error = msg
+                        ),
+                        false,
+                    ));
                     cx.notify();
                     return;
                 }
@@ -1528,8 +1533,7 @@ impl AuthProfilesSection {
             report_error(
                 UserFacingError::new(
                     ErrorKind::Storage,
-                    "The profile's secret could not be stored (the OS keyring may \
-                     be locked or unavailable) and will not persist after restart.",
+                    dbflux_i18n::t!("settings.auth_profiles.error.secret_store_failed"),
                 ),
                 cx,
             );

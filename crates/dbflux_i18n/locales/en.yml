@@ -171,6 +171,8 @@ connection_manager:
     no_policy: No policy
     extra_hook_ids: extra hook IDs (comma-separated)
     use_connection_auth_profile: Use Connection Auth Profile
+    select_additional_roles: "Select additional roles…"
+    select_additional_policies: "Select additional policies…"
   access_method:
     direct: Direct
     ssh_tunnel: SSH Tunnel
@@ -233,6 +235,9 @@ connection_manager:
   mcp_policy_hint: Configure policies in Settings → MCP → Policies
   additional_policies_optional: Additional policies (optional)
   scope_policy_preview: Scope/policy assignment preview
+  mcp_governance_error:
+    save_policy: "Failed to save MCP connection policy assignment: %{error}"
+    clear_policy: "Failed to clear MCP connection policy assignment: %{error}"
   tab:
     main: Main
     settings: Settings
@@ -2098,6 +2103,12 @@ settings:
   discard:
     title: Discard Unsaved Changes
     body: "You have unsaved changes. Discard them and switch to %{section}?"
+  editor_panel:
+    title:
+      edit: "Edit %{noun}"
+      new: "New %{noun}"
+  mcp_governance:
+    persist_error: "Failed to persist MCP governance: %{error}"
   general:
     header:
       title: General
@@ -2334,6 +2345,9 @@ settings:
     login_hint: Log in to load options
     inherited_from: "Inherited from %{trigger}."
     inherited_from_named: "Inherited from %{trigger} '%{name}'."
+    error:
+      secret_store_failed: "The profile's secret could not be stored (the OS keyring may be locked or unavailable) and will not persist after restart."
+      write_config_failed: "Failed to write profile to config: %{error}"
   mcp:
     tool:
       list_connections:
@@ -2518,6 +2532,7 @@ settings:
     error:
       refresh_interval_empty: Refresh interval override must not be empty
       refresh_interval_invalid: Refresh interval override must be a number greater than 0
+      save_failed: "Failed to save driver settings: %{error}"
     toast:
       saved: Driver settings saved.
       saved_warnings: Driver settings saved with warnings
@@ -2575,6 +2590,7 @@ settings:
       socket_id_required: Socket ID is required
       timeout_invalid: Timeout must be a valid number (milliseconds)
       duplicate_socket_id: "A service with socket ID '%{id}' already exists"
+      save_failed: "Failed to save RPC service config: %{error}"
     toast:
       saved: RPC service saved. Restart required to apply changes.
       deleted: RPC service deleted. Restart required to apply changes.
@@ -2614,6 +2630,7 @@ settings:
       delete: Delete
     error:
       host_and_user_required: Host and user are required
+      save_failed: "Failed to save SSH tunnel profiles: %{error}"
   proxies:
     placeholder_name: Proxy name
     placeholder_username: username
@@ -2644,6 +2661,8 @@ settings:
       basic: Basic
     status:
       disabled_caption: "off"
+    error:
+      save_failed: "Failed to save proxy profiles: %{error}"
     action:
       save: Save
       import: "Import…"

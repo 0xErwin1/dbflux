@@ -644,7 +644,7 @@ impl DriversSection {
             report_error(
                 UserFacingError::new(
                     ErrorKind::Storage,
-                    format!("Failed to save driver settings: {e}"),
+                    dbflux_i18n::t!("settings.drivers.error.save_failed", error = e),
                 ),
                 cx,
             );

@@ -279,7 +279,7 @@ impl ProxiesSection {
             report_error(
                 UserFacingError::new(
                     ErrorKind::Storage,
-                    format!("Failed to save proxy profiles: {e}"),
+                    dbflux_i18n::t!("settings.proxies.error.save_failed", error = e),
                 ),
                 cx,
             );

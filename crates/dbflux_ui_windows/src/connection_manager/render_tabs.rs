@@ -146,7 +146,7 @@ impl ConnectionManagerWindow {
             let form_values = self.collect_form_values(driver.form_definition(), cx);
             let secret_label = driver
                 .secret_field_label(&form_values)
-                .unwrap_or_else(|| "Password".to_string());
+                .unwrap_or_else(|| dbflux_i18n::t!("connection_manager.placeholder.password"));
 
             let password_field = self.render_password_field(
                 show_focus,

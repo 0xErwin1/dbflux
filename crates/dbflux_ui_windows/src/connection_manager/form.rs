@@ -655,7 +655,10 @@ impl ConnectionManagerWindow {
                         report_error(
                             UserFacingError::new(
                                 ErrorKind::Config,
-                                format!("Failed to save MCP connection policy assignment: {e}"),
+                                dbflux_i18n::t!(
+                                    "connection_manager.mcp_governance_error.save_policy",
+                                    error = e
+                                ),
                             ),
                             cx,
                         );
@@ -669,7 +672,10 @@ impl ConnectionManagerWindow {
                     report_error(
                         UserFacingError::new(
                             ErrorKind::Config,
-                            format!("Failed to clear MCP connection policy assignment: {e}"),
+                            dbflux_i18n::t!(
+                                "connection_manager.mcp_governance_error.clear_policy",
+                                error = e
+                            ),
                         ),
                         cx,
                     );

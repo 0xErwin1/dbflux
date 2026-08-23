@@ -171,6 +171,8 @@ connection_manager:
     no_policy: Sin política
     extra_hook_ids: IDs de hooks extra (separados por coma)
     use_connection_auth_profile: Usar el perfil de autenticación de la conexión
+    select_additional_roles: "Seleccionar roles adicionales…"
+    select_additional_policies: "Seleccionar políticas adicionales…"
   access_method:
     direct: Directo
     ssh_tunnel: Túnel SSH
@@ -233,6 +235,9 @@ connection_manager:
   mcp_policy_hint: Configura políticas en Ajustes → MCP → Políticas
   additional_policies_optional: Políticas adicionales (opcional)
   scope_policy_preview: Vista previa de alcance y políticas
+  mcp_governance_error:
+    save_policy: "No se pudo guardar la asignación de política MCP de la conexión: %{error}"
+    clear_policy: "No se pudo borrar la asignación de política MCP de la conexión: %{error}"
   tab:
     main: Principal
     settings: Ajustes
@@ -2098,6 +2103,12 @@ settings:
   discard:
     title: Descartar cambios sin guardar
     body: "Tienes cambios sin guardar. ¿Descartarlos y cambiar a %{section}?"
+  editor_panel:
+    title:
+      edit: "Editar %{noun}"
+      new: "Nuevo %{noun}"
+  mcp_governance:
+    persist_error: "No se pudo persistir la gobernanza de MCP: %{error}"
   general:
     header:
       title: General
@@ -2334,6 +2345,9 @@ settings:
     login_hint: Inicia sesión para cargar las opciones
     inherited_from: "Heredado de %{trigger}."
     inherited_from_named: "Heredado de %{trigger} '%{name}'."
+    error:
+      secret_store_failed: "No se pudo almacenar el secreto del perfil (el llavero del sistema operativo puede estar bloqueado o no disponible) y no persistirá tras reiniciar."
+      write_config_failed: "No se pudo escribir el perfil en la configuración: %{error}"
   mcp:
     tool:
       list_connections:
@@ -2518,6 +2532,7 @@ settings:
     error:
       refresh_interval_empty: El intervalo de actualización no puede estar vacío
       refresh_interval_invalid: El intervalo de actualización debe ser un número mayor que 0
+      save_failed: "No se pudieron guardar los ajustes del driver: %{error}"
     toast:
       saved: Ajustes del driver guardados.
       saved_warnings: Ajustes del driver guardados con advertencias
@@ -2575,6 +2590,7 @@ settings:
       socket_id_required: El ID del socket es obligatorio
       timeout_invalid: El tiempo de espera debe ser un número válido (milisegundos)
       duplicate_socket_id: "Ya existe un servicio con el ID de socket '%{id}'"
+      save_failed: "No se pudo guardar la configuración del servicio RPC: %{error}"
     toast:
       saved: Servicio RPC guardado. Es necesario reiniciar para aplicar los cambios.
       deleted: Servicio RPC eliminado. Es necesario reiniciar para aplicar los cambios.
@@ -2614,6 +2630,7 @@ settings:
       delete: Eliminar
     error:
       host_and_user_required: El host y el usuario son obligatorios
+      save_failed: "No se pudieron guardar los perfiles de túnel SSH: %{error}"
   proxies:
     placeholder_name: Nombre del proxy
     placeholder_username: usuario
@@ -2644,6 +2661,8 @@ settings:
       basic: Básica
     status:
       disabled_caption: apagado
+    error:
+      save_failed: "No se pudieron guardar los perfiles de proxy: %{error}"
     action:
       save: Guardar
       import: "Importar…"

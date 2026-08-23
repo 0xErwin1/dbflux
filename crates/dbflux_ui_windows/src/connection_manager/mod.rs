@@ -587,14 +587,18 @@ impl ConnectionManagerWindow {
                 .placeholder(dbflux_i18n::t!("connection_manager.placeholder.no_role"))
         });
         let conn_mcp_role_multi_select = cx.new(|_cx| {
-            MultiSelect::new("conn-mcp-extra-roles").placeholder("Select additional roles…")
+            MultiSelect::new("conn-mcp-extra-roles").placeholder(dbflux_i18n::t!(
+                "connection_manager.placeholder.select_additional_roles"
+            ))
         });
         let conn_mcp_policy_dropdown = cx.new(|_cx| {
             Dropdown::new("conn-mcp-policy")
                 .placeholder(dbflux_i18n::t!("connection_manager.placeholder.no_policy"))
         });
         let conn_mcp_policy_multi_select = cx.new(|_cx| {
-            MultiSelect::new("conn-mcp-extra-policies").placeholder("Select additional policies…")
+            MultiSelect::new("conn-mcp-extra-policies").placeholder(dbflux_i18n::t!(
+                "connection_manager.placeholder.select_additional_policies"
+            ))
         });
 
         let dropdown_subscription = cx.subscribe(
