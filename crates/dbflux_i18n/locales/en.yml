@@ -3140,6 +3140,7 @@ sidebar:
       object_storage: Buckets (%{count})
     folder:
       databases: Databases
+      new_default: New Folder
       fields: "Fields (%{count})"
       indexes: "Indexes (%{count})"
       indexes_plain: Indexes
