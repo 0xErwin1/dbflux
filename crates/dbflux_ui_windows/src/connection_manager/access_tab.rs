@@ -648,7 +648,7 @@ impl ConnectionManagerWindow {
                         cx.notify();
                     })),
             )
-            .child(Label::new("Use SSH Tunnel"));
+            .child(Label::new(dbflux_i18n::t!("access.use_ssh_tunnel")));
 
         let tunnel_items: Vec<DropdownItem> = ssh_tunnels
             .iter()
@@ -672,54 +672,58 @@ impl ConnectionManagerWindow {
             dropdown.set_focus_ring(focus_color, cx);
         });
 
-        let tunnel_selector: Option<AnyElement> = if ssh_enabled && !ssh_tunnels.is_empty() {
-            let selected_tunnel_name = selected_tunnel_id
-                .and_then(|id| ssh_tunnels.iter().find(|t| t.id == id))
-                .map(|t| t.name.clone());
+        let tunnel_selector: Option<AnyElement> =
+            if ssh_enabled && !ssh_tunnels.is_empty() {
+                let selected_tunnel_name = selected_tunnel_id
+                    .and_then(|id| ssh_tunnels.iter().find(|t| t.id == id))
+                    .map(|t| t.name.clone());
 
-            Some(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .child(Label::new("SSH Tunnel"))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .child(self.access.ssh_tunnel_dropdown.clone()),
-                            )
-                            .when(selected_tunnel_name.is_some(), |d| {
-                                d.child(
+                Some(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(Label::new(dbflux_i18n::t!("access.ssh_tunnel_label")))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .child(
                                     div()
-                                        .rounded(Radii::SM)
-                                        .border_2()
-                                        .when(tunnel_clear_focused, |dd| {
-                                            dd.border_color(ring_color)
-                                        })
-                                        .when(!tunnel_clear_focused, |dd| {
-                                            dd.border_color(gpui::transparent_black())
-                                        })
-                                        .child(
-                                            Button::new("clear-ssh-tunnel", "Clear")
+                                        .flex_1()
+                                        .child(self.access.ssh_tunnel_dropdown.clone()),
+                                )
+                                .when(selected_tunnel_name.is_some(), |d| {
+                                    d.child(
+                                        div()
+                                            .rounded(Radii::SM)
+                                            .border_2()
+                                            .when(tunnel_clear_focused, |dd| {
+                                                dd.border_color(ring_color)
+                                            })
+                                            .when(!tunnel_clear_focused, |dd| {
+                                                dd.border_color(gpui::transparent_black())
+                                            })
+                                            .child(
+                                                Button::new(
+                                                    "clear-ssh-tunnel",
+                                                    dbflux_i18n::t!("access.clear"),
+                                                )
                                                 .small()
                                                 .ghost()
                                                 .on_click(cx.listener(|this, _, window, cx| {
                                                     this.clear_ssh_tunnel_selection(window, cx);
                                                 })),
-                                        ),
-                                )
-                            }),
-                    )
-                    .into_any_element(),
-            )
-        } else {
-            None
-        };
+                                            ),
+                                    )
+                                }),
+                        )
+                        .into_any_element(),
+                )
+            } else {
+                None
+            };
 
         let theme = cx.theme().clone();
         let _muted_fg = theme.muted_foreground;
@@ -736,28 +740,42 @@ impl ConnectionManagerWindow {
                         let path_str = key_path
                             .as_ref()
                             .map(|p| p.to_string_lossy().to_string())
-                            .unwrap_or_else(|| "SSH Agent / default".to_string());
-                        format!("Private Key ({})", path_str)
+                            .unwrap_or_else(|| dbflux_i18n::t!("ssh.agent_default"));
+                        crate::labels::ssh_private_key_with_path(&path_str)
                     }
-                    dbflux_core::SshAuthMethod::Password => "Password".to_string(),
+                    dbflux_core::SshAuthMethod::Password => dbflux_i18n::t!("ssh.password"),
                 };
 
                 let edit_focused = show_focus && focus == FormFocus::SshEditInSettings;
 
+                let ssh_server_saved_title = dbflux_i18n::t!("access.ssh_server_saved");
+                let ssh_host_label = dbflux_i18n::t!("ssh.host");
+                let ssh_port_label = dbflux_i18n::t!("ssh.port");
+                let ssh_username_label = dbflux_i18n::t!("ssh.username");
+                let ssh_auth_label = dbflux_i18n::t!("ssh.auth_label");
+
                 self.render_section(
-                    "SSH Server (saved tunnel)",
+                    &ssh_server_saved_title,
                     div()
                         .flex()
                         .flex_col()
                         .gap_2()
-                        .child(self.render_readonly_row("Host", &tunnel.config.host, &theme))
                         .child(self.render_readonly_row(
-                            "Port",
+                            &ssh_host_label,
+                            &tunnel.config.host,
+                            &theme,
+                        ))
+                        .child(self.render_readonly_row(
+                            &ssh_port_label,
                             &tunnel.config.port.to_string(),
                             &theme,
                         ))
-                        .child(self.render_readonly_row("Username", &tunnel.config.user, &theme))
-                        .child(self.render_readonly_row("Auth", &auth_label, &theme))
+                        .child(self.render_readonly_row(
+                            &ssh_username_label,
+                            &tunnel.config.user,
+                            &theme,
+                        ))
+                        .child(self.render_readonly_row(&ssh_auth_label, &auth_label, &theme))
                         .child(
                             div()
                                 .mt_1()
@@ -766,10 +784,13 @@ impl ConnectionManagerWindow {
                                 .when(edit_focused, |d| d.border_color(ring_color))
                                 .when(!edit_focused, |d| d.border_color(gpui::transparent_black()))
                                 .child(
-                                    Button::new("ssh-edit-in-settings", "Edit in Settings")
-                                        .small()
-                                        .ghost()
-                                        .icon(Icon::new(AppIcon::ExternalLink)),
+                                    Button::new(
+                                        "ssh-edit-in-settings",
+                                        dbflux_i18n::t!("access.edit_in_settings"),
+                                    )
+                                    .small()
+                                    .ghost()
+                                    .icon(Icon::new(AppIcon::ExternalLink)),
                                 ),
                         ),
                     &theme,
@@ -804,9 +825,14 @@ impl ConnectionManagerWindow {
                 )
                 .into_any_element();
 
+            let ssh_server_title = dbflux_i18n::t!("ssh.ssh_server");
+            let ssh_host_label = dbflux_i18n::t!("ssh.host");
+            let ssh_port_label = dbflux_i18n::t!("ssh.port");
+            let ssh_username_label = dbflux_i18n::t!("ssh.username");
+
             let server_section = self
                 .render_section(
-                    "SSH Server",
+                    &ssh_server_title,
                     div()
                         .flex()
                         .flex_col()
@@ -817,7 +843,7 @@ impl ConnectionManagerWindow {
                                 .flex()
                                 .gap_3()
                                 .child(div().flex_1().child(self.form_field_input(
-                                    "Host",
+                                    &ssh_host_label,
                                     &self.access.input_ssh_host,
                                     true,
                                     show_focus && focus == FormFocus::SshHost,
@@ -826,7 +852,7 @@ impl ConnectionManagerWindow {
                                     cx,
                                 )))
                                 .child(div().w(px(80.0)).child(self.form_field_input(
-                                    "Port",
+                                    &ssh_port_label,
                                     &self.access.input_ssh_port,
                                     false,
                                     show_focus && focus == FormFocus::SshPort,
@@ -836,7 +862,7 @@ impl ConnectionManagerWindow {
                                 ))),
                         )
                         .child(div().id(3usize).child(self.form_field_input(
-                            "Username",
+                            &ssh_username_label,
                             &self.access.input_ssh_user,
                             true,
                             show_focus && focus == FormFocus::SshUser,
@@ -866,7 +892,7 @@ impl ConnectionManagerWindow {
                     d.border_color(gpui::transparent_black())
                 })
                 .child(
-                    Button::new("test-ssh", "Test SSH")
+                    Button::new("test-ssh", dbflux_i18n::t!("access.test_ssh"))
                         .icon(Icon::new(AppIcon::ExternalLink))
                         .small()
                         .ghost()
@@ -879,17 +905,17 @@ impl ConnectionManagerWindow {
             let status_el: Option<AnyElement> = match ssh_test_status {
                 TestStatus::None => None,
                 TestStatus::Testing => {
-                    Some(Text::muted("Testing SSH connection...").into_any_element())
+                    Some(Text::muted(dbflux_i18n::t!("access.testing_ssh")).into_any_element())
                 }
                 TestStatus::Success | TestStatus::SuccessWithWarning => Some(
                     StatusIndicator::new(Status::Connected)
-                        .label("SSH connection successful")
+                        .label(dbflux_i18n::t!("access.ssh_success"))
                         .into_any_element(),
                 ),
                 TestStatus::Failed => Some(
                     StatusIndicator::new(Status::Error)
                         .label(
-                            ssh_test_error.unwrap_or_else(|| "SSH connection failed".to_string()),
+                            ssh_test_error.unwrap_or_else(|| dbflux_i18n::t!("access.ssh_failed")),
                         )
                         .into_any_element(),
                 ),
@@ -907,13 +933,16 @@ impl ConnectionManagerWindow {
                             d.border_color(gpui::transparent_black())
                         })
                         .child(
-                            Button::new("save-ssh-tunnel", "Save as tunnel")
-                                .icon(Icon::new(AppIcon::Plus))
-                                .small()
-                                .ghost()
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.save_current_ssh_as_tunnel(cx);
-                                })),
+                            Button::new(
+                                "save-ssh-tunnel",
+                                dbflux_i18n::t!("access.save_as_tunnel"),
+                            )
+                            .icon(Icon::new(AppIcon::Plus))
+                            .small()
+                            .ghost()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.save_current_ssh_as_tunnel(cx);
+                            })),
                         )
                         .into_any_element(),
                 )
@@ -954,8 +983,9 @@ impl ConnectionManagerWindow {
         }
 
         if let Some(selector) = auth_selector {
+            let authentication_title = dbflux_i18n::t!("ssh.authentication");
             sections.push(
-                self.render_section("Authentication", selector, &theme)
+                self.render_section(&authentication_title, selector, &theme)
                     .into_any_element(),
             );
         }
@@ -975,9 +1005,7 @@ impl ConnectionManagerWindow {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .child(Text::muted(
-                        "Enable SSH tunnel to configure connection through a bastion host",
-                    ))
+                    .child(Text::muted(dbflux_i18n::t!("access.ssh_disabled_hint")))
                     .into_any_element(),
             );
         }
@@ -1029,7 +1057,7 @@ impl ConnectionManagerWindow {
                         primary,
                         border,
                     ))
-                    .child(div().text_sm().child("Private Key")),
+                    .child(div().text_sm().child(dbflux_i18n::t!("ssh.private_key"))),
             )
             .child(
                 div()
@@ -1051,7 +1079,7 @@ impl ConnectionManagerWindow {
                         primary,
                         border,
                     ))
-                    .child(div().text_sm().child("Password")),
+                    .child(div().text_sm().child(dbflux_i18n::t!("ssh.password"))),
             )
     }
 
@@ -1112,7 +1140,7 @@ impl ConnectionManagerWindow {
                         .flex()
                         .flex_col()
                         .gap_1()
-                        .child(Label::new("Private Key Path"))
+                        .child(Label::new(dbflux_i18n::t!("ssh.private_key_path")))
                         .child(
                             div()
                                 .flex()
@@ -1148,26 +1176,29 @@ impl ConnectionManagerWindow {
                                             d.border_color(gpui::transparent_black())
                                         })
                                         .child(
-                                            Button::new("browse-ssh-key", "Browse")
-                                                .small()
-                                                .ghost()
-                                                .on_click(cx.listener(|this, _, window, cx| {
+                                            Button::new(
+                                                "browse-ssh-key",
+                                                dbflux_i18n::t!("ssh.browse"),
+                                            )
+                                            .small()
+                                            .ghost()
+                                            .on_click(
+                                                cx.listener(|this, _, window, cx| {
                                                     this.browse_ssh_key(window, cx);
-                                                })),
+                                                }),
+                                            ),
                                         ),
                                 ),
                         ),
                 )
-                .child(Text::caption(
-                    "Leave empty to use SSH agent or default keys (~/.ssh/id_rsa)",
-                ))
+                .child(Text::caption(dbflux_i18n::t!("ssh.private_key_hint")))
                 .child(
                     div()
                         .id(6usize)
                         .flex()
                         .flex_col()
                         .gap_1()
-                        .child(Label::new("Key Passphrase"))
+                        .child(Label::new(dbflux_i18n::t!("ssh.key_passphrase")))
                         .child(
                             div()
                                 .flex()
@@ -1226,12 +1257,16 @@ impl ConnectionManagerWindow {
                                                     .items_center()
                                                     .gap_2()
                                                     .child(checkbox)
-                                                    .child(div().text_sm().child("Save")),
+                                                    .child(
+                                                        div()
+                                                            .text_sm()
+                                                            .child(dbflux_i18n::t!("ssh.save")),
+                                                    ),
                                             ),
                                     )
                                 }),
                         )
-                        .child(Text::caption("Leave empty if key has no passphrase")),
+                        .child(Text::caption(dbflux_i18n::t!("ssh.passphrase_hint"))),
                 )
                 .into_any_element(),
             SshAuthSelection::Password => div()
@@ -1244,7 +1279,7 @@ impl ConnectionManagerWindow {
                         .flex()
                         .flex_col()
                         .gap_1()
-                        .child(Label::new("SSH Password").required(true))
+                        .child(Label::new(dbflux_i18n::t!("ssh.ssh_password")).required(true))
                         .child(
                             div()
                                 .flex()
@@ -1303,7 +1338,11 @@ impl ConnectionManagerWindow {
                                                     .items_center()
                                                     .gap_2()
                                                     .child(checkbox)
-                                                    .child(div().text_sm().child("Save")),
+                                                    .child(
+                                                        div()
+                                                            .text_sm()
+                                                            .child(dbflux_i18n::t!("ssh.save")),
+                                                    ),
                                             ),
                                     )
                                 }),
@@ -1430,5 +1469,108 @@ mod tests {
 
         assert_eq!(en, "Select Proxy");
         assert_eq!(es, "Seleccionar proxy");
+    }
+
+    const ACCESS_SSH_KEYS: &[&str] = &[
+        "access.use_ssh_tunnel",
+        "access.ssh_tunnel_label",
+        "access.ssh_server_saved",
+        "access.test_ssh",
+        "access.testing_ssh",
+        "access.ssh_success",
+        "access.ssh_failed",
+        "access.save_as_tunnel",
+        "access.ssh_disabled_hint",
+    ];
+
+    #[test]
+    fn access_ssh_keys_resolve_in_both_locales() {
+        for locale in ["en", "es"] {
+            for key in ACCESS_SSH_KEYS {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(
+                    !value.is_empty(),
+                    "key {key} resolved empty for locale {locale}"
+                );
+                assert_ne!(value, *key, "key {key} did not resolve for locale {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "key {key} fell back to the raw locale-qualified form for locale {locale}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn access_use_ssh_tunnel_label_exact_values() {
+        let en = dbflux_i18n::t!("access.use_ssh_tunnel", locale = "en");
+        let es = dbflux_i18n::t!("access.use_ssh_tunnel", locale = "es");
+
+        assert_eq!(en, "Use SSH Tunnel");
+        assert_eq!(es, "Usar túnel SSH");
+    }
+
+    const SSH_VOCABULARY_KEYS: &[&str] = &[
+        "ssh.agent_default",
+        "ssh.authentication",
+        "ssh.private_key",
+        "ssh.password",
+        "ssh.private_key_path",
+        "ssh.browse",
+        "ssh.key_passphrase",
+        "ssh.save",
+        "ssh.passphrase_hint",
+        "ssh.ssh_password",
+        "ssh.ssh_server",
+        "ssh.host",
+        "ssh.port",
+        "ssh.username",
+        "ssh.host_user_required",
+        "ssh.private_key_short",
+        "ssh.update",
+        "ssh.create",
+        "ssh.test",
+        "ssh.private_key_with_path",
+        "ssh.private_key_hint",
+        "ssh.auth_label",
+    ];
+
+    #[test]
+    fn ssh_vocabulary_keys_resolve_in_both_locales() {
+        for locale in ["en", "es"] {
+            for key in SSH_VOCABULARY_KEYS {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(
+                    !value.is_empty(),
+                    "key {key} resolved empty for locale {locale}"
+                );
+                assert_ne!(value, *key, "key {key} did not resolve for locale {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "key {key} fell back to the raw locale-qualified form for locale {locale}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ssh_authentication_differs_between_locales() {
+        let en = dbflux_i18n::t!("ssh.authentication", locale = "en");
+        let es = dbflux_i18n::t!("ssh.authentication", locale = "es");
+
+        assert_ne!(en, es, "ssh.authentication should differ between en and es");
+    }
+
+    #[test]
+    fn ssh_passphrase_hint_exact_values() {
+        let en = dbflux_i18n::t!("ssh.passphrase_hint", locale = "en");
+        let es = dbflux_i18n::t!("ssh.passphrase_hint", locale = "es");
+
+        assert_eq!(en, "Leave empty if key has no passphrase");
+        assert_eq!(es, "Déjala vacía si la clave no tiene frase");
     }
 }
