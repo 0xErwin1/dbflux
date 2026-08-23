@@ -1,9 +1,9 @@
 # Conectar a una base de datos — Configuración avanzada
 
 Esta guía cubre todo lo que hay en el Connection Manager más allá del formulario
-básico de "host, port, user, password": llegar a una base de datos a través de un
-túnel SSH, un proxy o AWS SSM; autenticarse con Auth Profiles gestionados por un
-provider (AWS SSO); y obtener valores de campos individuales desde un secret
+básico de "host, port, user, password": llegar a una base de datos a través de
+un túnel SSH, un proxy o AWS SSM; autenticarse con Auth Profiles gestionados por
+un provider (AWS SSO); y obtener valores de campos individuales desde un secret
 manager o parameter store en lugar de escribirlos directamente.
 
 Para el flujo del día a día (crear una conexión, explorar el schema, ejecutar
@@ -18,12 +18,12 @@ Cada conexión usa exactamente **un** método de acceso, elegido en el desplegab
 **Access Method**. Cambiar de método borra la configuración de los demás — una
 conexión es Direct, SSH, Proxy o SSM, nunca una combinación.
 
-| Método | Qué hace |
-|--------|--------------|
-| **Direct** | Conecta directamente al host/port de la pestaña Main. Puede seguir resolviendo fuentes de valores por campo (ver [Fuentes de valores](#fuentes-de-valores-secret-manager-parameter-store-auth-session)). |
-| **SSH Tunnel** | Abre un port-forward local a través de un host SSH, y conecta a través de él. |
-| **Proxy** | Enruta la conexión a través de un proxy SOCKS5 o HTTP/HTTPS. |
-| **SSM Port Forwarding** | Usa AWS Systems Manager para hacer port-forward a una instancia y conecta a través del túnel. Requiere el build feature `aws`. |
+| Método                  | Qué hace                                                                                                                                                                                            |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Direct**              | Conecta directamente al host/port de la pestaña Main. Puede seguir resolviendo fuentes de valores por campo (ver [Fuentes de valores](#value-sources-secret-manager-parameter-store-auth-session)). |
+| **SSH Tunnel**          | Abre un port-forward local a través de un host SSH, y conecta a través de él.                                                                                                                       |
+| **Proxy**               | Enruta la conexión a través de un proxy SOCKS5 o HTTP/HTTPS.                                                                                                                                        |
+| **SSM Port Forwarding** | Usa AWS Systems Manager para hacer port-forward a una instancia y conecta a través del túnel. Requiere el build feature `aws`.                                                                      |
 
 ### Qué ocurre cuando pulsas Connect
 
@@ -51,22 +51,22 @@ pipeline. Ver [Settings & Hooks](SETTINGS.md#connection-hooks).
 Puedes usar un túnel SSH de dos formas:
 
 - **Referenciar un túnel guardado** — elige un perfil de túnel que gestiones de
-  forma centralizada en **Settings → SSH Tunnels**. Recomendado cuando reutilizas
-  el mismo bastion en varias conexiones.
+  forma centralizada en **Settings → SSH Tunnels**. Recomendado cuando
+  reutilizas el mismo bastion en varias conexiones.
 - **Inline** — rellena los campos SSH directamente en la pestaña Access. Más
   adelante puedes pulsar **Save as tunnel** para convertirlo en un perfil
   reutilizable.
 
 ### Campos SSH
 
-| Campo | Notas |
-|-------|-------|
-| **Host** / **Port** | El servidor SSH. El puerto suele ser `22`. |
-| **Username** | Usuario SSH. |
-| **Auth method** | **Private Key** o **Password**. |
-| **Key path** (Private Key) | Ruta a la clave privada. **Déjalo vacío para usar tu SSH agent o las claves por defecto** (`~/.ssh/id_rsa`, etc.). |
-| **Key passphrase** (Private Key) | Opcional; se guarda en el keyring del sistema operativo al marcar **Save**. |
-| **Password** (Password auth) | Se guarda en el keyring del sistema operativo al marcar **Save**. |
+| Campo                            | Notas                                                                                                              |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| **Host** / **Port**              | El servidor SSH. El puerto suele ser `22`.                                                                         |
+| **Username**                     | Usuario SSH.                                                                                                       |
+| **Auth method**                  | **Private Key** o **Password**.                                                                                    |
+| **Key path** (Private Key)       | Ruta a la clave privada. **Déjalo vacío para usar tu SSH agent o las claves por defecto** (`~/.ssh/id_rsa`, etc.). |
+| **Key passphrase** (Private Key) | Opcional; se guarda en el keyring del sistema operativo al marcar **Save**.                                        |
+| **Password** (Password auth)     | Se guarda en el keyring del sistema operativo al marcar **Save**.                                                  |
 
 No existe una opción separada de "SSH agent" — la autenticación basada en agente
 es lo que obtienes al elegir **Private Key** y dejar la ruta de la clave vacía.
@@ -78,8 +78,8 @@ es lo que obtienes al elegir **Private Key** y dejar la ruta de la clave vacía.
 Las passphrases y contraseñas se guardan en el **keyring del sistema
 operativo**, nunca en la base de datos. La casilla **Save** solo aparece cuando
 hay un keyring disponible; si no lo hay, los secretos no se persisten y tendrás
-que reintroducirlos cada sesión. Ver
-[Datos y privacidad → Secretos](DATA_AND_PRIVACY.md#secrets-and-the-os-keyring).
+que reintroducirlos cada sesión. Ver [Datos y privacidad →
+Secretos](DATA_AND_PRIVACY.md#secrets-and-the-os-keyring).
 
 ---
 
@@ -89,13 +89,13 @@ Los proxies se gestionan en **Settings → Proxies**; la pestaña Access solo
 *selecciona* un proxy guardado y muestra sus detalles. Si no tienes ninguno, la
 pestaña te enlaza a Settings.
 
-| Campo | Notas |
-|-------|-------|
-| **Type** | `SOCKS5`, `HTTP` o `HTTPS`. Puerto por defecto: `1080` para SOCKS5, `8080` para HTTP/HTTPS. |
-| **Host** / **Port** | El endpoint del proxy. |
-| **Auth** | `None`, o `Basic` con un usuario (la contraseña se guarda en el keyring). |
-| **No Proxy** | Hosts/patrones separados por comas para omitir el proxy. Soporta `*` (todos), hosts exactos y coincidencias de sufijo (con o sin punto inicial), sin distinguir mayúsculas/minúsculas. **No soporta rangos CIDR.** |
-| **Enabled** | Cuando un perfil de proxy está deshabilitado, la conexión recurre a una conexión **directa** (con un aviso) en lugar de fallar. |
+| Campo               | Notas                                                                                                                                                                                                              |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Type**            | `SOCKS5`, `HTTP` o `HTTPS`. Puerto por defecto: `1080` para SOCKS5, `8080` para HTTP/HTTPS.                                                                                                                        |
+| **Host** / **Port** | El endpoint del proxy.                                                                                                                                                                                             |
+| **Auth**            | `None`, o `Basic` con un usuario (la contraseña se guarda en el keyring).                                                                                                                                          |
+| **No Proxy**        | Hosts/patrones separados por comas para omitir el proxy. Soporta `*` (todos), hosts exactos y coincidencias de sufijo (con o sin punto inicial), sin distinguir mayúsculas/minúsculas. **No soporta rangos CIDR.** |
+| **Enabled**         | Cuando un perfil de proxy está deshabilitado, la conexión recurre a una conexión **directa** (con un aviso) en lugar de fallar.                                                                                    |
 
 > **Aviso:** un proxy deshabilitado, o un host remoto que coincide con **No
 > Proxy**, resulta en una conexión directa silenciosa. Si esperabas que el
@@ -106,15 +106,15 @@ pestaña te enlaza a Settings.
 ## Auth Profiles (AWS SSO y credenciales compartidas)
 
 Los Auth Profiles contienen autenticación gestionada por un provider que DBFlux
-resuelve en el momento de conectar. Se crean en **Settings → Auth Profiles** y se
-seleccionan por conexión. En este build los providers integrados son
-**solo AWS**:
+resuelve en el momento de conectar. Se crean en **Settings → Auth Profiles** y
+se seleccionan por conexión. En este build los providers integrados son **solo
+AWS**:
 
-| Provider | Para qué se usa |
-|----------|------------|
-| **AWS SSO** | Login de IAM Identity Center (SSO) que resuelve una cuenta + rol. |
-| **AWS SSO Session** | Una sesión SSO reutilizable (Start URL + región + scopes) de la que pueden heredar los perfiles AWS SSO. |
-| **AWS Shared Credentials** | Un perfil con nombre escrito en `~/.aws/credentials` (access key / secret / session token opcional). |
+| Provider                   | Para qué se usa                                                                                          |
+| -------------------------- | -------------------------------------------------------------------------------------------------------- |
+| **AWS SSO**                | Login de IAM Identity Center (SSO) que resuelve una cuenta + rol.                                        |
+| **AWS SSO Session**        | Una sesión SSO reutilizable (Start URL + región + scopes) de la que pueden heredar los perfiles AWS SSO. |
+| **AWS Shared Credentials** | Un perfil con nombre escrito en `~/.aws/credentials` (access key / secret / session token opcional).     |
 
 Los providers de auth RPC registrados externamente pueden añadir más entradas
 aquí; ver [RPC Services](RPC_SERVICES_CONFIG.md).
@@ -127,14 +127,14 @@ aquí; ver [RPC Services](RPC_SERVICES_CONFIG.md).
 
 El formulario está guiado por el provider. Para AWS SSO rellenas:
 
-| Campo | Notas |
-|-------|-------|
-| **Profile name** | p. ej. `dev`. |
-| **SSO session** | Referencia opcional a un perfil **AWS SSO Session**. Al fijarla, el Start URL y la región se heredan y sus campos inline se deshabilitan visualmente. |
-| **SSO Start URL** | La URL de tu portal de Identity Center (omítela si usas una sesión). |
-| **Region** | p. ej. `us-east-1`. |
-| **Account** | Un desplegable que se rellena **después de iniciar sesión** — lista las cuentas a las que tu sesión SSO tiene acceso. |
-| **Role** | Un desplegable que se rellena una vez elegida una cuenta. |
+| Campo             | Notas                                                                                                                                                 |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Profile name**  | p. ej. `dev`.                                                                                                                                         |
+| **SSO session**   | Referencia opcional a un perfil **AWS SSO Session**. Al fijarla, el Start URL y la región se heredan y sus campos inline se deshabilitan visualmente. |
+| **SSO Start URL** | La URL de tu portal de Identity Center (omítela si usas una sesión).                                                                                  |
+| **Region**        | p. ej. `us-east-1`.                                                                                                                                   |
+| **Account**       | Un desplegable que se rellena **después de iniciar sesión** — lista las cuentas a las que tu sesión SSO tiene acceso.                                 |
+| **Role**          | Un desplegable que se rellena una vez elegida una cuenta.                                                                                             |
 
 Los desplegables **Account** y **Role** son dinámicos: requieren una sesión SSO
 activa y se refrescan cuando cambian sus dependencias. Si están vacíos, inicia
@@ -165,9 +165,9 @@ DBFlux abre un modal de login:
   auth provider, se requiere un Auth Profile correspondiente o la conexión se
   rechaza antes de conectar.
 
-Cada fila de perfil tiene botones **Manage**, **Login** y **Refresh**.
-**Login** solo está habilitado cuando el perfil seleccionado realmente necesita
-iniciar sesión.
+Cada fila de perfil tiene botones **Manage**, **Login** y **Refresh**. **Login**
+solo está habilitado cuando el perfil seleccionado realmente necesita iniciar
+sesión.
 
 ---
 
@@ -177,12 +177,12 @@ El acceso "gestionado" permite que un provider abra el camino hacia el host por
 ti. La implementación incluida es **AWS SSM Port Forwarding** (requiere el
 feature `aws`).
 
-| Campo | Notas |
-|-------|-------|
-| **Instance ID** | Instancia EC2 de destino. Soporta un selector de fuente de valores. |
-| **Region** | Por defecto `us-east-1` si se deja en blanco. |
-| **Remote Port** | El puerto de la instancia al que se hace el forward. |
-| **Auth Profile** | **Obligatorio** — el perfil AWS usado para iniciar la sesión SSM. |
+| Campo            | Notas                                                               |
+| ---------------- | ------------------------------------------------------------------- |
+| **Instance ID**  | Instancia EC2 de destino. Soporta un selector de fuente de valores. |
+| **Region**       | Por defecto `us-east-1` si se deja en blanco.                       |
+| **Remote Port**  | El puerto de la instancia al que se hace el forward.                |
+| **Auth Profile** | **Obligatorio** — el perfil AWS usado para iniciar la sesión SSM.   |
 
 El puerto **local** del túnel lo asigna automáticamente DBFlux y el sistema
 operativo — solo el puerto remoto es configurable.
@@ -195,13 +195,13 @@ Cualquier campo individual de una conexión (host, password, etc.) puede obtener
 su valor desde una fuente externa en lugar de un literal. Haz clic en el
 selector de fuente junto a un campo y elige:
 
-| Fuente | Qué hace |
-|--------|--------------|
-| **Literal** | El valor que escribes (por defecto). |
-| **Environment Variable** | Se lee de una variable de entorno por nombre. |
-| **Secret Manager** | Se obtiene de un secret provider (AWS Secrets Manager). |
-| **Parameter Store** | Se obtiene de un parameter provider (AWS SSM Parameter Store). |
-| **Auth Session Field** | Toma un campo de la sesión/credenciales resuelta del Auth Profile. |
+| Fuente                   | Qué hace                                                           |
+| ------------------------ | ------------------------------------------------------------------ |
+| **Literal**              | El valor que escribes (por defecto).                               |
+| **Environment Variable** | Se lee de una variable de entorno por nombre.                      |
+| **Secret Manager**       | Se obtiene de un secret provider (AWS Secrets Manager).            |
+| **Parameter Store**      | Se obtiene de un parameter provider (AWS SSM Parameter Store).     |
+| **Auth Session Field**   | Toma un campo de la sesión/credenciales resuelta del Auth Profile. |
 
 Notas:
 
