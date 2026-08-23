@@ -24,6 +24,7 @@ const docs = defineCollection({
     pattern: [
       '*/docs/*.md',
       '*/docs/es/*.md',
+      '*/docs/es/drivers/*.md',
       '*/ARCHITECTURE.md',
       '*/CONTRIBUTING.md',
       '*/crates/dbflux_driver_*/README.md',

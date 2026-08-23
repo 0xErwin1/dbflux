@@ -6,6 +6,14 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Added
 
+* **Complete Spanish documentation and a language menu (#360)** — the
+  website's language switcher is now a dropdown listing every supported
+  language, ready to grow beyond two; the docs links in the navigation and
+  footer keep the reader's language across hosts. Every document the site
+  serves now ships in Spanish: the remaining fourteen guides, the
+  architecture and contributing pages, and all thirteen driver READMEs
+  (served from `docs/es/drivers/`).
+
 * **Spanish website and documentation (#360)** — dbflux.dev gains a Spanish
   edition under `/es/`: the landing page, about page, navigation, search
   dialog, install tabs and footer read from typed dictionaries with a
