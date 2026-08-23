@@ -4,6 +4,14 @@ import InstallTabs from './InstallTabs.astro';
 import { REPO } from '../data/nav';
 import { CURRENT, productVersion } from '../data/versions';
 import { SITE_ORIGIN, docsUrl } from '../data/site';
+import { DEFAULT_LOCALE, t } from '../i18n';
+import type { Locale } from '../i18n';
+
+interface Props {
+  locale?: Locale;
+}
+
+const { locale = DEFAULT_LOCALE } = Astro.props;
 
 const DRIVERS = [
   'PostgreSQL',
@@ -23,59 +31,59 @@ const DRIVERS = [
 const FEATURES = [
   {
     icon: 'query',
-    title: 'Dialect-aware editor',
-    body: 'Completion, validation and dangerous-statement detection come from the driver, not a shared guess. A DELETE without a WHERE is caught before it runs.',
+    title: t(locale, 'landing.feature.editor.title'),
+    body: t(locale, 'landing.feature.editor.body'),
   },
   {
     icon: 'table',
-    title: 'Editable result grid',
-    body: 'Edit cells in place when the result maps cleanly back to one table, page through millions of rows by keyset, and copy any selection as a native query.',
+    title: t(locale, 'landing.feature.grid.title'),
+    body: t(locale, 'landing.feature.grid.body'),
   },
   {
     icon: 'chart',
-    title: 'Charts and dashboards',
-    body: 'Turn any result into a chart, save it, and pin it to a dashboard alongside instance metrics from the same connection.',
+    title: t(locale, 'landing.feature.charts.title'),
+    body: t(locale, 'landing.feature.charts.body'),
   },
   {
     icon: 'hook',
-    title: 'Connection hooks',
-    body: 'Run a command, a script or in-process Lua around connect and disconnect, with live output in the tasks panel and a failure policy you choose.',
+    title: t(locale, 'landing.feature.hooks.title'),
+    body: t(locale, 'landing.feature.hooks.body'),
   },
   {
     icon: 'lock',
-    title: 'Reach anything',
-    body: 'SSH tunnels, HTTP proxies and AWS SSO are first-class. Secrets live in the OS keyring, never in the profile file.',
+    title: t(locale, 'landing.feature.reach.title'),
+    body: t(locale, 'landing.feature.reach.body'),
   },
   {
     icon: 'shield',
-    title: 'Auditable by default',
-    body: 'Queries, hooks, scripts and MCP calls all write to the same event log, with redaction and retention you control.',
+    title: t(locale, 'landing.feature.audit.title'),
+    body: t(locale, 'landing.feature.audit.body'),
   },
 ] as const;
 
 /** The four the application's own empty state offers on a fresh install. */
 const SHORTCUTS = [
-  { keys: ['Ctrl', 'N'], action: 'new query' },
-  { keys: ['Ctrl', 'Shift', 'P'], action: 'command palette' },
-  { keys: ['Ctrl', 'O'], action: 'open script from disk' },
-  { keys: ['Ctrl', 'Shift', 'N'], action: 'new connection' },
+  { keys: ['Ctrl', 'N'], action: t(locale, 'landing.shortcut.new_query') },
+  { keys: ['Ctrl', 'Shift', 'P'], action: t(locale, 'landing.shortcut.command_palette') },
+  { keys: ['Ctrl', 'O'], action: t(locale, 'landing.shortcut.open_script') },
+  { keys: ['Ctrl', 'Shift', 'N'], action: t(locale, 'landing.shortcut.new_connection') },
 ] as const;
 
 const DOC_CARDS = [
   {
-    href: docsUrl('usage'),
-    title: 'Usage guide',
-    body: 'First launch, creating a connection, running queries, browsing results, charting and exporting.',
+    href: docsUrl('usage', '', locale),
+    title: t(locale, 'landing.doc_card.usage.title'),
+    body: t(locale, 'landing.doc_card.usage.body'),
   },
   {
-    href: docsUrl('connections'),
-    title: 'Connecting',
-    body: 'SSH tunnels, proxies, AWS SSO and value sources for everything that is not a plain host and port.',
+    href: docsUrl('connections', '', locale),
+    title: t(locale, 'landing.doc_card.connecting.title'),
+    body: t(locale, 'landing.doc_card.connecting.body'),
   },
   {
-    href: docsUrl('mcp_ai_integration'),
-    title: 'AI + MCP',
-    body: 'Wire an AI client to DBFlux, then set the roles, policies and approvals that keep it inside the lines.',
+    href: docsUrl('mcp_ai_integration', '', locale),
+    title: t(locale, 'landing.doc_card.mcp.title'),
+    body: t(locale, 'landing.doc_card.mcp.body'),
   },
 ] as const;
 
@@ -117,52 +125,44 @@ const APPLICATION = {
 <section class="hero shell">
   <div class="hero__copy">
     <p class="eyebrow">Rust &middot; GPUI &middot; v{productVersion(CURRENT.id)}</p>
-    <h1>Every database you run, in one keyboard-driven window.</h1>
-    <p class="hero__lede">
-      An extensible, keyboard-first data platform. Twelve built-in drivers, a driver-neutral core,
-      and anything else you need over the RPC driver protocol.
-    </p>
+    <h1>{t(locale, 'landing.title')}</h1>
+    <p class="hero__lede">{t(locale, 'landing.lede')}</p>
     <div class="hero__actions">
-      <a class="btn btn--primary" href="#install" data-download-cta>Download for Linux</a>
-      <a class="btn btn--secondary" href={REPO} rel="noopener">View source</a>
+      <a class="btn btn--primary" href="#install" data-download-cta
+        >{t(locale, 'landing.download_linux')}</a
+      >
+      <a class="btn btn--secondary" href={REPO} rel="noopener">{t(locale, 'landing.view_source')}</a
+      >
     </div>
-    <p class="hero__meta">Linux &middot; macOS &middot; Windows — MIT or Apache-2.0</p>
+    <p class="hero__meta">{t(locale, 'landing.platforms_meta')}</p>
   </div>
 
   <figure class="hero__shot">
     <figcaption>
       <span class="dot" aria-hidden="true"></span>
-      Main server — SELECT * FROM public.transactions (1.5s)
+      {t(locale, 'landing.hero_caption')}
     </figcaption>
-    <img
-      src="/img/app-hero.jpg"
-      width="1400"
-      height="751"
-      alt="DBFlux with a connection tree open, showing databases, schemas, routines and instance metrics for a PostgreSQL server."
-    />
+    <img src="/img/app-hero.jpg" width="1400" height="751" alt={t(locale, 'landing.hero_alt')} />
   </figure>
 </section>
 
 <section class="shell reveal" id="install">
-  <InstallTabs />
+  <InstallTabs locale={locale} />
 </section>
 
 <section class="shell reveal" id="drivers">
   <header class="sec-head">
-    <p class="eyebrow">Built-in drivers</p>
-    <a href={docsUrl('drivers')}>Capability matrix &rarr;</a>
+    <p class="eyebrow">{t(locale, 'landing.drivers_eyebrow')}</p>
+    <a href={docsUrl('drivers', '', locale)}>{t(locale, 'landing.drivers_link')}</a>
   </header>
   <ul class="chips">
     {DRIVERS.map((driver) => <li>{driver}</li>)}
   </ul>
-  <p class="sec-note">
-    Relational, document, key-value, time-series and object stores share one result grid, one chart
-    engine and one audit log. External drivers register over the RPC protocol without a fork.
-  </p>
+  <p class="sec-note">{t(locale, 'landing.drivers_note')}</p>
 </section>
 
 <section class="shell reveal" id="features">
-  <p class="eyebrow">What you get</p>
+  <p class="eyebrow">{t(locale, 'landing.features_eyebrow')}</p>
   <ul class="features">
     {
       FEATURES.map((feature) => (
@@ -178,14 +178,10 @@ const APPLICATION = {
 
 <section class="shell reveal split">
   <div class="split__copy">
-    <p class="eyebrow">Keyboard-first</p>
-    <h2>The mouse is optional, not assumed.</h2>
-    <p>
-      Every surface has a binding and a command-palette entry: open a connection, run a statement,
-      jump to a table, pivot a result into a chart. The empty state tells you the four you need on
-      day one.
-    </p>
-    <a href={docsUrl('usage')}>Full keyboard reference &rarr;</a>
+    <p class="eyebrow">{t(locale, 'landing.keyboard_eyebrow')}</p>
+    <h2>{t(locale, 'landing.keyboard_title')}</h2>
+    <p>{t(locale, 'landing.keyboard_body')}</p>
+    <a href={docsUrl('usage', '', locale)}>{t(locale, 'landing.keyboard_link')}</a>
   </div>
   <ul class="keys">
     {
@@ -208,29 +204,21 @@ const APPLICATION = {
 
 <section class="shell reveal cards2">
   <article>
-    <p class="eyebrow eyebrow--link">Governance</p>
-    <h2>Give an AI client a connection, not your database.</h2>
-    <p>
-      The MCP server classifies every operation — metadata, read, write, destructive, admin — and a
-      policy engine decides per role and per connection. Write and destructive calls can sit behind
-      human approval.
-    </p>
+    <p class="eyebrow eyebrow--link">{t(locale, 'landing.governance_eyebrow')}</p>
+    <h2>{t(locale, 'landing.governance_title')}</h2>
+    <p>{t(locale, 'landing.governance_body')}</p>
   </article>
   <article>
-    <p class="eyebrow eyebrow--ok">Audit</p>
-    <h2>Every query, hook and tool call, on the record.</h2>
-    <p>
-      Events land in a local SQLite log with category, severity, actor and outcome. Query text is
-      fingerprinted rather than stored, sensitive values are redacted, and the whole log exports to
-      JSON or CSV.
-    </p>
+    <p class="eyebrow eyebrow--ok">{t(locale, 'landing.audit_eyebrow')}</p>
+    <h2>{t(locale, 'landing.audit_title')}</h2>
+    <p>{t(locale, 'landing.audit_body')}</p>
   </article>
 </section>
 
 <section class="shell reveal">
   <header class="sec-head">
-    <p class="eyebrow">Documentation</p>
-    <a href={docsUrl('')}>All guides &rarr;</a>
+    <p class="eyebrow">{t(locale, 'landing.docs_eyebrow')}</p>
+    <a href={docsUrl('', '', locale)}>{t(locale, 'landing.docs_link')}</a>
   </header>
   <ul class="doccards">
     {

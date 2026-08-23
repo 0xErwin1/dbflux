@@ -21,13 +21,12 @@ const LINKS = [
 ] as const;
 
 /**
- * Home and every docs page now have an `/es/` counterpart — a real translation
- * where one exists, the English body with a fallback notice otherwise (never a
- * 404). `about` has not gained its `/es/` route yet, so the switcher stays off
- * there until it does.
+ * Home, docs and about all have an `/es/` counterpart now — a real translation
+ * where one exists, the English body with a fallback notice otherwise for docs
+ * (never a 404).
  */
 const pathname = Astro.url.pathname;
-const showSwitcher = current === 'home' || current === 'docs';
+const showSwitcher = current === 'home' || current === 'docs' || current === 'about';
 const switchTarget = withLocale(pathname, locale === 'es' ? 'en' : 'es');
 const switchHreflang = locale === 'es' ? 'en' : 'es';
 ---

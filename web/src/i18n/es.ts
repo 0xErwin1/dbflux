@@ -222,8 +222,13 @@ export const es: Dictionary = {
           'Doce integrados como crates de Rust; cualquier otro a través del protocolo RPC de drivers.',
       },
     },
-    muted_links:
-      'El mapa completo de crates y los flujos entre crates viven en la guía de arquitectura. Si quieres escribir un driver, empieza por la guía de autoría de drivers.',
+    muted_links: {
+      prefix: 'El mapa completo de crates y los flujos entre crates viven en la ',
+      architecture: 'guía de arquitectura',
+      middle: '. Si quieres escribir un driver, empieza por la ',
+      driver_authoring: 'guía de autoría de drivers',
+      suffix: '.',
+    },
     maintainer_title: 'Mantenedor',
     maintainer_body:
       'Ignacio Perez, desarrollador backend y de sistemas que trabaja en Rust y C. DBFlux es suyo, y la gran mayoría de sus commits también.',

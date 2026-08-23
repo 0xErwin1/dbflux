@@ -162,7 +162,13 @@ export interface Dictionary {
       core: { detail: string };
       drivers: { detail: string };
     };
-    muted_links: string;
+    muted_links: {
+      prefix: string;
+      architecture: string;
+      middle: string;
+      driver_authoring: string;
+      suffix: string;
+    };
     maintainer_title: string;
     maintainer_body: string;
     contribute_title: string;
@@ -208,6 +214,17 @@ export function t(locale: Locale, key: DictionaryKey): string {
   }
 
   return value;
+}
+
+/**
+ * The full dictionary for a locale, typed as `Dictionary`.
+ *
+ * `t()` only resolves string leaves — `install.steps.*` are tuples, not
+ * strings, so a caller that needs one of those arrays reads it directly off
+ * this object instead.
+ */
+export function dictionary(locale: Locale): Dictionary {
+  return DICTIONARIES[locale];
 }
 
 /**
