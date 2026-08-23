@@ -144,6 +144,37 @@ connection_manager:
   filter_certificates: Certificates / keys
   filter_all_files: All files
   select_database_file: Select Database File
+  auth:
+    profile_created_sso: Selected profile created by AWS SSO wizard.
+    profile_created_wizard: Selected profile created by wizard.
+    refreshing_sessions: Refreshing auth profile sessions...
+    select_before_login: Select an auth profile before logging in.
+    provider_unavailable: "Auth provider '%{provider_id}' is not available."
+    interactive_login_unavailable: Interactive login is not available for this auth profile.
+    login_starting: "Starting auth-provider login for '%{name}'..."
+    login_completed: Auth-provider login completed.
+    login_failed: "Auth-provider login failed: %{error}"
+    session_status_valid_expires: "Session status: valid (expires at %{expires_at})"
+    session_status_valid: "Session status: valid"
+    session_status_expired: "Session status: expired"
+    session_status_login_required: "Session status: login required"
+  driver_settings_title: Driver Settings
+  driver_no_custom_settings: This driver has no custom settings.
+  mcp_disabled: MCP disabled for this connection
+  mcp_enabled_select_actor: MCP enabled — select a trusted client to bind
+  mcp_preview_summary: "Actor '%{actor}' | role: %{role} | policy: %{policy}"
+  mcp_preview_none: none
+  mcp_governance_title: MCP Governance
+  enable_mcp: Enable MCP for this connection
+  trusted_client_actor: Trusted Client (Actor)
+  mcp_actor_hint: AI agent identity — configure in Settings → MCP
+  role_label: Role
+  mcp_role_hint: Configure roles in Settings → MCP → Roles
+  additional_roles_optional: Additional roles (optional)
+  policy_label: Policy
+  mcp_policy_hint: Configure policies in Settings → MCP → Policies
+  additional_policies_optional: Additional policies (optional)
+  scope_policy_preview: Scope/policy assignment preview
 document:
   code:
     toolbar:

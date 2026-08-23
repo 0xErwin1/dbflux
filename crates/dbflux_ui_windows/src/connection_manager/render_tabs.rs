@@ -737,13 +737,22 @@ impl ConnectionManagerWindow {
             );
 
             sections.push(
-                self.render_section("Driver Settings", schema_fields, &theme)
-                    .into_any_element(),
+                self.render_section(
+                    &dbflux_i18n::t!("connection_manager.driver_settings_title"),
+                    schema_fields,
+                    &theme,
+                )
+                .into_any_element(),
             );
         }
 
         if sections.len() == 1 {
-            sections.push(Text::muted("This driver has no custom settings.").into_any_element());
+            sections.push(
+                Text::muted(dbflux_i18n::t!(
+                    "connection_manager.driver_no_custom_settings"
+                ))
+                .into_any_element(),
+            );
         }
 
         sections
@@ -768,7 +777,7 @@ impl ConnectionManagerWindow {
             .selected_value()
             .filter(|v| !v.is_empty())
             .map(|v| v.to_string())
-            .unwrap_or_else(|| "none".to_string());
+            .unwrap_or_else(|| dbflux_i18n::t!("connection_manager.mcp_preview_none"));
         let policy_label = self
             .mcp_tab
             .conn_mcp_policy_dropdown
@@ -776,17 +785,14 @@ impl ConnectionManagerWindow {
             .selected_value()
             .filter(|v| !v.is_empty())
             .map(|v| v.to_string())
-            .unwrap_or_else(|| "none".to_string());
+            .unwrap_or_else(|| dbflux_i18n::t!("connection_manager.mcp_preview_none"));
 
         let preview_text = if !enabled {
-            "MCP disabled for this connection".to_string()
+            dbflux_i18n::t!("connection_manager.mcp_disabled")
         } else if actor_label.is_empty() {
-            "MCP enabled — select a trusted client to bind".to_string()
+            dbflux_i18n::t!("connection_manager.mcp_enabled_select_actor")
         } else {
-            format!(
-                "Actor '{}' | role: {} | policy: {}",
-                actor_label, role_label, policy_label
-            )
+            crate::labels::mcp_preview_summary(&actor_label, &role_label, &policy_label)
         };
 
         let content = div()
@@ -804,7 +810,11 @@ impl ConnectionManagerWindow {
                             cx.notify();
                         }),
                     ))
-                    .child(div().text_sm().child("Enable MCP for this connection")),
+                    .child(
+                        div()
+                            .text_sm()
+                            .child(dbflux_i18n::t!("connection_manager.enable_mcp")),
+                    ),
             )
             .child(
                 div()
@@ -812,10 +822,12 @@ impl ConnectionManagerWindow {
                     .flex_col()
                     .gap_1()
                     .opacity(opacity)
-                    .child(Label::new("Trusted Client (Actor)"))
-                    .child(Text::caption(
-                        "AI agent identity — configure in Settings → MCP",
-                    ))
+                    .child(Label::new(dbflux_i18n::t!(
+                        "connection_manager.trusted_client_actor"
+                    )))
+                    .child(Text::caption(dbflux_i18n::t!(
+                        "connection_manager.mcp_actor_hint"
+                    )))
                     .child(self.mcp_tab.conn_mcp_actor_dropdown.clone()),
             )
             .child(
@@ -824,12 +836,14 @@ impl ConnectionManagerWindow {
                     .flex_col()
                     .gap_1()
                     .opacity(opacity)
-                    .child(Label::new("Role"))
-                    .child(Text::caption(
-                        "Configure roles in Settings \u{2192} MCP \u{2192} Roles",
-                    ))
+                    .child(Label::new(dbflux_i18n::t!("connection_manager.role_label")))
+                    .child(Text::caption(dbflux_i18n::t!(
+                        "connection_manager.mcp_role_hint"
+                    )))
                     .child(self.mcp_tab.conn_mcp_role_dropdown.clone())
-                    .child(Text::caption("Additional roles (optional)"))
+                    .child(Text::caption(dbflux_i18n::t!(
+                        "connection_manager.additional_roles_optional"
+                    )))
                     .child(self.mcp_tab.conn_mcp_role_multi_select.clone()),
             )
             .child(
@@ -838,20 +852,31 @@ impl ConnectionManagerWindow {
                     .flex_col()
                     .gap_1()
                     .opacity(opacity)
-                    .child(Text::label("Policy"))
-                    .child(Text::caption(
-                        "Configure policies in Settings \u{2192} MCP \u{2192} Policies",
-                    ))
+                    .child(Text::label(dbflux_i18n::t!(
+                        "connection_manager.policy_label"
+                    )))
+                    .child(Text::caption(dbflux_i18n::t!(
+                        "connection_manager.mcp_policy_hint"
+                    )))
                     .child(self.mcp_tab.conn_mcp_policy_dropdown.clone())
-                    .child(Text::caption("Additional policies (optional)"))
+                    .child(Text::caption(dbflux_i18n::t!(
+                        "connection_manager.additional_policies_optional"
+                    )))
                     .child(self.mcp_tab.conn_mcp_policy_multi_select.clone()),
             )
-            .child(Text::caption("Scope/policy assignment preview").into_any_element())
+            .child(
+                Text::caption(dbflux_i18n::t!("connection_manager.scope_policy_preview"))
+                    .into_any_element(),
+            )
             .child(Text::body(preview_text));
 
         vec![
-            self.render_section("MCP Governance", content, &theme)
-                .into_any_element(),
+            self.render_section(
+                &dbflux_i18n::t!("connection_manager.mcp_governance_title"),
+                content,
+                &theme,
+            )
+            .into_any_element(),
         ]
     }
 }
@@ -955,6 +980,66 @@ mod connection_overrides_i18n_tests {
             dbflux_i18n::t!("connection_manager.overrides.off", locale = "en"),
             "Off"
         );
+    }
+}
+
+#[cfg(test)]
+mod driver_settings_and_mcp_governance_i18n_tests {
+    const DRIVER_SETTINGS_AND_MCP_KEYS: &[&str] = &[
+        "connection_manager.driver_settings_title",
+        "connection_manager.driver_no_custom_settings",
+        "connection_manager.mcp_disabled",
+        "connection_manager.enable_mcp",
+        "connection_manager.trusted_client_actor",
+        "connection_manager.role_label",
+        "connection_manager.additional_roles_optional",
+        "connection_manager.policy_label",
+        "connection_manager.additional_policies_optional",
+        "connection_manager.scope_policy_preview",
+        "connection_manager.mcp_governance_title",
+        "connection_manager.mcp_enabled_select_actor",
+        "connection_manager.mcp_actor_hint",
+        "connection_manager.mcp_role_hint",
+        "connection_manager.mcp_policy_hint",
+        "connection_manager.mcp_preview_none",
+    ];
+
+    #[test]
+    fn driver_settings_and_mcp_governance_keys_resolve_in_both_locales() {
+        for locale in ["en", "es"] {
+            for key in DRIVER_SETTINGS_AND_MCP_KEYS {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(
+                    !value.is_empty(),
+                    "key {key} resolved empty for locale {locale}"
+                );
+                assert_ne!(value, *key, "key {key} did not resolve for locale {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "key {key} fell back to the raw locale-qualified form for locale {locale}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn connection_manager_mcp_governance_title_differs_between_locales() {
+        let en = dbflux_i18n::t!("connection_manager.mcp_governance_title", locale = "en");
+        let es = dbflux_i18n::t!("connection_manager.mcp_governance_title", locale = "es");
+
+        assert_ne!(
+            en, es,
+            "connection_manager.mcp_governance_title should differ between en and es"
+        );
+    }
+
+    #[test]
+    fn connection_manager_driver_settings_title_exact_english_value() {
+        let en = dbflux_i18n::t!("connection_manager.driver_settings_title", locale = "en");
+
+        assert_eq!(en, "Driver Settings");
     }
 }
 // primitive itself.
