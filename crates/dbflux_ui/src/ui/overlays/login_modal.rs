@@ -1,4 +1,7 @@
 use crate::ui::icons::AppIcon;
+use crate::ui::labels::{
+    login_browser_open_failed_message, login_elapsed_message, login_sign_in_prompt,
+};
 use dbflux_components::controls::Button;
 use dbflux_components::primitives::Text;
 use dbflux_components::tokens::{Radii, Spacing};
@@ -141,7 +144,7 @@ impl LoginModal {
                         let provider_name = provider_name.clone();
                         this.state = LoginModalState::Failed {
                             provider_name: Some(provider_name),
-                            error: "Login timed out after 5 minutes".to_string(),
+                            error: dbflux_i18n::t!("login.error.timed_out"),
                         };
                         this.visible = true;
                         cx.notify();
@@ -208,7 +211,7 @@ impl LoginModal {
         } = &mut self.state
         {
             let Some(url) = verification_url.clone() else {
-                *launch_error = Some("No login URL is available for this provider.".to_string());
+                *launch_error = Some(dbflux_i18n::t!("login.error.no_url"));
                 cx.notify();
                 return;
             };
@@ -222,10 +225,8 @@ impl LoginModal {
                         *launch_error = None;
                     }
                     Err(detached_error) => {
-                        *launch_error = Some(format!(
-                            "Could not open browser automatically. Open the URL manually. ({}; fallback failed: {})",
-                            error, detached_error
-                        ));
+                        *launch_error =
+                            Some(login_browser_open_failed_message(error, detached_error));
                     }
                 },
             }
@@ -265,7 +266,7 @@ impl Render for LoginModal {
         };
 
         let mut frame = ModalFrame::new("sso-login-modal", &self.focus_handle, close)
-            .title("Connection Flow")
+            .title(dbflux_i18n::t!("login.window_title"))
             .icon(AppIcon::Lock)
             .width(px(640.0))
             .max_height(px(500.0));
@@ -282,7 +283,7 @@ impl Render for LoginModal {
                 let elapsed = started_at.elapsed().as_secs();
                 let url_display = verification_url
                     .clone()
-                    .unwrap_or_else(|| "Login URL not provided by provider".to_string());
+                    .unwrap_or_else(|| dbflux_i18n::t!("login.error.no_url_provided"));
 
                 frame.child(
                     div()
@@ -290,13 +291,11 @@ impl Render for LoginModal {
                         .flex_col()
                         .gap(Spacing::MD)
                         .p(Spacing::MD)
-                        .child(Text::body(format!(
-                            "Sign in with {} to continue connecting \"{}\".",
-                            provider_name, profile_name
+                        .child(Text::body(login_sign_in_prompt(
+                            provider_name,
+                            profile_name,
                         )))
-                        .child(Text::caption(
-                            "Open the login URL in your browser and finish authentication. DBFlux will continue automatically once the login completes.",
-                        ))
+                        .child(Text::caption(dbflux_i18n::t!("login.body.instructions")))
                         .child(
                             div()
                                 .p(Spacing::SM)
@@ -304,16 +303,13 @@ impl Render for LoginModal {
                                 .border_1()
                                 .border_color(theme.border)
                                 .bg(theme.secondary)
-                                .child(Text::caption("Start URL"))
+                                .child(Text::caption(dbflux_i18n::t!("login.field.start_url")))
                                 .child(div().mt_1().child(Text::body(url_display))),
                         )
                         .when_some(launch_error.clone(), |el, error| {
                             el.child(Text::caption(error).warning())
                         })
-                        .child(Text::caption(format!(
-                            "Login can take up to 5 minutes. Elapsed: {}s",
-                            elapsed
-                        )))
+                        .child(Text::caption(login_elapsed_message(elapsed)))
                         .child(
                             div()
                                 .flex()
@@ -321,23 +317,38 @@ impl Render for LoginModal {
                                 .justify_end()
                                 .gap(Spacing::SM)
                                 .child(
-                                    Button::new("sso-open-browser", "Open Browser")
-                                        .when(has_url, |b| b.primary())
-                                        .on_click(cx.listener(|this, _, _, cx| {
+                                    Button::new(
+                                        "sso-open-browser",
+                                        dbflux_i18n::t!("login.action.open_browser"),
+                                    )
+                                    .when(has_url, |b| b.primary())
+                                    .on_click(cx.listener(
+                                        |this, _, _, cx| {
                                             this.open_browser(cx);
-                                        })),
+                                        },
+                                    )),
                                 )
                                 .child(
-                                    Button::new("sso-copy-url", "Copy URL")
-                                        .on_click(cx.listener(|this, _, _, cx| {
+                                    Button::new(
+                                        "sso-copy-url",
+                                        dbflux_i18n::t!("login.action.copy_url"),
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _, _, cx| {
                                             this.copy_url(cx);
-                                        })),
+                                        },
+                                    )),
                                 )
                                 .child(
-                                    Button::new("sso-cancel", "Cancel")
-                                        .on_click(cx.listener(|this, _, _, cx| {
+                                    Button::new(
+                                        "sso-cancel",
+                                        dbflux_i18n::t!("login.action.cancel"),
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _, _, cx| {
                                             this.close(cx);
-                                        })),
+                                        },
+                                    )),
                                 ),
                         ),
                 )
@@ -354,26 +365,29 @@ impl Render for LoginModal {
                     .flex()
                     .flex_col()
                     .gap(Spacing::MD)
-                    .child(Text::body("Connection failed").warning())
+                    .child(Text::body(dbflux_i18n::t!("login.banner.connection_failed")).warning())
                     .child(Text::body(error.clone()))
-                    .child(div().flex().justify_end().child(
-                        Button::new("sso-failed-close", "Close").on_click(cx.listener(
-                            |this, _, _, cx| {
-                                this.close(cx);
-                            },
-                        )),
-                    ));
+                    .child(
+                        div().flex().justify_end().child(
+                            Button::new("sso-failed-close", dbflux_i18n::t!("login.action.close"))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.close(cx);
+                                })),
+                        ),
+                    );
 
                 if show_auth_profiles_button {
-                    frame
-                        .child(error_content)
-                        .child(div().flex().justify_end().child(
-                            Button::new("login-open-auth-profiles", "Open Auth Profiles").on_click(
-                                cx.listener(|this, _, _, cx| {
-                                    this.open_auth_profiles_settings(cx);
-                                }),
-                            ),
-                        ))
+                    frame.child(error_content).child(
+                        div().flex().justify_end().child(
+                            Button::new(
+                                "login-open-auth-profiles",
+                                dbflux_i18n::t!("login.action.open_auth_profiles"),
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.open_auth_profiles_settings(cx);
+                            })),
+                        ),
+                    )
                 } else {
                     frame.child(error_content)
                 }
@@ -384,10 +398,8 @@ impl Render for LoginModal {
                     .flex()
                     .flex_col()
                     .gap(Spacing::MD)
-                    .child(Text::body("Login completed").success())
-                    .child(Text::body(
-                        "Authentication succeeded. Closing this dialog...",
-                    )),
+                    .child(Text::body(dbflux_i18n::t!("login.banner.completed")).success())
+                    .child(Text::body(dbflux_i18n::t!("login.banner.closing"))),
             ),
             _ => frame,
         };
@@ -406,5 +418,55 @@ mod tests {
             "Custom OIDC"
         )));
         assert!(!failed_state_shows_open_auth_profiles_button(None));
+    }
+
+    const LOGIN_CATALOG_KEYS: &[&str] = &[
+        "login.window_title",
+        "login.field.start_url",
+        "login.action.open_browser",
+        "login.action.copy_url",
+        "login.action.cancel",
+        "login.action.close",
+        "login.action.open_auth_profiles",
+        "login.banner.connection_failed",
+        "login.banner.completed",
+        "login.banner.closing",
+        "login.body.sign_in_prompt",
+        "login.body.instructions",
+        "login.body.elapsed",
+        "login.body.browser_open_failed",
+        "login.error.timed_out",
+        "login.error.no_url",
+        "login.error.no_url_provided",
+    ];
+
+    #[::core::prelude::v1::test]
+    fn login_keys_resolve_in_both_locales() {
+        for locale in ["en", "es"] {
+            for key in LOGIN_CATALOG_KEYS {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(
+                    !value.is_empty(),
+                    "key {key} resolved empty for locale {locale}"
+                );
+                assert_ne!(value, *key, "key {key} did not resolve for locale {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "key {key} fell back to the raw locale-qualified form for locale {locale}"
+                );
+            }
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn login_window_title_differs_between_locales() {
+        let english = dbflux_i18n::t!("login.window_title", locale = "en");
+        let spanish = dbflux_i18n::t!("login.window_title", locale = "es");
+
+        assert_eq!(english, "Connection Flow");
+        assert_eq!(spanish, "Flujo de conexión");
+        assert_ne!(english, spanish);
     }
 }

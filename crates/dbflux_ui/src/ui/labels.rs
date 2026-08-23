@@ -61,6 +61,148 @@ pub(crate) fn workspace_delete_connection_message(name: &str) -> String {
     dbflux_i18n::t!("workspace.confirm.delete_connection", name = name)
 }
 
+/// Formats the login modal's "Sign in with X to continue connecting Y" prompt.
+pub(crate) fn login_sign_in_prompt(provider_name: &str, profile_name: &str) -> String {
+    dbflux_i18n::t!(
+        "login.body.sign_in_prompt",
+        provider = provider_name,
+        profile = profile_name
+    )
+}
+
+/// Formats the "Elapsed: Ns" caption shown while waiting for login to complete.
+pub(crate) fn login_elapsed_message(elapsed_secs: u64) -> String {
+    dbflux_i18n::t!("login.body.elapsed", seconds = elapsed_secs)
+}
+
+/// Formats the fallback message shown when the login browser could not be launched.
+pub(crate) fn login_browser_open_failed_message(
+    error: impl std::fmt::Display,
+    fallback_error: impl std::fmt::Display,
+) -> String {
+    dbflux_i18n::t!(
+        "login.body.browser_open_failed",
+        error = error,
+        fallback_error = fallback_error
+    )
+}
+
+/// Formats the error shown when a saved chart fails source validation on open.
+pub(crate) fn charts_cannot_open_chart_message(error: impl std::fmt::Display) -> String {
+    dbflux_i18n::t!("charts.error.cannot_open_chart", error = error)
+}
+
+/// Formats the error shown when a dashboard import parse/build step fails.
+pub(crate) fn charts_import_failed_message(error: impl std::fmt::Display) -> String {
+    dbflux_i18n::t!("charts.error.import_failed", error = error)
+}
+
+/// Formats the error shown when an imported chart fails to persist.
+pub(crate) fn charts_persist_import_chart_failed_message(name: &str) -> String {
+    dbflux_i18n::t!("charts.error.persist_import_chart_failed", name = name)
+}
+
+/// Formats the error shown when an imported dashboard fails to persist.
+pub(crate) fn charts_persist_import_dashboard_failed_message(name: &str) -> String {
+    dbflux_i18n::t!("charts.error.persist_import_dashboard_failed", name = name)
+}
+
+/// Formats the error shown when a dashboard's charts/panels fail to save.
+pub(crate) fn charts_save_dashboard_failed_message(name: &str, message: &str) -> String {
+    dbflux_i18n::t!(
+        "charts.error.save_dashboard_failed",
+        name = name,
+        message = message
+    )
+}
+
+/// Formats the toast shown after a successful dashboard import.
+pub(crate) fn charts_import_success_message(count: usize) -> String {
+    dbflux_i18n::t!("charts.toast.import_success", count = count)
+}
+
+/// Formats the error shown when a remote dashboard fails to parse.
+pub(crate) fn charts_remote_parse_failed_message(error: impl std::fmt::Display) -> String {
+    dbflux_i18n::t!("charts.error.remote_parse_failed", error = error)
+}
+
+/// Formats the error shown when creating a dashboard fails.
+pub(crate) fn charts_create_dashboard_failed_message(error: impl std::fmt::Display) -> String {
+    dbflux_i18n::t!("charts.error.create_dashboard_failed", error = error)
+}
+
+/// Formats the error shown when deleting a dashboard fails.
+pub(crate) fn charts_delete_dashboard_failed_message(error: impl std::fmt::Display) -> String {
+    dbflux_i18n::t!("charts.error.delete_dashboard_failed", error = error)
+}
+
+/// Formats the error shown when duplicating a dashboard fails.
+pub(crate) fn charts_duplicate_dashboard_failed_message(error: impl std::fmt::Display) -> String {
+    dbflux_i18n::t!("charts.error.duplicate_dashboard_failed", error = error)
+}
+
+/// Formats the error shown when renaming a dashboard or saved chart fails.
+pub(crate) fn charts_rename_failed_message(error: impl std::fmt::Display) -> String {
+    dbflux_i18n::t!("charts.error.rename_failed", error = error)
+}
+
+/// Formats the error shown when deleting a saved chart fails.
+pub(crate) fn charts_delete_chart_failed_message(error: impl std::fmt::Display) -> String {
+    dbflux_i18n::t!("charts.error.delete_chart_failed", error = error)
+}
+
+/// Formats the error shown when duplicating a saved chart fails.
+pub(crate) fn charts_duplicate_chart_failed_message(error: impl std::fmt::Display) -> String {
+    dbflux_i18n::t!("charts.error.duplicate_chart_failed", error = error)
+}
+
+/// Formats the error shown when loading metric namespaces fails.
+pub(crate) fn charts_load_namespaces_failed_message(error: impl std::fmt::Display) -> String {
+    dbflux_i18n::t!("charts.error.load_namespaces_failed", error = error)
+}
+
+/// Formats the background-task label shown while loading metrics for a namespace.
+pub(crate) fn charts_loading_metrics_label(namespace: &str) -> String {
+    dbflux_i18n::t!("charts.status.loading_metrics", namespace = namespace)
+}
+
+/// Formats the error shown when loading metrics for a namespace fails.
+pub(crate) fn charts_load_metrics_failed_message(error: impl std::fmt::Display) -> String {
+    dbflux_i18n::t!("charts.error.load_metrics_failed", error = error)
+}
+
+/// Formats the error shown when a query-backed chart fails to persist for a new panel.
+pub(crate) fn charts_persist_chart_for_panel_failed_message(name: &str) -> String {
+    dbflux_i18n::t!("charts.error.persist_chart_for_panel_failed", name = name)
+}
+
+/// Formats the error shown when adding a panel to a dashboard fails.
+pub(crate) fn charts_add_panel_failed_message(error: impl std::fmt::Display) -> String {
+    dbflux_i18n::t!("charts.error.add_panel_failed", error = error)
+}
+
+/// Formats the error shown when a metric-backed chart fails to persist for a new panel.
+pub(crate) fn charts_persist_metric_chart_for_panel_failed_message(name: &str) -> String {
+    dbflux_i18n::t!(
+        "charts.error.persist_metric_chart_for_panel_failed",
+        name = name
+    )
+}
+
+/// Formats the toast shown when a panel for the same metric already exists.
+pub(crate) fn charts_panel_already_exists_message(namespace: &str, metric: &str) -> String {
+    dbflux_i18n::t!(
+        "charts.toast.panel_already_exists",
+        namespace = namespace,
+        metric = metric
+    )
+}
+
+/// Formats the error shown when adding several panels to a dashboard fails.
+pub(crate) fn charts_add_panels_failed_message(error: impl std::fmt::Display) -> String {
+    dbflux_i18n::t!("charts.error.add_panels_failed", error = error)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
