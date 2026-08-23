@@ -1335,6 +1335,83 @@ settings:
     login_hint: Inicia sesión para cargar las opciones
     inherited_from: "Heredado de %{trigger}."
     inherited_from_named: "Heredado de %{trigger} '%{name}'."
+  mcp:
+    tool:
+      list_connections:
+        name: Listar conexiones
+        description: Enumerar todas las conexiones de base de datos configuradas
+      get_connection:
+        name: Obtener conexión
+        description: Obtener los detalles completos de una conexión específica
+      get_connection_metadata:
+        name: Metadatos de la conexión
+        description: Obtener las capacidades del controlador y los metadatos de una conexión
+      list_databases:
+        name: Listar bases de datos
+        description: Listar todas las bases de datos accesibles en una conexión
+      list_schemas:
+        name: Listar esquemas
+        description: Listar los esquemas de una base de datos
+      list_tables:
+        name: Listar tablas
+        description: Listar las tablas y colecciones de un esquema
+      list_collections:
+        name: Listar colecciones
+        description: Listar colecciones de MongoDB u otros almacenes de documentos similares
+      describe_object:
+        name: Describir objeto
+        description: Obtener las definiciones de columnas/campos e índices de una tabla o colección
+      read_query:
+        name: Consulta de lectura
+        description: Ejecutar una consulta SELECT o equivalente de solo lectura
+      explain_query:
+        name: Explicar consulta
+        description: Mostrar el plan de ejecución de la consulta sin ejecutarla
+      preview_mutation:
+        name: Previsualizar mutación
+        description: Previsualizar una consulta de escritura/eliminación e informar las filas afectadas
+      list_scripts:
+        name: Listar scripts
+        description: Listar los scripts guardados en el directorio de scripts
+      get_script:
+        name: Obtener script
+        description: Obtener el código fuente de un script guardado específico
+      create_script:
+        name: Crear script
+        description: Guardar un nuevo script en el directorio de scripts
+      update_script:
+        name: Actualizar script
+        description: Sobrescribir un script guardado existente
+      delete_script:
+        name: Eliminar script
+        description: Eliminar de forma permanente un script del directorio de scripts
+      run_script:
+        name: Ejecutar script
+        description: Ejecutar un script Lua/SQL/shell guardado sobre una conexión
+      request_execution:
+        name: Solicitar ejecución
+        description: Enviar una mutación para aprobación humana antes de ejecutarla
+      list_pending_executions:
+        name: Listar pendientes
+        description: Ver todas las ejecuciones pendientes de aprobación
+      get_pending_execution:
+        name: Obtener pendiente
+        description: Obtener los detalles de una ejecución pendiente específica
+      approve_execution:
+        name: Aprobar ejecución
+        description: Aprobar y disparar una mutación pendiente
+      reject_execution:
+        name: Rechazar ejecución
+        description: Rechazar y descartar una mutación pendiente
+      query_audit_logs:
+        name: Consultar registros de auditoría
+        description: Buscar y filtrar el registro de auditoría
+      get_audit_entry:
+        name: Obtener entrada de auditoría
+        description: Obtener una entrada del registro de auditoría por ID
+      export_audit_logs:
+        name: Exportar registros de auditoría
+        description: Descargar las entradas del registro de auditoría como archivo
   nav:
     general_group: General
     general: General
