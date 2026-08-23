@@ -1,5 +1,5 @@
 ---
-import { docTitle, sectionsFor } from '../data/docs';
+import { localizedDocTitle, sectionsFor } from '../data/docs';
 import { docsHref } from '../data/versions';
 import { localeFromPathname, t } from '../i18n';
 import type { Locale } from '../i18n';
@@ -8,9 +8,16 @@ interface Props {
   versionId: string;
   available: readonly string[];
   locale?: Locale;
+  /** Spanish page titles sourced from each translated doc's own H1 — see `docs.ts`. */
+  esTitles?: Readonly<Record<string, string>>;
 }
 
-const { versionId, available, locale = localeFromPathname(Astro.url.pathname) } = Astro.props;
+const {
+  versionId,
+  available,
+  locale = localeFromPathname(Astro.url.pathname),
+  esTitles = {},
+} = Astro.props;
 const { sections, unfiled } = sectionsFor(available);
 ---
 
@@ -24,7 +31,9 @@ const { sections, unfiled } = sectionsFor(available);
       <ul>
         {section.entries.map((path) => (
           <li>
-            <a href={docsHref(`${versionId}/${path}`, locale)}>{docTitle(path)}</a>
+            <a href={docsHref(`${versionId}/${path}`, locale)}>
+              {localizedDocTitle(path, locale, esTitles)}
+            </a>
           </li>
         ))}
       </ul>

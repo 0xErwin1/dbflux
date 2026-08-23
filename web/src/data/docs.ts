@@ -3,6 +3,22 @@ import type { Locale } from '../i18n';
 import { DOCS_SECTIONS, docTitle } from './nav';
 
 /**
+ * The nav/rail/breadcrumb label for a page in `locale`.
+ *
+ * Spanish uses the translated doc's own H1 when one exists (`esTitles`);
+ * otherwise — untranslated pages, or the English locale — it falls back to
+ * the fixed `DOC_TITLES` rail label so navigation never renders a blank spot
+ * for a page that has not been translated yet.
+ */
+export function localizedDocTitle(
+  id: string,
+  locale: Locale,
+  esTitles: Readonly<Record<string, string>>,
+): string {
+  return (locale === 'es' ? esTitles[id] : undefined) ?? docTitle(id);
+}
+
+/**
  * Split a collection id of the form `<version>/<path>`, or its Spanish
  * counterpart `<version>/es/<path>` (see `content.config.ts`). The locale
  * segment is reported separately so callers never have to special-case it out
@@ -65,6 +81,43 @@ export function sectionsFor(available: readonly string[]): {
   const listed = new Set(sections.flatMap((section) => section.entries));
 
   return { sections, unfiled: available.filter((path) => !listed.has(path)).sort() };
+}
+
+/**
+ * The first-level heading of a doc's raw markdown body, if it has one.
+ *
+ * Every page in this collection is authored with its own H1 as the first
+ * line, so this is a plain first-match rather than a full markdown parse.
+ */
+export function firstHeading(body: string | undefined): string | undefined {
+  const match = body?.match(/^#\s+(.+)$/m);
+
+  return match?.[1].trim();
+}
+
+/**
+ * Spanish page titles, sourced from each translated doc's own H1.
+ *
+ * The English `DOC_TITLES` dictionary in `nav.ts` is a fixed rail label, not
+ * the page's own heading, so it never doubles as the Spanish title — pages
+ * without an `es` sibling are simply absent from the returned map and callers
+ * fall back to `docTitle(path)`.
+ */
+export function esTitlesFor(
+  entries: readonly CollectionEntry<'docs'>[],
+  versionId: string,
+): Record<string, string> {
+  const titles: Record<string, string> = {};
+
+  for (const entry of entries) {
+    const parsed = splitId(entry.id);
+    if (parsed.version !== versionId || parsed.locale !== 'es') continue;
+
+    const heading = firstHeading(entry.body);
+    if (heading) titles[parsed.path] = heading;
+  }
+
+  return titles;
 }
 
 /**

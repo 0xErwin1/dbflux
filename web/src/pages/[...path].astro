@@ -2,7 +2,7 @@
 import { getCollection, render } from 'astro:content';
 import DocsLayout from '../layouts/DocsLayout.astro';
 import DocsIndex from '../components/DocsIndex.astro';
-import { docTitle, pathsForVersion, repoPathFor, splitId } from '../data/docs';
+import { docTitle, esTitlesFor, pathsForVersion, repoPathFor, splitId } from '../data/docs';
 import { CURRENT, VERSIONS, docsRoute, versionById, versionLabel } from '../data/versions';
 import { DOCS_MODE } from '../data/site';
 import { DEFAULT_LOCALE, LOCALES } from '../i18n';
@@ -77,12 +77,18 @@ export async function getStaticPaths() {
 const { versionId, path, doc, locale, translated } = Astro.props;
 
 const version = versionById(versionId)!;
-const available = pathsForVersion(await getCollection('docs'), versionId);
+const allDocs = await getCollection('docs');
+const available = pathsForVersion(allDocs, versionId);
+const esTitles = esTitlesFor(allDocs, versionId);
 const isCurrent = versionId === CURRENT.id;
 
 const rendered = doc ? await render(doc) : undefined;
 
-const title = path ? docTitle(path) : 'Documentation';
+// A translated page's `<title>`/breadcrumb use its own Spanish H1 rather than
+// the fixed English rail label; a fallback page (English body under `/es/`)
+// keeps the English title since it is not actually showing translated text.
+const localizedTitle = locale === 'es' && translated && path ? esTitles[path] : undefined;
+const title = path ? (localizedTitle ?? docTitle(path)) : 'Documentation';
 
 const firstParagraph = doc?.body
   ?.split('\n\n')
@@ -108,12 +114,13 @@ const description = doc
   editPath={doc?.filePath ? repoPathFor(doc.filePath, versionId) : undefined}
   locale={locale}
   translated={translated}
+  esTitles={esTitles}
 >
   {
     rendered ? (
       <rendered.Content />
     ) : (
-      <DocsIndex versionId={versionId} available={available} locale={locale} />
+      <DocsIndex versionId={versionId} available={available} locale={locale} esTitles={esTitles} />
     )
   }
 </DocsLayout>
