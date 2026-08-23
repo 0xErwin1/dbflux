@@ -267,6 +267,25 @@ pub(crate) fn rpc_services_duplicate_socket_id(id: &str) -> String {
     dbflux_i18n::t!("settings.rpc_services.error.duplicate_socket_id", id = id)
 }
 
+/// Formats the delete-confirmation body for a named SSH tunnel.
+pub(crate) fn ssh_tunnels_delete_body(name: &str) -> String {
+    dbflux_i18n::t!("settings.ssh_tunnels.delete_dialog.body", name = name)
+}
+
+/// Builds the delete-confirmation body for a proxy profile, embedding the
+/// proxy name and pluralizing the affected-connections count.
+pub(crate) fn proxies_delete_body(name: &str, affected_connections: usize) -> String {
+    match affected_connections {
+        0 => dbflux_i18n::t!("settings.proxies.delete_dialog.body_none", name = name),
+        1 => dbflux_i18n::t!("settings.proxies.delete_dialog.body_one", name = name),
+        count => dbflux_i18n::t!(
+            "settings.proxies.delete_dialog.body_many",
+            name = name,
+            count = count
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -277,7 +296,8 @@ mod tests {
         hooks_delete_message, hooks_delete_unreadable_message, hooks_duplicate_id,
         hooks_env_pair_invalid, hooks_form_interpreter_hint, hooks_interpreter_auto_label,
         hooks_interpreter_missing, hooks_open_script_failed, hooks_write_script_failed,
-        mcp_preview_summary, ssh_private_key_with_path,
+        mcp_preview_summary, proxies_delete_body, ssh_private_key_with_path,
+        ssh_tunnels_delete_body,
     };
 
     #[test]
@@ -502,5 +522,36 @@ mod tests {
 
         assert!(message.contains('4'));
         assert!(message.contains('2'));
+    }
+
+    #[test]
+    fn ssh_tunnels_delete_body_embeds_tunnel_name() {
+        let message = ssh_tunnels_delete_body("bastion-prod");
+
+        assert!(message.contains("bastion-prod"));
+    }
+
+    #[test]
+    fn proxies_delete_body_uses_singular_form_for_one_connection() {
+        let message = proxies_delete_body("corporate-proxy", 1);
+
+        assert!(message.contains("corporate-proxy"));
+        assert!(message.contains('1'));
+    }
+
+    #[test]
+    fn proxies_delete_body_embeds_name_and_count_for_many_connections() {
+        let message = proxies_delete_body("corporate-proxy", 3);
+
+        assert!(message.contains("corporate-proxy"));
+        assert!(message.contains('3'));
+    }
+
+    #[test]
+    fn proxies_delete_body_omits_count_when_no_connections_affected() {
+        let message = proxies_delete_body("corporate-proxy", 0);
+
+        assert!(message.contains("corporate-proxy"));
+        assert!(!message.contains('0'));
     }
 }

@@ -2153,6 +2153,68 @@ settings:
       delete: Delete
       update: Update
       create: Create
+  ssh_tunnels:
+    placeholder_name: SSH tunnel
+    placeholder_password: password
+    placeholder_passphrase: passphrase
+    section_title: SSH Tunnels
+    section_description: Manage reusable SSH tunnels for bastion and jump-host access
+    empty: No saved SSH tunnels
+    new: New Tunnel
+    field:
+      name: Name
+    delete_dialog_title: Delete SSH Tunnel
+    delete_dialog:
+      body: 'Are you sure you want to delete "%{name}"?'
+    action:
+      import: "Import…"
+      export: Export
+      delete: Delete
+  proxies:
+    placeholder_name: Proxy name
+    placeholder_username: username
+    placeholder_password: password
+    section_title: Proxy Profiles
+    section_description: Manage proxy configurations for database connections
+    empty: No saved proxies
+    new: New Proxy
+    panel_title: Proxy
+    kind:
+      http: HTTP
+      https: HTTPS
+      socks5: SOCKS5
+    field:
+      name: Name
+      protocol: Protocol
+      authentication: Authentication
+      username: Username
+      password: Password
+      host: Host
+      port: Port
+      no_proxy: No Proxy
+      enabled: Enabled
+    hint:
+      no_proxy_list: Comma-separated hosts/CIDRs to bypass the proxy
+    auth:
+      none: None
+      basic: Basic
+    status:
+      disabled_caption: "off"
+    action:
+      save: Save
+      import: "Import…"
+      export: Export
+      delete: Delete
+      update: Update
+      create: Create
+    delete_dialog_title: Delete Proxy
+    delete_dialog:
+      body_none: 'Are you sure you want to delete "%{name}"?'
+      body_one: 'Are you sure you want to delete "%{name}"? 1 connection using this proxy will be updated.'
+      body_many: 'Are you sure you want to delete "%{name}"? %{count} connections using this proxy will be updated.'
+    discard_dialog_title: Discard Proxy Changes
+    discard_dialog:
+      body: You have unsaved proxy changes. Discard them?
   nav:
     general_group: General
     general: General

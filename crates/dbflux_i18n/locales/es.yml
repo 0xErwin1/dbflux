@@ -2153,6 +2153,68 @@ settings:
       delete: Eliminar
       update: Actualizar
       create: Crear
+  ssh_tunnels:
+    placeholder_name: Túnel SSH
+    placeholder_password: contraseña
+    placeholder_passphrase: frase
+    section_title: Túneles SSH
+    section_description: Gestiona túneles SSH reutilizables para acceso a bastiones y saltos
+    empty: No hay túneles SSH guardados
+    new: Nuevo túnel
+    field:
+      name: Nombre
+    delete_dialog_title: Eliminar túnel SSH
+    delete_dialog:
+      body: '¿Seguro que quieres eliminar "%{name}"?'
+    action:
+      import: "Importar…"
+      export: Exportar
+      delete: Eliminar
+  proxies:
+    placeholder_name: Nombre del proxy
+    placeholder_username: usuario
+    placeholder_password: contraseña
+    section_title: Perfiles de proxy
+    section_description: Gestiona las configuraciones de proxy para conexiones de base de datos
+    empty: No hay proxies guardados
+    new: Nuevo proxy
+    panel_title: Proxy
+    kind:
+      http: HTTP
+      https: HTTPS
+      socks5: SOCKS5
+    field:
+      name: Nombre
+      protocol: Protocolo
+      authentication: Autenticación
+      username: Usuario
+      password: Contraseña
+      host: Host
+      port: Puerto
+      no_proxy: Sin proxy
+      enabled: Habilitado
+    hint:
+      no_proxy_list: Hosts/CIDR separados por comas que omiten el proxy
+    auth:
+      none: Ninguna
+      basic: Básica
+    status:
+      disabled_caption: apagado
+    action:
+      save: Guardar
+      import: "Importar…"
+      export: Exportar
+      delete: Eliminar
+      update: Actualizar
+      create: Crear
+    delete_dialog_title: Eliminar proxy
+    delete_dialog:
+      body_none: '¿Seguro que quieres eliminar "%{name}"?'
+      body_one: '¿Seguro que quieres eliminar "%{name}"? Se actualizará 1 conexión que usa este proxy.'
+      body_many: '¿Seguro que quieres eliminar "%{name}"? Se actualizarán %{count} conexiones que usan este proxy.'
+    discard_dialog_title: Descartar cambios del proxy
+    discard_dialog:
+      body: Tienes cambios sin guardar en el proxy. ¿Deseas descartarlos?
   nav:
     general_group: General
     general: General

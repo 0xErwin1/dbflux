@@ -5,6 +5,7 @@ use super::layout;
 use super::section_trait::{SectionFocusEvent, SectionPortabilityEvent};
 use super::ssh_tunnels::SshFormNav;
 use crate::connection_manager::ExportTarget;
+use crate::labels::ssh_tunnels_delete_body;
 use crate::ssh_shared::{self, SshAuthSelection};
 use dbflux_components::controls::Button;
 use dbflux_components::controls::{GpuiInput as Input, InputState};
@@ -252,7 +253,10 @@ impl SshTunnelsSection {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let input_tunnel_name = cx.new(|cx| InputState::new(window, cx).placeholder("SSH tunnel"));
+        let input_tunnel_name = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(dbflux_i18n::t!("settings.ssh_tunnels.placeholder_name"))
+        });
         let input_ssh_host =
             cx.new(|cx| InputState::new(window, cx).placeholder("bastion.example.com"));
         let input_ssh_port = cx.new(|cx| {
@@ -265,12 +269,14 @@ impl SshTunnelsSection {
             cx.new(|cx| InputState::new(window, cx).placeholder("~/.ssh/id_rsa"));
         let input_ssh_key_passphrase = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("passphrase")
+                .placeholder(dbflux_i18n::t!(
+                    "settings.ssh_tunnels.placeholder_passphrase"
+                ))
                 .masked(true)
         });
         let input_ssh_password = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("password")
+                .placeholder(dbflux_i18n::t!("settings.ssh_tunnels.placeholder_password"))
                 .masked(true)
         });
 
@@ -405,7 +411,7 @@ impl SshTunnelsSection {
             .flex()
             .flex_col()
             .gap_2()
-            .child(Label::new("Authentication"))
+            .child(Label::new(dbflux_i18n::t!("ssh.authentication")))
             .child(
                 div()
                     .flex()
@@ -436,7 +442,7 @@ impl SshTunnelsSection {
                                 primary,
                                 border,
                             ))
-                            .child(div().text_sm().child("Private Key")),
+                            .child(div().text_sm().child(dbflux_i18n::t!("ssh.private_key"))),
                     )
                     .child(
                         div()
@@ -464,7 +470,7 @@ impl SshTunnelsSection {
                                 primary,
                                 border,
                             ))
-                            .child(div().text_sm().child("Password")),
+                            .child(div().text_sm().child(dbflux_i18n::t!("ssh.password"))),
                     ),
             )
     }
@@ -500,7 +506,7 @@ impl SshTunnelsSection {
                         cx.notify();
                     })),
             )
-            .child(div().text_sm().child("Save"))
+            .child(div().text_sm().child(dbflux_i18n::t!("ssh.save")))
     }
 
     fn render_private_key_fields(
@@ -540,7 +546,7 @@ impl SshTunnelsSection {
                     .items_end()
                     .gap_3()
                     .child(div().flex_1().child(self.render_ssh_field(
-                        "Private Key Path",
+                        &dbflux_i18n::t!("ssh.private_key_path"),
                         &self.input_ssh_key_path,
                         is_form_focused && current_field == SshFormField::KeyPath,
                         primary,
@@ -560,7 +566,7 @@ impl SshTunnelsSection {
                                 transparent_black()
                             })
                             .child(
-                                Button::new("browse-ssh-key", "Browse")
+                                Button::new("browse-ssh-key", dbflux_i18n::t!("ssh.browse"))
                                     .small()
                                     .ghost()
                                     .on_click(cx.listener(|this, _, window, cx| {
@@ -570,7 +576,7 @@ impl SshTunnelsSection {
                     }),
             )
             .child(
-                Body::new("Leave empty to use SSH agent or default keys (~/.ssh/id_rsa)")
+                Body::new(dbflux_i18n::t!("ssh.private_key_hint"))
                     .color(cx.theme().muted_foreground),
             )
             .child(
@@ -585,7 +591,7 @@ impl SshTunnelsSection {
                             .items_end()
                             .gap_1()
                             .child(div().flex_1().child(self.render_ssh_field(
-                                "Key Passphrase",
+                                &dbflux_i18n::t!("ssh.key_passphrase"),
                                 &self.input_ssh_key_passphrase,
                                 is_form_focused && current_field == SshFormField::Passphrase,
                                 primary,
@@ -597,7 +603,7 @@ impl SshTunnelsSection {
                     .when_some(save_checkbox, |div, checkbox| div.child(checkbox)),
             )
             .child(
-                Body::new("Leave empty if the key has no passphrase")
+                Body::new(dbflux_i18n::t!("ssh.passphrase_hint"))
                     .color(cx.theme().muted_foreground),
             )
     }
@@ -639,7 +645,7 @@ impl SshTunnelsSection {
                     .items_end()
                     .gap_1()
                     .child(div().flex_1().child(self.render_ssh_field(
-                        "SSH Password",
+                        &dbflux_i18n::t!("ssh.ssh_password"),
                         &self.input_ssh_password,
                         is_form_focused && current_field == SshFormField::Password,
                         primary,
@@ -686,24 +692,32 @@ impl SshTunnelsSection {
                                 transparent_black()
                             })
                             .child(
-                                Button::new("new-ssh-tunnel", "New Tunnel")
-                                    .icon(Icon::new(AppIcon::Plus))
-                                    .small()
-                                    .w_full()
-                                    .on_click(cx.listener(|this, _, window, cx| {
+                                Button::new(
+                                    "new-ssh-tunnel",
+                                    dbflux_i18n::t!("settings.ssh_tunnels.new"),
+                                )
+                                .icon(Icon::new(AppIcon::Plus))
+                                .small()
+                                .w_full()
+                                .on_click(cx.listener(
+                                    |this, _, window, cx| {
                                         this.clear_form(window, cx);
-                                    })),
+                                    },
+                                )),
                             ),
                     )
                     .child(
-                        Button::new("import-ssh-tunnel", "Import\u{2026}")
-                            .icon(Icon::new(AppIcon::Download))
-                            .small()
-                            .ghost()
-                            .w_full()
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.request_import(cx);
-                            })),
+                        Button::new(
+                            "import-ssh-tunnel",
+                            dbflux_i18n::t!("settings.ssh_tunnels.action.import"),
+                        )
+                        .icon(Icon::new(AppIcon::Download))
+                        .small()
+                        .ghost()
+                        .w_full()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.request_import(cx);
+                        })),
                     ),
             )
             .child(
@@ -717,7 +731,8 @@ impl SshTunnelsSection {
                     .when(tunnels.is_empty(), |root: Div| {
                         root.child(
                             div().p_4().child(
-                                Body::new("No saved SSH tunnels").color(theme.muted_foreground),
+                                Body::new(dbflux_i18n::t!("settings.ssh_tunnels.empty"))
+                                    .color(theme.muted_foreground),
                             ),
                         )
                     })
@@ -730,8 +745,10 @@ impl SshTunnelsSection {
                             tunnel.config.user, tunnel.config.host, tunnel.config.port
                         );
                         let auth_label = match tunnel.config.auth_method {
-                            dbflux_core::SshAuthMethod::PrivateKey { .. } => "Private key",
-                            dbflux_core::SshAuthMethod::Password => "Password",
+                            dbflux_core::SshAuthMethod::PrivateKey { .. } => {
+                                dbflux_i18n::t!("ssh.private_key_short")
+                            }
+                            dbflux_core::SshAuthMethod::Password => dbflux_i18n::t!("ssh.password"),
                         };
 
                         div()
@@ -789,12 +806,12 @@ impl SshTunnelsSection {
         match self.ssh_test_status {
             SshTestStatus::None => None,
             SshTestStatus::Testing => Some(
-                Body::new("Testing SSH connection...")
+                Body::new(dbflux_i18n::t!("access.testing_ssh"))
                     .color(_cx.theme().muted_foreground)
                     .into_any_element(),
             ),
             SshTestStatus::Success => Some(
-                Body::new("SSH connection successful")
+                Body::new(dbflux_i18n::t!("access.ssh_success"))
                     .color(_cx.theme().success)
                     .into_any_element(),
             ),
@@ -802,7 +819,7 @@ impl SshTunnelsSection {
                 Body::new(
                     self.ssh_test_error
                         .clone()
-                        .unwrap_or_else(|| "SSH connection failed".to_string()),
+                        .unwrap_or_else(|| dbflux_i18n::t!("access.ssh_failed")),
                 )
                 .color(_cx.theme().danger)
                 .into_any_element(),
@@ -824,7 +841,7 @@ impl SshTunnelsSection {
 
         layout::sticky_form_shell(
             PanelTitle::new(layout::editor_panel_title(
-                "SSH Tunnel",
+                &dbflux_i18n::t!("access.ssh_tunnel_label"),
                 editing_id.is_some(),
             )),
             div()
@@ -832,7 +849,7 @@ impl SshTunnelsSection {
                 .flex_col()
                 .gap_4()
                 .child(self.render_ssh_field(
-                    "Name",
+                    &dbflux_i18n::t!("settings.ssh_tunnels.field.name"),
                     &self.input_tunnel_name,
                     is_form_focused && field == SshFormField::Name,
                     primary,
@@ -844,7 +861,7 @@ impl SshTunnelsSection {
                         .flex()
                         .gap_3()
                         .child(div().flex_1().child(self.render_ssh_field(
-                            "Host",
+                            &dbflux_i18n::t!("ssh.host"),
                             &self.input_ssh_host,
                             is_form_focused && field == SshFormField::Host,
                             primary,
@@ -852,7 +869,7 @@ impl SshTunnelsSection {
                             cx,
                         )))
                         .child(div().w(px(80.0)).child(self.render_ssh_field(
-                            "Port",
+                            &dbflux_i18n::t!("ssh.port"),
                             &self.input_ssh_port,
                             is_form_focused && field == SshFormField::Port,
                             primary,
@@ -861,7 +878,7 @@ impl SshTunnelsSection {
                         ))),
                 )
                 .child(self.render_ssh_field(
-                    "Username",
+                    &dbflux_i18n::t!("ssh.username"),
                     &self.input_ssh_user,
                     is_form_focused && field == SshFormField::User,
                     primary,
@@ -902,30 +919,36 @@ impl SshTunnelsSection {
                 root.child(layout::footer_action_frame(
                     is_form_focused && field == SshFormField::ExportButton,
                     primary,
-                    Button::new("export-ssh-tunnel", "Export")
-                        .small()
-                        .ghost()
-                        .w_full()
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.request_export(cx);
-                        })),
+                    Button::new(
+                        "export-ssh-tunnel",
+                        dbflux_i18n::t!("settings.ssh_tunnels.action.export"),
+                    )
+                    .small()
+                    .ghost()
+                    .w_full()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.request_export(cx);
+                    })),
                 ))
                 .child(layout::footer_action_frame(
                     is_form_focused && field == SshFormField::DeleteButton,
                     primary,
-                    Button::new("delete-ssh-tunnel", "Delete")
-                        .small()
-                        .danger()
-                        .w_full()
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.request_delete_tunnel(tunnel_id, cx);
-                        })),
+                    Button::new(
+                        "delete-ssh-tunnel",
+                        dbflux_i18n::t!("settings.ssh_tunnels.action.delete"),
+                    )
+                    .small()
+                    .danger()
+                    .w_full()
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.request_delete_tunnel(tunnel_id, cx);
+                    })),
                 ))
             })
             .child(layout::footer_action_frame(
                 is_form_focused && field == SshFormField::TestButton,
                 primary,
-                Button::new("test-ssh-tunnel", "Test")
+                Button::new("test-ssh-tunnel", dbflux_i18n::t!("ssh.test"))
                     .small()
                     .ghost()
                     .w_full()
@@ -940,9 +963,9 @@ impl SshTunnelsSection {
                 Button::new(
                     "save-ssh-tunnel",
                     if editing_id.is_some() {
-                        "Update"
+                        dbflux_i18n::t!("ssh.update")
                     } else {
-                        "Create"
+                        dbflux_i18n::t!("ssh.create")
                     },
                 )
                 .small()
@@ -1041,8 +1064,8 @@ impl Render for SshTunnelsSection {
 
         layout::split_section_shell(
             dbflux_components::composites::section_header(
-                "SSH Tunnels",
-                "Manage reusable SSH tunnels for bastion and jump-host access",
+                dbflux_i18n::t!("settings.ssh_tunnels.section_title"),
+                dbflux_i18n::t!("settings.ssh_tunnels.section_description"),
                 cx,
             ),
             self.render_ssh_list(&tunnels, editing_id, cx),
@@ -1054,7 +1077,7 @@ impl Render for SshTunnelsSection {
 
             element.child(
                 Dialog::new(window, cx)
-                    .title("Delete SSH Tunnel")
+                    .title(dbflux_i18n::t!("settings.ssh_tunnels.delete_dialog_title"))
                     .confirm()
                     .on_ok(move |_, _, cx| {
                         entity.update(cx, |section, cx| {
@@ -1068,11 +1091,105 @@ impl Render for SshTunnelsSection {
                         });
                         true
                     })
-                    .child(div().text_sm().child(format!(
-                        "Are you sure you want to delete \"{}\"?",
-                        tunnel_delete_name
-                    ))),
+                    .child(
+                        div()
+                            .text_sm()
+                            .child(ssh_tunnels_delete_body(&tunnel_delete_name)),
+                    ),
             )
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    const SSH_TUNNELS_KEYS: &[&str] = &[
+        "settings.ssh_tunnels.placeholder_name",
+        "settings.ssh_tunnels.placeholder_password",
+        "settings.ssh_tunnels.placeholder_passphrase",
+        "settings.ssh_tunnels.section_title",
+        "settings.ssh_tunnels.section_description",
+        "settings.ssh_tunnels.empty",
+        "settings.ssh_tunnels.new",
+        "settings.ssh_tunnels.field.name",
+        "settings.ssh_tunnels.delete_dialog_title",
+        "settings.ssh_tunnels.delete_dialog.body",
+        "settings.ssh_tunnels.action.import",
+        "settings.ssh_tunnels.action.export",
+        "settings.ssh_tunnels.action.delete",
+    ];
+
+    // Reused from the shared `ssh.*` vocabulary (slice S10, `access_tab.rs`).
+    const SSH_TUNNELS_REUSED_SSH_KEYS: &[&str] = &[
+        "ssh.authentication",
+        "ssh.private_key",
+        "ssh.password",
+        "ssh.private_key_path",
+        "ssh.browse",
+        "ssh.key_passphrase",
+        "ssh.save",
+        "ssh.passphrase_hint",
+        "ssh.private_key_hint",
+        "ssh.ssh_password",
+        "ssh.host",
+        "ssh.port",
+        "ssh.username",
+        "ssh.private_key_short",
+        "ssh.update",
+        "ssh.create",
+        "ssh.test",
+    ];
+
+    // Reused from the `access.*` namespace (slice S10, `access_tab.rs`) since
+    // the SSH test-status strings are identical to the Access tab's.
+    const SSH_TUNNELS_REUSED_ACCESS_KEYS: &[&str] = &[
+        "access.testing_ssh",
+        "access.ssh_success",
+        "access.ssh_failed",
+        "access.ssh_tunnel_label",
+    ];
+
+    #[test]
+    fn ssh_tunnels_keys_resolve_in_both_locales() {
+        for locale in ["en", "es"] {
+            for key in SSH_TUNNELS_KEYS
+                .iter()
+                .chain(SSH_TUNNELS_REUSED_SSH_KEYS)
+                .chain(SSH_TUNNELS_REUSED_ACCESS_KEYS)
+            {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(
+                    !value.is_empty(),
+                    "key {key} resolved empty for locale {locale}"
+                );
+                assert_ne!(value, *key, "key {key} did not resolve for locale {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "key {key} fell back to the raw locale-qualified form for locale {locale}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ssh_tunnels_section_title_differs_between_locales() {
+        let english = dbflux_i18n::t!("settings.ssh_tunnels.section_title", locale = "en");
+        let spanish = dbflux_i18n::t!("settings.ssh_tunnels.section_title", locale = "es");
+
+        assert_eq!(english, "SSH Tunnels");
+        assert_eq!(spanish, "Túneles SSH");
+        assert_ne!(english, spanish);
+    }
+
+    #[test]
+    fn ssh_tunnels_empty_state_differs_between_locales() {
+        let english = dbflux_i18n::t!("settings.ssh_tunnels.empty", locale = "en");
+        let spanish = dbflux_i18n::t!("settings.ssh_tunnels.empty", locale = "es");
+
+        assert_eq!(english, "No saved SSH tunnels");
+        assert_eq!(spanish, "No hay túneles SSH guardados");
+        assert_ne!(english, spanish);
     }
 }
