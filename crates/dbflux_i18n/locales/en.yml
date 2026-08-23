@@ -941,6 +941,9 @@ document:
         builder: Builder
         switch_to_document: Switch to Document View
         switch_to_table: Switch to Table View
+      mode:
+        table: Table
+        document: Document
       editing:
         aggregated: Aggregated results cannot be edited
         no_primary_key: This table has no primary key - editing is disabled
@@ -1100,6 +1103,16 @@ document:
       back: Back
       continue: Continue
       close: Close
+  governance:
+    refresh: Refresh Pending
+    no_pending: No pending executions
+    pending_title: "Pending %{id}"
+    approval_context: Approval context
+    execution_plan: Execution plan
+    approve: Approve
+    reject: Reject
+    select_prompt: Select a pending request to review details.
+    load_failed: "Failed to load pending execution %{id}: %{error}"
   import_wizard:
     title: Import Data
     rail:
@@ -1157,6 +1170,19 @@ document:
       skipped: "%{table}: skipped"
       failed: "%{table}: FAILED — %{error}"
       not_attempted: "%{table}: not attempted"
+  instance_inspector:
+    task_label: "Inspector: %{metric_id}"
+    connection_not_found: Connection not found
+    connection_error: "Connection error: %{detail}"
+    action_unavailable: "Action cancelled — connection is no longer available. Reconnect and try again."
+    kill_default_label: Kill
+    kill_confirm_body: This action will terminate the selected operation. It cannot be undone.
+    cancel: Cancel
+    confirm: Confirm
+    error_prefix: "Error: %{error}"
+    loading: "Loading…"
+    empty: No data. Connect and click Refresh.
+    kill_failed_cause: "Action '%{action_label}' on inspector '%{metric_id}' failed"
   key_value:
     add_member_modal:
       cancel: Cancel
@@ -1791,6 +1817,16 @@ document:
     refresh:
       off: Off
       custom: Custom
+    result_warnings:
+      context:
+        query: query result
+        table_browse: table browse result
+        visual_query: visual query result
+        collection_browse: collection browse result
+        crud_returning: mutation RETURNING result
+        mutation_preview: mutation preview result
+      summary: "Unsupported database type '%{type_name}' in %{context}"
+      cause: "The %{context} contains values of unsupported type '%{type_name}'."
   tabs:
     menu:
       close: Close

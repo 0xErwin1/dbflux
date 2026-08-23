@@ -941,6 +941,9 @@ document:
         builder: Constructor
         switch_to_document: Cambiar a vista de documento
         switch_to_table: Cambiar a vista de tabla
+      mode:
+        table: Tabla
+        document: Documento
       editing:
         aggregated: Los resultados agregados no se pueden editar
         no_primary_key: Esta tabla no tiene clave primaria; la edición está deshabilitada
@@ -1100,6 +1103,16 @@ document:
       back: Atrás
       continue: Continuar
       close: Cerrar
+  governance:
+    refresh: Actualizar pendientes
+    no_pending: No hay ejecuciones pendientes
+    pending_title: "Pendiente %{id}"
+    approval_context: Contexto de aprobación
+    execution_plan: Plan de ejecución
+    approve: Aprobar
+    reject: Rechazar
+    select_prompt: Selecciona una solicitud pendiente para ver los detalles.
+    load_failed: "No se pudo cargar la ejecución pendiente %{id}: %{error}"
   import_wizard:
     title: Importar datos
     rail:
@@ -1157,6 +1170,19 @@ document:
       skipped: "%{table}: omitida"
       failed: "%{table}: FALLIDA — %{error}"
       not_attempted: "%{table}: no intentada"
+  instance_inspector:
+    task_label: "Inspector: %{metric_id}"
+    connection_not_found: Conexión no encontrada
+    connection_error: "Error de conexión: %{detail}"
+    action_unavailable: "Acción cancelada — la conexión ya no está disponible. Reconecta e inténtalo de nuevo."
+    kill_default_label: Terminar
+    kill_confirm_body: Esta acción terminará la operación seleccionada. No se puede deshacer.
+    cancel: Cancelar
+    confirm: Confirmar
+    error_prefix: "Error: %{error}"
+    loading: "Cargando…"
+    empty: Sin datos. Conecta y haz clic en Actualizar.
+    kill_failed_cause: "La acción '%{action_label}' en el inspector '%{metric_id}' falló"
   key_value:
     add_member_modal:
       cancel: Cancelar
@@ -1791,6 +1817,16 @@ document:
     refresh:
       off: Apagado
       custom: Personalizado
+    result_warnings:
+      context:
+        query: resultado de consulta
+        table_browse: resultado de exploración de tabla
+        visual_query: resultado de consulta visual
+        collection_browse: resultado de exploración de colección
+        crud_returning: resultado RETURNING de la mutación
+        mutation_preview: resultado de vista previa de mutación
+      summary: "Tipo de base de datos no compatible '%{type_name}' en %{context}"
+      cause: "El %{context} contiene valores de tipo no compatible '%{type_name}'."
   tabs:
     menu:
       close: Cerrar

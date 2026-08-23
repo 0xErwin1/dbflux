@@ -14,14 +14,24 @@ pub(crate) enum ResultWarningContext {
 }
 
 impl ResultWarningContext {
-    fn label(self) -> &'static str {
+    fn label(self) -> String {
         match self {
-            Self::Query => "query result",
-            Self::TableBrowse => "table browse result",
-            Self::VisualQuery => "visual query result",
-            Self::CollectionBrowse => "collection browse result",
-            Self::CrudReturning => "mutation RETURNING result",
-            Self::MutationPreview => "mutation preview result",
+            Self::Query => dbflux_i18n::t!("document.shared.result_warnings.context.query"),
+            Self::TableBrowse => {
+                dbflux_i18n::t!("document.shared.result_warnings.context.table_browse")
+            }
+            Self::VisualQuery => {
+                dbflux_i18n::t!("document.shared.result_warnings.context.visual_query")
+            }
+            Self::CollectionBrowse => {
+                dbflux_i18n::t!("document.shared.result_warnings.context.collection_browse")
+            }
+            Self::CrudReturning => {
+                dbflux_i18n::t!("document.shared.result_warnings.context.crud_returning")
+            }
+            Self::MutationPreview => {
+                dbflux_i18n::t!("document.shared.result_warnings.context.mutation_preview")
+            }
         }
     }
 }
@@ -139,14 +149,16 @@ fn unsupported_type_warnings(
         .map(|type_name| {
             UserFacingError::new(
                 ErrorKind::Driver,
-                format!(
-                    "Unsupported database type '{type_name}' in {}",
-                    context.label()
+                dbflux_i18n::t!(
+                    "document.shared.result_warnings.summary",
+                    type_name = type_name,
+                    context = context.label()
                 ),
             )
-            .with_cause(format!(
-                "The {} contains values of unsupported type '{type_name}'.",
-                context.label()
+            .with_cause(dbflux_i18n::t!(
+                "document.shared.result_warnings.cause",
+                type_name = type_name,
+                context = context.label()
             ))
             .with_severity(EventSeverity::Warn)
         })
@@ -325,6 +337,21 @@ mod tests {
                 .iter_mut()
                 .all(|result| take_crud_result_warning_types(result).is_empty())
         );
+    }
+
+    #[test]
+    fn context_labels_resolve_in_both_locales() {
+        for context in [
+            ResultWarningContext::Query,
+            ResultWarningContext::TableBrowse,
+            ResultWarningContext::VisualQuery,
+            ResultWarningContext::CollectionBrowse,
+            ResultWarningContext::CrudReturning,
+            ResultWarningContext::MutationPreview,
+        ] {
+            let en_label = context.label();
+            assert!(!en_label.is_empty());
+        }
     }
 
     fn assert_query_handoff_reports_once(

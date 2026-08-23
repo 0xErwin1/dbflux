@@ -4922,4 +4922,73 @@ mod tests {
         assert!(zero_total.contains("10"));
         assert!(!zero_total.contains('/'));
     }
+
+    /// PR 27b: the remaining-chrome sweep across `governance.rs`,
+    /// `result_warnings.rs`, `data_view.rs`, and `instance_inspector/mod.rs`.
+    #[test]
+    fn final_sweep_keys_resolve_in_both_locales() {
+        let keys = [
+            "document.governance.refresh",
+            "document.governance.no_pending",
+            "document.governance.pending_title",
+            "document.governance.approval_context",
+            "document.governance.execution_plan",
+            "document.governance.approve",
+            "document.governance.reject",
+            "document.governance.select_prompt",
+            "document.governance.load_failed",
+            "document.shared.result_warnings.context.query",
+            "document.shared.result_warnings.context.table_browse",
+            "document.shared.result_warnings.context.visual_query",
+            "document.shared.result_warnings.context.collection_browse",
+            "document.shared.result_warnings.context.crud_returning",
+            "document.shared.result_warnings.context.mutation_preview",
+            "document.shared.result_warnings.summary",
+            "document.shared.result_warnings.cause",
+            "document.data.grid.mode.table",
+            "document.data.grid.mode.document",
+            "document.instance_inspector.task_label",
+            "document.instance_inspector.connection_not_found",
+            "document.instance_inspector.connection_error",
+            "document.instance_inspector.action_unavailable",
+            "document.instance_inspector.kill_default_label",
+            "document.instance_inspector.kill_confirm_body",
+            "document.instance_inspector.cancel",
+            "document.instance_inspector.confirm",
+            "document.instance_inspector.error_prefix",
+            "document.instance_inspector.loading",
+            "document.instance_inspector.empty",
+            "document.instance_inspector.kill_failed_cause",
+        ];
+
+        for key in keys {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn final_sweep_keys_differ_between_locales() {
+        let keys = [
+            "document.governance.no_pending",
+            "document.shared.result_warnings.context.query",
+            "document.instance_inspector.kill_confirm_body",
+        ];
+
+        for key in keys {
+            let en = dbflux_i18n::t!(key, locale = "en");
+            let es = dbflux_i18n::t!(key, locale = "es");
+
+            assert_ne!(en, es, "{key} should differ between en and es");
+        }
+    }
 }
