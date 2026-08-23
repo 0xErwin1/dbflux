@@ -43,6 +43,14 @@ Choose the path that matches what you want to do.
 - [Driver Authoring](docs/DRIVER_AUTHORING.md) — choose and implement a built-in Rust or external RPC driver
 - [Architecture](ARCHITECTURE.md) — the canonical architecture and crate map, including crate boundaries and cross-crate flows
 
+### Translations
+
+DBFlux is translated on [Hosted Weblate](https://hosted.weblate.org/engage/dbflux/).
+The catalogs live in `crates/dbflux_i18n/locales/`, one YAML file per language, and
+translation updates arrive as pull requests from Weblate.
+
+[![Translation status](https://hosted.weblate.org/widget/dbflux/app/svg-badge.svg)](https://hosted.weblate.org/engage/dbflux/)
+
 ### Reference
 
 - [Charts](docs/CHARTS.md) — chart types, column kinds, and axis auto-detection
