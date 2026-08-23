@@ -188,6 +188,27 @@ document:
         deleted:
           one: "%{count} eliminación"
           many: "%{count} eliminaciones"
+    row_inspector:
+      badge:
+        primary_key: PK
+        foreign_key: FK
+      meta:
+        name: Nombre
+        type: Tipo
+        nullable: Anulable
+        primary_key: Clave primaria
+        foreign_key: Clave foránea
+        yes: "sí"
+        no: "no"
+      references:
+        empty: Sin referencias
+        loading: "Cargando esquema…"
+        not_found: "— no encontrado"
+        resolving: "Resolviendo…"
+      section:
+        column: COLUMNA
+        references: REFERENCIAS
+        row: FILA
   shared:
     refresh:
       off: Apagado
