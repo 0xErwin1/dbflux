@@ -731,11 +731,39 @@ sidebar:
   tabs:
     connections: CONEXIONES
     scripts: SCRIPTS
+  task:
+    connecting: "Conectando a %{name}"
+    disconnecting: "Desconectando %{name}"
+    connection_hook_cancelled: Hook de conexión cancelado
+    post_connect_hook_cancelled: Hook posterior a la conexión cancelado
+    disconnect_hook_cancelled: Hook de desconexión cancelado
+    post_disconnect_hook_cancelled: Hook posterior a la desconexión cancelado
   toast:
     edit_reconnect_updated: "'%{name}' actualizado"
     edit_reconnect_body: Reconecta para aplicar los cambios a la sesión activa.
     edit_reconnect_now: Reconectar ahora
     edit_reconnect_later: Más tarde
+    connection_already_pending: Ya hay una conexión pendiente
+    operation_started_elsewhere: Otro proceso ya inició la operación
+    background_task_limit: Hay demasiadas tareas en segundo plano, espera un momento
+    connection_cancelled_by_hook: Conexión cancelada por un hook
+    connection_cancelled_by_post_connect_hook: Conexión cancelada por el hook posterior a la conexión
+    disconnect_cancelled_by_hook: Desconexión cancelada por un hook
+    disconnected_hook_cancelled: Desconectado, pero se canceló el hook posterior a la desconexión
+    disconnected_hook_error: "Desconectado de %{name}, pero %{error}"
+    profile_not_found: Perfil no encontrado
+    connected:
+      plain: "Conectado a %{name}"
+      one: "Conectado a %{name} (con 1 advertencia de hook)"
+      many: "Conectado a %{name} (con %{count} advertencias de hook)"
+    disconnected:
+      plain: "Desconectado de %{name}"
+      one: "Desconectado de %{name} (con 1 advertencia de hook)"
+      many: "Desconectado de %{name} (con %{count} advertencias de hook)"
+    external_driver_unavailable:
+      config: "El driver externo '%{driver_id}' no está disponible porque el servicio '%{socket_id}' tiene una configuración inválida: %{summary}"
+      launch: "El driver externo '%{driver_id}' no está disponible porque el servicio '%{socket_id}' no inició: %{summary}"
+      probe: "El driver externo '%{driver_id}' no está disponible porque el servicio '%{socket_id}' falló durante la prueba del driver: %{summary}"
   tree:
     container:
       relational: Tablas (%{count})

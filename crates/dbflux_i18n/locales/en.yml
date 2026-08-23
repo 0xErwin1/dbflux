@@ -731,11 +731,39 @@ sidebar:
   tabs:
     connections: CONNECTIONS
     scripts: SCRIPTS
+  task:
+    connecting: "Connecting to %{name}"
+    disconnecting: "Disconnecting %{name}"
+    connection_hook_cancelled: Connection hook cancelled
+    post_connect_hook_cancelled: Post-connect hook cancelled
+    disconnect_hook_cancelled: Disconnect hook cancelled
+    post_disconnect_hook_cancelled: Post-disconnect hook cancelled
   toast:
     edit_reconnect_updated: "'%{name}' updated"
     edit_reconnect_body: Reconnect to apply the changes to the live session.
     edit_reconnect_now: Reconnect now
     edit_reconnect_later: Later
+    connection_already_pending: Connection already pending
+    operation_started_elsewhere: Operation started by another thread
+    background_task_limit: Too many background tasks running, please wait
+    connection_cancelled_by_hook: Connection cancelled by hook
+    connection_cancelled_by_post_connect_hook: Connection cancelled by post-connect hook
+    disconnect_cancelled_by_hook: Disconnect cancelled by hook
+    disconnected_hook_cancelled: Disconnected, but post-disconnect hook was cancelled
+    disconnected_hook_error: "Disconnected from %{name}, but %{error}"
+    profile_not_found: Profile not found
+    connected:
+      plain: "Connected to %{name}"
+      one: "Connected to %{name} (with 1 hook warning)"
+      many: "Connected to %{name} (with %{count} hook warnings)"
+    disconnected:
+      plain: "Disconnected from %{name}"
+      one: "Disconnected from %{name} (with 1 hook warning)"
+      many: "Disconnected from %{name} (with %{count} hook warnings)"
+    external_driver_unavailable:
+      config: "External driver '%{driver_id}' is unavailable because service '%{socket_id}' has an invalid configuration: %{summary}"
+      launch: "External driver '%{driver_id}' is unavailable because service '%{socket_id}' did not start: %{summary}"
+      probe: "External driver '%{driver_id}' is unavailable because service '%{socket_id}' failed during driver probe: %{summary}"
   tree:
     container:
       relational: Tables (%{count})

@@ -23,20 +23,7 @@ fn format_external_driver_stage_message(
     socket_id: &str,
     summary: &str,
 ) -> String {
-    match stage {
-        ExternalDriverStage::Config => format!(
-            "External driver '{}' is unavailable because service '{}' has an invalid configuration: {}",
-            driver_id, socket_id, summary
-        ),
-        ExternalDriverStage::Launch => format!(
-            "External driver '{}' is unavailable because service '{}' did not start: {}",
-            driver_id, socket_id, summary
-        ),
-        ExternalDriverStage::Probe => format!(
-            "External driver '{}' is unavailable because service '{}' failed during driver probe: {}",
-            driver_id, socket_id, summary
-        ),
-    }
+    crate::labels::external_driver_unavailable_label(stage, driver_id, socket_id, summary)
 }
 
 pub(crate) fn format_connect_prepare_error(
@@ -274,7 +261,7 @@ impl Sidebar {
             match self.app_state.update(cx, |state, _cx| {
                 if state.is_operation_pending(profile_id, None) {
                     return Err(PendingToast {
-                        message: "Connection already pending".to_string(),
+                        message: crate::labels::connection_already_pending_toast_label(),
                         is_error: true,
                     });
                 }
@@ -284,7 +271,7 @@ impl Sidebar {
 
                 if result.is_ok() && !state.start_pending_operation(profile_id, None) {
                     return Err(PendingToast {
-                        message: "Operation started by another thread".to_string(),
+                        message: crate::labels::operation_started_elsewhere_toast_label(),
                         is_error: true,
                     });
                 }
@@ -326,7 +313,7 @@ impl Sidebar {
                 state.finish_pending_operation(profile_id, None);
             });
             self.pending_toast = Some(PendingToast {
-                message: "Too many background tasks running, please wait".to_string(),
+                message: crate::labels::background_task_limit_toast_label(),
                 is_error: true,
             });
             self.refresh_tree(cx);
@@ -335,8 +322,10 @@ impl Sidebar {
         }
 
         let (task_id, cancel_token) = self.app_state.update(cx, |state, cx| {
-            let result =
-                state.start_task(TaskKind::Connect, format!("Connecting to {}", profile_name));
+            let result = state.start_task(
+                TaskKind::Connect,
+                crate::labels::connecting_task_label(&profile_name),
+            );
             cx.emit(AppStateChanged);
             result
         });
@@ -412,14 +401,17 @@ impl Sidebar {
                         }
 
                         app_state.update(cx, |state, cx| {
-                            state.fail_task(task_id, "Connection hook cancelled");
+                            state.fail_task(
+                                task_id,
+                                crate::labels::connection_hook_cancelled_task_label(),
+                            );
                             state.finish_pending_operation(profile_id, None);
                             cx.emit(AppStateChanged);
                         });
 
                         sidebar.update(cx, |sidebar, cx| {
                             sidebar.pending_toast = Some(PendingToast {
-                                message: "Connection cancelled by hook".to_string(),
+                                message: crate::labels::connection_cancelled_by_hook_toast_label(),
                                 is_error: true,
                             });
                             sidebar.refresh_tree(cx);
@@ -677,14 +669,19 @@ impl Sidebar {
                         }
 
                         app_state.update(cx, |state, cx| {
-                            state.fail_task(task_id, "Post-connect hook cancelled");
+                            state.fail_task(
+                                task_id,
+                                crate::labels::post_connect_hook_cancelled_task_label(),
+                            );
                             state.finish_pending_operation(profile_id, None);
                             cx.emit(AppStateChanged);
                         });
 
                         sidebar.update(cx, |sidebar, cx| {
                             sidebar.pending_toast = Some(PendingToast {
-                                message: "Connection cancelled by post-connect hook".to_string(),
+                                message:
+                                    crate::labels::connection_cancelled_by_post_connect_hook_toast_label(
+                                    ),
                                 is_error: true,
                             });
                             sidebar.refresh_tree(cx);
@@ -741,16 +738,10 @@ impl Sidebar {
                     cx.notify();
                 });
 
-                let message = if hook_warnings.is_empty() {
-                    format!("Connected to {}", connected_profile_name)
-                } else {
-                    format!(
-                        "Connected to {} (with {} hook warning{})",
-                        connected_profile_name,
-                        hook_warnings.len(),
-                        if hook_warnings.len() == 1 { "" } else { "s" }
-                    )
-                };
+                let message = crate::labels::connected_toast_label(
+                    &connected_profile_name,
+                    hook_warnings.len(),
+                );
 
                 sidebar.update(cx, |sidebar, cx| {
                     sidebar.pending_toast = Some(PendingToast {
@@ -782,7 +773,7 @@ impl Sidebar {
 
         if self.app_state.read(cx).is_background_task_limit_reached() {
             self.pending_toast = Some(PendingToast {
-                message: "Too many background tasks running, please wait".to_string(),
+                message: crate::labels::background_task_limit_toast_label(),
                 is_error: true,
             });
             self.refresh_tree(cx);
@@ -797,7 +788,7 @@ impl Sidebar {
         let (task_id, cancel_token) = self.app_state.update(cx, |state, cx| {
             let task = state.start_task_for_profile(
                 TaskKind::Disconnect,
-                format!("Disconnecting {}", profile_name),
+                crate::labels::disconnecting_task_label(&profile_name),
                 Some(profile_id),
             );
             cx.emit(AppStateChanged);
@@ -854,13 +845,17 @@ impl Sidebar {
                     if let Err(update_error) = cx.update(|cx| {
                         if !cancel_token.is_cancelled() {
                             app_state.update(cx, |state, cx| {
-                                state.fail_task(task_id, "Disconnect hook cancelled");
+                                state.fail_task(
+                                    task_id,
+                                    crate::labels::disconnect_hook_cancelled_task_label(),
+                                );
                                 cx.emit(AppStateChanged);
                             });
 
                             sidebar.update(cx, |sidebar, cx| {
                                 sidebar.pending_toast = Some(PendingToast {
-                                    message: "Disconnect cancelled by hook".to_string(),
+                                    message:
+                                        crate::labels::disconnect_cancelled_by_hook_toast_label(),
                                     is_error: true,
                                 });
                                 sidebar.refresh_tree(cx);
@@ -984,10 +979,9 @@ impl Sidebar {
 
                         sidebar.update(cx, |sidebar, cx| {
                             sidebar.pending_toast = Some(PendingToast {
-                                message: format!(
-                                    "Disconnected from {}, but {}",
-                                    profile_name,
-                                    error.to_lowercase()
+                                message: crate::labels::disconnected_hook_error_toast_label(
+                                    &profile_name,
+                                    &error.to_lowercase(),
                                 ),
                                 is_error: true,
                             });
@@ -1005,14 +999,17 @@ impl Sidebar {
                     if let Err(update_error) = cx.update(|cx| {
                         if !cancel_token.is_cancelled() {
                             app_state.update(cx, |state, cx| {
-                                state.fail_task(task_id, "Post-disconnect hook cancelled");
+                                state.fail_task(
+                                    task_id,
+                                    crate::labels::post_disconnect_hook_cancelled_task_label(),
+                                );
                                 cx.emit(AppStateChanged);
                             });
 
                             sidebar.update(cx, |sidebar, cx| {
                                 sidebar.pending_toast = Some(PendingToast {
-                                    message: "Disconnected, but post-disconnect hook was cancelled"
-                                        .to_string(),
+                                    message: crate::labels::disconnected_hook_cancelled_toast_label(
+                                    ),
                                     is_error: true,
                                 });
                                 sidebar.refresh_tree(cx);
@@ -1044,16 +1041,8 @@ impl Sidebar {
                     cx.emit(AppStateChanged);
                 });
 
-                let message = if hook_warnings.is_empty() {
-                    format!("Disconnected from {}", profile_name)
-                } else {
-                    format!(
-                        "Disconnected from {} (with {} hook warning{})",
-                        profile_name,
-                        hook_warnings.len(),
-                        if hook_warnings.len() == 1 { "" } else { "s" }
-                    )
-                };
+                let message =
+                    crate::labels::disconnected_toast_label(&profile_name, hook_warnings.len());
 
                 sidebar.update(cx, |sidebar, cx| {
                     sidebar.pending_toast = Some(PendingToast {
@@ -1135,7 +1124,7 @@ impl Sidebar {
 
         if !profile_exists {
             report_error(
-                UserFacingError::new(ErrorKind::User, "Profile not found")
+                UserFacingError::new(ErrorKind::User, crate::labels::profile_not_found_label())
                     .with_cause(format!("profile id {profile_id}")),
                 cx,
             );
@@ -1177,6 +1166,48 @@ mod tests {
         let (lock, condvar) = &**gate;
         *lock.lock().expect("gate lock") = true;
         condvar.notify_all();
+    }
+
+    const CONNECTION_TOAST_KEYS: [&str; 14] = [
+        "sidebar.task.connecting",
+        "sidebar.task.disconnecting",
+        "sidebar.task.connection_hook_cancelled",
+        "sidebar.task.post_connect_hook_cancelled",
+        "sidebar.task.disconnect_hook_cancelled",
+        "sidebar.task.post_disconnect_hook_cancelled",
+        "sidebar.toast.connection_already_pending",
+        "sidebar.toast.operation_started_elsewhere",
+        "sidebar.toast.background_task_limit",
+        "sidebar.toast.connection_cancelled_by_hook",
+        "sidebar.toast.connection_cancelled_by_post_connect_hook",
+        "sidebar.toast.disconnect_cancelled_by_hook",
+        "sidebar.toast.disconnected_hook_cancelled",
+        "sidebar.toast.profile_not_found",
+    ];
+
+    #[test]
+    fn connection_toast_keys_resolve_in_both_locales() {
+        for key in CONNECTION_TOAST_KEYS {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert_ne!(value, key, "missing translation for {locale}.{key}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "translation fell back to the miss sentinel for {locale}.{key}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn connected_toast_differs_between_locales() {
+        let english = crate::labels::connected_toast_label("prod-db", 0);
+        let spanish_key = dbflux_i18n::t!("sidebar.toast.connected.plain", locale = "es");
+
+        assert_ne!(english, spanish_key);
+        assert!(english.contains("prod-db"));
     }
 
     #[gpui::test]

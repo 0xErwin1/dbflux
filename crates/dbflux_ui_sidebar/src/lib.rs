@@ -2026,9 +2026,14 @@ mod tests {
         };
 
         let message = format_connect_prepare_error(&error, Some(&diagnostic));
+        let expected_prefix = crate::labels::external_driver_unavailable_label(
+            &ExternalDriverStage::Probe,
+            "rpc:missing.sock",
+            "missing.sock",
+            "Probe failed",
+        );
 
-        assert!(message.contains("rpc:missing.sock"));
-        assert!(message.contains("Probe failed"));
+        assert!(message.starts_with(&expected_prefix));
         assert!(message.contains("host exited before ready"));
     }
 
@@ -2057,15 +2062,19 @@ mod tests {
         };
 
         let toast = connect_prepare_error_toast(&error, Some(&diagnostic));
+        let expected_prefix = crate::labels::external_driver_unavailable_label(
+            &ExternalDriverStage::Launch,
+            "rpc:missing.sock",
+            "missing.sock",
+            "Driver host exited before socket was ready",
+        );
 
         assert!(toast.is_error);
-        assert!(toast.message.contains("rpc:missing.sock"));
-        assert!(toast.message.contains("missing.sock"));
-        assert!(toast.message.contains("did not start"));
+        assert!(toast.message.starts_with(&expected_prefix));
         assert!(
             toast
                 .message
-                .contains("Driver host exited before socket was ready")
+                .contains("stdout:\nbooting\n\nstderr:\nmissing binary")
         );
     }
 
