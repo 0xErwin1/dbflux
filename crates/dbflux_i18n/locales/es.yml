@@ -2123,6 +2123,36 @@ settings:
       pub_sub: Pub/Sub
       graph_traversal: Recorrido de grafo
       edge_properties: Propiedades de arista
+  rpc_services:
+    section_title: Servicios RPC
+    section_description: Gestiona los servicios RPC configurados. Los cambios requieren reiniciar.
+    empty: No hay servicios RPC configurados
+    edit_title: Editar servicio RPC
+    new_title: Nuevo servicio RPC
+    error:
+      socket_id_required: El ID del socket es obligatorio
+      timeout_invalid: El tiempo de espera debe ser un número válido (milisegundos)
+      duplicate_socket_id: "Ya existe un servicio con el ID de socket '%{id}'"
+    toast:
+      saved: Servicio RPC guardado. Es necesario reiniciar para aplicar los cambios.
+      deleted: Servicio RPC eliminado. Es necesario reiniciar para aplicar los cambios.
+    field:
+      disabled: Deshabilitado
+      socket_id: ID de socket
+      command: Comando
+      startup_timeout: Tiempo de espera de inicio (ms)
+      enable: Habilitar este servicio
+      service_type: Tipo de servicio
+      arguments: Argumentos
+      env_vars: Variables de entorno
+      default_command: (predeterminado)
+    kind:
+      driver: Driver
+      auth_provider: Proveedor de autenticación
+    action:
+      delete: Eliminar
+      update: Actualizar
+      create: Crear
   nav:
     general_group: General
     general: General

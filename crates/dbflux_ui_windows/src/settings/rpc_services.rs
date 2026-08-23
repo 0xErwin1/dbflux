@@ -18,29 +18,30 @@ use std::collections::HashMap;
 
 use super::layout;
 use super::services_section::{ServiceFocus, ServiceFormRow, ServicesSection};
+use crate::labels::rpc_services_duplicate_socket_id;
 
-fn services_section_title() -> &'static str {
-    "RPC Services"
+fn services_section_title() -> String {
+    dbflux_i18n::t!("settings.rpc_services.section_title")
 }
 
-fn services_section_description() -> &'static str {
-    "Manage configured RPC services. Changes require restart."
+fn services_section_description() -> String {
+    dbflux_i18n::t!("settings.rpc_services.section_description")
 }
 
-fn empty_services_message() -> &'static str {
-    "No RPC services configured"
+fn empty_services_message() -> String {
+    dbflux_i18n::t!("settings.rpc_services.empty")
 }
 
-fn service_editor_title(is_editing: bool) -> &'static str {
+fn service_editor_title(is_editing: bool) -> String {
     if is_editing {
-        "Edit RPC Service"
+        dbflux_i18n::t!("settings.rpc_services.edit_title")
     } else {
-        "New RPC Service"
+        dbflux_i18n::t!("settings.rpc_services.new_title")
     }
 }
 
-fn new_service_button_label() -> &'static str {
-    "New RPC Service"
+fn new_service_button_label() -> String {
+    dbflux_i18n::t!("settings.rpc_services.new_title")
 }
 
 fn editable_service_kind(service: &ServiceConfig) -> RpcServiceKind {
@@ -286,9 +287,10 @@ impl ServicesSection {
     pub(super) fn save_service(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let socket_id = self.input_socket_id.read(cx).value().trim().to_string();
         if socket_id.is_empty() {
-            Toast::error("Socket ID is required")
+            let msg = dbflux_i18n::t!("settings.rpc_services.error.socket_id_required");
+            Toast::error(msg.clone())
                 .meta_right(now_hms())
-                .action(copy_action("Socket ID is required"))
+                .action(copy_action(msg))
                 .push(cx);
             return;
         }
@@ -299,7 +301,7 @@ impl ServicesSection {
             .enumerate()
             .any(|(i, s)| s.socket_id == socket_id && Some(i) != self.editing_svc_idx);
         if is_duplicate {
-            let msg = format!("A service with socket ID \"{}\" already exists", socket_id);
+            let msg = rpc_services_duplicate_socket_id(&socket_id);
             Toast::error(msg.clone())
                 .meta_right(now_hms())
                 .action(copy_action(msg))
@@ -314,9 +316,10 @@ impl ServicesSection {
             match timeout_str.parse::<u64>() {
                 Ok(v) => Some(v),
                 Err(_) => {
-                    Toast::error("Timeout must be a valid number (milliseconds)")
+                    let msg = dbflux_i18n::t!("settings.rpc_services.error.timeout_invalid");
+                    Toast::error(msg.clone())
                         .meta_right(now_hms())
-                        .action(copy_action("Timeout must be a valid number (milliseconds)"))
+                        .action(copy_action(msg))
                         .push(cx);
                     return;
                 }
@@ -385,7 +388,7 @@ impl ServicesSection {
             );
             return;
         }
-        Toast::info("RPC service saved. Restart required to apply changes.")
+        Toast::info(dbflux_i18n::t!("settings.rpc_services.toast.saved"))
             .meta_right(now_hms())
             .push(cx);
 
@@ -441,7 +444,7 @@ impl ServicesSection {
             );
             return;
         }
-        Toast::info("RPC service deleted. Restart required to apply changes.")
+        Toast::info(dbflux_i18n::t!("settings.rpc_services.toast.deleted"))
             .meta_right(now_hms())
             .push(cx);
         cx.notify();
@@ -887,7 +890,10 @@ impl ServicesSection {
                             .command
                             .as_deref()
                             .filter(|value| !value.is_empty())
-                            .unwrap_or("(default)");
+                            .map(|value| value.to_string())
+                            .unwrap_or_else(|| {
+                                dbflux_i18n::t!("settings.rpc_services.field.default_command")
+                            });
 
                         div()
                             .id(SharedString::from(format!("svc-item-{}", idx)))
@@ -945,12 +951,14 @@ impl ServicesSection {
                                                                 .rounded(px(3.0))
                                                                 .bg(theme.secondary)
                                                                 .child(MonoCaption::new(
-                                                                    "Disabled",
+                                                                    dbflux_i18n::t!(
+                                                                        "settings.rpc_services.field.disabled"
+                                                                    ),
                                                                 )),
                                                         )
                                                     }),
                                             )
-                                            .child(MonoMeta::new(subtitle.to_string())),
+                                            .child(MonoMeta::new(subtitle)),
                                     ),
                             )
                     })),
@@ -981,7 +989,7 @@ impl ServicesSection {
                 .flex_col()
                 .gap_4()
                 .child(self.render_svc_input_field(
-                    "Socket ID",
+                    dbflux_i18n::t!("settings.rpc_services.field.socket_id"),
                     &self.input_socket_id,
                     is_row_focused(ServiceFormRow::SocketId),
                     primary,
@@ -989,7 +997,7 @@ impl ServicesSection {
                     cx,
                 ))
                 .child(self.render_svc_input_field(
-                    "Command",
+                    dbflux_i18n::t!("settings.rpc_services.field.command"),
                     &self.input_svc_command,
                     is_row_focused(ServiceFormRow::Command),
                     primary,
@@ -997,7 +1005,7 @@ impl ServicesSection {
                     cx,
                 ))
                 .child(self.render_svc_input_field(
-                    "Startup Timeout (ms)",
+                    dbflux_i18n::t!("settings.rpc_services.field.startup_timeout"),
                     &self.input_svc_timeout,
                     is_row_focused(ServiceFormRow::Timeout),
                     primary,
@@ -1035,7 +1043,7 @@ impl ServicesSection {
                     is_row_focused(ServiceFormRow::DeleteButton),
                     theme.primary,
                     Button::new("delete-service")
-                        .label("Delete")
+                        .label(dbflux_i18n::t!("settings.rpc_services.action.delete"))
                         .small()
                         .danger()
                         .w_full()
@@ -1051,9 +1059,9 @@ impl ServicesSection {
                 theme.primary,
                 Button::new("save-service")
                     .label(if self.editing_svc_idx.is_some() {
-                        "Update"
+                        dbflux_i18n::t!("settings.rpc_services.action.update")
                     } else {
-                        "Create"
+                        dbflux_i18n::t!("settings.rpc_services.action.create")
                     })
                     .small()
                     .primary()
@@ -1067,7 +1075,7 @@ impl ServicesSection {
 
     fn render_svc_input_field(
         &self,
-        label: &str,
+        label: String,
         input: &Entity<InputState>,
         is_focused: bool,
         primary: Hsla,
@@ -1078,7 +1086,7 @@ impl ServicesSection {
             .flex()
             .flex_col()
             .gap_1()
-            .child(Label::new(label.to_string()))
+            .child(Label::new(label))
             .child(
                 div()
                     .rounded(Radii::SM)
@@ -1132,7 +1140,9 @@ impl ServicesSection {
                         cx.notify();
                     })),
             )
-            .child(Body::new("Enable this service"))
+            .child(Body::new(dbflux_i18n::t!(
+                "settings.rpc_services.field.enable"
+            )))
     }
 
     fn render_radio_button(selected: bool, primary: Hsla, border: Hsla) -> Div {
@@ -1165,59 +1175,68 @@ impl ServicesSection {
             is_form_focused && rows.get(cursor).copied() == Some(ServiceFormRow::Kind);
 
         let kinds = [
-            (RpcServiceKind::Driver, 0usize, "Driver"),
-            (RpcServiceKind::AuthProvider, 1usize, "Auth Provider"),
+            (
+                RpcServiceKind::Driver,
+                0usize,
+                "driver",
+                dbflux_i18n::t!("settings.rpc_services.kind.driver"),
+            ),
+            (
+                RpcServiceKind::AuthProvider,
+                1usize,
+                "auth_provider",
+                dbflux_i18n::t!("settings.rpc_services.kind.auth_provider"),
+            ),
         ];
 
         div()
             .flex()
             .flex_col()
             .gap_2()
-            .child(Label::new("Service Type"))
-            .child(
-                div()
-                    .flex()
-                    .gap_4()
-                    .children(kinds.into_iter().map(|(kind, column, label)| {
-                        let is_focused = is_row_focused && self.svc_env_col == column;
+            .child(Label::new(dbflux_i18n::t!(
+                "settings.rpc_services.field.service_type"
+            )))
+            .child(div().flex().gap_4().children(kinds.into_iter().map(
+                |(kind, column, id, label)| {
+                    let is_focused = is_row_focused && self.svc_env_col == column;
 
-                        div()
-                            .id(SharedString::from(format!("service-kind-{}", label)))
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .px_2()
-                            .py_1()
-                            .rounded(Radii::SM)
-                            .cursor_pointer()
-                            .border_1()
-                            .border_color(if is_focused {
-                                primary
-                            } else {
-                                transparent_black()
-                            })
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.svc_focus = ServiceFocus::Form;
-                                if let Some(position) = this
-                                    .svc_form_rows()
-                                    .iter()
-                                    .position(|candidate| *candidate == ServiceFormRow::Kind)
-                                {
-                                    this.svc_form_cursor = position;
-                                }
-                                this.svc_env_col = column;
-                                this.svc_kind = kind;
-                                this.svc_editing_field = false;
-                                cx.notify();
-                            }))
-                            .child(Self::render_radio_button(
-                                self.svc_kind == kind,
-                                primary,
-                                border,
-                            ))
-                            .child(div().text_sm().child(label))
-                    })),
-            )
+                    div()
+                        .id(SharedString::from(format!("service-kind-{}", id)))
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .px_2()
+                        .py_1()
+                        .rounded(Radii::SM)
+                        .cursor_pointer()
+                        .border_1()
+                        .border_color(if is_focused {
+                            primary
+                        } else {
+                            transparent_black()
+                        })
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.svc_focus = ServiceFocus::Form;
+                            if let Some(position) = this
+                                .svc_form_rows()
+                                .iter()
+                                .position(|candidate| *candidate == ServiceFormRow::Kind)
+                            {
+                                this.svc_form_cursor = position;
+                            }
+                            this.svc_env_col = column;
+                            this.svc_kind = kind;
+                            this.svc_editing_field = false;
+                            cx.notify();
+                        }))
+                        .child(Self::render_radio_button(
+                            self.svc_kind == kind,
+                            primary,
+                            border,
+                        ))
+                        .child(div().text_sm().child(label))
+                },
+            )))
     }
 
     fn render_svc_args_section(
@@ -1237,7 +1256,9 @@ impl ServicesSection {
             .flex()
             .flex_col()
             .gap_2()
-            .child(Label::new("Arguments"))
+            .child(Label::new(dbflux_i18n::t!(
+                "settings.rpc_services.field.arguments"
+            )))
             .children(self.svc_arg_inputs.iter().enumerate().map(|(idx, input)| {
                 let is_row_at_cursor =
                     is_form_focused && rows.get(cursor).copied() == Some(ServiceFormRow::Arg(idx));
@@ -1350,7 +1371,9 @@ impl ServicesSection {
             .flex()
             .flex_col()
             .gap_2()
-            .child(Label::new("Environment Variables"))
+            .child(Label::new(dbflux_i18n::t!(
+                "settings.rpc_services.field.env_vars"
+            )))
             .children(
                 self.svc_env_key_inputs
                     .iter()
@@ -1569,5 +1592,88 @@ mod tests {
             preserved_api_contract_for_edit(&services, Some(0)),
             Some(api_contract)
         );
+    }
+
+    const RPC_SERVICES_KEYS: &[&str] = &[
+        "settings.rpc_services.section_title",
+        "settings.rpc_services.section_description",
+        "settings.rpc_services.empty",
+        "settings.rpc_services.edit_title",
+        "settings.rpc_services.new_title",
+        "settings.rpc_services.error.socket_id_required",
+        "settings.rpc_services.error.timeout_invalid",
+        "settings.rpc_services.error.duplicate_socket_id",
+        "settings.rpc_services.toast.saved",
+        "settings.rpc_services.toast.deleted",
+        "settings.rpc_services.field.disabled",
+        "settings.rpc_services.field.socket_id",
+        "settings.rpc_services.field.command",
+        "settings.rpc_services.field.startup_timeout",
+        "settings.rpc_services.field.enable",
+        "settings.rpc_services.field.service_type",
+        "settings.rpc_services.field.arguments",
+        "settings.rpc_services.field.env_vars",
+        "settings.rpc_services.field.default_command",
+        "settings.rpc_services.kind.driver",
+        "settings.rpc_services.kind.auth_provider",
+        "settings.rpc_services.action.delete",
+        "settings.rpc_services.action.update",
+        "settings.rpc_services.action.create",
+    ];
+
+    #[test]
+    fn rpc_services_keys_resolve_in_both_locales() {
+        for locale in ["en", "es"] {
+            for key in RPC_SERVICES_KEYS {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(
+                    !value.is_empty(),
+                    "key {key} resolved empty for locale {locale}"
+                );
+                assert_ne!(value, *key, "key {key} did not resolve for locale {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "key {key} fell back to the raw locale-qualified form for locale {locale}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn rpc_services_section_title_differs_between_locales() {
+        let english = dbflux_i18n::t!("settings.rpc_services.section_title", locale = "en");
+        let spanish = dbflux_i18n::t!("settings.rpc_services.section_title", locale = "es");
+
+        assert_eq!(english, "RPC Services");
+        assert_eq!(spanish, "Servicios RPC");
+        assert_ne!(english, spanish);
+    }
+
+    #[test]
+    fn rpc_services_kind_labels_resolve_for_driver_and_auth_provider() {
+        let driver_en = dbflux_i18n::t!("settings.rpc_services.kind.driver", locale = "en");
+        let auth_provider_en =
+            dbflux_i18n::t!("settings.rpc_services.kind.auth_provider", locale = "en");
+        let driver_es = dbflux_i18n::t!("settings.rpc_services.kind.driver", locale = "es");
+        let auth_provider_es =
+            dbflux_i18n::t!("settings.rpc_services.kind.auth_provider", locale = "es");
+
+        assert_eq!(driver_en, "Driver");
+        assert_eq!(auth_provider_en, "Auth Provider");
+        assert_eq!(driver_es, "Driver");
+        assert_eq!(auth_provider_es, "Proveedor de autenticación");
+        assert_ne!(auth_provider_en, auth_provider_es);
+    }
+
+    #[test]
+    fn rpc_services_duplicate_socket_id_message_embeds_socket_id() {
+        let english = dbflux_i18n::t!(
+            "settings.rpc_services.error.duplicate_socket_id",
+            id = "svc.sock"
+        );
+
+        assert!(english.contains("svc.sock"));
     }
 }

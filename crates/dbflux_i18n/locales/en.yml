@@ -2123,6 +2123,36 @@ settings:
       pub_sub: Pub/Sub
       graph_traversal: Graph Traversal
       edge_properties: Edge Properties
+  rpc_services:
+    section_title: RPC Services
+    section_description: Manage configured RPC services. Changes require restart.
+    empty: No RPC services configured
+    edit_title: Edit RPC Service
+    new_title: New RPC Service
+    error:
+      socket_id_required: Socket ID is required
+      timeout_invalid: Timeout must be a valid number (milliseconds)
+      duplicate_socket_id: "A service with socket ID '%{id}' already exists"
+    toast:
+      saved: RPC service saved. Restart required to apply changes.
+      deleted: RPC service deleted. Restart required to apply changes.
+    field:
+      disabled: Disabled
+      socket_id: Socket ID
+      command: Command
+      startup_timeout: Startup Timeout (ms)
+      enable: Enable this service
+      service_type: Service Type
+      arguments: Arguments
+      env_vars: Environment Variables
+      default_command: (default)
+    kind:
+      driver: Driver
+      auth_provider: Auth Provider
+    action:
+      delete: Delete
+      update: Update
+      create: Create
   nav:
     general_group: General
     general: General
