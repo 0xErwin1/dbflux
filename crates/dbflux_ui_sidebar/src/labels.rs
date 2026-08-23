@@ -1,6 +1,6 @@
 //! Translated label helpers for sidebar chrome (tabs, footer, tree folders).
 
-use dbflux_core::DatabaseCategory;
+use dbflux_core::{DatabaseCategory, RelationKind};
 
 /// Translated label for a schema-tree container folder, e.g. `"Tables (12)"`.
 pub(crate) fn container_folder_label(category: DatabaseCategory, count: usize) -> String {
@@ -114,6 +114,106 @@ pub(crate) fn node_loading_label(name: &str) -> String {
 /// `"Error: access denied — click to retry"`.
 pub(crate) fn error_retry_label(error: &str) -> String {
     dbflux_i18n::t!("sidebar.tree.status.error_retry", error = error)
+}
+
+/// Translated label for the table-dependents folder, e.g. `"Used by 1
+/// object"` or `"Used by 3 objects"`.
+pub(crate) fn used_by_label(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!("sidebar.tree.status.used_by_objects.one")
+    } else {
+        dbflux_i18n::t!("sidebar.tree.status.used_by_objects.many", count = count)
+    }
+}
+
+/// Translated kind suffix for a table-dependents child row, e.g. `"orders_v
+/// (View)"`. `Trigger` intentionally stays untranslated in every locale.
+pub(crate) fn dependent_kind_label(kind: &RelationKind) -> String {
+    match kind {
+        RelationKind::View => dbflux_i18n::t!("sidebar.tree.status.dependent_kind.view"),
+        RelationKind::MaterializedView => {
+            dbflux_i18n::t!("sidebar.tree.status.dependent_kind.materialized_view")
+        }
+        RelationKind::ForeignKeyChild => {
+            dbflux_i18n::t!("sidebar.tree.status.dependent_kind.foreign_key_child")
+        }
+        RelationKind::Trigger => dbflux_i18n::t!("sidebar.tree.status.dependent_kind.trigger"),
+    }
+}
+
+/// Translated label for a collection's Fields folder, e.g. `"Fields (5)"`.
+pub(crate) fn fields_folder_label(count: usize) -> String {
+    dbflux_i18n::t!("sidebar.tree.folder.fields", count = count)
+}
+
+/// Translated label for an Indexes folder (collection, table, or schema
+/// level), e.g. `"Indexes (2)"`.
+pub(crate) fn indexes_folder_label(count: usize) -> String {
+    dbflux_i18n::t!("sidebar.tree.folder.indexes", count = count)
+}
+
+/// Translated label for an Indexes folder while its contents are still
+/// loading, before a count is known.
+pub(crate) fn indexes_folder_label_plain() -> String {
+    dbflux_i18n::t!("sidebar.tree.folder.indexes_plain")
+}
+
+/// Translated label for a Foreign Keys folder (table or schema level), e.g.
+/// `"Foreign Keys (1)"`.
+pub(crate) fn foreign_keys_folder_label(count: usize) -> String {
+    dbflux_i18n::t!("sidebar.tree.folder.foreign_keys", count = count)
+}
+
+/// Translated label for a Foreign Keys folder while its contents are still
+/// loading, before a count is known.
+pub(crate) fn foreign_keys_folder_label_plain() -> String {
+    dbflux_i18n::t!("sidebar.tree.folder.foreign_keys_plain")
+}
+
+/// Translated label for a schema-level Routines folder, e.g. `"Routines
+/// (4)"`.
+pub(crate) fn routines_folder_label(count: usize) -> String {
+    dbflux_i18n::t!("sidebar.tree.folder.routines", count = count)
+}
+
+/// Translated label for a Routines folder while its contents are still
+/// loading, before a count is known.
+pub(crate) fn routines_folder_label_plain() -> String {
+    dbflux_i18n::t!("sidebar.tree.folder.routines_plain")
+}
+
+/// Translated label for a table's Columns folder, e.g. `"Columns (6)"`.
+pub(crate) fn columns_folder_label(count: usize) -> String {
+    dbflux_i18n::t!("sidebar.tree.folder.columns", count = count)
+}
+
+/// Translated label for a table's Constraints folder, e.g. `"Constraints
+/// (2)"`.
+pub(crate) fn constraints_folder_label(count: usize) -> String {
+    dbflux_i18n::t!("sidebar.tree.folder.constraints", count = count)
+}
+
+/// Translated label for a schema-level Data Types folder, e.g. `"Data Types
+/// (3)"`.
+pub(crate) fn data_types_folder_label(count: usize) -> String {
+    dbflux_i18n::t!("sidebar.tree.folder.data_types", count = count)
+}
+
+/// Translated label for a Data Types folder while its contents are still
+/// loading, before a count is known.
+pub(crate) fn data_types_folder_label_plain() -> String {
+    dbflux_i18n::t!("sidebar.tree.folder.data_types_plain")
+}
+
+/// Translated label for a schema-level Views folder, e.g. `"Views (2)"`.
+pub(crate) fn views_folder_label(count: usize) -> String {
+    dbflux_i18n::t!("sidebar.tree.folder.views", count = count)
+}
+
+/// Translated label for a table's Storage folder (driver-supplied storage
+/// hints such as distribution and sort keys), e.g. `"Storage (3)"`.
+pub(crate) fn storage_folder_label(count: usize) -> String {
+    dbflux_i18n::t!("sidebar.tree.folder.storage", count = count)
 }
 
 #[cfg(test)]
@@ -402,6 +502,55 @@ mod tests {
         assert_eq!(
             label,
             dbflux_i18n::t!("sidebar.tree.status.error_retry", error = "access denied")
+        );
+    }
+
+    #[test]
+    fn used_by_label_one_vs_many() {
+        let singular = super::used_by_label(1);
+        let plural = super::used_by_label(3);
+
+        assert_eq!(
+            singular,
+            dbflux_i18n::t!("sidebar.tree.status.used_by_objects.one")
+        );
+        assert_eq!(
+            plural,
+            dbflux_i18n::t!("sidebar.tree.status.used_by_objects.many", count = 3)
+        );
+        assert!(plural.contains('3'));
+        assert_ne!(singular, plural);
+    }
+
+    #[test]
+    fn used_by_label_diverges_between_locales() {
+        let english_template =
+            dbflux_i18n::t!("sidebar.tree.status.used_by_objects.many", locale = "en");
+        let spanish_template =
+            dbflux_i18n::t!("sidebar.tree.status.used_by_objects.many", locale = "es");
+
+        assert_ne!(english_template, spanish_template);
+    }
+
+    #[test]
+    fn dependent_kind_label_covers_every_relation_kind() {
+        use dbflux_core::RelationKind;
+
+        assert_eq!(
+            super::dependent_kind_label(&RelationKind::View),
+            dbflux_i18n::t!("sidebar.tree.status.dependent_kind.view")
+        );
+        assert_eq!(
+            super::dependent_kind_label(&RelationKind::MaterializedView),
+            dbflux_i18n::t!("sidebar.tree.status.dependent_kind.materialized_view")
+        );
+        assert_eq!(
+            super::dependent_kind_label(&RelationKind::ForeignKeyChild),
+            dbflux_i18n::t!("sidebar.tree.status.dependent_kind.foreign_key_child")
+        );
+        assert_eq!(
+            super::dependent_kind_label(&RelationKind::Trigger),
+            dbflux_i18n::t!("sidebar.tree.status.dependent_kind.trigger")
         );
     }
 }
