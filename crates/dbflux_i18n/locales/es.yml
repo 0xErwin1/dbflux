@@ -629,11 +629,52 @@ settings:
       unreadable:
         title: Filas de hooks ilegibles
         hint: Ilegible — no se puede editar
+    form:
+      title:
+        edit: Editar hook
+        new: Nuevo hook
+      id: ID del hook
+      kind: Tipo
+      command: Comando
+      args: Argumentos
+      args_hint: Argumentos separados por espacios
+      language: Lenguaje
+      file_path: Ruta del archivo
+      file_path_hint: Los scripts se editan en el editor de la app y se guardan en hooks/ de forma predeterminada
+      open_in_app: Abrir en la app
+      open_in_editor: Abrir en el editor
+      interpreter: Intérprete
+      interpreter_hint: "Déjalo vacío para %{default_interpreter}"
+      interpreter_auto: "automático (%{value})"
+      interpreter_unsupported: No compatible en esta plataforma
+      capabilities: Capacidades
+      capability:
+        logging: Registro
+        env_read: Lectura de entorno
+        connection_metadata: Metadatos de conexión
+        process_run: Ejecución de procesos controlada
+        process_run_hint: "Habilita `dbflux.process.run(...)` sin exponer la biblioteca `os` de Lua"
+      execution_mode: Modo de ejecución
+      execution_mode_hint: El modo desacoplado se ejecuta en segundo plano y no bloquea la conexión ni la desconexión
+      ready_signal: Señal de listo
+      ready_signal_hint: DBFlux espera este texto en la salida del hook antes de continuar. Obligatorio para hooks de preconexión desacoplados.
+      cwd: Directorio de trabajo
+      env: Entorno
+      env_hint: Pares CLAVE=valor separados por comas
+      env_denylist: Lista de exclusión de entorno
+      env_denylist_hint: Nombres de variables separados por comas a excluir del entorno heredado
+      timeout: Tiempo de espera (ms)
+      resolved_command: Comando resuelto
+      enabled: Habilitado
+      inherit_env: Heredar entorno del proceso padre
+      on_failure: Ante un error
+      preview_placeholder: "<ingresa un comando>"
     status:
       unsupported_platform: No compatible en esta plataforma
       script_missing: El archivo del script aún no existe
       interpreter_missing: "No se encontró el intérprete '%{interpreter}' en PATH"
       language_unsupported: El lenguaje seleccionado no es compatible en esta plataforma
+      lua_process_run_warning: "process.run de Lua está habilitado: este hook puede ejecutar programas externos con tus permisos de usuario. La lista de programas permitidos es un filtro de conveniencia, no un límite de aislamiento de seguridad — un programa anterior en $PATH puede sustituirse bajo el mismo nombre."
     error:
       open_script: "No se pudo abrir el script: %{error}"
       command_not_editable: Los comandos no se abren en el editor de scripts
