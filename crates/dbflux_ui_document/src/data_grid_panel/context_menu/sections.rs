@@ -39,7 +39,7 @@ impl DataGridPanel {
 
             let is_selected = *visual_index == selected_index;
             let is_danger = item.is_danger;
-            let label = item.label;
+            let label = item.label.clone();
             let icon = item.icon;
             let current_index = *visual_index;
 
@@ -51,7 +51,7 @@ impl DataGridPanel {
 
             menu_items.push(
                 div()
-                    .id(SharedString::from(label))
+                    .id(label.clone())
                     .flex()
                     .items_center()
                     .gap(Spacing::SM)

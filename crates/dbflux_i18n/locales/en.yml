@@ -137,6 +137,37 @@ document:
           field: field
           host: host
           region: region
+    context_menu:
+      item:
+        copy: Copy
+        view_document: View Document
+        add_document: Add Document
+        duplicate_document: Duplicate Document
+        delete_document: Delete Document
+        paste: Paste
+        edit: Edit
+        edit_in_modal: Edit in Modal
+        set_default: Set to Default
+        set_null: Set to NULL
+        add_row: Add Row
+        inspect_row: Inspect Row
+        duplicate_row: Duplicate Row
+        delete_row: Delete Row
+        chart_this_query: Chart this query
+      submenu:
+        copy_query:
+          sql: Copy as SQL
+          query: Copy as Query
+          command: Copy as Command
+      delete_confirm:
+        title:
+          one: Delete row?
+          many: "Delete %{count} rows?"
+        description:
+          one: This action cannot be undone.
+          many: "%{count} rows will be permanently deleted. This cannot be undone."
+        cancel: Cancel
+        delete: Delete
     grid:
       edit_bar:
         clean: No unsaved changes

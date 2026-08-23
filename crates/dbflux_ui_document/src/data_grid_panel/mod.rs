@@ -364,7 +364,7 @@ struct TableContextMenu {
 
 /// A single item in the context menu.
 struct ContextMenuItem {
-    label: &'static str,
+    label: SharedString,
     action: Option<ContextMenuAction>,
     icon: Option<dbflux_components::icons::AppIcon>,
     is_separator: bool,

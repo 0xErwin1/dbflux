@@ -329,16 +329,62 @@ pub(crate) fn bulk_delete_success_label(kind: MutationItemKind, count: usize) ->
     dbflux_i18n::t!(key, count = count)
 }
 
+/// Label for the context menu's "Copy as ..." submenu trigger, keyed by the
+/// active connection's query language.
+///
+/// `None` covers both an unresolved connection and a `QueryResult` source
+/// (which has no connection to query), and shares the generic "Copy as
+/// Query" bucket with any query language that has no dedicated wording.
+pub(crate) fn copy_query_language_label(language: Option<dbflux_core::QueryLanguage>) -> String {
+    match language {
+        Some(dbflux_core::QueryLanguage::Sql) => {
+            dbflux_i18n::t!("document.data.context_menu.submenu.copy_query.sql")
+        }
+        Some(dbflux_core::QueryLanguage::MongoQuery) => {
+            dbflux_i18n::t!("document.data.context_menu.submenu.copy_query.query")
+        }
+        Some(dbflux_core::QueryLanguage::RedisCommands) => {
+            dbflux_i18n::t!("document.data.context_menu.submenu.copy_query.command")
+        }
+        _ => dbflux_i18n::t!("document.data.context_menu.submenu.copy_query.query"),
+    }
+}
+
+/// Title and body copy for the row-delete confirmation modal, with the
+/// affected row count interpolated.
+///
+/// Uses the singular catalog bucket only for exactly one row; every other
+/// count uses the plural bucket.
+pub(crate) fn delete_confirm_copy(count: usize) -> (String, String) {
+    if count == 1 {
+        (
+            dbflux_i18n::t!("document.data.context_menu.delete_confirm.title.one"),
+            dbflux_i18n::t!("document.data.context_menu.delete_confirm.description.one"),
+        )
+    } else {
+        (
+            dbflux_i18n::t!(
+                "document.data.context_menu.delete_confirm.title.many",
+                count = count
+            ),
+            dbflux_i18n::t!(
+                "document.data.context_menu.delete_confirm.description.many",
+                count = count
+            ),
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         MutationItemKind, bulk_delete_success_label, chart_degraded_copy, chart_dock_shape_label,
-        chart_rail_why_text, delete_rows_label, partial_delete_label, pending_change_count_label,
-        pending_edits_summary, refresh_policy_label, row_count_label, unsaved_changes_label,
-        update_columns_label,
+        chart_rail_why_text, copy_query_language_label, delete_confirm_copy, delete_rows_label,
+        partial_delete_label, pending_change_count_label, pending_edits_summary,
+        refresh_policy_label, row_count_label, unsaved_changes_label, update_columns_label,
     };
     use dbflux_components::chart::ChartDetection;
-    use dbflux_core::RefreshPolicy;
+    use dbflux_core::{QueryLanguage, RefreshPolicy};
 
     #[test]
     fn unsaved_changes_label_zero_one_many() {
@@ -682,6 +728,93 @@ mod tests {
         );
         let es = dbflux_i18n::t!(
             "document.data.mutation.confirm.delete.summary.many",
+            locale = "es"
+        );
+
+        assert_ne!(en, es);
+    }
+
+    #[test]
+    fn copy_query_submenu_label_covers_all_variants() {
+        assert_eq!(
+            copy_query_language_label(Some(QueryLanguage::Sql)),
+            "Copy as SQL"
+        );
+        assert_eq!(
+            copy_query_language_label(Some(QueryLanguage::MongoQuery)),
+            "Copy as Query"
+        );
+        assert_eq!(
+            copy_query_language_label(Some(QueryLanguage::RedisCommands)),
+            "Copy as Command"
+        );
+        assert_eq!(copy_query_language_label(None), "Copy as Query");
+    }
+
+    #[test]
+    fn delete_confirm_copy_singular_and_plural() {
+        let (one_title, one_body) = delete_confirm_copy(1);
+        let (many_title, many_body) = delete_confirm_copy(3);
+
+        assert_eq!(one_title, "Delete row?");
+        assert_eq!(one_body, "This action cannot be undone.");
+        assert_eq!(many_title, "Delete 3 rows?");
+        assert!(many_body.contains('3'));
+        assert_ne!(one_title, many_title);
+    }
+
+    #[test]
+    fn context_menu_keys_resolve_in_both_locales() {
+        let keys = [
+            "document.data.context_menu.item.copy",
+            "document.data.context_menu.item.view_document",
+            "document.data.context_menu.item.add_document",
+            "document.data.context_menu.item.duplicate_document",
+            "document.data.context_menu.item.delete_document",
+            "document.data.context_menu.item.paste",
+            "document.data.context_menu.item.edit",
+            "document.data.context_menu.item.edit_in_modal",
+            "document.data.context_menu.item.set_default",
+            "document.data.context_menu.item.set_null",
+            "document.data.context_menu.item.add_row",
+            "document.data.context_menu.item.inspect_row",
+            "document.data.context_menu.item.duplicate_row",
+            "document.data.context_menu.item.delete_row",
+            "document.data.context_menu.item.chart_this_query",
+            "document.data.context_menu.submenu.copy_query.sql",
+            "document.data.context_menu.submenu.copy_query.query",
+            "document.data.context_menu.submenu.copy_query.command",
+            "document.data.context_menu.delete_confirm.title.one",
+            "document.data.context_menu.delete_confirm.title.many",
+            "document.data.context_menu.delete_confirm.description.one",
+            "document.data.context_menu.delete_confirm.description.many",
+            "document.data.context_menu.delete_confirm.cancel",
+            "document.data.context_menu.delete_confirm.delete",
+        ];
+
+        for key in keys {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn context_menu_delete_confirm_title_differs_between_locales() {
+        let en = dbflux_i18n::t!(
+            "document.data.context_menu.delete_confirm.title.many",
+            locale = "en"
+        );
+        let es = dbflux_i18n::t!(
+            "document.data.context_menu.delete_confirm.title.many",
             locale = "es"
         );
 

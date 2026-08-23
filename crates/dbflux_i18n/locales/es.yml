@@ -137,6 +137,37 @@ document:
           field: campo
           host: host
           region: región
+    context_menu:
+      item:
+        copy: Copiar
+        view_document: Ver documento
+        add_document: Agregar documento
+        duplicate_document: Duplicar documento
+        delete_document: Eliminar documento
+        paste: Pegar
+        edit: Editar
+        edit_in_modal: Editar en modal
+        set_default: Establecer valor predeterminado
+        set_null: Establecer NULL
+        add_row: Agregar fila
+        inspect_row: Inspeccionar fila
+        duplicate_row: Duplicar fila
+        delete_row: Eliminar fila
+        chart_this_query: Graficar esta consulta
+      submenu:
+        copy_query:
+          sql: Copiar como SQL
+          query: Copiar como consulta
+          command: Copiar como comando
+      delete_confirm:
+        title:
+          one: "¿Eliminar fila?"
+          many: "¿Eliminar %{count} filas?"
+        description:
+          one: Esta acción no se puede deshacer.
+          many: "%{count} filas se eliminarán de forma permanente. Esta acción no se puede deshacer."
+        cancel: Cancelar
+        delete: Eliminar
     grid:
       edit_bar:
         clean: Sin cambios pendientes
