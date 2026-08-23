@@ -5,7 +5,12 @@ use dbflux_components::tokens::SyntaxColors;
 use dbflux_components::typography::{Body, MonoCaption};
 use gpui::FontWeight;
 
-fn sidebar_tab_text(label: &'static str, active: bool, focused: bool, color: Hsla) -> MonoCaption {
+fn sidebar_tab_text(
+    label: impl Into<SharedString>,
+    active: bool,
+    focused: bool,
+    color: Hsla,
+) -> MonoCaption {
     let weight = if active && focused {
         FontWeight::BOLD
     } else if active {
@@ -79,7 +84,7 @@ impl Sidebar {
                                 });
                             })
                             .child(sidebar_tab_text(
-                                "CONNECTIONS",
+                                dbflux_i18n::t!("sidebar.tabs.connections"),
                                 active_tab == SidebarTab::Connections,
                                 focused,
                                 tab_text_color(active_tab == SidebarTab::Connections),
@@ -100,7 +105,7 @@ impl Sidebar {
                                 });
                             })
                             .child(sidebar_tab_text(
-                                "SCRIPTS",
+                                dbflux_i18n::t!("sidebar.tabs.scripts"),
                                 active_tab == SidebarTab::Scripts,
                                 focused,
                                 tab_text_color(active_tab == SidebarTab::Scripts),
@@ -146,7 +151,7 @@ impl Sidebar {
                         .items_center()
                         .justify_center()
                         .child(
-                            Text::body("Press x to confirm delete, ESC to cancel")
+                            Text::body(dbflux_i18n::t!("sidebar.confirm.delete_hint"))
                                 .font_size(FontSizes::SM),
                         ),
                 )
@@ -228,8 +233,12 @@ impl Sidebar {
                         .justify_center()
                         .gap(Spacing::SM)
                         .px(Spacing::MD)
-                        .child(Body::new("No connections yet").muted(cx))
-                        .child(Body::new("Use + to add a new connection").muted(cx)),
+                        .child(
+                            Body::new(dbflux_i18n::t!("sidebar.empty.connections_title")).muted(cx),
+                        )
+                        .child(
+                            Body::new(dbflux_i18n::t!("sidebar.empty.connections_hint")).muted(cx),
+                        ),
                 )
             })
     }
@@ -326,11 +335,8 @@ impl Sidebar {
                         .justify_center()
                         .gap(Spacing::SM)
                         .px(Spacing::MD)
-                        .child(Body::new("No scripts yet").muted(cx))
-                        .child(
-                            Body::new("Use + to create a new script or import an existing file")
-                                .muted(cx),
-                        ),
+                        .child(Body::new(dbflux_i18n::t!("sidebar.empty.scripts_title")).muted(cx))
+                        .child(Body::new(dbflux_i18n::t!("sidebar.empty.scripts_hint")).muted(cx)),
                 )
             })
     }

@@ -189,6 +189,29 @@ settings:
       button: Save
       error: "Failed to save general settings: %{error}"
       success: Settings saved. Some changes apply on next startup.
+sidebar:
+  confirm:
+    delete_hint: Press x to confirm delete, ESC to cancel
+  empty:
+    connections_title: No connections yet
+    connections_hint: Use + to add a new connection
+    scripts_title: No scripts yet
+    scripts_hint: Use + to create a new script or import an existing file
+  status:
+    connection_summary: "%{connected} connected · %{idle} idle"
+  tabs:
+    connections: CONNECTIONS
+    scripts: SCRIPTS
+  tree:
+    container:
+      relational: Tables (%{count})
+      document: Collections (%{count})
+      key_value: Keys (%{count})
+      graph: Nodes (%{count})
+      time_series: Measurements (%{count})
+      wide_column: Tables (%{count})
+      log_stream: Log Groups (%{count})
+      object_storage: Buckets (%{count})
 sql_preview:
   title:
     sql: SQL Preview

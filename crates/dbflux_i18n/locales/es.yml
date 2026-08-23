@@ -189,6 +189,29 @@ settings:
       button: Guardar
       error: "No se pudo guardar la configuración general: %{error}"
       success: Configuración guardada. Algunos cambios se aplican al reiniciar.
+sidebar:
+  confirm:
+    delete_hint: Presiona x para confirmar la eliminación, ESC para cancelar
+  empty:
+    connections_title: Aún no hay conexiones
+    connections_hint: Usa + para agregar una nueva conexión
+    scripts_title: Aún no hay scripts
+    scripts_hint: Usa + para crear un script nuevo o importar un archivo existente
+  status:
+    connection_summary: "%{connected} conectadas · %{idle} inactivas"
+  tabs:
+    connections: CONEXIONES
+    scripts: SCRIPTS
+  tree:
+    container:
+      relational: Tablas (%{count})
+      document: Colecciones (%{count})
+      key_value: Claves (%{count})
+      graph: Nodos (%{count})
+      time_series: Mediciones (%{count})
+      wide_column: Tablas (%{count})
+      log_stream: Log Groups (%{count})
+      object_storage: Buckets (%{count})
 sql_preview:
   title:
     sql: Vista previa de SQL
