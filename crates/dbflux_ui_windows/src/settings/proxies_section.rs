@@ -5,6 +5,7 @@ use super::layout;
 use super::proxies::ProxyFormNav;
 use super::section_trait::{SectionFocusEvent, SectionPortabilityEvent};
 use crate::connection_manager::ExportTarget;
+use crate::labels::proxies_delete_body;
 use dbflux_components::controls::Button;
 use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
 use dbflux_components::icons::AppIcon;
@@ -106,7 +107,10 @@ impl ProxiesSection {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let input_proxy_name = cx.new(|cx| InputState::new(window, cx).placeholder("Proxy name"));
+        let input_proxy_name = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(dbflux_i18n::t!("settings.proxies.placeholder_name"))
+        });
         let input_proxy_host =
             cx.new(|cx| InputState::new(window, cx).placeholder("proxy.example.com"));
         let input_proxy_port = cx.new(|cx| {
@@ -114,10 +118,13 @@ impl ProxiesSection {
                 .placeholder("8080")
                 .default_value("8080")
         });
-        let input_proxy_username = cx.new(|cx| InputState::new(window, cx).placeholder("username"));
+        let input_proxy_username = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(dbflux_i18n::t!("settings.proxies.placeholder_username"))
+        });
         let input_proxy_password = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("password")
+                .placeholder(dbflux_i18n::t!("settings.proxies.placeholder_password"))
                 .masked(true)
         });
         let input_proxy_no_proxy =
@@ -299,22 +306,37 @@ impl ProxiesSection {
         let current_kind = self.proxy_kind;
 
         let kinds = [
-            (ProxyFormField::KindHttp, ProxyKind::Http, "HTTP"),
-            (ProxyFormField::KindHttps, ProxyKind::Https, "HTTPS"),
-            (ProxyFormField::KindSocks5, ProxyKind::Socks5, "SOCKS5"),
+            (
+                ProxyFormField::KindHttp,
+                ProxyKind::Http,
+                dbflux_i18n::t!("settings.proxies.kind.http"),
+            ),
+            (
+                ProxyFormField::KindHttps,
+                ProxyKind::Https,
+                dbflux_i18n::t!("settings.proxies.kind.https"),
+            ),
+            (
+                ProxyFormField::KindSocks5,
+                ProxyKind::Socks5,
+                dbflux_i18n::t!("settings.proxies.kind.socks5"),
+            ),
         ];
 
         div()
             .flex()
             .flex_col()
             .gap_2()
-            .child(Label::new("Protocol"))
+            .child(Label::new(dbflux_i18n::t!(
+                "settings.proxies.field.protocol"
+            )))
             .child(div().flex().gap_4().children(kinds.into_iter().map(
                 |(form_field, kind, label)| {
                     let is_focused = is_form_focused && current_field == form_field;
+                    let item_id = format!("proxy-kind-{}", label);
 
                     div()
-                        .id(SharedString::from(format!("proxy-kind-{}", label)))
+                        .id(SharedString::from(item_id))
                         .flex()
                         .items_center()
                         .gap_2()
@@ -364,7 +386,9 @@ impl ProxiesSection {
             .flex()
             .flex_col()
             .gap_2()
-            .child(Label::new("Authentication"))
+            .child(Label::new(dbflux_i18n::t!(
+                "settings.proxies.field.authentication"
+            )))
             .child(
                 div()
                     .flex()
@@ -395,7 +419,11 @@ impl ProxiesSection {
                                 primary,
                                 border,
                             ))
-                            .child(div().text_sm().child("None")),
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .child(dbflux_i18n::t!("settings.proxies.auth.none")),
+                            ),
                     )
                     .child(
                         div()
@@ -423,7 +451,11 @@ impl ProxiesSection {
                                 primary,
                                 border,
                             ))
-                            .child(div().text_sm().child("Basic")),
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .child(dbflux_i18n::t!("settings.proxies.auth.basic")),
+                            ),
                     ),
             )
     }
@@ -465,7 +497,11 @@ impl ProxiesSection {
                                 cx.notify();
                             })),
                     )
-                    .child(div().text_sm().child("Save")),
+                    .child(
+                        div()
+                            .text_sm()
+                            .child(dbflux_i18n::t!("settings.proxies.action.save")),
+                    ),
             )
         } else {
             None
@@ -483,7 +519,7 @@ impl ProxiesSection {
             .flex_col()
             .gap_3()
             .child(self.render_proxy_field(
-                "Username",
+                &dbflux_i18n::t!("settings.proxies.field.username"),
                 &self.input_proxy_username,
                 is_form_focused && current_field == ProxyFormField::Username,
                 primary,
@@ -502,7 +538,7 @@ impl ProxiesSection {
                             .items_end()
                             .gap_1()
                             .child(div().flex_1().child(self.render_proxy_field(
-                                "Password",
+                                &dbflux_i18n::t!("settings.proxies.field.password"),
                                 &self.input_proxy_password,
                                 is_password_focused,
                                 primary,
@@ -550,7 +586,7 @@ impl ProxiesSection {
                                 transparent_black()
                             })
                             .child(
-                                Button::new("new-proxy", "New Proxy")
+                                Button::new("new-proxy", dbflux_i18n::t!("settings.proxies.new"))
                                     .icon(Icon::new(AppIcon::Plus))
                                     .small()
                                     .w_full()
@@ -564,14 +600,17 @@ impl ProxiesSection {
                             ),
                     )
                     .child(
-                        Button::new("import-proxy", "Import\u{2026}")
-                            .icon(Icon::new(AppIcon::Download))
-                            .small()
-                            .ghost()
-                            .w_full()
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.request_import(cx);
-                            })),
+                        Button::new(
+                            "import-proxy",
+                            dbflux_i18n::t!("settings.proxies.action.import"),
+                        )
+                        .icon(Icon::new(AppIcon::Download))
+                        .small()
+                        .ghost()
+                        .w_full()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.request_import(cx);
+                        })),
                     ),
             )
             .child(
@@ -584,9 +623,10 @@ impl ProxiesSection {
                     .gap_1()
                     .when(proxies.is_empty(), |root: Div| {
                         root.child(
-                            div()
-                                .p_4()
-                                .child(Body::new("No saved proxies").color(theme.muted_foreground)),
+                            div().p_4().child(
+                                Body::new(dbflux_i18n::t!("settings.proxies.empty"))
+                                    .color(theme.muted_foreground),
+                            ),
                         )
                     })
                     .children(proxies.iter().enumerate().map(|(idx, proxy)| {
@@ -641,7 +681,9 @@ impl ProxiesSection {
                                                     .color(theme.muted_foreground),
                                             )
                                             .when(!proxy.enabled, |root| {
-                                                root.child(MonoCaption::new("off"))
+                                                root.child(MonoCaption::new(dbflux_i18n::t!(
+                                                    "settings.proxies.status.disabled_caption"
+                                                )))
                                             }),
                                     )
                                     .child(
@@ -672,13 +714,16 @@ impl ProxiesSection {
         let field = self.proxy_form_field;
 
         layout::sticky_form_shell(
-            PanelTitle::new(layout::editor_panel_title("Proxy", editing_id.is_some())),
+            PanelTitle::new(layout::editor_panel_title(
+                &dbflux_i18n::t!("settings.proxies.panel_title"),
+                editing_id.is_some(),
+            )),
             div()
                 .flex()
                 .flex_col()
                 .gap_4()
                 .child(self.render_proxy_field(
-                    "Name",
+                    &dbflux_i18n::t!("settings.proxies.field.name"),
                     &self.input_proxy_name,
                     is_form_focused && field == ProxyFormField::Name,
                     primary,
@@ -691,7 +736,7 @@ impl ProxiesSection {
                         .flex()
                         .gap_3()
                         .child(div().flex_1().child(self.render_proxy_field(
-                            "Host",
+                            &dbflux_i18n::t!("settings.proxies.field.host"),
                             &self.input_proxy_host,
                             is_form_focused && field == ProxyFormField::Host,
                             primary,
@@ -699,7 +744,7 @@ impl ProxiesSection {
                             cx,
                         )))
                         .child(div().w(px(80.0)).child(self.render_proxy_field(
-                            "Port",
+                            &dbflux_i18n::t!("settings.proxies.field.port"),
                             &self.input_proxy_port,
                             is_form_focused && field == ProxyFormField::Port,
                             primary,
@@ -725,7 +770,7 @@ impl ProxiesSection {
                         .flex_col()
                         .gap_1()
                         .child(self.render_proxy_field(
-                            "No Proxy",
+                            &dbflux_i18n::t!("settings.proxies.field.no_proxy"),
                             &self.input_proxy_no_proxy,
                             is_form_focused && field == ProxyFormField::NoProxy,
                             primary,
@@ -733,7 +778,7 @@ impl ProxiesSection {
                             cx,
                         ))
                         .child(
-                            Body::new("Comma-separated hosts/CIDRs to bypass the proxy")
+                            Body::new(dbflux_i18n::t!("settings.proxies.hint.no_proxy_list"))
                                 .color(theme.muted_foreground),
                         ),
                 )
@@ -761,7 +806,7 @@ impl ProxiesSection {
                                     cx.notify();
                                 })),
                         )
-                        .child(Body::new("Enabled"))
+                        .child(Body::new(dbflux_i18n::t!("settings.proxies.field.enabled")))
                 }),
             None,
             &theme,
@@ -787,24 +832,30 @@ impl ProxiesSection {
                 root.child(layout::footer_action_frame(
                     is_form_focused && field == ProxyFormField::ExportButton,
                     primary,
-                    Button::new("export-proxy", "Export")
-                        .small()
-                        .ghost()
-                        .w_full()
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.request_export(cx);
-                        })),
+                    Button::new(
+                        "export-proxy",
+                        dbflux_i18n::t!("settings.proxies.action.export"),
+                    )
+                    .small()
+                    .ghost()
+                    .w_full()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.request_export(cx);
+                    })),
                 ))
                 .child(layout::footer_action_frame(
                     is_form_focused && field == ProxyFormField::DeleteButton,
                     primary,
-                    Button::new("delete-proxy", "Delete")
-                        .small()
-                        .danger()
-                        .w_full()
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.request_delete_proxy(proxy_id, cx);
-                        })),
+                    Button::new(
+                        "delete-proxy",
+                        dbflux_i18n::t!("settings.proxies.action.delete"),
+                    )
+                    .small()
+                    .danger()
+                    .w_full()
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.request_delete_proxy(proxy_id, cx);
+                    })),
                 ))
             })
             .child(layout::footer_action_frame(
@@ -813,9 +864,9 @@ impl ProxiesSection {
                 Button::new(
                     "save-proxy",
                     if editing_id.is_some() {
-                        "Update"
+                        dbflux_i18n::t!("settings.proxies.action.update")
                     } else {
-                        "Create"
+                        dbflux_i18n::t!("settings.proxies.action.create")
                     },
                 )
                 .small()
@@ -1026,73 +1077,168 @@ impl Render for ProxiesSection {
 
         layout::split_section_shell(
             dbflux_components::composites::section_header(
-                "Proxy Profiles",
-                "Manage proxy configurations for database connections",
+                dbflux_i18n::t!("settings.proxies.section_title"),
+                dbflux_i18n::t!("settings.proxies.section_description"),
                 cx,
             ),
             self.render_proxy_list(&proxies, editing_id, cx),
             self.render_proxy_form(editing_id, keyring_available, cx),
         )
-            .when(show_proxy_delete, |element| {
-                let entity = cx.entity().clone();
-                let entity_cancel = entity.clone();
+        .when(show_proxy_delete, |element| {
+            let entity = cx.entity().clone();
+            let entity_cancel = entity.clone();
+            let body = proxies_delete_body(&proxy_delete_name, proxy_affected_count);
 
-                let body = if proxy_affected_count > 0 {
-                    format!(
-                        "Are you sure you want to delete \"{}\"? {} connection{} using this proxy will be updated.",
-                        proxy_delete_name,
-                        proxy_affected_count,
-                        if proxy_affected_count == 1 { "" } else { "s" }
-                    )
-                } else {
-                    format!("Are you sure you want to delete \"{}\"?", proxy_delete_name)
-                };
+            element.child(
+                Dialog::new(window, cx)
+                    .title(dbflux_i18n::t!("settings.proxies.delete_dialog_title"))
+                    .confirm()
+                    .on_ok(move |_, _, cx| {
+                        entity.update(cx, |section, cx| {
+                            section.confirm_delete_proxy(cx);
+                        });
+                        true
+                    })
+                    .on_cancel(move |_, _, cx| {
+                        entity_cancel.update(cx, |section, cx| {
+                            section.cancel_delete_proxy(cx);
+                        });
+                        true
+                    })
+                    .child(div().text_sm().child(body)),
+            )
+        })
+        .when(show_discard_confirm, |element| {
+            let entity = cx.entity().clone();
+            let entity_cancel = entity.clone();
 
-                element.child(
-                    Dialog::new(window, cx)
-                        .title("Delete Proxy")
-                        .confirm()
-                        .on_ok(move |_, _, cx| {
-                            entity.update(cx, |section, cx| {
-                                section.confirm_delete_proxy(cx);
-                            });
-                            true
-                        })
-                        .on_cancel(move |_, _, cx| {
-                            entity_cancel.update(cx, |section, cx| {
-                                section.cancel_delete_proxy(cx);
-                            });
-                            true
-                        })
-                        .child(div().text_sm().child(body)),
-                )
-            })
-            .when(show_discard_confirm, |element| {
-                let entity = cx.entity().clone();
-                let entity_cancel = entity.clone();
+            element.child(
+                Dialog::new(window, cx)
+                    .title(dbflux_i18n::t!("settings.proxies.discard_dialog_title"))
+                    .confirm()
+                    .on_ok(move |_, window, cx| {
+                        entity.update(cx, |section, cx| {
+                            section.confirm_discard_changes(window, cx);
+                        });
+                        true
+                    })
+                    .on_cancel(move |_, _, cx| {
+                        entity_cancel.update(cx, |section, cx| {
+                            section.cancel_discard_changes(cx);
+                        });
+                        true
+                    })
+                    .child(
+                        div()
+                            .text_sm()
+                            .child(dbflux_i18n::t!("settings.proxies.discard_dialog.body")),
+                    ),
+            )
+        })
+    }
+}
 
-                element.child(
-                    Dialog::new(window, cx)
-                        .title("Discard Proxy Changes")
-                        .confirm()
-                        .on_ok(move |_, window, cx| {
-                            entity.update(cx, |section, cx| {
-                                section.confirm_discard_changes(window, cx);
-                            });
-                            true
-                        })
-                        .on_cancel(move |_, _, cx| {
-                            entity_cancel.update(cx, |section, cx| {
-                                section.cancel_discard_changes(cx);
-                            });
-                            true
-                        })
-                        .child(
-                            div()
-                                .text_sm()
-                                .child("You have unsaved proxy changes. Discard them?"),
-                        ),
-                )
-            })
+#[cfg(test)]
+mod tests {
+    const PROXIES_KEYS: &[&str] = &[
+        "settings.proxies.placeholder_name",
+        "settings.proxies.placeholder_username",
+        "settings.proxies.placeholder_password",
+        "settings.proxies.section_title",
+        "settings.proxies.section_description",
+        "settings.proxies.empty",
+        "settings.proxies.new",
+        "settings.proxies.panel_title",
+        "settings.proxies.kind.http",
+        "settings.proxies.kind.https",
+        "settings.proxies.kind.socks5",
+        "settings.proxies.field.name",
+        "settings.proxies.field.protocol",
+        "settings.proxies.field.authentication",
+        "settings.proxies.field.username",
+        "settings.proxies.field.password",
+        "settings.proxies.field.host",
+        "settings.proxies.field.port",
+        "settings.proxies.field.no_proxy",
+        "settings.proxies.field.enabled",
+        "settings.proxies.hint.no_proxy_list",
+        "settings.proxies.auth.none",
+        "settings.proxies.auth.basic",
+        "settings.proxies.status.disabled_caption",
+        "settings.proxies.action.save",
+        "settings.proxies.action.import",
+        "settings.proxies.action.export",
+        "settings.proxies.action.delete",
+        "settings.proxies.action.update",
+        "settings.proxies.action.create",
+        "settings.proxies.delete_dialog_title",
+        "settings.proxies.delete_dialog.body_none",
+        "settings.proxies.delete_dialog.body_one",
+        "settings.proxies.delete_dialog.body_many",
+        "settings.proxies.discard_dialog_title",
+        "settings.proxies.discard_dialog.body",
+    ];
+
+    #[test]
+    fn proxies_keys_resolve_in_both_locales() {
+        for locale in ["en", "es"] {
+            for key in PROXIES_KEYS {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(
+                    !value.is_empty(),
+                    "key {key} resolved empty for locale {locale}"
+                );
+                assert_ne!(value, *key, "key {key} did not resolve for locale {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "key {key} fell back to the raw locale-qualified form for locale {locale}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn proxies_section_title_differs_between_locales() {
+        let english = dbflux_i18n::t!("settings.proxies.section_title", locale = "en");
+        let spanish = dbflux_i18n::t!("settings.proxies.section_title", locale = "es");
+
+        assert_eq!(english, "Proxy Profiles");
+        assert_eq!(spanish, "Perfiles de proxy");
+        assert_ne!(english, spanish);
+    }
+
+    #[test]
+    fn proxies_kind_labels_stay_untranslated_protocol_names() {
+        for locale in ["en", "es"] {
+            assert_eq!(
+                dbflux_i18n::t!("settings.proxies.kind.http", locale = locale),
+                "HTTP"
+            );
+            assert_eq!(
+                dbflux_i18n::t!("settings.proxies.kind.https", locale = locale),
+                "HTTPS"
+            );
+            assert_eq!(
+                dbflux_i18n::t!("settings.proxies.kind.socks5", locale = locale),
+                "SOCKS5"
+            );
+        }
+    }
+
+    #[test]
+    fn proxies_auth_labels_differ_between_locales() {
+        let none_en = dbflux_i18n::t!("settings.proxies.auth.none", locale = "en");
+        let none_es = dbflux_i18n::t!("settings.proxies.auth.none", locale = "es");
+        let basic_en = dbflux_i18n::t!("settings.proxies.auth.basic", locale = "en");
+        let basic_es = dbflux_i18n::t!("settings.proxies.auth.basic", locale = "es");
+
+        assert_eq!(none_en, "None");
+        assert_eq!(none_es, "Ninguna");
+        assert_eq!(basic_en, "Basic");
+        assert_eq!(basic_es, "Básica");
+        assert_ne!(none_en, none_es);
+        assert_ne!(basic_en, basic_es);
     }
 }
