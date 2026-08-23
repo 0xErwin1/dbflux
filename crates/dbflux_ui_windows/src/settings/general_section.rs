@@ -76,31 +76,33 @@ impl GeneralSection {
 
         let dropdown_theme = cx.new(move |_cx| {
             Dropdown::new("general-theme")
-                .placeholder("Theme")
+                .placeholder(dbflux_i18n::t!("settings.general.theme.label"))
                 .items(Self::theme_items())
                 .selected_index(Some(theme_index))
         });
         let dropdown_style = cx.new(move |_cx| {
             Dropdown::new("general-style")
-                .placeholder("Style")
+                .placeholder(dbflux_i18n::t!("settings.general.style.label"))
                 .items(Self::style_items())
                 .selected_index(Some(style_index))
         });
         let dropdown_language = cx.new(move |_cx| {
             Dropdown::new("general-language")
-                .placeholder("Language")
+                .placeholder(dbflux_i18n::t!("settings.general.language.label"))
                 .items(Self::language_items())
                 .selected_index(Some(language_index))
         });
         let dropdown_default_focus = cx.new(move |_cx| {
             Dropdown::new("general-default-focus")
-                .placeholder("Default focus")
+                .placeholder(dbflux_i18n::t!("settings.general.default_focus.label"))
                 .items(Self::startup_focus_items())
                 .selected_index(Some(startup_focus_index))
         });
         let dropdown_refresh_policy = cx.new(move |_cx| {
             Dropdown::new("general-refresh-policy")
-                .placeholder("Refresh policy")
+                .placeholder(dbflux_i18n::t!(
+                    "settings.general.placeholder.refresh_policy"
+                ))
                 .items(Self::refresh_policy_items())
                 .selected_index(Some(refresh_policy_index))
         });
@@ -509,5 +511,40 @@ mod tests {
         assert_eq!(GeneralSection::language_for_index(2), "es");
         // Out-of-range falls back to System.
         assert_eq!(GeneralSection::language_for_index(99), "");
+    }
+
+    #[test]
+    fn dropdown_placeholders_reuse_or_extend_settings_general_catalog_keys() {
+        assert_eq!(dbflux_i18n::t!("settings.general.theme.label"), "Theme");
+        assert_eq!(dbflux_i18n::t!("settings.general.style.label"), "Style");
+        assert_eq!(
+            dbflux_i18n::t!("settings.general.language.label"),
+            "Language"
+        );
+        assert_eq!(
+            dbflux_i18n::t!("settings.general.default_focus.label"),
+            "Default focus"
+        );
+        assert_eq!(
+            dbflux_i18n::t!("settings.general.placeholder.refresh_policy"),
+            "Refresh policy"
+        );
+
+        for locale in ["en", "es"] {
+            let value = dbflux_i18n::t!(
+                "settings.general.placeholder.refresh_policy",
+                locale = locale
+            );
+
+            assert!(
+                !value.is_empty(),
+                "settings.general.placeholder.refresh_policy resolved empty for locale {locale}"
+            );
+            assert_ne!(
+                value,
+                format!("{locale}.settings.general.placeholder.refresh_policy"),
+                "settings.general.placeholder.refresh_policy fell back to the raw key for locale {locale}"
+            );
+        }
     }
 }

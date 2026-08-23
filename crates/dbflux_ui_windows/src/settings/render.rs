@@ -31,24 +31,26 @@ impl SettingsCoordinator {
         }
     }
 
-    fn section_display_name(section: super::SettingsSectionId) -> &'static str {
+    fn section_display_name(section: super::SettingsSectionId) -> String {
         match section {
-            super::SettingsSectionId::General => "General",
-            super::SettingsSectionId::Audit => "Audit",
+            super::SettingsSectionId::General => dbflux_i18n::t!("settings.nav.general"),
+            super::SettingsSectionId::Audit => dbflux_i18n::t!("settings.nav.audit"),
             #[cfg(feature = "mcp")]
-            super::SettingsSectionId::McpClients => "Clients",
+            super::SettingsSectionId::McpClients => dbflux_i18n::t!("settings.nav.mcp_clients"),
             #[cfg(feature = "mcp")]
-            super::SettingsSectionId::McpRoles => "Roles",
+            super::SettingsSectionId::McpRoles => dbflux_i18n::t!("settings.nav.mcp_roles"),
             #[cfg(feature = "mcp")]
-            super::SettingsSectionId::McpPolicies => "Policies",
-            super::SettingsSectionId::Keybindings => "Keybindings",
-            super::SettingsSectionId::Proxies => "Proxy",
-            super::SettingsSectionId::SshTunnels => "SSH Tunnels",
-            super::SettingsSectionId::AuthProfiles => "Auth Profiles",
-            super::SettingsSectionId::Services => "RPC Services",
-            super::SettingsSectionId::Hooks => "Hooks",
-            super::SettingsSectionId::Drivers => "Drivers",
-            super::SettingsSectionId::About => "About",
+            super::SettingsSectionId::McpPolicies => dbflux_i18n::t!("settings.nav.mcp_policies"),
+            super::SettingsSectionId::Keybindings => dbflux_i18n::t!("settings.nav.keybindings"),
+            super::SettingsSectionId::Proxies => dbflux_i18n::t!("settings.nav.proxies"),
+            super::SettingsSectionId::SshTunnels => dbflux_i18n::t!("settings.nav.ssh_tunnels"),
+            super::SettingsSectionId::AuthProfiles => {
+                dbflux_i18n::t!("settings.auth_profiles.section_title")
+            }
+            super::SettingsSectionId::Services => dbflux_i18n::t!("settings.nav.services"),
+            super::SettingsSectionId::Hooks => dbflux_i18n::t!("settings.nav.hooks"),
+            super::SettingsSectionId::Drivers => dbflux_i18n::t!("settings.nav.drivers"),
+            super::SettingsSectionId::About => dbflux_i18n::t!("settings.nav.about"),
         }
     }
 
@@ -240,7 +242,11 @@ impl Render for SettingsCoordinator {
 
         let _ = self.app_state.read(cx);
 
-        let csd_title_bar = platform::render_csd_title_bar(_window, cx, "Settings");
+        let csd_title_bar = platform::render_csd_title_bar(
+            _window,
+            cx,
+            &dbflux_i18n::t!("connection_manager.tab.settings"),
+        );
 
         div()
             .size_full()
@@ -278,11 +284,11 @@ impl Render for SettingsCoordinator {
             .when_some(self.pending_section_confirm, |element, target_section| {
                 let confirm_entity = cx.entity().clone();
                 let cancel_entity = confirm_entity.clone();
-                let section_name = Self::section_display_name(target_section).to_string();
+                let section_name = Self::section_display_name(target_section);
 
                 element.child(
                     Dialog::new(_window, cx)
-                        .title("Discard Unsaved Changes")
+                        .title(dbflux_i18n::t!("settings.discard.title"))
                         .confirm()
                         .on_ok(move |_, window, cx| {
                             confirm_entity.update(cx, |this, cx| {
@@ -296,9 +302,8 @@ impl Render for SettingsCoordinator {
                             });
                             true
                         })
-                        .child(Body::new(format!(
-                            "You have unsaved changes. Discard them and switch to {}?",
-                            section_name
+                        .child(Body::new(crate::labels::settings_discard_body(
+                            &section_name,
                         ))),
                 )
             })
@@ -384,7 +389,7 @@ impl SettingsCoordinator {
                     .child(layout::footer_action_frame(
                         false,
                         cx.theme().primary,
-                        Button::new("settings-close", "Close")
+                        Button::new("settings-close", dbflux_i18n::t!("settings.action.close"))
                             .small()
                             .ghost()
                             .w_full()
@@ -402,5 +407,70 @@ impl SettingsCoordinator {
                     .min_w(px(120.0))
                     .when_some(section_actions, |div, actions| div.child(actions)),
             )
+    }
+}
+
+#[cfg(test)]
+mod section_title_i18n_tests {
+    use super::SettingsCoordinator;
+    use crate::settings::SettingsSectionId;
+
+    #[test]
+    fn section_display_name_covers_every_section_with_non_empty_titles() {
+        let sections: &[SettingsSectionId] = &[
+            SettingsSectionId::General,
+            SettingsSectionId::Audit,
+            #[cfg(feature = "mcp")]
+            SettingsSectionId::McpClients,
+            #[cfg(feature = "mcp")]
+            SettingsSectionId::McpRoles,
+            #[cfg(feature = "mcp")]
+            SettingsSectionId::McpPolicies,
+            SettingsSectionId::Keybindings,
+            SettingsSectionId::Proxies,
+            SettingsSectionId::SshTunnels,
+            SettingsSectionId::AuthProfiles,
+            SettingsSectionId::Services,
+            SettingsSectionId::Hooks,
+            SettingsSectionId::Drivers,
+            SettingsSectionId::About,
+        ];
+
+        for section in sections {
+            let title = SettingsCoordinator::section_display_name(*section);
+
+            assert!(!title.is_empty(), "{section:?} produced an empty title");
+        }
+    }
+
+    #[test]
+    fn section_display_name_matches_the_translated_nav_and_section_title_keys() {
+        assert_eq!(
+            SettingsCoordinator::section_display_name(SettingsSectionId::General),
+            dbflux_i18n::t!("settings.nav.general")
+        );
+        assert_eq!(
+            SettingsCoordinator::section_display_name(SettingsSectionId::Services),
+            dbflux_i18n::t!("settings.nav.services")
+        );
+        assert_eq!(
+            SettingsCoordinator::section_display_name(SettingsSectionId::AuthProfiles),
+            dbflux_i18n::t!("settings.auth_profiles.section_title")
+        );
+    }
+
+    #[test]
+    fn discard_dialog_and_close_action_keys_resolve_in_both_locales() {
+        for locale in ["en", "es"] {
+            for key in ["settings.discard.title", "settings.action.close"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(
+                    !value.is_empty(),
+                    "key {key} resolved empty for locale {locale}"
+                );
+                assert_ne!(value, key, "key {key} did not resolve for locale {locale}");
+            }
+        }
     }
 }

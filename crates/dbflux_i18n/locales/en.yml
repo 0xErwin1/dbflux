@@ -154,6 +154,7 @@ controls:
       many: "+%{count} more"
 connection_manager:
   placeholder:
+    seconds: seconds
     connection_name: Connection name
     password: Password
     key_passphrase_optional: Key passphrase (optional)
@@ -171,6 +172,8 @@ connection_manager:
     no_policy: No policy
     extra_hook_ids: extra hook IDs (comma-separated)
     use_connection_auth_profile: Use Connection Auth Profile
+    select_additional_roles: "Select additional roles…"
+    select_additional_policies: "Select additional policies…"
   access_method:
     direct: Direct
     ssh_tunnel: SSH Tunnel
@@ -186,6 +189,9 @@ connection_manager:
     default_seconds_caption: "Default: %{value}s"
     on: "On"
     off: "Off"
+  form_title:
+    edit: "Edit %{driver} Connection"
+    new: "New %{driver} Connection"
   connection_overrides_title: Connection Overrides
   connection_hooks_title: Connection Hooks
   new_auth_profile: "New Auth Profile..."
@@ -230,6 +236,9 @@ connection_manager:
   mcp_policy_hint: Configure policies in Settings → MCP → Policies
   additional_policies_optional: Additional policies (optional)
   scope_policy_preview: Scope/policy assignment preview
+  mcp_governance_error:
+    save_policy: "Failed to save MCP connection policy assignment: %{error}"
+    clear_policy: "Failed to clear MCP connection policy assignment: %{error}"
   tab:
     main: Main
     settings: Settings
@@ -1960,6 +1969,7 @@ form:
     auth_profile_dangling: "Auth profile '%{name}' could not be found in ~/.aws/config. Please recreate the profile or update the connection binding."
     dynamic_auth_profile_required: Dynamic value sources require an Auth Profile. Select one in Access tab.
     auth_profile_no_provider: "Selected Auth Profile '%{name}' has no registered provider for dynamic value sources."
+    unknown_hook: "Unknown %{label} hook '%{token}'. Configure it in Settings > Hooks"
   action:
     updating: Updating
     saving: Saving
@@ -2302,6 +2312,16 @@ scripts:
 settings:
   action:
     default_connection_name: connection
+    close: Close
+  discard:
+    title: Discard Unsaved Changes
+    body: "You have unsaved changes. Discard them and switch to %{section}?"
+  editor_panel:
+    title:
+      edit: "Edit %{noun}"
+      new: "New %{noun}"
+  mcp_governance:
+    persist_error: "Failed to persist MCP governance: %{error}"
   general:
     header:
       title: General
@@ -2375,6 +2395,8 @@ settings:
       error: Failed to update the shared-database setting
       hint: "Applied on next launch. Shares the stable database (dbflux.db) instead of this nightly build's dbflux-nightly.db."
     override_value_header: Override Value
+    placeholder:
+      refresh_policy: Refresh policy
     save:
       button: Save
       error: "Failed to save general settings: %{error}"
@@ -2536,6 +2558,9 @@ settings:
     login_hint: Log in to load options
     inherited_from: "Inherited from %{trigger}."
     inherited_from_named: "Inherited from %{trigger} '%{name}'."
+    error:
+      secret_store_failed: "The profile's secret could not be stored (the OS keyring may be locked or unavailable) and will not persist after restart."
+      write_config_failed: "Failed to write profile to config: %{error}"
   mcp:
     tool:
       list_connections:
@@ -2720,6 +2745,7 @@ settings:
     error:
       refresh_interval_empty: Refresh interval override must not be empty
       refresh_interval_invalid: Refresh interval override must be a number greater than 0
+      save_failed: "Failed to save driver settings: %{error}"
     toast:
       saved: Driver settings saved.
       saved_warnings: Driver settings saved with warnings
@@ -2777,6 +2803,7 @@ settings:
       socket_id_required: Socket ID is required
       timeout_invalid: Timeout must be a valid number (milliseconds)
       duplicate_socket_id: "A service with socket ID '%{id}' already exists"
+      save_failed: "Failed to save RPC service config: %{error}"
     toast:
       saved: RPC service saved. Restart required to apply changes.
       deleted: RPC service deleted. Restart required to apply changes.
@@ -2816,6 +2843,7 @@ settings:
       delete: Delete
     error:
       host_and_user_required: Host and user are required
+      save_failed: "Failed to save SSH tunnel profiles: %{error}"
   proxies:
     placeholder_name: Proxy name
     placeholder_username: username
@@ -2846,6 +2874,8 @@ settings:
       basic: Basic
     status:
       disabled_caption: "off"
+    error:
+      save_failed: "Failed to save proxy profiles: %{error}"
     action:
       save: Save
       import: "Import…"
@@ -3181,7 +3211,6 @@ ssh:
   host: Host
   port: Port
   username: Username
-  host_user_required: Host and user are required
   private_key_short: Private key
   update: Update
   create: Create

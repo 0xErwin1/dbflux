@@ -382,7 +382,7 @@ impl ServicesSection {
             report_error(
                 UserFacingError::new(
                     ErrorKind::Storage,
-                    format!("Failed to save RPC service config: {e}"),
+                    dbflux_i18n::t!("settings.rpc_services.error.save_failed", error = e),
                 ),
                 cx,
             );
@@ -438,7 +438,7 @@ impl ServicesSection {
             report_error(
                 UserFacingError::new(
                     ErrorKind::Storage,
-                    format!("Failed to save RPC service config: {e}"),
+                    dbflux_i18n::t!("settings.rpc_services.error.save_failed", error = e),
                 ),
                 cx,
             );

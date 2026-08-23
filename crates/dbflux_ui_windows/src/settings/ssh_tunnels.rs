@@ -273,7 +273,7 @@ impl SshTunnelsSection {
             report_error(
                 UserFacingError::new(
                     ErrorKind::Storage,
-                    format!("Failed to save SSH tunnel profiles: {e}"),
+                    dbflux_i18n::t!("settings.ssh_tunnels.error.save_failed", error = e),
                 ),
                 cx,
             );

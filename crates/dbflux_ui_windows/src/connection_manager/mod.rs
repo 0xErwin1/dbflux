@@ -523,7 +523,7 @@ impl ConnectionManagerWindow {
         });
         let conn_refresh_interval_input = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("seconds")
+                .placeholder(dbflux_i18n::t!("connection_manager.placeholder.seconds"))
                 .default_value("5")
         });
         let conn_confirm_dangerous_dropdown = cx.new(|_cx| {
@@ -587,14 +587,18 @@ impl ConnectionManagerWindow {
                 .placeholder(dbflux_i18n::t!("connection_manager.placeholder.no_role"))
         });
         let conn_mcp_role_multi_select = cx.new(|_cx| {
-            MultiSelect::new("conn-mcp-extra-roles").placeholder("Select additional roles…")
+            MultiSelect::new("conn-mcp-extra-roles").placeholder(dbflux_i18n::t!(
+                "connection_manager.placeholder.select_additional_roles"
+            ))
         });
         let conn_mcp_policy_dropdown = cx.new(|_cx| {
             Dropdown::new("conn-mcp-policy")
                 .placeholder(dbflux_i18n::t!("connection_manager.placeholder.no_policy"))
         });
         let conn_mcp_policy_multi_select = cx.new(|_cx| {
-            MultiSelect::new("conn-mcp-extra-policies").placeholder("Select additional policies…")
+            MultiSelect::new("conn-mcp-extra-policies").placeholder(dbflux_i18n::t!(
+                "connection_manager.placeholder.select_additional_policies"
+            ))
         });
 
         let dropdown_subscription = cx.subscribe(
@@ -1736,7 +1740,8 @@ impl ConnectionManagerWindow {
             .collect();
 
         let mut role_items = vec![dbflux_components::controls::DropdownItem::with_value(
-            "No role", "",
+            dbflux_i18n::t!("connection_manager.placeholder.no_role"),
+            "",
         )];
         role_items.extend(roles.iter().map(|r| {
             let label = dbflux_mcp::builtin_display_name(&r.id)
@@ -1746,7 +1751,7 @@ impl ConnectionManagerWindow {
         }));
 
         let mut policy_items = vec![dbflux_components::controls::DropdownItem::with_value(
-            "No policy",
+            dbflux_i18n::t!("connection_manager.placeholder.no_policy"),
             "",
         )];
         policy_items.extend(policies.iter().map(|p| {
@@ -2345,9 +2350,8 @@ impl ConnectionManagerWindow {
 
         for (label, primary, extra) in phases {
             for token in Self::unresolved_hook_tokens(primary, &extra, &name_to_id, &known_ids) {
-                self.validation_errors.push(format!(
-                    "Unknown {label} hook '{token}'. Configure it in Settings > Hooks"
-                ));
+                self.validation_errors
+                    .push(crate::labels::form_unknown_hook(label, &token));
             }
         }
     }
