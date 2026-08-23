@@ -98,6 +98,38 @@ controls:
     more:
       one: "+%{count} more"
       many: "+%{count} more"
+connection_manager:
+  placeholder:
+    connection_name: Connection name
+    password: Password
+    key_passphrase_optional: Key passphrase (optional)
+    ssh_password: SSH password
+    ca_cert_path: Path to CA certificate
+    client_cert_path: Path to client certificate
+    client_key_path: Path to client key
+    select_ssh_tunnel: Select SSH Tunnel
+    select_proxy: Select Proxy
+    none: None
+    use_driver_default: Use Driver Default
+    no_hook: No hook
+    select_trusted_client: Select trusted client
+    no_role: No role
+    no_policy: No policy
+  access_method:
+    direct: Direct
+    ssh_tunnel: SSH Tunnel
+    proxy: Proxy
+    ssm: SSM Port Forwarding
+  new_auth_profile: "New Auth Profile..."
+  aws_sso_wizard_title: AWS SSO Wizard
+  aws_sso_open_failed: Failed to open AWS SSO wizard window
+  select_ssh_key_title: Select SSH Private Key
+  select_ca_cert: Select CA certificate
+  select_client_cert: Select client certificate
+  select_client_key: Select client key
+  filter_certificates: Certificates / keys
+  filter_all_files: All files
+  select_database_file: Select Database File
 document:
   data:
     chart_dock:

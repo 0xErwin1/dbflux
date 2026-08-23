@@ -98,6 +98,38 @@ controls:
     more:
       one: "+%{count} más"
       many: "+%{count} más"
+connection_manager:
+  placeholder:
+    connection_name: Nombre de la conexión
+    password: Contraseña
+    key_passphrase_optional: Frase de la clave (opcional)
+    ssh_password: Contraseña SSH
+    ca_cert_path: Ruta al certificado de CA
+    client_cert_path: Ruta al certificado de cliente
+    client_key_path: Ruta a la clave de cliente
+    select_ssh_tunnel: Seleccionar túnel SSH
+    select_proxy: Seleccionar proxy
+    none: Ninguno
+    use_driver_default: Usar valor predeterminado del driver
+    no_hook: Sin hook
+    select_trusted_client: Seleccionar cliente de confianza
+    no_role: Sin rol
+    no_policy: Sin política
+  access_method:
+    direct: Directo
+    ssh_tunnel: Túnel SSH
+    proxy: Proxy
+    ssm: Reenvío de puertos SSM
+  new_auth_profile: "Nuevo perfil de autenticación..."
+  aws_sso_wizard_title: Asistente de AWS SSO
+  aws_sso_open_failed: No se pudo abrir el asistente de AWS SSO
+  select_ssh_key_title: Seleccionar clave privada SSH
+  select_ca_cert: Seleccionar certificado de CA
+  select_client_cert: Seleccionar certificado de cliente
+  select_client_key: Seleccionar clave de cliente
+  filter_certificates: Certificados / claves
+  filter_all_files: Todos los archivos
+  select_database_file: Seleccionar archivo de base de datos
 document:
   data:
     chart_dock:
