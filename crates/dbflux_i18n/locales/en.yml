@@ -99,6 +99,48 @@ controls:
       one: "+%{count} more"
       many: "+%{count} more"
 document:
+  code:
+    toolbar:
+      refresh: Refresh
+      cancel: Cancel
+      checking: "Checking…"
+      run: Run
+      shortcut_hint_with_selection: "%{shortcut} (selection/full)"
+      new_tab: New tab
+      selection: Selection
+      read_only: Read-only
+      saved: Saved
+      save: Save
+      formatter_unavailable: Formatter unavailable
+      query_history: Query history
+      explain_query: Explain query
+      open_in_chart: Open current query in a chart document
+    output:
+      running: "Running..."
+      stopped: Stopped
+      output: Output
+      lines:
+        one: "%{count} line"
+        many: "%{count} lines"
+      truncated: "(truncated at %{limit} lines)"
+    result:
+      count:
+        one: "%{count} result"
+        many: "%{count} results"
+      loading:
+        title: "Running…"
+        body: Query in progress
+      error:
+        title: Query Error
+      empty: Run a query to see results
+      awaiting_connection: Connect to this database to view the routine definition.
+    script_confirm:
+      title: Run entire script
+      message:
+        one: "No text is selected, so the entire script will run as %{count} statement in order. Continue?"
+        many: "No text is selected, so the entire script will run as %{count} statements in order. Continue?"
+      cancel: Cancel
+      run: Run Script
   data:
     chart_dock:
       toolbar:

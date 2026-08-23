@@ -99,6 +99,48 @@ controls:
       one: "+%{count} más"
       many: "+%{count} más"
 document:
+  code:
+    toolbar:
+      refresh: Actualizar
+      cancel: Cancelar
+      checking: "Verificando…"
+      run: Ejecutar
+      shortcut_hint_with_selection: "%{shortcut} (selección/completo)"
+      new_tab: Nueva pestaña
+      selection: Selección
+      read_only: Solo lectura
+      saved: Guardado
+      save: Guardar
+      formatter_unavailable: Formateador no disponible
+      query_history: Historial de consultas
+      explain_query: Explicar consulta
+      open_in_chart: Abrir la consulta actual en un documento de gráfico
+    output:
+      running: "Ejecutando..."
+      stopped: Detenido
+      output: Salida
+      lines:
+        one: "%{count} línea"
+        many: "%{count} líneas"
+      truncated: "(truncado a %{limit} líneas)"
+    result:
+      count:
+        one: "%{count} resultado"
+        many: "%{count} resultados"
+      loading:
+        title: "Ejecutando…"
+        body: Consulta en progreso
+      error:
+        title: Error de consulta
+      empty: Ejecute una consulta para ver los resultados
+      awaiting_connection: Conéctese a esta base de datos para ver la definición de la rutina.
+    script_confirm:
+      title: Ejecutar todo el script
+      message:
+        one: "No hay texto seleccionado, por lo que se ejecutará todo el script como %{count} sentencia en orden. ¿Continuar?"
+        many: "No hay texto seleccionado, por lo que se ejecutará todo el script como %{count} sentencias en orden. ¿Continuar?"
+      cancel: Cancelar
+      run: Ejecutar script
   data:
     chart_dock:
       toolbar:

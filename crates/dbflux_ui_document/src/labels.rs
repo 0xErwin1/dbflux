@@ -375,13 +375,81 @@ pub(crate) fn delete_confirm_copy(count: usize) -> (String, String) {
     }
 }
 
+/// Label for the code editor toolbar's run-shortcut caption.
+///
+/// `shortcut` is the platform-specific key chord (e.g. `"Cmd+Enter"`), which
+/// stays a literal outside the catalog. Only the surrounding "(selection/full)"
+/// qualifier, shown for query languages that support connection context, is
+/// translated.
+pub(crate) fn code_toolbar_shortcut_hint_label(shortcut: &str, with_selection: bool) -> String {
+    if with_selection {
+        dbflux_i18n::t!(
+            "document.code.toolbar.shortcut_hint_with_selection",
+            shortcut = shortcut
+        )
+    } else {
+        shortcut.to_string()
+    }
+}
+
+/// Label for the live script output header's line count.
+///
+/// Uses the singular catalog bucket only for exactly one line; every other
+/// count, including zero, uses the plural bucket.
+pub(crate) fn live_output_lines_label(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!("document.code.output.lines.one", count = count)
+    } else {
+        dbflux_i18n::t!("document.code.output.lines.many", count = count)
+    }
+}
+
+/// Label for the live script output truncation notice, with the line limit
+/// interpolated.
+pub(crate) fn live_output_truncated_label(limit: usize) -> String {
+    dbflux_i18n::t!("document.code.output.truncated", limit = limit)
+}
+
+/// Label for the collapsed results bar's tab count.
+///
+/// Uses the singular catalog bucket only for exactly one result tab; every
+/// other count, including zero, uses the plural bucket.
+pub(crate) fn result_tab_count_label(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!("document.code.result.count.one", count = count)
+    } else {
+        dbflux_i18n::t!("document.code.result.count.many", count = count)
+    }
+}
+
+/// Label for the "run entire script" confirmation modal body, with the
+/// statement count interpolated.
+///
+/// Uses the singular catalog bucket only for exactly one statement; every
+/// other count, including zero, uses the plural bucket.
+pub(crate) fn script_confirm_message_label(statement_count: usize) -> String {
+    if statement_count == 1 {
+        dbflux_i18n::t!(
+            "document.code.script_confirm.message.one",
+            count = statement_count
+        )
+    } else {
+        dbflux_i18n::t!(
+            "document.code.script_confirm.message.many",
+            count = statement_count
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         MutationItemKind, bulk_delete_success_label, chart_degraded_copy, chart_dock_shape_label,
-        chart_rail_why_text, copy_query_language_label, delete_confirm_copy, delete_rows_label,
-        partial_delete_label, pending_change_count_label, pending_edits_summary,
-        refresh_policy_label, row_count_label, unsaved_changes_label, update_columns_label,
+        chart_rail_why_text, code_toolbar_shortcut_hint_label, copy_query_language_label,
+        delete_confirm_copy, delete_rows_label, live_output_lines_label,
+        live_output_truncated_label, partial_delete_label, pending_change_count_label,
+        pending_edits_summary, refresh_policy_label, result_tab_count_label, row_count_label,
+        script_confirm_message_label, unsaved_changes_label, update_columns_label,
     };
     use dbflux_components::chart::ChartDetection;
     use dbflux_core::{QueryLanguage, RefreshPolicy};
@@ -819,5 +887,135 @@ mod tests {
         );
 
         assert_ne!(en, es);
+    }
+
+    #[test]
+    fn code_render_keys_resolve_in_both_locales() {
+        let keys = [
+            "document.code.toolbar.refresh",
+            "document.code.toolbar.cancel",
+            "document.code.toolbar.checking",
+            "document.code.toolbar.run",
+            "document.code.toolbar.shortcut_hint_with_selection",
+            "document.code.toolbar.new_tab",
+            "document.code.toolbar.selection",
+            "document.code.toolbar.read_only",
+            "document.code.toolbar.saved",
+            "document.code.toolbar.save",
+            "document.code.toolbar.formatter_unavailable",
+            "document.code.toolbar.query_history",
+            "document.code.toolbar.explain_query",
+            "document.code.toolbar.open_in_chart",
+            "document.code.output.running",
+            "document.code.output.stopped",
+            "document.code.output.output",
+            "document.code.output.lines.one",
+            "document.code.output.lines.many",
+            "document.code.output.truncated",
+            "document.code.result.count.one",
+            "document.code.result.count.many",
+            "document.code.result.loading.title",
+            "document.code.result.loading.body",
+            "document.code.result.error.title",
+            "document.code.result.empty",
+            "document.code.result.awaiting_connection",
+            "document.code.script_confirm.title",
+            "document.code.script_confirm.message.one",
+            "document.code.script_confirm.message.many",
+            "document.code.script_confirm.cancel",
+            "document.code.script_confirm.run",
+        ];
+
+        for key in keys {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn code_toolbar_run_differs_between_locales() {
+        let en = dbflux_i18n::t!("document.code.toolbar.run", locale = "en");
+        let es = dbflux_i18n::t!("document.code.toolbar.run", locale = "es");
+
+        assert_eq!(en, "Run");
+        assert_ne!(en, es);
+    }
+
+    #[test]
+    fn code_output_running_differs_between_locales() {
+        let en = dbflux_i18n::t!("document.code.output.running", locale = "en");
+        let es = dbflux_i18n::t!("document.code.output.running", locale = "es");
+
+        assert_eq!(en, "Running...");
+        assert_ne!(en, es);
+    }
+
+    #[test]
+    fn code_result_empty_differs_between_locales() {
+        let en = dbflux_i18n::t!("document.code.result.empty", locale = "en");
+        let es = dbflux_i18n::t!("document.code.result.empty", locale = "es");
+
+        assert_eq!(en, "Run a query to see results");
+        assert_ne!(en, es);
+    }
+
+    #[test]
+    fn code_script_confirm_title_differs_between_locales() {
+        let en = dbflux_i18n::t!("document.code.script_confirm.title", locale = "en");
+        let es = dbflux_i18n::t!("document.code.script_confirm.title", locale = "es");
+
+        assert_eq!(en, "Run entire script");
+        assert_ne!(en, es);
+    }
+
+    #[test]
+    fn code_toolbar_shortcut_hint_label_with_and_without_selection() {
+        let plain = code_toolbar_shortcut_hint_label("Ctrl+Enter", false);
+        let with_selection = code_toolbar_shortcut_hint_label("Ctrl+Enter", true);
+
+        assert_eq!(plain, "Ctrl+Enter");
+        assert!(with_selection.contains("Ctrl+Enter"));
+        assert_ne!(with_selection, plain);
+    }
+
+    #[test]
+    fn live_output_lines_label_one_many() {
+        assert_eq!(live_output_lines_label(1), "1 line");
+        assert_eq!(live_output_lines_label(2), "2 lines");
+        assert_eq!(live_output_lines_label(0), "0 lines");
+    }
+
+    #[test]
+    fn live_output_truncated_label_interpolates_limit() {
+        let label = live_output_truncated_label(5000);
+
+        assert_eq!(label, "(truncated at 5000 lines)");
+    }
+
+    #[test]
+    fn result_tab_count_label_one_many() {
+        assert_eq!(result_tab_count_label(1), "1 result");
+        assert_eq!(result_tab_count_label(2), "2 results");
+    }
+
+    #[test]
+    fn script_confirm_message_label_one_many() {
+        let one = script_confirm_message_label(1);
+        let many = script_confirm_message_label(3);
+
+        assert!(one.contains('1'));
+        assert!(one.contains("statement in order"));
+        assert!(many.contains('3'));
+        assert!(many.contains("statements in order"));
+        assert_ne!(one, many);
     }
 }

@@ -24,9 +24,9 @@ impl CodeDocument {
 
         let auto_refresh_enabled = self.refresh.refresh_policy.is_auto();
         let refresh_label = if auto_refresh_enabled {
-            self.refresh.refresh_policy.label()
+            crate::labels::refresh_policy_label(self.refresh.refresh_policy)
         } else {
-            "Refresh"
+            dbflux_i18n::t!("document.code.toolbar.refresh")
         };
         let refresh_icon = if is_executing {
             AppIcon::Loader
@@ -37,11 +37,23 @@ impl CodeDocument {
         };
 
         let (run_icon, run_label, run_enabled) = if is_executing {
-            (AppIcon::X, "Cancel", true)
+            (
+                AppIcon::X,
+                dbflux_i18n::t!("document.code.toolbar.cancel"),
+                true,
+            )
         } else if is_preflight {
-            (AppIcon::Loader, "Checking…", false)
+            (
+                AppIcon::Loader,
+                dbflux_i18n::t!("document.code.toolbar.checking"),
+                false,
+            )
         } else {
-            (AppIcon::Play, "Run", true)
+            (
+                AppIcon::Play,
+                dbflux_i18n::t!("document.code.toolbar.run"),
+                true,
+            )
         };
 
         let accent = theme.accent;
@@ -56,20 +68,15 @@ impl CodeDocument {
                     .map(|finished| finished.duration_since(r.started_at))
             });
 
-        // Keep this label in sync with the RunQuery binding (Cmd+Enter on
-        // macOS, Ctrl+Enter elsewhere) registered in `keymap::defaults`.
+        // Keep this base shortcut in sync with the RunQuery binding (Cmd+Enter
+        // on macOS, Ctrl+Enter elsewhere) registered in `keymap::defaults`.
         #[cfg(target_os = "macos")]
-        let shortcut_hint = if is_db_language {
-            "Cmd+Enter (selection/full)"
-        } else {
-            "Cmd+Enter"
-        };
+        let shortcut_hint_base = "Cmd+Enter";
         #[cfg(not(target_os = "macos"))]
-        let shortcut_hint = if is_db_language {
-            "Ctrl+Enter (selection/full)"
-        } else {
-            "Ctrl+Enter"
-        };
+        let shortcut_hint_base = "Ctrl+Enter";
+
+        let shortcut_hint =
+            crate::labels::code_toolbar_shortcut_hint_label(shortcut_hint_base, is_db_language);
 
         compact_top_bar(&theme, std::iter::empty::<AnyElement>())
             .id("sql-toolbar")
@@ -97,7 +104,7 @@ impl CodeDocument {
                 el.child(
                     ToolbarButton::new("run-in-new-tab-btn")
                         .icon(AppIcon::SquarePlay)
-                        .label("New tab")
+                        .label(dbflux_i18n::t!("document.code.toolbar.new_tab"))
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.run_query_in_new_tab(window, cx);
                         })),
@@ -105,7 +112,7 @@ impl CodeDocument {
                 .child(
                     ToolbarButton::new("run-selection-btn")
                         .icon(AppIcon::ScrollText)
-                        .label("Selection")
+                        .label(dbflux_i18n::t!("document.code.toolbar.selection"))
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.run_selected_query(window, cx);
                         })),
@@ -113,7 +120,10 @@ impl CodeDocument {
             })
             .when(!is_read_only, |el| el.child(Text::caption(shortcut_hint)))
             .when(is_read_only, |el| {
-                el.child(Text::caption("Read-only").muted_foreground())
+                el.child(
+                    Text::caption(dbflux_i18n::t!("document.code.toolbar.read_only"))
+                        .muted_foreground(),
+                )
             })
             .child(self.render_secondary_actions(is_read_only, cx))
             .when(!is_read_only && is_db_language, |el| {
@@ -149,7 +159,9 @@ impl CodeDocument {
                 el.child(Text::caption(format!("{:.2}s", duration.as_secs_f64())))
             })
             .when(self.session.show_saved_label, |el| {
-                el.child(Text::caption("Saved"))
+                el.child(Text::caption(dbflux_i18n::t!(
+                    "document.code.toolbar.saved"
+                )))
             })
     }
 
@@ -172,7 +184,7 @@ impl CodeDocument {
                 el.child(
                     ToolbarButton::new("toolbar-save-btn")
                         .icon(AppIcon::Save)
-                        .tooltip("Save")
+                        .tooltip(dbflux_i18n::t!("document.code.toolbar.save"))
                         .on_click(cx.listener(|this, _, window, cx| {
                             if this.is_file_backed() {
                                 this.save_file(window, cx);
@@ -187,7 +199,9 @@ impl CodeDocument {
                 el.child(
                     ToolbarButton::new("toolbar-format-btn")
                         .icon(AppIcon::Zap)
-                        .tooltip("Formatter unavailable")
+                        .tooltip(dbflux_i18n::t!(
+                            "document.code.toolbar.formatter_unavailable"
+                        ))
                         .disabled(true),
                 )
             })
@@ -196,7 +210,7 @@ impl CodeDocument {
                 el.child(
                     ToolbarButton::new("toolbar-history-btn")
                         .icon(AppIcon::History)
-                        .tooltip("Query history")
+                        .tooltip(dbflux_i18n::t!("document.code.toolbar.query_history"))
                         .on_click(cx.listener(|this, _, window, cx| {
                             let is_open = this.history.history_modal.read(cx).is_visible();
                             if is_open {
@@ -216,7 +230,7 @@ impl CodeDocument {
                 el.child(
                     ToolbarButton::new("toolbar-explain-btn")
                         .icon(AppIcon::Info)
-                        .tooltip("Explain query")
+                        .tooltip(dbflux_i18n::t!("document.code.toolbar.explain_query"))
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.run_explain(window, cx);
                         })),
@@ -227,7 +241,7 @@ impl CodeDocument {
                 el.child(
                     ToolbarButton::new("toolbar-chart-btn")
                         .icon(AppIcon::ChartSpline)
-                        .tooltip("Open current query in a chart document")
+                        .tooltip(dbflux_i18n::t!("document.code.toolbar.open_in_chart"))
                         .on_click(cx.listener(|this, _, _window, cx| {
                             this.emit_chart_this_query(cx);
                         })),
@@ -367,15 +381,15 @@ impl CodeDocument {
             .expect("live output state should exist when rendering");
 
         let status = if self.state == DocumentState::Executing {
-            "Running..."
+            dbflux_i18n::t!("document.code.output.running")
         } else if live_output.is_finished() {
-            "Stopped"
+            dbflux_i18n::t!("document.code.output.stopped")
         } else {
-            "Output"
+            dbflux_i18n::t!("document.code.output.output")
         };
 
         let text = SharedString::from(live_output.render_text());
-        let line_count = live_output.line_count();
+        let line_count_label = crate::labels::live_output_lines_label(live_output.line_count());
 
         div()
             .id("script-live-output")
@@ -393,7 +407,7 @@ impl CodeDocument {
                     .border_b_1()
                     .border_color(theme.border)
                     .child(Text::label(status))
-                    .child(Text::caption(format!("{} lines", line_count)))
+                    .child(Text::caption(line_count_label))
                     .when(live_output.has_stderr(), |el| {
                         el.child(Badge::new("stderr", BadgeVariant::Warning))
                     }),
@@ -406,12 +420,9 @@ impl CodeDocument {
                     .child(div().whitespace_nowrap().child(Text::code(text))),
             )
             .when(live_output.is_truncated(), |el| {
-                el.child(
-                    div()
-                        .px(Spacing::MD)
-                        .pb(Spacing::SM)
-                        .child(Text::caption("(truncated at 5000 lines)")),
-                )
+                el.child(div().px(Spacing::MD).pb(Spacing::SM).child(Text::caption(
+                    crate::labels::live_output_truncated_label(LiveOutputState::MAX_LINES),
+                )))
             })
     }
 
@@ -549,17 +560,9 @@ impl CodeDocument {
             .border_t_1()
             .border_color(theme.border)
             .bg(theme.tab_bar)
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .child(Text::caption(format!(
-                        "{} result{}",
-                        tab_count,
-                        if tab_count == 1 { "" } else { "s" }
-                    ))),
-            )
+            .child(div().flex().items_center().gap_1().child(Text::caption(
+                crate::labels::result_tab_count_label(tab_count),
+            )))
             .child(div().flex_1())
             .child(
                 div()
@@ -582,18 +585,24 @@ impl CodeDocument {
     fn render_loading_results(&self, _cx: &mut Context<Self>) -> impl IntoElement {
         let icon = Icon::new(AppIcon::Loader).size(px(12.0)); // guardrail-allow: 12px icon size, no ICON_XS token
         div().p(Spacing::MD).size_full().child(
-            BannerBlock::new(BannerVariant::Info, "Running…")
-                .with_icon(icon)
-                .with_body("Query in progress"),
+            BannerBlock::new(
+                BannerVariant::Info,
+                dbflux_i18n::t!("document.code.result.loading.title"),
+            )
+            .with_icon(icon)
+            .with_body(dbflux_i18n::t!("document.code.result.loading.body")),
         )
     }
 
     fn render_error_state(&self, error: &str, _cx: &mut Context<Self>) -> impl IntoElement {
         let icon = Icon::new(AppIcon::CircleX).size(Heights::ICON_SM);
         div().p(Spacing::MD).size_full().overflow_y_hidden().child(
-            BannerBlock::new(BannerVariant::Danger, "Query Error")
-                .with_icon(icon)
-                .with_pre(error.to_string()),
+            BannerBlock::new(
+                BannerVariant::Danger,
+                dbflux_i18n::t!("document.code.result.error.title"),
+            )
+            .with_icon(icon)
+            .with_pre(error.to_string()),
         )
     }
 
@@ -603,7 +612,7 @@ impl CodeDocument {
             .flex()
             .items_center()
             .justify_center()
-            .child(Text::muted("Run a query to see results"))
+            .child(Text::muted(dbflux_i18n::t!("document.code.result.empty")))
     }
 
     /// Placeholder shown for a routine document when no connection is active for
@@ -614,9 +623,9 @@ impl CodeDocument {
             .flex()
             .items_center()
             .justify_center()
-            .child(Text::muted(
-                "Connect to this database to view the routine definition.",
-            ))
+            .child(Text::muted(dbflux_i18n::t!(
+                "document.code.result.awaiting_connection"
+            )))
     }
 
     fn render_script_confirm_modal(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -631,10 +640,7 @@ impl CodeDocument {
             .as_ref()
             .map(|p| p.statement_count)
             .unwrap_or(0);
-        let message = format!(
-            "No text is selected, so the entire script will run as {} statements in order. Continue?",
-            statement_count
-        );
+        let message = crate::labels::script_confirm_message_label(statement_count);
 
         let body = Text::caption(message).into_any_element();
 
@@ -642,30 +648,40 @@ impl CodeDocument {
             .flex()
             .gap(Spacing::SM)
             .child(
-                Button::new("script-confirm-cancel-btn", "Cancel").on_click(move |_, _, cx| {
+                Button::new(
+                    "script-confirm-cancel-btn",
+                    dbflux_i18n::t!("document.code.script_confirm.cancel"),
+                )
+                .on_click(move |_, _, cx| {
                     entity_cancel.update(cx, |doc, cx| {
                         doc.cancel_script_query(cx);
                     });
                 }),
             )
             .child(
-                Button::new("script-confirm-run-btn", "Run Script").on_click(
-                    move |_, window, cx| {
-                        entity_run.update(cx, |doc, cx| {
-                            doc.confirm_script_query(window, cx);
-                        });
-                    },
-                ),
+                Button::new(
+                    "script-confirm-run-btn",
+                    dbflux_i18n::t!("document.code.script_confirm.run"),
+                )
+                .on_click(move |_, window, cx| {
+                    entity_run.update(cx, |doc, cx| {
+                        doc.confirm_script_query(window, cx);
+                    });
+                }),
             )
             .into_any_element();
 
-        ModalShell::new("Run entire script", body, footer)
-            .width(px(460.0))
-            .on_close(move |_, cx| {
-                entity_close.update(cx, |doc, cx| {
-                    doc.cancel_script_query(cx);
-                });
-            })
+        ModalShell::new(
+            dbflux_i18n::t!("document.code.script_confirm.title"),
+            body,
+            footer,
+        )
+        .width(px(460.0))
+        .on_close(move |_, cx| {
+            entity_close.update(cx, |doc, cx| {
+                doc.cancel_script_query(cx);
+            });
+        })
     }
 
     fn render_dangerous_query_modal(&self, cx: &mut Context<Self>) -> impl IntoElement {
