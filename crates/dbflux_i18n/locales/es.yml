@@ -866,6 +866,31 @@ document:
       incomplete_aggregate_rows:
         one: "%{count} fila agregada está incompleta y se excluirá de la consulta"
         many: "%{count} filas agregadas están incompletas y se excluirán de la consulta"
+  schema_diff:
+    action:
+      apply: "Aplicar…"
+      compute_diff: Calcular diferencia
+      preview_ddl: Vista previa del DDL
+    status:
+      computing: "Calculando diferencia…"
+      empty: No se encontraron diferencias entre los dos esquemas.
+      idle: Elige un origen y ejecuta Calcular diferencia para ver los cambios de esquema.
+      unsupported: No compatible
+    view:
+      compare_against: Comparar con
+      mode:
+        live: "En vivo ↔ En vivo"
+        snapshot: "Instantánea ↔ En vivo"
+      source:
+        connection_section: Otras conexiones
+        database_section: Otras bases de datos en esta conexión
+        empty: Conecta una segunda base de datos o conexión para comparar.
+        no_snapshots: Aún no hay instantáneas capturadas para esta conexión.
+      title: "Diferencia de esquema — %{database}"
+      title_default: Diferencia de esquema
+      unsupported_action:
+        create: Crear tabla
+        drop: Eliminar tabla
   shared:
     add: Agregar
     refresh:
