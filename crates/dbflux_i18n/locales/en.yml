@@ -199,6 +199,14 @@ document:
           many: "%{count} rows will be permanently deleted. This cannot be undone."
         cancel: Cancel
         delete: Delete
+      filter:
+        title: Filter
+        cell_value: Cell value
+      order:
+        title: Order
+        remove: Remove ordering
+      generate_sql:
+        title: Generate SQL
     grid:
       edit_bar:
         clean: No unsaved changes
