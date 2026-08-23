@@ -225,13 +225,15 @@ fn build_auth_profile_from_form(
 }
 
 const MIRROR_LABEL_FALLBACK: &str = "Read-only — managed externally";
-const SUCCESS_WRITTEN_FALLBACK: &str = "Profile saved.";
+fn success_written_fallback() -> String {
+    dbflux_i18n::t!("settings.auth_profiles.saved_fallback")
+}
 const NAME_HINT_FALLBACK: &str = "";
 
 fn dangling_fallback() -> DanglingMessage {
     DanglingMessage {
-        title: "Profile reference invalid".to_string(),
-        body: "This profile cannot be loaded.".to_string(),
+        title: dbflux_i18n::t!("settings.auth_profiles.reference_invalid_title"),
+        body: dbflux_i18n::t!("settings.auth_profiles.reference_invalid_body"),
     }
 }
 
@@ -244,7 +246,7 @@ fn resolve_mirror_label(edit_caps: Option<&AuthEditCapabilities>) -> String {
 fn resolve_success_text(edit_caps: Option<&AuthEditCapabilities>) -> String {
     edit_caps
         .map(|e| e.success_written.clone())
-        .unwrap_or_else(|| SUCCESS_WRITTEN_FALLBACK.to_string())
+        .unwrap_or_else(success_written_fallback)
 }
 
 fn resolve_dangling(edit_caps: Option<&AuthEditCapabilities>, origin: &str) -> DanglingMessage {
@@ -304,7 +306,10 @@ fn apply_fetch_error_state(
 ) {
     match &error {
         FetchOptionsError::NeedsLogin => {
-            field_login_hint.insert(field_id.to_string(), "Log in to load options".to_string());
+            field_login_hint.insert(
+                field_id.to_string(),
+                dbflux_i18n::t!("settings.auth_profiles.login_hint"),
+            );
 
             if !login_in_progress {
                 *provider_login_status = Some((
@@ -373,11 +378,15 @@ impl AuthProfilesSection {
             })
             .collect();
 
-        let input_name = cx.new(|cx| InputState::new(window, cx).placeholder("Profile name"));
+        let input_name = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(dbflux_i18n::t!("settings.auth_profiles.placeholder_name"))
+        });
 
         let provider_dropdown = cx.new(|_cx| {
-            Dropdown::new(SharedString::from("auth-provider-selector"))
-                .placeholder("Select provider…")
+            Dropdown::new(SharedString::from("auth-provider-selector")).placeholder(
+                dbflux_i18n::t!("settings.auth_profiles.select_provider_ellipsis"),
+            )
         });
 
         let app_state_subscription =
@@ -575,8 +584,10 @@ impl AuthProfilesSection {
                         let dropdown_id = format!("auth-dynamic-{}", field_id);
                         let placeholder_str = if placeholder.is_empty() {
                             match &kind {
-                                FormFieldKind::AuthProfileRef { .. } => "— None —".to_string(),
-                                _ => "Select...".to_string(),
+                                FormFieldKind::AuthProfileRef { .. } => {
+                                    dbflux_i18n::t!("settings.auth_profiles.select_none")
+                                }
+                                _ => dbflux_i18n::t!("settings.auth_profiles.select_ellipsis"),
                             }
                         } else {
                             placeholder
@@ -894,7 +905,7 @@ impl AuthProfilesSection {
         // was not called before the first render — defensive path only).
         if !self.dynamic_dropdowns.contains_key(&field_id) {
             let placeholder = if field.placeholder.is_empty() {
-                "Select...".to_string()
+                dbflux_i18n::t!("settings.auth_profiles.select_ellipsis")
             } else {
                 field.placeholder.clone()
             };
@@ -992,7 +1003,8 @@ impl AuthProfilesSection {
         if !self.dynamic_dropdowns.contains_key(&field_id) {
             let dropdown_id = format!("auth-dynamic-{}", field_id);
             let dropdown = cx.new(|_cx| {
-                Dropdown::new(SharedString::from(dropdown_id)).placeholder("— None —".to_string())
+                Dropdown::new(SharedString::from(dropdown_id))
+                    .placeholder(dbflux_i18n::t!("settings.auth_profiles.select_none"))
             });
             self.dynamic_dropdowns.insert(field_id.clone(), dropdown);
         }
@@ -2022,7 +2034,7 @@ impl AuthProfilesSection {
         disabled_hint: Option<String>,
         inherited_value: Option<String>,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let primary = cx.theme().primary;
         let theme = cx.theme();
 
@@ -2139,26 +2151,34 @@ impl AuthProfilesSection {
                     .flex()
                     .flex_col()
                     .gap_2()
-                    .child(Label::new("Profiles"))
+                    .child(Label::new(dbflux_i18n::t!(
+                        "settings.auth_profiles.profiles_label"
+                    )))
                     .child(
-                        Button::new("new-auth-profile", "New Auth Profile")
-                            .icon(Icon::new(AppIcon::Plus))
-                            .small()
-                            .w_full()
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.auth_focus = AuthFocus::Form;
-                                this.begin_create_profile(window, cx);
-                            })),
+                        Button::new(
+                            "new-auth-profile",
+                            dbflux_i18n::t!("settings.auth_profiles.new_profile"),
+                        )
+                        .icon(Icon::new(AppIcon::Plus))
+                        .small()
+                        .w_full()
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.auth_focus = AuthFocus::Form;
+                            this.begin_create_profile(window, cx);
+                        })),
                     )
                     .child(
-                        Button::new("import-auth-profile", "Import\u{2026}")
-                            .icon(Icon::new(AppIcon::Download))
-                            .small()
-                            .ghost()
-                            .w_full()
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.request_import(cx);
-                            })),
+                        Button::new(
+                            "import-auth-profile",
+                            dbflux_i18n::t!("settings.auth_profiles.import"),
+                        )
+                        .icon(Icon::new(AppIcon::Download))
+                        .small()
+                        .ghost()
+                        .w_full()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.request_import(cx);
+                        })),
                     ),
             )
             .child(
@@ -2297,7 +2317,9 @@ impl AuthProfilesSection {
                         .flex()
                         .flex_col()
                         .gap_1()
-                        .child(Label::new("Source"))
+                        .child(Label::new(dbflux_i18n::t!(
+                            "settings.auth_profiles.source_label"
+                        )))
                         .child(Text::body(resolve_mirror_label(edit_caps.as_ref()))),
                 )
                 .children(field_rows.into_iter().map(|(label, value)| {
@@ -2418,9 +2440,10 @@ impl AuthProfilesSection {
                                 .and_then(|p| p.fields.get(&field.id).cloned())
                                 .filter(|v| !v.trim().is_empty());
 
-                            let hint = label
-                                .map(|name| format!("Inherited from {} '{}'.", trigger_id, name))
-                                .unwrap_or_else(|| format!("Inherited from {}.", trigger_id));
+                            let hint = crate::labels::auth_profiles_inherited_hint(
+                                trigger_id,
+                                label.as_deref(),
+                            );
                             Some((true, Some(hint), inherited))
                         })
                         .unwrap_or((false, None, None));
@@ -2430,7 +2453,7 @@ impl AuthProfilesSection {
                     let extra_hint: Option<String> =
                         if field.kind == FormFieldKind::WriteOnly && !disabled {
                             Some(field.help.clone().unwrap_or_else(|| {
-                                "Leave blank to keep the current value.".to_string()
+                                dbflux_i18n::t!("settings.auth_profiles.leave_blank_hint")
                             }))
                         } else {
                             None
@@ -2470,12 +2493,12 @@ impl AuthProfilesSection {
         layout::sticky_form_shell(
             div()
                 .child(Label::new(layout::editor_panel_title(
-                    "Auth Profile",
+                    &dbflux_i18n::t!("settings.auth_profiles.auth_profile_label"),
                     is_editing,
                 )))
-                .child(Text::muted(
-                    "Reusable authentication profile for access and value resolution",
-                )),
+                .child(Text::muted(dbflux_i18n::t!(
+                    "settings.auth_profiles.editor_subtitle"
+                ))),
             div()
                 .flex()
                 .flex_col()
@@ -2502,18 +2525,25 @@ impl AuthProfilesSection {
                                             .size(Heights::ICON_SM)
                                             .color(theme.warning),
                                     )
-                                    .child(Label::new("Profile Changed on Disk")),
+                                    .child(Label::new(dbflux_i18n::t!(
+                                        "settings.auth_profiles.changed_on_disk"
+                                    ))),
                             )
                             .child(Text::caption(msg))
                             .when(show_reload, |panel| {
                                 panel.child(
-                                    Button::new("edit-reload-profile", "Reload")
-                                        .small()
-                                        .on_click(cx.listener(|this, _, window, cx| {
+                                    Button::new(
+                                        "edit-reload-profile",
+                                        dbflux_i18n::t!("settings.auth_profiles.reload"),
+                                    )
+                                    .small()
+                                    .on_click(cx.listener(
+                                        |this, _, window, cx| {
                                             if let Some(id) = this.selected_profile_id {
                                                 this.load_profile_into_form(id, window, cx);
                                             }
-                                        })),
+                                        },
+                                    )),
                                 )
                             }),
                     )
@@ -2536,8 +2566,9 @@ impl AuthProfilesSection {
                     } else {
                         None
                     };
+                    let name_label = dbflux_i18n::t!("settings.auth_profiles.name_label");
                     self.render_input_row_disabled(
-                        "Name",
+                        &name_label,
                         &self.input_name,
                         AuthFormField::Name,
                         is_focused,
@@ -2552,7 +2583,9 @@ impl AuthProfilesSection {
                         .flex()
                         .flex_col()
                         .gap_2()
-                        .child(Label::new("Provider"))
+                        .child(Label::new(dbflux_i18n::t!(
+                            "settings.auth_profiles.provider_label"
+                        )))
                         .when(self.edit_snapshot.is_none(), |row| {
                             row.child(self.render_provider_selector(window, cx))
                         })
@@ -2630,7 +2663,9 @@ impl AuthProfilesSection {
                                         cx.notify();
                                     })),
                             )
-                            .child(Text::body("Enabled")),
+                            .child(Text::body(dbflux_i18n::t!(
+                                "settings.auth_profiles.enabled"
+                            ))),
                     )
                 }),
             None,
@@ -2655,40 +2690,49 @@ impl AuthProfilesSection {
                 root.child(layout::footer_action_frame(
                     is_form_focused && self.auth_form_field == AuthFormField::ExportButton,
                     primary,
-                    Button::new("export-auth-profile", "Export")
-                        .small()
-                        .ghost()
-                        .w_full()
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.request_export(cx);
-                        })),
+                    Button::new(
+                        "export-auth-profile",
+                        dbflux_i18n::t!("settings.auth_profiles.export"),
+                    )
+                    .small()
+                    .ghost()
+                    .w_full()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.request_export(cx);
+                    })),
                 ))
                 .child(layout::footer_action_frame(
                     is_form_focused && self.auth_form_field == AuthFormField::DeleteButton,
                     primary,
-                    Button::new("delete-auth-profile", "Delete")
-                        .small()
-                        .danger()
-                        .w_full()
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.request_delete_selected_profile(cx);
-                        })),
+                    Button::new(
+                        "delete-auth-profile",
+                        dbflux_i18n::t!("settings.auth_profiles.delete"),
+                    )
+                    .small()
+                    .danger()
+                    .w_full()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.request_delete_selected_profile(cx);
+                    })),
                 ))
             })
             .child(layout::footer_action_frame(
                 false,
                 primary,
-                Button::new("cancel-auth-profile", "Cancel")
-                    .small()
-                    .w_full()
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        if let Some(selected_id) = this.selected_profile_id {
-                            this.load_profile_into_form(selected_id, window, cx);
-                        } else {
-                            this.clear_form(window, cx);
-                            cx.notify();
-                        }
-                    })),
+                Button::new(
+                    "cancel-auth-profile",
+                    dbflux_i18n::t!("settings.auth_profiles.cancel"),
+                )
+                .small()
+                .w_full()
+                .on_click(cx.listener(|this, _, window, cx| {
+                    if let Some(selected_id) = this.selected_profile_id {
+                        this.load_profile_into_form(selected_id, window, cx);
+                    } else {
+                        this.clear_form(window, cx);
+                        cx.notify();
+                    }
+                })),
             ))
             .child(layout::footer_action_frame(
                 is_form_focused && self.auth_form_field == AuthFormField::SaveButton,
@@ -2696,11 +2740,11 @@ impl AuthProfilesSection {
                 Button::new(
                     "save-auth-profile",
                     if is_reflected {
-                        "Save to File"
+                        dbflux_i18n::t!("settings.auth_profiles.save_to_file")
                     } else if is_editing {
-                        "Update"
+                        dbflux_i18n::t!("settings.auth_profiles.update")
                     } else {
-                        "Create"
+                        dbflux_i18n::t!("settings.auth_profiles.create")
                     },
                 )
                 .small()
@@ -2924,31 +2968,25 @@ impl Render for AuthProfilesSection {
         layout::section_container(
             layout::split_section_shell(
                 dbflux_components::composites::section_header(
-                    "Auth Profiles",
-                    "Manage reusable authentication profiles for connection access",
+                    dbflux_i18n::t!("settings.auth_profiles.section_title"),
+                    dbflux_i18n::t!("settings.auth_profiles.section_description"),
                     cx,
                 ),
                 self.render_profile_list(&profiles, cx),
                 self.render_editor_panel(window, cx),
             )
-                .when(show_delete_dialog, |element| {
+            .when(show_delete_dialog, |element| {
                 let entity = cx.entity().clone();
                 let entity_cancel = entity.clone();
 
-                let body = if affected_connections > 0 {
-                    format!(
-                        "Are you sure you want to delete \"{}\"? {} connection{} using this auth profile will be updated.",
-                        delete_name,
-                        affected_connections,
-                        if affected_connections == 1 { "" } else { "s" }
-                    )
-                } else {
-                    format!("Are you sure you want to delete \"{}\"?", delete_name)
-                };
+                let body =
+                    crate::labels::auth_profiles_delete_body(&delete_name, affected_connections);
 
                 element.child(
                     Dialog::new(window, cx)
-                        .title("Delete Auth Profile")
+                        .title(dbflux_i18n::t!(
+                            "settings.auth_profiles.delete_dialog_title"
+                        ))
                         .confirm()
                         .on_ok(move |_, window, cx| {
                             entity.update(cx, |section, cx| {
@@ -3693,7 +3731,8 @@ mod tests {
     fn no_edit_caps_success_text_returns_fallback() {
         let result = resolve_success_text(None);
         assert_eq!(
-            result, SUCCESS_WRITTEN_FALLBACK,
+            result,
+            success_written_fallback(),
             "resolve_success_text must return the fallback when edit caps are absent"
         );
         assert!(
@@ -3749,8 +3788,9 @@ mod tests {
 
         let without_caps = resolve_success_text(None);
         assert_eq!(
-            without_caps, SUCCESS_WRITTEN_FALLBACK,
-            "resolve_success_text must return SUCCESS_WRITTEN_FALLBACK when edit is None"
+            without_caps,
+            success_written_fallback(),
+            "resolve_success_text must return the saved-fallback translation when edit is None"
         );
     }
 
@@ -3865,5 +3905,127 @@ mod tests {
                 "Delete row must be absent for reflected profiles (field_count={field_count})"
             );
         }
+    }
+
+    // ---------------------------------------------------------------------------
+    // i18n — chrome keys (spec S15): section header, profiles list, form
+    // labels/buttons, export/delete dialogs, changed-on-disk banner.
+    // ---------------------------------------------------------------------------
+
+    const AUTH_PROFILES_CHROME_KEYS: &[&str] = &[
+        "settings.auth_profiles.profiles_label",
+        "settings.auth_profiles.new_profile",
+        "settings.auth_profiles.import",
+        "settings.auth_profiles.source_label",
+        "settings.auth_profiles.leave_blank_hint",
+        "settings.auth_profiles.auth_profile_label",
+        "settings.auth_profiles.editor_subtitle",
+        "settings.auth_profiles.changed_on_disk",
+        "settings.auth_profiles.reload",
+        "settings.auth_profiles.name_label",
+        "settings.auth_profiles.provider_label",
+        "settings.auth_profiles.placeholder_name",
+        "settings.auth_profiles.select_provider_ellipsis",
+        "settings.auth_profiles.select_ellipsis",
+        "settings.auth_profiles.select_none",
+        "settings.auth_profiles.enabled",
+        "settings.auth_profiles.export",
+        "settings.auth_profiles.delete",
+        "settings.auth_profiles.save_to_file",
+        "settings.auth_profiles.cancel",
+        "settings.auth_profiles.update",
+        "settings.auth_profiles.create",
+        "settings.auth_profiles.section_title",
+        "settings.auth_profiles.section_description",
+        "settings.auth_profiles.delete_dialog_title",
+        "settings.auth_profiles.saved_fallback",
+        "settings.auth_profiles.reference_invalid_title",
+        "settings.auth_profiles.reference_invalid_body",
+        "settings.auth_profiles.login_hint",
+        "settings.auth_profiles.delete_dialog.body_none",
+        "settings.auth_profiles.delete_dialog.body_one",
+        "settings.auth_profiles.delete_dialog.body_many",
+        "settings.auth_profiles.inherited_from",
+        "settings.auth_profiles.inherited_from_named",
+    ];
+
+    #[::core::prelude::v1::test]
+    fn auth_profiles_chrome_keys_resolve_in_both_locales() {
+        for locale in ["en", "es"] {
+            for key in AUTH_PROFILES_CHROME_KEYS {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(
+                    !value.is_empty(),
+                    "key {key} resolved empty for locale {locale}"
+                );
+                assert_ne!(value, *key, "key {key} did not resolve for locale {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "key {key} fell back to the raw locale-qualified form for locale {locale}"
+                );
+            }
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn auth_profiles_section_title_differs_between_locales() {
+        let en = dbflux_i18n::t!("settings.auth_profiles.section_title", locale = "en");
+        let es = dbflux_i18n::t!("settings.auth_profiles.section_title", locale = "es");
+
+        assert_eq!(en, "Auth Profiles");
+        assert_eq!(es, "Perfiles de autenticación");
+        assert_ne!(en, es);
+    }
+
+    #[::core::prelude::v1::test]
+    fn auth_profiles_new_profile_exact_values() {
+        let en = dbflux_i18n::t!("settings.auth_profiles.new_profile", locale = "en");
+        let es = dbflux_i18n::t!("settings.auth_profiles.new_profile", locale = "es");
+
+        assert_eq!(en, "New Auth Profile");
+        assert_eq!(es, "Nuevo perfil de autenticación");
+    }
+
+    #[::core::prelude::v1::test]
+    fn auth_profiles_delete_body_embeds_name_with_no_affected_connections() {
+        let message = crate::labels::auth_profiles_delete_body("prod-mongo", 0);
+
+        assert_eq!(message, "Are you sure you want to delete \"prod-mongo\"?");
+    }
+
+    #[::core::prelude::v1::test]
+    fn auth_profiles_delete_body_uses_singular_for_one_affected_connection() {
+        let message = crate::labels::auth_profiles_delete_body("prod-mongo", 1);
+
+        assert_eq!(
+            message,
+            "Are you sure you want to delete \"prod-mongo\"? 1 connection using this auth profile will be updated."
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn auth_profiles_delete_body_uses_plural_for_multiple_affected_connections() {
+        let message = crate::labels::auth_profiles_delete_body("prod-mongo", 3);
+
+        assert_eq!(
+            message,
+            "Are you sure you want to delete \"prod-mongo\"? 3 connections using this auth profile will be updated."
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn auth_profiles_inherited_hint_without_referenced_name() {
+        let hint = crate::labels::auth_profiles_inherited_hint("proxy_id", None);
+
+        assert_eq!(hint, "Inherited from proxy_id.");
+    }
+
+    #[::core::prelude::v1::test]
+    fn auth_profiles_inherited_hint_with_referenced_name() {
+        let hint = crate::labels::auth_profiles_inherited_hint("proxy_id", Some("corporate-proxy"));
+
+        assert_eq!(hint, "Inherited from proxy_id 'corporate-proxy'.");
     }
 }
