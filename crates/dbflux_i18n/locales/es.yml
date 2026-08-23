@@ -800,6 +800,18 @@ sidebar:
     post_connect_hook_cancelled: Hook posterior a la conexión cancelado
     disconnect_hook_cancelled: Hook de desconexión cancelado
     post_disconnect_hook_cancelled: Hook posterior a la desconexión cancelado
+    pipeline:
+      connecting: "Conectando a %{name} (pipeline)"
+      cancelled: Pipeline cancelado
+      failed: "Pipeline con error: %{error}"
+      completed: Pipeline completado
+      stage:
+        authenticating: "Pipeline: autenticando (%{provider})"
+        waiting_for_login: "Pipeline: esperando el inicio de sesión de %{provider}"
+        resolving_values: "Pipeline: resolviendo valores (%{resolved}/%{total})"
+        opening_access: "Pipeline: abriendo acceso (%{method})"
+        connecting: "Pipeline: conectando el driver (%{driver})"
+        fetching_schema: "Pipeline: obteniendo el esquema"
   toast:
     edit_reconnect_updated: "'%{name}' actualizado"
     edit_reconnect_body: Reconecta para aplicar los cambios a la sesión activa.

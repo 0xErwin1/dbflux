@@ -800,6 +800,18 @@ sidebar:
     post_connect_hook_cancelled: Post-connect hook cancelled
     disconnect_hook_cancelled: Disconnect hook cancelled
     post_disconnect_hook_cancelled: Post-disconnect hook cancelled
+    pipeline:
+      connecting: "Connecting to %{name} (pipeline)"
+      cancelled: Pipeline cancelled
+      failed: "Pipeline failed: %{error}"
+      completed: Pipeline completed
+      stage:
+        authenticating: "Pipeline: Authenticating (%{provider})"
+        waiting_for_login: "Pipeline: Waiting for %{provider} login"
+        resolving_values: "Pipeline: Resolving values (%{resolved}/%{total})"
+        opening_access: "Pipeline: Opening access (%{method})"
+        connecting: "Pipeline: Connecting driver (%{driver})"
+        fetching_schema: "Pipeline: Fetching schema"
   toast:
     edit_reconnect_updated: "'%{name}' updated"
     edit_reconnect_body: Reconnect to apply the changes to the live session.
