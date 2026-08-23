@@ -292,6 +292,8 @@ mod tests {
         for key in [
             "document.object_editor.status.loading",
             "document.object_editor.status.preparing",
+            "document.object_browser.error.connection_unavailable",
+            "document.object_browser.error.api_unavailable",
         ] {
             let en = dbflux_i18n::t!(key, locale = "en");
             let es = dbflux_i18n::t!(key, locale = "es");
