@@ -2484,6 +2484,116 @@ settings:
       title: "Conflicto: %{chord} también está asignado a %{others}"
       body: Dos o más comandos comparten este atajo en este contexto.
       unknown_other: otro atajo
+    command:
+      toggle_command_palette: Mostrar u ocultar la paleta de comandos
+      new_query_tab: Nueva pestaña de consulta
+      close_tab: Cerrar pestaña actual
+      next_tab: Pestaña siguiente
+      prev_tab: Pestaña anterior
+      switch_to_tab: Cambiar a pestaña
+      open_tab_menu: Abrir menú de pestaña
+      focus_sidebar: Enfocar barra lateral
+      focus_editor: Enfocar editor
+      focus_results: Enfocar resultados
+      focus_tasks: Enfocar tareas en segundo plano
+      cycle_focus_forward: Ciclar foco hacia adelante
+      cycle_focus_backward: Ciclar foco hacia atrás
+      focus_left: Enfocar a la izquierda
+      focus_right: Enfocar a la derecha
+      focus_up: Enfocar hacia arriba
+      focus_down: Enfocar hacia abajo
+      select_next: Seleccionar siguiente
+      select_prev: Seleccionar anterior
+      select_first: Seleccionar primero
+      select_last: Seleccionar último
+      page_down: Página siguiente
+      page_up: Página anterior
+      extend_select_next: Extender selección hacia abajo
+      extend_select_prev: Extender selección hacia arriba
+      toggle_selection: Alternar selección
+      move_selected_up: Mover selección hacia arriba
+      move_selected_down: Mover selección hacia abajo
+      column_left: Columna izquierda
+      column_right: Columna derecha
+      execute: Ejecutar
+      cancel: Cancelar
+      expand_collapse: Expandir o contraer
+      delete: Eliminar
+      rename: Renombrar
+      focus_search: Enfocar búsqueda
+      toggle_favorite: Alternar favorito
+      run_query: Ejecutar consulta
+      run_query_in_new_tab: Ejecutar consulta en nueva pestaña
+      cancel_query: Cancelar consulta
+      open_history: Mostrar u ocultar historial
+      open_saved_queries: Abrir consultas guardadas
+      save_query: Guardar
+      save_file_as: Guardar archivo como
+      open_script_file: Abrir archivo de script
+      export_results: Exportar resultados
+      results_next_page: "Resultados: página siguiente"
+      results_prev_page: "Resultados: página anterior"
+      focus_toolbar: Enfocar barra de herramientas
+      toggle_panel: Alternar panel
+      results_delete_row: Eliminar fila
+      results_add_row: Agregar fila
+      results_duplicate_row: Duplicar fila
+      results_copy_row: Copiar fila
+      results_copy_cell: Copiar celda
+      results_set_null: Establecer celda en NULL
+      open_context_menu: Abrir menú contextual
+      menu_up: "Menú: arriba"
+      menu_down: "Menú: abajo"
+      menu_select: "Menú: seleccionar"
+      menu_back: "Menú: atrás"
+      sidebar_next_tab: "Barra lateral: siguiente pestaña"
+      refresh_schema: Actualizar schema
+      open_connection_manager: Abrir gestor de conexiones
+      export_connections: "Exportar conexiones…"
+      disconnect: Desconectar
+      open_item_menu: Abrir menú del elemento
+      create_folder: Crear carpeta
+      toggle_editor: Mostrar u ocultar panel del editor
+      toggle_results: Mostrar u ocultar panel de resultados
+      toggle_tasks: Mostrar u ocultar panel de tareas
+      toggle_sidebar: Mostrar u ocultar barra lateral
+      open_settings: Abrir configuración
+      open_login_modal: Abrir inicio de sesión de Auth Profile
+      open_sso_wizard: Abrir asistente de AWS SSO
+      open_audit_viewer: Abrir visor de auditoría
+      open_mcp_approvals: Abrir aprobaciones de MCP
+      refresh_mcp_governance: Actualizar gobernanza de MCP
+      open_saved_chart: "Abrir gráfico..."
+      import_dashboard: "Importar dashboard desde JSON..."
+      new_dashboard: "Nuevo dashboard..."
+    context:
+      global: Global
+      sidebar: Barra lateral
+      editor: Editor
+      results: Resultados
+      background_tasks: Tareas en segundo plano
+      command_palette: Paleta de comandos
+      connection_manager: Gestor de conexiones
+      history_modal: Historial
+      text_input: Campo de texto
+      dropdown: Menú desplegable
+      sql_preview_modal: Vista previa de SQL
+      context_menu: Menú contextual
+      confirm_modal: Confirmar
+      form_navigation: Navegación de formulario
+      context_bar: Barra de contexto
+      audit: Visor de auditoría
+      event_streams_picker: Selector de flujos de eventos
+    category:
+      global: Global
+      focus: Foco
+      navigation: Navegación
+      results: Resultados
+      actions: Acciones
+      editor: Editor
+      sidebar: Barra lateral
+      view: Vista
+      dashboards: Dashboards
   hooks:
     header:
       title: Hooks

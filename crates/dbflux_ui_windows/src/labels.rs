@@ -711,6 +711,54 @@ pub(crate) fn export_toast_success(kind: &str, path: &str) -> String {
     )
 }
 
+/// Translates a command's display name for the Settings → Keybindings
+/// section, keyed by [`dbflux_app::keymap::Command::id`].
+pub(crate) fn keybinding_command_name(cmd: &dbflux_app::keymap::Command) -> String {
+    dbflux_i18n::t!(&format!("settings.keybindings.command.{}", cmd.id()))
+}
+
+/// Translates a context's display name for the Settings → Keybindings
+/// section, keyed by [`dbflux_app::keymap::ContextId::id`].
+pub(crate) fn keybinding_context_name(ctx: &dbflux_app::keymap::ContextId) -> String {
+    dbflux_i18n::t!(&format!("settings.keybindings.context.{}", ctx.id()))
+}
+
+/// Translates a command category label for the Settings → Keybindings
+/// section.
+///
+/// `category` is the English string returned by
+/// [`dbflux_app::keymap::Command::category`]; it is mapped to a stable slug
+/// through an explicit match rather than derived by string munging.
+///
+/// No `settings/keybindings.rs` view currently groups bindings by category
+/// (only by [`dbflux_app::keymap::ContextId`]), so this has no production
+/// call site yet; it exists so the catalog stays complete alongside
+/// [`keybinding_command_name`] and [`keybinding_context_name`], and is
+/// exercised by the exhaustive translation-coverage tests below.
+#[allow(dead_code)]
+pub(crate) fn keybinding_category_name(category: &str) -> String {
+    dbflux_i18n::t!(&format!(
+        "settings.keybindings.category.{}",
+        keybinding_category_slug(category)
+    ))
+}
+
+#[allow(dead_code)]
+fn keybinding_category_slug(category: &str) -> &'static str {
+    match category {
+        "Global" => "global",
+        "Focus" => "focus",
+        "Navigation" => "navigation",
+        "Results" => "results",
+        "Actions" => "actions",
+        "Editor" => "editor",
+        "Sidebar" => "sidebar",
+        "View" => "view",
+        "Dashboards" => "dashboards",
+        other => panic!("keybinding_category_slug: unknown command category {other:?}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1320,5 +1368,142 @@ mod tests {
 
         assert!(message.contains("connection"));
         assert!(message.contains("/tmp/bundle.toml"));
+    }
+}
+
+#[cfg(test)]
+mod keybinding_translation_tests {
+    use super::{keybinding_category_name, keybinding_command_name, keybinding_context_name};
+    use dbflux_app::keymap::{Command, ContextId};
+
+    const COMMAND_CATEGORIES: &[&str] = &[
+        "Global",
+        "Focus",
+        "Navigation",
+        "Results",
+        "Actions",
+        "Editor",
+        "Sidebar",
+        "View",
+        "Dashboards",
+    ];
+
+    #[test]
+    fn keybinding_command_names_resolve_in_both_locales_and_match_display_name_in_english() {
+        for command in Command::all_variants() {
+            let key = format!("settings.keybindings.command.{}", command.id());
+
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(&key, locale = locale);
+
+                assert!(
+                    !value.is_empty(),
+                    "key {key} resolved empty for locale {locale}"
+                );
+                assert_ne!(value, key, "key {key} did not resolve for locale {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "key {key} fell back to the raw locale-qualified form for locale {locale}"
+                );
+            }
+
+            assert_eq!(
+                dbflux_i18n::t!(&key, locale = "en"),
+                command.display_name(),
+                "English catalog value for {key} must match Command::display_name()"
+            );
+        }
+    }
+
+    #[test]
+    fn keybinding_command_name_helper_matches_catalog_lookup() {
+        let command = Command::RunQuery;
+
+        assert_eq!(
+            keybinding_command_name(&command),
+            dbflux_i18n::t!("settings.keybindings.command.run_query", locale = "en")
+        );
+    }
+
+    #[test]
+    fn keybinding_context_names_resolve_in_both_locales_and_match_display_name_in_english() {
+        for context in ContextId::all_variants() {
+            let key = format!("settings.keybindings.context.{}", context.id());
+
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(&key, locale = locale);
+
+                assert!(
+                    !value.is_empty(),
+                    "key {key} resolved empty for locale {locale}"
+                );
+                assert_ne!(value, key, "key {key} did not resolve for locale {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "key {key} fell back to the raw locale-qualified form for locale {locale}"
+                );
+            }
+
+            assert_eq!(
+                dbflux_i18n::t!(&key, locale = "en"),
+                context.display_name(),
+                "English catalog value for {key} must match ContextId::display_name()"
+            );
+        }
+    }
+
+    #[test]
+    fn keybinding_context_name_helper_matches_catalog_lookup() {
+        let context = ContextId::Sidebar;
+
+        assert_eq!(
+            keybinding_context_name(&context),
+            dbflux_i18n::t!("settings.keybindings.context.sidebar", locale = "en")
+        );
+    }
+
+    #[test]
+    fn keybinding_category_names_resolve_in_both_locales_and_match_category_in_english() {
+        for category in COMMAND_CATEGORIES {
+            let slug = category.to_ascii_lowercase();
+            let key = format!("settings.keybindings.category.{slug}");
+
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(&key, locale = locale);
+
+                assert!(
+                    !value.is_empty(),
+                    "key {key} resolved empty for locale {locale}"
+                );
+                assert_ne!(value, key, "key {key} did not resolve for locale {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "key {key} fell back to the raw locale-qualified form for locale {locale}"
+                );
+            }
+
+            assert_eq!(
+                dbflux_i18n::t!(&key, locale = "en"),
+                *category,
+                "English catalog value for {key} must match the Command::category() string"
+            );
+        }
+    }
+
+    #[test]
+    fn keybinding_category_name_helper_matches_catalog_lookup() {
+        assert_eq!(
+            keybinding_category_name("Editor"),
+            dbflux_i18n::t!("settings.keybindings.category.editor", locale = "en")
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "unknown command category")]
+    fn keybinding_category_name_panics_on_unmapped_category() {
+        keybinding_category_name("NotACategory");
     }
 }
