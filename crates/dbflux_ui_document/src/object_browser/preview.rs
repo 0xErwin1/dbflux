@@ -13,6 +13,7 @@ use super::metadata::{
 use super::preview_content::{ImagePreview, PreviewContentState, PreviewKind};
 use super::render::{format_modified, object_icon};
 use super::{ObjectAction, ObjectBrowserDocument};
+use crate::labels::object_browser_versions_count_label;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Text};
 use dbflux_components::tokens::{Heights, Radii, Spacing};
@@ -283,8 +284,10 @@ impl ObjectBrowserDocument {
                                 .cursor_pointer()
                                 .hover(|d| d.bg(theme.secondary))
                                 .tooltip(|window, cx| {
-                                    gpui_component::tooltip::Tooltip::new("Open in editor")
-                                        .build(window, cx)
+                                    gpui_component::tooltip::Tooltip::new(dbflux_i18n::t!(
+                                        "document.object_browser.preview.header.open_in_editor"
+                                    ))
+                                    .build(window, cx)
                                 })
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.request_open_object_editor(key.clone(), cx);
@@ -306,8 +309,10 @@ impl ObjectBrowserDocument {
                                 .cursor_pointer()
                                 .hover(|d| d.bg(theme.secondary))
                                 .tooltip(|window, cx| {
-                                    gpui_component::tooltip::Tooltip::new("Open in system viewer")
-                                        .build(window, cx)
+                                    gpui_component::tooltip::Tooltip::new(dbflux_i18n::t!(
+                                        "document.object_browser.preview.header.open_in_system_viewer"
+                                    ))
+                                    .build(window, cx)
                                 })
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.open_object_externally(key.clone(), cx);
@@ -399,7 +404,12 @@ impl ObjectBrowserDocument {
                             .items_center()
                             .gap(Spacing::XS)
                             .child(Icon::new(AppIcon::Maximize2).small().muted())
-                            .child(Text::caption("Fit to width").muted_foreground()),
+                            .child(
+                                Text::caption(dbflux_i18n::t!(
+                                    "document.object_browser.preview.body.fit_to_width"
+                                ))
+                                .muted_foreground(),
+                            ),
                     )
                     .when_some(timing, |this, timing| {
                         this.child(Text::caption(timing).muted_foreground())
@@ -414,7 +424,7 @@ impl ObjectBrowserDocument {
         if let PreviewContentState::Loading = self.preview_content() {
             return self.render_notice(
                 AppIcon::Loader,
-                "Loading preview…",
+                &dbflux_i18n::t!("document.object_browser.preview.body.loading"),
                 NoticeTone::Neutral,
                 cx,
             );
@@ -427,7 +437,7 @@ impl ObjectBrowserDocument {
         let (icon, message, tone) = match &self.metadata {
             None | Some(ObjectMetadataState::Loading) => (
                 AppIcon::Loader,
-                "Loading metadata…".to_string(),
+                dbflux_i18n::t!("document.object_browser.preview.body.loading_metadata"),
                 NoticeTone::Neutral,
             ),
             Some(ObjectMetadataState::Error(message)) => {
@@ -459,13 +469,9 @@ impl ObjectBrowserDocument {
     fn unpreviewable_message(&self) -> String {
         match self.preview_kind() {
             Some(PreviewKind::Pdf) => {
-                "PDFs are not rendered in-app. Download this object or open it in your system \
-                 viewer."
-                    .to_string()
+                dbflux_i18n::t!("document.object_browser.preview.body.unpreviewable.pdf")
             }
-            _ => "This file type has no in-app preview. Download this object or open it in your \
-                  system viewer."
-                .to_string(),
+            _ => dbflux_i18n::t!("document.object_browser.preview.body.unpreviewable.generic"),
         }
     }
 
@@ -518,46 +524,51 @@ impl ObjectBrowserDocument {
             .child(
                 div()
                     .pb(Spacing::XS)
-                    .child(Text::subsection_label("Object")),
+                    .child(Text::subsection_label(dbflux_i18n::t!(
+                        "document.object_browser.metadata.section"
+                    ))),
             )
-            .child(self.metadata_row("Key", Text::code(metadata.key.clone()).into_any_element()))
             .child(self.metadata_row(
-                "Size",
+                dbflux_i18n::t!("document.object_browser.metadata.key"),
+                Text::code(metadata.key.clone()).into_any_element(),
+            ))
+            .child(self.metadata_row(
+                dbflux_i18n::t!("document.object_browser.metadata.size"),
                 Text::code(format_size_detail(metadata.size_bytes)).into_any_element(),
             ))
             .child(self.metadata_row(
-                "Content-Type",
+                dbflux_i18n::t!("document.object_browser.metadata.content_type"),
                 Text::code(optional_value(metadata.content_type.as_deref())).into_any_element(),
             ))
             .child(self.metadata_row(
-                "Last modified",
+                dbflux_i18n::t!("document.object_browser.metadata.last_modified"),
                 Text::code(format_modified(metadata.last_modified)).into_any_element(),
             ))
             .child(
                 self.metadata_row(
-                    "ETag",
+                    dbflux_i18n::t!("document.object_browser.metadata.etag"),
                     Text::code(optional_value(metadata.etag.as_deref()))
                         .muted_foreground()
                         .into_any_element(),
                 ),
             )
             .child(self.metadata_row(
-                "Storage class",
+                dbflux_i18n::t!("document.object_browser.metadata.storage_class"),
                 self.render_storage_class(metadata.storage_class.as_deref(), cx),
             ))
             .child(self.metadata_row(
-                "Encryption",
+                dbflux_i18n::t!("document.object_browser.metadata.encryption"),
                 Text::code(optional_value(metadata.encryption.as_deref())).into_any_element(),
             ))
             .child(self.metadata_row(
-                "Versions",
+                dbflux_i18n::t!("document.object_browser.metadata.versions"),
                 self.render_versions_value(key, metadata.version_count, cx),
             ))
             .child(self.render_versions_list(cx))
             .into_any_element()
     }
 
-    fn metadata_row(&self, label: &'static str, value: AnyElement) -> impl IntoElement {
+    fn metadata_row(&self, label: impl Into<SharedString>, value: AnyElement) -> impl IntoElement {
         div()
             .flex()
             .items_start()
@@ -591,16 +602,13 @@ impl ObjectBrowserDocument {
         }
 
         match &self.versions {
-            ObjectVersionsState::Loading => Text::caption("Loading…")
-                .muted_foreground()
-                .into_any_element(),
+            ObjectVersionsState::Loading => Text::caption(dbflux_i18n::t!(
+                "document.object_browser.preview.versions.loading"
+            ))
+            .muted_foreground()
+            .into_any_element(),
             ObjectVersionsState::Loaded(versions) => {
-                let word = if versions.len() == 1 {
-                    "version"
-                } else {
-                    "versions"
-                };
-                Text::code(format!("{} {word}", versions.len())).into_any_element()
+                Text::code(object_browser_versions_count_label(versions.len())).into_any_element()
             }
             ObjectVersionsState::Error(message) => {
                 Text::caption(message.clone()).danger().into_any_element()
@@ -620,7 +628,12 @@ impl ObjectBrowserDocument {
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.load_object_versions(key.clone(), cx);
                     }))
-                    .child(Text::caption("View versions").primary())
+                    .child(
+                        Text::caption(dbflux_i18n::t!(
+                            "document.object_browser.preview.versions.view"
+                        ))
+                        .primary(),
+                    )
                     .into_any_element()
             }
         }
@@ -698,7 +711,7 @@ impl ObjectBrowserDocument {
             .child(self.preview_action_button(
                 "object-browser-download",
                 AppIcon::Download,
-                "Download",
+                dbflux_i18n::t!("document.object_browser.preview.action.download"),
                 false,
                 {
                     let key = key.to_string();
@@ -709,7 +722,7 @@ impl ObjectBrowserDocument {
             .child(self.preview_action_button(
                 "object-browser-open-externally",
                 AppIcon::ExternalLink,
-                "Open",
+                dbflux_i18n::t!("document.object_browser.preview.action.open"),
                 false,
                 {
                     let key = key.to_string();
@@ -720,7 +733,7 @@ impl ObjectBrowserDocument {
             .child(self.preview_action_button(
                 "object-browser-copy-uri",
                 AppIcon::Copy,
-                "Copy URI",
+                dbflux_i18n::t!("document.object_browser.preview.action.copy_uri"),
                 false,
                 {
                     let key = key.to_string();
@@ -731,7 +744,7 @@ impl ObjectBrowserDocument {
             .child(self.preview_action_button(
                 "object-browser-presign",
                 AppIcon::Link2,
-                "Presign",
+                dbflux_i18n::t!("document.object_browser.preview.action.presign"),
                 false,
                 {
                     let key = key.to_string();
@@ -744,7 +757,7 @@ impl ObjectBrowserDocument {
             .child(self.preview_action_button(
                 "object-browser-delete",
                 AppIcon::Delete,
-                "Delete",
+                dbflux_i18n::t!("document.object_browser.preview.action.delete"),
                 true,
                 {
                     let key = key.to_string();
@@ -760,7 +773,7 @@ impl ObjectBrowserDocument {
         &self,
         id: &'static str,
         icon: AppIcon,
-        label: &'static str,
+        label: impl Into<SharedString>,
         destructive: bool,
         on_activate: impl Fn(&mut Self, &mut Context<Self>) + 'static,
         cx: &mut Context<Self>,

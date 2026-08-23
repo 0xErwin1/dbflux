@@ -756,6 +756,76 @@ document:
         no_limit: No limit
         missing: Missing
         expired: Expired
+  object_browser:
+    columns:
+      class: Class
+      key: Key
+      last_modified: Last modified
+      size: Size
+    empty:
+      bucket: This bucket is empty
+      filtered: No keys match this filter
+      loading: "Loading objects…"
+      prefix: This prefix is empty
+    gate:
+      archived: "This object is archived and cannot be previewed. Restore it in your S3 console to access its contents."
+      too_large: "This object is %{size} and exceeds the %{limit} preview limit. Download it to inspect its contents."
+    metadata:
+      content_type: Content-Type
+      encryption: Encryption
+      etag: ETag
+      key: Key
+      last_modified: Last modified
+      section: Object
+      size: Size
+      storage_class: Storage class
+      versions: Versions
+    preview:
+      action:
+        copy_uri: Copy URI
+        delete: Delete
+        download: Download
+        open: Open
+        presign: Presign
+      body:
+        fit_to_width: Fit to width
+        loading: "Loading preview…"
+        loading_metadata: "Loading metadata…"
+        unpreviewable:
+          generic: "This file type has no in-app preview. Download this object or open it in your system viewer."
+          pdf: "PDFs are not rendered in-app. Download this object or open it in your system viewer."
+      header:
+        open_in_editor: Open in editor
+        open_in_system_viewer: Open in system viewer
+      versions:
+        count:
+          one: "%{count} version"
+          many: "%{count} versions"
+        loading: "Loading…"
+        view: View versions
+    status:
+      folders:
+        one: "%{count} folder"
+        many: "%{count} folders"
+      key_hint:
+        delete: x delete
+        filter: / filter
+        open: Enter open
+        preview: Space preview
+        rename: r rename
+        up: "← up a level"
+      load_more: Load more
+      loading_more: "Loading more…"
+      objects:
+        one: "%{count} object"
+        many: "%{count} objects"
+      retry: Retry
+      tree_mode: tree mode
+    toolbar:
+      new_folder: New folder
+      refresh: Refresh
+      tree: Tree
+      upload: Upload
   query_builder:
     aggregate:
       fn:

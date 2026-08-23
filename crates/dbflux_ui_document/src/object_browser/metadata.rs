@@ -29,24 +29,11 @@ pub enum PreviewGate {
 
 impl PreviewGate {
     /// Explanation shown in place of the preview, or `None` when the object
-    /// is previewable.
+    /// is previewable. Delegates to the translated, exhaustive
+    /// `crate::labels::preview_gate_message` so every variant routes through
+    /// the catalog.
     pub fn message(&self) -> Option<String> {
-        match self {
-            PreviewGate::Allowed => None,
-            PreviewGate::TooLarge {
-                size_bytes,
-                limit_bytes,
-            } => Some(format!(
-                "This object is {} and exceeds the {} preview limit. Download it to inspect its contents.",
-                format_bytes(*size_bytes),
-                format_bytes(*limit_bytes)
-            )),
-            PreviewGate::Archived => Some(
-                "This object is archived and cannot be previewed. Restore it in your S3 console \
-                 to access its contents."
-                    .to_string(),
-            ),
-        }
+        crate::labels::preview_gate_message(self)
     }
 }
 
