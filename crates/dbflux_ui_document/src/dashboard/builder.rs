@@ -154,7 +154,11 @@ impl PanelContextMenu {
 // Time-range preset helpers
 // ---------------------------------------------------------------------------
 
-/// All five time-range preset variants in display order.
+/// All five time-range preset variants in display order. The English label
+/// column is retained for structural coverage only — `preset_label` matches
+/// on the enum variant directly and resolves the translated string through
+/// the catalog instead of reading this table.
+#[allow(dead_code)]
 pub(super) const TIME_RANGE_PRESETS: &[(TimeRangePreset, &str)] = &[
     (TimeRangePreset::Last15min, "Last 15 min"),
     (TimeRangePreset::LastHour, "Last 1 hour"),
@@ -163,14 +167,24 @@ pub(super) const TIME_RANGE_PRESETS: &[(TimeRangePreset, &str)] = &[
     (TimeRangePreset::Last7Days, "Last 7 days"),
 ];
 
-/// Returns the display label for a `TimeRangePreset`.
+/// Returns the translated display label for a `TimeRangePreset`.
 #[allow(dead_code)]
-pub(super) fn preset_label(preset: TimeRangePreset) -> &'static str {
-    TIME_RANGE_PRESETS
-        .iter()
-        .find(|(p, _)| *p == preset)
-        .map(|(_, l)| *l)
-        .unwrap_or("Last 24 hours")
+pub(super) fn preset_label(preset: TimeRangePreset) -> String {
+    match preset {
+        TimeRangePreset::Last15min => {
+            dbflux_i18n::t!("document.dashboard.builder.preset.last_15_min")
+        }
+        TimeRangePreset::LastHour => dbflux_i18n::t!("document.dashboard.builder.preset.last_hour"),
+        TimeRangePreset::Last6Hours => {
+            dbflux_i18n::t!("document.dashboard.builder.preset.last_6_hours")
+        }
+        TimeRangePreset::Last24Hours => {
+            dbflux_i18n::t!("document.dashboard.builder.preset.last_24_hours")
+        }
+        TimeRangePreset::Last7Days => {
+            dbflux_i18n::t!("document.dashboard.builder.preset.last_7_days")
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -243,7 +257,7 @@ pub(super) fn dashboard_toolbar(
     });
 
     let add_btn = ToolbarButton::new("dash-add-panel-toolbar")
-        .label("+ Add Panel")
+        .label(dbflux_i18n::t!("document.dashboard.toolbar.add_panel"))
         .variant(ToolbarButtonVariant::Primary)
         .on_click(move |event, window, app| on_add_panel(event, window, app));
 
@@ -254,9 +268,15 @@ pub(super) fn dashboard_toolbar(
         this.toggle_mode(cx);
     });
     let (mode_icon, mode_tooltip) = if in_edit_mode {
-        (AppIcon::Eye, "Exit edit mode")
+        (
+            AppIcon::Eye,
+            dbflux_i18n::t!("document.dashboard.toolbar.exit_edit_mode_tooltip"),
+        )
     } else {
-        (AppIcon::Pencil, "Edit dashboard")
+        (
+            AppIcon::Pencil,
+            dbflux_i18n::t!("document.dashboard.toolbar.edit_mode_tooltip"),
+        )
     };
     let mode_btn = ToolbarButton::new("dash-mode-toggle")
         .icon(mode_icon)
@@ -275,9 +295,13 @@ pub(super) fn dashboard_toolbar(
             this.request_save_as_editable(cx);
         });
         let save_as_btn = ToolbarButton::new("dash-save-as-editable")
-            .label("Save as editable")
+            .label(dbflux_i18n::t!(
+                "document.dashboard.toolbar.save_as_editable"
+            ))
             .variant(ToolbarButtonVariant::Default)
-            .tooltip("Clone this overview into a new editable dashboard")
+            .tooltip(dbflux_i18n::t!(
+                "document.dashboard.toolbar.save_as_editable_tooltip"
+            ))
             .on_click(move |event, window, app| on_save_as(event, window, app));
         div()
             .flex_shrink_0()
@@ -351,7 +375,7 @@ fn build_custom_time_controls(
         .child(slots.end_minute)
         .child(
             ToolbarButton::new("dashboard-custom-time-apply")
-                .label("Apply")
+                .label(dbflux_i18n::t!("document.dashboard.toolbar.apply"))
                 .variant(ToolbarButtonVariant::Default)
                 .disabled(!can_apply)
                 .on_click(on_apply),
@@ -553,12 +577,22 @@ fn panel_kebab_menu(
 
     // Build the action list. "Edit title…" is omitted for slot types that
     // carry no user-editable title (Inspector, Divider).
-    let mut menu_items: Vec<MenuItem> = vec![MenuItem::new("Configure…").icon(AppIcon::Settings)];
+    let mut menu_items: Vec<MenuItem> = vec![
+        MenuItem::new(dbflux_i18n::t!("document.dashboard.panel.menu.configure"))
+            .icon(AppIcon::Settings),
+    ];
     if has_editable_title {
-        menu_items.push(MenuItem::new("Edit title…").icon(AppIcon::Pencil));
+        menu_items.push(
+            MenuItem::new(dbflux_i18n::t!("document.dashboard.panel.menu.edit_title"))
+                .icon(AppIcon::Pencil),
+        );
     }
     menu_items.push(MenuItem::separator());
-    menu_items.push(MenuItem::new("Remove panel").icon(AppIcon::Delete).danger());
+    menu_items.push(
+        MenuItem::new(dbflux_i18n::t!("document.dashboard.panel.menu.remove"))
+            .icon(AppIcon::Delete)
+            .danger(),
+    );
 
     // Map visual index → domain PanelMenuAction index, skipping the separator
     // and the conditionally absent "Edit title…" item.
@@ -760,14 +794,61 @@ mod tests {
         assert_eq!(TIME_RANGE_PRESETS.len(), 5);
     }
 
-    /// `preset_label` returns the correct human-readable string for each variant.
+    /// `preset_label` routes every `TimeRangePreset` variant through the
+    /// `document.dashboard.builder.preset.*` catalog instead of returning a
+    /// hardcoded English string.
     #[test]
     fn preset_label_returns_correct_string() {
-        assert_eq!(preset_label(TimeRangePreset::Last15min), "Last 15 min");
-        assert_eq!(preset_label(TimeRangePreset::LastHour), "Last 1 hour");
-        assert_eq!(preset_label(TimeRangePreset::Last6Hours), "Last 6 hours");
-        assert_eq!(preset_label(TimeRangePreset::Last24Hours), "Last 24 hours");
-        assert_eq!(preset_label(TimeRangePreset::Last7Days), "Last 7 days");
+        assert_eq!(
+            preset_label(TimeRangePreset::Last15min),
+            dbflux_i18n::t!("document.dashboard.builder.preset.last_15_min")
+        );
+        assert_eq!(
+            preset_label(TimeRangePreset::LastHour),
+            dbflux_i18n::t!("document.dashboard.builder.preset.last_hour")
+        );
+        assert_eq!(
+            preset_label(TimeRangePreset::Last6Hours),
+            dbflux_i18n::t!("document.dashboard.builder.preset.last_6_hours")
+        );
+        assert_eq!(
+            preset_label(TimeRangePreset::Last24Hours),
+            dbflux_i18n::t!("document.dashboard.builder.preset.last_24_hours")
+        );
+        assert_eq!(
+            preset_label(TimeRangePreset::Last7Days),
+            dbflux_i18n::t!("document.dashboard.builder.preset.last_7_days")
+        );
+    }
+
+    /// `preset_label` keys resolve in both locales and diverge between them,
+    /// so the parity loop cannot pass on English fallbacks copied verbatim
+    /// into `es.yml`.
+    #[test]
+    fn preset_label_keys_resolve_and_differ_between_locales() {
+        let keys = [
+            "document.dashboard.builder.preset.last_15_min",
+            "document.dashboard.builder.preset.last_hour",
+            "document.dashboard.builder.preset.last_6_hours",
+            "document.dashboard.builder.preset.last_24_hours",
+            "document.dashboard.builder.preset.last_7_days",
+        ];
+        for key in keys {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+
+        let en = dbflux_i18n::t!("document.dashboard.builder.preset.last_hour", locale = "en");
+        let es = dbflux_i18n::t!("document.dashboard.builder.preset.last_hour", locale = "es");
+        assert_ne!(en, es);
     }
 
     /// `snap_columns` rounds half-cell deltas to the nearest grid unit.
@@ -861,6 +942,43 @@ mod tests {
         assert_eq!(state.original_column, 4);
         assert_eq!(state.working_column, 4);
         assert!(state.active);
+    }
+
+    /// The dashboard toolbar and per-panel kebab-menu keys resolve in both
+    /// locales and are not accidentally left off the catalog.
+    #[test]
+    fn dashboard_toolbar_and_panel_menu_keys_resolve_in_both_locales() {
+        let keys = [
+            "document.dashboard.toolbar.add_panel",
+            "document.dashboard.toolbar.apply",
+            "document.dashboard.toolbar.edit_mode_tooltip",
+            "document.dashboard.toolbar.exit_edit_mode_tooltip",
+            "document.dashboard.toolbar.save_as_editable",
+            "document.dashboard.toolbar.save_as_editable_tooltip",
+            "document.dashboard.panel.menu.configure",
+            "document.dashboard.panel.menu.edit_title",
+            "document.dashboard.panel.menu.remove",
+        ];
+        for key in keys {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+    }
+
+    /// At least one toolbar key must actually diverge between locales.
+    #[test]
+    fn dashboard_toolbar_add_panel_differs_between_locales() {
+        let en = dbflux_i18n::t!("document.dashboard.toolbar.add_panel", locale = "en");
+        let es = dbflux_i18n::t!("document.dashboard.toolbar.add_panel", locale = "es");
+        assert_ne!(en, es);
     }
 
     /// `DragResizeState` carries the resize axis along with dimensions.

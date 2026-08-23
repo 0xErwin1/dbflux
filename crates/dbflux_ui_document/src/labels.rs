@@ -1338,6 +1338,29 @@ pub(crate) fn bucket_encryption_choice_label(
     }
 }
 
+/// Label for a [`dbflux_components::chart::ChartKind`] shown as a segmented
+/// button in the dashboard panel's Configure popover. Exhaustive by
+/// construction so a new chart kind fails this crate's build until its
+/// catalog key is added here.
+pub(crate) fn configure_chart_kind_label(kind: dbflux_components::chart::ChartKind) -> String {
+    use dbflux_components::chart::ChartKind;
+
+    match kind {
+        ChartKind::Line => dbflux_i18n::t!("document.dashboard.configure.chart_kind.line"),
+        ChartKind::Bar => dbflux_i18n::t!("document.dashboard.configure.chart_kind.bar"),
+        ChartKind::Scatter => dbflux_i18n::t!("document.dashboard.configure.chart_kind.scatter"),
+        ChartKind::Area => dbflux_i18n::t!("document.dashboard.configure.chart_kind.area"),
+        ChartKind::StackedBar => {
+            dbflux_i18n::t!("document.dashboard.configure.chart_kind.stacked")
+        }
+        ChartKind::Pie => dbflux_i18n::t!("document.dashboard.configure.chart_kind.pie"),
+        // Not currently offered by `CHART_KIND_OPTIONS` (the Configure
+        // popover's chart-kind picker), but the match stays exhaustive so a
+        // future picker addition cannot forget the catalog key.
+        ChartKind::Number => dbflux_i18n::t!("document.dashboard.configure.chart_kind.number"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1347,18 +1370,18 @@ mod tests {
         bool_op_label, bucket_encryption_choice_label, buckets_table_summary_line,
         builder_mode_label, bulk_delete_success_label, chart_degraded_copy, chart_dock_shape_label,
         chart_rail_why_text, code_toolbar_shortcut_hint_label, comparator_label,
-        copy_query_language_label, dangerous_query_body, dangerous_query_title,
-        delete_confirm_copy, delete_prefix_delete_button_label, delete_prefix_deleted_toast,
-        delete_prefix_probe_totals, delete_rows_label, execution_count_state_label,
-        execution_mode_label, history_items_count_label, history_tab_label, image_decode_error,
-        image_header_error, incomplete_aggregate_rows_label, join_kind_label,
-        live_output_lines_label, live_output_truncated_label, object_browser_status_summary,
-        object_browser_versions_count_label, partial_delete_label, pending_change_count_label,
-        pending_edits_summary, presign_expiry_label, presign_method_label, preview_gate_message,
-        refresh_policy_label, result_tab_count_label, row_count_label, schema_change_description,
-        script_confirm_message_label, sort_direction_label, table_action_description,
-        unsaved_changes_label, update_columns_label, valid_lines_label, versioning_off_label,
-        versioning_status_label,
+        configure_chart_kind_label, copy_query_language_label, dangerous_query_body,
+        dangerous_query_title, delete_confirm_copy, delete_prefix_delete_button_label,
+        delete_prefix_deleted_toast, delete_prefix_probe_totals, delete_rows_label,
+        execution_count_state_label, execution_mode_label, history_items_count_label,
+        history_tab_label, image_decode_error, image_header_error, incomplete_aggregate_rows_label,
+        join_kind_label, live_output_lines_label, live_output_truncated_label,
+        object_browser_status_summary, object_browser_versions_count_label, partial_delete_label,
+        pending_change_count_label, pending_edits_summary, presign_expiry_label,
+        presign_method_label, preview_gate_message, refresh_policy_label, result_tab_count_label,
+        row_count_label, schema_change_description, script_confirm_message_label,
+        sort_direction_label, table_action_description, unsaved_changes_label,
+        update_columns_label, valid_lines_label, versioning_off_label, versioning_status_label,
     };
     use crate::buckets_table::BucketEncryptionChoice;
     use crate::object_browser::{PresignExpiry, PresignMethodChoice, PreviewGate};
@@ -3572,6 +3595,50 @@ mod tests {
         let en = dbflux_i18n::t!("document.buckets_table.versioning.on", locale = "en");
         let es = dbflux_i18n::t!("document.buckets_table.versioning.on", locale = "es");
 
+        assert_ne!(en, es);
+    }
+
+    /// PR 23: `configure_chart_kind_label` covers every `ChartKind` variant
+    /// (exhaustive match, no wildcard arm — a new variant fails the build
+    /// until its catalog key is added here).
+    #[test]
+    fn configure_chart_kind_label_covers_all_variants() {
+        use dbflux_components::chart::ChartKind;
+
+        let kinds = [
+            ChartKind::Line,
+            ChartKind::Bar,
+            ChartKind::Scatter,
+            ChartKind::Area,
+            ChartKind::StackedBar,
+            ChartKind::Pie,
+            ChartKind::Number,
+        ];
+        for kind in kinds {
+            let label = configure_chart_kind_label(kind);
+            assert!(
+                !label.is_empty(),
+                "configure_chart_kind_label({kind:?}) resolved empty"
+            );
+        }
+
+        assert_eq!(
+            configure_chart_kind_label(ChartKind::Line),
+            dbflux_i18n::t!("document.dashboard.configure.chart_kind.line")
+        );
+    }
+
+    /// PR 23: `configure_chart_kind_label` diverges between locales.
+    #[test]
+    fn configure_chart_kind_label_differs_between_locales() {
+        let en = dbflux_i18n::t!(
+            "document.dashboard.configure.chart_kind.line",
+            locale = "en"
+        );
+        let es = dbflux_i18n::t!(
+            "document.dashboard.configure.chart_kind.line",
+            locale = "es"
+        );
         assert_ne!(en, es);
     }
 }

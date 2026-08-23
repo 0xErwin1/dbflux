@@ -527,6 +527,54 @@ document:
         raw_expression_in_set:
           title: Raw SQL expression in SET
           body: SET clause contains a raw SQL expression — bypasses parameter binding
+  dashboard:
+    builder:
+      preset:
+        last_15_min: Last 15 min
+        last_24_hours: Last 24 hours
+        last_6_hours: Last 6 hours
+        last_7_days: Last 7 days
+        last_hour: Last 1 hour
+    configure:
+      action:
+        export_png: Export PNG
+        stats: Stats
+      apply: Apply
+      bindings_hint: Run the chart at least once to configure bindings.
+      cancel: Cancel
+      chart_kind:
+        area: Area
+        bar: Bar
+        line: Line
+        number: Number
+        pie: Pie
+        scatter: Scatter
+        stacked: Stacked
+      section:
+        actions: Actions
+        axis_bindings: Axis bindings
+        chart_type: Chart type
+      title: "Configure panel: %{name}"
+    panel:
+      chart_not_found:
+        body: Chart not found — saved chart was deleted
+        title: Chart not found
+      menu:
+        configure: Configure…
+        edit_title: Edit title…
+        remove: Remove panel
+    status:
+      empty_hint: Add a saved chart to get started
+    toast:
+      position_overlap: Position overlaps another panel
+      save_position_failed: "Failed to save panel position: %{message}"
+    toolbar:
+      add_panel: + Add Panel
+      apply: Apply
+      edit_mode_tooltip: Edit dashboard
+      exit_edit_mode_tooltip: Exit edit mode
+      save_as_editable: Save as editable
+      save_as_editable_tooltip: Clone this overview into a new editable dashboard
   data:
     chart_dock:
       toolbar:

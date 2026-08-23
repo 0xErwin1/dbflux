@@ -18,14 +18,16 @@ use dbflux_core::ColumnMeta;
 use gpui::prelude::*;
 use gpui::{AnyElement, Context, Entity, IntoElement, div, px};
 
-/// All chart kinds offered by the Configure popover, in display order.
-const CHART_KIND_OPTIONS: &[(ChartKind, &str, &str)] = &[
-    (ChartKind::Line, "Line", "configure-kind-line"),
-    (ChartKind::Bar, "Bar", "configure-kind-bar"),
-    (ChartKind::Scatter, "Scatter", "configure-kind-scatter"),
-    (ChartKind::Area, "Area", "configure-kind-area"),
-    (ChartKind::StackedBar, "Stacked", "configure-kind-stacked"),
-    (ChartKind::Pie, "Pie", "configure-kind-pie"),
+/// All chart kinds offered by the Configure popover, in display order. The
+/// translated label for each kind comes from
+/// `crate::labels::configure_chart_kind_label`, not this table.
+const CHART_KIND_OPTIONS: &[(ChartKind, &str)] = &[
+    (ChartKind::Line, "configure-kind-line"),
+    (ChartKind::Bar, "configure-kind-bar"),
+    (ChartKind::Scatter, "configure-kind-scatter"),
+    (ChartKind::Area, "configure-kind-area"),
+    (ChartKind::StackedBar, "configure-kind-stacked"),
+    (ChartKind::Pie, "configure-kind-pie"),
 ];
 
 /// Build the Configure popover overlay element for the panel at `panel_index`.
@@ -70,9 +72,18 @@ pub(super) fn render_configure_popover(
         .flex()
         .flex_col()
         .gap(Spacing::LG)
-        .child(section("Chart type", chart_kind_row))
-        .child(section("Axis bindings", bindings_row))
-        .child(section("Actions", actions_row))
+        .child(section(
+            dbflux_i18n::t!("document.dashboard.configure.section.chart_type"),
+            chart_kind_row,
+        ))
+        .child(section(
+            dbflux_i18n::t!("document.dashboard.configure.section.axis_bindings"),
+            bindings_row,
+        ))
+        .child(section(
+            dbflux_i18n::t!("document.dashboard.configure.section.actions"),
+            actions_row,
+        ))
         .into_any_element();
 
     // Footer: Cancel + Apply
@@ -88,21 +99,28 @@ pub(super) fn render_configure_popover(
         .flex_row()
         .gap(Spacing::SM)
         .child(
-            Button::new("configure-cancel", "Cancel")
-                .ghost()
-                .on_click(on_cancel),
+            Button::new(
+                "configure-cancel",
+                dbflux_i18n::t!("document.dashboard.configure.cancel"),
+            )
+            .ghost()
+            .on_click(on_cancel),
         )
         .child(
-            Button::new("configure-apply", "Apply")
-                .primary()
-                .on_click(on_apply),
+            Button::new(
+                "configure-apply",
+                dbflux_i18n::t!("document.dashboard.configure.apply"),
+            )
+            .primary()
+            .on_click(on_apply),
         )
         .into_any_element();
 
     // Bridge ModalShell's App-scoped on_close into the DashboardDocument
     // entity via a weak handle so the X button closes the popover.
     let weak_self = cx.weak_entity();
-    let modal = ModalShell::new(format!("Configure panel: {panel_title}"), body, footer)
+    let modal_title = dbflux_i18n::t!("document.dashboard.configure.title", name = panel_title);
+    let modal = ModalShell::new(modal_title, body, footer)
         .width(px(720.0))
         .on_close(move |_window, cx| {
             if let Some(this) = weak_self.upgrade() {
@@ -113,7 +131,7 @@ pub(super) fn render_configure_popover(
     Some(modal.into_any_element())
 }
 
-fn section(label: &'static str, body: AnyElement) -> AnyElement {
+fn section(label: impl Into<gpui::SharedString>, body: AnyElement) -> AnyElement {
     div()
         .flex()
         .flex_col()
@@ -130,8 +148,9 @@ fn render_chart_kind_row(
 ) -> AnyElement {
     let buttons: Vec<AnyElement> = CHART_KIND_OPTIONS
         .iter()
-        .map(|(kind, label, id)| {
+        .map(|(kind, id)| {
             let kind = *kind;
+            let label = crate::labels::configure_chart_kind_label(kind);
             let is_active = kind == current_kind;
             let on_click = cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
                 this.configure_apply_chart_kind(panel_index, kind, cx);
@@ -141,9 +160,9 @@ fn render_chart_kind_row(
             // `.ghost()` produced borderless transparent boxes which blended
             // into the modal and looked like static text.
             let btn = if is_active {
-                Button::new(*id, *label).primary().on_click(on_click)
+                Button::new(*id, label).primary().on_click(on_click)
             } else {
-                Button::new(*id, *label).on_click(on_click)
+                Button::new(*id, label).on_click(on_click)
             };
             btn.into_any_element()
         })
@@ -169,9 +188,9 @@ fn render_bindings_row(
     // surface a hint and skip the AxisBar.
     if columns.is_empty() {
         return div()
-            .child(Text::caption(
-                "Run the chart at least once to configure bindings.",
-            ))
+            .child(Text::caption(dbflux_i18n::t!(
+                "document.dashboard.configure.bindings_hint"
+            )))
             .into_any_element();
     }
 
@@ -249,8 +268,20 @@ fn render_actions_row(panel_index: usize, cx: &mut Context<DashboardDocument>) -
         .flex()
         .flex_row()
         .gap(Spacing::SM)
-        .child(Button::new("configure-stats", "Stats").on_click(on_stats))
-        .child(Button::new("configure-png", "Export PNG").on_click(on_png))
+        .child(
+            Button::new(
+                "configure-stats",
+                dbflux_i18n::t!("document.dashboard.configure.action.stats"),
+            )
+            .on_click(on_stats),
+        )
+        .child(
+            Button::new(
+                "configure-png",
+                dbflux_i18n::t!("document.dashboard.configure.action.export_png"),
+            )
+            .on_click(on_png),
+        )
         .into_any_element()
 }
 
@@ -279,7 +310,7 @@ mod tests {
         ];
         for kind in kinds {
             assert!(
-                CHART_KIND_OPTIONS.iter().any(|(k, _, _)| *k == kind),
+                CHART_KIND_OPTIONS.iter().any(|(k, _)| *k == kind),
                 "Configure popover must surface {kind:?}"
             );
         }
@@ -290,9 +321,69 @@ mod tests {
     #[test]
     fn chart_kind_option_ids_are_unique() {
         let mut seen: Vec<&str> = Vec::new();
-        for (_, _, id) in CHART_KIND_OPTIONS {
+        for (_, id) in CHART_KIND_OPTIONS {
             assert!(!seen.contains(id), "duplicate Configure popover id: {id}");
             seen.push(id);
         }
+    }
+
+    /// `crate::labels::configure_chart_kind_label` covers every chart kind
+    /// surfaced by `CHART_KIND_OPTIONS` and its labels resolve through the
+    /// catalog (widened from a hardcoded `&str` table column).
+    #[test]
+    fn chart_kind_options_labels_resolve_via_configure_chart_kind_label() {
+        for (kind, _) in CHART_KIND_OPTIONS {
+            let label = crate::labels::configure_chart_kind_label(*kind);
+            assert!(
+                !label.is_empty(),
+                "configure_chart_kind_label({kind:?}) resolved empty"
+            );
+        }
+    }
+
+    /// The Configure popover's section/action/footer keys resolve in both
+    /// locales and the popover title interpolates the panel name.
+    #[test]
+    fn configure_popover_keys_resolve_in_both_locales() {
+        let keys = [
+            "document.dashboard.configure.section.chart_type",
+            "document.dashboard.configure.section.axis_bindings",
+            "document.dashboard.configure.section.actions",
+            "document.dashboard.configure.cancel",
+            "document.dashboard.configure.apply",
+            "document.dashboard.configure.bindings_hint",
+            "document.dashboard.configure.action.stats",
+            "document.dashboard.configure.action.export_png",
+        ];
+        for key in keys {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+    }
+
+    /// The popover title interpolates the panel name via `%{name}`.
+    #[test]
+    fn configure_popover_title_interpolates_panel_name() {
+        let title = dbflux_i18n::t!("document.dashboard.configure.title", name = "My Chart");
+        assert!(
+            title.contains("My Chart"),
+            "expected the panel name to be interpolated into the title, got {title:?}"
+        );
+    }
+
+    /// At least one Configure popover key must diverge between locales.
+    #[test]
+    fn configure_popover_cancel_differs_between_locales() {
+        let en = dbflux_i18n::t!("document.dashboard.configure.cancel", locale = "en");
+        let es = dbflux_i18n::t!("document.dashboard.configure.cancel", locale = "es");
+        assert_ne!(en, es);
     }
 }
