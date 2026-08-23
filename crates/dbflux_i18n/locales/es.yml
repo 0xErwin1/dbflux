@@ -527,6 +527,54 @@ document:
         raw_expression_in_set:
           title: Expresión SQL cruda en SET
           body: "La cláusula SET contiene una expresión SQL cruda — evita el enlace de parámetros"
+  dashboard:
+    builder:
+      preset:
+        last_15_min: Últimos 15 min
+        last_24_hours: Últimas 24 horas
+        last_6_hours: Últimas 6 horas
+        last_7_days: Últimos 7 días
+        last_hour: Última hora
+    configure:
+      action:
+        export_png: Exportar PNG
+        stats: Estadísticas
+      apply: Aplicar
+      bindings_hint: Ejecuta el gráfico al menos una vez para configurar los enlaces.
+      cancel: Cancelar
+      chart_kind:
+        area: Área
+        bar: Barras
+        line: Línea
+        number: Número
+        pie: Circular
+        scatter: Dispersión
+        stacked: Apiladas
+      section:
+        actions: Acciones
+        axis_bindings: Enlaces de ejes
+        chart_type: Tipo de gráfico
+      title: "Configurar panel: %{name}"
+    panel:
+      chart_not_found:
+        body: Gráfico no encontrado — el gráfico guardado fue eliminado
+        title: Gráfico no encontrado
+      menu:
+        configure: Configurar…
+        edit_title: Editar título…
+        remove: Quitar panel
+    status:
+      empty_hint: Agrega un gráfico guardado para comenzar
+    toast:
+      position_overlap: La posición se superpone con otro panel
+      save_position_failed: "No se pudo guardar la posición del panel: %{message}"
+    toolbar:
+      add_panel: + Agregar panel
+      apply: Aplicar
+      edit_mode_tooltip: Editar dashboard
+      exit_edit_mode_tooltip: Salir del modo de edición
+      save_as_editable: Guardar como editable
+      save_as_editable_tooltip: Clonar esta vista general en un nuevo dashboard editable
   data:
     chart_dock:
       toolbar:
