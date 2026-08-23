@@ -14,7 +14,7 @@ pub struct Select {
 impl Select {
     pub fn new(id: impl Into<ElementId>) -> Self {
         Self {
-            dropdown: Dropdown::new(id).placeholder("Select"),
+            dropdown: Dropdown::new(id),
         }
     }
 
@@ -56,5 +56,20 @@ impl Select {
 
     pub fn selected_value(&self) -> Option<SharedString> {
         self.dropdown.selected_value()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Select;
+
+    #[test]
+    fn select_uses_shared_dropdown_placeholder() {
+        let select = Select::new("select-test");
+
+        assert_eq!(
+            select.dropdown.placeholder_text().to_string(),
+            dbflux_i18n::t!("controls.dropdown.placeholder")
+        );
     }
 }
