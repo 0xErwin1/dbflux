@@ -1691,6 +1691,14 @@ settings:
     mcp_roles: Roles
     mcp_policies: Políticas
 
+shutdown:
+  signal_sent: Cerrando la aplicación...
+  cancelling_tasks: Cancelando tareas...
+  closing_connections: Cerrando conexiones...
+  flushing_logs: Guardando registros...
+  complete: Cierre completado
+  failed: Error al cerrar
+
 sidebar:
   confirm:
     delete_hint: Presiona x para confirmar la eliminación, ESC para cancelar
@@ -1987,8 +1995,39 @@ sso_wizard:
     roles_discovered: Descubrimiento de roles de SSO completado
     roles_failed: "Error al descubrir roles: %{error}"
     profile_created: Perfil de autenticación de AWS SSO creado
+status_bar:
+  disconnected: desconectado
+  tasks_label: Tareas
+  tasks_running:
+    one: "1 en curso"
+    many: "%{count} en curso"
+tasks_panel:
+  empty: No hay tareas en segundo plano
+  output_truncated: ... salida truncada en el panel
 toast:
   action:
     copy: Copiar
     show_details: Mostrar detalles
     hide_details: Ocultar detalles
+workspace:
+  background_tasks: Tareas en segundo plano
+  empty_documents: No hay documentos abiertos
+  hint:
+    new_query: nueva consulta
+    command_palette: paleta de comandos
+    open: abrir script desde el disco
+    new_connection: nueva conexión
+  mcp_approvals: Aprobaciones de MCP
+  event_streams: Flujos de eventos
+  action:
+    delete: Eliminar
+    drop: Eliminar (DDL)
+    delete_folder: Eliminar carpeta
+    delete_connection: Eliminar conexión
+    cancel: Cancelar
+  confirm:
+    delete_selected: "¿Eliminar %{count} elementos seleccionados?"
+    drop_object: '¿Eliminar (DDL) %{object_type} "%{name}"?'
+    delete_folder: '¿Eliminar la carpeta "%{name}"?'
+    delete_connection: '¿Eliminar la conexión "%{name}"?'
+  default_object_type: Objeto

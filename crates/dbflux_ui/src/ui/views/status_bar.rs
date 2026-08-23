@@ -269,7 +269,9 @@ impl Render for StatusBar {
                                 this.child(Self::metadata_text(connection_name))
                             })
                             .when(!is_connected, |this| {
-                                this.child(Self::metadata_text("disconnected"))
+                                this.child(Self::metadata_text(dbflux_i18n::t!(
+                                    "status_bar.disconnected"
+                                )))
                             }),
                     )
                     // Running task info — shown with a divider when a task is active
@@ -380,10 +382,14 @@ impl Render for StatusBar {
                                         .size(px(12.0))
                                         .primary(),
                                 )
-                                .child(Self::status_text(format!("{} running", running_count)))
+                                .child(Self::status_text(
+                                    crate::ui::labels::tasks_running_label(running_count),
+                                ))
                             })
                             .when(running_count == 0, |this| {
-                                this.child(Self::status_text("Tasks"))
+                                this.child(Self::status_text(dbflux_i18n::t!(
+                                    "status_bar.tasks_label"
+                                )))
                             }),
                     ),
             )

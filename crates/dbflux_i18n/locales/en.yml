@@ -1691,6 +1691,14 @@ settings:
     mcp_roles: Roles
     mcp_policies: Policies
 
+shutdown:
+  signal_sent: Shutting down...
+  cancelling_tasks: Cancelling tasks...
+  closing_connections: Closing connections...
+  flushing_logs: Flushing logs...
+  complete: Shutdown complete
+  failed: Shutdown failed
+
 sidebar:
   confirm:
     delete_hint: Press x to confirm delete, ESC to cancel
@@ -1987,8 +1995,39 @@ sso_wizard:
     roles_discovered: SSO role discovery completed
     roles_failed: "Failed to discover roles: %{error}"
     profile_created: Created AWS SSO auth profile
+status_bar:
+  disconnected: disconnected
+  tasks_label: Tasks
+  tasks_running:
+    one: "1 running"
+    many: "%{count} running"
+tasks_panel:
+  empty: No background tasks
+  output_truncated: ... output truncated in panel
 toast:
   action:
     copy: Copy
     show_details: Show details
     hide_details: Hide details
+workspace:
+  background_tasks: Background Tasks
+  empty_documents: No documents open
+  hint:
+    new_query: new query
+    command_palette: command palette
+    open: open script from disk
+    new_connection: new connection
+  mcp_approvals: MCP Approvals
+  event_streams: Event Streams
+  action:
+    delete: Delete
+    drop: Drop
+    delete_folder: Delete folder
+    delete_connection: Delete connection
+    cancel: Cancel
+  confirm:
+    delete_selected: "Delete %{count} selected items?"
+    drop_object: 'Drop %{object_type} "%{name}"?'
+    delete_folder: 'Delete folder "%{name}"?'
+    delete_connection: 'Delete connection "%{name}"?'
+  default_object_type: Object

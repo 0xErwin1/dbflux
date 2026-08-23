@@ -30,7 +30,7 @@ impl Workspace {
 /// muted description.
 fn empty_state_shortcut<const N: usize>(
     keys: [&'static str; N],
-    description: &'static str,
+    description: impl Into<gpui::SharedString>,
 ) -> gpui::Div {
     gpui::div()
         .flex()
@@ -165,7 +165,7 @@ impl Render for Workspace {
             let workspace = cx.entity().clone();
             let tasks_header = panel_header_collapsible_variant(
                 "panel-header-Background Tasks",
-                "Background Tasks",
+                dbflux_i18n::t!("workspace.background_tasks"),
                 PanelHeaderVariant::WorkspaceTasks,
                 !tasks_expanded,
                 tasks_focused,
@@ -273,7 +273,7 @@ impl Render for Workspace {
             let workspace = cx.entity().clone();
             let tasks_header_empty = panel_header_collapsible_variant(
                 "panel-header-Background Tasks",
-                "Background Tasks",
+                dbflux_i18n::t!("workspace.background_tasks"),
                 PanelHeaderVariant::WorkspaceTasks,
                 !tasks_expanded,
                 tasks_focused,
@@ -305,25 +305,31 @@ impl Render for Workspace {
                                         .size(px(64.0))
                                         .color(muted_fg.opacity(0.5)),
                                 )
-                                .child(Body::new("No documents open").muted(cx))
+                                .child(
+                                    Body::new(dbflux_i18n::t!("workspace.empty_documents"))
+                                        .muted(cx),
+                                )
                                 .child(
                                     div()
                                         .mt_4()
                                         .flex()
                                         .flex_col()
                                         .gap_2()
-                                        .child(empty_state_shortcut(["Ctrl", "N"], "new query"))
+                                        .child(empty_state_shortcut(
+                                            ["Ctrl", "N"],
+                                            dbflux_i18n::t!("workspace.hint.new_query"),
+                                        ))
                                         .child(empty_state_shortcut(
                                             ["Ctrl", "Shift", "P"],
-                                            "command palette",
+                                            dbflux_i18n::t!("workspace.hint.command_palette"),
                                         ))
                                         .child(empty_state_shortcut(
                                             ["Ctrl", "O"],
-                                            "open script from disk",
+                                            dbflux_i18n::t!("workspace.hint.open"),
                                         ))
                                         .child(empty_state_shortcut(
                                             ["Ctrl", "Shift", "N"],
-                                            "new connection",
+                                            dbflux_i18n::t!("workspace.hint.new_connection"),
                                         )),
                                 ),
                         ),
@@ -729,7 +735,9 @@ impl Render for Workspace {
                     root.when_some(self.active_governance_panel, |root, panel| {
                         let _close_entity = cx.entity().clone();
                         let title = match panel {
-                            super::GovernancePanel::Approvals => "MCP Approvals",
+                            super::GovernancePanel::Approvals => {
+                                dbflux_i18n::t!("workspace.mcp_approvals")
+                            }
                         };
 
                         let content = match panel {
@@ -805,7 +813,7 @@ impl Render for Workspace {
                     )
                     .context_id(ContextId::EventStreamsPicker)
                     .icon(AppIcon::ScrollText)
-                    .title("Event Streams")
+                    .title(dbflux_i18n::t!("workspace.event_streams"))
                     .width(px(1000.0))
                     .height(px(720.0))
                     .top_offset(px(60.0))
@@ -980,27 +988,35 @@ impl Render for Workspace {
                     let sidebar_close = self.sidebar.clone();
 
                     let title = if modal_state.multi_count.is_some() {
-                        "Delete"
+                        dbflux_i18n::t!("workspace.action.delete")
                     } else if modal_state.is_ddl {
-                        "Drop"
+                        dbflux_i18n::t!("workspace.action.drop")
                     } else if modal_state.is_folder {
-                        "Delete folder"
+                        dbflux_i18n::t!("workspace.action.delete_folder")
                     } else {
-                        "Delete connection"
+                        dbflux_i18n::t!("workspace.action.delete_connection")
                     };
 
                     let message = if let Some(count) = modal_state.multi_count {
-                        format!("Delete {count} selected items?")
+                        crate::ui::labels::workspace_delete_selected_message(count)
                     } else if modal_state.is_ddl {
-                        let object_type = modal_state.object_type.unwrap_or("Object");
-                        format!("Drop {} \"{}\"?", object_type, modal_state.item_name)
+                        crate::ui::labels::workspace_drop_object_message(
+                            modal_state.object_type,
+                            modal_state.item_name,
+                        )
                     } else if modal_state.is_folder {
-                        format!("Delete folder \"{}\"?", modal_state.item_name)
+                        crate::ui::labels::workspace_delete_folder_message(modal_state.item_name)
                     } else {
-                        format!("Delete connection \"{}\"?", modal_state.item_name)
+                        crate::ui::labels::workspace_delete_connection_message(
+                            modal_state.item_name,
+                        )
                     };
 
-                    let confirm_label = if modal_state.is_ddl { "Drop" } else { "Delete" };
+                    let confirm_label = if modal_state.is_ddl {
+                        dbflux_i18n::t!("workspace.action.drop")
+                    } else {
+                        dbflux_i18n::t!("workspace.action.delete")
+                    };
                     let variant = if modal_state.is_ddl {
                         ModalVariant::Danger
                     } else {
@@ -1013,7 +1029,11 @@ impl Render for Workspace {
                         .flex()
                         .gap(Spacing::SM)
                         .child(
-                            Button::new("delete-cancel", "Cancel").on_click(move |_, _, cx| {
+                            Button::new(
+                                "delete-cancel",
+                                dbflux_i18n::t!("workspace.action.cancel"),
+                            )
+                            .on_click(move |_, _, cx| {
                                 sidebar_cancel.update(cx, |this, cx| {
                                     this.cancel_modal_delete(cx);
                                 });
