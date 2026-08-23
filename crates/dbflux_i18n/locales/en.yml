@@ -211,6 +211,27 @@ connection_manager:
     configure: Configure
     configure_named: "Configure %{name}"
 document:
+  audit:
+    filter:
+      apply: Apply
+      clear: Clear
+      group_label: "Group:"
+      loading: "Loading…"
+      retry: Retry
+      view_mode:
+        chart: Chart
+        table: Table
+      y_scale:
+        linear: "Y: Linear"
+        log: "Y: Log"
+    menu:
+      copy_row_as_csv: Copy Row as CSV
+      copy_summary: Copy Summary
+      export: Export
+      export_format:
+        csv: CSV
+        json: JSON
+      filter_by_correlation: Filter by Correlation
   code:
     toolbar:
       refresh: Refresh
