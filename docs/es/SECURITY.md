@@ -37,16 +37,16 @@ no divulgado.
   MCP](docs/MCP_AI_INTEGRATION.md).
 - **Los hooks de conexión y los scripts Lua ejecutan el código que
   configuraste.** Se ejecutan con los privilegios del proceso de DBFlux por
-  diseño; eso es lo que hace un hook. Ver [ajustes y
-  hooks](docs/SETTINGS.md) y [scripting con Lua](docs/LUA.md).
-- **El log de auditoría es local.** Registra lo que ocurrió en esa máquina y
-  es legible por cualquier cosa que pueda leer tu directorio de datos. Ver
-  [datos y privacidad](docs/DATA_AND_PRIVACY.md).
+  diseño; eso es lo que hace un hook. Ver [ajustes y hooks](docs/SETTINGS.md) y
+  [scripting con Lua](docs/LUA.md).
+- **El log de auditoría es local.** Registra lo que ocurrió en esa máquina y es
+  legible por cualquier cosa que pueda leer tu directorio de datos. Ver [datos y
+  privacidad](docs/DATA_AND_PRIVACY.md).
 
 ## Dónde viven los secretos
 
 Las credenciales se guardan en el keyring del sistema operativo, nunca en un
-archivo de perfil de conexión, y el log de auditoría almacena un fingerprint
-del texto de la query en lugar del texto en sí. [Datos y
+archivo de perfil de conexión, y el log de auditoría almacena un fingerprint del
+texto de la query en lugar del texto en sí. [Datos y
 privacidad](docs/DATA_AND_PRIVACY.md) describe qué se escribe dónde, y cómo
 inspeccionarlo o eliminarlo.
