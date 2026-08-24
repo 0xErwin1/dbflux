@@ -101,6 +101,38 @@ jobs:
           cache-targets: true
           cache-on-failure: true
 
+      # Testcontainers pulls images lazily at test time, so concurrent test
+      # binaries race to pull the same tag and anonymous Docker Hub throttling
+      # aborts mid-stream ("bytes remaining on stream"). Pulling everything
+      # up front, serially and with retries, removes that failure mode.
+      - name: Pre-pull container images
+        run: |
+          images=(
+            postgres:16
+            pgvector/pgvector:0.8.0-pg16
+            mysql:8.4
+            mongo:7
+            redis:7
+            clickhouse/clickhouse-server:25.8.30.16
+            mcr.microsoft.com/mssql/server:2022-latest
+            amazon/dynamodb-local:latest
+            influxdb:2.7
+            influxdb:1.8
+            minio/minio:RELEASE.2025-09-07T16-13-09Z
+          )
+          for image in "${images[@]}"; do
+            for attempt in 1 2 3; do
+              if docker pull --quiet "$image"; then
+                break
+              fi
+              if [ "$attempt" = 3 ]; then
+                echo "failed to pull $image after 3 attempts" >&2
+                exit 1
+              fi
+              sleep $((attempt * 15))
+            done
+          done
+
       - name: Run PostgreSQL live integration tests
         run: cargo test -p dbflux_driver_postgres --locked --test live_integration -- --ignored
 
