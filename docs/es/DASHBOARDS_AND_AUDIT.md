@@ -1,34 +1,34 @@
 # Dashboards y Audit — Guía de uso
 
-Cómo graficar y guardar queries, construir dashboards, ver métricas de instancia en
-vivo y usar el visor de audit. Este es el complemento de *cómo se usa* de la
+Cómo graficar y guardar queries, construir dashboards, ver métricas de instancia
+en vivo y usar el visor de audit. Este es el complemento de *cómo se usa* de la
 documentación interna: [Charts](CHARTS.md), [Dashboards](DASHBOARDS.md) y
 [Audit](AUDIT.md).
 
 ---
 
-## Charts guardados
+## Saved charts
 
 ### Graficar el resultado de una query
 
 1. Ejecuta una query que devuelva datos tabulares.
 2. Haz clic derecho en la result grid y elige **Chart this query**.
 
-Se abre un chart document, sembrado con tu query, y se ejecuta automáticamente. La
-opción solo aparece cuando el resultado tiene una query original utilizable y
+Se abre un chart document, sembrado con tu query, y se ejecuta automáticamente.
+La opción solo aparece cuando el resultado tiene una query original utilizable y
 DBFlux puede autodetectar columnas graficables. Tipos de chart soportados: Line,
 Bar, Scatter, Area, Stacked Bar, Pie. La detección de ejes usa el kind de cada
 columna (time, numeric, text); ver [Charts](CHARTS.md) para las reglas.
 
 ### Guardar y reabrir
 
-- En un chart document, pulsa **Save** y dale un nombre. Volver a guardar el mismo
-  chart lo sobrescribe (sin duplicados).
+- En un chart document, pulsa **Save** y dale un nombre. Volver a guardar el
+  mismo chart lo sobrescribe (sin duplicados).
 - Reabre un chart guardado con **Open Chart…** en el command palette — lista los
   charts guardados de la conexión activa. (Si no hay ninguno: *"No saved charts
   for the current profile"*.)
-- Los charts guardados también aparecen en el sidebar bajo **Saved Charts**, donde
-  cada chart tiene **Open / Rename… / Duplicate / Delete…**.
+- Los charts guardados también aparecen en el sidebar bajo **Saved Charts**,
+  donde cada chart tiene **Open / Rename… / Duplicate / Delete…**.
 
 Los charts se guardan por connection profile.
 
@@ -41,8 +41,8 @@ un rango de tiempo y una política de refresh.
 
 ### Crear uno
 
-1. Ejecuta **New Dashboard…** desde el command palette (o **New Dashboard…** en la
-   carpeta **Dashboards** del sidebar).
+1. Ejecuta **New Dashboard…** desde el command palette (o **New Dashboard…** en
+   la carpeta **Dashboards** del sidebar).
 2. Ponle nombre. Se abre con una cuadrícula de 12 columnas y el refresh apagado.
 
 Los dashboards nuevos se abren en modo **View**. La carpeta Dashboards del
@@ -66,19 +66,19 @@ Configure.
 
 Haz clic en **+ Add Panel**. El selector tiene hasta tres pestañas:
 
-| Pestaña | Crea |
-|---------|------|
-| **Saved** | Un panel a partir de uno o más charts guardados existentes. |
-| **Query** | Un panel nuevo a partir de un nombre + una query que escribes. |
+| Pestaña    | Crea                                                                                                                         |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| **Saved**  | Un panel a partir de uno o más charts guardados existentes.                                                                  |
+| **Query**  | Un panel nuevo a partir de un nombre + una query que escribes.                                                               |
 | **Metric** | Un panel a partir de una metric del driver (solo se muestra cuando el driver de la conexión expone un catálogo de métricas). |
 
 El menú kebab de cada panel (modo Edit) ofrece **Configure / Edit title / Remove
-panel**. El popover **Configure** te permite cambiar el tipo de chart (Line, Bar,
-Scatter, Area, Stacked, Pie), ajustar los axis bindings, ver **Stats** y
+panel**. El popover **Configure** te permite cambiar el tipo de chart (Line,
+Bar, Scatter, Area, Stacked, Pie), ajustar los axis bindings, ver **Stats** y
 **Export PNG**.
 
-Los dashboards también pueden contener tiras **Divider** — cabeceras markdown que
-agrupan visualmente los panels y colapsan los panels debajo al hacer clic.
+Los dashboards también pueden contener tiras **Divider** — cabeceras markdown
+que agrupan visualmente los panels y colapsan los panels debajo al hacer clic.
 
 > Un panel **Chart** referencia un chart guardado. Si borras ese chart guardado,
 > el panel se convierte en un placeholder ("Chart not found — saved chart was
@@ -95,10 +95,10 @@ La toolbar tiene:
   el desplegable establece un intervalo de auto-refresh (o Off / refresh al
   abrir).
 
-> **Las conexiones desconectadas se gestionan con elegancia.** Cuando la conexión
-> de un panel se cierra, su tick de refresh se salta — el timer sigue vivo y se
-> reanuda automáticamente al reconectar, sin necesidad de volver a abrir el
-> dashboard.
+> **Las conexiones desconectadas se gestionan con elegancia.** Cuando la
+> conexión de un panel se cierra, su tick de refresh se salta — el timer sigue
+> vivo y se reanuda automáticamente al reconectar, sin necesidad de volver a
+> abrir el dashboard.
 
 ---
 
@@ -110,13 +110,13 @@ el sidebar, encima de las carpetas **Instance Metrics** e **Instance
 Inspectors**.
 
 - **Instance Overview** es un dashboard de solo lectura sintetizado a partir del
-  layout por defecto del driver (una pestaña por conexión). No se puede editar ni
-  añadirle panels, pero puedes pulsar **Save as editable** para clonar su layout
-  en un dashboard nuevo, totalmente editable.
+  layout por defecto del driver (una pestaña por conexión). No se puede editar
+  ni añadirle panels, pero puedes pulsar **Save as editable** para clonar su
+  layout en un dashboard nuevo, totalmente editable.
 - **Instance Metrics** son charts de series temporales (p. ej. connections,
   throughput).
-- **Instance Inspectors** son snapshots tabulares del estado en vivo del servidor
-  (p. ej. `pg_stat_activity` de Postgres, la process list de MySQL, las
+- **Instance Inspectors** son snapshots tabulares del estado en vivo del
+  servidor (p. ej. `pg_stat_activity` de Postgres, la process list de MySQL, las
   operaciones actuales de MongoDB, la client list de Redis), refrescados en el
   intervalo compartido.
 
@@ -139,9 +139,9 @@ Algunos inspectors ofrecen acciones por fila (por ejemplo **Kill connection** /
 Cuando un driver lo soporta (CloudWatch es la implementación de referencia),
 DBFlux puede **explorar (browse)** e **importar** dashboards upstream.
 
-- **Browse**: los dashboards upstream aparecen en el sidebar. Abrir uno obtiene y
-  renderiza el dashboard como uno **en memoria, de solo lectura** — no se escribe
-  nada de vuelta en la fuente, y nada se guarda localmente. Una acción
+- **Browse**: los dashboards upstream aparecen en el sidebar. Abrir uno obtiene
+  y renderiza el dashboard como uno **en memoria, de solo lectura** — no se
+  escribe nada de vuelta en la fuente, y nada se guarda localmente. Una acción
   **Refresh** vuelve a obtener el listado. El listado tiene el ámbito de la
   sesión y **no** se conserva entre reinicios.
 - **Import**: el comando **Import Dashboard** (palette o sidebar) parsea la
@@ -176,16 +176,16 @@ Outcome, Actor, Action, Duration y Summary**.
 
 Las categorías de un vistazo:
 
-| Categoría | Cubre |
-|-----------|-------|
-| **Query** | Ejecución de queries y scans. |
-| **Connection** | Connect / disconnect / reconnect. |
-| **Hook** | Ejecuciones de connection-hooks. |
-| **Script** | Ejecuciones de scripts Lua / Python / Bash. |
-| **Mcp** | Llamadas a tools de un AI client. |
-| **Governance** | Decisiones de policy. |
-| **Config** | Cambios de profile y settings. |
-| **System** | Arranque, migraciones y eventos de log internos. |
+| Categoría      | Cubre                                            |
+| -------------- | ------------------------------------------------ |
+| **Query**      | Ejecución de queries y scans.                    |
+| **Connection** | Connect / disconnect / reconnect.                |
+| **Hook**       | Ejecuciones de connection-hooks.                 |
+| **Script**     | Ejecuciones de scripts Lua / Python / Bash.      |
+| **Mcp**        | Llamadas a tools de un AI client.                |
+| **Governance** | Decisiones de policy.                            |
+| **Config**     | Cambios de profile y settings.                   |
+| **System**     | Arranque, migraciones y eventos de log internos. |
 
 ### Filtrar
 
@@ -209,8 +209,9 @@ recientes orientados al usuario.
 
 El botón **Export** escribe los eventos actualmente visibles a **CSV** o
 **JSON** en tu carpeta `~/Downloads` (`audit_export.csv` / `audit_export.json`),
-usando el schema extendido (todos los campos, incluidos los details estructurados).
-Un toast de éxito informa de cuántos eventos se escribieron y dónde.
+usando el schema extendido (todos los campos, incluidos los details
+estructurados). Un toast de éxito informa de cuántos eventos se escribieron y
+dónde.
 
 ### Retención
 

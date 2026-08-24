@@ -34,7 +34,8 @@ yay -S dbflux
 
 ### Debian / Ubuntu
 
-Descarga el paquete `.deb` desde [Releases](https://github.com/0xErwin1/dbflux/releases):
+Descarga el paquete `.deb` desde
+[Releases](https://github.com/0xErwin1/dbflux/releases):
 
 ```bash
 # Reemplaza amd64 por arm64 para ARM
@@ -44,7 +45,8 @@ sudo dpkg -i dbflux-linux-amd64.deb
 
 ### Fedora / RHEL / CentOS
 
-Descarga el paquete `.rpm` desde [Releases](https://github.com/0xErwin1/dbflux/releases):
+Descarga el paquete `.rpm` desde
+[Releases](https://github.com/0xErwin1/dbflux/releases):
 
 ```bash
 # Reemplaza amd64 por arm64 para ARM
@@ -53,7 +55,8 @@ sudo dnf install https://github.com/0xErwin1/dbflux/releases/latest/download/dbf
 
 ### Nix
 
-Usando flakes (el paquete por defecto es un **binario prebuilt** para Linux x86_64 / aarch64, sin compilación):
+Usando flakes (el paquete por defecto es un **binario prebuilt** para Linux
+x86_64 / aarch64, sin compilación):
 
 ```bash
 # Ejecutar directamente (prebuilt)
@@ -73,7 +76,9 @@ nix run    github:0xErwin1/dbflux#dbflux-source
 nix build  github:0xErwin1/dbflux#dbflux-source
 ```
 
-Los builds nightly siguen `main` y se instalan en paralelo con la versión estable (app id, icono y base de datos `dbflux-nightly.db` distintos). Consúmelos desde la referencia `nightly`:
+Los builds nightly siguen `main` y se instalan en paralelo con la versión
+estable (app id, icono y base de datos `dbflux-nightly.db` distintos).
+Consúmelos desde la referencia `nightly`:
 
 ```bash
 nix run github:0xErwin1/dbflux/nightly#dbflux-nightly
@@ -106,11 +111,14 @@ NixOS / nix-darwin vía overlay:
 
 ## macOS
 
-DBFlux para macOS no está firmado con un certificado de desarrollador de Apple. Al abrirlo por primera vez, verás una advertencia sobre un "desarrollador no identificado".
+DBFlux para macOS no está firmado con un certificado de desarrollador de Apple.
+Al abrirlo por primera vez, verás una advertencia sobre un "desarrollador no
+identificado".
 
 ### Instalación
 
-1. Descarga el DMG para tu arquitectura desde [Releases](https://github.com/0xErwin1/dbflux/releases):
+1. Descarga el DMG para tu arquitectura desde
+   [Releases](https://github.com/0xErwin1/dbflux/releases):
    - **Macs Intel**: `dbflux-macos-amd64.dmg`
    - **Apple Silicon (M1/M2/M3/M4)**: `dbflux-macos-arm64.dmg`
 2. Abre el DMG y arrastra DBFlux a Applications
@@ -137,16 +145,20 @@ open /Applications/DBFlux.app
 
 ### Instalador
 
-1. Descarga `dbflux-windows-amd64-setup.exe` desde [Releases](https://github.com/0xErwin1/dbflux/releases)
+1. Descarga `dbflux-windows-amd64-setup.exe` desde
+   [Releases](https://github.com/0xErwin1/dbflux/releases)
 2. Ejecuta el instalador y sigue el asistente
 
 ### Portable
 
-1. Descarga `dbflux-windows-amd64.zip` desde [Releases](https://github.com/0xErwin1/dbflux/releases)
+1. Descarga `dbflux-windows-amd64.zip` desde
+   [Releases](https://github.com/0xErwin1/dbflux/releases)
 2. Extrae en cualquier carpeta
 3. Ejecuta `dbflux.exe`
 
-> **Nota**: El ejecutable no está firmado con un certificado de firma de código de Windows. Windows SmartScreen puede mostrar una advertencia. Haz clic en "Más información" → "Ejecutar de todas formas" para continuar.
+> **Nota**: El ejecutable no está firmado con un certificado de firma de código
+> de Windows. Windows SmartScreen puede mostrar una advertencia. Haz clic en
+> "Más información" → "Ejecutar de todas formas" para continuar.
 
 ### Requisitos
 
@@ -187,5 +199,7 @@ curl -fsSL https://raw.githubusercontent.com/0xErwin1/dbflux/main/scripts/uninst
 
 ## Próximos pasos
 
-- [Guía de uso](USAGE.md) — primer inicio, creación de una conexión y tu primera consulta
-- [Conectar — Configuración avanzada](CONNECTIONS.md) — túneles SSH, proxies, AWS SSO y fuentes de valores
+- [Guía de uso](USAGE.md) — primer inicio, creación de una conexión y tu primera
+  consulta
+- [Conectar — Configuración avanzada](CONNECTIONS.md) — túneles SSH, proxies,
+  AWS SSO y fuentes de valores

@@ -11,27 +11,25 @@ Base de datos relacional open-source avanzada.
 
 ## Funcionalidades
 
-- Driver relacional de PostgreSQL con ejecución de queries SQL y
-  descubrimiento de schema.
+- Driver relacional de PostgreSQL con ejecución de queries SQL y descubrimiento
+  de schema.
 - Soporta schemas, tablas, vistas, índices, foreign keys, constraints CHECK,
   constraints UNIQUE, y tipos personalizados.
 - Expone routines almacenadas (funciones, procedures, agregados, funciones
   window) en el árbol de schema con un visor de definición de solo lectura.
 - Soporta autenticación, SSL, túnel SSH, y modos de conexión URI/manual.
-- Soporta cancelación de queries a través de los cancel tokens de
-  PostgreSQL.
-- Incluye generación de SQL/código específica de PostgreSQL para CRUD,
-  índices, reindex, foreign keys, y operaciones de tipos.
-- Los scripts multi-sentencia (varias sentencias separadas por `;`) se
-  ejecutan como un lote vía el simple query protocol, devolviendo un result
-  set por sentencia.
-- Motor de transferencia de datos: carga masiva nativa multi-fila con
-  `INSERT` (`BULK_INSERT`), DDL `CREATE TABLE` nativo del driver a partir de
-  las columnas de una tabla origen, soporte de `TRUNCATE TABLE`, y un toggle
-  de integridad referencial (`SET session_replication_role`) para
-  migraciones seguras con FK.
-- Muestra valores `vector`, `halfvec`, y `sparsevec` de `pgvector`,
-  incluyendo arrays unidimensionales verificados, como resultados textuales.
+- Soporta cancelación de queries a través de los cancel tokens de PostgreSQL.
+- Incluye generación de SQL/código específica de PostgreSQL para CRUD, índices,
+  reindex, foreign keys, y operaciones de tipos.
+- Los scripts multi-sentencia (varias sentencias separadas por `;`) se ejecutan
+  como un lote vía el simple query protocol, devolviendo un result set por
+  sentencia.
+- Motor de transferencia de datos: carga masiva nativa multi-fila con `INSERT`
+  (`BULK_INSERT`), DDL `CREATE TABLE` nativo del driver a partir de las columnas
+  de una tabla origen, soporte de `TRUNCATE TABLE`, y un toggle de integridad
+  referencial (`SET session_replication_role`) para migraciones seguras con FK.
+- Muestra valores `vector`, `halfvec`, y `sparsevec` de `pgvector`, incluyendo
+  arrays unidimensionales verificados, como resultados textuales.
 - Muestra valores `tsvector` y `tsquery` de búsqueda de texto completo,
   incluyendo arrays unidimensionales, en la forma de texto canónica de
   PostgreSQL.
@@ -46,8 +44,7 @@ vistas de sistema de PostgreSQL:
   `pg_statio_user_tables`)
 - `pg.active_connections` — conexiones en estado `'active'`
 - `pg.idle_connections` — conexiones en estado `'idle'`
-- `pg.blocks_read` — bloques leídos desde disco (de
-  `pg_statio_user_tables`)
+- `pg.blocks_read` — bloques leídos desde disco (de `pg_statio_user_tables`)
 - `pg.stat_statements.mean_exec_ms` — tiempo de ejecución medio por query
   (requiere la extensión `pg_stat_statements`)
 
@@ -65,37 +62,36 @@ Expone snapshots tabulares del estado del servidor en ejecución:
 ## Limitaciones
 
 - Las columnas de resultados en lote (multi-sentencia) no llevan metadata de
-  tipo; los valores se devuelven como texto y la auto-detección de gráficos
-  está deshabilitada para ellas. Ejecuta una única sentencia para obtener
-  columnas completamente tipadas.
+  tipo; los valores se devuelven como texto y la auto-detección de gráficos está
+  deshabilitada para ellas. Ejecuta una única sentencia para obtener columnas
+  completamente tipadas.
 
 - `pg.stat_statements.mean_exec_ms` solo está disponible cuando la extensión
-  `pg_stat_statements` está instalada y cargada. El driver sondea su
-  presencia al construir el catálogo; cuando está ausente, la métrica se
-  omite de `list_metrics()`.
+  `pg_stat_statements` está instalada y cargada. El driver sondea su presencia
+  al construir el catálogo; cuando está ausente, la métrica se omite de
+  `list_metrics()`.
 
-- Instance Metrics devuelve un único dato por llamada (snapshot actual), no
-  una serie temporal histórica. La UI hace polling en el intervalo de
-  refresco configurado para construir el gráfico en vivo.
+- Instance Metrics devuelve un único dato por llamada (snapshot actual), no una
+  serie temporal histórica. La UI hace polling en el intervalo de refresco
+  configurado para construir el gráfico en vivo.
 
 - Driver solo SQL; no expone APIs de documentos ni de key-value.
-- Las definiciones de routines para funciones agregadas y window se
-  sintetizan a partir de metadata del catálogo porque `pg_get_functiondef`
-  no las soporta.
-- La edición y ejecución de routines no están soportadas; el visor de
-  routines es de solo lectura.
-- La cancelación es best effort y depende del estado del servidor/sesión en
-  el momento de la cancelación.
-- La generación de código apunta solo a construcciones de PostgreSQL
-  soportadas; los IDs de generador no soportados devuelven `NotSupported`.
+- Las definiciones de routines para funciones agregadas y window se sintetizan a
+  partir de metadata del catálogo porque `pg_get_functiondef` no las soporta.
+- La edición y ejecución de routines no están soportadas; el visor de routines
+  es de solo lectura.
+- La cancelación es best effort y depende del estado del servidor/sesión en el
+  momento de la cancelación.
+- La generación de código apunta solo a construcciones de PostgreSQL soportadas;
+  los IDs de generador no soportados devuelven `NotSupported`.
 
 ## Capacidades de DDL
 
 ### DDL transaccional
 
-PostgreSQL soporta **DDL transaccional** — todas las operaciones de DDL
-(excepto `CREATE INDEX CONCURRENTLY`) pueden envolverse en transacciones y
-revertirse con rollback:
+PostgreSQL soporta **DDL transaccional** — todas las operaciones de DDL (excepto
+`CREATE INDEX CONCURRENTLY`) pueden envolverse en transacciones y revertirse con
+rollback:
 
 ```sql
 BEGIN;
@@ -104,8 +100,8 @@ ALTER TABLE users ADD COLUMN phone VARCHAR(20) NULL;
 ROLLBACK;  -- Seguro de revertir si algo sale mal
 ```
 
-**Excepción**: `CREATE INDEX CONCURRENTLY` y `DROP INDEX CONCURRENTLY` no
-pueden ejecutarse dentro de una transacción.
+**Excepción**: `CREATE INDEX CONCURRENTLY` y `DROP INDEX CONCURRENTLY` no pueden
+ejecutarse dentro de una transacción.
 
 ### Comportamiento de ALTER TABLE
 
@@ -120,13 +116,12 @@ pueden ejecutarse dentro de una transacción.
 
 **Cambiar tipos de columna**:
 - Puede requerir reescritura de tabla (bloquea la tabla)
-- Usa la cláusula `USING` para conversión personalizada:
-  `ALTER COLUMN age TYPE integer USING age::integer`
+- Usa la cláusula `USING` para conversión personalizada: `ALTER COLUMN age TYPE
+  integer USING age::integer`
 
 **Eliminar columnas**:
 - Rápido (marca la columna como eliminada, sin reescritura)
-- Los datos no se liberan inmediatamente (usa `VACUUM FULL` si es
-  necesario)
+- Los datos no se liberan inmediatamente (usa `VACUUM FULL` si es necesario)
 
 **Renombrar columnas**:
 - Rápido (solo metadata)
@@ -155,8 +150,8 @@ pueden ejecutarse dentro de una transacción.
 ### Constraints
 
 **Agregar constraints**:
-- Los constraints `CHECK` y `UNIQUE` escanean la tabla (puede tomar tiempo
-  en tablas grandes)
+- Los constraints `CHECK` y `UNIQUE` escanean la tabla (puede tomar tiempo en
+  tablas grandes)
 - Usa `NOT VALID` para diferir la validación:
   ```sql
   ALTER TABLE users ADD CONSTRAINT age_check CHECK (age >= 0) NOT VALID;
@@ -185,9 +180,8 @@ pueden ejecutarse dentro de una transacción.
 
 ### Limitaciones conocidas
 
-- `CREATE INDEX CONCURRENTLY` requiere un lock exclusivo momentáneamente
-  (puede bloquear en tablas de alto tráfico)
+- `CREATE INDEX CONCURRENTLY` requiere un lock exclusivo momentáneamente (puede
+  bloquear en tablas de alto tráfico)
 - `ALTER TYPE ADD VALUE` no se puede revertir con rollback
 - Eliminar columnas no libera el espacio en disco inmediatamente (requiere
   `VACUUM FULL`)
-
