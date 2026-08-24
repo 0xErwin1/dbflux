@@ -1086,16 +1086,14 @@ fn theme_setting_from_storage(theme: &str) -> dbflux_core::ThemeSetting {
 
 /// Maps a storage `language` string to a `GeneralSettings::language` value.
 ///
-/// Mirrors the supported set of `dbflux_i18n::Language` storage identifiers
-/// without depending on `dbflux_i18n` from this app/core layer. Any value
-/// other than the empty string or a currently supported language falls back
-/// to the empty string, which `dbflux_i18n::resolve` treats as "follow the
-/// system locale" (`LanguagePreference::System`).
+/// The value passes through unvalidated on purpose: the supported set of
+/// languages is derived from the translation catalogs in `dbflux_i18n`, and
+/// this app/core layer must not duplicate it. `dbflux_i18n::resolve` treats
+/// any unrecognized value as "follow the system locale", so a stale or
+/// not-yet-shipped language code degrades safely instead of being erased
+/// here and losing the user's choice across an upgrade cycle.
 fn language_setting_from_storage(language: &str) -> String {
-    match language {
-        "en" | "es" => language.to_string(),
-        _ => String::new(),
-    }
+    language.to_string()
 }
 
 /// Maps a storage `style` string to `AppStyle`.
@@ -2441,7 +2439,7 @@ mod tests {
     }
 
     #[test]
-    fn invalid_language_storage_value_falls_back_to_empty_string() {
+    fn unrecognized_language_storage_value_loads_through_unchanged() {
         let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
 
         let mut dto = GeneralSettingsDto {
@@ -2473,8 +2471,9 @@ mod tests {
 
         let loaded = load_config(&runtime).expect("load configuration");
         assert_eq!(
-            loaded.general_settings.language, "",
-            "unsupported language storage value must fall back to empty string (System)"
+            loaded.general_settings.language, "de",
+            "an unrecognized language code must survive the load; dbflux_i18n::resolve \
+             degrades it to System without erasing the stored choice"
         );
 
         dto.language = "es".to_string();

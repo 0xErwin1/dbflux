@@ -2124,6 +2124,8 @@ hooks:
   tab:
     intro: Selecciona hooks reutilizables configurados en Ajustes -> Hooks
     lua_process_run_note: El hook seleccionado habilita Lua process.run y puede ejecutar programas externos con tus permisos de usuario
+language:
+  native_name: Español
 login:
   window_title: Flujo de conexión
   field:
@@ -2449,8 +2451,6 @@ settings:
       label: Idioma
       option:
         system: Sistema
-        english: Inglés
-        spanish: Español
       notice: Los cambios de idioma se aplican al reiniciar DBFlux.
     restore_session:
       label: Restaurar la sesión al iniciar

@@ -4,6 +4,14 @@ All notable changes to DBFlux will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+* **Language list derived from the translation catalogs (#360)** — the
+  Settings language dropdown now lists every language that ships a catalog in
+  `crates/dbflux_i18n/locales/`, with each language named in its own tongue
+  via the `language.native_name` key. Contributing a new language on Weblate
+  is enough for it to appear in the next build, with no code changes.
+
 ### Added
 
 * **Complete Spanish documentation and a language menu (#360)** — the
