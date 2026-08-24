@@ -158,8 +158,8 @@ El outcome se mapea a `HookResult` así:
 
 | Outcome     | `exit_code` | `stderr` | `warnings` |
 | ----------- | ----------- | -------- | ---------- |
-| `Ok`        | `0`         | vacío    | `[]`       |
-| `Warn(msg)` | `0`         | vacío    | `[msg]`    |
+| `Ok`        | `0`         | empty    | `[]`       |
+| `Warn(msg)` | `0`         | empty    | `[msg]`    |
 | `Fail(msg)` | `1`         | `msg`    | `[]`       |
 
 ### `connection.*` — Metadata de conexión
@@ -248,8 +248,8 @@ hook.ok()
 
 | Campo        | Tipo     | Requerido | Descripción                                                                                                  |
 | ------------ | -------- | --------- | ------------------------------------------------------------------------------------------------------------ |
-| `program`    | string   | sí        | Nombre de comando plano (sin separadores de ruta)                                                            |
-| `allowlist`  | string   | sí        | Debe coincidir con un nombre de allowlist conocido                                                           |
+| `program`    | string   | yes       | Nombre de comando plano (sin separadores de ruta)                                                            |
+| `allowlist`  | string   | yes       | Debe coincidir con un nombre de allowlist conocido                                                           |
 | `args`       | string[] | no        | Argumentos del comando                                                                                       |
 | `timeout_ms` | integer  | no\*      | Timeout por proceso (ms). El timeout a nivel de hook igual aplica por encima.                                |
 | `cwd`        | string   | no        | Directorio de trabajo                                                                                        |
