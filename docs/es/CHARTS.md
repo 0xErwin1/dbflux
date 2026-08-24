@@ -251,3 +251,5 @@ Estas limitaciones están fundamentadas en el código actual, no son suposicione
   demás tipos de chart se seleccionan después de la construcción.
 - La decimación de series usa un umbral LTTB cuyo valor por defecto es 10.000
   puntos (`default_decimation_threshold`).
+  </content>
+  </invoke>
