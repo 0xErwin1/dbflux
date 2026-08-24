@@ -20,7 +20,7 @@ export const VERSIONS_DIR = join(WEB, '.versions');
 
 /** Paths every version contributes, matching the collection in content.config.ts. */
 const WANTED =
-  /^(docs\/[^/]+\.md|docs\/es\/[^/]+\.md|docs\/es\/drivers\/[^/]+\.md|ARCHITECTURE\.md|CONTRIBUTING\.md|crates\/dbflux_driver_[^/]+\/README\.md)$/;
+  /^(docs\/[^/]+\.md|docs\/es\/[^/]+\.md|docs\/es\/drivers\/[^/]+\.md|ARCHITECTURE\.md|CONTRIBUTING\.md|SECURITY\.md|crates\/dbflux_driver_[^/]+\/README\.md)$/;
 
 const git = (args) =>
   execFileSync('git', args, { cwd: REPO, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });

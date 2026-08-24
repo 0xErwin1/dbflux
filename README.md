@@ -1,5 +1,7 @@
 # DBFlux
 
+**English** · [Español](README.es.md)
+
 An extensible, keyboard-first data platform delivered as a Rust + GPUI desktop client.
 
 **[dbflux.dev](https://dbflux.dev)** &middot; [Documentation](https://docs.dbflux.dev/) &middot; [Install](https://docs.dbflux.dev/install/)

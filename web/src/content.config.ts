@@ -27,6 +27,7 @@ const docs = defineCollection({
       '*/docs/es/drivers/*.md',
       '*/ARCHITECTURE.md',
       '*/CONTRIBUTING.md',
+      '*/SECURITY.md',
       '*/crates/dbflux_driver_*/README.md',
     ],
     generateId: ({ entry }) => {
