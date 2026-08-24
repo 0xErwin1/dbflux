@@ -1,21 +1,37 @@
 # Arquitectura
 
-Para el modelo conceptual y los límites de contratos, empieza por [Key Concepts](docs/CONCEPTS.md). Este documento sigue siendo canónico para los límites de crates y los archivos clave.
+Para el modelo conceptual y los límites de contratos, empieza por [Key
+Concepts](docs/CONCEPTS.md). Este documento sigue siendo canónico para los
+límites de crates y los archivos clave.
 
 ## Descripción general
 
-- DBFlux es un cliente de bases de datos centrado en el teclado, construido con Rust y GPUI, enfocado en workflows rápidos y una UI de escritorio limpia (README.md).
-- El repositorio es un workspace de Rust con un crate de aplicación UI más tipos core compartidos, implementaciones de drivers y bibliotecas de soporte (Cargo.toml, crates/).
-- Soporta múltiples paradigmas de bases de datos: relacional (SQL), documentos (MongoDB, DynamoDB), key-value (Redis), series temporales (InfluxDB), log-stream (CloudWatch Logs), grafos y wide-column stores.
-- Este es el documento canónico de nivel superior para la estructura del proyecto, la descripción general de la arquitectura, los límites de los crates, los archivos clave y el mapa entre crates. El resto de documentos de nivel superior deben enlazar aquí en lugar de duplicar ese material.
+- DBFlux es un cliente de bases de datos centrado en el teclado, construido con
+  Rust y GPUI, enfocado en workflows rápidos y una UI de escritorio limpia
+  (README.md).
+- El repositorio es un workspace de Rust con un crate de aplicación UI más tipos
+  core compartidos, implementaciones de drivers y bibliotecas de soporte
+  (Cargo.toml, crates/).
+- Soporta múltiples paradigmas de bases de datos: relacional (SQL), documentos
+  (MongoDB, DynamoDB), key-value (Redis), series temporales (InfluxDB),
+  log-stream (CloudWatch Logs), grafos y wide-column stores.
+- Este es el documento canónico de nivel superior para la estructura del
+  proyecto, la descripción general de la arquitectura, los límites de los
+  crates, los archivos clave y el mapa entre crates. El resto de documentos de
+  nivel superior deben enlazar aquí en lugar de duplicar ese material.
 
 ## Arquitectura de un vistazo
 
-El texto que sigue es exhaustivo pero denso; estos tres diagramas dan primero el modelo mental. Son conceptuales — los nombres exactos de los símbolos viven en las secciones siguientes.
+El texto que sigue es exhaustivo pero denso; estos tres diagramas dan primero el
+modelo mental. Son conceptuales — los nombres exactos de los símbolos viven en
+las secciones siguientes.
 
 ### Mapa de crates en capas
 
-Las dependencias apuntan hacia abajo. `dbflux_core` es la capa de contratos sin dependencias sobre la que se construye el resto de crates; la UI nunca depende de un crate de driver concreto (ver [Desacoplamiento Driver/UI](#sistema-de-drivers)).
+Las dependencias apuntan hacia abajo. `dbflux_core` es la capa de contratos sin
+dependencias sobre la que se construye el resto de crates; la UI nunca depende
+de un crate de driver concreto (ver [Desacoplamiento
+Driver/UI](#driver-system)).
 
 ```mermaid
 flowchart TB
@@ -59,7 +75,9 @@ flowchart TB
 
 ### Flujo de queries
 
-Una query viaja desde el editor document hasta una `Connection` del driver y de vuelta a una vista de resultado elegida por `DatabaseCategory` — la UI nunca bifurca según un driver id.
+Una query viaja desde el editor document hasta una `Connection` del driver y de
+vuelta a una vista de resultado elegida por `DatabaseCategory` — la UI nunca
+bifurca según un driver id.
 
 ```mermaid
 sequenceDiagram
@@ -86,7 +104,9 @@ sequenceDiagram
 
 ### Flujo de conexión
 
-Conectar ejecuta un pipeline pre-connect agnóstico del provider antes de que el driver abra, con tunneling/managed access opcional y hooks de lifecycle en cada fase.
+Conectar ejecuta un pipeline pre-connect agnóstico del provider antes de que el
+driver abra, con tunneling/managed access opcional y hooks de lifecycle en cada
+fase.
 
 ```mermaid
 flowchart TB
@@ -108,11 +128,16 @@ flowchart TB
 
 - Lenguaje: Rust 2024 edition (crates/dbflux/Cargo.toml).
 - UI: `gpui`, `gpui-component` (Cargo.toml).
-- Bases de datos: `tokio-postgres` (PostgreSQL), `rusqlite` (SQLite), `mysql` (MySQL/MariaDB), `mongodb` (MongoDB), `redis` (Redis), `aws-sdk-dynamodb` (DynamoDB), y HTTP vía `reqwest` (ClickHouse) (Cargo.toml).
-- Auth/integración AWS: `aws-config`, `aws-sdk-sso`, `aws-sdk-ssooidc`, `aws-sdk-sts`, `aws-sdk-secretsmanager`, `aws-sdk-ssm` (`dbflux_aws`).
-- IPC/RPC: sockets locales `interprocess` + framing de mensajes `bincode` (`dbflux_ipc`, `dbflux_driver_ipc`, `dbflux_driver_host`).
+- Bases de datos: `tokio-postgres` (PostgreSQL), `rusqlite` (SQLite), `mysql`
+  (MySQL/MariaDB), `mongodb` (MongoDB), `redis` (Redis), `aws-sdk-dynamodb`
+  (DynamoDB), y HTTP vía `reqwest` (ClickHouse) (Cargo.toml).
+- Auth/integración AWS: `aws-config`, `aws-sdk-sso`, `aws-sdk-ssooidc`,
+  `aws-sdk-sts`, `aws-sdk-secretsmanager`, `aws-sdk-ssm` (`dbflux_aws`).
+- IPC/RPC: sockets locales `interprocess` + framing de mensajes `bincode`
+  (`dbflux_ipc`, `dbflux_driver_ipc`, `dbflux_driver_host`).
 - SSH: `ssh2` vía `dbflux_ssh` (crates/dbflux_ssh/src/lib.rs).
-- Export: `csv` + `hex` + `base64` + `serde_json` vía `dbflux_export` (crates/dbflux_export/src/lib.rs).
+- Export: `csv` + `hex` + `base64` + `serde_json` vía `dbflux_export`
+  (crates/dbflux_export/src/lib.rs).
 - Serialización/config: `serde`, `serde_json`, `dirs` (Cargo.toml).
 - Logging: `log`, `env_logger` (crates/dbflux/src/main.rs).
 
@@ -542,324 +567,845 @@ crates/
 
 ### Capa de Aplicación
 
-- Punto de entrada de la app: `crates/dbflux/src/main.rs` inicializa logging, theme y la ventana principal de GPUI.
-- Estado global de la app: `crates/dbflux_app/src/app_state.rs` (struct plano, sin dependencia de GPUI) contiene drivers, profiles, conexiones activas, history, task manager y acceso al secret store.
-- CLI e instancia única: `crates/dbflux/src/cli.rs` parsea argumentos; `crates/dbflux_ui/src/ipc_server.rs` ejecuta el servidor IPC de control de la app para los comandos `Focus` y `OpenScript`.
-- Assets: `crates/dbflux_ui/src/assets.rs` implementa `AssetSource` de GPUI para servir íconos SVG embebidos.
-- Shell de UI del workspace: `crates/dbflux_ui/src/ui/views/workspace/` conecta panes (sidebar/dock, área de documents, dock inferior), command palette y el enrutado de foco. Dividido entre `mod.rs`, `actions.rs`, `dispatch.rs` y `render.rs`. Este módulo permanece en `dbflux_ui`.
+- Punto de entrada de la app: `crates/dbflux/src/main.rs` inicializa logging,
+  theme y la ventana principal de GPUI.
+- Estado global de la app: `crates/dbflux_app/src/app_state.rs` (struct plano,
+  sin dependencia de GPUI) contiene drivers, profiles, conexiones activas,
+  history, task manager y acceso al secret store.
+- CLI e instancia única: `crates/dbflux/src/cli.rs` parsea argumentos;
+  `crates/dbflux_ui/src/ipc_server.rs` ejecuta el servidor IPC de control de la
+  app para los comandos `Focus` y `OpenScript`.
+- Assets: `crates/dbflux_ui/src/assets.rs` implementa `AssetSource` de GPUI para
+  servir íconos SVG embebidos.
+- Shell de UI del workspace: `crates/dbflux_ui/src/ui/views/workspace/` conecta
+  panes (sidebar/dock, área de documents, dock inferior), command palette y el
+  enrutado de foco. Dividido entre `mod.rs`, `actions.rs`, `dispatch.rs` y
+  `render.rs`. Este módulo permanece en `dbflux_ui`.
 
 ### Reporte de errores orientado al usuario
 
-Los fallos disparados por el usuario se enrutan a través de un único seam en `crates/dbflux_ui_base/src/user_error/mod.rs`, de modo que cada error accionable produce un toast, una fila de audit y un incremento del badge de la status bar — todos indexados por el mismo correlation id UUID v7.
+Los fallos disparados por el usuario se enrutan a través de un único seam en
+`crates/dbflux_ui_base/src/user_error/mod.rs`, de modo que cada error accionable
+produce un toast, una fila de audit y un incremento del badge de la status bar —
+todos indexados por el mismo correlation id UUID v7.
 
-- **Puntos de entrada**: `report_error(UserFacingError, &mut App)` (foreground) y `report_error_async(UserFacingError, &AsyncApp)` (background / `cx.spawn` / `background_executor`). La variante sync NO debe llamarse desde un contexto background — requiere `&mut App`.
-- **Taxonomía**: `ErrorKind { Storage, Network, Auth, Hook, Driver, User, Config }` determina el estilo del badge/toast y el discriminador `action` del audit. La severidad reutiliza `dbflux_core::observability::EventSeverity`; `report_error` no agrega un enum paralelo.
-- **Alimentación desde el driver**: `UserFacingError::from_formatted(kind, FormattedError)` consume la salida existente del `ErrorFormatter` del driver. El código de la UI nunca bifurca según el driver id.
-- **Puente con audit**: el seam emite `tracing::error!(target = "dbflux_ui::user_error", correlation_id = %id, kind, action = "user_error", outcome = "failure", ...)`. `AuditFieldVisitor` (`crates/dbflux_core/src/observability/tracing_bridge/layer.rs`) enruta tanto `record_str` como `record_debug` a través de `record_string_by_name` para que el slot tipado `EventRecord.correlation_id` se rellene sin importar si el campo se registra con el sigilo `%` (Display) o `?` (Debug).
-- **Throttle de toasts**: `ToastHost` mantiene un token bucket por severidad (capacidad 5, refill de 1 token / 2 s) para Info y Warn, de forma que las tormentas de pérdida de conexión no saturen la pantalla. Error y Fatal evitan el throttle. El reloj del bucket es inyectable para tests deterministas.
-- **Badge + navegación**: `AppStateEntity::note_user_error` incrementa `unread_error_count` y emite `UserErrorReported`. El badge de la status bar se suscribe y, al hacer click, llama a `AppStateEntity::request_open_audit(None, cx)`, que emite `OpenAuditRequested`. La acción "View in Audit" del toast emite el mismo evento con `Some(correlation_id)`. El workspace se suscribe una vez a `OpenAuditRequested` y dirige `AuditDocument` mediante `set_correlation_filter` o `new_with_correlation_id`.
-- **Convención**: solo el primer catch site reporta. Los propagadores por encima NO deben volver a reportar — no hay deduplicación en runtime, los double-toasts son una cuestión de code review (ver AGENTS.md § Error Handling).
+- **Puntos de entrada**: `report_error(UserFacingError, &mut App)` (foreground)
+  y `report_error_async(UserFacingError, &AsyncApp)` (background / `cx.spawn` /
+  `background_executor`). La variante sync NO debe llamarse desde un contexto
+  background — requiere `&mut App`.
+- **Taxonomía**: `ErrorKind { Storage, Network, Auth, Hook, Driver, User, Config
+  }` determina el estilo del badge/toast y el discriminador `action` del audit.
+  La severidad reutiliza `dbflux_core::observability::EventSeverity`;
+  `report_error` no agrega un enum paralelo.
+- **Alimentación desde el driver**: `UserFacingError::from_formatted(kind,
+  FormattedError)` consume la salida existente del `ErrorFormatter` del driver.
+  El código de la UI nunca bifurca según el driver id.
+- **Puente con audit**: el seam emite `tracing::error!(target =
+  "dbflux_ui::user_error", correlation_id = %id, kind, action = "user_error",
+  outcome = "failure", ...)`. `AuditFieldVisitor`
+  (`crates/dbflux_core/src/observability/tracing_bridge/layer.rs`) enruta tanto
+  `record_str` como `record_debug` a través de `record_string_by_name` para que
+  el slot tipado `EventRecord.correlation_id` se rellene sin importar si el
+  campo se registra con el sigilo `%` (Display) o `?` (Debug).
+- **Throttle de toasts**: `ToastHost` mantiene un token bucket por severidad
+  (capacidad 5, refill de 1 token / 2 s) para Info y Warn, de forma que las
+  tormentas de pérdida de conexión no saturen la pantalla. Error y Fatal evitan
+  el throttle. El reloj del bucket es inyectable para tests deterministas.
+- **Badge + navegación**: `AppStateEntity::note_user_error` incrementa
+  `unread_error_count` y emite `UserErrorReported`. El badge de la status bar se
+  suscribe y, al hacer click, llama a `AppStateEntity::request_open_audit(None,
+  cx)`, que emite `OpenAuditRequested`. La acción "View in Audit" del toast
+  emite el mismo evento con `Some(correlation_id)`. El workspace se suscribe una
+  vez a `OpenAuditRequested` y dirige `AuditDocument` mediante
+  `set_correlation_filter` o `new_with_correlation_id`.
+- **Convención**: solo el primer catch site reporta. Los propagadores por encima
+  NO deben volver a reportar — no hay deduplicación en runtime, los
+  double-toasts son una cuestión de code review (ver AGENTS.md § Error
+  Handling).
 
 ### Sistema de Documents
 
-`crates/dbflux_ui_document/src/` implementa una arquitectura de documents basada en tabs con cinco capas:
+`crates/dbflux_ui_document/src/` implementa una arquitectura de documents basada
+en tabs con cinco capas:
 
 **Capas (de la más externa a la más interna)**
 
-1. **`Tab`** (`tab_manager.rs`) — enum `#[non_exhaustive]` con una única variante `Pane(Box<PaneHandle>)`. Se mantiene como enum por compatibilidad futura (por ejemplo, futuras variantes de pane desacoplable). `TabManager` mantiene un `Vec<Tab>` más el orden MRU.
+1. **`Tab`** (`tab_manager.rs`) — enum `#[non_exhaustive]` con una única
+   variante `Pane(Box<PaneHandle>)`. Se mantiene como enum por compatibilidad
+   futura (por ejemplo, futuras variantes de pane desacoplable). `TabManager`
+   mantiene un `Vec<Tab>` más el orden MRU.
 
-2. **`PaneHandle`** (`pane.rs`) — shell que borra closures y reemplaza al antiguo enum cerrado `DocumentHandle`. Cada una de las 22 operaciones (render, focus, dispatch_command, meta_snapshot, tab_title, can_close, connection_id, active_context, change_summary, refresh_policy, set_active_tab, set_refresh_policy, flush_auto_save, matches_dedup_key, subscribe, más helpers opcionales) es un closure `Box<dyn Fn>` que captura el `Entity<T>` tipado. `PaneHandle` es `!Clone`. Cada tipo de document provee `XxxDocument::into_pane(entity, cx) -> PaneHandle` en su propio archivo `pane.rs` (todos bajo `crates/dbflux_ui_document/src/`). Agregar un nuevo tipo de document no requiere cambios en `workspace/mod.rs`, `tab_manager.rs`, `tab_bar.rs` ni `handle.rs`.
+2. **`PaneHandle`** (`pane.rs`) — shell que borra closures y reemplaza al
+   antiguo enum cerrado `DocumentHandle`. Cada una de las 22 operaciones
+   (render, focus, dispatch_command, meta_snapshot, tab_title, can_close,
+   connection_id, active_context, change_summary, refresh_policy,
+   set_active_tab, set_refresh_policy, flush_auto_save, matches_dedup_key,
+   subscribe, más helpers opcionales) es un closure `Box<dyn Fn>` que captura el
+   `Entity<T>` tipado. `PaneHandle` es `!Clone`. Cada tipo de document provee
+   `XxxDocument::into_pane(entity, cx) -> PaneHandle` en su propio archivo
+   `pane.rs` (todos bajo `crates/dbflux_ui_document/src/`). Agregar un nuevo
+   tipo de document no requiere cambios en `workspace/mod.rs`, `tab_manager.rs`,
+   `tab_bar.rs` ni `handle.rs`.
 
-3. **`DocumentKey`** (`dedup.rs`) — enum de identidad usado para la deduplicación de tabs. Variantes: `Table`, `Collection`, `File`, `KeyValueDb`, `Chart`, `Audit`, `EventStream`, `Routine`, `MetricChart`, `Dashboard`, `InstanceMetric`, `InstanceInspector`, `InstanceOverview`, `ObjectStoreBucketsRoot`, `ObjectBrowser`, `ObjectEditor`. Reemplaza los métodos `is_*` del antiguo `DocumentHandle`. Los call sites usan `tab_manager.find_by_key(&DocumentKey::Table { ... }, cx)`.
+3. **`DocumentKey`** (`dedup.rs`) — enum de identidad usado para la
+   deduplicación de tabs. Variantes: `Table`, `Collection`, `File`,
+   `KeyValueDb`, `Chart`, `Audit`, `EventStream`, `Routine`, `MetricChart`,
+   `Dashboard`, `InstanceMetric`, `InstanceInspector`, `InstanceOverview`,
+   `ObjectStoreBucketsRoot`, `ObjectBrowser`, `ObjectEditor`. Reemplaza los
+   métodos `is_*` del antiguo `DocumentHandle`. Los call sites usan
+   `tab_manager.find_by_key(&DocumentKey::Table { ... }, cx)`.
 
-4. **`DocumentEvent`** (`handle.rs`, ~30 LOC) — enum de eventos unificado que reemplaza cuatro enums de eventos por-document que fueron eliminados. Variantes: `MetaChanged`, `ExecutionStarted`, `ExecutionFinished`, `RequestClose`, `RequestFocus`, `RequestSqlPreview`, `OpenInspector`, `ChartThisQuery`.
+4. **`DocumentEvent`** (`handle.rs`, ~30 LOC) — enum de eventos unificado que
+   reemplaza cuatro enums de eventos por-document que fueron eliminados.
+   Variantes: `MetaChanged`, `ExecutionStarted`, `ExecutionFinished`,
+   `RequestClose`, `RequestFocus`, `RequestSqlPreview`, `OpenInspector`,
+   `ChartThisQuery`.
 
-5. **`ResultPanel` + `ViewHandle`** (`crates/dbflux_components/src/result_panel/mod.rs`) — host de chrome universal. `ResultPanel` posee una fila de chrome y delega el renderizado del cuerpo a un `ViewHandle` (7 closures: render, focus, focus_handle, toolbar_segments, available_modes, current_mode, set_mode). El sistema de slots (`ToolbarSegment { position: SegmentPosition::{Left,Center,Right}, index: u16, builder }`) permite que las views aporten chrome arbitrario: `ResultPanel` combina los segmentos integrados (barra de modos en Left/0 cuando `available_modes.len() >= 2`) con los segmentos provistos por la view, los ordena por `(position, index)` y los renderiza en una fila `flex_wrap`.
+5. **`ResultPanel` + `ViewHandle`**
+   (`crates/dbflux_components/src/result_panel/mod.rs`) — host de chrome
+   universal. `ResultPanel` posee una fila de chrome y delega el renderizado del
+   cuerpo a un `ViewHandle` (7 closures: render, focus, focus_handle,
+   toolbar_segments, available_modes, current_mode, set_mode). El sistema de
+   slots (`ToolbarSegment { position: SegmentPosition::{Left,Center,Right},
+   index: u16, builder }`) permite que las views aporten chrome arbitrario:
+   `ResultPanel` combina los segmentos integrados (barra de modos en Left/0
+   cuando `available_modes.len() >= 2`) con los segmentos provistos por la view,
+   los ordena por `(position, index)` y los renderiza en una fila `flex_wrap`.
 
 **Los tipos de document**
 
-- `DataDocument` (`crates/dbflux_ui_document/src/data_document/`) — shell delgado alrededor de `DataGridPanel` + `ResultPanel`. DataGridPanel se monta como un `ViewHandle`; una filter bar se inyecta como segmento Center/0.
-- `ChartDocument` (`crates/dbflux_ui_document/src/chart_document/`) — entity `ChartShell` + `Option<Entity<ResultPanel>>` perezoso. El área del chart, la axis bar y los botones de acción se montan como segmentos Left/Center/Right. Se renderiza de forma independiente o embebido dentro de un panel de `DashboardDocument`.
-- `DashboardDocument` (`crates/dbflux_ui_document/src/dashboard/`) — grid nombrado de paneles de chart con un `TimeRangePanel` compartido y una refresh policy. Cada panel es una entity `ChartDocument` `Loaded` o un placeholder `Orphan` para un chart eliminado. La re-ejecución de paneles está acotada por `PANEL_REEXEC_CAP`. Ver `docs/DASHBOARDS.md`.
-- `CodeDocument` (`crates/dbflux_ui_document/src/code/`) — editor multi-tab. Cada tab de resultado envuelve su `DataGridPanel` en su propio `ResultPanel`. El chrome externo (editor, context bar, tab strip) se renderiza a sí mismo.
-- `KeyValueDocument` (`crates/dbflux_ui_document/src/key_value/`) — se renderiza a sí mismo. `KeyValueView` es un boundary struct a nivel de archivo (no una entity GPUI separada) que agrupa helpers de render extraídos de `key_value/render.rs`.
-- `AuditDocument` (`crates/dbflux_ui_document/src/audit/`) — se renderiza a sí mismo. `LogStreamView` es un boundary struct a nivel de archivo. El cuerpo se extrajo a `audit/render.rs` y `audit/commands.rs` como archivos `impl AuditDocument` hermanos.
-- `InstanceInspectorDocument` (`crates/dbflux_ui_document/src/instance_inspector/`) — tab tabular de snapshot de instance-inspector, indexado por `DocumentKey::InstanceInspector`.
-- `chart/` (`crates/dbflux_ui_document/src/chart/`) — el host `ChartShell` (`shell.rs`, `host.rs`) más el metric picker (`metric_picker*.rs`) y `toolbar.rs`, distinto de `chart_document/`; respalda los charts de métricas/instancia.
-- `BucketsTableDocument` (`crates/dbflux_ui_document/src/buckets_table/`) — vista de object-storage en la raíz de la conexión (nombre, región, cantidad de objetos, tamaño, versioning, fecha de creación), que reutiliza `dbflux_components::data_table` en lugar de `DataGridPanel`; indexado por `DocumentKey::ObjectStoreBucketsRoot`.
-- `ObjectBrowserDocument` (`crates/dbflux_ui_document/src/object_browser/`) — browser de object-storage con vista dividida tree/preview, navegación paginada y de tree perezoso, preview, metadata, upload, delete, rename y presign; indexado por `DocumentKey::ObjectBrowser`.
-- `ObjectEditorDocument` (`crates/dbflux_ui_document/src/object_editor/`) — tab independiente de "abrir en editor" para objetos de texto en S3, que comparte el módulo `object_text` (detección de line-ending, resaltado de lenguaje, audit de guardado) con el editor inline de `ObjectBrowserDocument`; indexado por `DocumentKey::ObjectEditor`.
+- `DataDocument` (`crates/dbflux_ui_document/src/data_document/`) — shell
+  delgado alrededor de `DataGridPanel` + `ResultPanel`. DataGridPanel se monta
+  como un `ViewHandle`; una filter bar se inyecta como segmento Center/0.
+- `ChartDocument` (`crates/dbflux_ui_document/src/chart_document/`) — entity
+  `ChartShell` + `Option<Entity<ResultPanel>>` perezoso. El área del chart, la
+  axis bar y los botones de acción se montan como segmentos Left/Center/Right.
+  Se renderiza de forma independiente o embebido dentro de un panel de
+  `DashboardDocument`.
+- `DashboardDocument` (`crates/dbflux_ui_document/src/dashboard/`) — grid
+  nombrado de paneles de chart con un `TimeRangePanel` compartido y una refresh
+  policy. Cada panel es una entity `ChartDocument` `Loaded` o un placeholder
+  `Orphan` para un chart eliminado. La re-ejecución de paneles está acotada por
+  `PANEL_REEXEC_CAP`. Ver `docs/DASHBOARDS.md`.
+- `CodeDocument` (`crates/dbflux_ui_document/src/code/`) — editor multi-tab.
+  Cada tab de resultado envuelve su `DataGridPanel` en su propio `ResultPanel`.
+  El chrome externo (editor, context bar, tab strip) se renderiza a sí mismo.
+- `KeyValueDocument` (`crates/dbflux_ui_document/src/key_value/`) — se renderiza
+  a sí mismo. `KeyValueView` es un boundary struct a nivel de archivo (no una
+  entity GPUI separada) que agrupa helpers de render extraídos de
+  `key_value/render.rs`.
+- `AuditDocument` (`crates/dbflux_ui_document/src/audit/`) — se renderiza a sí
+  mismo. `LogStreamView` es un boundary struct a nivel de archivo. El cuerpo se
+  extrajo a `audit/render.rs` y `audit/commands.rs` como archivos `impl
+  AuditDocument` hermanos.
+- `InstanceInspectorDocument`
+  (`crates/dbflux_ui_document/src/instance_inspector/`) — tab tabular de
+  snapshot de instance-inspector, indexado por `DocumentKey::InstanceInspector`.
+- `chart/` (`crates/dbflux_ui_document/src/chart/`) — el host `ChartShell`
+  (`shell.rs`, `host.rs`) más el metric picker (`metric_picker*.rs`) y
+  `toolbar.rs`, distinto de `chart_document/`; respalda los charts de
+  métricas/instancia.
+- `BucketsTableDocument` (`crates/dbflux_ui_document/src/buckets_table/`) —
+  vista de object-storage en la raíz de la conexión (nombre, región, cantidad de
+  objetos, tamaño, versioning, fecha de creación), que reutiliza
+  `dbflux_components::data_table` en lugar de `DataGridPanel`; indexado por
+  `DocumentKey::ObjectStoreBucketsRoot`.
+- `ObjectBrowserDocument` (`crates/dbflux_ui_document/src/object_browser/`) —
+  browser de object-storage con vista dividida tree/preview, navegación paginada
+  y de tree perezoso, preview, metadata, upload, delete, rename y presign;
+  indexado por `DocumentKey::ObjectBrowser`.
+- `ObjectEditorDocument` (`crates/dbflux_ui_document/src/object_editor/`) — tab
+  independiente de "abrir en editor" para objetos de texto en S3, que comparte
+  el módulo `object_text` (detección de line-ending, resaltado de lenguaje,
+  audit de guardado) con el editor inline de `ObjectBrowserDocument`; indexado
+  por `DocumentKey::ObjectEditor`.
 
-**Agregar un nuevo tipo de document** (sin cambios requeridos fuera del nuevo módulo):
+**Agregar un nuevo tipo de document** (sin cambios requeridos fuera del nuevo
+módulo):
 1. Crea `crates/dbflux_ui_document/src/<name>/mod.rs` con la entity.
-2. Crea `crates/dbflux_ui_document/src/<name>/pane.rs` con `into_pane(entity, cx) -> PaneHandle`.
-3. Agrega una variante de `DocumentKey` en `crates/dbflux_ui_document/src/dedup.rs` si se necesita dedup.
-4. Agrega una función `open_<name>` en `crates/dbflux_ui/src/ui/views/workspace/actions.rs`.
+2. Crea `crates/dbflux_ui_document/src/<name>/pane.rs` con `into_pane(entity,
+   cx) -> PaneHandle`.
+3. Agrega una variante de `DocumentKey` en
+   `crates/dbflux_ui_document/src/dedup.rs` si se necesita dedup.
+4. Agrega una función `open_<name>` en
+   `crates/dbflux_ui/src/ui/views/workspace/actions.rs`.
 
 **Notas de arquitectura**
 
-- `KeyValueView` y `LogStreamView` son boundary structs a nivel de archivo, no entities GPUI separadas. El modelo de borrow de `Context<T>` único de GPUI hace inviables las divisiones de `impl Render` entre entities cuando 40+ closures `cx.listener()` en un document capturan `Self`; dividir requeriría reubicar todo el estado de dominio en la view entity. El boundary logrado es a nivel de archivo.
-- El trait `DataView` (`data_view_trait.rs`) no incluye un método `render`. La spec pedía `render` en el trait, pero `impl IntoElement` no es trait-object-safe y hacer boxing a `AnyElement` entra en conflicto con los idioms de GPUI. El renderizado pasa por `ViewHandle.render` en su lugar.
-- Auto-save: los tabs se auto-guardan en scratch files (sin título) o shadow files (con archivo respaldo) con un debounce de 2 segundos. Ctrl+S escribe al archivo original. Los tabs se cierran sin avisos.
-- Restauración de sesión: `SessionStore` persiste un manifest de los tabs abiertos en `~/.local/share/dbflux/sessions/`. Al iniciar, todos los tabs se restauran con detección de conflictos para archivos modificados externamente. Solo los code documents producen `CodeSessionTabSnapshot`; el resto de tipos de document no se persisten en la sesión.
-- Prevención de duplicados: `tab_manager.find_by_key` verifica `PaneHandle::matches_dedup_key` antes de abrir un nuevo tab, enfocando el existente si lo encuentra.
+- `KeyValueView` y `LogStreamView` son boundary structs a nivel de archivo, no
+  entities GPUI separadas. El modelo de borrow de `Context<T>` único de GPUI
+  hace inviables las divisiones de `impl Render` entre entities cuando 40+
+  closures `cx.listener()` en un document capturan `Self`; dividir requeriría
+  reubicar todo el estado de dominio en la view entity. El boundary logrado es a
+  nivel de archivo.
+- El trait `DataView` (`data_view_trait.rs`) no incluye un método `render`. La
+  spec pedía `render` en el trait, pero `impl IntoElement` no es
+  trait-object-safe y hacer boxing a `AnyElement` entra en conflicto con los
+  idioms de GPUI. El renderizado pasa por `ViewHandle.render` en su lugar.
+- Auto-save: los tabs se auto-guardan en scratch files (sin título) o shadow
+  files (con archivo respaldo) con un debounce de 2 segundos. Ctrl+S escribe al
+  archivo original. Los tabs se cierran sin avisos.
+- Restauración de sesión: `SessionStore` persiste un manifest de los tabs
+  abiertos en `~/.local/share/dbflux/sessions/`. Al iniciar, todos los tabs se
+  restauran con detección de conflictos para archivos modificados externamente.
+  Solo los code documents producen `CodeSessionTabSnapshot`; el resto de tipos
+  de document no se persisten en la sesión.
+- Prevención de duplicados: `tab_manager.find_by_key` verifica
+  `PaneHandle::matches_dedup_key` antes de abrir un nuevo tab, enfocando el
+  existente si lo encuentra.
 
 ### Visual Query Builder
 
-Un rail lateral compone sentencias SELECT/UPDATE/DELETE sin escribir SQL y las alimenta al DataView. Es agnóstico del driver por construcción: gated en `QueryLanguage::Sql`, sin bifurcación por driver en ningún punto del camino.
+Un rail lateral compone sentencias SELECT/UPDATE/DELETE sin escribir SQL y las
+alimenta al DataView. Es agnóstico del driver por construcción: gated en
+`QueryLanguage::Sql`, sin bifurcación por driver en ningún punto del camino.
 
-**Tipos de spec principales** (`crates/dbflux_core/src/query/visual_query.rs`, re-exportados desde `dbflux_core::query`):
-- `VisualQuerySpec` — el modelo del SELECT: proyección, FROM con alias, JOINs, un árbol de predicados `WHERE` recursivo (`FilterNode` / `Predicate`), GROUP BY / aggregates / HAVING, `ORDER BY` (`SortEntry`), y `LIMIT`/`OFFSET`.
-- `VisualMutationSpec` (con `MutationKind`, `ColumnAssignment` / `Assignment`, `AssignmentValue`) — el modelo de UPDATE/DELETE. Una asignación de expresión raw se rastrea mediante un flag `used_raw_expression` en lugar de un marcador textual.
-- `EditableBinding` — la prueba de que un resultado SELECT es *editable-safe* (ver Edición inline más abajo).
+**Tipos de spec principales** (`crates/dbflux_core/src/query/visual_query.rs`,
+re-exportados desde `dbflux_core::query`):
+- `VisualQuerySpec` — el modelo del SELECT: proyección, FROM con alias, JOINs,
+  un árbol de predicados `WHERE` recursivo (`FilterNode` / `Predicate`), GROUP
+  BY / aggregates / HAVING, `ORDER BY` (`SortEntry`), y `LIMIT`/`OFFSET`.
+- `VisualMutationSpec` (con `MutationKind`, `ColumnAssignment` / `Assignment`,
+  `AssignmentValue`) — el modelo de UPDATE/DELETE. Una asignación de expresión
+  raw se rastrea mediante un flag `used_raw_expression` en lugar de un marcador
+  textual.
+- `EditableBinding` — la prueba de que un resultado SELECT es *editable-safe*
+  (ver Edición inline más abajo).
 
-**Generación de SQL** (`crates/dbflux_core/src/query/generator.rs`): el trait `QueryGenerator` gana tres métodos con implementación por defecto — `generate_select`, `generate_update_from_spec`, `generate_delete_from_spec`. Estos delegan al `SqlSelectBuilder` interno del crate (funciones libres `build_select_query` / `build_grouped_count_query`), que renderiza SQL específico del dialecto para SQLite, PostgreSQL, MySQL/MariaDB y SQL Server. Las queries agrupadas reutilizan `build_group_by` / `build_having` / `build_count_of_grouped`, de modo que la paginación ejecuta una subquery `COUNT(*)` sobre el SELECT agrupado. UPDATE/DELETE emiten DML fragmentado con keyset sobre la PK de la tabla.
+**Generación de SQL** (`crates/dbflux_core/src/query/generator.rs`): el trait
+`QueryGenerator` gana tres métodos con implementación por defecto —
+`generate_select`, `generate_update_from_spec`, `generate_delete_from_spec`.
+Estos delegan al `SqlSelectBuilder` interno del crate (funciones libres
+`build_select_query` / `build_grouped_count_query`), que renderiza SQL
+específico del dialecto para SQLite, PostgreSQL, MySQL/MariaDB y SQL Server. Las
+queries agrupadas reutilizan `build_group_by` / `build_having` /
+`build_count_of_grouped`, de modo que la paginación ejecuta una subquery
+`COUNT(*)` sobre el SELECT agrupado. UPDATE/DELETE emiten DML fragmentado con
+keyset sobre la PK de la tabla.
 
-**Política de mutación** (`crates/dbflux_core/src/connection/manager.rs`): `MutationPolicy { Allowed | ReadOnly | ApprovalRequired }` compone la gobernanza del actor MCP, el read-only por perfil y una resolución por defecto `Allowed`. UPDATE/DELETE sin `WHERE` está adicionalmente gated por una verificación doble de `DangerousQueryKind` a nivel de spec y a nivel de texto.
+**Política de mutación** (`crates/dbflux_core/src/connection/manager.rs`):
+`MutationPolicy { Allowed | ReadOnly | ApprovalRequired }` compone la gobernanza
+del actor MCP, el read-only por perfil y una resolución por defecto `Allowed`.
+UPDATE/DELETE sin `WHERE` está adicionalmente gated por una verificación doble
+de `DangerousQueryKind` a nivel de spec y a nivel de texto.
 
-**UI** (`crates/dbflux_ui_document/src/query_builder/`): `QueryBuilderPanel` (`panel.rs`, `view.rs`) renderiza el rail con un selector de modo y secciones por cláusula bajo `sections/` (`columns`, `joins`, `filters`, `group_by`, `sort`, `assignments`, `execution`); `mutation_state.rs`, `completion.rs` (autocompletado consciente del schema), `events.rs` y `tree_ops.rs` lo respaldan. El preview de SQL siempre está visible y se regenera de forma síncrona en cada cambio.
+**UI** (`crates/dbflux_ui_document/src/query_builder/`): `QueryBuilderPanel`
+(`panel.rs`, `view.rs`) renderiza el rail con un selector de modo y secciones
+por cláusula bajo `sections/` (`columns`, `joins`, `filters`, `group_by`,
+`sort`, `assignments`, `execution`); `mutation_state.rs`, `completion.rs`
+(autocompletado consciente del schema), `events.rs` y `tree_ops.rs` lo
+respaldan. El preview de SQL siempre está visible y se regenera de forma
+síncrona en cada cambio.
 
-**Ejecución** (`crates/dbflux_ui_document/src/data_grid_panel/`): el builder se integra en el DataView; `MutationExecutor` (`mutation_executor.rs`) impulsa una máquina de estados `ExecutionMode` — `SingleTransaction`, `ChunkedTransaction`, `DirectAutocommit` — auto-sugerida a partir de la estimación de conteo, la capability `TRANSACTIONS` y la disponibilidad de primary key (con un modal de tradeoff ante un override del usuario). Las ejecuciones fragmentadas usan paginación con keyset (tamaño de chunk acotado a `[1000, 10000]`, por defecto 5000), muestran entries por chunk en el Tasks panel con cancelación entre chunks, y hacen `ROLLBACK` ante un fallo de chunk.
+**Ejecución** (`crates/dbflux_ui_document/src/data_grid_panel/`): el builder se
+integra en el DataView; `MutationExecutor` (`mutation_executor.rs`) impulsa una
+máquina de estados `ExecutionMode` — `SingleTransaction`, `ChunkedTransaction`,
+`DirectAutocommit` — auto-sugerida a partir de la estimación de conteo, la
+capability `TRANSACTIONS` y la disponibilidad de primary key (con un modal de
+tradeoff ante un override del usuario). Las ejecuciones fragmentadas usan
+paginación con keyset (tamaño de chunk acotado a `[1000, 10000]`, por defecto
+5000), muestran entries por chunk en el Tasks panel con cancelación entre
+chunks, y hacen `ROLLBACK` ante un fallo de chunk.
 
-**Edición inline sobre resultados del builder**: cuando un resultado SELECT es demostrablemente editable-safe — mapea 1:1 a una única tabla subyacente y proyecta cada columna de PK bajo su nombre original — el builder calcula un `EditableBinding` a partir del `VisualQuerySpec` confirmado y lo enhebra en el DataView, reutilizando el camino de mutación de tabla única con un `WHERE` construido a partir de los valores de PK proyectados (sin parsear SQL). Los JOINs están permitidos: las columnas de la tabla origen siguen siendo editables, las columnas unidas quedan de solo lectura. Aggregates / `GROUP BY` / `HAVING`, PKs proyectadas con alias o faltantes, y claves de schema aún no cargadas caen a solo lectura. La prueba vive en `dbflux_core` sobre tipos genéricos de spec/metadata, así que cada driver relacional la adopta.
+**Edición inline sobre resultados del builder**: cuando un resultado SELECT es
+demostrablemente editable-safe — mapea 1:1 a una única tabla subyacente y
+proyecta cada columna de PK bajo su nombre original — el builder calcula un
+`EditableBinding` a partir del `VisualQuerySpec` confirmado y lo enhebra en el
+DataView, reutilizando el camino de mutación de tabla única con un `WHERE`
+construido a partir de los valores de PK proyectados (sin parsear SQL). Los
+JOINs están permitidos: las columnas de la tabla origen siguen siendo editables,
+las columnas unidas quedan de solo lectura. Aggregates / `GROUP BY` / `HAVING`,
+PKs proyectadas con alias o faltantes, y claves de schema aún no cargadas caen a
+solo lectura. La prueba vive en `dbflux_core` sobre tipos genéricos de
+spec/metadata, así que cada driver relacional la adopta.
 
-**Persistencia**: la migración `017_qry_saved_queries` agrega la familia de tablas `qry_*` (raíz + tablas hijas de columns/sorts/joins, FKs en cascada, `UNIQUE (profile_id, name)`), frontada por `SavedQueryRepo` (`crates/dbflux_storage/src/repositories/qry_saved_queries.rs`) y el `SavedQueryManager` en memoria (`crates/dbflux_ui_base/src/saved_query_manager.rs`). Un seam `TableProbe` verifica la existencia de la tabla al importar una saved query hacia otra conexión sin acceder al código del driver.
+**Persistencia**: la migración `017_qry_saved_queries` agrega la familia de
+tablas `qry_*` (raíz + tablas hijas de columns/sorts/joins, FKs en cascada,
+`UNIQUE (profile_id, name)`), frontada por `SavedQueryRepo`
+(`crates/dbflux_storage/src/repositories/qry_saved_queries.rs`) y el
+`SavedQueryManager` en memoria
+(`crates/dbflux_ui_base/src/saved_query_manager.rs`). Un seam `TableProbe`
+verifica la existencia de la tabla al importar una saved query hacia otra
+conexión sin acceder al código del driver.
 
 ### Visualización de Datos
 
-- **Data table**: `crates/dbflux_components/src/components/data_table/` tabla virtualizada personalizada con ordenamiento, selección, scroll horizontal vía el patrón de phantom scroller, navegación por teclado, redimensionado de columnas y menú contextual con operaciones CRUD.
-- **Document tree**: `crates/dbflux_components/src/components/document_tree/` visor jerárquico de JSON/BSON para bases de datos de documentos con navegación por teclado (j/k/h/l), búsqueda (Ctrl+F o /), nodos colapsables y modos de vista (Keys Only, Keys+Preview, Full Values).
-- **Key-value view**: `crates/dbflux_ui_document/src/key_value/` tab de document específico de Redis con renderizado por tipo (String, Hash, List, Set, SortedSet, Stream), paginación, mutations y menú contextual. Se integra con el workspace vía un `PaneHandle` construido en `key_value/pane.rs`.
-- Cell editor modal: `crates/dbflux_components/src/modals/cell_editor.rs` provee un editor modal para columnas JSON y texto largo/multilínea, con validación y formateo de JSON. (Shim en la ruta antigua de overlay en `dbflux_ui`.)
-- Document preview modal: `crates/dbflux_components/src/modals/document_preview.rs` preview de document JSON a pantalla completa con un editor JSON inline. (Shim en la ruta antigua de overlay en `dbflux_ui`.)
-- Command palette: `crates/dbflux_ui/src/ui/overlays/command_palette.rs` command palette con fuzzy-search para todas las acciones de la app.
+- **Data table**: `crates/dbflux_components/src/components/data_table/` tabla
+  virtualizada personalizada con ordenamiento, selección, scroll horizontal vía
+  el patrón de phantom scroller, navegación por teclado, redimensionado de
+  columnas y menú contextual con operaciones CRUD.
+- **Document tree**: `crates/dbflux_components/src/components/document_tree/`
+  visor jerárquico de JSON/BSON para bases de datos de documentos con navegación
+  por teclado (j/k/h/l), búsqueda (Ctrl+F o /), nodos colapsables y modos de
+  vista (Keys Only, Keys+Preview, Full Values).
+- **Key-value view**: `crates/dbflux_ui_document/src/key_value/` tab de document
+  específico de Redis con renderizado por tipo (String, Hash, List, Set,
+  SortedSet, Stream), paginación, mutations y menú contextual. Se integra con el
+  workspace vía un `PaneHandle` construido en `key_value/pane.rs`.
+- Cell editor modal: `crates/dbflux_components/src/modals/cell_editor.rs` provee
+  un editor modal para columnas JSON y texto largo/multilínea, con validación y
+  formateo de JSON. (Shim en la ruta antigua de overlay en `dbflux_ui`.)
+- Document preview modal:
+  `crates/dbflux_components/src/modals/document_preview.rs` preview de document
+  JSON a pantalla completa con un editor JSON inline. (Shim en la ruta antigua
+  de overlay en `dbflux_ui`.)
+- Command palette: `crates/dbflux_ui/src/ui/overlays/command_palette.rs` command
+  palette con fuzzy-search para todas las acciones de la app.
 
 ### Dashboards y Saved Charts
 
-DBFlux persiste configuraciones de chart como **Saved Charts** y las agrupa en **Dashboards** (un grid de paneles de chart y dividers markdown opcionales, con un rango de tiempo y refresh policy compartidos). Los drivers se suman al import/browse de dashboards vía seams genéricos del core — la UI nunca bifurca según driver IDs.
+DBFlux persiste configuraciones de chart como **Saved Charts** y las agrupa en
+**Dashboards** (un grid de paneles de chart y dividers markdown opcionales, con
+un rango de tiempo y refresh policy compartidos). Los drivers se suman al
+import/browse de dashboards vía seams genéricos del core — la UI nunca bifurca
+según driver IDs.
 
-- **Storage**: tablas `viz_*` en `~/.local/share/dbflux/dbflux.db`. Los repositorios viven en `crates/dbflux_storage/src/repositories/viz_dashboards.rs`, `viz_dashboard_panels.rs` y `viz_saved_charts.rs`. `SavedChartDto` es un aggregate root que escribe atómicamente en tres tablas.
-- **Managers** (cachés en memoria sobre repositorios): `DashboardManager` (`crates/dbflux_ui_base/src/dashboard_manager.rs`) con `Dashboard`, `DashboardPanel`, `DashboardPanelKind { Chart { saved_chart_id } | Divider { markdown } | Inspector { metric_id } }`, `DashboardPanelDraft`; `SavedChartManager` (`crates/dbflux_ui_base/src/saved_chart_manager.rs`) posee el lifecycle de `SavedChart` y `SavedChartRefreshPolicy` (`Off` | `Interval { every_secs }`).
-- **Caché de sesión para listados remotos**: `RemoteDashboardCache` (`crates/dbflux_app/src/remote_dashboard_cache.rs`) — no se persiste entre reinicios.
-- **Documents**: `ChartDocument` (`crates/dbflux_ui_document/src/chart_document/`) indexado por `DocumentKey::Chart`; `DashboardDocument` (`crates/dbflux_ui_document/src/dashboard/`) indexado por `DocumentKey::Dashboard`. Los paneles de dashboard embeben entities `ChartDocument` (`Loaded` / `Orphan`); el `TimeRangePanel` compartido propaga los cambios de ventana a cada panel cargado vía subscriptions.
+- **Storage**: tablas `viz_*` en `~/.local/share/dbflux/dbflux.db`. Los
+  repositorios viven en
+  `crates/dbflux_storage/src/repositories/viz_dashboards.rs`,
+  `viz_dashboard_panels.rs` y `viz_saved_charts.rs`. `SavedChartDto` es un
+  aggregate root que escribe atómicamente en tres tablas.
+- **Managers** (cachés en memoria sobre repositorios): `DashboardManager`
+  (`crates/dbflux_ui_base/src/dashboard_manager.rs`) con `Dashboard`,
+  `DashboardPanel`, `DashboardPanelKind { Chart { saved_chart_id } | Divider {
+  markdown } | Inspector { metric_id } }`, `DashboardPanelDraft`;
+  `SavedChartManager` (`crates/dbflux_ui_base/src/saved_chart_manager.rs`) posee
+  el lifecycle de `SavedChart` y `SavedChartRefreshPolicy` (`Off` | `Interval {
+  every_secs }`).
+- **Caché de sesión para listados remotos**: `RemoteDashboardCache`
+  (`crates/dbflux_app/src/remote_dashboard_cache.rs`) — no se persiste entre
+  reinicios.
+- **Documents**: `ChartDocument`
+  (`crates/dbflux_ui_document/src/chart_document/`) indexado por
+  `DocumentKey::Chart`; `DashboardDocument`
+  (`crates/dbflux_ui_document/src/dashboard/`) indexado por
+  `DocumentKey::Dashboard`. Los paneles de dashboard embeben entities
+  `ChartDocument` (`Loaded` / `Orphan`); el `TimeRangePanel` compartido propaga
+  los cambios de ventana a cada panel cargado vía subscriptions.
 - **Seams de driver**:
-  - `DashboardImporter` (`crates/dbflux_core/src/connection/dashboard_import.rs`) — los drivers parsean el JSON del dashboard upstream a `WidgetImportSpec`s. Carga `MetricView { TimeSeries | StackedArea | SingleValue }`, `ImportedMetricSeries` y coordenadas `WidgetLayout` nativas. Gated por `DriverCapabilities::DASHBOARD_IMPORT`.
-  - `DashboardSource` (`crates/dbflux_core/src/connection/dashboard_source.rs`) — los drivers listan dashboards upstream con `RemoteDashboard` / `DashboardRef` (`last_modified` ISO8601 opcional). Gated por `DriverCapabilities::DASHBOARD_SYNC`.
-  - `CloudWatchDashboardSource` + `CloudWatchDashboardImporter` en `crates/dbflux_driver_cloudwatch/` implementan ambos para browse + import de solo lectura. DBFlux nunca escribe de vuelta a los dashboards de CloudWatch.
-  - `InstanceCatalog` (`crates/dbflux_core/src/connection/instance_catalog.rs`) — los drivers publican métricas de servidor en vivo (series temporales), inspectores tabulares (sessions, processlist, currentOp, CLIENT LIST), un descriptor de **Instance Overview** por defecto, y acciones de fila de inspector opcionales gated por probes de privilegios por driver. Gated por `DriverCapabilities::INSTANCE_METRICS` (series temporales) e `INSTANCE_INSPECTOR` (tabular). PostgreSQL, MySQL/MariaDB, MongoDB, Redis y SQL Server lo implementan.
-- **Instance Overview**: un dashboard de solo lectura auto-generado, indexado por `DocumentKey::InstanceOverview { profile_id }`, compuesto a partir del descriptor `InstanceCatalog` del driver. "Save as editable" lo clona en un `Dashboard` persistido y propiedad del usuario. El `DashboardPanelKind` `Inspector` aloja los inspectores tabulares y se persiste vía `viz_dashboard_panels.panel_kind`.
+  - `DashboardImporter`
+    (`crates/dbflux_core/src/connection/dashboard_import.rs`) — los drivers
+    parsean el JSON del dashboard upstream a `WidgetImportSpec`s. Carga
+    `MetricView { TimeSeries | StackedArea | SingleValue }`,
+    `ImportedMetricSeries` y coordenadas `WidgetLayout` nativas. Gated por
+    `DriverCapabilities::DASHBOARD_IMPORT`.
+  - `DashboardSource` (`crates/dbflux_core/src/connection/dashboard_source.rs`)
+    — los drivers listan dashboards upstream con `RemoteDashboard` /
+    `DashboardRef` (`last_modified` ISO8601 opcional). Gated por
+    `DriverCapabilities::DASHBOARD_SYNC`.
+  - `CloudWatchDashboardSource` + `CloudWatchDashboardImporter` en
+    `crates/dbflux_driver_cloudwatch/` implementan ambos para browse + import de
+    solo lectura. DBFlux nunca escribe de vuelta a los dashboards de CloudWatch.
+  - `InstanceCatalog` (`crates/dbflux_core/src/connection/instance_catalog.rs`)
+    — los drivers publican métricas de servidor en vivo (series temporales),
+    inspectores tabulares (sessions, processlist, currentOp, CLIENT LIST), un
+    descriptor de **Instance Overview** por defecto, y acciones de fila de
+    inspector opcionales gated por probes de privilegios por driver. Gated por
+    `DriverCapabilities::INSTANCE_METRICS` (series temporales) e
+    `INSTANCE_INSPECTOR` (tabular). PostgreSQL, MySQL/MariaDB, MongoDB, Redis y
+    SQL Server lo implementan.
+- **Instance Overview**: un dashboard de solo lectura auto-generado, indexado
+  por `DocumentKey::InstanceOverview { profile_id }`, compuesto a partir del
+  descriptor `InstanceCatalog` del driver. "Save as editable" lo clona en un
+  `Dashboard` persistido y propiedad del usuario. El `DashboardPanelKind`
+  `Inspector` aloja los inspectores tabulares y se persiste vía
+  `viz_dashboard_panels.panel_kind`.
 
-Ver `docs/DASHBOARDS.md` para la referencia completa (incluyendo instance metrics e inspectors) y `docs/CHARTS.md` para el chart engine.
+Ver `docs/DASHBOARDS.md` para la referencia completa (incluyendo instance
+metrics e inspectors) y `docs/CHARTS.md` para el chart engine.
 
 ### Schema y Navegación
 
-- Sidebar: `crates/dbflux_ui_sidebar/src/` muestra dos tabs — Connections (tree de schema con organización por carpetas, drag-drop, multi-selección) y Scripts (gestión de archivos/carpetas para saved query files, script hooks y otros archivos del usuario). Cambia de tab con las teclas `q` o `e`. Muestra tables/collections, columns, indexes por database category con carga perezosa. Re-exportado vía un shim en `crates/dbflux_ui/src/ui/views/sidebar/mod.rs`.
-- Los recursos hijos propiedad de un driver bajo collections/containers se publican a través de la metadata genérica `CollectionChildInfo`. El sidebar no debe inferir hijos específicos de un driver a partir de nombres, tipos de campo o driver IDs.
-- Las routines (functions, procedures, aggregates, window functions) aparecen como una carpeta "Routines" por schema cuando el driver activa la capability `ROUTINES` y puebla el seam `schema_routines`. La UI renderiza la carpeta de forma genérica; no hace casos especiales para ningún driver.
-- Sidebar dock: `crates/dbflux_ui/src/ui/dock/sidebar_dock.rs` provee un sidebar colapsable y redimensionable con el comando ToggleSidebar (Ctrl+B).
-- Connection tree: `crates/dbflux_core/src/connection/tree.rs` modela carpetas y conexiones como una estructura de árbol; `tree_manager.rs` maneja la gestión en memoria.
+- Sidebar: `crates/dbflux_ui_sidebar/src/` muestra dos tabs — Connections (tree
+  de schema con organización por carpetas, drag-drop, multi-selección) y Scripts
+  (gestión de archivos/carpetas para saved query files, script hooks y otros
+  archivos del usuario). Cambia de tab con las teclas `q` o `e`. Muestra
+  tables/collections, columns, indexes por database category con carga perezosa.
+  Re-exportado vía un shim en `crates/dbflux_ui/src/ui/views/sidebar/mod.rs`.
+- Los recursos hijos propiedad de un driver bajo collections/containers se
+  publican a través de la metadata genérica `CollectionChildInfo`. El sidebar no
+  debe inferir hijos específicos de un driver a partir de nombres, tipos de
+  campo o driver IDs.
+- Las routines (functions, procedures, aggregates, window functions) aparecen
+  como una carpeta "Routines" por schema cuando el driver activa la capability
+  `ROUTINES` y puebla el seam `schema_routines`. La UI renderiza la carpeta de
+  forma genérica; no hace casos especiales para ningún driver.
+- Sidebar dock: `crates/dbflux_ui/src/ui/dock/sidebar_dock.rs` provee un sidebar
+  colapsable y redimensionable con el comando ToggleSidebar (Ctrl+B).
+- Connection tree: `crates/dbflux_core/src/connection/tree.rs` modela carpetas y
+  conexiones como una estructura de árbol; `tree_manager.rs` maneja la gestión
+  en memoria.
 
 ### Sistema de Drivers
 
-- **Driver capabilities**: `crates/dbflux_core/src/driver/capabilities.rs` define:
-  - `DatabaseCategory`: Relational, Document, KeyValue, Graph, TimeSeries, WideColumn, LogStream, ObjectStorage
-  - `QueryLanguage`: Sql, CloudWatchLogsInsightsQl, OpenSearchPpl, OpenSearchSql, MongoQuery, RedisCommands, Cypher, InfluxQuery, Flux, Cql, Lua, Python, Bash (cada uno lleva su modo de editor, placeholder y prefijo de comentario)
-  - `DriverCapabilities`: bitflags `u64` para features como PAGINATION, TRANSACTIONS, NESTED_DOCUMENTS, MULTI_STATEMENT, ROUTINES, STORED_PROCEDURES, DASHBOARD_IMPORT, DASHBOARD_SYNC, etc.
-  - `DriverMetadata`: información estática del driver (id, name, category, query_language, capabilities, icon)
-- **Formularios de conexión propiedad del driver**: cada `DbDriver` devuelve su `&DriverFormDef` desde `form_definition()`. Las definiciones de formulario viven en el crate del driver (por ejemplo `dbflux_driver_cloudwatch::driver::CLOUDWATCH_FORM`), no en core. `DriverFormDef` lleva tabs → sections → fields, donde `FormFieldKind` cubre `Text`, `Password`, `WriteOnly` (secrets), `FilePath`, `Select`, `DynamicSelect` (opciones obtenidas en runtime, `depends_on` + `RefreshTrigger`), y `AuthProfileRef { provider_id }`.
-- **Formateo de errores**: `crates/dbflux_core/src/core/error_formatter.rs` provee el trait `ErrorFormatter` para mensajes de error específicos del driver con contexto (detail, hint, column, table, constraint).
-- API de dominio core: `crates/dbflux_core/src/core/traits.rs` define `DbDriver`, `Connection`, generación SQL, contratos de cancelación y seams genéricos de driver a UI como `EventStreamTarget` y `SourceContextSpec`.
-- **Generación de queries**: `crates/dbflux_core/src/query/generator.rs` define `QueryGenerator` como la fuente de verdad, propiedad del driver, para el texto de mutación más templates de read/query. Los drivers SQL usan `SqlMutationGenerator`; MongoDB, Redis y DynamoDB exponen sus propios generadores nativos. La UI y MCP acceden a los generadores vía `Connection::query_generator()` para que los previews y las queries copiadas provengan del driver en lugar de un formatter local a la UI.
-- Driver forms: `crates/dbflux_core/src/driver/form.rs` define schemas de formulario dinámicos que los drivers proveen para la configuración de conexión. Soporta modos de conexión tanto basados en formulario como en URI.
-- **Desacoplamiento Driver/UI**: la UI y las capas de orquestación de la app nunca deben bifurcar según driver IDs concretos ni embeber routing específico de driver. El core expone los seams, y los drivers los completan.
-  - `DriverMetadata` cubre la adaptación amplia (`DatabaseCategory`, `QueryLanguage`, `DriverCapabilities`).
-  - `CollectionPresentation` le indica a la UI cómo se abre una collection/container (por ejemplo data grid vs event stream).
-  - `CollectionChildInfo` permite a los drivers publicar fuentes hijas bajo una collection/container sin heurísticas de UI.
-  - `EventStreamTarget` le da al workspace/audit un identificador genérico para event streams propiedad del driver.
-  - `SourceContextSpec` permite a los drivers declarar controles adicionales de contexto de query sin hardcodear nombres de driver en `dbflux_ui`.
-  - `ObjectStoreConnection` (`crates/dbflux_core/src/core/traits.rs`), alcanzado vía `Connection::object_store_api()`, es el seam de object-storage (listado de bucket/object, CRUD, presign, copy, versions); `CollectionPresentation::ObjectBrowser` y `PaneHandle::status_segments()` permiten que la UI abra y decore documents de object-storage sin bifurcar según driver ID.
-  - Si la UI necesita comportamiento nuevo, agrega primero una abstracción genérica del core; no agregues `if driver_id == ...` en `dbflux_ui` ni en código de workflow orientado a la app.
+- **Driver capabilities**: `crates/dbflux_core/src/driver/capabilities.rs`
+  define:
+  - `DatabaseCategory`: Relational, Document, KeyValue, Graph, TimeSeries,
+    WideColumn, LogStream, ObjectStorage
+  - `QueryLanguage`: Sql, CloudWatchLogsInsightsQl, OpenSearchPpl,
+    OpenSearchSql, MongoQuery, RedisCommands, Cypher, InfluxQuery, Flux, Cql,
+    Lua, Python, Bash (cada uno lleva su modo de editor, placeholder y prefijo
+    de comentario)
+  - `DriverCapabilities`: bitflags `u64` para features como PAGINATION,
+    TRANSACTIONS, NESTED_DOCUMENTS, MULTI_STATEMENT, ROUTINES,
+    STORED_PROCEDURES, DASHBOARD_IMPORT, DASHBOARD_SYNC, etc.
+  - `DriverMetadata`: información estática del driver (id, name, category,
+    query_language, capabilities, icon)
+- **Formularios de conexión propiedad del driver**: cada `DbDriver` devuelve su
+  `&DriverFormDef` desde `form_definition()`. Las definiciones de formulario
+  viven en el crate del driver (por ejemplo
+  `dbflux_driver_cloudwatch::driver::CLOUDWATCH_FORM`), no en core.
+  `DriverFormDef` lleva tabs → sections → fields, donde `FormFieldKind` cubre
+  `Text`, `Password`, `WriteOnly` (secrets), `FilePath`, `Select`,
+  `DynamicSelect` (opciones obtenidas en runtime, `depends_on` +
+  `RefreshTrigger`), y `AuthProfileRef { provider_id }`.
+- **Formateo de errores**: `crates/dbflux_core/src/core/error_formatter.rs`
+  provee el trait `ErrorFormatter` para mensajes de error específicos del driver
+  con contexto (detail, hint, column, table, constraint).
+- API de dominio core: `crates/dbflux_core/src/core/traits.rs` define
+  `DbDriver`, `Connection`, generación SQL, contratos de cancelación y seams
+  genéricos de driver a UI como `EventStreamTarget` y `SourceContextSpec`.
+- **Generación de queries**: `crates/dbflux_core/src/query/generator.rs` define
+  `QueryGenerator` como la fuente de verdad, propiedad del driver, para el texto
+  de mutación más templates de read/query. Los drivers SQL usan
+  `SqlMutationGenerator`; MongoDB, Redis y DynamoDB exponen sus propios
+  generadores nativos. La UI y MCP acceden a los generadores vía
+  `Connection::query_generator()` para que los previews y las queries copiadas
+  provengan del driver en lugar de un formatter local a la UI.
+- Driver forms: `crates/dbflux_core/src/driver/form.rs` define schemas de
+  formulario dinámicos que los drivers proveen para la configuración de
+  conexión. Soporta modos de conexión tanto basados en formulario como en URI.
+- **Desacoplamiento Driver/UI**: la UI y las capas de orquestación de la app
+  nunca deben bifurcar según driver IDs concretos ni embeber routing específico
+  de driver. El core expone los seams, y los drivers los completan.
+  - `DriverMetadata` cubre la adaptación amplia (`DatabaseCategory`,
+    `QueryLanguage`, `DriverCapabilities`).
+  - `CollectionPresentation` le indica a la UI cómo se abre una
+    collection/container (por ejemplo data grid vs event stream).
+  - `CollectionChildInfo` permite a los drivers publicar fuentes hijas bajo una
+    collection/container sin heurísticas de UI.
+  - `EventStreamTarget` le da al workspace/audit un identificador genérico para
+    event streams propiedad del driver.
+  - `SourceContextSpec` permite a los drivers declarar controles adicionales de
+    contexto de query sin hardcodear nombres de driver en `dbflux_ui`.
+  - `ObjectStoreConnection` (`crates/dbflux_core/src/core/traits.rs`), alcanzado
+    vía `Connection::object_store_api()`, es el seam de object-storage (listado
+    de bucket/object, CRUD, presign, copy, versions);
+    `CollectionPresentation::ObjectBrowser` y `PaneHandle::status_segments()`
+    permiten que la UI abra y decore documents de object-storage sin bifurcar
+    según driver ID.
+  - Si la UI necesita comportamiento nuevo, agrega primero una abstracción
+    genérica del core; no agregues `if driver_id == ...` en `dbflux_ui` ni en
+    código de workflow orientado a la app.
 
 ### Pipeline de Auth y Access
 
-- `crates/dbflux_app/src/auth_provider_registry.rs` mantiene el registro en runtime de `DynAuthProvider` en el crate de app y evita hardcodear lógica de provider de AWS en los flujos de UI de conexión.
-- `crates/dbflux_core/src/auth/` define los contratos de provider (`AuthFormDef`, `DynAuthProvider`, `ImportableProfile`, `after_profile_saved`) y los tipos serializables de auth profile/session.
-- `AuthProfile` usa un `fields: HashMap<String, String>` plano y agnóstico del provider (migrado desde payloads `config` anidados, con deserialización de compatibilidad para entradas legacy). Dos flags adicionales modelan la capa de reflejo en vivo:
-  - `read_only: bool` — se activa cuando el profile se refleja desde una fuente de verdad externa (por ejemplo `~/.aws/config`); DBFlux no edita los profiles reflejados.
-  - `dangling_origin: Option<String>` — marca profiles almacenados que perdieron su fuente respaldo. Valores: `"keyring-only"` (solo queda el secret del keyring), `"file-gone"` (la entrada del archivo desapareció).
-- **Reflejo en vivo de profiles de AWS**: `dbflux_aws/src/config.rs` lee `~/.aws/config` y `~/.aws/credentials` como fuente de verdad vía `CachedAwsConfig` (caché dual indexado por mtime, uno por archivo). `AwsProfileInfo` lleva `is_sso`, `is_sso_session`, `sso_session` (referencia con nombre), `sso_start_url`, `sso_region`, `sso_account_id`, `sso_role_name`. Las sesiones AWS SSO aparecen como entradas de auth profile de primera clase (`[sso-session <name>]`); los profiles que las referencian se expanden antes del login/validación.
-- `crates/dbflux_core/src/access/mod.rs` introduce `AccessKind::Managed { provider, params }` agnóstico del provider, con migración transparente desde el JSON legacy de profile `method = "ssm"`.
-- `crates/dbflux_core/src/pipeline/mod.rs` ejecuta los stages pre-connect (`Authenticating` -> `ResolvingValues` -> `OpeningAccess`) y publica actualizaciones de `PipelineState` para los watchers de la UI.
-- `crates/dbflux_app/src/access_manager.rs` provee la implementación de `AccessManager` del lado de la app para access directo y managed (actualmente `aws-ssm`).
-- **Desacoplamiento del dropdown de auth-profile (DEC-1)**: el connection manager renderiza su selector de auth-profile a partir del seam genérico de form-field `FormFieldKind::AuthProfileRef { provider_id: Option<String> }`, nunca haciendo match sobre driver ids. Los drivers que quieren el picker (por ejemplo DynamoDB, CloudWatch) declaran un campo `profile` como `AuthProfileRef { provider_id: None }`; un filtro `None` enumera profiles de forma agnóstica del provider, así que tanto los providers integrados como los respaldados por RPC externo aparecen. El form-field kind no se persiste, así que agregarlo o quitarlo no necesita migración de storage.
+- `crates/dbflux_app/src/auth_provider_registry.rs` mantiene el registro en
+  runtime de `DynAuthProvider` en el crate de app y evita hardcodear lógica de
+  provider de AWS en los flujos de UI de conexión.
+- `crates/dbflux_core/src/auth/` define los contratos de provider
+  (`AuthFormDef`, `DynAuthProvider`, `ImportableProfile`, `after_profile_saved`)
+  y los tipos serializables de auth profile/session.
+- `AuthProfile` usa un `fields: HashMap<String, String>` plano y agnóstico del
+  provider (migrado desde payloads `config` anidados, con deserialización de
+  compatibilidad para entradas legacy). Dos flags adicionales modelan la capa de
+  reflejo en vivo:
+  - `read_only: bool` — se activa cuando el profile se refleja desde una fuente
+    de verdad externa (por ejemplo `~/.aws/config`); DBFlux no edita los
+    profiles reflejados.
+  - `dangling_origin: Option<String>` — marca profiles almacenados que perdieron
+    su fuente respaldo. Valores: `"keyring-only"` (solo queda el secret del
+    keyring), `"file-gone"` (la entrada del archivo desapareció).
+- **Reflejo en vivo de profiles de AWS**: `dbflux_aws/src/config.rs` lee
+  `~/.aws/config` y `~/.aws/credentials` como fuente de verdad vía
+  `CachedAwsConfig` (caché dual indexado por mtime, uno por archivo).
+  `AwsProfileInfo` lleva `is_sso`, `is_sso_session`, `sso_session` (referencia
+  con nombre), `sso_start_url`, `sso_region`, `sso_account_id`, `sso_role_name`.
+  Las sesiones AWS SSO aparecen como entradas de auth profile de primera clase
+  (`[sso-session <name>]`); los profiles que las referencian se expanden antes
+  del login/validación.
+- `crates/dbflux_core/src/access/mod.rs` introduce `AccessKind::Managed {
+  provider, params }` agnóstico del provider, con migración transparente desde
+  el JSON legacy de profile `method = "ssm"`.
+- `crates/dbflux_core/src/pipeline/mod.rs` ejecuta los stages pre-connect
+  (`Authenticating` -> `ResolvingValues` -> `OpeningAccess`) y publica
+  actualizaciones de `PipelineState` para los watchers de la UI.
+- `crates/dbflux_app/src/access_manager.rs` provee la implementación de
+  `AccessManager` del lado de la app para access directo y managed (actualmente
+  `aws-ssm`).
+- **Desacoplamiento del dropdown de auth-profile (DEC-1)**: el connection
+  manager renderiza su selector de auth-profile a partir del seam genérico de
+  form-field `FormFieldKind::AuthProfileRef { provider_id: Option<String> }`,
+  nunca haciendo match sobre driver ids. Los drivers que quieren el picker (por
+  ejemplo DynamoDB, CloudWatch) declaran un campo `profile` como `AuthProfileRef
+  { provider_id: None }`; un filtro `None` enumera profiles de forma agnóstica
+  del provider, así que tanto los providers integrados como los respaldados por
+  RPC externo aparecen. El form-field kind no se persiste, así que agregarlo o
+  quitarlo no necesita migración de storage.
 
 ### Infraestructura de Tunnels
 
-- `crates/dbflux_tunnel_core/` provee un struct `Tunnel` RAII compartido que enlaza un puerto local, verifica conectividad y lanza un thread de forwarding en background que se apaga al hacer drop.
-- Trait `TunnelConnector`: las implementaciones proveen `test_connection()` y `run_tunnel_loop()` para forwarding específico de protocolo (SOCKS5, HTTP CONNECT, SSH).
-- `ForwardingConnection<R>`: forwarding bidireccional entre un `TcpStream` local y un `R` remoto genérico (`TcpStream` para proxy, `ssh2::Channel` para SSH). Las estrategias de escritura se inyectan vía punteros a función.
-- `adaptive_sleep()`: 50ms cuando está idle, 1ms cuando hay conexiones, se salta cuando se transfirieron datos.
-- `crates/dbflux_proxy/`: tunnel de proxy SOCKS5 y HTTP CONNECT vía implementación de `TunnelConnector`.
-- `crates/dbflux_ssh/`: tunnel SSH vía implementación de `TunnelConnector`. Todas las operaciones SSH se serializan a un único thread por seguridad de libssh2.
-- Proxy+SSH son mutuamente excluyentes por conexión (impuesto en `ConnectProfileParams::execute()`).
-- El callback `CreateTunnelFn` en `dbflux_core` evita una dependencia circular: el crate de app provee la implementación real de proxy.
+- `crates/dbflux_tunnel_core/` provee un struct `Tunnel` RAII compartido que
+  enlaza un puerto local, verifica conectividad y lanza un thread de forwarding
+  en background que se apaga al hacer drop.
+- Trait `TunnelConnector`: las implementaciones proveen `test_connection()` y
+  `run_tunnel_loop()` para forwarding específico de protocolo (SOCKS5, HTTP
+  CONNECT, SSH).
+- `ForwardingConnection<R>`: forwarding bidireccional entre un `TcpStream` local
+  y un `R` remoto genérico (`TcpStream` para proxy, `ssh2::Channel` para SSH).
+  Las estrategias de escritura se inyectan vía punteros a función.
+- `adaptive_sleep()`: 50ms cuando está idle, 1ms cuando hay conexiones, se salta
+  cuando se transfirieron datos.
+- `crates/dbflux_proxy/`: tunnel de proxy SOCKS5 y HTTP CONNECT vía
+  implementación de `TunnelConnector`.
+- `crates/dbflux_ssh/`: tunnel SSH vía implementación de `TunnelConnector`.
+  Todas las operaciones SSH se serializan a un único thread por seguridad de
+  libssh2.
+- Proxy+SSH son mutuamente excluyentes por conexión (impuesto en
+  `ConnectProfileParams::execute()`).
+- El callback `CreateTunnelFn` en `dbflux_core` evita una dependencia circular:
+  el crate de app provee la implementación real de proxy.
 
 ### Connection Hooks
 
-- `crates/dbflux_core/src/connection/hook.rs` define definiciones de hook reutilizables con tres modos de ejecución: `Command`, `Script` y `Lua`.
-- Los hooks respaldados por proceso pueden ser inline o respaldados por archivo, y cubren Bash/Python más comandos arbitrarios.
-- Los hooks de Lua corren in-process a través de `dbflux_lua`, con acceso gated por capability a `hook.*`, `connection.*`, `dbflux.log.*`, `dbflux.env.*` y `dbflux.process.run()`.
-- Bindings de fase por profile: `PreConnect`, `PostConnect`, `PreDisconnect`, `PostDisconnect`.
-- `HookRunner` orquesta la ejecución con `HookPhaseOutcome` (success/warning/abort).
-- Los hooks respaldados por proceso y los subprocesos disparados por Lua comparten un executor de streaming común. La salida es visible en el Tasks panel para los hooks de lifecycle y en el results panel del document para los scripts ejecutados desde el editor.
-- Failure policies: `Disconnect` (aborta el flujo), `Warn` (continúa con advertencia), `Ignore` (solo registra).
-- Settings UI: `crates/dbflux_ui_windows/src/settings/hooks.rs` para las definiciones globales; `crates/dbflux_ui_windows/src/connection_manager/hooks_tab.rs` para los bindings de fase por profile.
+- `crates/dbflux_core/src/connection/hook.rs` define definiciones de hook
+  reutilizables con tres modos de ejecución: `Command`, `Script` y `Lua`.
+- Los hooks respaldados por proceso pueden ser inline o respaldados por archivo,
+  y cubren Bash/Python más comandos arbitrarios.
+- Los hooks de Lua corren in-process a través de `dbflux_lua`, con acceso gated
+  por capability a `hook.*`, `connection.*`, `dbflux.log.*`, `dbflux.env.*` y
+  `dbflux.process.run()`.
+- Bindings de fase por profile: `PreConnect`, `PostConnect`, `PreDisconnect`,
+  `PostDisconnect`.
+- `HookRunner` orquesta la ejecución con `HookPhaseOutcome`
+  (success/warning/abort).
+- Los hooks respaldados por proceso y los subprocesos disparados por Lua
+  comparten un executor de streaming común. La salida es visible en el Tasks
+  panel para los hooks de lifecycle y en el results panel del document para los
+  scripts ejecutados desde el editor.
+- Failure policies: `Disconnect` (aborta el flujo), `Warn` (continúa con
+  advertencia), `Ignore` (solo registra).
+- Settings UI: `crates/dbflux_ui_windows/src/settings/hooks.rs` para las
+  definiciones globales;
+  `crates/dbflux_ui_windows/src/connection_manager/hooks_tab.rs` para los
+  bindings de fase por profile.
 
 ### Ventana de Settings
 
-- Settings se organiza en las siguientes secciones: General, Keybindings, Auth Profiles, Proxies, SSH Tunnels, Services, Hooks, Drivers, Audit y About. Las secciones de MCP (trusted clients, roles, policies) están gated bajo la feature `mcp`.
-- El sidebar usa el componente `TreeNav` con categorías Network/Connection colapsables.
-- `UiStateStore` persiste el estado de colapso del sidebar en la tabla `st_ui_state` en `~/.local/share/dbflux/dbflux.db`.
-- La sección Auth Profiles está impulsada por el provider (`DynAuthProvider::form_def`) y soporta importar profiles descubiertos por el provider (para AWS, desde `~/.aws/config`).
-- Los formularios de Proxy y SSH tunnel usan `FormGridNav<F>` para navegación 2D en grid guiada por teclado.
-- La sección Drivers muestra overrides de settings por driver filtrados por `DatabaseCategory`.
+- Settings se organiza en las siguientes secciones: General, Keybindings, Auth
+  Profiles, Proxies, SSH Tunnels, Services, Hooks, Drivers, Audit y About. Las
+  secciones de MCP (trusted clients, roles, policies) están gated bajo la
+  feature `mcp`.
+- El sidebar usa el componente `TreeNav` con categorías Network/Connection
+  colapsables.
+- `UiStateStore` persiste el estado de colapso del sidebar en la tabla
+  `st_ui_state` en `~/.local/share/dbflux/dbflux.db`.
+- La sección Auth Profiles está impulsada por el provider
+  (`DynAuthProvider::form_def`) y soporta importar profiles descubiertos por el
+  provider (para AWS, desde `~/.aws/config`).
+- Los formularios de Proxy y SSH tunnel usan `FormGridNav<F>` para navegación 2D
+  en grid guiada por teclado.
+- La sección Drivers muestra overrides de settings por driver filtrados por
+  `DatabaseCategory`.
 
 ### Integración IPC/RPC
 
-- `crates/dbflux_ipc/` define contratos versionados de app-control y driver RPC, framing de transporte, naming de sockets multiplataforma, y auth tokens de IPC (`auth.rs`).
-- `crates/dbflux_ui/src/ipc_server.rs` (permanece en `dbflux_ui`) ejecuta el servidor IPC de app-control para el comportamiento de instancia única (`Focus`, `OpenScript`). `crates/dbflux/src/cli.rs` actúa como cliente IPC cuando se lanza una segunda instancia.
-- `crates/dbflux_core/src/config/app.rs` maneja solo el import legacy de config.json (deprecated).
-- `crates/dbflux_app/src/app_state.rs` sondea cada servicio RPC configurado al iniciar (`Hello`) y lo registra como una driver key en memoria `rpc:<socket_id>`.
-- `crates/dbflux_driver_ipc/src/driver.rs` implementa `DbDriver` como un proxy RPC y solo apaga los hosts managed que DBFlux mismo lanzó.
-- Los profiles de conexión externos usan `DbConfig::External { kind, values }`, donde los valores del formulario provienen del `form_definition` remoto devuelto durante `Hello`.
+- `crates/dbflux_ipc/` define contratos versionados de app-control y driver RPC,
+  framing de transporte, naming de sockets multiplataforma, y auth tokens de IPC
+  (`auth.rs`).
+- `crates/dbflux_ui/src/ipc_server.rs` (permanece en `dbflux_ui`) ejecuta el
+  servidor IPC de app-control para el comportamiento de instancia única
+  (`Focus`, `OpenScript`). `crates/dbflux/src/cli.rs` actúa como cliente IPC
+  cuando se lanza una segunda instancia.
+- `crates/dbflux_core/src/config/app.rs` maneja solo el import legacy de
+  config.json (deprecated).
+- `crates/dbflux_app/src/app_state.rs` sondea cada servicio RPC configurado al
+  iniciar (`Hello`) y lo registra como una driver key en memoria
+  `rpc:<socket_id>`.
+- `crates/dbflux_driver_ipc/src/driver.rs` implementa `DbDriver` como un proxy
+  RPC y solo apaga los hosts managed que DBFlux mismo lanzó.
+- Los profiles de conexión externos usan `DbConfig::External { kind, values }`,
+  donde los valores del formulario provienen del `form_definition` remoto
+  devuelto durante `Hello`.
 
 ### Generación de SQL
 
-- **SQL dialect**: `crates/dbflux_core/src/sql/dialect.rs` define el trait `SqlDialect` para la sintaxis SQL específica de la base de datos (quoting, LIMIT/OFFSET, mapeo de tipos).
-- **Generación de SQL**: `crates/dbflux_core/src/sql/generation.rs` provee generación de sentencias INSERT/UPDATE/DELETE.
-- **Query builder**: `crates/dbflux_core/src/sql/query_builder.rs` ofrece `SqlQueryBuilder` para la construcción segura y parametrizada de queries.
+- **SQL dialect**: `crates/dbflux_core/src/sql/dialect.rs` define el trait
+  `SqlDialect` para la sintaxis SQL específica de la base de datos (quoting,
+  LIMIT/OFFSET, mapeo de tipos).
+- **Generación de SQL**: `crates/dbflux_core/src/sql/generation.rs` provee
+  generación de sentencias INSERT/UPDATE/DELETE.
+- **Query builder**: `crates/dbflux_core/src/sql/query_builder.rs` ofrece
+  `SqlQueryBuilder` para la construcción segura y parametrizada de queries.
 
 ### Operaciones CRUD
 
-- **Tipos de mutación**: `crates/dbflux_core/src/data/crud.rs` define el enum `MutationRequest` que cubre todos los paradigmas de base de datos:
+- **Tipos de mutación**: `crates/dbflux_core/src/data/crud.rs` define el enum
+  `MutationRequest` que cubre todos los paradigmas de base de datos:
   - SQL: INSERT/UPDATE/DELETE con cláusulas WHERE
   - Document: insertOne/updateOne/deleteOne/deleteMany
-  - Key-Value: SET/DELETE/HASH_SET/SET_ADD/LIST_PUSH/ZSET_ADD y sus contrapartes de remove, más STREAM_ADD
-- **Tipos key-value**: `crates/dbflux_core/src/data/key_value.rs` define structs de request basados en Vec para comandos variádicos de Redis (por ejemplo, `HashSetRequest.fields: Vec<(String, String)>`, `SetAddRequest.members: Vec<String>`).
-- **Query safety / `LanguageService`**: `crates/dbflux_core/src/query/language_service.rs` define el trait `LanguageService` (`validate`, `detect_dangerous`, `editor_diagnostics`) y una implementación por defecto `SqlLanguageService` reutilizada por los drivers relacionales. Los dialectos no-SQL (MongoDB, Redis, T-SQL) proveen sus propias implementaciones desde el crate de driver correspondiente (por ejemplo `TSqlLanguageService` vive en `dbflux_driver_mssql`). `DangerousQueryKind` cubre SQL `DeleteNoWhere` / `UpdateNoWhere` / `Truncate` / `Drop` / `Alter` / `Script`, MongoDB `deleteMany` / `updateMany` / `dropCollection` / `dropDatabase`, y Redis `FlushAll` / `FlushDb` / `MultiDelete` / `KeysPattern`. El dispatcher `classify_query_for_language(&QueryLanguage, &str)` enruta al clasificador correcto para que la UI nunca bifurque según driver id.
+  - Key-Value: SET/DELETE/HASH_SET/SET_ADD/LIST_PUSH/ZSET_ADD y sus contrapartes
+    de remove, más STREAM_ADD
+- **Tipos key-value**: `crates/dbflux_core/src/data/key_value.rs` define structs
+  de request basados en Vec para comandos variádicos de Redis (por ejemplo,
+  `HashSetRequest.fields: Vec<(String, String)>`, `SetAddRequest.members:
+  Vec<String>`).
+- **Query safety / `LanguageService`**:
+  `crates/dbflux_core/src/query/language_service.rs` define el trait
+  `LanguageService` (`validate`, `detect_dangerous`, `editor_diagnostics`) y una
+  implementación por defecto `SqlLanguageService` reutilizada por los drivers
+  relacionales. Los dialectos no-SQL (MongoDB, Redis, T-SQL) proveen sus propias
+  implementaciones desde el crate de driver correspondiente (por ejemplo
+  `TSqlLanguageService` vive en `dbflux_driver_mssql`). `DangerousQueryKind`
+  cubre SQL `DeleteNoWhere` / `UpdateNoWhere` / `Truncate` / `Drop` / `Alter` /
+  `Script`, MongoDB `deleteMany` / `updateMany` / `dropCollection` /
+  `dropDatabase`, y Redis `FlushAll` / `FlushDb` / `MultiDelete` /
+  `KeysPattern`. El dispatcher `classify_query_for_language(&QueryLanguage,
+  &str)` enruta al clasificador correcto para que la UI nunca bifurque según
+  driver id.
 
 ### Storage y Configuración
 
-**Storage SQLite unificado**: Todos los datos de runtime se almacenan en una única base de datos SQLite en `~/.local/share/dbflux/dbflux.db`. Esto reemplazó tres stores separados (config.db, state.db, audit.sqlite).
+**Storage SQLite unificado**: Todos los datos de runtime se almacenan en una
+única base de datos SQLite en `~/.local/share/dbflux/dbflux.db`. Esto reemplazó
+tres stores separados (config.db, state.db, audit.sqlite).
 
 **Prefijos de tabla por dominio**:
-- `cfg_*` — dominio de config (profiles, auth, proxy, SSH, hooks, services, governance, drivers, folders)
-- `st_*` — dominio de state (sessions, tabs, query history, saved queries, recent items, UI state, schema cache)
+- `cfg_*` — dominio de config (profiles, auth, proxy, SSH, hooks, services,
+  governance, drivers, folders)
+- `st_*` — dominio de state (sessions, tabs, query history, saved queries,
+  recent items, UI state, schema cache)
 - `aud_*` — dominio de audit (audit events, entities, attributes)
-- `viz_*` — dominio de visualización (dashboards, dashboard panels, saved charts y sus bindings/series)
-- `qry_*` — specs guardadas del visual-query-builder (raíz + projected columns, sorts, joins)
+- `viz_*` — dominio de visualización (dashboards, dashboard panels, saved charts
+  y sus bindings/series)
+- `qry_*` — specs guardadas del visual-query-builder (raíz + projected columns,
+  sorts, joins)
 - `sys_*` — dominio de sistema (migrations, metadata, legacy imports)
 
 **Crate de storage** (`dbflux_storage/`):
-- `bootstrap.rs`: `StorageRuntime` gestiona la única conexión `dbflux.db` con inicialización perezosa
-- `paths.rs`: `dbflux_db_path()` devuelve la ruta de base de datos consciente del channel (`dbflux.db`, o `dbflux-nightly.db` en el channel nightly a menos que `nightly_shares_stable_db()` opte de vuelta por el archivo stable vía `set_nightly_shares_stable_db`). Ver § Release Channels y Branding
-- `migrations/`: sistema de migraciones basado en traits (trait `Migration` con `name()` y `run(&Transaction)`). `MigrationRegistry` mantiene todas las migraciones y las ejecuta en orden, rastreando su finalización en `sys_migrations`. Idempotente — verifica `sys_migrations` antes de ejecutar.
-- `repositories/`: todos los repositorios de dominio implementan el trait `Repository` (`all()`, `find_by_id()`, `upsert()`, `delete()`). `AuditRepository` maneja los audit events con `AuditEventDto`.
-- `legacy.rs`: importa archivos JSON legacy a SQLite en el primer inicio (idempotente, rastreado en `sys_legacy_imports`)
+- `bootstrap.rs`: `StorageRuntime` gestiona la única conexión `dbflux.db` con
+  inicialización perezosa
+- `paths.rs`: `dbflux_db_path()` devuelve la ruta de base de datos consciente
+  del channel (`dbflux.db`, o `dbflux-nightly.db` en el channel nightly a menos
+  que `nightly_shares_stable_db()` opte de vuelta por el archivo stable vía
+  `set_nightly_shares_stable_db`). Ver § Release Channels y Branding
+- `migrations/`: sistema de migraciones basado en traits (trait `Migration` con
+  `name()` y `run(&Transaction)`). `MigrationRegistry` mantiene todas las
+  migraciones y las ejecuta en orden, rastreando su finalización en
+  `sys_migrations`. Idempotente — verifica `sys_migrations` antes de ejecutar.
+- `repositories/`: todos los repositorios de dominio implementan el trait
+  `Repository` (`all()`, `find_by_id()`, `upsert()`, `delete()`).
+  `AuditRepository` maneja los audit events con `AuditEventDto`.
+- `legacy.rs`: importa archivos JSON legacy a SQLite en el primer inicio
+  (idempotente, rastreado en `sys_legacy_imports`)
 
-**Orden de import de JSON legacy**: Auth/proxy/SSH primero, luego connection profiles (orden de dependencia de FK). Fuentes de import:
+**Orden de import de JSON legacy**: Auth/proxy/SSH primero, luego connection
+profiles (orden de dependencia de FK). Fuentes de import:
 - `profiles.json` → `cfg_connection_profiles` + tablas hijas
 - `auth_profiles.json` → `cfg_auth_profiles`
 - `ssh_tunnels.json` → `cfg_ssh_tunnel_profiles`
 - `config.json` → `cfg_services` (solo servicios RPC)
 
-**Secrets**: `SecretManager` usa el trait `HasSecretRef` para las operaciones de keyring. Los secrets se almacenan en el keyring del sistema operativo, las referencias se almacenan en SQLite.
+**Secrets**: `SecretManager` usa el trait `HasSecretRef` para las operaciones de
+keyring. Los secrets se almacenan en el keyring del sistema operativo, las
+referencias se almacenan en SQLite.
 
-**Persistencia de sesión**: archivos scratch/shadow y el manifest de sesión en `~/.local/share/dbflux/sessions/` para la restauración de tabs al iniciar.
+**Persistencia de sesión**: archivos scratch/shadow y el manifest de sesión en
+`~/.local/share/dbflux/sessions/` para la restauración de tabs al iniciar.
 
-**Contexto de ejecución**: `crates/dbflux_core/src/connection/context.rs` rastrea, por tab, la connection, database, schema y el contexto de fuente genérico declarado por el driver. La forma actual del generic source-window es `ExecutionSourceContext::CollectionWindow { targets, start_ms, end_ms }`. Solo las anotaciones de connection/database/schema se serializan en los headers de archivo guardados.
+**Contexto de ejecución**: `crates/dbflux_core/src/connection/context.rs`
+rastrea, por tab, la connection, database, schema y el contexto de fuente
+genérico declarado por el driver. La forma actual del generic source-window es
+`ExecutionSourceContext::CollectionWindow { targets, start_ms, end_ms }`. Solo
+las anotaciones de connection/database/schema se serializan en los headers de
+archivo guardados.
 
-**History modal**: `crates/dbflux_ui_document/src/history_modal.rs` provee un modal unificado para explorar recent queries y saved queries con búsqueda, favoritos y soporte de rename.
+**History modal**: `crates/dbflux_ui_document/src/history_modal.rs` provee un
+modal unificado para explorar recent queries y saved queries con búsqueda,
+favoritos y soporte de rename.
 
 ### Release Channels y Branding
 
-**Seam de channel** (`crates/dbflux_core/src/release_channel.rs`): `ReleaseChannel` (`Stable`, `Rc`, `Nightly`) se deriva una única vez a partir de la `CARGO_PKG_VERSION` compilada vía `ReleaseChannel::current()`. El pipeline de release de CI estampa la versión del workspace antes de compilar, así que el channel queda codificado en el propio binario: `-nightly` → `Nightly`, `-rc.N` → `Rc`, `MAJOR.MINOR.PATCH` plano → `Stable` (nightly gana si aparecen ambos marcadores). Esta única señal alimenta la identidad específica de channel que el runtime necesita:
+**Seam de channel** (`crates/dbflux_core/src/release_channel.rs`):
+`ReleaseChannel` (`Stable`, `Rc`, `Nightly`) se deriva una única vez a partir de
+la `CARGO_PKG_VERSION` compilada vía `ReleaseChannel::current()`. El pipeline de
+release de CI estampa la versión del workspace antes de compilar, así que el
+channel queda codificado en el propio binario: `-nightly` → `Nightly`, `-rc.N` →
+`Rc`, `MAJOR.MINOR.PATCH` plano → `Stable` (nightly gana si aparecen ambos
+marcadores). Esta única señal alimenta la identidad específica de channel que el
+runtime necesita:
 
-- `app_id()` — `app_id` de GPUI (Wayland app id / `WM_CLASS` de X11). Nightly devuelve `dbflux-nightly` para que coexista con stable en lugar de compartir su entrada de taskbar e icono; `Stable`/`Rc` devuelven `dbflux`. Se consume en `crates/dbflux/src/main.rs`.
-- `display_name()` — título de ventana y nombre de bundle (`DBFlux Nightly` vs `DBFlux`).
-- `db_file_name()` — `dbflux-nightly.db` vs `dbflux.db`, para que una migración que se rompa en un build pre-release no pueda corromper una base de datos stable cuando ambos channels corren en paralelo. Un build nightly puede optar por la base de datos stable mediante el marcador `set_nightly_shares_stable_db` (ver § Storage y Configuración).
+- `app_id()` — `app_id` de GPUI (Wayland app id / `WM_CLASS` de X11). Nightly
+  devuelve `dbflux-nightly` para que coexista con stable en lugar de compartir
+  su entrada de taskbar e icono; `Stable`/`Rc` devuelven `dbflux`. Se consume en
+  `crates/dbflux/src/main.rs`.
+- `display_name()` — título de ventana y nombre de bundle (`DBFlux Nightly` vs
+  `DBFlux`).
+- `db_file_name()` — `dbflux-nightly.db` vs `dbflux.db`, para que una migración
+  que se rompa en un build pre-release no pueda corromper una base de datos
+  stable cuando ambos channels corren en paralelo. Un build nightly puede optar
+  por la base de datos stable mediante el marcador
+  `set_nightly_shares_stable_db` (ver § Storage y Configuración).
 
-**Assets de branding**: las marcas de marca a color completo viven bajo `resources/branding/{stable,nightly}/` (`mark.svg`, `mark-256.png`, `mark-small.svg`, `wordmark.svg`) más el `resources/branding/glyph.svg` compartido. `crates/dbflux_ui/src/assets.rs` sirve la marca PNG pre-renderizada por channel para `img(...)`. La metadata de packaging (`packaging/*.yaml`, `resources/desktop/dbflux.desktop`, `resources/macos/Info.plist`, `resources/windows/installer.iss`) y el build de Nix (`nix/binary.nix`, `nix/nightly-info.nix`, `nix/release-info.nix`) sustituyen placeholders de channel para que la entrada de escritorio, la asociación MIME y el ícono del launcher coincidan con el channel en ejecución.
+**Assets de branding**: las marcas de marca a color completo viven bajo
+`resources/branding/{stable,nightly}/` (`mark.svg`, `mark-256.png`,
+`mark-small.svg`, `wordmark.svg`) más el `resources/branding/glyph.svg`
+compartido. `crates/dbflux_ui/src/assets.rs` sirve la marca PNG pre-renderizada
+por channel para `img(...)`. La metadata de packaging (`packaging/*.yaml`,
+`resources/desktop/dbflux.desktop`, `resources/macos/Info.plist`,
+`resources/windows/installer.iss`) y el build de Nix (`nix/binary.nix`,
+`nix/nightly-info.nix`, `nix/release-info.nix`) sustituyen placeholders de
+channel para que la entrada de escritorio, la asociación MIME y el ícono del
+launcher coincidan con el channel en ejecución.
 
-El modelo de channel/branding es un seam de runtime: el código de UI y de app leen los accessors de `ReleaseChannel`; nunca bifurcan según el string de versión crudo ni hardcodean los identificadores `dbflux`/`dbflux-nightly`. El flujo de release/nightly en sí está documentado en `docs/RELEASE.md`.
+El modelo de channel/branding es un seam de runtime: el código de UI y de app
+leen los accessors de `ReleaseChannel`; nunca bifurcan según el string de
+versión crudo ni hardcodean los identificadores `dbflux`/`dbflux-nightly`. El
+flujo de release/nightly en sí está documentado en `docs/RELEASE.md`.
 
 ### Implementaciones de Drivers
 
-- **PostgreSQL**: `crates/dbflux_driver_postgres/` — `tokio-postgres` con TLS, cancelación, extracción detallada de errores.
-- **MySQL/MariaDB**: `crates/dbflux_driver_mysql/` — arquitectura de conexión dual (sync para schema, async para queries).
-- **SQLite**: `crates/dbflux_driver_sqlite/` — conexiones basadas en archivo con `rusqlite`.
-- **Microsoft SQL Server**: `crates/dbflux_driver_mssql/` — cliente TDS `tiberius` con TLS, SSH tunnel, routing de named-instance vía SQL Browser, introspección multi-schema, CRUD vía `OUTPUT INSERTED.*` / `OUTPUT DELETED.*`, y cancelación por side-channel basada en `KILL` con restauración automática de sesión.
+- **PostgreSQL**: `crates/dbflux_driver_postgres/` — `tokio-postgres` con TLS,
+  cancelación, extracción detallada de errores.
+- **MySQL/MariaDB**: `crates/dbflux_driver_mysql/` — arquitectura de conexión
+  dual (sync para schema, async para queries).
+- **SQLite**: `crates/dbflux_driver_sqlite/` — conexiones basadas en archivo con
+  `rusqlite`.
+- **Microsoft SQL Server**: `crates/dbflux_driver_mssql/` — cliente TDS
+  `tiberius` con TLS, SSH tunnel, routing de named-instance vía SQL Browser,
+  introspección multi-schema, CRUD vía `OUTPUT INSERTED.*` / `OUTPUT DELETED.*`,
+  y cancelación por side-channel basada en `KILL` con restauración automática de
+  sesión.
 - **MongoDB**: `crates/dbflux_driver_mongodb/` — driver async `mongodb` con:
   - Manejo y conversión de valores BSON
   - Query parser para la sintaxis `db.collection.method()`
   - Browsing de collections con paginación
   - Descubrimiento de índices
   - Operaciones CRUD sobre documents
-  - Shell query generator (`MongoShellGenerator`) para insertOne/updateOne/deleteOne
+  - Shell query generator (`MongoShellGenerator`) para
+    insertOne/updateOne/deleteOne
 - **Redis**: `crates/dbflux_driver_redis/` — driver `redis` con:
   - API key-value para tipos String, Hash, List, Set, SortedSet y Stream
-  - Comandos variádicos (HSET con múltiples fields, SADD con múltiples members, etc.)
+  - Comandos variádicos (HSET con múltiples fields, SADD con múltiples members,
+    etc.)
   - Soporte de keyspace (índice de base de datos)
   - Key scanning, gestión de TTL, rename, descubrimiento de tipo
-  - Command generator (`RedisCommandGenerator`) para todos los tipos de mutación key-value
-- **DynamoDB**: `crates/dbflux_driver_dynamodb/` — driver `aws-sdk-dynamodb` con:
-  - Descubrimiento nativo de tablas (`ListTables`, `DescribeTable`) con metadata de claves PK/SK + GSI/LSI mapeada a las abstracciones de document de DBFlux
-  - Planificación del read path (`Scan` vs `Query`) con opciones de lectura (`index`, `consistent_read`) y traducción/fallback de server-filter
-  - Soporte de mutación para paths de un solo item y multi-item (`put`, `update`, `delete`), con upsert de un solo item y manejo de reintentos acotado para batch writes sin procesar
-  - Parser de JSON command-envelope para el modo execute (`scan`, `query`, `put`, `update`, `delete`) y generación de query de mutación (`DynamoQueryGenerator`)
-  - Límites actuales: sin cancelación de query, sin superficie de API PartiQL/transaction, y sin combinación `update many + upsert`
-- **InfluxDB**: `crates/dbflux_driver_influxdb/` — driver `DatabaseCategory::TimeSeries` que cubre tanto InfluxDB v1 como v2:
-  - v1 habla InfluxQL; v2 expone Flux además de InfluxQL (`QueryGenerator` emite Flux solo cuando `version == V2`)
-  - Descubrimiento de bucket/database y measurement mapeado al modelo de schema, con paginación y export CSV/JSON
-  - Orientado a lectura: sin transactions; la generación de mutación es limitada en comparación con los drivers relacionales
-- **ClickHouse**: `crates/dbflux_driver_clickhouse/` — driver `DatabaseCategory::Relational` y `QueryLanguage::Sql` para ClickHouse self-hosted y ClickHouse Cloud:
-  - Usa la interfaz HTTP(S) de ClickHouse y decodificación dinámica de resultados JSON para schemas arbitrarios
-  - Descubre databases, tables, views, columns y metadata de engine sin representar las databases como schemas
-  - Soporta SQL orientado a lectura y generación visual de SELECT; mutations estructuradas, DDL, transactions, SSH tunneling y parámetros de query genéricos no están expuestos
-- **CloudWatch Logs**: `crates/dbflux_driver_cloudwatch/` — driver `DatabaseCategory::LogStream` para AWS CloudWatch Logs:
-  - Descubrimiento de log group/stream expuesto como collections; los log groups se abren como event streams vía `CollectionPresentation::EventStream` y un `EventStreamTarget` genérico, consumidos por el `AuditDocument`/log-stream viewer sin ninguna bifurcación de UI específica de driver
-  - Los modos de query (Logs Insights QL, OpenSearch PPL/SQL) se exponen a través de `SourceContextSpec`; `DriverMetadata.query_language` usa `Sql` por defecto para el comportamiento del editor
-  - Autenticación a través del stack de auth de AWS; sin cancelación de query todavía
-- **Amazon S3**: `crates/dbflux_driver_s3/` — driver `aws-sdk-s3` (`DatabaseCategory::ObjectStorage`):
-  - Autenticación vía AWS profile/SSO (`AuthProfileRef`) o credenciales estáticas de access-key, con override de endpoint y direccionamiento path-style para endpoints compatibles con S3 (Cloudflare R2, MinIO)
-  - Descubrimiento de buckets (`BucketsTableDocument` en la raíz de la conexión) y navegación paginada de objetos por nivel (`ObjectBrowserDocument`), con un modo de tree opcional no paginado
-  - La implementación de `ObjectStoreConnection` cubre upload, delete, delete recursivo de prefix/bucket (`DeleteObjects` en batch), copy, presign, detalles/versioning de bucket, y versions de object
-  - CRUD completo desde la UI: upload, delete recursivo con confirmación por escritura, creación de folder/bucket con degradación graceful por endpoint, rename (copy-then-delete), URLs presignadas
-  - Cada mutation se audita bajo `EventCategory::ObjectStorage`; las credenciales y URLs presignadas nunca se registran ni persisten
+  - Command generator (`RedisCommandGenerator`) para todos los tipos de mutación
+    key-value
+- **DynamoDB**: `crates/dbflux_driver_dynamodb/` — driver `aws-sdk-dynamodb`
+  con:
+  - Descubrimiento nativo de tablas (`ListTables`, `DescribeTable`) con metadata
+    de claves PK/SK + GSI/LSI mapeada a las abstracciones de document de DBFlux
+  - Planificación del read path (`Scan` vs `Query`) con opciones de lectura
+    (`index`, `consistent_read`) y traducción/fallback de server-filter
+  - Soporte de mutación para paths de un solo item y multi-item (`put`,
+    `update`, `delete`), con upsert de un solo item y manejo de reintentos
+    acotado para batch writes sin procesar
+  - Parser de JSON command-envelope para el modo execute (`scan`, `query`,
+    `put`, `update`, `delete`) y generación de query de mutación
+    (`DynamoQueryGenerator`)
+  - Límites actuales: sin cancelación de query, sin superficie de API
+    PartiQL/transaction, y sin combinación `update many + upsert`
+- **InfluxDB**: `crates/dbflux_driver_influxdb/` — driver
+  `DatabaseCategory::TimeSeries` que cubre tanto InfluxDB v1 como v2:
+  - v1 habla InfluxQL; v2 expone Flux además de InfluxQL (`QueryGenerator` emite
+    Flux solo cuando `version == V2`)
+  - Descubrimiento de bucket/database y measurement mapeado al modelo de schema,
+    con paginación y export CSV/JSON
+  - Orientado a lectura: sin transactions; la generación de mutación es limitada
+    en comparación con los drivers relacionales
+- **ClickHouse**: `crates/dbflux_driver_clickhouse/` — driver
+  `DatabaseCategory::Relational` y `QueryLanguage::Sql` para ClickHouse
+  self-hosted y ClickHouse Cloud:
+  - Usa la interfaz HTTP(S) de ClickHouse y decodificación dinámica de
+    resultados JSON para schemas arbitrarios
+  - Descubre databases, tables, views, columns y metadata de engine sin
+    representar las databases como schemas
+  - Soporta SQL orientado a lectura y generación visual de SELECT; mutations
+    estructuradas, DDL, transactions, SSH tunneling y parámetros de query
+    genéricos no están expuestos
+- **CloudWatch Logs**: `crates/dbflux_driver_cloudwatch/` — driver
+  `DatabaseCategory::LogStream` para AWS CloudWatch Logs:
+  - Descubrimiento de log group/stream expuesto como collections; los log groups
+    se abren como event streams vía `CollectionPresentation::EventStream` y un
+    `EventStreamTarget` genérico, consumidos por el `AuditDocument`/log-stream
+    viewer sin ninguna bifurcación de UI específica de driver
+  - Los modos de query (Logs Insights QL, OpenSearch PPL/SQL) se exponen a
+    través de `SourceContextSpec`; `DriverMetadata.query_language` usa `Sql` por
+    defecto para el comportamiento del editor
+  - Autenticación a través del stack de auth de AWS; sin cancelación de query
+    todavía
+- **Amazon S3**: `crates/dbflux_driver_s3/` — driver `aws-sdk-s3`
+  (`DatabaseCategory::ObjectStorage`):
+  - Autenticación vía AWS profile/SSO (`AuthProfileRef`) o credenciales
+    estáticas de access-key, con override de endpoint y direccionamiento
+    path-style para endpoints compatibles con S3 (Cloudflare R2, MinIO)
+  - Descubrimiento de buckets (`BucketsTableDocument` en la raíz de la conexión)
+    y navegación paginada de objetos por nivel (`ObjectBrowserDocument`), con un
+    modo de tree opcional no paginado
+  - La implementación de `ObjectStoreConnection` cubre upload, delete, delete
+    recursivo de prefix/bucket (`DeleteObjects` en batch), copy, presign,
+    detalles/versioning de bucket, y versions de object
+  - CRUD completo desde la UI: upload, delete recursivo con confirmación por
+    escritura, creación de folder/bucket con degradación graceful por endpoint,
+    rename (copy-then-delete), URLs presignadas
+  - Cada mutation se audita bajo `EventCategory::ObjectStorage`; las
+    credenciales y URLs presignadas nunca se registran ni persisten
 
 ### Política de README de drivers
 
-- Cada crate de driver (`crates/dbflux_driver_*/`) tiene un `README.md` que documenta las features y limitaciones actuales.
-- Mantén esos archivos README alineados con las capabilities de `DriverMetadata` y el comportamiento real en runtime tras cualquier cambio de driver.
+- Cada crate de driver (`crates/dbflux_driver_*/`) tiene un `README.md` que
+  documenta las features y limitaciones actuales.
+- Mantén esos archivos README alineados con las capabilities de `DriverMetadata`
+  y el comportamiento real en runtime tras cualquier cambio de driver.
 
 ### Componentes de Soporte
 
-- Sistema de toasts: `crates/dbflux_ui_base/src/toast.rs` implementación personalizada con auto-dismiss (4s) para toasts de success/info/warning. (Shim en `crates/dbflux_ui/src/ui/components/toast.rs`.)
-- Infraestructura de tunnels: `crates/dbflux_tunnel_core/` provee `Tunnel` RAII con el trait `TunnelConnector` y el forwarder bidireccional `ForwardingConnection<R>`.
-- Proxy tunneling: `crates/dbflux_proxy/` implementa tunnels de proxy SOCKS5 y HTTP CONNECT vía `TunnelConnector`.
-- SSH tunneling: `crates/dbflux_ssh/src/lib.rs` implementa tunnel SSH vía `TunnelConnector`, todas las operaciones serializadas a un thread por seguridad de libssh2.
-- Export: `crates/dbflux_export/` provee export basado en shape (CSV, JSON pretty/compact, Text, Binary/Hex/Base64). La disponibilidad de formato la determina `QueryResultShape`, no el driver. Cada formato tiene su propio módulo (`binary.rs`, `csv.rs`, `json.rs`, `text.rs`). La disponibilidad del file-dialog se sondea en runtime vía `dbflux_ui_base/src/file_dialog.rs::is_native_file_dialog_available()` (en Linux: verifica `PATH` en busca de `xdg-desktop-portal`, `zenity`, `kdialog`); cuando no hay backend disponible, los exports caen a `fallback_export_dir()` (`~/.local/share/dbflux/exports/`) con deconfliction vía `unique_path_in()`. También hay disponible un path de export por clipboard como target alternativo.
-- Test support: `crates/dbflux_test_support/` provee gestión de contenedores Docker y fixtures para live integration tests en todos los drivers. DynamoDB Local se usa solo para integration tests y validación local; el uso en producción apunta a endpoints remotos de AWS DynamoDB.
-- Sistema de íconos: enum `AppIcon` definido en `crates/dbflux_components/src/icons/mod.rs`; los bytes SVG embebidos y la lista `ALL_ICONS` permanecen en `crates/dbflux_ui/src/ui/icons/mod.rs` (los recursos viven bajo `crates/dbflux_ui/resources/`), cargados vía `assets.rs`.
-- Detección de plataforma: `crates/dbflux_ui_base/src/platform.rs` maneja las diferencias entre X11/Wayland con `is_x11()`, `floating_window_kind()`, y `apply_window_options()` para los hints correctos de tamaño mínimo de ventana. (Shim en `crates/dbflux_ui/src/platform.rs`.)
+- Sistema de toasts: `crates/dbflux_ui_base/src/toast.rs` implementación
+  personalizada con auto-dismiss (4s) para toasts de success/info/warning. (Shim
+  en `crates/dbflux_ui/src/ui/components/toast.rs`.)
+- Infraestructura de tunnels: `crates/dbflux_tunnel_core/` provee `Tunnel` RAII
+  con el trait `TunnelConnector` y el forwarder bidireccional
+  `ForwardingConnection<R>`.
+- Proxy tunneling: `crates/dbflux_proxy/` implementa tunnels de proxy SOCKS5 y
+  HTTP CONNECT vía `TunnelConnector`.
+- SSH tunneling: `crates/dbflux_ssh/src/lib.rs` implementa tunnel SSH vía
+  `TunnelConnector`, todas las operaciones serializadas a un thread por
+  seguridad de libssh2.
+- Export: `crates/dbflux_export/` provee export basado en shape (CSV, JSON
+  pretty/compact, Text, Binary/Hex/Base64). La disponibilidad de formato la
+  determina `QueryResultShape`, no el driver. Cada formato tiene su propio
+  módulo (`binary.rs`, `csv.rs`, `json.rs`, `text.rs`). La disponibilidad del
+  file-dialog se sondea en runtime vía
+  `dbflux_ui_base/src/file_dialog.rs::is_native_file_dialog_available()` (en
+  Linux: verifica `PATH` en busca de `xdg-desktop-portal`, `zenity`, `kdialog`);
+  cuando no hay backend disponible, los exports caen a `fallback_export_dir()`
+  (`~/.local/share/dbflux/exports/`) con deconfliction vía `unique_path_in()`.
+  También hay disponible un path de export por clipboard como target
+  alternativo.
+- Test support: `crates/dbflux_test_support/` provee gestión de contenedores
+  Docker y fixtures para live integration tests en todos los drivers. DynamoDB
+  Local se usa solo para integration tests y validación local; el uso en
+  producción apunta a endpoints remotos de AWS DynamoDB.
+- Sistema de íconos: enum `AppIcon` definido en
+  `crates/dbflux_components/src/icons/mod.rs`; los bytes SVG embebidos y la
+  lista `ALL_ICONS` permanecen en `crates/dbflux_ui/src/ui/icons/mod.rs` (los
+  recursos viven bajo `crates/dbflux_ui/resources/`), cargados vía `assets.rs`.
+- Detección de plataforma: `crates/dbflux_ui_base/src/platform.rs` maneja las
+  diferencias entre X11/Wayland con `is_x11()`, `floating_window_kind()`, y
+  `apply_window_options()` para los hints correctos de tamaño mínimo de ventana.
+  (Shim en `crates/dbflux_ui/src/platform.rs`.)
 
 ### Sistema de Gobernanza MCP
 
-DBFlux soporta el Model Context Protocol (MCP) para integración con clientes de IA con una capa completa de gobernanza:
+DBFlux soporta el Model Context Protocol (MCP) para integración con clientes de
+IA con una capa completa de gobernanza:
 
 **Classification** (`dbflux_policy/classification.rs`):
-- Enum `ExecutionClassification`: Metadata, Read, Write, Destructive, AdminSafe, Admin, AdminDestructive
-- Se usa para categorizar operaciones por nivel de impacto para las decisiones de policy y los flujos de approval
+- Enum `ExecutionClassification`: Metadata, Read, Write, Destructive, AdminSafe,
+  Admin, AdminDestructive
+- Se usa para categorizar operaciones por nivel de impacto para las decisiones
+  de policy y los flujos de approval
 
 **Policy Engine** (`dbflux_policy/engine.rs`):
 - `PolicyEngine::evaluate()` toma actor, connection, tool y classification
@@ -869,122 +1415,285 @@ DBFlux soporta el Model Context Protocol (MCP) para integración con clientes de
 - `ConnectionPolicyAssignment` vincula actors/connections a roles y policies
 
 **Trusted Clients** (`dbflux_policy/trusted_clients.rs`):
-- `TrustedClientRegistry` identifica clientes de IA conocidos por id, name, issuer
+- `TrustedClientRegistry` identifica clientes de IA conocidos por id, name,
+  issuer
 - Se usa para diferenciar entre actors trusted y untrusted en los audit logs
 
 **Approval Flow** (`dbflux_approval`):
-- `ApprovalService` gestiona el lifecycle de approve/reject para ejecuciones diferidas
-- `InMemoryPendingExecutionStore` mantiene las ejecuciones pendientes a la espera de approval humano
-- `ExecutionPlan` captura el contexto original del request para la ejecución diferida
+- `ApprovalService` gestiona el lifecycle de approve/reject para ejecuciones
+  diferidas
+- `InMemoryPendingExecutionStore` mantiene las ejecuciones pendientes a la
+  espera de approval humano
+- `ExecutionPlan` captura el contexto original del request para la ejecución
+  diferida
 
 **Audit** (`dbflux_audit`):
-- `AuditService` delega en `AuditRepository` en `dbflux_storage` (`~/.local/share/dbflux/dbflux.db`, tabla `aud_audit_events`)
-- Los events usan `EventRecord` de `dbflux_core::observability` — campos estructurados para category, severity, outcome, actor type, connection, object, details y contexto de error
-- Los events se emiten a través del trait `EventSink`; las capas de servicio inyectan `Arc<dyn EventSink>` en lugar de llamar directamente a `AuditService`
-- Categories: `Query`, `Connection`, `Hook`, `Script`, `Mcp`, `Governance`, `Config`, `System`
-- Antes de almacenar: valida los campos requeridos específicos de category, hace fingerprint del texto de query como SHA256 (el texto de query nunca se almacena por defecto), redacta valores sensibles, impone un límite de payload de detail de 64 KiB
-- `AuditQueryFilter` para consultar por actor, tool, category, action, outcome, rango de fechas, texto libre y correlation ID
-- Export a JSON/CSV vía `AuditExportFormat`; `export_extended()` incluye todos los campos del DTO incluyendo `details_json`
-- Retention purge: `AuditService::purge_old_events(days, batch_size)` — en batches para evitar transacciones de escritura largas
-- Ver `docs/AUDIT.md` para el schema completo de eventos, campos requeridos y patrones de uso
+- `AuditService` delega en `AuditRepository` en `dbflux_storage`
+  (`~/.local/share/dbflux/dbflux.db`, tabla `aud_audit_events`)
+- Los events usan `EventRecord` de `dbflux_core::observability` — campos
+  estructurados para category, severity, outcome, actor type, connection,
+  object, details y contexto de error
+- Los events se emiten a través del trait `EventSink`; las capas de servicio
+  inyectan `Arc<dyn EventSink>` en lugar de llamar directamente a `AuditService`
+- Categories: `Query`, `Connection`, `Hook`, `Script`, `Mcp`, `Governance`,
+  `Config`, `System`
+- Antes de almacenar: valida los campos requeridos específicos de category, hace
+  fingerprint del texto de query como SHA256 (el texto de query nunca se
+  almacena por defecto), redacta valores sensibles, impone un límite de payload
+  de detail de 64 KiB
+- `AuditQueryFilter` para consultar por actor, tool, category, action, outcome,
+  rango de fechas, texto libre y correlation ID
+- Export a JSON/CSV vía `AuditExportFormat`; `export_extended()` incluye todos
+  los campos del DTO incluyendo `details_json`
+- Retention purge: `AuditService::purge_old_events(days, batch_size)` — en
+  batches para evitar transacciones de escritura largas
+- Ver `docs/AUDIT.md` para el schema completo de eventos, campos requeridos y
+  patrones de uso
 
 **MCP Runtime** (`dbflux_mcp/runtime.rs`):
 - `McpRuntime` implementa el trait `McpGovernanceService`
 - Integra el policy engine, el approval service y el audit service
-- Emite `McpRuntimeEvent` para actualizaciones de la UI (clients/roles/policies cambiados, ejecuciones pendientes)
-- El tool catalog (`tool_catalog.rs`) define los tools canónicos de MCP y los tools diferidos
+- Emite `McpRuntimeEvent` para actualizaciones de la UI (clients/roles/policies
+  cambiados, ejecuciones pendientes)
+- El tool catalog (`tool_catalog.rs`) define los tools canónicos de MCP y los
+  tools diferidos
 
 **Standalone Server** (`dbflux_mcp_server`):
 - Expuesto como `dbflux mcp --client-id <id>` para clientes de IA
 - Transporte JSON-RPC sobre stdin/stdout
-- `ConnectionCache` más un setup de conexión serializado evitan el teardown de PostgreSQL con scope de request y las carreras de duplicate-connect
+- `ConnectionCache` más un setup de conexión serializado evitan el teardown de
+  PostgreSQL con scope de request y las carreras de duplicate-connect
 - Mismo stack de gobernanza que el MCP integrado en la app
-- `preview_mutation` es estrictamente de solo lectura; el inseguro `preview_ddl` intencionalmente no se expone hasta que DBFlux tenga un path de preview de DDL seguro y no mutante
+- `preview_mutation` es estrictamente de solo lectura; el inseguro `preview_ddl`
+  intencionalmente no se expone hasta que DBFlux tenga un path de preview de DDL
+  seguro y no mutante
 
 **Integración con la UI**:
-- `McpApprovalsView` (`crates/dbflux_ui_document/src/governance.rs`) para revisar ejecuciones pendientes
-- `mcp_section.rs` (`crates/dbflux_ui_windows/src/settings/mcp_section.rs`) en Settings para trusted clients, roles y policies
-- `AuditDocument` (`crates/dbflux_ui_document/src/audit/`) como el visor de eventos unificado tanto para los registros de audit internos como para los event streams externos respaldados por driver expuestos a través de `EventStreamTarget`s genéricos (sin path de audit document específico de driver en la UI)
-- `LoginModal` (`crates/dbflux_ui/src/ui/overlays/login_modal.rs`) y `SsoWizard` (`crates/dbflux_ui_base/src/sso_wizard.rs`, shim en la ruta antigua de overlay) para el flujo de autenticación de AWS SSO
+- `McpApprovalsView` (`crates/dbflux_ui_document/src/governance.rs`) para
+  revisar ejecuciones pendientes
+- `mcp_section.rs` (`crates/dbflux_ui_windows/src/settings/mcp_section.rs`) en
+  Settings para trusted clients, roles y policies
+- `AuditDocument` (`crates/dbflux_ui_document/src/audit/`) como el visor de
+  eventos unificado tanto para los registros de audit internos como para los
+  event streams externos respaldados por driver expuestos a través de
+  `EventStreamTarget`s genéricos (sin path de audit document específico de
+  driver en la UI)
+- `LoginModal` (`crates/dbflux_ui/src/ui/overlays/login_modal.rs`) y `SsoWizard`
+  (`crates/dbflux_ui_base/src/sso_wizard.rs`, shim en la ruta antigua de
+  overlay) para el flujo de autenticación de AWS SSO
 
 ## Flujo de Datos
 
-- Startup: `main` crea `AppState` y `Workspace`, restaura la sesión previa (tabs desde `session.json`), y abre la ventana principal. Si no se restaura ningún tab, el foco por defecto va al sidebar (`crates/dbflux/src/main.rs`, `crates/dbflux_ui/src/ui/views/workspace/`).
-- Bootstrap de drivers externos: al iniciar, DBFlux lee `cfg_services` desde `~/.local/share/dbflux/dbflux.db`, sondea cada servicio, y solo registra los servicios que completan el handshake RPC (`Hello`) exitosamente.
-- Flujo de conexión: `AppState::prepare_pipeline_input` construye un input de pipeline pre-connect agnóstico del provider. El pipeline ejecuta validación de auth/session, resolución dinámica de values, y setup de access managed/direct antes del connect del driver + fetch de schema. Soporta configuración basada en formulario, input de URI directo, proxy/SSH opcional y access managed (`aws-ssm`). Los connection hooks siguen ejecutándose en cada fase (PreConnect, PostConnect, PreDisconnect, PostDisconnect).
-- Flujo de query: `CodeDocument` envía database queries a una implementación de `Connection` cuando el `QueryLanguage` activo soporta el contexto de conexión. El query language (SQL/MongoDB/etc) lo determina la metadata del driver. Los resultados se renderizan en tabs de resultado dentro del document. Las queries peligrosas (DELETE sin WHERE, DROP, TRUNCATE) disparan diálogos de confirmación (manejados en `code/execution.rs`). Cuando el driver anuncia la capability `MULTI_STATEMENT`, un script con varias sentencias separadas por `;` se ejecuta como un batch, produciendo un result set por sentencia.
-- Flujo de script: `CodeDocument` ejecuta documents de Lua, Python y Bash como script hooks en lugar de database queries. Las ejecuciones de script crean un canal de salida local, transmiten texto en vivo a un buffer propiedad del document, y mantienen la salida final como un resultado de texto cuando la ejecución termina.
-- Selección de view mode: `DataGridPanel` (en `crates/dbflux_ui_document/src/data_grid_panel/`) selecciona automáticamente el view mode apropiado según la database category — vista Table para bases de datos relacionales, vista Document tree para bases de datos de documentos como MongoDB y DynamoDB, vista key-value para Redis. Los contenedores de document tipo event-stream se abren a través de `CollectionPresentation::EventStream` en lugar de checks de driver del lado de la UI. Los menús contextuales incluyen "Copy as Query" para generar sentencias/envelopes de mutación específicos del driver vía `QueryGenerator`.
-- Query preview: `SqlPreviewModal` (en `crates/dbflux_ui_base/src/sql_preview_modal.rs`, shim en la ruta antigua de overlay) enruta los previews de lectura/DML relacionales a través de `QueryGenerator` para previews de row, table y view, mientras que el DDL sigue en `CodeGenerator`. Los lenguajes no-SQL (MongoDB, Redis) siguen usando el modo de preview genérico con texto estático y resaltado de sintaxis específico del lenguaje.
-- Schema refresh: `Workspace::refresh_schema` ejecuta `Connection::schema` en un background executor y actualiza `AppState` (`crates/dbflux_ui/src/ui/views/workspace/`).
-- Carga perezosa: los drivers obtienen la metadata de table/collection (columns, indexes) bajo demanda cuando los items se expanden en el sidebar, no durante la conexión inicial (optimización de rendimiento para bases de datos grandes).
-- Flujo de history: las queries completadas se almacenan en `HistoryStore`, se persisten a JSON, y son accesibles a través del history modal (`crates/dbflux_core/src/storage/history.rs`). La UI del history modal está en `crates/dbflux_ui_document/src/history_modal.rs`.
-- Flujo de saved queries: los usuarios pueden guardar queries con nombres vía `SavedQueryStore`; el history modal (Ctrl+P) permite explorar, buscar y cargar saved queries (`crates/dbflux_core/src/storage/saved_query.rs`).
+- Startup: `main` crea `AppState` y `Workspace`, restaura la sesión previa (tabs
+  desde `session.json`), y abre la ventana principal. Si no se restaura ningún
+  tab, el foco por defecto va al sidebar (`crates/dbflux/src/main.rs`,
+  `crates/dbflux_ui/src/ui/views/workspace/`).
+- Bootstrap de drivers externos: al iniciar, DBFlux lee `cfg_services` desde
+  `~/.local/share/dbflux/dbflux.db`, sondea cada servicio, y solo registra los
+  servicios que completan el handshake RPC (`Hello`) exitosamente.
+- Flujo de conexión: `AppState::prepare_pipeline_input` construye un input de
+  pipeline pre-connect agnóstico del provider. El pipeline ejecuta validación de
+  auth/session, resolución dinámica de values, y setup de access managed/direct
+  antes del connect del driver + fetch de schema. Soporta configuración basada
+  en formulario, input de URI directo, proxy/SSH opcional y access managed
+  (`aws-ssm`). Los connection hooks siguen ejecutándose en cada fase
+  (PreConnect, PostConnect, PreDisconnect, PostDisconnect).
+- Flujo de query: `CodeDocument` envía database queries a una implementación de
+  `Connection` cuando el `QueryLanguage` activo soporta el contexto de conexión.
+  El query language (SQL/MongoDB/etc) lo determina la metadata del driver. Los
+  resultados se renderizan en tabs de resultado dentro del document. Las queries
+  peligrosas (DELETE sin WHERE, DROP, TRUNCATE) disparan diálogos de
+  confirmación (manejados en `code/execution.rs`). Cuando el driver anuncia la
+  capability `MULTI_STATEMENT`, un script con varias sentencias separadas por
+  `;` se ejecuta como un batch, produciendo un result set por sentencia.
+- Flujo de script: `CodeDocument` ejecuta documents de Lua, Python y Bash como
+  script hooks en lugar de database queries. Las ejecuciones de script crean un
+  canal de salida local, transmiten texto en vivo a un buffer propiedad del
+  document, y mantienen la salida final como un resultado de texto cuando la
+  ejecución termina.
+- Selección de view mode: `DataGridPanel` (en
+  `crates/dbflux_ui_document/src/data_grid_panel/`) selecciona automáticamente
+  el view mode apropiado según la database category — vista Table para bases de
+  datos relacionales, vista Document tree para bases de datos de documentos como
+  MongoDB y DynamoDB, vista key-value para Redis. Los contenedores de document
+  tipo event-stream se abren a través de `CollectionPresentation::EventStream`
+  en lugar de checks de driver del lado de la UI. Los menús contextuales
+  incluyen "Copy as Query" para generar sentencias/envelopes de mutación
+  específicos del driver vía `QueryGenerator`.
+- Query preview: `SqlPreviewModal` (en
+  `crates/dbflux_ui_base/src/sql_preview_modal.rs`, shim en la ruta antigua de
+  overlay) enruta los previews de lectura/DML relacionales a través de
+  `QueryGenerator` para previews de row, table y view, mientras que el DDL sigue
+  en `CodeGenerator`. Los lenguajes no-SQL (MongoDB, Redis) siguen usando el
+  modo de preview genérico con texto estático y resaltado de sintaxis específico
+  del lenguaje.
+- Schema refresh: `Workspace::refresh_schema` ejecuta `Connection::schema` en un
+  background executor y actualiza `AppState`
+  (`crates/dbflux_ui/src/ui/views/workspace/`).
+- Carga perezosa: los drivers obtienen la metadata de table/collection (columns,
+  indexes) bajo demanda cuando los items se expanden en el sidebar, no durante
+  la conexión inicial (optimización de rendimiento para bases de datos grandes).
+- Flujo de history: las queries completadas se almacenan en `HistoryStore`, se
+  persisten a JSON, y son accesibles a través del history modal
+  (`crates/dbflux_core/src/storage/history.rs`). La UI del history modal está en
+  `crates/dbflux_ui_document/src/history_modal.rs`.
+- Flujo de saved queries: los usuarios pueden guardar queries con nombres vía
+  `SavedQueryStore`; el history modal (Ctrl+P) permite explorar, buscar y cargar
+  saved queries (`crates/dbflux_core/src/storage/saved_query.rs`).
 
 ## Arquitectura de Teclado y Foco
 
-- Sistema de keymap: `crates/dbflux_ui/src/keymap/` (permanece en `dbflux_ui`) define el keymap glue (`actions.rs`, `dispatcher.rs`). Los keymap helpers (`default_keymap`, `key_chord_from_gpui`) viven en `crates/dbflux_ui_base/src/keymap.rs`. Los tipos de comando de dominio (`Command`, `ContextId`) se definen en `dbflux_core::keymap_types` y se re-exportan a través de `crates/dbflux_app/src/keymap/`.
-- Dispatch de comandos: `Workspace` implementa el trait `CommandDispatcher`; `dispatch()` en `views/workspace/dispatch.rs` enruta comandos según `focus_target` (Document, Sidebar, BackgroundTasks).
-- Diseño centrado en el document: FocusTarget se simplificó de Editor/Results/Sidebar/BackgroundTasks a Document/Sidebar/BackgroundTasks, dejando que los documents gestionen su propio estado de foco interno.
-- Capas de foco: cada contexto tiene su propia capa de keymap con bindings de estilo vim (navegación j/k/h/l).
-- Modos de foco de panel: paneles complejos como las data tables tienen máquinas de estado de foco interno (`FocusMode::Table`/`Toolbar`, `EditState::Navigating`/`Editing`) para manejar navegación por teclado anidada.
-- Sincronización mouse/teclado: los handlers de mouse actualizan el estado de foco para mantener consistente la navegación por teclado y mouse; un flag `switching_input` evita condiciones de carrera durante los eventos de blur de input.
+- Sistema de keymap: `crates/dbflux_ui/src/keymap/` (permanece en `dbflux_ui`)
+  define el keymap glue (`actions.rs`, `dispatcher.rs`). Los keymap helpers
+  (`default_keymap`, `key_chord_from_gpui`) viven en
+  `crates/dbflux_ui_base/src/keymap.rs`. Los tipos de comando de dominio
+  (`Command`, `ContextId`) se definen en `dbflux_core::keymap_types` y se
+  re-exportan a través de `crates/dbflux_app/src/keymap/`.
+- Dispatch de comandos: `Workspace` implementa el trait `CommandDispatcher`;
+  `dispatch()` en `views/workspace/dispatch.rs` enruta comandos según
+  `focus_target` (Document, Sidebar, BackgroundTasks).
+- Diseño centrado en el document: FocusTarget se simplificó de
+  Editor/Results/Sidebar/BackgroundTasks a Document/Sidebar/BackgroundTasks,
+  dejando que los documents gestionen su propio estado de foco interno.
+- Capas de foco: cada contexto tiene su propia capa de keymap con bindings de
+  estilo vim (navegación j/k/h/l).
+- Modos de foco de panel: paneles complejos como las data tables tienen máquinas
+  de estado de foco interno (`FocusMode::Table`/`Toolbar`,
+  `EditState::Navigating`/`Editing`) para manejar navegación por teclado
+  anidada.
+- Sincronización mouse/teclado: los handlers de mouse actualizan el estado de
+  foco para mantener consistente la navegación por teclado y mouse; un flag
+  `switching_input` evita condiciones de carrera durante los eventos de blur de
+  input.
 
 ## Integraciones Externas
 
-- PostgreSQL: cliente `tokio-postgres` con TLS opcional, soporte de cancelación, carga perezosa de schema, y modo de conexión por URI (crates/dbflux_driver_postgres/src/driver.rs).
-- MySQL/MariaDB: crate `mysql` con arquitectura de conexión dual (sync para schema, async para queries), carga perezosa de schema, y modo de conexión por URI (crates/dbflux_driver_mysql/src/driver.rs).
-- SQLite: conexiones basadas en archivo con `rusqlite` y carga perezosa de schema (crates/dbflux_driver_sqlite/src/driver.rs).
-- Microsoft SQL Server: cliente TDS `tiberius` con modos TLS (`off`/`on`/`required`), SSH tunneling, lookup de named-instance vía SQL Browser, introspección multi-database/multi-schema vía queries calificadas al catálogo `sys.*`, CRUD con `OUTPUT INSERTED.*` / `OUTPUT DELETED.*`, y cancelación cooperativa vía side-channel `KILL <spid>` con restauración automática de sesión (crates/dbflux_driver_mssql/src/driver.rs).
-- MongoDB: driver async `mongodb` con manejo de BSON, query parser para la sintaxis `db.collection.method()`, descubrimiento de collection/index, CRUD de documents, generación de shell query, y soporte de descripción de collection para workflows de metadata de MCP/UI (crates/dbflux_driver_mongodb/src/driver.rs).
-- Redis: driver `redis` con API key-value para todos los tipos de Redis, comandos variádicos, soporte de keyspace, key scanning, y generación de comandos (crates/dbflux_driver_redis/src/driver.rs).
-- DynamoDB: driver `aws-sdk-dynamodb` con soporte de AWS profile/region para DynamoDB remoto, más override de endpoint opcional para emuladores locales y tests (crates/dbflux_driver_dynamodb/src/driver.rs).
-- ClickHouse: driver HTTP(S) usando `reqwest` con decodificación dinámica de JSON, descubrimiento de database/table, y soporte de SQL orientado a lectura para ClickHouse self-hosted y ClickHouse Cloud (crates/dbflux_driver_clickhouse/src/driver.rs).
-- Amazon S3: driver `aws-sdk-s3` con AWS profile/SSO o credenciales estáticas, override de endpoint y direccionamiento path-style para endpoints compatibles con S3 (Cloudflare R2, MinIO), CRUD de bucket/object, URLs presignadas, y soporte de copy/versions (crates/dbflux_driver_s3/src/driver.rs).
-- Stack de auth de AWS: `dbflux_aws` provee providers de auth AWS SSO/shared/static, orquestación de login SSO, descubrimiento de account/role, y write-back del profile `~/.aws/config` para los auth profiles recién guardados.
-- IPC/RPC local: sockets `interprocess` + envelopes versionados para app control y comunicación de servicio RPC (`crates/dbflux_ipc/`, `crates/dbflux_driver_ipc/`, `crates/dbflux_driver_host/`). `dbflux_app::rpc_services` descubre los service descriptors persistidos, adapta `RpcServiceKind::Driver` en `DbDriver`s de runtime, y conecta `RpcServiceKind::AuthProvider` a `RpcAuthProvider` (que implementa `DynAuthProvider`). Preserva la compatibilidad con `rpc:<socket_id>`. El protocolo IPC de auth-provider está en v1.2: agrega las variantes `FetchDynamicOptions` / `DynamicOptions` y el manifest flag `secret_dependency_opt_in`. Los auth tokens los gestiona `dbflux_ipc/src/auth.rs`.
-- Proxy: tunnels SOCKS5/HTTP CONNECT vía `dbflux_tunnel_core::Tunnel` (crates/dbflux_proxy/src/lib.rs).
-- SSH: sesiones `ssh2` con forwarding TCP local vía `dbflux_tunnel_core::Tunnel` (crates/dbflux_ssh/src/lib.rs).
-- OS keyring: almacenamiento opcional de secrets para passwords, SSH passphrases, y credenciales de proxy (crates/dbflux_core/src/storage/secrets.rs).
-- Export: export multi-formato basado en shape — CSV, JSON (pretty/compact), Text, Binary (raw/hex/base64) vía `dbflux_export` (`lib.rs`, `binary.rs`, `csv.rs`, `json.rs`, `text.rs`).
+- PostgreSQL: cliente `tokio-postgres` con TLS opcional, soporte de cancelación,
+  carga perezosa de schema, y modo de conexión por URI
+  (crates/dbflux_driver_postgres/src/driver.rs).
+- MySQL/MariaDB: crate `mysql` con arquitectura de conexión dual (sync para
+  schema, async para queries), carga perezosa de schema, y modo de conexión por
+  URI (crates/dbflux_driver_mysql/src/driver.rs).
+- SQLite: conexiones basadas en archivo con `rusqlite` y carga perezosa de
+  schema (crates/dbflux_driver_sqlite/src/driver.rs).
+- Microsoft SQL Server: cliente TDS `tiberius` con modos TLS
+  (`off`/`on`/`required`), SSH tunneling, lookup de named-instance vía SQL
+  Browser, introspección multi-database/multi-schema vía queries calificadas al
+  catálogo `sys.*`, CRUD con `OUTPUT INSERTED.*` / `OUTPUT DELETED.*`, y
+  cancelación cooperativa vía side-channel `KILL <spid>` con restauración
+  automática de sesión (crates/dbflux_driver_mssql/src/driver.rs).
+- MongoDB: driver async `mongodb` con manejo de BSON, query parser para la
+  sintaxis `db.collection.method()`, descubrimiento de collection/index, CRUD de
+  documents, generación de shell query, y soporte de descripción de collection
+  para workflows de metadata de MCP/UI
+  (crates/dbflux_driver_mongodb/src/driver.rs).
+- Redis: driver `redis` con API key-value para todos los tipos de Redis,
+  comandos variádicos, soporte de keyspace, key scanning, y generación de
+  comandos (crates/dbflux_driver_redis/src/driver.rs).
+- DynamoDB: driver `aws-sdk-dynamodb` con soporte de AWS profile/region para
+  DynamoDB remoto, más override de endpoint opcional para emuladores locales y
+  tests (crates/dbflux_driver_dynamodb/src/driver.rs).
+- ClickHouse: driver HTTP(S) usando `reqwest` con decodificación dinámica de
+  JSON, descubrimiento de database/table, y soporte de SQL orientado a lectura
+  para ClickHouse self-hosted y ClickHouse Cloud
+  (crates/dbflux_driver_clickhouse/src/driver.rs).
+- Amazon S3: driver `aws-sdk-s3` con AWS profile/SSO o credenciales estáticas,
+  override de endpoint y direccionamiento path-style para endpoints compatibles
+  con S3 (Cloudflare R2, MinIO), CRUD de bucket/object, URLs presignadas, y
+  soporte de copy/versions (crates/dbflux_driver_s3/src/driver.rs).
+- Stack de auth de AWS: `dbflux_aws` provee providers de auth AWS
+  SSO/shared/static, orquestación de login SSO, descubrimiento de account/role,
+  y write-back del profile `~/.aws/config` para los auth profiles recién
+  guardados.
+- IPC/RPC local: sockets `interprocess` + envelopes versionados para app control
+  y comunicación de servicio RPC (`crates/dbflux_ipc/`,
+  `crates/dbflux_driver_ipc/`, `crates/dbflux_driver_host/`).
+  `dbflux_app::rpc_services` descubre los service descriptors persistidos,
+  adapta `RpcServiceKind::Driver` en `DbDriver`s de runtime, y conecta
+  `RpcServiceKind::AuthProvider` a `RpcAuthProvider` (que implementa
+  `DynAuthProvider`). Preserva la compatibilidad con `rpc:<socket_id>`. El
+  protocolo IPC de auth-provider está en v1.2: agrega las variantes
+  `FetchDynamicOptions` / `DynamicOptions` y el manifest flag
+  `secret_dependency_opt_in`. Los auth tokens los gestiona
+  `dbflux_ipc/src/auth.rs`.
+- Proxy: tunnels SOCKS5/HTTP CONNECT vía `dbflux_tunnel_core::Tunnel`
+  (crates/dbflux_proxy/src/lib.rs).
+- SSH: sesiones `ssh2` con forwarding TCP local vía `dbflux_tunnel_core::Tunnel`
+  (crates/dbflux_ssh/src/lib.rs).
+- OS keyring: almacenamiento opcional de secrets para passwords, SSH
+  passphrases, y credenciales de proxy
+  (crates/dbflux_core/src/storage/secrets.rs).
+- Export: export multi-formato basado en shape — CSV, JSON (pretty/compact),
+  Text, Binary (raw/hex/base64) vía `dbflux_export` (`lib.rs`, `binary.rs`,
+  `csv.rs`, `json.rs`, `text.rs`).
 
 ## Configuración
 
-- Settings de workspace: `Cargo.toml` define los miembros del workspace y las dependencias compartidas.
-- Features de la app: `crates/dbflux/Cargo.toml` activa `sqlite`, `postgres`, `mysql`, `mongodb`, `redis`, `dynamodb`, `cloudwatch`, `influxdb`, `mssql`, `redshift`, `clickhouse`, `s3`, `lua`, `aws`, y `mcp` (habilitadas por defecto en esta branch).
-- Datos de runtime: toda la configuración de runtime se almacena en `~/.local/share/dbflux/dbflux.db` (un único archivo SQLite).
+- Settings de workspace: `Cargo.toml` define los miembros del workspace y las
+  dependencias compartidas.
+- Features de la app: `crates/dbflux/Cargo.toml` activa `sqlite`, `postgres`,
+  `mysql`, `mongodb`, `redis`, `dynamodb`, `cloudwatch`, `influxdb`, `mssql`,
+  `redshift`, `clickhouse`, `s3`, `lua`, `aws`, y `mcp` (habilitadas por defecto
+  en esta branch).
+- Datos de runtime: toda la configuración de runtime se almacena en
+  `~/.local/share/dbflux/dbflux.db` (un único archivo SQLite).
   - `cfg_connection_profiles` + tablas hijas (bindings de auth, proxy, SSH)
   - `cfg_auth_profiles` (storage de auth profile agnóstico del provider)
   - `cfg_ssh_tunnel_profiles`, `cfg_proxy_profiles`
   - `cfg_hooks`, `cfg_hook_bindings`
-  - `cfg_services`, `cfg_service_args`, `cfg_service_env` (descriptores de servicio RPC; `cfg_services.service_kind` registra `driver` vs `auth_provider`)
+  - `cfg_services`, `cfg_service_args`, `cfg_service_env` (descriptores de
+    servicio RPC; `cfg_services.service_kind` registra `driver` vs
+    `auth_provider`)
   - tablas `cfg_governance_*` (roles, policies, trusted clients)
   - `cfg_drivers` (overrides de settings por driver)
   - `cfg_folders` (organización del connection tree)
-  - `st_sessions`, `st_tabs`, `st_query_history`, `st_saved_queries`, `st_recent_items`, `st_ui_state`
+  - `st_sessions`, `st_tabs`, `st_query_history`, `st_saved_queries`,
+    `st_recent_items`, `st_ui_state`
   - `aud_audit_events`, `aud_audit_entities`, `aud_audit_attributes`
-  - `viz_dashboards`, `viz_dashboard_panels`, `viz_saved_charts`, `viz_saved_chart_series`, `viz_saved_chart_binding_y`, `viz_saved_chart_source_metric_dimensions`, `viz_saved_chart_source_metric_series`
-  - `qry_saved_queries`, `qry_saved_query_columns`, `qry_saved_query_sorts`, `qry_saved_query_joins`
+  - `viz_dashboards`, `viz_dashboard_panels`, `viz_saved_charts`,
+    `viz_saved_chart_series`, `viz_saved_chart_binding_y`,
+    `viz_saved_chart_source_metric_dimensions`,
+    `viz_saved_chart_source_metric_series`
+  - `qry_saved_queries`, `qry_saved_query_columns`, `qry_saved_query_sorts`,
+    `qry_saved_query_joins`
   - `sys_migrations`, `sys_legacy_imports`
-- Import de JSON legacy: en el primer inicio, `dbflux_storage/src/legacy.rs` importa los archivos JSON existentes a SQLite si existen:
+- Import de JSON legacy: en el primer inicio, `dbflux_storage/src/legacy.rs`
+  importa los archivos JSON existentes a SQLite si existen:
   - `~/.config/dbflux/profiles.json` → `cfg_connection_profiles`
   - `~/.config/dbflux/auth_profiles.json` → `cfg_auth_profiles`
   - `~/.config/dbflux/ssh_tunnels.json` → `cfg_ssh_tunnel_profiles`
-  - `~/.config/dbflux/config.json` (legacy, solo rpc_services) → `cfg_services` con filas legacy por defecto en `service_kind='driver'`
+  - `~/.config/dbflux/config.json` (legacy, solo rpc_services) → `cfg_services`
+    con filas legacy por defecto en `service_kind='driver'`
   - El import es idempotente (rastreado en `sys_legacy_imports`)
 - Datos de sesión (directorio de datos):
-  - `sessions/` archivos scratch y shadow para auto-save (crates/dbflux_core/src/storage/session.rs).
-  - `scripts/` carpeta de scripts del usuario (crates/dbflux_core/src/config/scripts_directory.rs).
-- Secrets: los passwords se almacenan en el keyring del sistema operativo; las referencias se derivan de los profile IDs. El trait `HasSecretRef` unifica las operaciones de secret de SSH tunnel y proxy (crates/dbflux_core/src/storage/secrets.rs, crates/dbflux_core/src/storage/secret_manager.rs).
+  - `sessions/` archivos scratch y shadow para auto-save
+    (crates/dbflux_core/src/storage/session.rs).
+  - `scripts/` carpeta de scripts del usuario
+    (crates/dbflux_core/src/config/scripts_directory.rs).
+- Secrets: los passwords se almacenan en el keyring del sistema operativo; las
+  referencias se derivan de los profile IDs. El trait `HasSecretRef` unifica las
+  operaciones de secret de SSH tunnel y proxy
+  (crates/dbflux_core/src/storage/secrets.rs,
+  crates/dbflux_core/src/storage/secret_manager.rs).
 
 ## Build y Deploy
 
-- Build: `cargo build -p dbflux --features sqlite,postgres,mysql,mongodb,redis,dynamodb,clickhouse,aws` o `--release` (AGENTS.md).
-- Run: `cargo run -p dbflux --features sqlite,postgres,mysql,mongodb,redis,dynamodb,clickhouse,aws` (AGENTS.md).
+- Build: `cargo build -p dbflux --features
+  sqlite,postgres,mysql,mongodb,redis,dynamodb,clickhouse,aws` o `--release`
+  (AGENTS.md).
+- Run: `cargo run -p dbflux --features
+  sqlite,postgres,mysql,mongodb,redis,dynamodb,clickhouse,aws` (AGENTS.md).
 - Test: `cargo test --workspace` (AGENTS.md).
-- Lint/format: `cargo clippy --workspace -- -D warnings`, `cargo fmt --all` (AGENTS.md).
-- Nix: `nix build` o `nix run` usando flake.nix; `nix develop` para el dev shell.
-- Arch Linux: publicado en el AUR como `dbflux`; el PKGBUILD se mantiene en el repositorio externo del AUR, no en este repo.
-- Instalador de Linux: `curl -fsSL .../install.sh | bash` descarga e instala el release.
-- Releases: el workflow de GitHub Actions compila Linux amd64/arm64, macOS amd64/arm64, y Windows amd64, con firma GPG opcional, y publica en GitHub Releases.
-- Modelo de despliegue: app de escritorio con GUI; sin runtime de servidor en este repo.
+- Lint/format: `cargo clippy --workspace -- -D warnings`, `cargo fmt --all`
+  (AGENTS.md).
+- Nix: `nix build` o `nix run` usando flake.nix; `nix develop` para el dev
+  shell.
+- Arch Linux: publicado en el AUR como `dbflux`; el PKGBUILD se mantiene en el
+  repositorio externo del AUR, no en este repo.
+- Instalador de Linux: `curl -fsSL .../install.sh | bash` descarga e instala el
+  release.
+- Releases: el workflow de GitHub Actions compila Linux amd64/arm64, macOS
+  amd64/arm64, y Windows amd64, con firma GPG opcional, y publica en GitHub
+  Releases.
+- Modelo de despliegue: app de escritorio con GUI; sin runtime de servidor en
+  este repo.
