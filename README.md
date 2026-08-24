@@ -49,7 +49,7 @@ DBFlux is translated on [Hosted Weblate](https://hosted.weblate.org/engage/dbflu
 The catalogs live in `crates/dbflux_i18n/locales/`, one YAML file per language, and
 translation updates arrive as pull requests from Weblate.
 
-[![Translation status](https://hosted.weblate.org/widget/dbflux/app/svg-badge.svg)](https://hosted.weblate.org/engage/dbflux/)
+<a href="https://hosted.weblate.org/engage/dbflux/"><img src="https://hosted.weblate.org/widget/dbflux/multi-auto.svg" alt="Translation status"></a>
 
 ### Reference
 
