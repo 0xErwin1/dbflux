@@ -283,11 +283,15 @@ impl GeneralSection {
     }
 
     fn language_items() -> Vec<DropdownItem> {
-        vec![
-            DropdownItem::new(dbflux_i18n::t!("settings.general.language.option.system")),
-            DropdownItem::new(dbflux_i18n::t!("settings.general.language.option.english")),
-            DropdownItem::new(dbflux_i18n::t!("settings.general.language.option.spanish")),
-        ]
+        std::iter::once(DropdownItem::new(dbflux_i18n::t!(
+            "settings.general.language.option.system"
+        )))
+        .chain(
+            dbflux_i18n::Language::available()
+                .iter()
+                .map(|language| DropdownItem::new(language.native_name())),
+        )
+        .collect()
     }
 
     fn startup_focus_items() -> Vec<DropdownItem> {
@@ -345,16 +349,23 @@ impl GeneralSection {
     fn language_index(persisted: &str) -> usize {
         match dbflux_i18n::LanguagePreference::from_storage_str(persisted) {
             dbflux_i18n::LanguagePreference::System => 0,
-            dbflux_i18n::LanguagePreference::Explicit(dbflux_i18n::Language::English) => 1,
-            dbflux_i18n::LanguagePreference::Explicit(dbflux_i18n::Language::Spanish) => 2,
+            dbflux_i18n::LanguagePreference::Explicit(language) => {
+                dbflux_i18n::Language::available()
+                    .iter()
+                    .position(|available| *available == language)
+                    .map(|position| position + 1)
+                    .unwrap_or(0)
+            }
         }
     }
 
     fn language_for_index(index: usize) -> &'static str {
-        let preference = match index {
-            1 => dbflux_i18n::LanguagePreference::Explicit(dbflux_i18n::Language::English),
-            2 => dbflux_i18n::LanguagePreference::Explicit(dbflux_i18n::Language::Spanish),
-            _ => dbflux_i18n::LanguagePreference::System,
+        let preference = match index
+            .checked_sub(1)
+            .and_then(|position| dbflux_i18n::Language::available().get(position).copied())
+        {
+            Some(language) => dbflux_i18n::LanguagePreference::Explicit(language),
+            None => dbflux_i18n::LanguagePreference::System,
         };
         preference.as_storage_str()
     }
@@ -482,35 +493,42 @@ mod tests {
     }
 
     #[test]
-    fn language_dropdown_exposes_exactly_three_labels() {
+    fn language_dropdown_exposes_system_plus_every_available_language() {
         let labels: Vec<_> = GeneralSection::language_items()
             .into_iter()
             .map(|item| item.label)
             .collect();
 
-        assert_eq!(
-            labels,
-            vec![
-                dbflux_i18n::t!("settings.general.language.option.system"),
-                dbflux_i18n::t!("settings.general.language.option.english"),
-                dbflux_i18n::t!("settings.general.language.option.spanish"),
-            ]
-        );
+        let expected: Vec<_> =
+            std::iter::once(dbflux_i18n::t!("settings.general.language.option.system"))
+                .chain(
+                    dbflux_i18n::Language::available()
+                        .iter()
+                        .map(|language| language.native_name()),
+                )
+                .collect();
+
+        assert_eq!(labels, expected);
     }
 
     #[test]
     fn language_index_and_reverse_mapping_cover_system_and_explicit_languages() {
         assert_eq!(GeneralSection::language_index(""), 0);
         assert_eq!(GeneralSection::language_index("en"), 1);
-        assert_eq!(GeneralSection::language_index("es"), 2);
+        let available = dbflux_i18n::Language::available();
+        let es_position = available
+            .iter()
+            .position(|language| language.as_storage_str() == "es")
+            .expect("es.yml ships a catalog for Spanish");
+        assert_eq!(GeneralSection::language_index("es"), es_position + 1);
         // An unrecognized persisted value falls back to System.
         assert_eq!(GeneralSection::language_index("de"), 0);
 
         assert_eq!(GeneralSection::language_for_index(0), "");
         assert_eq!(GeneralSection::language_for_index(1), "en");
-        assert_eq!(GeneralSection::language_for_index(2), "es");
+        assert_eq!(GeneralSection::language_for_index(es_position + 1), "es");
         // Out-of-range falls back to System.
-        assert_eq!(GeneralSection::language_for_index(99), "");
+        assert_eq!(GeneralSection::language_for_index(available.len() + 1), "");
     }
 
     #[test]

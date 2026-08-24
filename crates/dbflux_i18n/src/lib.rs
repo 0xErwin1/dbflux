@@ -1,36 +1,73 @@
 rust_i18n::i18n!("locales", fallback = "en");
 
 /// A language DBFlux ships a translation catalog for.
+///
+/// The set of available languages is derived at runtime from the catalog
+/// files under `locales/` via [`Language::available`], so adding a new
+/// catalog (for example `zh.yml`) makes the language available with no code
+/// changes here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Language {
-    English,
-    Spanish,
-}
+pub struct Language(&'static str);
 
 impl Language {
+    /// The fallback language. Always available, regardless of which other
+    /// catalogs are present.
+    pub const ENGLISH: Language = Language("en");
+
+    /// Every language DBFlux ships a translation catalog for, sorted with
+    /// English first and the rest alphabetically by storage identifier.
+    pub fn available() -> &'static [Language] {
+        static AVAILABLE: std::sync::OnceLock<Vec<Language>> = std::sync::OnceLock::new();
+
+        AVAILABLE.get_or_init(|| {
+            let mut codes = rust_i18n::available_locales!();
+            codes.sort_by(|a, b| match (*a, *b) {
+                ("en", "en") => std::cmp::Ordering::Equal,
+                ("en", _) => std::cmp::Ordering::Less,
+                (_, "en") => std::cmp::Ordering::Greater,
+                _ => a.cmp(b),
+            });
+
+            codes.into_iter().map(Language).collect()
+        })
+    }
+
     /// The stable identifier persisted to settings storage.
     pub fn as_storage_str(self) -> &'static str {
-        match self {
-            Language::English => "en",
-            Language::Spanish => "es",
-        }
+        self.0
     }
 
     /// Parses a persisted storage identifier back into a `Language`.
     ///
-    /// Returns `None` for anything other than the exact stored identifiers,
-    /// including unsupported languages and locale strings with region tags.
+    /// Returns `None` for anything other than an identifier of a currently
+    /// available language, including unsupported languages and locale
+    /// strings with region tags.
     pub fn from_storage_str(value: &str) -> Option<Language> {
-        match value {
-            "en" => Some(Language::English),
-            "es" => Some(Language::Spanish),
-            _ => None,
-        }
+        Language::available()
+            .iter()
+            .copied()
+            .find(|language| language.0 == value)
     }
 
     /// The `rust-i18n` locale code, currently identical to the storage string.
     pub fn locale_code(self) -> &'static str {
-        self.as_storage_str()
+        self.0
+    }
+
+    /// The language's own name in that language, for example `"English"` or
+    /// `"Español"`.
+    ///
+    /// Falls back to the raw storage identifier when the catalog has no
+    /// `language.native_name` entry for this language.
+    pub fn native_name(self) -> String {
+        let name = translate_in(self.0, "language.native_name");
+        let missing_marker = format!("{}.language.native_name", self.0);
+
+        if name == missing_marker {
+            self.0.to_string()
+        } else {
+            name
+        }
     }
 }
 
@@ -90,7 +127,7 @@ pub fn resolve(persisted: Option<&str>, system: Option<&str>) -> Language {
         }
     }
 
-    Language::English
+    Language::ENGLISH
 }
 
 /// Detects the OS-reported locale (for example `"en-US"` or `"es-ES"`).
@@ -152,31 +189,35 @@ macro_rules! t {
 mod tests {
     use super::*;
 
+    fn spanish() -> Language {
+        Language::from_storage_str("es").expect("es.yml ships a catalog for Spanish")
+    }
+
     #[test]
     fn resolve_prefers_valid_persisted_language() {
-        assert_eq!(resolve(Some("es"), Some("en-US")), Language::Spanish);
+        assert_eq!(resolve(Some("es"), Some("en-US")), spanish());
     }
 
     #[test]
     fn resolve_empty_persisted_falls_back_to_system() {
-        assert_eq!(resolve(Some(""), Some("es-ES")), Language::Spanish);
+        assert_eq!(resolve(Some(""), Some("es-ES")), spanish());
     }
 
     #[test]
     fn resolve_invalid_persisted_falls_back_to_system() {
-        assert_eq!(resolve(Some("de"), Some("es-419")), Language::Spanish);
-        assert_eq!(resolve(Some("de"), Some("fr-FR")), Language::English);
+        assert_eq!(resolve(Some("de"), Some("es-419")), spanish());
+        assert_eq!(resolve(Some("de"), Some("fr-FR")), Language::ENGLISH);
     }
 
     #[test]
     fn resolve_unsupported_system_subtag_falls_back_to_english() {
-        assert_eq!(resolve(None, Some("fr-FR")), Language::English);
-        assert_eq!(resolve(None, None), Language::English);
+        assert_eq!(resolve(None, Some("fr-FR")), Language::ENGLISH);
+        assert_eq!(resolve(None, None), Language::ENGLISH);
     }
 
     #[test]
     fn resolve_es419_maps_to_spanish() {
-        assert_eq!(resolve(None, Some("es-419")), Language::Spanish);
+        assert_eq!(resolve(None, Some("es-419")), spanish());
     }
 
     #[test]
@@ -207,22 +248,56 @@ mod tests {
         );
 
         assert_eq!(
-            LanguagePreference::Explicit(Language::English).as_storage_str(),
+            LanguagePreference::Explicit(Language::ENGLISH).as_storage_str(),
             "en"
         );
         assert_eq!(
             LanguagePreference::from_storage_str("en"),
-            LanguagePreference::Explicit(Language::English)
+            LanguagePreference::Explicit(Language::ENGLISH)
         );
 
         assert_eq!(
-            LanguagePreference::Explicit(Language::Spanish).as_storage_str(),
+            LanguagePreference::Explicit(spanish()).as_storage_str(),
             "es"
         );
         assert_eq!(
             LanguagePreference::from_storage_str("es"),
-            LanguagePreference::Explicit(Language::Spanish)
+            LanguagePreference::Explicit(spanish())
         );
+    }
+
+    #[test]
+    fn available_contains_en_and_es_with_en_first() {
+        let available = Language::available();
+
+        assert_eq!(available[0].as_storage_str(), "en");
+        assert!(
+            available
+                .iter()
+                .any(|language| language.as_storage_str() == "es")
+        );
+    }
+
+    #[test]
+    fn from_storage_str_round_trips_available_languages() {
+        assert_eq!(Language::from_storage_str("en"), Some(Language::ENGLISH));
+        assert_eq!(Language::from_storage_str("es"), Some(spanish()));
+        assert_eq!(Language::from_storage_str("zz"), None);
+    }
+
+    #[test]
+    fn from_storage_str_empty_resolves_to_system_preference() {
+        assert_eq!(Language::from_storage_str(""), None);
+        assert_eq!(
+            LanguagePreference::from_storage_str(""),
+            LanguagePreference::System
+        );
+    }
+
+    #[test]
+    fn native_name_returns_the_language_own_name() {
+        assert_eq!(Language::ENGLISH.native_name(), "English");
+        assert_eq!(spanish().native_name(), "Español");
     }
 
     fn flatten_catalog_keys(value: &serde_yaml::Value, prefix: String, out: &mut Vec<String>) {
