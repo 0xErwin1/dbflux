@@ -13,8 +13,8 @@ Este documento es la referencia orientada a humanos. El skill automatizado
 | Canal       | Branch de origen | Patrón de tag       | Tipo de GitHub release | Construido por |
 | ----------- | ---------------- | ------------------- | ---------------------- | -------------- |
 | **nightly** | `main` HEAD      | `nightly` (rolling) | prerelease             | Cron — diario  |
-| **rc**      | `release/vX.Y`   | `vX.Y.Z-rc.N`       | prerelease             | Push del tag   |
-| **stable**  | `release/vX.Y`   | `vX.Y.Z`            | published              | Push del tag   |
+| **rc**      | `release/vX.Y`   | `vX.Y.Z-rc.N`       | prerelease             | Tag push       |
+| **stable**  | `release/vX.Y`   | `vX.Y.Z`            | published              | Tag push       |
 
 El canal `-dev.N` está **retirado**. Nightly lo reemplaza. Los tags `-dev.N`
 antiguos permanecen en GitHub pero no se crean nuevos.
@@ -321,11 +321,11 @@ git log --grep='cherry picked from' release/vX.Y
 
 ## Canales Downstream
 
-| Tipo de tag     | GitHub Release | AUR         | Nix flake (este repo)                                      | nixpkgs (futuro) |
-| --------------- | -------------- | ----------- | ---------------------------------------------------------- | ---------------- |
-| nightly         | prerelease     | se omite    | auto-fijado — `#dbflux-nightly` en la ref nightly          | se omite         |
-| `-rc.N`         | prerelease     | se omite    | actualiza el `release-info` de la release branch y de main | se omite         |
-| Stable `vX.Y.Z` | published      | bump + push | actualiza el `release-info` de la release branch y de main | bump + PR        |
+| Tipo de tag     | GitHub Release | AUR         | Nix flake (este repo)                             | nixpkgs (futuro) |
+| --------------- | -------------- | ----------- | ------------------------------------------------- | ---------------- |
+| nightly         | prerelease     | skip        | auto-fijado — `#dbflux-nightly` en la ref nightly | skip             |
+| `-rc.N`         | prerelease     | skip        | bump release branch's + main's `release-info`     | skip             |
+| Stable `vX.Y.Z` | published      | bump + push | bump release branch's + main's `release-info`     | bump + PR        |
 
 ### AUR
 
