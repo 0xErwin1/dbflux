@@ -516,14 +516,14 @@ así la escritura funciona con normalidad.)
 | Teclas                                        | Acción                                     |
 | --------------------------------------------- | ------------------------------------------ |
 | `Ctrl+h` / `Ctrl+k` / `Ctrl+l`                | Enfocar panel izquierda / arriba / derecha |
-| `Ctrl+j`                                      | Enfocar la toolbar                         |
+| `Ctrl+j`                                      | Focus toolbar                              |
 | `j` / `k` (o `Down` / `Up`)                   | Fila siguiente / anterior                  |
 | `h` / `l` (o `Left` / `Right`)                | Columna izquierda / derecha                |
 | `g` / `Shift+g` (o `Home` / `End`)            | Primera / última fila                      |
 | `Ctrl+d` / `Ctrl+u` (o `PageDown` / `PageUp`) | Página abajo / arriba                      |
 | `]` / `[`                                     | Página siguiente / anterior de resultados  |
 | `Ctrl+e` / `Cmd+e`                            | Exportar resultados                        |
-| `f`                                           | Enfocar la toolbar                         |
+| `f`                                           | Focus toolbar                              |
 | `/`                                           | Enfocar búsqueda/filtro                    |
 | `x`                                           | Eliminar fila                              |
 | `r`                                           | Renombrar / editar                         |
