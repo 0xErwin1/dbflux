@@ -527,10 +527,10 @@ audit category para la que no tiene permiso.
 | ---------------- | ------------------------------------------------------------------------------------------------------------------------- |
 | `actor_type`     | Siempre `ExternalDriver` o `ExternalAuthProvider`                                                                         |
 | `source_id`      | Siempre `ExternalDriver` / `ExternalAuthProvider` con el `socket_id` registrado                                           |
-| `actor_id`       | Siempre `rpc:<socket_id>`                                                                                                 |
-| `connection_id`  | Provisto por el host desde el contexto de sesión (puede ser `None`)                                                       |
-| `database_name`  | Provisto por el host desde el contexto de sesión (puede ser `None`)                                                       |
-| `driver_id`      | Siempre `rpc:<socket_id>`                                                                                                 |
+| `actor_id`       | Always `rpc:<socket_id>`                                                                                                  |
+| `connection_id`  | Host-supplied from session context (may be `None`)                                                                        |
+| `database_name`  | Host-supplied from session context (may be `None`)                                                                        |
+| `driver_id`      | Always `rpc:<socket_id>`                                                                                                  |
 | `correlation_id` | Generado por el host; uno por sesión para drivers, uno por request para auth providers                                    |
 | `ts_ms`          | Suministrado por el servicio, pero limitado si la desviación respecto al reloj de pared del host supera los cinco minutos |
 
