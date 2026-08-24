@@ -264,7 +264,7 @@ permanece visible todo el tiempo.
 Las mutaciones están sujetas a una política que combina el estado de solo
 lectura de la conexión y el contexto del actor:
 
-| Política          | Efecto                                                                |
+| Policy            | Efecto                                                                |
 | ----------------- | --------------------------------------------------------------------- |
 | Allowed           | La mutación puede ejecutarse.                                         |
 | Read-only         | La ejecución está bloqueada (por ejemplo, un perfil de solo lectura). |
@@ -516,14 +516,14 @@ así la escritura funciona con normalidad.)
 | Teclas                                        | Acción                                     |
 | --------------------------------------------- | ------------------------------------------ |
 | `Ctrl+h` / `Ctrl+k` / `Ctrl+l`                | Enfocar panel izquierda / arriba / derecha |
-| `Ctrl+j`                                      | Focus toolbar                              |
+| `Ctrl+j`                                      | Enfocar la toolbar                         |
 | `j` / `k` (o `Down` / `Up`)                   | Fila siguiente / anterior                  |
 | `h` / `l` (o `Left` / `Right`)                | Columna izquierda / derecha                |
 | `g` / `Shift+g` (o `Home` / `End`)            | Primera / última fila                      |
 | `Ctrl+d` / `Ctrl+u` (o `PageDown` / `PageUp`) | Página abajo / arriba                      |
 | `]` / `[`                                     | Página siguiente / anterior de resultados  |
 | `Ctrl+e` / `Cmd+e`                            | Exportar resultados                        |
-| `f`                                           | Focus toolbar                              |
+| `f`                                           | Enfocar la toolbar                         |
 | `/`                                           | Enfocar búsqueda/filtro                    |
 | `x`                                           | Eliminar fila                              |
 | `r`                                           | Renombrar / editar                         |
