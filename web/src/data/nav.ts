@@ -49,6 +49,7 @@ export const DOCS_SECTIONS: readonly DocsSection[] = [
     title: 'Contributing',
     entries: [
       'contributing',
+      'security',
       'architecture',
       'driver_authoring',
       'driver_rpc_protocol',
@@ -79,6 +80,7 @@ export const DOC_TITLES: Readonly<Record<string, string>> = {
   release: 'Release process',
   architecture: 'Architecture',
   contributing: 'Contributing',
+  security: 'Security',
   'drivers/postgres': 'PostgreSQL',
   'drivers/mysql': 'MySQL / MariaDB',
   'drivers/mssql': 'SQL Server',
@@ -137,6 +139,7 @@ export function routeForRepoPath(
 
   if (path === 'ARCHITECTURE.md') return docsUrl('architecture', versionPrefix, locale);
   if (path === 'CONTRIBUTING.md') return docsUrl('contributing', versionPrefix, locale);
+  if (path === 'SECURITY.md') return docsUrl('security', versionPrefix, locale);
 
   return `${REPO}/blob/main/${path}`;
 }
@@ -157,6 +160,7 @@ export function titleForRepoPath(path: string): string | null {
 
   if (path === 'ARCHITECTURE.md') return DOC_TITLES.architecture ?? null;
   if (path === 'CONTRIBUTING.md') return DOC_TITLES.contributing ?? null;
+  if (path === 'SECURITY.md') return DOC_TITLES.security ?? null;
 
   return null;
 }
