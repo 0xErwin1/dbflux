@@ -141,14 +141,14 @@ Las seis capas se ejecutan dentro del proceso del servidor en cada solicitud
 | Scripts         | `update_script`           | write                                  | Sobrescribe un script guardado existente                                                                             |
 | Scripts         | `delete_script`           | admin                                  | Elimina permanentemente un script                                                                                    |
 | Scripts         | `execute_script`          | computed                               | Ejecuta un script guardado contra una conexión. La clasificación se deriva del cuerpo del script                     |
-| Aprobación      | `request_execution`       | admin                                  | Envía una mutación para aprobación humana antes de ejecutarla                                                        |
-| Aprobación      | `list_pending_executions` | read                                   | Muestra todas las ejecuciones pendientes de aprobación                                                               |
-| Aprobación      | `get_pending_execution`   | read                                   | Obtiene los detalles de una ejecución pendiente específica                                                           |
-| Aprobación      | `approve_execution`       | admin                                  | Aprueba una mutación pendiente (solo admin)                                                                          |
-| Aprobación      | `reject_execution`        | admin                                  | Rechaza y descarta una mutación pendiente (solo admin)                                                               |
-| Auditoría       | `query_audit_logs`        | read                                   | Busca y filtra el audit trail                                                                                        |
-| Auditoría       | `get_audit_entry`         | read                                   | Obtiene una entrada específica del audit log por ID                                                                  |
-| Auditoría       | `export_audit_logs`       | read                                   | Descarga entradas del audit log como CSV o JSON                                                                      |
+| Approval        | `request_execution`       | admin                                  | Envía una mutación para aprobación humana antes de ejecutarla                                                        |
+| Approval        | `list_pending_executions` | read                                   | Muestra todas las ejecuciones pendientes de aprobación                                                               |
+| Approval        | `get_pending_execution`   | read                                   | Obtiene los detalles de una ejecución pendiente específica                                                           |
+| Approval        | `approve_execution`       | admin                                  | Aprueba una mutación pendiente (solo admin)                                                                          |
+| Approval        | `reject_execution`        | admin                                  | Rechaza y descarta una mutación pendiente (solo admin)                                                               |
+| Audit           | `query_audit_logs`        | read                                   | Busca y filtra el audit trail                                                                                        |
+| Audit           | `get_audit_entry`         | read                                   | Obtiene una entrada específica del audit log por ID                                                                  |
+| Audit           | `export_audit_logs`       | read                                   | Descarga entradas del audit log como CSV o JSON                                                                      |
 
 Tools diferidas (rechazadas explícitamente en tiempo de solicitud en v1):
 
