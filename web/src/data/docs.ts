@@ -2,6 +2,7 @@ import type { CollectionEntry } from 'astro:content';
 import { DEFAULT_LOCALE, LOCALES } from '../i18n';
 import type { Locale } from '../i18n';
 import { splitContentEntryId } from '../i18n/locale-registry.mjs';
+import { CURRENT, docsRoute } from './versions';
 import { DOCS_SECTIONS, docTitle } from './nav';
 
 export type DocTitlesByLocale = Readonly<Partial<Record<Locale, Readonly<Record<string, string>>>>>;
@@ -123,6 +124,86 @@ export function repoPathFor(filePath: string, versionId: string): string {
   const prefix = `.versions/${versionId}/`;
 
   return filePath.startsWith(prefix) ? filePath.slice(prefix.length) : filePath;
+}
+
+export interface DocRoutePolicy {
+  readonly canonicalPath?: string;
+  readonly indexable: boolean;
+  readonly alternateLocales: readonly Locale[];
+}
+
+const routePath = (versionId: string, path: string, locale: Locale): string =>
+  `/${docsRoute(versionId, path, locale)}/`.replace(/\/+/g, '/');
+
+export const sitemapPathsFor = (
+  facts: readonly { readonly path: string; readonly locales: readonly string[] }[],
+): Set<string> =>
+  new Set([
+    ...LOCALES.map((locale) => routePath(CURRENT.id, '', locale)),
+    ...facts.flatMap(({ path, locales }) =>
+      locales
+        .filter((locale): locale is Locale => (LOCALES as readonly string[]).includes(locale))
+        .map((locale) => routePath(CURRENT.id, path, locale)),
+    ),
+  ]);
+
+export function docRoutePolicy(
+  entries: readonly CollectionEntry<'docs'>[],
+  versionId: string,
+  path: string | undefined,
+  locale: Locale,
+  translated: boolean,
+): DocRoutePolicy {
+  const page = path ?? '';
+  const currentLocales =
+    path === undefined
+      ? LOCALES
+      : LOCALES.filter((target) =>
+          entries.some((entry) => {
+            const id = splitId(entry.id);
+            return id.version === CURRENT.id && id.locale === target && id.path === page;
+          }),
+        );
+  const indexable = versionId === CURRENT.id && translated;
+  const canonicalLocale = currentLocales.includes(locale)
+    ? locale
+    : currentLocales.includes(DEFAULT_LOCALE)
+      ? DEFAULT_LOCALE
+      : undefined;
+  const canonicalPath = indexable
+    ? routePath(versionId, page, locale)
+    : canonicalLocale
+      ? routePath(CURRENT.id, page, canonicalLocale)
+      : undefined;
+  const alternateLocales = indexable ? currentLocales : [];
+  return { canonicalPath, indexable, alternateLocales };
+}
+
+/** Extract only human prose from markdown; code, headings, commands, and navigation cannot become metadata. */
+export function safeDescription(body: string | undefined): string | undefined {
+  if (!body) return undefined;
+  let fenced = false;
+  for (const raw of body.split('\n')) {
+    const line = raw.trim();
+    if (/^(?:`{3,}|~{3,})/.test(line)) {
+      fenced = !fenced;
+      continue;
+    }
+    if (
+      fenced ||
+      !line ||
+      /^(?:#{1,6}\s|[-*+]\s|\d+[.)]\s|>|---+$|<[^>]+>$)/.test(line) ||
+      /^\$\s|^(?:curl|wget|sudo|npm|pnpm|cargo|git)\b/.test(line) ||
+      line.includes('|')
+    )
+      continue;
+    const prose = line
+      .replace(/[`*_\[\]]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (prose.length >= 24) return prose.slice(0, 180).replace(/\s+\S*$/, '');
+  }
+  return undefined;
 }
 
 export { docTitle };

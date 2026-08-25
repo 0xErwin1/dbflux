@@ -18,6 +18,10 @@ import { ORIGIN } from '../data/site';
  * what the live URL returns before concluding a rule is in effect.
  */
 const BODY = [
+  'User-agent: Google-Extended',
+  'Content-Signal: search=yes,ai-train=no,use=reference',
+  'Allow: /',
+  '',
   'User-agent: *',
   'Content-Signal: search=yes,ai-train=no,use=reference',
   'Allow: /',

@@ -4,7 +4,7 @@ import Base from '../../layouts/Base.astro';
 import DocsLayout from '../../layouts/DocsLayout.astro';
 import DocsIndex from '../../components/DocsIndex.astro';
 import Landing from '../../components/Landing.astro';
-import { pathsForVersion } from '../../data/docs';
+import { docRoutePolicy, pathsForVersion } from '../../data/docs';
 import { CURRENT } from '../../data/versions';
 import { DOCS_AT_ROOT } from '../../data/site';
 import { DEFAULT_LOCALE, LOCALES } from '../../i18n';
@@ -18,7 +18,9 @@ export function getStaticPaths() {
 }
 
 const { locale } = Astro.props as { locale: Locale };
-const available = DOCS_AT_ROOT ? pathsForVersion(await getCollection('docs'), CURRENT.id) : [];
+const docs = await getCollection('docs');
+const available = DOCS_AT_ROOT ? pathsForVersion(docs, CURRENT.id) : [];
+const policy = docRoutePolicy(docs, CURRENT.id, undefined, locale, true);
 ---
 
 {
@@ -30,6 +32,7 @@ const available = DOCS_AT_ROOT ? pathsForVersion(await getCollection('docs'), CU
       description="Guides for installing, connecting, querying, charting and governing DBFlux."
       locale={locale}
       translated
+      policy={policy}
     >
       <DocsIndex versionId={CURRENT.id} available={available} locale={locale} />
     </DocsLayout>

@@ -1,8 +1,11 @@
 import { dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import manifest from './.versions/manifest.json';
 import { defineConfig } from 'astro/config';
 import sitemap from '@astrojs/sitemap';
 import { routeForRepoPath, titleForRepoPath } from './src/data/nav';
+import { sitemapPathsFor } from './src/data/docs';
+import { CURRENT } from './src/data/versions';
 import { DOCS_MODE, ORIGIN } from './src/data/site';
 import { hostRedirects } from './src/integrations/host-redirects';
 import { DEFAULT_LOCALE } from './src/i18n';
@@ -10,6 +13,9 @@ import type { Locale } from './src/i18n';
 import { LOCALE_REGISTRY, localeForRepoPath } from './src/i18n/locale-registry.mjs';
 
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
+const sitemapPaths = sitemapPathsFor(
+  manifest.find((entry) => entry.id === CURRENT.id)?.sourceFacts ?? [],
+);
 
 /** Collect the text of a node back into a plain string. */
 function textOf(node: any): string {
@@ -170,17 +176,7 @@ export default defineConfig({
   },
   integrations: [
     sitemap({
-      // `/about/` belongs to the site host and says so in its canonical tag.
-      // The documentation build emits it only because one source tree builds
-      // both hosts, so keep it out of this host's sitemap.
-      filter: (page) => !(DOCS_MODE === 'docs' && new URL(page).pathname.startsWith('/about')),
-      // Mirrors `i18n.locales` above so the generator can pair each page with
-      // its counterpart in the other locale and emit hreflang alternates,
-      // matching `routing: 'manual'`'s unprefixed default locale.
-      i18n: {
-        defaultLocale: DEFAULT_LOCALE,
-        locales: Object.fromEntries(LOCALE_REGISTRY.map(({ id }) => [id, id])),
-      },
+      filter: (page) => DOCS_MODE !== 'docs' || sitemapPaths.has(new URL(page).pathname),
     }),
     hostRedirects(),
   ],

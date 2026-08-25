@@ -28,9 +28,13 @@ concurrency:
 
 jobs:
   build:
-    name: Build the site
+    name: Production ${{ matrix.mode }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [site, docs]
 
     steps:
       - uses: actions/checkout@v4
@@ -59,11 +63,15 @@ jobs:
 
       - name: Types
         working-directory: web
-        run: pnpm check
+        run: DOCS_MODE=${{ matrix.mode }} pnpm check
 
       - name: Build
         working-directory: web
-        run: pnpm build
+        run: pnpm build:${{ matrix.mode }}
+
+      - name: Audit distribution
+        working-directory: web
+        run: pnpm audit:dist --mode ${{ matrix.mode }}
 
       - name: Check for links to pages that do not exist
         working-directory: web
