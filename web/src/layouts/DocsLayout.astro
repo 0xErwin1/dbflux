@@ -2,10 +2,9 @@
 import Base from '../layouts/Base.astro';
 import DocsTree from '../components/DocsTree.astro';
 import VersionPicker from '../components/VersionPicker.astro';
-import type { DocTitlesByLocale } from '../data/docs';
+import type { DocRoutePolicy, DocTitlesByLocale } from '../data/docs';
 import type { DocsVersion } from '../data/versions';
 import { CURRENT, docsHref, versionHome, versionLabel } from '../data/versions';
-import { docsUrl } from '../data/site';
 import { DEFAULT_LOCALE, localeFromPathname, t } from '../i18n';
 import type { Locale } from '../i18n';
 import { searchIndexPath } from '../i18n/locale-registry.mjs';
@@ -23,7 +22,7 @@ interface Props {
   available: readonly string[];
   headings?: readonly Heading[];
   title: string;
-  description: string;
+  description?: string;
   editPath?: string;
   locale?: Locale;
   /**
@@ -32,10 +31,8 @@ interface Props {
    * untranslated notice below and forces `noindex` regardless of `version`.
    */
   translated?: boolean;
-  /** Existing translated document H1s, indexed by canonical locale id. */
   titlesByLocale?: DocTitlesByLocale;
-  /** Locales with real content for this exact document. */
-  alternateLocales?: readonly Locale[];
+  policy: DocRoutePolicy;
 }
 
 const {
@@ -49,28 +46,12 @@ const {
   locale = localeFromPathname(Astro.url.pathname),
   translated = false,
   titlesByLocale = {},
-  alternateLocales,
+  policy,
 } = Astro.props;
 const onThisPage = headings.filter((heading) => heading.depth === 2);
-
-const isCurrent = version.id === CURRENT.id;
-const suffix = isCurrent ? '' : ` (${versionLabel(version)})`;
-const searchIndex = searchIndexPath(version.id, CURRENT.id, locale, DEFAULT_LOCALE);
-
-/**
- * Older and unreleased versions point at the current release, so a search engine
- * ranks the version most readers are running rather than whichever it crawled.
- * The version canonical and the locale prefix are independent axes, so the
- * active locale is passed through rather than always resolving to English.
- */
-const canonicalPath = isCurrent ? undefined : docsUrl(currentPath ?? '', undefined, locale);
-
-/**
- * A non-English page that fell back to the English body (no Spanish sibling
- * yet) must stay out of search results: it would otherwise index as a
- * near-duplicate of the canonical English page under a different URL.
- */
 const showsFallback = locale !== DEFAULT_LOCALE && !translated;
+const suffix = version.id === CURRENT.id ? '' : ` (${versionLabel(version)})`;
+const searchIndex = searchIndexPath(version.id, CURRENT.id, locale, DEFAULT_LOCALE);
 ---
 
 <Base
@@ -78,12 +59,11 @@ const showsFallback = locale !== DEFAULT_LOCALE && !translated;
   description={description}
   current="docs"
   wide
-  noindex={version.noindex || showsFallback}
-  canonicalPath={canonicalPath}
+  noindex={!policy.indexable}
+  canonicalPath={policy.canonicalPath ?? null}
   searchIndex={searchIndex}
   locale={locale}
-  translated={translated}
-  alternateLocales={alternateLocales}
+  alternateLocales={policy.alternateLocales}
 >
   <div class="docs">
     <button

@@ -4,7 +4,7 @@ import Base from '../layouts/Base.astro';
 import DocsLayout from '../layouts/DocsLayout.astro';
 import DocsIndex from '../components/DocsIndex.astro';
 import Landing from '../components/Landing.astro';
-import { pathsForVersion } from '../data/docs';
+import { docRoutePolicy, pathsForVersion } from '../data/docs';
 import { CURRENT } from '../data/versions';
 import { DOCS_AT_ROOT } from '../data/site';
 
@@ -12,7 +12,9 @@ import { DOCS_AT_ROOT } from '../data/site';
  * The root is whatever this build is for: the landing page normally, and the
  * documentation index when the documentation has an origin of its own.
  */
-const available = DOCS_AT_ROOT ? pathsForVersion(await getCollection('docs'), CURRENT.id) : [];
+const docs = await getCollection('docs');
+const available = DOCS_AT_ROOT ? pathsForVersion(docs, CURRENT.id) : [];
+const policy = docRoutePolicy(docs, CURRENT.id, undefined, 'en', true);
 ---
 
 {
@@ -23,6 +25,7 @@ const available = DOCS_AT_ROOT ? pathsForVersion(await getCollection('docs'), CU
       title="Documentation"
       description="Guides for installing, connecting, querying, charting and governing DBFlux."
       translated
+      policy={policy}
     >
       <DocsIndex versionId={CURRENT.id} available={available} />
     </DocsLayout>

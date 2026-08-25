@@ -2,8 +2,15 @@
 import { getCollection, render } from 'astro:content';
 import DocsLayout from '../layouts/DocsLayout.astro';
 import DocsIndex from '../components/DocsIndex.astro';
-import { docTitle, localizedTitlesFor, pathsForVersion, repoPathFor } from '../data/docs';
-import { CURRENT, VERSIONS, docsRoute, versionById, versionLabel } from '../data/versions';
+import {
+  docRoutePolicy,
+  docTitle,
+  localizedTitlesFor,
+  pathsForVersion,
+  repoPathFor,
+  safeDescription,
+} from '../data/docs';
+import { VERSIONS, docsRoute, versionById, versionLabel } from '../data/versions';
 import { DOCS_MODE } from '../data/site';
 import { DEFAULT_LOCALE, LOCALES } from '../i18n';
 import type { Locale } from '../i18n';
@@ -31,8 +38,9 @@ export async function getStaticPaths() {
 
   const docs = await getCollection('docs');
   const pages = buildLocalizedDocumentMatrix(docs).map(
-    ({ version, path, locale, entry, translated, alternateLocales }) => {
+    ({ version, path, locale, entry, translated }) => {
       const canonicalLocale = locale as Locale;
+      const policy = docRoutePolicy(docs, version, path, canonicalLocale, translated);
 
       return {
         params: { path: docsRoute(version, path, canonicalLocale) },
@@ -42,7 +50,7 @@ export async function getStaticPaths() {
           doc: entry,
           locale: canonicalLocale,
           translated,
-          alternateLocales: alternateLocales as Locale[],
+          policy,
         },
       };
     },
@@ -52,10 +60,20 @@ export async function getStaticPaths() {
   // rendered entirely from the chrome dictionary, so it exists in every locale
   // the same way `/` and `/es/` already do.
   const indexes = LOCALES.flatMap((locale) =>
-    VERSIONS.map((version) => ({
-      params: { path: docsRoute(version.id, '', locale) },
-      props: { versionId: version.id, path: undefined, doc: undefined, locale, translated: true },
-    })).filter(
+    VERSIONS.map((version) => {
+      const policy = docRoutePolicy(docs, version.id, undefined, locale, true);
+      return {
+        params: { path: docsRoute(version.id, '', locale) },
+        props: {
+          versionId: version.id,
+          path: undefined,
+          doc: undefined,
+          locale,
+          translated: true,
+          policy,
+        },
+      };
+    }).filter(
       // With the documentation at the root of its own host, the current
       // release's index is `/` (or `/es/`), which `index.astro` (or
       // `es/index.astro`) already owns.
@@ -66,14 +84,12 @@ export async function getStaticPaths() {
   return [...pages, ...indexes];
 }
 
-const { versionId, path, doc, locale, translated, alternateLocales } = Astro.props;
+const { versionId, path, doc, locale, translated, policy } = Astro.props;
 
 const version = versionById(versionId)!;
 const allDocs = await getCollection('docs');
 const available = pathsForVersion(allDocs, versionId);
 const titlesByLocale = localizedTitlesFor(allDocs, versionId);
-const isCurrent = versionId === CURRENT.id;
-
 const rendered = doc ? await render(doc) : undefined;
 
 // A translated page uses its own H1; a fallback keeps the English rail title.
@@ -81,16 +97,9 @@ const localizedTitle =
   locale !== DEFAULT_LOCALE && translated && path ? titlesByLocale[locale]?.[path] : undefined;
 const title = path ? (localizedTitle ?? docTitle(path)) : 'Documentation';
 
-const firstParagraph = doc?.body
-  ?.split('\n\n')
-  .map((block) => block.trim())
-  .find((block) => block.length > 0 && !block.startsWith('#'));
-
 const description = doc
-  ? firstParagraph
-    ? firstParagraph.replace(/\s+/g, ' ').slice(0, 180)
-    : `${title} — DBFlux documentation.`
-  : isCurrent
+  ? safeDescription(doc.body)
+  : policy.indexable
     ? 'Guides for installing, connecting, querying, charting and governing DBFlux.'
     : `DBFlux ${versionLabel(version)} documentation.`;
 ---
@@ -105,7 +114,7 @@ const description = doc
   editPath={doc?.filePath ? repoPathFor(doc.filePath, versionId) : undefined}
   locale={locale}
   translated={translated}
-  alternateLocales={alternateLocales}
+  policy={policy}
   titlesByLocale={titlesByLocale}
 >
   {

@@ -18,7 +18,8 @@
     "build:docs": "DOCS_MODE=docs pnpm run build",
     "dev:docs": "DOCS_MODE=docs pnpm run dev",
     "deploy:site": "pnpm run build:site && wrangler deploy",
-    "deploy:docs": "pnpm run build:docs && wrangler deploy --config wrangler.docs.jsonc"
+    "deploy:docs": "pnpm run build:docs && wrangler deploy --config wrangler.docs.jsonc",
+    "audit:dist": "node scripts/audit-dist.mjs"
   },
   "dependencies": {
     "@astrojs/markdown-remark": "^7.2.3",

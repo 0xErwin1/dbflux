@@ -12,7 +12,11 @@
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { isDocsRepoPath } from '../src/i18n/locale-registry.mjs';
+import {
+  contentEntryId,
+  isDocsRepoPath,
+  splitContentEntryId,
+} from '../src/i18n/locale-registry.mjs';
 
 const WEB = new URL('..', import.meta.url).pathname;
 const REPO = new URL('../..', import.meta.url).pathname;
@@ -105,8 +109,16 @@ export function fetchDocs(versions) {
     const version = workspaceVersion(ref);
     const { commit, date } = buildOf(ref);
 
+    const localesByPath = new Map();
+    for (const file of files) {
+      const source = splitContentEntryId(contentEntryId(`${id}/${file}`));
+      const locales = localesByPath.get(source.path) ?? [];
+      if (!locales.includes(source.locale)) locales.push(source.locale);
+      localesByPath.set(source.path, locales);
+    }
+    const sourceFacts = [...localesByPath].map(([path, locales]) => ({ path, locales }));
     console.log(`  docs: ${id} <- ${ref} @ ${version} (${commit}, ${files.length} files)`);
-    done.push({ id, ref, version, commit, date });
+    done.push({ id, ref, version, commit, date, sourceFacts });
   }
 
   writeFileSync(join(VERSIONS_DIR, 'manifest.json'), JSON.stringify(done, null, 2));
