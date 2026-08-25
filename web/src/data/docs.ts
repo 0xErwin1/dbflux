@@ -1,37 +1,29 @@
 import type { CollectionEntry } from 'astro:content';
+import { DEFAULT_LOCALE, LOCALES } from '../i18n';
 import type { Locale } from '../i18n';
+import { splitContentEntryId } from '../i18n/locale-registry.mjs';
 import { DOCS_SECTIONS, docTitle } from './nav';
 
-/**
- * The nav/rail/breadcrumb label for a page in `locale`.
- *
- * Spanish uses the translated doc's own H1 when one exists (`esTitles`);
- * otherwise — untranslated pages, or the English locale — it falls back to
- * the fixed `DOC_TITLES` rail label so navigation never renders a blank spot
- * for a page that has not been translated yet.
- */
+export type DocTitlesByLocale = Readonly<Partial<Record<Locale, Readonly<Record<string, string>>>>>;
+
+/** The translated H1 when it exists, otherwise the stable English rail label. */
 export function localizedDocTitle(
   id: string,
   locale: Locale,
-  esTitles: Readonly<Record<string, string>>,
+  titlesByLocale: DocTitlesByLocale,
 ): string {
-  return (locale === 'es' ? esTitles[id] : undefined) ?? docTitle(id);
+  return (locale === DEFAULT_LOCALE ? undefined : titlesByLocale[locale]?.[id]) ?? docTitle(id);
 }
 
-/**
- * Split a collection id of the form `<version>/<path>`, or its Spanish
- * counterpart `<version>/es/<path>` (see `content.config.ts`). The locale
- * segment is reported separately so callers never have to special-case it out
- * of `path` themselves.
- */
+/** Split a collection id while preserving the registry's canonical locale id. */
 export function splitId(id: string): { version: string; locale: Locale; path: string } {
-  const separator = id.indexOf('/');
-  const version = id.slice(0, separator);
-  const rest = id.slice(separator + 1);
+  const parsed = splitContentEntryId(id);
 
-  if (rest.startsWith('es/')) return { version, locale: 'es', path: rest.slice(3) };
+  if (!(LOCALES as readonly string[]).includes(parsed.locale)) {
+    throw new Error(`Content entry "${id}" uses unregistered locale "${parsed.locale}"`);
+  }
 
-  return { version, locale: 'en', path: rest };
+  return { ...parsed, locale: parsed.locale as Locale };
 }
 
 /**
@@ -95,26 +87,23 @@ export function firstHeading(body: string | undefined): string | undefined {
   return match?.[1].trim();
 }
 
-/**
- * Spanish page titles, sourced from each translated doc's own H1.
- *
- * The English `DOC_TITLES` dictionary in `nav.ts` is a fixed rail label, not
- * the page's own heading, so it never doubles as the Spanish title — pages
- * without an `es` sibling are simply absent from the returned map and callers
- * fall back to `docTitle(path)`.
- */
-export function esTitlesFor(
+/** Localized page titles, sourced only from translated documents that exist. */
+export function localizedTitlesFor(
   entries: readonly CollectionEntry<'docs'>[],
   versionId: string,
-): Record<string, string> {
-  const titles: Record<string, string> = {};
+): DocTitlesByLocale {
+  const titles: Partial<Record<Locale, Record<string, string>>> = {};
 
   for (const entry of entries) {
     const parsed = splitId(entry.id);
-    if (parsed.version !== versionId || parsed.locale !== 'es') continue;
+    if (parsed.version !== versionId || parsed.locale === DEFAULT_LOCALE) continue;
 
     const heading = firstHeading(entry.body);
-    if (heading) titles[parsed.path] = heading;
+    if (!heading) continue;
+
+    const localeTitles = titles[parsed.locale] ?? {};
+    localeTitles[parsed.path] = heading;
+    titles[parsed.locale] = localeTitles;
   }
 
   return titles;

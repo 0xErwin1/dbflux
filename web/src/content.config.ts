@@ -1,5 +1,6 @@
 import { defineCollection } from 'astro:content';
 import { glob } from 'astro/loaders';
+import { contentEntryId, docsRepoPatterns } from './i18n/locale-registry.mjs';
 
 /**
  * Documentation for every published version.
@@ -13,35 +14,21 @@ import { glob } from 'astro/loaders';
  * architecture and contributing guides are read from the repository too, so a
  * change in behaviour and the paragraph describing it stay in one commit.
  *
- * A Spanish sibling lives at `docs/es/<page>.md`. Its generated id naturally
- * becomes `<version>/es/<page>` — the leading `docs/` strip below leaves the
- * `es/` segment in place — so no extra id logic is needed to keep English and
- * Spanish entries apart.
+ * Localized siblings live in the explicit docs directories from the locale
+ * registry. Their generated ids use the canonical locale id, even when its
+ * filesystem directory has different casing or spelling.
  */
 const docs = defineCollection({
   loader: glob({
     base: '.versions',
     pattern: [
-      '*/docs/*.md',
-      '*/docs/es/*.md',
-      '*/docs/es/drivers/*.md',
+      ...docsRepoPatterns().map((pattern) => `*/${pattern}`),
       '*/ARCHITECTURE.md',
       '*/CONTRIBUTING.md',
       '*/SECURITY.md',
       '*/crates/dbflux_driver_*/README.md',
     ],
-    generateId: ({ entry }) => {
-      const [version, ...rest] = entry.split('/');
-      const path = rest.join('/');
-
-      const driver = path.match(/^crates\/dbflux_driver_([^/]+)\/README\.md$/);
-      if (driver) return `${version}/drivers/${driver[1]}`;
-
-      return `${version}/${path
-        .replace(/^docs\//, '')
-        .replace(/\.md$/, '')
-        .toLowerCase()}`;
-    },
+    generateId: ({ entry }) => contentEntryId(entry),
   }),
 });
 

@@ -7,6 +7,7 @@ import { DOCS_MODE, ORIGIN } from './src/data/site';
 import { hostRedirects } from './src/integrations/host-redirects';
 import { DEFAULT_LOCALE } from './src/i18n';
 import type { Locale } from './src/i18n';
+import { LOCALE_REGISTRY, localeForRepoPath } from './src/i18n/locale-registry.mjs';
 
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 
@@ -29,10 +30,9 @@ function textOf(node: any): string {
  * back to a broken `github.com/.../blob/main/web/.versions/...` link. The
  * per-version mirror root is the correct base for that resolution.
  *
- * The locale is read the same way: `docs/es/<page>.md` inside the mirror is
- * the Spanish sibling `content.config.ts` loads under the `es/` id segment.
- * The version is the mirror's own directory name, needed so a link written
- * inside a version-exclusive page (e.g. a driver only shipped in `nightly`)
+ * The locale is derived from the registered localized docs directories inside
+ * the mirror. The version is the mirror's own directory name, needed so a link
+ * written inside a version-exclusive page (e.g. a driver only shipped in `nightly`)
  * resolves within that same version instead of silently falling back to the
  * current release.
  */
@@ -50,7 +50,7 @@ function versionContext(
   const version = afterMarker.slice(0, versionEnd);
   const root = filePath.slice(0, markerIndex + marker.length) + version;
   const repoPath = afterMarker.slice(versionEnd + 1);
-  const locale: Locale = repoPath.startsWith('docs/es/') ? 'es' : 'en';
+  const locale = localeForRepoPath(repoPath) as Locale;
 
   return { root, locale, version };
 }
@@ -164,8 +164,8 @@ function rehypeMermaid() {
 export default defineConfig({
   site: ORIGIN,
   i18n: {
-    defaultLocale: 'en',
-    locales: ['en', 'es'],
+    defaultLocale: DEFAULT_LOCALE,
+    locales: LOCALE_REGISTRY.map(({ id }) => id),
     routing: 'manual',
   },
   integrations: [
@@ -178,8 +178,8 @@ export default defineConfig({
       // its counterpart in the other locale and emit hreflang alternates,
       // matching `routing: 'manual'`'s unprefixed default locale.
       i18n: {
-        defaultLocale: 'en',
-        locales: { en: 'en', es: 'es' },
+        defaultLocale: DEFAULT_LOCALE,
+        locales: Object.fromEntries(LOCALE_REGISTRY.map(({ id }) => [id, id])),
       },
     }),
     hostRedirects(),

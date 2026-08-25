@@ -12,15 +12,18 @@
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { isDocsRepoPath } from '../src/i18n/locale-registry.mjs';
 
 const WEB = new URL('..', import.meta.url).pathname;
 const REPO = new URL('../..', import.meta.url).pathname;
 
 export const VERSIONS_DIR = join(WEB, '.versions');
 
-/** Paths every version contributes, matching the collection in content.config.ts. */
-const WANTED =
-  /^(docs\/[^/]+\.md|docs\/es\/[^/]+\.md|docs\/es\/drivers\/[^/]+\.md|ARCHITECTURE\.md|CONTRIBUTING\.md|SECURITY\.md|crates\/dbflux_driver_[^/]+\/README\.md)$/;
+/** Non-document paths every version contributes alongside registered locale docs. */
+const WANTED_REPOSITORY_PATH =
+  /^(ARCHITECTURE\.md|CONTRIBUTING\.md|SECURITY\.md|crates\/dbflux_driver_[^/]+\/README\.md)$/;
+
+const wantedPath = (path) => isDocsRepoPath(path) || WANTED_REPOSITORY_PATH.test(path);
 
 const git = (args) =>
   execFileSync('git', args, { cwd: REPO, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
@@ -34,10 +37,7 @@ const git = (args) =>
  * caught by the caller when there is no network or no remote.
  */
 function readTree(ref) {
-  const list = () =>
-    git(['ls-tree', '-r', '--name-only', ref])
-      .split('\n')
-      .filter((path) => WANTED.test(path));
+  const list = () => git(['ls-tree', '-r', '--name-only', ref]).split('\n').filter(wantedPath);
 
   try {
     return list();

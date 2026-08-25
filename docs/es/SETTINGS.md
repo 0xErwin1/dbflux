@@ -33,13 +33,17 @@ Integration](MCP_AI_INTEGRATION.md).
 | ------------ | ------------------------ | ------- |
 | **Theme**    | Dark, Mirage, Light      | Dark    |
 | **Style**    | Default, Compact         | Default |
-| **Language** | System, English, Spanish | System  |
+| **Language** | System y todos los idiomas con un catálogo de traducción incluido | System  |
 
-System sigue el locale de tu sistema operativo y recurre a English cuando ese
-locale no está soportado. Un cambio de idioma tiene efecto después de reiniciar
-DBFlux, por lo que el control muestra una nota permanente al respecto. Este
-release solo traduce la sección General; el resto de la UI se está convirtiendo
-crate por crate y permanece en English por ahora.
+La lista de idiomas se deriva de los catálogos de traducción incluidos con
+DBFlux: English aparece primero, seguido de los demás idiomas en un orden
+determinista y con sus nombres nativos. System sigue el locale del sistema
+operativo y recurre a English cuando ningún locale incluido coincide de forma no
+ambigua. Un cambio de idioma tiene efecto después de reiniciar DBFlux, por lo que
+el control muestra una nota permanente al respecto. Los catálogos parciales
+recurren a English para el texto general aún no traducido. Este release solo
+traduce la sección General; el resto de la UI se está convirtiendo crate por crate
+y permanece en English por ahora.
 
 ### Inicio y sesión
 

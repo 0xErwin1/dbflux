@@ -22,13 +22,10 @@ interface Props {
   searchIndex?: string;
   /** Active locale. Derived from the URL when the caller does not know it yet. */
   locale?: Locale;
-  /**
-   * Whether this exact page exists in every locale, not just as an English
-   * fallback. Only `true` for `/` and `/es/` today — doc pages get this once
-   * the locale-aware docs pipeline (W2a) can say per page whether a Spanish
-   * translation exists.
-   */
+  /** Whether this page exists in every shipped locale (landing/about compatibility). */
   translated?: boolean;
+  /** Locales with real content for this exact page; fallback routes are excluded. */
+  alternateLocales?: readonly Locale[];
 }
 
 const {
@@ -41,6 +38,7 @@ const {
   searchIndex = '/search-index.json',
   locale = localeFromPathname(Astro.url.pathname),
   translated = false,
+  alternateLocales = translated ? LOCALES : [],
 } = Astro.props;
 // Astro.site is unset when the config fails to load, and a crashed canonical tag
 // should not take the whole page down with it.
@@ -55,18 +53,18 @@ const canonical = canonicalPath?.startsWith('http')
 const socialImage = new URL('/brand/og-card.jpg', ORIGIN).href;
 
 /**
- * hreflang pairs, only for a page the caller has confirmed exists in every
- * locale (`translated`). hreflang requires absolute URLs, so this stays empty
- * without `Astro.site` — same guard as `canonical` above.
+ * hreflang pairs only for locales with real content. hreflang requires absolute
+ * URLs, so this stays empty without `Astro.site` — same guard as `canonical`.
  */
 const alternateHref = (target: Locale) =>
   Astro.site ? new URL(withLocale(Astro.url.pathname, target), Astro.site).href : undefined;
 
-const alternates =
-  translated && Astro.site
-    ? LOCALES.map((target) => ({ hreflang: target, href: alternateHref(target)! }))
-    : [];
-const xDefaultHref = translated ? alternateHref(DEFAULT_LOCALE) : undefined;
+const alternates = Astro.site
+  ? alternateLocales.map((target) => ({ hreflang: target, href: alternateHref(target)! }))
+  : [];
+const xDefaultHref = alternateLocales.includes(DEFAULT_LOCALE)
+  ? alternateHref(DEFAULT_LOCALE)
+  : undefined;
 ---
 
 <!doctype html>

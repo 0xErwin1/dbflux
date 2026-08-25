@@ -1,17 +1,29 @@
 import { en } from './en';
 import { es } from './es';
+import { DEFAULT_LOCALE as REGISTRY_DEFAULT_LOCALE, LOCALE_REGISTRY } from './locale-registry.mjs';
 
-export type Locale = 'en' | 'es';
+const DICTIONARY_MODULES = { en, es };
 
-export const LOCALES: readonly Locale[] = ['en', 'es'];
+export type Locale = keyof typeof DICTIONARY_MODULES;
 
-export const DEFAULT_LOCALE: Locale = 'en';
+const registeredLocaleIds = LOCALE_REGISTRY.map(({ id }) => id);
+const dictionaryLocaleIds = Object.keys(DICTIONARY_MODULES);
+
+if (
+  registeredLocaleIds.length !== dictionaryLocaleIds.length ||
+  registeredLocaleIds.some((id) => !dictionaryLocaleIds.includes(id))
+) {
+  throw new Error('Locale registry and translated dictionaries must declare the same locale ids');
+}
+
+export const LOCALES = registeredLocaleIds as readonly Locale[];
+
+export const DEFAULT_LOCALE = REGISTRY_DEFAULT_LOCALE as Locale;
 
 /** Native display name for each locale, used by the language picker. */
-export const LOCALE_NAMES: Record<Locale, string> = {
-  en: 'English',
-  es: 'Español',
-};
+export const LOCALE_NAMES = Object.fromEntries(
+  LOCALE_REGISTRY.map(({ id, name }) => [id, name]),
+) as Record<Locale, string>;
 
 /**
  * The complete shape of every chrome string the site renders.
@@ -209,7 +221,7 @@ type DotPaths<T, Prefix extends string = ''> = {
 /** Every dot-delimited key path a `Dictionary` exposes, e.g. `"nav.features"`. */
 export type DictionaryKey = DotPaths<Dictionary>;
 
-const DICTIONARIES: Record<Locale, Dictionary> = { en, es };
+const DICTIONARIES: Record<Locale, Dictionary> = DICTIONARY_MODULES;
 
 /** Resolve a dot-delimited key path against the dictionary for `locale`. */
 export function t(locale: Locale, key: DictionaryKey): string {
