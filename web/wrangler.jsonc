@@ -13,9 +13,12 @@
   // `wrangler.docs.jsonc` is the same thing for the documentation host, used
   // when DOCS_MODE splits the site across two origins.
   "name": "dbflux-web",
+  "main": "worker.mjs",
   "compatibility_date": "2026-08-19",
   "assets": {
     "directory": "./dist",
+    "binding": "ASSETS",
     "not_found_handling": "404-page",
+    "run_worker_first": true,
   },
 }

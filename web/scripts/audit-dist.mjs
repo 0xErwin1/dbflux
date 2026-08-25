@@ -96,4 +96,116 @@ if (
   )
 )
   fail('/install metadata leaks code or shell content');
+const acquisition =
+  '/install/postgresql/ /install/mysql/ /install/mongodb/ /features/sql-editor/ /features/local-mcp-governance/'.split(
+    ' ',
+  );
+const acquisitionFiles = acquisition.map(fileFor);
+if (mode === 'site')
+  for (const [index, file] of acquisitionFiles.entries()) {
+    const html = text(file);
+    if ((html.match(/<h1[ >]/g) ?? []).length !== 1 || !html.includes('>Install DBFlux<'))
+      fail(`invalid acquisition ${acquisition[index]}`);
+    if (
+      !html.includes('docs.dbflux.dev') ||
+      !/"@type":"WebPage"/.test(html) ||
+      !/"@type":"BreadcrumbList"/.test(html)
+    )
+      fail(`missing acquisition facts ${acquisition[index]}`);
+    if (/SoftwareApplication|rating|review|offer|price/i.test(html))
+      fail(`unsupported acquisition schema ${acquisition[index]}`);
+  }
+else if (acquisitionFiles.some(existsSync)) fail('acquisition route appears in docs mode');
+if (mode === 'site')
+  for (const route of acquisition) if (!llms.includes(`- ${route}`)) fail(`llms lacks ${route}`);
+const mcp = mode === 'site' && text(fileFor('/features/local-mcp-governance/'));
+if (
+  mcp &&
+  (!/local dbflux mcp subprocess.*stdio.*newline-delimited JSON-RPC 2\.0/i.test(mcp) ||
+    /hosted|oauth|saas|remote.proxy|live.policy.reload/i.test(mcp))
+)
+  fail('invalid MCP governance copy');
+const markdownFiles = new Set(
+  readdirSync(root, { recursive: true })
+    .filter((file) => file.endsWith('index.md'))
+    .map((file) => `/${file.slice(0, -8)}`),
+);
+if (mode === 'docs') {
+  const markdownExpected = new Set(
+    [...expected].filter((path) => routeKey(path).locale === DEFAULT_LOCALE && path !== '/'),
+  );
+  if (
+    markdownFiles.size !== markdownExpected.size ||
+    [...markdownExpected].some((file) => !markdownFiles.has(file))
+  )
+    fail('Markdown sibling set differs from current English documents');
+  if (
+    locations.some(({ pathname }) => pathname.endsWith('.md')) ||
+    !text('dist/install/index.md').includes('](/release/)')
+  )
+    fail('invalid Markdown discovery or links');
+} else if (markdownFiles.size) fail('Markdown appears outside docs mode');
+for (const config of ['wrangler.jsonc', 'wrangler.docs.jsonc'])
+  if (
+    !/"main": "worker.mjs"[\s\S]*"binding": "ASSETS"[\s\S]*"run_worker_first": true/.test(
+      text(config),
+    )
+  )
+    fail(`invalid ${config}`);
+const { default: worker } = await import('../worker.mjs');
+const assets = {
+  fetch(request) {
+    const path = new URL(request.url).pathname;
+    if (path.endsWith('index.md'))
+      return path.includes('missing-sibling')
+        ? new Response('', { status: 404 })
+        : new Response('markdown');
+    if (path.includes('redirect'))
+      return new Response(null, { status: 302, headers: { Location: '/' } });
+    if (path.includes('error')) return new Response('error', { status: 500 });
+    return new Response('html', {
+      headers: {
+        'content-type': 'text/html',
+        Vary: 'Origin',
+        Link: '<old>; rel="next"',
+        'cache-control': 'max-age=60',
+      },
+    });
+  },
+};
+const request = (accept, method = 'GET', path = '/usage/') =>
+  worker.fetch(
+    new Request(`https://docs.dbflux.dev${path}`, { method, headers: { Accept: accept } }),
+    { ASSETS: assets },
+  );
+for (const [accept, body] of [
+  ['text/markdown', 'markdown'],
+  ['text/html', 'html'],
+  ['', 'html'],
+  ['*/*', 'html'],
+  ['application/json', 'html'],
+  ['text/markdown;q=no', 'html'],
+  ['text/html;q=0.4,text/markdown;q=0.9', 'markdown'],
+  ['text/html,text/markdown', 'markdown'],
+  ['text/markdown;q=0', 'html'],
+]) {
+  const response = await request(accept);
+  if (
+    (await response.text()) !== body ||
+    !response.headers.get('vary')?.includes('Accept') ||
+    !response.headers.get('link')?.includes('old')
+  )
+    fail(`Worker negotiation failed for ${accept || 'absent'}`);
+}
+for (const [method, path, status, body] of [
+  ['HEAD', '/usage/', 200, ''],
+  ['POST', '/usage/', 200, 'html'],
+  ['GET', '/redirect/', 302, ''],
+  ['GET', '/error/', 500, 'error'],
+  ['GET', '/missing-sibling/', 200, 'html'],
+]) {
+  const response = await request('text/markdown', method, path);
+  if (response.status !== status || (await response.text()) !== body)
+    fail(`Worker response semantics failed for ${method} ${path}`);
+}
 console.log(`ok: SEO foundation audit (${mode})`);
