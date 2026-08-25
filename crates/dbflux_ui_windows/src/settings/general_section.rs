@@ -493,41 +493,45 @@ mod tests {
     }
 
     #[test]
-    fn language_dropdown_exposes_system_plus_every_available_language() {
+    fn language_dropdown_orders_system_then_english_then_deterministic_remainder() {
         let labels: Vec<_> = GeneralSection::language_items()
             .into_iter()
             .map(|item| item.label)
             .collect();
+        let available = dbflux_i18n::Language::available();
 
-        let expected: Vec<_> =
-            std::iter::once(dbflux_i18n::t!("settings.general.language.option.system"))
-                .chain(
-                    dbflux_i18n::Language::available()
-                        .iter()
-                        .map(|language| language.native_name()),
-                )
-                .collect();
+        assert_eq!(labels.len(), available.len() + 1);
+        assert_eq!(labels.first().map(|label| label.as_ref()), Some("System"));
+        assert_eq!(labels.get(1).map(|label| label.as_ref()), Some("English"));
 
-        assert_eq!(labels, expected);
+        let storage_ids: Vec<_> = available
+            .iter()
+            .skip(1)
+            .map(|language| language.as_storage_str())
+            .collect();
+        let mut sorted_storage_ids = storage_ids.clone();
+        sorted_storage_ids.sort_unstable();
+        assert_eq!(storage_ids, sorted_storage_ids);
+
+        for (label, language) in labels.iter().skip(1).zip(available) {
+            assert_eq!(label, &language.native_name());
+        }
     }
 
     #[test]
-    fn language_index_and_reverse_mapping_cover_system_and_explicit_languages() {
+    fn language_index_and_reverse_mapping_round_trip_every_available_locale() {
         assert_eq!(GeneralSection::language_index(""), 0);
-        assert_eq!(GeneralSection::language_index("en"), 1);
-        let available = dbflux_i18n::Language::available();
-        let es_position = available
-            .iter()
-            .position(|language| language.as_storage_str() == "es")
-            .expect("es.yml ships a catalog for Spanish");
-        assert_eq!(GeneralSection::language_index("es"), es_position + 1);
-        // An unrecognized persisted value falls back to System.
-        assert_eq!(GeneralSection::language_index("de"), 0);
-
         assert_eq!(GeneralSection::language_for_index(0), "");
-        assert_eq!(GeneralSection::language_for_index(1), "en");
-        assert_eq!(GeneralSection::language_for_index(es_position + 1), "es");
-        // Out-of-range falls back to System.
+
+        let available = dbflux_i18n::Language::available();
+        for (position, language) in available.iter().enumerate() {
+            let index = position + 1;
+            let storage_id = language.as_storage_str();
+            assert_eq!(GeneralSection::language_index(storage_id), index);
+            assert_eq!(GeneralSection::language_for_index(index), storage_id);
+        }
+
+        assert_eq!(GeneralSection::language_index("de"), 0);
         assert_eq!(GeneralSection::language_for_index(available.len() + 1), "");
     }
 

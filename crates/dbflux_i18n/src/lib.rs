@@ -54,20 +54,14 @@ impl Language {
         self.0
     }
 
-    /// The language's own name in that language, for example `"English"` or
-    /// `"Español"`.
+    /// The language's own name in that exact locale, for example `"English"`
+    /// or `"Español"`.
     ///
-    /// Falls back to the raw storage identifier when the catalog has no
-    /// `language.native_name` entry for this language.
+    /// Every shipped catalog is required to define a nonempty
+    /// `language.native_name`; catalog contract tests enforce that metadata
+    /// independently from ordinary translation fallback.
     pub fn native_name(self) -> String {
-        let name = translate_in(self.0, "language.native_name");
-        let missing_marker = format!("{}.language.native_name", self.0);
-
-        if name == missing_marker {
-            self.0.to_string()
-        } else {
-            name
-        }
+        translate_in(self.0, "language.native_name")
     }
 }
 
@@ -101,13 +95,72 @@ impl LanguagePreference {
     }
 }
 
+fn normalized_subtags(locale: &str) -> Vec<String> {
+    locale
+        .split(['-', '_'])
+        .filter(|subtag| !subtag.is_empty())
+        .map(str::to_ascii_lowercase)
+        .collect()
+}
+
+fn match_available_locale<'a>(requested: &str, available: &'a [&'a str]) -> Option<&'a str> {
+    let requested_subtags = normalized_subtags(requested);
+    let requested_primary = requested_subtags.first()?;
+
+    if let Some(exact) = available
+        .iter()
+        .copied()
+        .find(|candidate| normalized_subtags(candidate) == requested_subtags)
+    {
+        return Some(exact);
+    }
+
+    if requested_primary == "zh"
+        && let Some(variant) = requested_subtags.get(1)
+    {
+        let target = match variant.as_str() {
+            "hans" | "cn" | "sg" => Some("zh-hans"),
+            "hant" | "tw" | "hk" | "mo" => Some("zh-hant"),
+            _ => None,
+        };
+
+        if let Some(target) = target {
+            return available
+                .iter()
+                .copied()
+                .find(|candidate| normalized_subtags(candidate).join("-") == target);
+        }
+    }
+
+    let has_explicit_script = requested_subtags
+        .iter()
+        .skip(1)
+        .any(|subtag| subtag.len() == 4 && subtag.bytes().all(|byte| byte.is_ascii_alphabetic()));
+    if has_explicit_script {
+        return None;
+    }
+
+    let mut primary_matches = available
+        .iter()
+        .copied()
+        .filter(|candidate| normalized_subtags(candidate).first() == Some(requested_primary));
+    let matched = primary_matches.next()?;
+    if primary_matches.next().is_some() {
+        None
+    } else {
+        Some(matched)
+    }
+}
+
 /// Resolves the effective UI `Language` from a persisted preference and the
 /// detected system locale.
 ///
-/// Precedence: a valid persisted `Language` wins outright. Otherwise, the
-/// system locale's primary subtag (the part before `-` or `_`) is matched
-/// case-insensitively against the supported languages. If neither source
-/// yields a supported language, English is the default.
+/// Precedence: a valid canonical persisted `Language` wins outright. Otherwise,
+/// the system locale is normalized case-insensitively with `-` and `_` treated
+/// alike. Exact locale/script matches and Chinese region aliases are preferred;
+/// primary-language fallback is used only when it identifies one available
+/// locale unambiguously. If neither source yields a supported language, English
+/// is the default.
 pub fn resolve(persisted: Option<&str>, system: Option<&str>) -> Language {
     if let Some(persisted) = persisted
         && let Some(language) = Language::from_storage_str(persisted)
@@ -116,13 +169,13 @@ pub fn resolve(persisted: Option<&str>, system: Option<&str>) -> Language {
     }
 
     if let Some(system) = system {
-        let primary_subtag = system
-            .split(['-', '_'])
-            .next()
-            .unwrap_or(system)
-            .to_ascii_lowercase();
-
-        if let Some(language) = Language::from_storage_str(&primary_subtag) {
+        let available_codes: Vec<_> = Language::available()
+            .iter()
+            .map(|language| language.locale_code())
+            .collect();
+        if let Some(locale) = match_available_locale(system, &available_codes)
+            && let Some(language) = Language::from_storage_str(locale)
+        {
             return language;
         }
     }
@@ -240,30 +293,21 @@ mod tests {
     }
 
     #[test]
-    fn language_preference_storage_str_roundtrip_including_system() {
+    fn language_preference_storage_str_round_trips_system_and_every_available_locale() {
         assert_eq!(LanguagePreference::System.as_storage_str(), "");
         assert_eq!(
             LanguagePreference::from_storage_str(""),
             LanguagePreference::System
         );
 
-        assert_eq!(
-            LanguagePreference::Explicit(Language::ENGLISH).as_storage_str(),
-            "en"
-        );
-        assert_eq!(
-            LanguagePreference::from_storage_str("en"),
-            LanguagePreference::Explicit(Language::ENGLISH)
-        );
-
-        assert_eq!(
-            LanguagePreference::Explicit(spanish()).as_storage_str(),
-            "es"
-        );
-        assert_eq!(
-            LanguagePreference::from_storage_str("es"),
-            LanguagePreference::Explicit(spanish())
-        );
+        for &language in Language::available() {
+            let storage_id = language.as_storage_str();
+            assert_eq!(
+                LanguagePreference::from_storage_str(storage_id),
+                LanguagePreference::Explicit(language),
+                "available locale {storage_id} must round-trip through preferences"
+            );
+        }
     }
 
     #[test]
@@ -279,10 +323,57 @@ mod tests {
     }
 
     #[test]
-    fn from_storage_str_round_trips_available_languages() {
-        assert_eq!(Language::from_storage_str("en"), Some(Language::ENGLISH));
-        assert_eq!(Language::from_storage_str("es"), Some(spanish()));
+    fn from_storage_str_round_trips_every_available_language_and_rejects_noncanonical_ids() {
+        for &language in Language::available() {
+            let storage_id = language.as_storage_str();
+            assert_eq!(Language::from_storage_str(storage_id), Some(language));
+        }
+
         assert_eq!(Language::from_storage_str("zz"), None);
+        assert_eq!(Language::from_storage_str("ES"), None);
+        assert_eq!(Language::from_storage_str("es-ES"), None);
+    }
+
+    #[test]
+    fn locale_matching_normalizes_case_and_separators() {
+        let available = ["en", "es", "pt-BR"];
+
+        assert_eq!(match_available_locale("ES_419", &available), Some("es"));
+        assert_eq!(match_available_locale("pt_br", &available), Some("pt-BR"));
+    }
+
+    #[test]
+    fn locale_matching_maps_chinese_regions_without_shipping_chinese_catalogs() {
+        let available = ["en", "zh-Hans", "zh-Hant"];
+
+        for locale in ["zh-Hans", "zh-CN", "zh_SG"] {
+            assert_eq!(
+                match_available_locale(locale, &available),
+                Some("zh-Hans"),
+                "{locale} must select Simplified Chinese"
+            );
+        }
+        for locale in ["zh-Hant", "zh-TW", "zh_HK", "ZH-mo"] {
+            assert_eq!(
+                match_available_locale(locale, &available),
+                Some("zh-Hant"),
+                "{locale} must select Traditional Chinese"
+            );
+        }
+    }
+
+    #[test]
+    fn locale_matching_uses_primary_language_only_when_unambiguous() {
+        assert_eq!(match_available_locale("es-MX", &["en", "es"]), Some("es"));
+        assert_eq!(
+            match_available_locale("zh", &["en", "zh-Hans", "zh-Hant"]),
+            None
+        );
+        assert_eq!(
+            match_available_locale("sr-Latn", &["en", "sr-Cyrl"]),
+            None,
+            "an explicit script must not be discarded"
+        );
     }
 
     #[test]
@@ -345,28 +436,56 @@ mod tests {
         }
     }
 
-    #[test]
-    fn catalog_keys_match_between_en_and_es() {
-        let en: serde_yaml::Value =
-            serde_yaml::from_str(include_str!("../locales/en.yml")).expect("valid en.yml");
-        let es: serde_yaml::Value =
-            serde_yaml::from_str(include_str!("../locales/es.yml")).expect("valid es.yml");
+    fn catalog(locale: &str) -> serde_yaml::Value {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("locales")
+            .join(format!("{locale}.yml"));
+        let source = std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
+        serde_yaml::from_str(&source).expect("shipped catalog must be valid YAML")
+    }
 
+    #[test]
+    fn shipped_catalogs_define_nonempty_exact_native_names() {
+        for language in Language::available() {
+            let locale = language.locale_code();
+            let catalog = catalog(locale);
+            let native_name = catalog
+                .get("language")
+                .and_then(|language| language.get("native_name"))
+                .and_then(serde_yaml::Value::as_str);
+
+            assert!(
+                native_name.is_some_and(|name| !name.trim().is_empty()),
+                "shipped locale {locale} must define a nonempty exact language.native_name"
+            );
+        }
+    }
+
+    #[test]
+    fn partial_catalogs_may_omit_fallback_keys_but_must_not_add_unknown_keys() {
+        let en = catalog("en");
         let mut en_keys = Vec::new();
         flatten_catalog_keys(&en, String::new(), &mut en_keys);
-        let mut es_keys = Vec::new();
-        flatten_catalog_keys(&es, String::new(), &mut es_keys);
-
         let en_set: std::collections::BTreeSet<_> = en_keys.into_iter().collect();
-        let es_set: std::collections::BTreeSet<_> = es_keys.into_iter().collect();
 
-        let missing_in_es: Vec<_> = en_set.difference(&es_set).cloned().collect();
-        let missing_in_en: Vec<_> = es_set.difference(&en_set).cloned().collect();
+        for language in Language::available()
+            .iter()
+            .filter(|language| **language != Language::ENGLISH)
+        {
+            let locale = language.locale_code();
+            let translated = catalog(locale);
+            let mut translated_keys = Vec::new();
+            flatten_catalog_keys(&translated, String::new(), &mut translated_keys);
+            let translated_set: std::collections::BTreeSet<_> =
+                translated_keys.into_iter().collect();
+            let unknown: Vec<_> = translated_set.difference(&en_set).cloned().collect();
 
-        assert!(
-            missing_in_es.is_empty() && missing_in_en.is_empty(),
-            "catalog key mismatch — missing in es.yml: {missing_in_es:?}, missing in en.yml: {missing_in_en:?}"
-        );
+            assert!(
+                unknown.is_empty(),
+                "catalog {locale} contains keys unknown to the English fallback: {unknown:?}"
+            );
+        }
     }
 
     #[test]

@@ -2,11 +2,13 @@
 import Base from '../layouts/Base.astro';
 import DocsTree from '../components/DocsTree.astro';
 import VersionPicker from '../components/VersionPicker.astro';
+import type { DocTitlesByLocale } from '../data/docs';
 import type { DocsVersion } from '../data/versions';
 import { CURRENT, docsHref, versionHome, versionLabel } from '../data/versions';
 import { docsUrl } from '../data/site';
 import { DEFAULT_LOCALE, localeFromPathname, t } from '../i18n';
 import type { Locale } from '../i18n';
+import { searchIndexPath } from '../i18n/locale-registry.mjs';
 
 interface Heading {
   depth: number;
@@ -30,8 +32,10 @@ interface Props {
    * untranslated notice below and forces `noindex` regardless of `version`.
    */
   translated?: boolean;
-  /** Spanish page titles sourced from each translated doc's own H1 — see `docs.ts`. */
-  esTitles?: Readonly<Record<string, string>>;
+  /** Existing translated document H1s, indexed by canonical locale id. */
+  titlesByLocale?: DocTitlesByLocale;
+  /** Locales with real content for this exact document. */
+  alternateLocales?: readonly Locale[];
 }
 
 const {
@@ -44,12 +48,14 @@ const {
   editPath,
   locale = localeFromPathname(Astro.url.pathname),
   translated = false,
-  esTitles = {},
+  titlesByLocale = {},
+  alternateLocales,
 } = Astro.props;
 const onThisPage = headings.filter((heading) => heading.depth === 2);
 
 const isCurrent = version.id === CURRENT.id;
 const suffix = isCurrent ? '' : ` (${versionLabel(version)})`;
+const searchIndex = searchIndexPath(version.id, CURRENT.id, locale, DEFAULT_LOCALE);
 
 /**
  * Older and unreleased versions point at the current release, so a search engine
@@ -74,9 +80,10 @@ const showsFallback = locale !== DEFAULT_LOCALE && !translated;
   wide
   noindex={version.noindex || showsFallback}
   canonicalPath={canonicalPath}
-  searchIndex={isCurrent ? '/search-index.json' : `/${version.id}/search-index.json`}
+  searchIndex={searchIndex}
   locale={locale}
   translated={translated}
+  alternateLocales={alternateLocales}
 >
   <div class="docs">
     <button
@@ -97,7 +104,7 @@ const showsFallback = locale !== DEFAULT_LOCALE && !translated;
         current={currentPath}
         available={available}
         locale={locale}
-        esTitles={esTitles}
+        titlesByLocale={titlesByLocale}
       />
     </aside>
 

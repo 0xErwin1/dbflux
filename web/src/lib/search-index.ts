@@ -1,6 +1,8 @@
 import { getCollection, render } from 'astro:content';
-import { docTitle, splitId } from '../data/docs';
+import { docTitle } from '../data/docs';
 import { docsHref } from '../data/versions';
+import type { Locale } from '../i18n';
+import { selectLocaleSearchEntries } from '../i18n/locale-registry.mjs';
 
 export interface Section {
   /** Page path. */
@@ -45,19 +47,14 @@ function slugify(text: string): string {
  * Indexes are per version rather than global: a reader on 0.6 searching for a
  * flag should not be shown the page that documents it in nightly.
  */
-export async function buildSearchIndex(versionId: string): Promise<Section[]> {
+export async function buildSearchIndex(versionId: string, locale: Locale): Promise<Section[]> {
   const docs = await getCollection('docs');
   const sections: Section[] = [];
+  const selected = selectLocaleSearchEntries(docs, versionId, locale);
 
-  for (const doc of docs) {
-    const { version, locale, path } = splitId(doc.id);
-    // The index stays English-only for now — a Spanish entry's id carries an
-    // `es/` path segment that `docsHref` does not expect, and there is no
-    // Spanish snippet UI yet to show its matches in.
-    if (version !== versionId || locale !== 'en') continue;
-
+  for (const { path, entry: doc } of selected) {
     const { headings } = await render(doc);
-    const href = docsHref(doc.id);
+    const href = docsHref(`${versionId}/${path}`, locale);
     const title = docTitle(path);
 
     // Fenced code is dropped first so a `# comment` inside a shell block is

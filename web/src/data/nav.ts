@@ -2,6 +2,7 @@ import { docsUrl } from './site';
 import { CURRENT } from './versions';
 import { DEFAULT_LOCALE } from '../i18n';
 import type { Locale } from '../i18n';
+import { localizedDocPath } from '../i18n/locale-registry.mjs';
 
 export const REPO = 'https://github.com/0xErwin1/dbflux';
 
@@ -106,10 +107,8 @@ export const REPO_URL = REPO;
  *
  * `locale` selects the URL prefix for a repository path that does not itself
  * say which locale it belongs to (a driver README, `ARCHITECTURE.md`, or an
- * English `docs/<page>.md`) — typically the locale of the page doing the
- * linking. A `docs/es/<page>.md` path is unambiguous on its own and always
- * resolves to its Spanish route regardless of `locale`, matching the id
- * `content.config.ts` assigns it.
+ * English `docs/<page>.md`). A path in any registered localized docs directory
+ * is unambiguous and resolves to that locale's canonical route id.
  *
  * `versionId` selects the URL's version prefix, matching the version of the
  * page doing the linking (e.g. `nightly` for a link written inside nightly's
@@ -131,11 +130,11 @@ export function routeForRepoPath(
   const driver = path.match(/^crates\/dbflux_driver_([^/]+)\/README\.md$/);
   if (driver) return docsUrl(`drivers/${driver[1]}`, versionPrefix, locale);
 
-  const esDoc = path.match(/^docs\/es\/([^/]+)\.md$/);
-  if (esDoc) return docsUrl(esDoc[1].toLowerCase(), versionPrefix, 'es');
-
-  const doc = path.match(/^docs\/([^/]+)\.md$/);
-  if (doc) return docsUrl(doc[1].toLowerCase(), versionPrefix, locale);
+  const doc = localizedDocPath(path);
+  if (doc) {
+    const routeLocale = doc.locale === DEFAULT_LOCALE ? locale : (doc.locale as Locale);
+    return docsUrl(doc.path, versionPrefix, routeLocale);
+  }
 
   if (path === 'ARCHITECTURE.md') return docsUrl('architecture', versionPrefix, locale);
   if (path === 'CONTRIBUTING.md') return docsUrl('contributing', versionPrefix, locale);
@@ -155,8 +154,8 @@ export function titleForRepoPath(path: string): string | null {
   const driver = path.match(/^crates\/dbflux_driver_([^/]+)\/README\.md$/);
   if (driver) return DOC_TITLES[`drivers/${driver[1]}`] ?? null;
 
-  const doc = path.match(/^docs\/(?:es\/)?([^/]+)\.md$/);
-  if (doc) return DOC_TITLES[doc[1].toLowerCase()] ?? null;
+  const doc = localizedDocPath(path);
+  if (doc) return DOC_TITLES[doc.path] ?? null;
 
   if (path === 'ARCHITECTURE.md') return DOC_TITLES.architecture ?? null;
   if (path === 'CONTRIBUTING.md') return DOC_TITLES.contributing ?? null;

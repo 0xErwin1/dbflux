@@ -2438,11 +2438,38 @@ mod tests {
         assert!(loaded.general_settings.dangerous_requires_preview);
     }
 
+    fn shipped_locale_ids() -> Vec<String> {
+        let locales_dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../dbflux_i18n/locales");
+        let entries = std::fs::read_dir(&locales_dir).unwrap_or_else(|error| {
+            panic!(
+                "failed to read shipped locales from {}: {error}",
+                locales_dir.display()
+            )
+        });
+        let mut locale_ids = Vec::new();
+        for entry in entries {
+            let path = entry
+                .expect("locale directory entry must be readable")
+                .path();
+            if path.extension().and_then(std::ffi::OsStr::to_str) == Some("yml") {
+                locale_ids.push(
+                    path.file_stem()
+                        .and_then(std::ffi::OsStr::to_str)
+                        .expect("locale filename must be valid UTF-8")
+                        .to_string(),
+                );
+            }
+        }
+        locale_ids.sort();
+        locale_ids
+    }
+
     #[test]
-    fn unrecognized_language_storage_value_loads_through_unchanged() {
+    fn unrecognized_language_storage_value_survives_load_and_save_unchanged() {
         let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
 
-        let mut dto = GeneralSettingsDto {
+        let dto = GeneralSettingsDto {
             id: 1,
             theme: "dark".to_string(),
             restore_session_on_startup: 1,
@@ -2476,38 +2503,39 @@ mod tests {
              degrades it to System without erasing the stored choice"
         );
 
-        dto.language = "es".to_string();
-        runtime
+        super::save_general_settings(&runtime, &loaded.general_settings)
+            .expect("save loaded general settings");
+        let saved = runtime
             .general_settings()
-            .upsert(&dto)
-            .expect("save general settings dto");
-
-        let loaded = load_config(&runtime).expect("load configuration");
-        assert_eq!(
-            loaded.general_settings.language, "es",
-            "supported language storage value must load through unchanged"
-        );
+            .get()
+            .expect("load re-saved dto")
+            .expect("general settings row");
+        assert_eq!(saved.language, "de");
     }
 
     #[test]
-    fn language_round_trips_through_save_and_load() {
-        let settings = GeneralSettings {
-            language: "es".to_string(),
-            ..Default::default()
-        };
+    fn every_shipped_language_round_trips_through_save_and_load() {
+        let locale_ids = shipped_locale_ids();
+        assert!(!locale_ids.is_empty(), "at least one locale must ship");
 
-        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
-        super::save_general_settings(&runtime, &settings).expect("save general settings");
+        for locale_id in locale_ids {
+            let settings = GeneralSettings {
+                language: locale_id.clone(),
+                ..Default::default()
+            };
+            let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+            super::save_general_settings(&runtime, &settings).expect("save general settings");
 
-        let dto = runtime
-            .general_settings()
-            .get()
-            .expect("load saved dto")
-            .expect("general settings row");
-        assert_eq!(dto.language, "es");
+            let dto = runtime
+                .general_settings()
+                .get()
+                .expect("load saved dto")
+                .expect("general settings row");
+            assert_eq!(dto.language, locale_id);
 
-        let loaded = load_config(&runtime).expect("load configuration");
-        assert_eq!(loaded.general_settings.language, "es");
+            let loaded = load_config(&runtime).expect("load configuration");
+            assert_eq!(loaded.general_settings.language, locale_id);
+        }
     }
 
     #[test]

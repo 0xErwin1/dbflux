@@ -2,10 +2,12 @@
 import { getCollection, render } from 'astro:content';
 import DocsLayout from '../layouts/DocsLayout.astro';
 import DocsIndex from '../components/DocsIndex.astro';
-import { docTitle, esTitlesFor, pathsForVersion, repoPathFor, splitId } from '../data/docs';
+import { docTitle, localizedTitlesFor, pathsForVersion, repoPathFor } from '../data/docs';
 import { CURRENT, VERSIONS, docsRoute, versionById, versionLabel } from '../data/versions';
 import { DOCS_MODE } from '../data/site';
 import { DEFAULT_LOCALE, LOCALES } from '../i18n';
+import type { Locale } from '../i18n';
+import { buildLocalizedDocumentMatrix } from '../i18n/locale-registry.mjs';
 
 /**
  * Every documentation page, for every published version, in every locale.
@@ -16,9 +18,9 @@ import { DEFAULT_LOCALE, LOCALES } from '../i18n';
  * `/es/docs/usage/` alongside `/docs/usage/`. A file tree cannot express that; a
  * computed path can.
  *
- * A page missing its Spanish translation is never a 404: it renders the English
- * body under the `/es/` URL, with `translated: false` telling `DocsLayout` to
- * show the fallback notice and keep the page out of search results.
+ * A page missing a localized entry is never a 404: it renders the English body
+ * under that locale's URL, with `translated: false` telling `DocsLayout` to show
+ * the fallback notice and keep the page out of search results.
  */
 export async function getStaticPaths() {
   // This build does not carry the documentation. The URLs it used to publish
@@ -28,32 +30,22 @@ export async function getStaticPaths() {
   if (DOCS_MODE === 'site') return [];
 
   const docs = await getCollection('docs');
-  const enDocs = docs.filter((doc) => splitId(doc.id).locale === 'en');
-
-  const esByKey = new Map(
-    docs
-      .filter((doc) => splitId(doc.id).locale === 'es')
-      .map((doc) => {
-        const { version, path } = splitId(doc.id);
-        return [`${version}/${path}`, doc] as const;
-      }),
-  );
-
-  const pages = LOCALES.flatMap((locale) =>
-    enDocs.map((doc) => {
-      const { version, path } = splitId(doc.id);
-      const esDoc = esByKey.get(`${version}/${path}`);
-      // hreflang only pairs pages that genuinely exist in both locales — an
-      // English page never alternates to a Spanish URL that is only showing
-      // its own English fallback, and vice versa.
-      const translated = esDoc !== undefined;
-      const activeDoc = locale === 'es' && esDoc ? esDoc : doc;
+  const pages = buildLocalizedDocumentMatrix(docs).map(
+    ({ version, path, locale, entry, translated, alternateLocales }) => {
+      const canonicalLocale = locale as Locale;
 
       return {
-        params: { path: docsRoute(version, path, locale) },
-        props: { versionId: version, path, doc: activeDoc, locale, translated },
+        params: { path: docsRoute(version, path, canonicalLocale) },
+        props: {
+          versionId: version,
+          path,
+          doc: entry,
+          locale: canonicalLocale,
+          translated,
+          alternateLocales: alternateLocales as Locale[],
+        },
       };
-    }),
+    },
   );
 
   // The version index has no translatable body of its own — `DocsIndex` is
@@ -74,20 +66,19 @@ export async function getStaticPaths() {
   return [...pages, ...indexes];
 }
 
-const { versionId, path, doc, locale, translated } = Astro.props;
+const { versionId, path, doc, locale, translated, alternateLocales } = Astro.props;
 
 const version = versionById(versionId)!;
 const allDocs = await getCollection('docs');
 const available = pathsForVersion(allDocs, versionId);
-const esTitles = esTitlesFor(allDocs, versionId);
+const titlesByLocale = localizedTitlesFor(allDocs, versionId);
 const isCurrent = versionId === CURRENT.id;
 
 const rendered = doc ? await render(doc) : undefined;
 
-// A translated page's `<title>`/breadcrumb use its own Spanish H1 rather than
-// the fixed English rail label; a fallback page (English body under `/es/`)
-// keeps the English title since it is not actually showing translated text.
-const localizedTitle = locale === 'es' && translated && path ? esTitles[path] : undefined;
+// A translated page uses its own H1; a fallback keeps the English rail title.
+const localizedTitle =
+  locale !== DEFAULT_LOCALE && translated && path ? titlesByLocale[locale]?.[path] : undefined;
 const title = path ? (localizedTitle ?? docTitle(path)) : 'Documentation';
 
 const firstParagraph = doc?.body
@@ -114,13 +105,19 @@ const description = doc
   editPath={doc?.filePath ? repoPathFor(doc.filePath, versionId) : undefined}
   locale={locale}
   translated={translated}
-  esTitles={esTitles}
+  alternateLocales={alternateLocales}
+  titlesByLocale={titlesByLocale}
 >
   {
     rendered ? (
       <rendered.Content />
     ) : (
-      <DocsIndex versionId={versionId} available={available} locale={locale} esTitles={esTitles} />
+      <DocsIndex
+        versionId={versionId}
+        available={available}
+        locale={locale}
+        titlesByLocale={titlesByLocale}
+      />
     )
   }
 </DocsLayout>
