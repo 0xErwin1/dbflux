@@ -1,1 +1,103 @@
-{}
+access:
+  tab_label: 访问
+  method_label: 访问方式
+  direct_hint: 直连使用基础选项中配置的数据库字段。
+  auth_profile_optional: 认证配置文件（可选）
+  manage: 管理
+  login: 登录
+  refresh: 刷新
+  auth_profile_hint: 用于在直连模式下解析密钥、连接参数、认证配置文件取值来源。
+  session_valid: 认证配置文件会话有效
+  ssm_title: SSM 端口转发
+  ssm_instance_id: 实例 ID
+  ssm_region: 区域
+  ssm_remote_port: 远程端口
+  ssm_port_hint: DBFlux 和操作系统会自动分配本地隧道端口，此处仅可配置远程端口。
+  auth_profile: 认证配置文件
+  proxy_no_profiles: 未配置代理
+  proxy_no_profiles_hint: 在“设置 > 代理”中添加代理
+  proxy_disabled_label: '%{name}（已禁用）'
+  select_proxy: 选择代理
+  clear: 清除
+  proxy_details: 代理详情
+  proxy_type: 类型
+  proxy_host: 地址
+  proxy_auth: 认证
+  proxy_enabled: 已启用
+  proxy_no_proxy: 不使用代理
+  value_yes: 是
+  value_no: 否
+  no_proxy_placeholder: （无）
+  edit_in_settings: 在设置中编辑
+  use_ssh_tunnel: 使用 SSH 隧道
+  ssh_tunnel_label: SSH 隧道
+  ssh_server_saved: SSH 服务器（已保存的隧道）
+  test_ssh: 测试 SSH 连接
+  testing_ssh: 正在测试 SSH 连接…
+  ssh_success: SSH 连接成功
+  ssh_failed: SSH 连接失败
+  save_as_tunnel: 保存为隧道
+  ssh_disabled_hint: 启用 SSH 隧道以配置通过堡垒机的连接
+audit:
+  toast:
+    focus_existing_viewer: 正在聚焦已打开的审计视图
+    opened_viewer: 已打开审计视图
+    opened_mcp_approvals: 已打开 MCP 审批
+    mcp_governance_persisted: MCP 治理状态已持久化
+  error:
+    open_viewer_failed: 无法打开审计视图：%{error}
+    persist_mcp_governance_failed: 持久化 MCP 治理失败：%{error}
+chart:
+  axis_bar:
+    group: 分组
+    aggregation:
+      none: 无
+      sum: sum
+      avg: avg
+      min: min
+      max: max
+  engine:
+    no_data: 暂无数据
+  point_inspector:
+    series: 序列
+    hovered_point: 悬停点
+    time: 时间
+    value: 值
+    source_doc: 来源文档
+    quick_actions: 快捷操作
+    show_in_tree: 在树中显示
+    annotate: 标注
+    copy_as_query: 复制为查询语句
+    coming_soon: 即将推出
+common:
+  time_range:
+    error:
+      invalid_selection: 时间选择无效
+      ambiguous_local: 本地时间不准确或无效
+      invalid_start: 无效的开始时间：%{error}
+      invalid_end: 无效的结束时间：%{error}
+      start_after_end: 开始时间必须早于结束时间
+      no_date_range: 未选择日期范围
+      incomplete_time_selection: 时间选择不完整
+charts:
+  default_import_name: 导入的视图
+  orphaned_profile_label: （已独立）
+  status:
+    loading_namespaces: 正在加载指标命名空间
+    loading_metrics: 正在加载 %{namespace} 的指标
+  toast:
+    chart_not_found: 未找到已保存的图表
+    dashboard_not_found: 未找到视图
+    connection_not_found: 未找到此视图的连接。
+    add_profile_first: 请先添加连接配置再创建视图。
+    import_success: 已将 %{count} 个面板导入到新视图。
+    panel_already_exists: “%{namespace}/%{metric}”的面板已在此视图中
+  error:
+    cannot_open_chart: 无法打开图表：%{error}
+    rescale_failed: 将面板重新缩放到 12 列网格失败
+    no_active_connection_import: 没有活动连接 — 请先连接到一个配置再导入。
+    import_unsupported: 当前连接不支持视图导入。
+    import_failed: 视图导入失败：%{error}
+    persist_import_chart_failed: 持久化导入的图表“%{name}”失败
+    persist_import_dashboard_failed: 持久化导入的视图“%{name}”失败
+    persist_import_panels_failed: 持久化导入的视图面板失败
