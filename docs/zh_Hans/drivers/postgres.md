@@ -1,0 +1,150 @@
+# PostgreSQL
+
+Advanced open-source relational database.
+
+## At a glance
+
+- **Category** — Relational
+- **Query language** — SQL
+- **Default port** — 5432
+- **URI scheme** — `postgresql`
+
+## Features
+
+- PostgreSQL relational driver with SQL query execution and schema discovery.
+- Supports schemas, tables, views, indexes, foreign keys, check constraints, unique constraints, and custom types.
+- Exposes stored routines (functions, procedures, aggregates, window functions) in the schema tree with read-only definition viewer.
+- Supports authentication, SSL, SSH tunneling, and URI/manual connection modes.
+- Supports query cancellation through PostgreSQL cancel tokens.
+- Includes PostgreSQL-specific SQL/code generation for CRUD, indexes, reindex, foreign keys, and type operations.
+- Multi-statement scripts (several `;`-separated statements) run as a batch via the simple query protocol, returning one result set per statement.
+- Data-transfer engine: native multi-row `INSERT` bulk-load (`BULK_INSERT`), driver-native `CREATE TABLE` DDL from a source table's columns, `TRUNCATE TABLE` support, and a referential-integrity toggle (`SET session_replication_role`) for FK-safe migrations.
+- Displays `pgvector` `vector`, `halfvec`, and `sparsevec` values, including verified one-dimensional arrays, as textual results.
+- Displays full-text search `tsvector` and `tsquery` values, including one-dimensional arrays, in PostgreSQL's canonical text form.
+
+### Instance Metrics
+
+Exposes a curated set of live server metrics sourced from PostgreSQL system views:
+
+- `pg.tps` — transactions per second (from `pg_stat_database`)
+- `pg.cache_hit_ratio` — buffer cache hit ratio (from `pg_statio_user_tables`)
+- `pg.active_connections` — connections in state `'active'`
+- `pg.idle_connections` — connections in state `'idle'`
+- `pg.blocks_read` — blocks read from disk (from `pg_statio_user_tables`)
+- `pg.stat_statements.mean_exec_ms` — mean execution time per query (requires `pg_stat_statements` extension)
+
+Each metric is returned as a single `(timestamp_ms, value)` row for live charting.
+
+### Instance Inspector
+
+Exposes tabular snapshots of running server state:
+
+- `pg.activity` — current sessions from `pg_stat_activity` (query text, state, wait event, duration)
+- `pg.locks` — active locks from `pg_locks` joined with `pg_class`
+
+## Limitations
+
+- Batched (multi-statement) result columns carry no type metadata; values are returned as text and chart auto-detection is disabled for them. Run a single statement to get fully typed columns.
+
+- `pg.stat_statements.mean_exec_ms` is only available when the `pg_stat_statements` extension is installed and loaded. The driver probes for its presence at catalog construction time; when absent the metric is omitted from `list_metrics()`.
+
+- Instance metrics return a single data point per call (current snapshot), not a historical time series. The UI polls at the configured refresh interval to build the live chart.
+
+- SQL-only driver; it does not expose document or key-value APIs.
+- Routine definitions for aggregate and window functions are synthesized from catalog metadata because `pg_get_functiondef` does not support them.
+- Routine editing and execution are not supported; the routine viewer is read-only.
+- Cancellation is best effort and depends on server/session state at cancellation time.
+- Code generation targets supported PostgreSQL constructs only; unsupported generator IDs return `NotSupported`.
+
+## DDL Capabilities
+
+### Transactional DDL
+
+PostgreSQL supports **transactional DDL** — all DDL operations (except `CREATE INDEX CONCURRENTLY`) can be wrapped in transactions and rolled back:
+
+```sql
+BEGIN;
+ALTER TABLE users ADD COLUMN phone VARCHAR(20) NULL;
+-- Test the change
+ROLLBACK;  -- Safe to rollback if something goes wrong
+```
+
+**Exception**: `CREATE INDEX CONCURRENTLY` and `DROP INDEX CONCURRENTLY` cannot run inside a transaction.
+
+### ALTER TABLE Behavior
+
+**Adding columns with defaults (PostgreSQL 11+)**:
+- Fast (metadata-only operation)
+- No table rewrite required
+- Does not lock table for reads/writes
+
+**Adding columns without defaults**:
+- Fast (no rewrite)
+- Existing rows get `NULL` for new column
+
+**Changing column types**:
+- May require table rewrite (locks table)
+- Use `USING` clause for custom conversion: `ALTER COLUMN age TYPE integer USING age::integer`
+
+**Dropping columns**:
+- Fast (marks column as dropped, no rewrite)
+- Data is not immediately reclaimed (use `VACUUM FULL` if needed)
+
+**Renaming columns**:
+- Fast (metadata-only)
+- May break views, triggers, and application code
+
+### Index Operations
+
+**CREATE INDEX**:
+- Locks table for writes (reads allowed)
+- Use `CONCURRENTLY` for zero-downtime index creation:
+  ```sql
+  CREATE INDEX CONCURRENTLY idx_users_email ON users(email);
+  ```
+
+**DROP INDEX**:
+- Locks table for writes (reads allowed)
+- Use `CONCURRENTLY` for zero-downtime index removal:
+  ```sql
+  DROP INDEX CONCURRENTLY idx_users_email;
+  ```
+
+**REINDEX**:
+- Locks table for reads and writes
+- Use `CONCURRENTLY` (PostgreSQL 12+) for zero-downtime reindex
+
+### Constraints
+
+**Adding constraints**:
+- `CHECK` and `UNIQUE` constraints scan table (may take time on large tables)
+- Use `NOT VALID` to defer validation:
+  ```sql
+  ALTER TABLE users ADD CONSTRAINT age_check CHECK (age >= 0) NOT VALID;
+  -- Later, validate without locking:
+  ALTER TABLE users VALIDATE CONSTRAINT age_check;
+  ```
+
+**Foreign keys**:
+- Adding foreign keys scans both tables
+- Use `NOT VALID` + `VALIDATE CONSTRAINT` for zero-downtime FK creation
+
+### Custom Types
+
+**CREATE TYPE (enum)**:
+- Fast (metadata-only)
+- Use `ALTER TYPE ... ADD VALUE` to add enum values:
+  ```sql
+  ALTER TYPE status_enum ADD VALUE 'archived';
+  ```
+  **Note**: Cannot be rolled back inside a transaction (committed immediately)
+
+**DROP TYPE**:
+- Fails if type is in use by tables
+- Must drop dependent columns first
+
+### Known Limitations
+
+- `CREATE INDEX CONCURRENTLY` requires exclusive lock momentarily (may block on high-traffic tables)
+- `ALTER TYPE ADD VALUE` cannot be rolled back
+- Dropping columns does not reclaim disk space immediately (requires `VACUUM FULL`)
