@@ -1,0 +1,3505 @@
+access:
+  tab_label: 访问
+  method_label: 访问方式
+  direct_hint: 直连使用基础选项中配置的数据库字段。
+  auth_profile_optional: 认证配置文件（可选）
+  manage: 管理
+  login: 登录
+  refresh: 刷新
+  auth_profile_hint: 用于在直连模式下解析密钥、连接参数、认证配置文件取值来源。
+  session_valid: 认证配置文件会话有效
+  ssm_title: SSM 端口转发
+  ssm_instance_id: 实例 ID
+  ssm_region: 区域
+  ssm_remote_port: 远程端口
+  ssm_port_hint: DBFlux 和操作系统会自动分配本地隧道端口，此处仅可配置远程端口。
+  auth_profile: 认证配置文件
+  proxy_no_profiles: 未配置代理配置
+  proxy_no_profiles_hint: 在 设置 > 代理 中添加代理
+  proxy_disabled_label: "%{name}（已禁用）"
+  select_proxy: 选择代理
+  clear: 清除
+  proxy_details: 代理详情
+  proxy_type: 类型
+  proxy_host: 地址
+  proxy_auth: 认证
+  proxy_enabled: 已启用
+  proxy_no_proxy: 不使用代理
+  value_yes: 是
+  value_no: 否
+  no_proxy_placeholder: （无）
+  edit_in_settings: 在设置中编辑
+  use_ssh_tunnel: 使用 SSH 隧道
+  ssh_tunnel_label: SSH 隧道
+  ssh_server_saved: SSH 服务器（已保存的隧道）
+  test_ssh: 测试 SSH 连接
+  testing_ssh: 正在测试 SSH 连接…
+  ssh_success: SSH 连接成功
+  ssh_failed: SSH 连接失败
+  save_as_tunnel: 保存为隧道
+  ssh_disabled_hint: 启用 SSH 隧道以配置经由堡垒主机的连接
+audit:
+  toast:
+    focus_existing_viewer: 正在聚焦已打开的审计查看器
+    opened_viewer: 已打开审计查看器
+    opened_mcp_approvals: 已打开 MCP 审批
+    mcp_governance_persisted: MCP 治理状态已持久化
+  error:
+    open_viewer_failed: "无法打开审计查看器：%{error}"
+    persist_mcp_governance_failed: "持久化 MCP 治理失败：%{error}"
+chart:
+  axis_bar:
+    group: 分组
+    aggregation:
+      none: 无
+      sum: sum
+      avg: avg
+      min: min
+      max: max
+  engine:
+    no_data: 暂无数据
+  point_inspector:
+    series: 序列
+    hovered_point: 悬停点
+    time: 时间
+    value: 取值
+    source_doc: 来源文档
+    quick_actions: 快捷操作
+    show_in_tree: 在树中显示
+    annotate: 标注
+    copy_as_query: 复制为查询语句
+    coming_soon: 即将推出
+common:
+  time_range:
+    error:
+      invalid_selection: 时间选择无效
+      ambiguous_local: 本地时间不准确或无效
+      invalid_start: "无效的开始时间：%{error}"
+      invalid_end: "无效的结束时间：%{error}"
+      start_after_end: 开始时间必须早于结束时间
+      no_date_range: 未选择日期范围
+      incomplete_time_selection: 时间选择不完整
+charts:
+  default_import_name: 导入的仪表盘
+  orphaned_profile_label: （已独立）
+  status:
+    loading_namespaces: 正在加载指标命名空间
+    loading_metrics: "正在加载 %{namespace} 的指标"
+  toast:
+    chart_not_found: 未找到已保存的图表
+    dashboard_not_found: 未找到仪表盘
+    connection_not_found: 未找到此仪表盘的连接。
+    add_profile_first: 请先添加连接配置再创建仪表盘。
+    import_success: "已将 %{count} 个面板导入到新仪表盘。"
+    panel_already_exists: "%{namespace}/%{metric} 的面板已在此仪表盘中"
+  error:
+    cannot_open_chart: "无法打开图表：%{error}"
+    rescale_failed: 将面板重新缩放到 12 列网格失败
+    no_active_connection_import: 没有活动连接 — 请先连接到一个配置再导入。
+    import_unsupported: 当前连接不支持仪表盘导入。
+    import_failed: "仪表盘导入失败：%{error}"
+    persist_import_chart_failed: "持久化导入的图表 %{name} 失败"
+    persist_import_dashboard_failed: "持久化导入的仪表盘 %{name} 失败"
+    persist_import_panels_failed: 持久化导入的仪表盘面板失败
+    save_dashboard_failed: "保存仪表盘 %{name} 失败：%{message}"
+    browsing_unsupported: 此连接不支持仪表盘浏览。
+    parse_unsupported: 此连接无法解析仪表盘。
+    remote_parse_failed: "仪表盘解析失败：%{error}"
+    create_dashboard_failed: "创建仪表盘失败：%{error}"
+    delete_dashboard_failed: "删除仪表盘失败：%{error}"
+    duplicate_dashboard_failed: "复制仪表盘失败：%{error}"
+    rename_failed: "重命名失败：%{error}"
+    delete_chart_failed: "删除已保存的图表失败：%{error}"
+    duplicate_chart_failed: "复制已保存的图表失败：%{error}"
+    load_namespaces_failed: "加载指标命名空间失败：%{error}"
+    load_metrics_failed: "加载指标失败：%{error}"
+    persist_chart_for_panel_failed: "为新面板持久化图表 %{name} 失败"
+    add_panel_failed: "添加面板失败：%{error}"
+    persist_metric_chart_for_panel_failed: "为新面板持久化指标图表 %{name} 失败"
+    add_panels_failed: "添加面板失败：%{error}"
+  instance_overview:
+    editable_name: "%{name}（可编辑）"
+    toast:
+      no_dashboard_defined: 此驱动未定义实例概览仪表盘。
+      created_editable: 已创建包含所有概览面板的可编辑仪表盘。
+    error:
+      create_editable_failed: "创建可编辑仪表盘失败：%{error}"
+components:
+  json_editor:
+    empty_error: 文档不能为空
+    format: 格式化
+    compact: 紧凑
+    cancel: 取消
+    save: 保存
+  value_source:
+    literal: 字符
+    env: 环境变量
+    secret: AWS 云密钥管理
+    parameter: AWS 参数存储
+    auth: 认证会话字段
+    json_key_placeholder: JSON 键（可选）
+  file_picker:
+    browse: 浏览…
+composites:
+  refresh_split_button:
+    label: 刷新
+controls:
+  dropdown:
+    placeholder: 选择
+  multi_select:
+    placeholder: 选择…
+    clear_all: 全部清除
+    more:
+      one: "+%{count} 项"
+      many: "+%{count} 项"
+connection_manager:
+  placeholder:
+    seconds: 秒
+    connection_name: 连接名称
+    password: 密码
+    key_passphrase_optional: 密钥口令（可选）
+    ssh_password: SSH 密码
+    ca_cert_path: CA 证书路径
+    client_cert_path: 客户端证书路径
+    client_key_path: 客户端密钥路径
+    select_ssh_tunnel: 选择 SSH 隧道
+    select_proxy: 选择代理
+    none: 无
+    use_driver_default: 使用驱动默认值
+    no_hook: 无
+    select_trusted_client: 选择受信客户端
+    no_role: 无角色
+    no_policy: 无策略
+    extra_hook_ids: 额外 hook ID（逗号分隔）
+    use_connection_auth_profile: 使用连接认证配置文件
+    select_additional_roles: 选择附加角色…
+    select_additional_policies: 选择附加策略…
+  access_method:
+    direct: 直连
+    ssh_tunnel: SSH 隧道
+    proxy: 代理
+    ssm: SSM 端口转发
+  overrides:
+    refresh_policy: 刷新策略
+    refresh_interval: 刷新间隔（秒）
+    confirm_dangerous: 确认危险查询
+    requires_where: 要求 WHERE 子句
+    requires_preview: 要求预览
+    default_caption: "默认：%{value}"
+    default_seconds_caption: "默认：%{value}s"
+    on: 开
+    off: 关
+  form_title:
+    edit: "编辑 %{driver} 连接"
+    new: "新建 %{driver} 连接"
+  connection_overrides_title: 连接覆盖项
+  connection_hooks_title: 连接 Hooks
+  new_auth_profile: 新建认证配置文件…
+  aws_sso_wizard_title: AWS SSO 向导
+  aws_sso_open_failed: 打开 AWS SSO 向导窗口失败
+  select_ssh_key_title: 选择 SSH 私钥
+  select_ca_cert: 选择 CA 证书
+  select_client_cert: 选择客户端证书
+  select_client_key: 选择客户端密钥
+  filter_certificates: 证书 / 密钥
+  filter_all_files: 所有文件
+  select_database_file: 选择数据库文件
+  auth:
+    profile_created_sso: 所选配置文件由 AWS SSO 向导创建。
+    profile_created_wizard: 所选配置文件由向导创建。
+    refreshing_sessions: 正在刷新认证配置文件会话…
+    select_before_login: 请先选择认证配置文件再登录。
+    provider_unavailable: "认证提供程序 %{provider_id} 不可用。"
+    interactive_login_unavailable: 此认证配置文件不支持交互式登录。
+    login_starting: "正在为 %{name} 启动认证提供程序登录…"
+    login_completed: 认证提供程序登录完成。
+    login_failed: "认证提供程序登录失败：%{error}"
+    session_status_valid_expires: "会话状态：有效（%{expires_at} 过期）"
+    session_status_valid: 会话状态：有效
+    session_status_expired: 会话状态：已过期
+    session_status_login_required: 会话状态：需要登录
+    ssh_config_incomplete: SSH 配置不完整
+  driver_settings_title: 驱动设置
+  driver_no_custom_settings: 此驱动没有自定义设置。
+  mcp_disabled: 此连接已禁用 MCP
+  mcp_enabled_select_actor: MCP 已启用 — 请选择要绑定的受信客户端
+  mcp_preview_summary: "执行者 %{actor} | 角色：%{role} | 策略：%{policy}"
+  mcp_preview_none: 无
+  mcp_governance_title: MCP 治理
+  enable_mcp: 为此连接启用 MCP
+  trusted_client_actor: 受信客户端（执行者）
+  mcp_actor_hint: AI 智能体身份 — 在 设置 → MCP 中配置
+  role_label: 角色
+  mcp_role_hint: 在 设置 → MCP → 角色 中配置角色
+  additional_roles_optional: 附加角色（可选）
+  policy_label: 策略
+  mcp_policy_hint: 在 设置 → MCP → 策略 中配置策略
+  additional_policies_optional: 附加策略（可选）
+  scope_policy_preview: 作用域 / 策略分配预览
+  mcp_governance_error:
+    save_policy: "保存 MCP 连接策略分配失败：%{error}"
+    clear_policy: "清除 MCP 连接策略分配失败：%{error}"
+  tab:
+    main: 基础
+    settings: 设置
+    mcp: MCP
+  field:
+    name: 名称
+    ssl_mode: SSL 模式
+    ca_certificate: CA 证书
+    client_cert: 客户端证书
+    client_key: 客户端密钥
+  section:
+    transport: 传输
+  banner:
+    correct_following: 请更正以下内容
+    testing_connection: 正在测试连接…
+    connection_successful: 连接成功
+    connection_successful_warnings: 连接成功（有警告）
+    connection_failed: 连接失败
+  action:
+    copy: 复制
+    back: 返回
+    test_connection: 测试连接
+    save: 保存
+    browse: 浏览
+  window_title: 连接管理器
+  driver_select:
+    search_placeholder: 按名称、驱动、端口筛选…
+    title: 新建连接
+    subtitle: 选择数据库类型
+    empty_state: 没有符合筛选条件的驱动
+    import_from_file: 从文件导入…
+    cancel: 取消
+    configure: 配置
+    configure_named: "配置 %{name}"
+  export:
+    target:
+      connection: 连接
+      auth_profile: 认证配置文件
+      ssh_tunnel: SSH 隧道
+      proxy: 代理
+      bundle: 捆绑包
+    title: 导出
+    title_with_kind: "导出%{kind}"
+    placeholder:
+      output_path: 输出文件路径…
+    field:
+      credentials: 凭据
+      include_connection_password: 包含连接密码
+      include_proxy_credentials: 包含代理凭据
+      include_ssh_password: 包含 SSH 密码
+      embed_ssh_keys: 内嵌 SSH 私钥（需要加密）
+      auth_export_mode: 认证配置文件导出模式
+      reference_aws_profile: 引用（AWS 配置文件）
+      disable_encryption: 禁用加密（强制明文）
+      confirm_passphrase: 确认口令
+      encryption: 加密
+      output_file: 输出文件
+    auth_mode:
+      include: 包含值
+      reference: 引用
+      required_on_import: 导入时必需
+      exclude: 排除
+    hint:
+      connection_scope: 将导出此连接及其配置文件。
+      profile_scope: 将导出此配置文件。
+      plaintext_warning: 敏感信息将以明文写入。仅当输出文件存放于安全位置时才使用此选项。
+    error:
+      choose_output_path: 请选择输出文件路径。
+      passphrase_or_plaintext: 请输入口令或启用强制明文模式。
+      passphrase_mismatch: 口令与确认口令不一致。
+      target_removed: 此配置文件已无法导出，它可能已被删除。
+      cannot_determine_output_path: "无法确定输出路径：%{error}"
+      failed: "导出失败：%{error}"
+      write_failed: "写入导出文件失败：%{error}"
+    summary:
+      auth_profile_line: "认证配置文件：%{name}"
+      auth_profile_line_reference: "认证配置文件：%{name}（引用）"
+      proxy_line: "代理：%{name}"
+      ssh_line: "SSH 隧道：%{name}"
+    action:
+      export: 导出
+    status:
+      exporting: 正在导出…
+    banner:
+      failed: 导出失败
+    result:
+      omitted_fields:
+        one: "已省略 %{count} 个字段 — 接收方需在导入时提供。"
+        many: "已省略 %{count} 个字段 — 接收方需在导入时提供。"
+      warning: "警告：%{message}"
+      success_title: "已导出到 %{path}"
+    toast:
+      success: "已将 %{kind} 导出到 %{path}"
+  import:
+    placeholder:
+      bundle_passphrase: 捆绑包口令
+      bundle_path: "TOML 捆绑包路径…"
+      secret_value: 输入密钥内容
+    dialog:
+      open_title: 打开连接捆绑包
+    filter:
+      toml: TOML 捆绑包
+      all: 所有文件
+    error:
+      choose_file: 请选择要导入的捆绑包文件。
+      cannot_read_file: "无法读取文件：%{error}"
+      parse_error: "解析错误：%{error}"
+      encrypted_needs_passphrase: 此捆绑包已加密。请输入口令后重试。
+      encryption_unavailable: 此捆绑包使用口令加密，但当前版本的 DBFlux 不支持加密功能。
+      wrong_passphrase: 口令错误或捆绑包已损坏。
+      decryption_error: "解密错误：%{error}"
+      import_failed: "导入失败：%{error}"
+      secret_failures_toast:
+        one: "导入时有 %{count} 个密钥无法写入密钥环。密钥环可能已锁定或不可用。"
+        many: "导入时有 %{count} 个密钥无法写入密钥环。密钥环可能已锁定或不可用。"
+    field:
+      bundle_file: 捆绑包文件
+      bundle_encrypted: 捆绑包已加密
+      passphrase: 口令
+    hint:
+      no_native_picker: 此系统没有原生文件选择器 — 请在上方输入或粘贴捆绑包路径。
+      external_refs: 外部值引用将原样保留
+      external_refs_body: SSM、AWS 云密钥管理和环境变量引用将原样导入，并在连接时由本机解析。
+      leave_empty_skip: 留空以跳过。
+      select_profile_or_skip: 选择一个配置文件或跳过：
+    modal_title: 导入
+    preview:
+      intro: 此捆绑包将导入以下内容：
+      count:
+        connections:
+          one: "%{count} 个连接"
+          many: "%{count} 个连接"
+        auth_profiles:
+          one: "%{count} 个认证配置文件"
+          many: "%{count} 个认证配置文件"
+        ssh_tunnels:
+          one: "%{count} 个 SSH 隧道"
+          many: "%{count} 个 SSH 隧道"
+        proxies:
+          one: "%{count} 个代理配置"
+          many: "%{count} 个代理配置"
+      conflicts_banner:
+        one: "目标位置已存在 %{count} 个配置文件 — 您将选择如何处理。"
+        many: "目标位置已存在 %{count} 个配置文件 — 您将逐一选择如何处理。"
+      required_banner:
+        one: "导入后可能有 %{count} 个值需要提供 — 捆绑包中省略的密钥可输入或跳过。"
+        many: "导入后可能有 %{count} 个值需要提供 — 捆绑包中省略的密钥可输入或跳过。"
+      driver_not_installed_banner: 一个或多个连接引用了本机未安装的驱动，将被跳过。
+    conflict_kind:
+      auth_profile: 认证配置文件
+      ssh_tunnel: SSH 隧道
+      proxy: 代理
+      connection: 连接
+    conflicts:
+      intro: 此捆绑包中的部分配置文件已存在。请选择如何处理每个冲突。
+      row_label: "%{kind}：%{bundle_name} 与 %{existing_name} 冲突"
+    required:
+      intro: 以下值可能是必需的。密钥留空即可跳过 — 连接仍会导入，只是缺少该值。
+      secret_label: "%{owner} 的密钥：%{field}"
+      aws_reference_label: "AWS 认证配置文件 %{name}（%{provider_id}），用于 %{owner} "
+      auth_profile_ref_label: "%{owner} 的认证配置文件：%{field}"
+      no_matching_auth_profile: 本机没有匹配的认证配置文件。连接将不带配置文件导入，之后可在 设置 > 认证配置文件 中指定。
+    status:
+      complete: 导入完成。
+      loading: 加载中…
+      importing: 正在导入…
+      imported_toast:
+        one: "已导入 %{count} 个实体。"
+        many: "已导入 %{count} 个实体。"
+    banner:
+      failed: 导入失败
+    outcome:
+      succeeded:
+        one: "已导入 %{count} 个实体。"
+        many: "已导入 %{count} 个实体。"
+      needs_driver:
+        one: "已跳过 %{count} 个连接 — 驱动未安装。"
+        many: "已跳过 %{count} 个连接 — 驱动未安装。"
+      config_failures:
+        one: "%{count} 个连接无法配置。"
+        many: "%{count} 个连接无法配置。"
+      unresolved_refs:
+        one: "%{count} 个连接存在无法解析的引用，未导入。"
+        many: "%{count} 个连接存在无法解析的引用，未导入。"
+      secret_failures:
+        one: "%{count} 个密钥无法写入密钥环。请为受影响的连接手动输入。"
+        many: "%{count} 个密钥无法写入密钥环。请为每个受影响的连接手动输入。"
+    action:
+      reuse_existing: 复用现有
+      create_new: 新建
+      map_to: "映射到：%{name}"
+      skip: 跳过
+      use_profile: "使用：%{name}"
+      cancel: 取消
+      back: 返回
+      done: 完成
+      load: 加载
+      continue_: 继续
+      import: 导入
+connections:
+  window:
+    manager_title: 连接管理器
+    edit_title: 编辑连接
+  toast:
+    disconnecting: "正在断开与 %{name} 的连接…"
+    no_active_connection: 无活动连接
+    refreshing_schema: 正在刷新模式…
+  error:
+    refresh_schema_failed: "刷新模式失败：%{error}"
+document:
+  audit:
+    actor:
+      app: 应用
+      external_auth_provider: 外部认证提供程序
+      external_driver: 外部驱动
+      hook: Hook
+      mcp_client: MCP 客户端
+      script: 脚本
+      system: 系统
+      user: 用户
+    category:
+      config: 配置
+      connection: 连接
+      governance: 治理
+      hook: Hook
+      mcp: MCP
+      object_storage: 对象存储
+      query: 查询
+      script: 脚本
+      system: 系统
+    export:
+      unsupported_source: 仅内置审计视图支持导出
+      exported:
+        one: "已导出 %{count} 个事件到 %{path}"
+        many: "已导出 %{count} 个事件到 %{path}"
+      write_failed: "导出写入文件失败：%{error}"
+      failed: "导出失败：%{error}"
+    task:
+      loading_event_stream: "正在加载事件流：%{title}"
+    detail:
+      action: 操作
+      actor: 执行者
+      category: 类别
+      connection_driver: 连接 / 驱动
+      correlation_id: 关联 ID
+      details: 详情
+      duration: 时长
+      error: 错误
+      event_id: 事件 ID
+      level: 级别
+      message: 消息
+      outcome: 结果
+      partition: 分区
+      secondary_time: 次要时间
+      source: 来源
+      summary: 摘要
+      time: 时间
+    filter:
+      apply: 应用
+      clear: 清除
+      group_label: 分组：
+      loading: 加载中…
+      placeholder:
+        local: 本地
+      retry: 重试
+      view_mode:
+        chart: 图表
+        table: 表格
+      y_scale:
+        linear: Y 轴：线性
+        log: Y 轴：对数
+    level:
+      debug: 调试
+      error: 错误
+      fatal: 严重
+      info: 信息
+      trace: 跟踪
+      warn: 警告
+    menu:
+      copy_row_as_csv: 将行复制为 CSV
+      copy_summary: 复制摘要
+      export: 导出
+      export_format:
+        csv: CSV
+        json: JSON
+      filter_by_correlation: 按关联筛选
+    outcome:
+      cancelled: 已取消
+      failure: 失败
+      pending: 等待中
+      success: 成功
+    row:
+      unit:
+        events: 事件
+        rows: 行
+    source:
+      connection_not_found: 未找到此事件源的连接
+      load_failed: "加载事件出错：%{error}"
+      empty:
+        external: 没有符合当前筛选条件的事件。
+        internal: 没有符合当前筛选条件的审计事件。
+      error_heading:
+        external: 加载事件失败
+        internal: 加载审计事件失败
+      loading:
+        external: 正在加载事件…
+        internal: 正在加载审计事件…
+  buckets_table:
+    title: "存储桶 — %{connection}"
+    search_placeholder: 按名称查找存储桶…
+    toolbar:
+      refresh: 刷新
+      new_bucket: 新建存储桶
+    columns:
+      name: 名称
+      region: 区域
+      objects: 对象数
+      size: 大小
+      versioning: 版本控制
+      created: 创建时间
+    versioning:
+      on: 开启
+      suspended: 已暂停
+      off: 关闭
+    details:
+      calculate_size: 计算大小
+      calculating: 正在计算…
+    footer:
+      buckets:
+        one: "%{count} 个存储桶"
+        many: "%{count} 个存储桶"
+      regions:
+        one: "%{count} 个区域"
+        many: "%{count} 个区域"
+      hint:
+        open: Enter 浏览
+        properties: Space 属性
+        delete: x 删除（仅限空存储桶）
+    empty:
+      loading: 正在加载存储桶…
+      error: 列出存储桶失败
+      error_detail: "列出存储桶失败：%{error}"
+      no_match: "没有符合 %{query} 的存储桶"
+      no_buckets: 此连接没有存储桶
+      hint_refresh: r 刷新
+    delete_confirm:
+      title: 删除存储桶？
+      body: "%{bucket} 为空，将被删除。此操作无法撤销。"
+      cancel: 取消
+      confirm: 删除
+    error:
+      bucket_not_empty: "存储桶 %{bucket} 不为空。请先递归删除该存储桶中的对象，然后再删除存储桶。"
+    status:
+      duration_tooltip: 上次对象存储调用的客户端耗时
+    new_bucket:
+      title: 新建存储桶
+      field:
+        name: 名称
+        name_hint: 3-63 个字符 · 小写字母、数字、英文句号和连字符
+        region: 区域
+        encryption: 默认加密
+      section:
+        options: 选项
+      option:
+        versioning: 启用版本控制
+        block_public_access: 阻止所有公共访问
+        object_lock: 对象锁定
+        object_lock_warning: 存储桶创建后无法禁用对象锁定。
+      encryption:
+        none: 无
+      applied_immediately: 立即生效
+      cancel: 取消
+      create: 创建
+      creating: 正在创建…
+      error:
+        length: 存储桶名称长度必须为 3-63 个字符。
+        charset: 存储桶名称只能包含小写字母、数字、英文句号和连字符。
+      toast:
+        created: "已创建存储桶 %{name} "
+        created_with_limitations: "已创建存储桶 %{name}（有限制）"
+  chart:
+    toolbar:
+      type_label: 类型
+      stats: 统计
+      save_chart: 保存图表
+      points:
+        one: "%{count} 个点"
+        many: "%{count} 个点"
+    shell:
+      run: 运行
+      running: 正在运行…
+      save: 保存
+      cancel: 取消
+      name_placeholder: 图表名称
+      degraded:
+        loading_metric: 正在加载指标数据…
+        no_data_points: 所选时间窗口内没有数据点。
+        run_query: 运行查询以填充图表。
+        no_time_column: 结果中未检测到时间列。
+        no_numeric_series: 结果中未检测到数值序列。
+        build_failed: 图表构建失败。
+      custom_range:
+        apply: 应用
+      stats_rail:
+        rebuilding: 正在重建图表…
+        no_stats: 此序列没有可用的统计信息。
+        unavailable: 不可用
+        window_title: 窗口
+        window:
+          start: 开始
+          end: 结束
+          span: 跨度
+          points: 点数
+        source_title: 来源
+    status:
+      task_label: 图表查询
+    toast:
+      chart_saved: 图表已保存
+      save_failed: "保存图表失败：%{error}"
+      png_export_coming: PNG 导出将在 v0.7 提供
+    error:
+      source: "图表源错误：%{error}"
+      no_connection_selected: 未选择连接
+      connection_not_found: 未找到连接
+      connection_error: "连接错误：%{error}"
+      collection_source_unsupported: ChartDocument 不支持集合数据源；请通过 DataDocument 打开
+    metric_picker:
+      apply: 应用
+      dropdown:
+        custom: 自定义…
+      period:
+        placeholder: 周期（秒）
+        error: "周期：%{message}"
+        validation:
+          not_a_number: "period 必须为数字，实际为 %{value}"
+          too_low: period 至少为 1 秒
+          too_high: period 不得超过 86400 秒（24 小时）
+      statistic:
+        placeholder: 统计信息（如 p99）
+        error: "统计信息：%{message}"
+        validation:
+          empty: 统计信息不能为空
+      dimensions:
+        title: 维度
+        loading: 正在加载维度…
+        error: "错误：%{message}"
+        retry: 重试
+        aggregate_all: 全部聚合
+        empty: 无维度组合
+        connection_not_found: 连接不存在或未激活
+        catalog_unsupported: 连接不支持指标目录
+  code:
+    toolbar:
+      refresh: 刷新
+      cancel: 取消
+      checking: 正在检查…
+      run: 运行
+      shortcut_hint_with_selection: "%{shortcut}（选区 / 全部）"
+      new_tab: 新建标签页
+      selection: 选区
+      read_only: 只读
+      saved: 已保存
+      save: 保存
+      formatter_unavailable: 格式化程序不可用
+      query_history: 查询历史
+      explain_query: 解释查询
+      open_in_chart: 在图表文档中打开当前查询
+    output:
+      running: 正在运行…
+      stopped: 已停止
+      output: 输出
+      lines:
+        one: "%{count} 行"
+        many: "%{count} 行"
+      truncated: "（在 %{limit} 行处截断）"
+    result:
+      count:
+        one: "%{count} 个结果"
+        many: "%{count} 个结果"
+      loading:
+        title: 正在运行…
+        body: 查询进行中
+      error:
+        title: 查询错误
+      empty: 运行查询以查看结果
+      awaiting_connection: 连接到此数据库以查看例程定义。
+    script_confirm:
+      title: 运行整个脚本
+      message:
+        one: "未选中文本，因此整个脚本将按顺序作为 %{count} 条语句运行。是否继续？"
+        many: "未选中文本，因此整个脚本将按顺序作为 %{count} 条语句运行。是否继续？"
+      cancel: 取消
+      run: 运行脚本
+    dangerous_query:
+      fallback:
+        title: 警告
+        body: 此查询可能具有危险性。
+      dont_ask_again: 不再询问
+      cancel: 取消
+      run_anyway: 仍要运行
+      kind:
+        delete_no_where:
+          title: 不带 WHERE 的 DELETE
+          body: 不带 WHERE 的 DELETE 可能影响所有行
+        update_no_where:
+          title: 不带 WHERE 的 UPDATE
+          body: 不带 WHERE 的 UPDATE 可能影响所有行
+        truncate:
+          title: TRUNCATE
+          body: TRUNCATE 将删除所有行
+        drop:
+          title: DROP
+          body: DROP 将永久移除该对象
+        alter:
+          title: ALTER
+          body: ALTER 将修改结构
+        script:
+          title: 危险脚本
+          body: 此脚本包含潜在破坏性语句
+        mongo_delete_many:
+          title: deleteMany 使用空筛选器
+          body: 使用空筛选器的 deleteMany 将删除所有文档
+        mongo_update_many:
+          title: updateMany 使用空筛选器
+          body: 使用空筛选器的 updateMany 将更新所有文档
+        mongo_drop_collection:
+          title: drop() 集合
+          body: drop() 将永久移除该集合
+        mongo_drop_database:
+          title: dropDatabase()
+          body: dropDatabase() 将永久移除整个数据库
+        redis_flush_all:
+          title: FLUSHALL
+          body: FLUSHALL 将删除所有数据库中的所有键
+        redis_flush_db:
+          title: FLUSHDB
+          body: FLUSHDB 将删除当前数据库中的所有键
+        redis_multi_delete:
+          title: DEL（多个键）
+          body: 带多个键的 DEL 将把它们全部删除
+        redis_keys_pattern:
+          title: KEYS 模式
+          body: 带模式的 KEYS 在大型数据库上存在性能风险
+        raw_expression_in_set:
+          title: SET 中的原生 SQL 表达式
+          body: SET 子句包含原生 SQL 表达式 — 绕过参数绑定
+    context_bar:
+      placeholder:
+        connection: 无连接
+        database: 数据库
+        schema: 模式
+      label:
+        connection: 连接：
+        source: 来源：
+        database: 数据库：
+        schema: 模式：
+      fallback:
+        syntax: 语法
+        sources: 来源
+        time: 时间
+        start: 开始
+        end: 结束
+      apply: 应用
+      connect_error: "无法连接到数据库 %{database} "
+      connect_failed: "连接数据库 %{database} 失败：%{error}"
+    execution:
+      toast:
+        select_query: 选择要运行的查询文本
+        enter_query: 输入要运行的查询
+        no_active_connection: 无活动连接
+        connection_not_found: 未找到连接
+        auto_refresh_blocked: 已阻止自动刷新：查询会修改数据
+        explain_unavailable: 脚本不支持 Explain
+        enter_query_to_explain: 输入要解释的查询
+        enter_script_content: 输入要运行的脚本内容
+        write_query_first: 请先编写查询才能在图表中打开
+        connecting: "正在连接数据库 %{database}，请稍候…"
+        redis_flush_disabled: FLUSHALL / FLUSHDB 已在设置中禁用
+      result_title:
+        query_failed: 查询失败
+        script_failed: 脚本失败
+      task:
+        run_script: "运行 %{name} 脚本"
+      copy_error: 复制错误
+      result_tab_title: "结果 %{index}"
+      error:
+        select_source: 请至少选择一个来源
+        start_time_required: 需要开始时间
+        end_time_required: 需要结束时间
+        start_before_end: 开始时间必须早于结束时间
+      hint_prefix: "%{message}\n提示：%{hint}"
+    file_ops:
+      save_as:
+        title: 脚本另存为
+        all_files: 所有文件
+      error:
+        save_failed: "保存文件失败：%{error}"
+        dialog_unavailable: "保存失败 — 文件对话框不可用且无法创建回退目录：%{error}"
+        save_script_failed: "保存脚本失败：%{error}"
+        auto_save_failed: "%{path} 自动保存失败"
+      native_picker_fallback: "原生文件选择器不可用 — 脚本已改存到 %{path}。请安装 xdg-desktop-portal、zenity 或 kdialog 以使用保存对话框。"
+    title:
+      untitled: 未命名
+  dashboard:
+    builder:
+      preset:
+        last_15_min: 最近 15 分钟
+        last_24_hours: 最近 24 小时
+        last_6_hours: 最近 6 小时
+        last_7_days: 最近 7 天
+        last_hour: 最近 1 小时
+    configure:
+      action:
+        export_png: 导出 PNG
+        stats: 统计
+      apply: 应用
+      bindings_hint: 请先至少运行一次图表以配置绑定。
+      cancel: 取消
+      chart_kind:
+        area: 面积图
+        bar: 柱状图
+        line: 折线图
+        number: 数字
+        pie: 饼图
+        scatter: 散点图
+        stacked: 堆叠图
+      section:
+        actions: 操作
+        axis_bindings: 轴绑定
+        chart_type: 图表类型
+      title: "配置面板：%{name}"
+    panel:
+      chart_not_found:
+        body: 未找到图表 — 已保存的图表已被删除
+        title: 未找到图表
+      menu:
+        configure: 配置…
+        edit_title: 编辑标题…
+        remove: 移除面板
+    status:
+      empty_hint: 添加已保存的图表以开始
+    toast:
+      position_overlap: 位置与其他面板重叠
+      save_position_failed: "保存面板位置失败：%{message}"
+    toolbar:
+      add_panel: + 添加面板
+      apply: 应用
+      edit_mode_tooltip: 编辑仪表盘
+      exit_edit_mode_tooltip: 退出编辑模式
+      save_as_editable: 另存为可编辑
+      save_as_editable_tooltip: 将此概览克隆为新的可编辑仪表盘
+  data:
+    chart_dock:
+      toolbar:
+        apply: 应用
+      save:
+        title: 保存图表
+        name_placeholder: 图表名称
+        cancel: 取消
+        save: 保存
+      degraded:
+        no_time_column:
+          title: 未检测到时间列
+          body: 此结果没有 Timestamp 列。请选择一个列作为时间轴。
+        no_numeric_series:
+          title: 无数值序列
+          body: 此结果没有可绘制为序列的 Float 或 Integer 列。
+        no_data:
+          title: 暂无数据
+          body: 运行查询以填充图表视图。
+        build_failed:
+          title: 图表构建失败
+          body: 查询结果包含可绘图的列，但无法构建图表。
+        open_table_tab: 打开表格标签页
+        pick_time_column: 选择时间列…
+        hide_picker: 隐藏选择器
+      picker:
+        x_axis_label: X 轴（时间 / 标签列）
+        y_axis_label: Y 轴（数值列）
+        apply: 应用
+      rail:
+        shape:
+          rows:
+            one: "%{count} 行"
+            many: "%{count} 行"
+          columns:
+            one: "%{count} 列"
+            many: "%{count} 列"
+          template: "%{rows} × %{columns}"
+      configure:
+        why:
+          numeric:
+            one: "%{count} 个数值列"
+            many: "%{count} 个数值列"
+          timestamp:
+            one: "%{count} 个类时间戳列"
+            many: "%{count} 个类时间戳列"
+          template: "结果包含 %{numeric} 和 %{timestamp}。请选择哪个作为时间轴以及要绘制哪些序列。"
+          title: 为何显示此面板
+        time_column:
+          title: 时间列
+        series:
+          title: 序列
+        axis_stacking:
+          title: 轴与堆叠
+          y_axis: y 轴
+          y_axis_value: 线性 · 0 → 自动
+          stack: 堆叠
+          stack_value: 关闭（v0.6.0）
+          interpolation: 插值
+          interpolation_value: 线性
+        reset: 重置
+      stats:
+        rebuilding: 正在重建图表…
+        no_stats: 此序列没有可用的统计信息。
+        unavailable: 不可用
+        title: 统计
+        window:
+          title: 窗口
+          start: 开始
+          end: 结束
+          span: 跨度
+          points: 点数
+        source:
+          title: 来源
+          measurement: 测量
+          field: 字段
+          host: 主机
+          region: 区域
+    context_menu:
+      item:
+        copy: 复制
+        view_document: 查看文档
+        add_document: 添加文档
+        duplicate_document: 复制文档
+        delete_document: 删除文档
+        paste: 粘贴
+        edit: 编辑
+        edit_in_modal: 在弹窗中编辑
+        set_default: 设为默认值
+        set_null: 设为 NULL
+        add_row: 添加行
+        inspect_row: 检查行
+        duplicate_row: 复制行
+        delete_row: 删除行
+        chart_this_query: 将此查询制作成图表
+      submenu:
+        copy_query:
+          sql: 复制为 SQL
+          query: 复制为查询
+          command: 复制为命令
+      delete_confirm:
+        title:
+          one: 删除行？
+          many: "删除 %{count} 行？"
+        description:
+          one: 此操作无法撤销。
+          many: "%{count} 行将被永久删除。此操作无法撤销。"
+        cancel: 取消
+        delete: 删除
+      filter:
+        title: 筛选
+        cell_value: 单元格值
+      order:
+        title: 排序
+        remove: 移除排序
+      generate_sql:
+        title: 生成 SQL
+      error:
+        no_results_to_export: 没有可导出的结果
+        invalid_json: 无效的 JSON
+        document_must_be_json_object: 文档必须为 JSON 对象
+        document_missing_id: 文档必须有 _id 字段
+        table_state_not_available: 表格状态不可用
+        primary_key_not_determined: 无法确定文档主键
+      export:
+        dialog_title: "导出为 %{format}"
+        error:
+          dialog_unavailable_fallback_failed: "导出失败 — 文件对话框不可用且无法创建回退目录：%{error}"
+          failed: "导出失败：%{error}"
+        toast:
+          native_picker_fallback: "原生文件选择器不可用 — 已改为导出到 %{path}。请安装 xdg-desktop-portal、zenity 或 kdialog 以使用保存对话框。"
+          exported: "已导出到 %{path}"
+      clipboard:
+        error:
+          binary_unsupported: 原始二进制无法复制到剪贴板 — 请选择 Hex 或 Base64。
+          non_utf8: "无法复制非 UTF8 输出：%{error}"
+          failed: "复制失败：%{error}"
+        toast:
+          copied: "已将 %{format}（%{bytes} 字节）复制到剪贴板"
+      document:
+        toast:
+          inserted: 文档已插入
+          updated: 文档已更新
+        error:
+          insert_failed: "插入文档失败：%{error}"
+          update_failed: "更新文档失败：%{error}"
+    grid:
+      edit_bar:
+        clean: 无未保存的更改
+        dirty:
+          one: "%{count} 处未保存更改"
+          many: "%{count} 处未保存更改"
+        save: 保存
+        revert: 还原
+      toolbar:
+        refresh: 刷新
+        builder: 构建器
+        switch_to_document: 切换到文档视图
+        switch_to_table: 切换到表格视图
+      mode:
+        table: 表格
+        document: 文档
+      editing:
+        aggregated: 聚合结果无法编辑
+        no_primary_key: 此表没有主键 - 编辑已禁用
+        not_single_table: 编辑已禁用：结果未绑定到单个表。
+      loading: 加载中…
+      empty: 暂无数据
+      views:
+        table: 数据
+        chart: 图表
+        json: JSON
+        text: 文本
+        raw: 原始
+        truncated: "（在 %{max_lines} 行处截断）"
+        empty: （空）
+      status:
+        rows:
+          one: "%{count} 行"
+          many: "%{count} 行"
+        pending_changes:
+          one: "%{count} 处待处理更改"
+          many: "%{count} 处待处理更改"
+      export:
+        trigger: 导出
+        save_as_file: 保存为文件
+        copy_to_clipboard: 复制到剪贴板
+        png_coming_soon: "PNG 导出将在 v0.7 提供 — %{detail}"
+        format:
+          csv: CSV
+          json_pretty: JSON（美化）
+          json_compact: JSON（紧凑）
+          text: 文本
+          binary: 二进制
+          hex: Hex
+          base64: Base64
+      pending:
+        inserted:
+          one: "%{count} 处插入"
+          many: "%{count} 处插入"
+        updated:
+          one: "%{count} 处更新"
+          many: "%{count} 处更新"
+        deleted:
+          one: "%{count} 处删除"
+          many: "%{count} 处删除"
+      error:
+        limit_must_be_positive: Limit 必须大于 0
+        invalid_limit: 无效的 limit 值
+        connection_not_found: 未找到连接
+        connection_not_available: 连接不可用
+        invalid_json_filter: 无效的 JSON 筛选器
+        chart_save_failed: "保存图表 %{name} 失败：%{error}"
+        pk_details_fetch_failed: "获取主键表详情失败：%{error}"
+        query_failed: "查询失败：%{error}"
+        chart_save_no_profile_binding: "无法保存图表：查询未绑定连接配置"
+      placeholder:
+        chart_name: 图表名称
+      filter:
+        open_in_builder: 在构建器中打开
+      toast:
+        query_imported: 查询导入成功
+        mutation_queued: 变更已排队等待审批。
+        chart_saved: "图表 %{name} 已保存"
+        auto_refresh_unavailable: 查询结果不支持自动刷新
+    saved_query:
+      toast:
+        saved_as: "已另存为 %{name} "
+      error:
+        already_exists: "已存在名为 %{name} 的已保存查询"
+        target_connection_unavailable: 目标连接不可用
+        import_failed: 导入失败：目标连接上未找到源表
+    mutation:
+      confirm:
+        delete:
+          summary:
+            one: "从 %{table} 删除 %{count} 行"
+            many: "从 %{table} 删除 %{count} 行"
+            unknown: "从 %{table} 删除行"
+        update:
+          summary:
+            one: "更新 %{table} 中的 %{count} 列"
+            many: "更新 %{table} 中的 %{count} 列"
+      task:
+        delete_rows:
+          one: "删除 %{count} 行"
+          many: "删除 %{count} 行"
+        delete_documents:
+          one: "删除 %{count} 个文档"
+          many: "删除 %{count} 个文档"
+        update_document_field: 更新文档字段
+        save_row: 保存行
+        save_document: 保存文档
+        insert_document: 插入文档
+        insert_row: 插入行
+        delete_document: 删除文档
+        delete_row: 删除行
+        visual_mutation_chunked: 可视化变更（分块）
+        visual_mutation_direct: 可视化变更（直接）
+        visual_mutation_single_transaction: 可视化变更（单事务）
+      error:
+        update_document_unsupported_id: 无法更新文档字段：文档的 _id 值不受支持
+        update_document_failed: "更新文档失败：%{error}"
+        save_row_unsupported_pk: 无法保存行：主键使用了不受支持的值类型
+        save_row_identity_failed: 无法保存行：无法根据主键列构建行标识
+        save_row_unsupported_values: 无法保存行：不受支持的值为只读
+        save_failed: "保存失败：%{error}"
+        save_document_unsupported_id: 无法保存文档：其 _id 值不受支持
+        insert_failed: "插入失败：%{error}"
+        insert_no_values: 无法插入：未提供任何值
+        delete_document_unsupported_id: 无法删除文档：其 _id 值不受支持
+        delete_failed: "删除失败：%{error}"
+        delete_no_primary_key: 无法删除：此表未定义主键
+        delete_identity_failed: 无法删除：无法识别行
+        bulk_delete_no_rows_identified: 无法删除：未能识别任何行
+        bulk_delete_no_documents_identified: 无法删除：未能识别任何文档
+        read_only_connection: 此连接为只读，不允许执行变更。
+        approval_queue_failed: "变更排队等待审批失败：%{error}"
+        approval_requires_mcp: 此连接的变更需要审批。请启用 MCP 功能以激活审批工作流。
+        connection_not_found: 未找到连接 — 无法执行变更。
+        chunked_requires_primary_key: 分块模式需要主键 — 此表未找到主键。
+        chunked_execution_failed: "表 %{table} 上的分块变更失败：%{error}"
+        execution_failed: "表 %{table} 上的变更失败：%{error}"
+      toast:
+        document_updated: 文档已更新
+        saved: 已保存
+        document_inserted: 文档已插入
+        row_inserted: 行已插入
+        document_deleted: 文档已删除
+        row_deleted: 行已删除
+        rows_deleted: "已删除 %{count} 行"
+        documents_deleted: "已删除 %{count} 个文档"
+        partial_delete:
+          row: "已删除 %{done}/%{total} 行，随后失败：%{error}"
+          document: "已删除 %{done}/%{total} 个文档，随后失败：%{error}"
+        chunk_size_reduced: "分块大小已从 %{original} 减小到 %{effective} — 驱动参数限制迫使分块下限低于 %{floor}。处理速度将慢于预期。"
+        chunk_size_adjusted: "分块大小已从 %{original} 调整为 %{effective}，以保持在驱动参数限制之内。"
+        execution_completed:
+          one: "变更完成：影响 %{count} 行"
+          many: "变更完成：影响 %{count} 行"
+        execution_cancelled:
+          one: "变更已取消，已处理 %{count} 行"
+          many: "变更已取消，已处理 %{count} 行"
+    row_inspector:
+      badge:
+        primary_key: PK
+        foreign_key: FK
+      meta:
+        name: 名称
+        type: 类型
+        nullable: 可空
+        primary_key: 主键
+        foreign_key: 外键
+        yes: 是
+        no: 否
+      references:
+        empty: 无引用
+        loading: 正在加载模式…
+        not_found: — 未找到
+        resolving: 正在解析…
+      section:
+        column: 列
+        references: 引用
+        row: 行
+      title: "行 %{row}"
+  export_wizard:
+    title: 导出数据
+    task:
+      one: "从 %{profile} 导出 %{count} 张表"
+      many: "从 %{profile} 导出 %{count} 张表"
+    rail:
+      tables: 表
+      format_options: 格式与选项
+      confirm: 确认
+      run: 运行
+    tables:
+      selected_count: "已选择 %{count} 张表用于导出"
+    format_options:
+      format_label: 格式
+      output_folder_label: 输出文件夹
+      no_folder_chosen: 未选择文件夹
+      choose_folder: 选择文件夹…
+      choosing: 正在选择…
+      dialog_title: 选择导出文件夹
+      segment_size_label: 分段 / 分块大小（高级）
+      segment_size_placeholder: 分段 / 分块大小
+      segment_size_invalid: 必须为大于等于 1 的整数；已保留之前的值。
+      error:
+        no_dialog_fallback_failed: "没有可用的文件夹选择器且无法创建回退导出目录：%{error}"
+    confirm:
+      title: 查看导出计划
+      summary: "%{count} 张表，格式 %{format}，导出到 %{folder}"
+      segment_size: "分段 / 分块大小：%{size}"
+      start_export: 开始导出
+    running:
+      title: 正在导出…
+      position:
+        of_total: "表 %{index} / %{total}"
+        preparing: 准备中
+      progress:
+        of_total: "%{done} / %{total} 行"
+        only: "%{done} 行"
+      cancel: 取消
+    error:
+      no_connection: 此导出没有活动连接
+    toast:
+      cancelled: 导出已取消
+      success: "%{summary}。已保存到 %{folder}"
+      schema_fetch_failed: "读取表模式时导出失败：%{error}"
+      table_failed: "表 %{table} 导出失败：%{error}"
+      failed: "导出失败：%{error}"
+    summary:
+      with_failures: "已导出 %{completed} 张表，共 %{rows} 行（跳过 %{skipped} 张，失败 %{failed} 张）"
+      ok: "已导出 %{completed} 张表，共 %{rows} 行（跳过 %{skipped} 张）"
+    status_line:
+      completed: "%{table}：完成（%{rows} 行）"
+      skipped: "%{table}：已跳过"
+      failed: "%{table}：失败 — %{error}"
+      not_attempted: "%{table}：未尝试"
+    footer:
+      back: 返回
+      continue: 继续
+      close: 关闭
+  governance:
+    refresh: 刷新待处理项
+    no_pending: 无待处理执行
+    pending_title: "待处理 %{id}"
+    approval_context: 审批上下文
+    execution_plan: 执行计划
+    approve: 批准
+    reject: 拒绝
+    select_prompt: 选择一个待处理请求以查看详情。
+    load_failed: "加载待处理执行 %{id} 失败：%{error}"
+  import_wizard:
+    title: 导入数据
+    task:
+      one: "导入 %{count} 张表"
+      many: "导入 %{count} 张表"
+    rail:
+      pick_folder: 选择文件夹
+      configure: 配置
+      confirm: 确认
+      run: 运行
+    pick_folder:
+      description: 选择包含 manifest.json 和导出的表文件的文件夹。
+      choose_folder: 选择文件夹…
+      reading_manifest: 正在读取清单…
+      dialog_title: 选择导入文件夹
+      error:
+        no_connection: 此配置没有活动连接
+        no_dialog: 此平台没有可用的文件夹选择器
+        invalid_bundle: "无效的导入捆绑包：%{error}"
+    configure:
+      mode_placeholder: 模式
+      target_placeholder: 目标列
+      source_placeholder: 源列
+      source_unset: （未设置）
+      apply_mapping: 应用映射
+      continue: 继续
+      unmatched_source: "未匹配的源列将被跳过，除非重新映射：%{names}"
+    mapping_mode:
+      create: 创建
+      existing: 已存在（仅插入）
+      recreate: 重建（DROP + CREATE）
+      skip: 跳过
+      truncate: 清空（TRUNCATE + 插入）
+    confirm:
+      body: "这将在加载数据前删除并重建或清空以下表：%{tables}"
+      warning: 此操作无法撤销。确认以继续。
+      back: 返回
+      proceed: 是，继续
+    running:
+      title: 正在导入…
+      progress:
+        of_total: "%{done} / %{total} 行"
+        only: "%{done} 行"
+    done:
+      close: 关闭
+    error:
+      no_connection: 此导入没有活动连接
+    toast:
+      cancelled: 导入已取消
+      completed: 导入已完成
+      table_failed: "表 %{table} 导入失败：%{error}"
+      failed: "导入失败：%{error}"
+    summary:
+      with_failures: "已导入 %{completed} 张表，共 %{rows} 行（跳过 %{skipped} 张，失败 %{failed} 张）"
+      ok: "已导入 %{completed} 张表，共 %{rows} 行（跳过 %{skipped} 张）"
+    status_line:
+      completed: "%{table}：完成（%{rows} 行）"
+      skipped: "%{table}：已跳过"
+      failed: "%{table}：失败 — %{error}"
+      not_attempted: "%{table}：未尝试"
+  instance_inspector:
+    task_label: "检查器：%{metric_id}"
+    connection_not_found: 未找到连接
+    connection_error: "连接错误：%{detail}"
+    action_unavailable: 操作已取消 — 连接不再可用。请重新连接后重试。
+    kill_default_label: 终止
+    kill_confirm_body: 此操作将终止所选的操作进程，无法撤销。
+    cancel: 取消
+    confirm: 确认
+    error_prefix: "错误：%{error}"
+    loading: 加载中…
+    empty: 暂无数据。请连接并点击刷新。
+    kill_failed_cause: "检查器 %{metric_id} 上的操作 %{action_label} 失败"
+  key_value:
+    add_member_modal:
+      cancel: 取消
+      error:
+        at_least_one_entry: 至少需要一个条目
+        prefix: "错误：%{error}"
+      section:
+        fields: 字段
+        members: 元素
+      submit: 添加
+      title:
+        default: 添加元素
+        hash: 添加哈希字段
+        list: 添加列表元素
+        set: 添加集合元素
+        sorted_set: 添加有序集合元素
+        stream: 添加流条目
+    context_menu:
+      add_entry: 添加条目
+      add_member: 添加元素
+      copy_as_command: 复制为命令
+      copy_entry: 复制条目
+      copy_key: 复制键
+      copy_member: 复制元素
+      copy_value: 复制值
+      delete_entry: 删除条目
+      delete_key: 删除键
+      delete_member: 删除元素
+      edit_member: 编辑元素
+      edit_value: 编辑值
+      new_key: 新建键
+      rename: 重命名
+    history_modal:
+      empty:
+        recent: 暂无历史
+        saved: 无已保存查询
+      footer:
+        items:
+          one: "%{count} 项"
+          many: "%{count} 项"
+      save:
+        name_placeholder: 查询名称
+        name_required: 请输入查询名称
+        success_toast: 查询已保存
+        title: 保存查询
+      search_placeholder: 搜索…
+      tabs:
+        recent: 最近
+        saved: 已保存
+    mutation:
+      error:
+        connection_inactive: 连接不再处于活动状态
+        member_target_unavailable: 无法删除元素：连接或键不可用
+        key_not_deleted: 键未被删除
+      task:
+        delete_member: "从 %{key} 删除元素"
+        edit_member: "编辑 %{key} 中的元素"
+        add_member: "向 %{key} 添加元素"
+        create_key: "创建键 %{key}"
+    new_key:
+      title: 新建键
+      key_type:
+        label: 键类型*
+        placeholder: 选择类型
+      ttl:
+        label: TTL
+        placeholder: 无限制
+      key_name:
+        label: 键名*
+        placeholder: 输入键名
+      value:
+        label: 值
+        placeholder: 输入值
+      field_placeholder: 输入字段
+      member_placeholder: 输入元素
+      score_placeholder: 输入分值
+      error:
+        key_name_required: 键名为必填项
+        ttl_invalid: TTL 必须为正整数
+        stream_requires_field: 流至少需要一对字段 / 值
+        prefix: "错误：%{error}"
+      cancel: 取消
+      create: 创建
+      type:
+        string: 字符串
+        hash: 哈希
+        list: 列表
+        set: 集合
+        sorted_set: 有序集合
+        json: JSON
+        stream: 流
+    pagination:
+      error:
+        background_task_limit: 后台任务运行过多，请稍候
+    parsing:
+      type:
+        string: 字符串
+        bytes: 字节
+        hash: 哈希
+        list: 列表
+        set: 集合
+        sorted_set: ZSet
+        json: JSON
+        stream: 流
+        unknown: ？
+    render:
+      delete_key:
+        title: 删除键？
+        message: "确认删除 %{key}？此操作无法撤销。"
+      delete_member:
+        title: 删除元素？
+        message: "确认删除 %{member}？此操作无法撤销。"
+      delete_confirm:
+        cancel: 取消
+        delete: 删除
+      unknown_type: 未知
+      value_header: 值
+      id_header: ID
+      fields_header: 字段
+      field_score_header: 字段 / 分值
+      click_to_edit: 点击或按 Enter 编辑
+      select_key_prompt: 选择一个键以查看
+      prev: 上一页
+      next: 下一页
+      page: "第 %{page} 页"
+      keys_count:
+        one: "%{count} 个键"
+        many: "%{count} 个键"
+      filter:
+        keys_placeholder: 筛选键…
+        members_placeholder: 筛选元素…
+      ttl:
+        no_limit: 无限制
+        missing: 缺失
+        expired: 已过期
+  migrate_wizard:
+    title: 迁移数据
+    task:
+      one: "迁移 %{count} 张表"
+      many: "迁移 %{count} 张表"
+    rail:
+      source_target: 源与目标
+      tables_mapping: 表映射
+      options: 选项
+      confirm: 确认
+      run: 运行
+    mapping_mode:
+      create: 创建
+      existing: 已存在（仅插入）
+      recreate: 重建（DROP + CREATE）
+      skip: 跳过
+      truncate: 清空（TRUNCATE + 插入）
+    options:
+      segment_size_label: 分段 / 提交大小
+      segment_size_placeholder: 分段 / 提交大小
+      segment_size_invalid: 必须为大于等于 1 的整数；已保留之前的值。
+      disable_referential_integrity: 迁移期间禁用引用完整性
+    confirm:
+      review_plan: 查看迁移计划
+      destructive_ack: 我了解此计划将删除或清空目标中的现有数据。
+      destructive_tag: 破坏性
+      start_migration: 开始迁移
+      mode_label:
+        create: 创建
+        existing: 已存在
+        recreate: 重建
+        skip: 跳过
+        truncate: 清空
+      reorder:
+        warning: 这些表相互循环引用，无法自动排序。请在开始前选择加载顺序：
+        up: 上移
+        down: 下移
+        accept: 使用此顺序
+    running:
+      title: 正在迁移…
+      position:
+        of_total: "表 %{index} / %{total}"
+        preparing: 准备中
+      progress:
+        of_total: "%{done} / %{total} 行"
+        only: "%{done} 行"
+    done:
+      completed_in: "已在 %{elapsed} 内完成"
+    toast:
+      success: 迁移已完成
+    status:
+      cancelled: 迁移已取消
+    error:
+      no_source_connection: 源配置没有活动连接
+      no_target_connection: 目标配置没有活动连接
+      table_schema_read_failed: "无法读取表模式：%{error}"
+      foreign_keys_read_failed: "无法读取外键：%{error}"
+      table_failed: "表 %{table} 迁移失败：%{error}"
+      cyclic_order: "迁移失败：外键顺序在运行中出现循环"
+      failed: "迁移失败：%{error}"
+    summary:
+      with_failures: "已迁移 %{completed} 张表，共 %{rows} 行（跳过 %{skipped} 张，失败 %{failed} 张）"
+      ok: "已迁移 %{completed} 张表，共 %{rows} 行（跳过 %{skipped} 张）"
+    status_line:
+      completed: "%{table}：完成（%{rows} 行）"
+      skipped: "%{table}：已跳过"
+      failed: "%{table}：失败 — %{error}"
+      not_attempted: "%{table}：未尝试"
+    mapping:
+      target_placeholder: 目标表
+      mode_placeholder: 模式
+      unset_option: （未设置）
+      set_all_label: 全部设置：
+      columns_button: 列…
+      unmapped_count:
+        one: "%{count} 个未映射"
+        many: "%{count} 个未映射"
+      column_mapping_title: "列映射 — %{table}"
+      target_column_header: 目标列
+      source_column_header: 源列
+      unmapped_columns: "未映射的源列：%{columns}"
+      header_source: 源
+      header_target: 目标
+      header_mapping_mode: 映射模式
+      header_transform: 转换
+      error:
+        target_schema_read_failed: "无法读取目标表模式：%{error}"
+    source_target:
+      source_title: 源
+      target_title: 目标
+      checked_count:
+        one: "%{count} 个已勾选"
+        many: "%{count} 个已勾选"
+      no_target_selected: 未选择目标
+      retry: "重试 — %{error}"
+      source_connection_gone: 源连接已丢失
+      target_connection_gone: 目标连接已丢失
+      cross_database_error: "一次迁移只有一个源数据库。只能选择 %{source} 中的表 — 无法混入 %{other} 中的表。"
+    footer:
+      back: 返回
+      continue: 继续
+      loading: 加载中…
+      cancel: 取消
+      close: 关闭
+  object_browser:
+    columns:
+      class: 类别
+      key: 键
+      last_modified: 最后修改
+      size: 大小
+    toast:
+      copied: "已复制 %{uri}"
+    context_menu:
+      item:
+        preview: 预览
+        open_in_editor: 在编辑器中打开
+        download: 下载
+        rename: 重命名
+        presign: 预签名
+        copy_uri: 复制 S3 URI
+        delete: 删除
+        collapse: 折叠
+        expand: 展开
+        open: 打开
+        new_folder_inside: 在内部新建文件夹
+        delete_folder: 删除文件夹
+    create_folder:
+      cancel: 取消
+      confirm: 创建
+      confirm_in_progress: 正在创建…
+      created_toast: "已创建文件夹 %{uri}"
+      hint: "创建为以 / 结尾的零字节键"
+      location: "位于 %{uri}"
+      name_placeholder: folder-name
+      title: 新建文件夹
+      error:
+        consecutive_slashes: 文件夹名称不能包含连续斜杠。
+        empty: 文件夹名称不能为空。
+        leading_trailing_slash: 文件夹名称不能以斜杠开头或结尾。
+    delete:
+      body: "%{key}（%{size}）将被删除。此操作无法撤销。"
+      cancel: 取消
+      confirm: 删除
+      deleted_toast: "已删除 %{uri}"
+      title: 删除对象？
+      unknown_size: 大小未知
+    delete_prefix:
+      versioning_note: 此存储桶已启用版本控制 — 删除的对象会添加删除标记，不会永久移除。
+      deleted_toast:
+        one: "已删除 %{uri} 下的 %{count} 个对象"
+        many: "已删除 %{uri} 下的 %{count} 个对象"
+    delete_prefix_modal:
+      title: 删除文件夹 — 递归
+      body_intro: 此路径下的所有内容都将被删除。
+      counting: 正在统计对象…
+      counting_progress: "正在统计… 目前 %{totals}（%{pages} 页）"
+      cancelled: "取消前已统计 %{totals}"
+      capped: "至少 %{totals}（在 %{pages} 页处停止）"
+      error: "无法统计对象：%{error}"
+      cancel_probe: 停止统计
+      first_keys_label: 受影响的前几个键
+      remaining_keys: "… 还有 %{count} 个"
+      confirm_hint: "输入 %{phrase} 以确认"
+      batched_caption: "DeleteObjects · 分批 ×1000"
+      cancel: 取消
+      delete_button:
+        default: 删除对象
+        one: "删除 %{count} 个对象"
+        many: "删除 %{count} 个对象"
+    editor:
+      nav:
+        open: "打开 %{key}"
+        leave_bucket_root: 返回存储桶根目录
+        leave_for: "返回 %{prefix}"
+        close_preview: 关闭此预览
+        delete: "删除 %{key}"
+        rename: "重命名 %{key}"
+      unsaved_summary: "%{key} 有未保存的编辑"
+      toast:
+        saved: "已保存 %{uri}"
+      footer:
+        saving: 正在保存…
+        save: 保存
+        discard: 放弃
+        find: 查找
+      dirty_badge: 已修改
+      unsaved_confirm:
+        title: 未保存的编辑
+        body: "%{key} 存在未保存的编辑。要在%{action}之前保存吗？"
+        cancel: 取消
+    empty:
+      bucket: 此存储桶为空
+      filtered: 没有符合此筛选条件的键
+      loading: 正在加载对象…
+      prefix: 此前缀为空
+    error:
+      api_unavailable: 对象存储 API 不可用
+      connection_unavailable: 连接不再处于活动状态
+    gate:
+      archived: 此对象已归档，无法预览。请在您的 S3 控制台中恢复它以访问其内容。
+      too_large: "此对象大小为 %{size}，超过了 %{limit} 的预览上限。请下载以查看其内容。"
+    metadata:
+      content_type: Content-Type
+      encryption: 加密
+      etag: ETag
+      key: 键
+      last_modified: 最后修改
+      section: 对象
+      size: 大小
+      storage_class: 存储类别
+      versions: 版本
+    presign:
+      title: 预签名 URL
+      method_field_label: 方法
+      expiry_field_label: 有效期
+      signing: 正在签名 URL…
+      close: 关闭
+      copy_url: 复制 URL
+      copied_toast: 已复制预签名 URL 到剪贴板
+      signing_identity_fallback: 此连接
+      method:
+        get: GET 下载
+        put: PUT 上传
+      expiry:
+        fifteen_minutes: 15 分钟
+        one_hour: 1 小时
+        twelve_hours: 12 小时
+        seven_days: 7 天
+      warning:
+        capability:
+          get: 下载此对象
+          put: 覆盖此对象
+        until_instant: "有效期至 %{instant}"
+        until_it_expires: 直到过期
+        body: "任何持有此 URL 的人都可以%{capability}，%{expiry}。该 URL 使用 %{signed_by} 的凭据签名，并携带其权限。"
+    preview:
+      action:
+        copy_uri: 复制 URI
+        delete: 删除
+        download: 下载
+        open: 打开
+        presign: 预签名
+      body:
+        fit_to_width: 适应宽度
+        image_decode_error: "无法解码图像：%{error}"
+        image_header_error: "无法读取图像头：%{error}"
+        loading: 正在加载预览…
+        loading_metadata: 正在加载元数据…
+        svg_invalid_utf8: 此对象不是有效的 UTF-8，因此不能是 SVG。
+        svg_missing_root: 此对象不包含 <svg> 根元素。
+        unpreviewable:
+          generic: 此文件类型没有应用内预览。请下载此对象或在系统查看器中打开。
+          pdf: PDF 不在应用内渲染。请下载此对象或在系统查看器中打开。
+      header:
+        open_in_editor: 在编辑器中打开
+        open_in_system_viewer: 在系统查看器中打开
+      versions:
+        count:
+          one: "%{count} 个版本"
+          many: "%{count} 个版本"
+        loading: "加载中…"
+        view: 查看版本
+    rename:
+      cancel: 取消
+      confirm: 重命名
+      confirm_in_progress: 正在重命名…
+      name_placeholder: object-name
+      renamed_toast: "已重命名为 %{uri}"
+      title: 重命名对象
+      error:
+        contains_slash: 名称不能包含斜杠 — 重命名仅在同一文件夹内进行。
+        empty: 名称不能为空。
+        unchanged: 新名称必须与当前名称不同。
+    status:
+      folders:
+        one: "%{count} 个文件夹"
+        many: "%{count} 个文件夹"
+      key_hint:
+        delete: x 删除
+        filter: / 筛选
+        open: Enter 打开
+        preview: Space 预览
+        rename: r 重命名
+        up: ← 上一级
+      load_more: 加载更多
+      loading_more: 正在加载更多…
+      objects:
+        one: "%{count} 个对象"
+        many: "%{count} 个对象"
+      retry: 重试
+      tree_mode: 树模式
+    toolbar:
+      new_folder: 新建文件夹
+      refresh: 刷新
+      tree: 树
+      upload: 上传
+      filter_prefix_placeholder: 筛选此前缀…
+    transfer:
+      dialog_title: 对象另存为
+      dialog_filter_all_files: 所有文件
+      error:
+        fallback_dir_failed: "文件对话框不可用且无法创建回退目录：%{error}"
+      toast:
+        saved: "已将 %{name}（%{size}）保存到 %{path}"
+        opened: "已在系统查看器中打开 %{name}"
+        no_handler: "没有可用于 %{name} 的系统处理器；已保存到 %{path}"
+    upload:
+      dialog_title: 上传对象
+      error:
+        no_file_picker: 此平台没有可用的文件选择器
+      toast:
+        uploaded:
+          one: "已上传 %{count} 个对象到 %{uri}"
+          many: "已上传 %{count} 个对象到 %{uri}"
+        failed_suffix:
+          one: "（%{count} 个上传失败）"
+          many: "（%{count} 个上传失败）"
+  object_editor:
+    error:
+      not_previewable_fallback: 此对象无法在应用内打开。
+      not_text: 此对象不是文本，无法在应用内编辑。
+      not_utf8: 此对象不是有效的 UTF-8 文本，无法在应用内编辑。
+    status:
+      bucket_tooltip: 存储桶
+      key_tooltip: 对象键
+      loading: 正在加载对象…
+      preparing: 正在准备编辑器…
+      size_tooltip: 上次加载或保存时的对象大小
+  query_builder:
+    aggregate:
+      fn:
+        count_star: COUNT(*)
+        count: COUNT
+        count_distinct: COUNT DISTINCT
+        sum: SUM
+        avg: AVG
+        min: MIN
+        max: MAX
+    assignments:
+      add_button: + 添加赋值
+      column_placeholder: 列
+      value_placeholder: 值
+      raw_sql_warning: 原生 SQL — 表达式将按原样插值。运行前请核实。
+      kind:
+        literal: 字面量
+        raw_sql: 原生 SQL
+        "null": "NULL"
+        default: DEFAULT
+    chrome:
+      save: 保存
+      reset: 重置
+      untitled_query: 未命名查询
+    columns:
+      all_columns: 所有列（*）
+    comparator:
+      eq: =
+      neq: ≠
+      gt: >
+      lt: <
+      gte: ≥
+      lte: ≤
+      like: LIKE
+      ilike: ILIKE
+      in: IN
+      is_null: IS NULL
+      is_not_null: IS NOT NULL
+    execution:
+      mode_label: 模式：
+      chunk_size_label: 分块大小：
+      lock_timeout_label: 锁超时（ms）：
+      lock_timeout_none: 无
+      counting: 正在统计行数…
+      rows_estimated: "预计 %{count} 行"
+      timed_out: 行数统计超时 — 建议使用分块模式
+      failed: "行数统计失败：%{message}"
+      mode:
+        single_tx: 单事务
+        chunked_tx: 分块事务
+        direct: 直接
+    filters:
+      no_filters: 无筛选
+      add_filter: + 筛选
+      add_subgroup: + 子组
+      max_depth: "已达最大筛选嵌套深度（%{depth} 层）"
+      bool_op:
+        and: AND
+        or: OR
+    group_by:
+      heading: 按列分组
+      add_column: + 分组列
+      aggregates_heading: 聚合项
+      add_aggregate: "+ %{function}"
+      alias_placeholder: 别名
+    join:
+      kind:
+        inner: INNER
+        left: LEFT
+        right: RIGHT
+        full: FULL
+    joins:
+      no_fk_metadata: 没有可用的外键元数据。请以原生表达式输入条件。
+      loading_fk: 正在加载外键…
+      add_join: + 连接
+      add_condition: + 条件
+      table_placeholder: 表
+    mode:
+      select: SELECT
+      update: UPDATE
+      delete: DELETE
+    mutation:
+      preview_placeholder: "-- %{kind}：配置赋值 / 筛选以预览 SQL"
+    section:
+      columns: 列
+      execution: 执行
+      filters: 筛选
+      filters_where: 筛选（WHERE）
+      sort: 排序
+      sql_preview: SQL 预览
+    sort:
+      direction:
+        asc: ASC
+        desc: DESC
+      key_order: 排序键顺序
+      key_order_named: "排序键顺序（%{name}）"
+      key_limited_hint: 此驱动的排序仅限于排序键。
+      invalid_column: "%{column} 不在 GROUP BY 列或聚合别名中"
+    status:
+      limit: Limit
+      offset: Offset
+      valid_lines:
+        one: "有效 · %{count} 行"
+        many: "有效 · %{count} 行"
+      run: 运行
+      apply_update: 应用更新
+      open_in_editor: 在编辑器中打开
+      incomplete_aggregate_rows:
+        one: "%{count} 个聚合行不完整，将被排除在查询之外"
+        many: "%{count} 个聚合行不完整，将被排除在查询之外"
+  schema_diff:
+    action:
+      apply: 应用…
+      compute_diff: 计算差异
+      preview_ddl: 预览 DDL
+    apply:
+      read_only: 此连接为只读，不允许执行模式更改。
+    change:
+      column_added: "添加列 %{name} %{type_name}"
+      column_removed: "删除列 %{name}"
+      default_dropped: "删除 %{column} 上的默认值"
+      default_set: "将 %{column} 的默认值设为 %{value}"
+      foreign_key_changed: 更改外键
+      index_added: "添加索引 %{name}"
+      index_removed: "删除索引 %{name}"
+      not_null: "将 %{column} 设为 NOT NULL"
+      nullable: "将 %{column} 设为可空"
+      primary_key_changed: 更改主键
+      type_changed: "将 %{column} 的类型从 %{before} 改为 %{after}"
+    source:
+      risk:
+        destructive: 破坏性
+        safe: 安全
+        warning: 警告
+      schema_not_loaded: "%{database} 的模式尚未加载。请先在侧边栏展开该数据库，然后再次运行计算差异。"
+    status:
+      computing: 正在计算差异…
+      empty: 两个模式之间未发现差异。
+      idle: 选择一个来源并运行计算差异以查看模式更改。
+      unsupported: 不支持
+    summary:
+      apply: "将 %{count} 项模式更改应用到 %{target}"
+      this_connection: 此连接
+    table_action:
+      create: "创建表 %{table}"
+      drop: "删除表 %{table}"
+    toast:
+      applied: "已在 %{tables} 张表上应用 %{statements} 条 DDL 语句。"
+      apply_partial_failure: "在表 %{table} 上失败之前，已应用 %{total} 张表中的 %{applied} 张（%{statements} 条 DDL 语句）：%{error}。剩余 %{remaining} 张表未尝试。"
+      approval_queue_failed: "排队等待审批失败：%{error}"
+      approval_queued: 模式更改已排队等待审批。
+      approval_unavailable: 此连接需要审批，但当前版本不支持审批。
+      connection_unavailable: 目标连接不再可用。
+      ddl_build_failed: "无法构建 DDL：%{error}"
+      read_only: 此连接为只读，不允许执行模式更改。
+      reference_connection_disconnected: 所选的参照连接未连接。
+      reference_not_picked: 请选择要对比的参照数据库或连接。
+      select_at_least_one: 请先至少选择一项更改。
+      select_at_least_one_to_apply: 请至少选择一项要应用的更改。
+      snapshot_load_failed: "加载快照失败：%{error}"
+      snapshot_missing: 所选快照已不存在。
+      snapshot_not_picked: 请选择要对比的快照。
+    view:
+      compare_against: 对比对象
+      mode:
+        live: 实时 ↔ 实时
+        snapshot: 快照 ↔ 实时
+      source:
+        connection_section: 其他连接
+        database_section: 此连接上的其他数据库
+        empty: 连接第二个数据库或连接以进行对比。
+        no_snapshots: 此连接尚未捕获快照。
+      title: "模式差异 — %{database}"
+      title_default: 模式差异
+      unsupported_action:
+        create: 创建表
+        drop: 删除表
+  shared:
+    add: 添加
+    error_prefix: "错误：%{message}"
+    error_with_detail_clipboard: "%{title}：%{detail}"
+    hint:
+      enter_save_esc_cancel: "Enter 保存，Esc 取消"
+    refresh:
+      off: 关
+      custom: 自定义
+      on_open: 打开时
+    result_warnings:
+      context:
+        query: 查询结果
+        table_browse: 表浏览结果
+        visual_query: 可视化查询结果
+        collection_browse: 集合浏览结果
+        crud_returning: 变更 RETURNING 结果
+        mutation_preview: 变更预览结果
+      summary: "%{context} 中存在不受支持的数据库类型 %{type_name}"
+      cause: "%{context} 包含不受支持的类型 %{type_name} 的值。"
+  tabs:
+    menu:
+      close: 关闭
+      close_all: 全部关闭
+      close_left: 关闭左侧
+      close_others: 关闭其他
+      close_right: 关闭右侧
+    unsaved_changes: 未保存的更改
+document_tree:
+  search_placeholder: 搜索…
+  view:
+    tree: 树视图
+    raw_json: 原始 JSON
+  no_matches: 无匹配项
+  document_label: "文档 %{index}"
+documents:
+  default_title: 未命名
+  new_query_name: 查询
+  toast:
+    schema_diff_opened: 已打开模式差异
+    no_active_connection_for:
+      table: 此表没有活动连接
+      collection: 此集合没有活动连接
+      event_source: 此事件源没有活动连接
+      key_value_db: 此键值数据库没有活动连接
+      object_storage_account: 此对象存储账户没有活动连接
+      bucket: 此存储桶没有活动连接
+      object: 此对象没有活动连接
+  error:
+    write_initial_script_failed: "写入初始脚本内容失败：%{error}"
+    save_session_failed: 保存会话清单失败
+errors:
+  action:
+    view_in_audit: 在审计中查看
+  correlation:
+    detail: "关联：%{id}"
+    clipboard: "%{summary}\n关联：%{id}"
+form:
+  validation:
+    connection_name_required: 连接名称为必填项
+    no_driver_selected: 未选择驱动
+    field_required: "%{field} 为必填项"
+    field_invalid_number: "%{field} 必须是有效数字"
+    ssh_host_required: 启用 SSH 时必须填写 SSH 主机
+    ssh_user_required: 启用 SSH 时必须填写 SSH 用户
+    ssh_port_invalid: SSH 端口必须是有效数字
+    ssm_instance_id_required: 必须填写 SSM 实例 ID
+    ssm_instance_id_format: SSM 实例 ID 必须以 "i-" 或 "mi-" 开头
+    ssm_region_required: 必须填写 SSM 区域
+    ssm_remote_port_positive: SSM 远程端口必须大于 0
+    ssm_remote_port_invalid: SSM 远程端口必须是有效数字
+    auth_profile_not_found: "在 ~/.aws/config 中未找到 AWS 配置文件 %{id}  — 请在连接前在 ~/.aws/config 中恢复或重新创建该配置文件。"
+    auth_profile_dangling_keyring_only: "认证配置文件 %{name} 仅存在于 DBFlux 密钥环中，在 ~/.aws/config 或 ~/.aws/credentials 中已没有对应条目。请将凭据添加到 ~/.aws/credentials 以使用此配置文件连接。"
+    auth_profile_dangling: "在 ~/.aws/config 中未找到认证配置文件 %{name} 。请重新创建该配置文件或更新连接绑定。"
+    dynamic_auth_profile_required: 动态值来源需要认证配置文件。请在访问标签页中选择一个。
+    auth_profile_no_provider: "所选认证配置文件 %{name} 没有为动态值来源注册的提供程序。"
+    unknown_hook: "未知的 %{label} Hook %{token}。请在 设置 > Hooks 中配置"
+  action:
+    updating: 正在更新
+    saving: 正在保存
+  warning:
+    refresh_interval_invalid: 已忽略刷新间隔覆盖项：值必须为正数
+  error:
+    build_profile_failed: 构建配置失败
+    test_cancelled_pre: 测试连接被预连接 Hook 取消
+    test_cancelled_post: 测试连接被后连接 Hook 取消
+    test_cleanup_failed: "测试连接清理失败：%{error}"
+    test_cleanup_warning: "%{primary_error}（清理警告：%{cleanup_error}）"
+    detached_hook_cleanup_failed: "未能释放配置 %{profile_name}（%{profile_id}）的分离式测试 Hook 任务；作用域任务 ID [%{task_ids}]：%{error}"
+    aws_credentials_missing: "无法解析配置文件 %{name} 的 AWS 凭据。请将凭据添加到 ~/.aws/credentials（或使用环境变量 / IAM 角色）后重试。DBFlux 不存储 AWS 访问密钥 — 凭据由 AWS SDK 直接读取。"
+    pipeline_stage_failed: "流水线阶段 %{stage}：%{source}"
+hooks:
+  kind:
+    command: 命令
+    script: 脚本
+  source:
+    file: 文件
+  script:
+    placeholder: 输入脚本内容…
+  execution:
+    blocking: 阻塞
+    detached: 分离
+  failure:
+    disconnect: 断开连接
+    warn: 警告
+    ignore: 忽略
+  delete:
+    title: 删除 Hook
+    message: "确定要删除 Hook %{name} 吗？"
+  delete_unreadable:
+    title: 删除无法读取的 Hook
+    message: "永久删除无法读取的 Hook %{name}？其存储的数据无法恢复，但其名称此后可被重新使用。"
+  action:
+    delete: 删除
+    update: 更新
+    create: 创建
+  phase:
+    pre_connect_hook: 预连接 Hook
+    extra_pre_connect: 额外预连接
+    post_connect_hook: 后连接 Hook
+    extra_post_connect: 额外后连接
+    pre_disconnect_hook: 预断开 Hook
+    extra_pre_disconnect: 额外预断开
+    post_disconnect_hook: 后断开 Hook
+    extra_post_disconnect: 额外后断开
+  tab:
+    intro: 选择在 设置 -> Hook 中配置的可复用 Hook
+    lua_process_run_note: 所选 Hook 会启用 Lua process.run，并可以您的用户权限执行外部程序
+language:
+  native_name: 简体中文
+login:
+  window_title: 连接流程
+  field:
+    start_url: 起始 URL
+  action:
+    open_browser: 打开浏览器
+    copy_url: 复制 URL
+    cancel: 取消
+    close: 关闭
+    open_auth_profiles: 打开认证配置文件
+  banner:
+    connection_failed: 连接失败
+    completed: 登录完成
+    closing: 认证成功。正在关闭此对话框…
+  body:
+    sign_in_prompt: "使用 %{provider} 登录以继续连接 %{profile}。"
+    instructions: 在浏览器中打开登录 URL 并完成认证。登录完成后 DBFlux 将自动继续。
+    elapsed: "登录最多可能需要 5 分钟。已用时：%{seconds}s"
+    browser_open_failed: "无法自动打开浏览器。请手动打开该 URL。（%{error}；回退失败：%{fallback_error}）"
+  error:
+    timed_out: 登录在 5 分钟后超时
+    no_url: 此提供程序没有可用的登录 URL。
+    no_url_provided: 提供程序未提供登录 URL
+modals:
+  active_query:
+    title: 有查询正在运行
+    prompt: 此连接上仍有查询在运行。您想怎么做？
+    elapsed: "已运行 %{seconds}s"
+    disconnect_anyway: 仍然断开
+    quit_anyway: 仍然退出
+    keep_waiting: 继续等待
+    cancel_query: 取消查询
+  add_panel_picker:
+    title: 添加面板
+    submit:
+      zero: 添加面板
+      one: 添加 1 个面板
+      many: "添加 %{count} 个面板"
+      create: 创建面板
+    saved:
+      empty: 此连接上没有已保存的图表。使用 来自查询 或 来自指标 直接创建一个。
+      search_label: 搜索
+      search_placeholder: 搜索图表…
+    tab:
+      saved: 已保存图表
+      query: 来自查询
+      metric: 来自指标
+    name_placeholder: 面板名称
+    name_label: 名称
+    query:
+      placeholder: 输入查询…
+      label: 查询
+    chart_kind:
+      label: 图表类型
+      line: 折线图
+      bar: 柱状图
+      area: 面积图
+      scatter: 散点图
+    metric:
+      namespace_filter_placeholder: 筛选命名空间…
+      metric_filter_placeholder: 筛选指标…
+      namespace_label: 命名空间
+      metric_label: 指标
+      period_label: 周期（秒）
+      statistic_label: 统计信息
+      loading_namespaces: 正在加载命名空间…
+      select_namespace_hint: 选择一个命名空间以加载指标。
+      loading: 加载中…
+      no_metrics: 此命名空间中没有指标。
+      no_metrics_filtered: 没有符合筛选条件的指标。
+    cancel: 取消
+  cell_editor:
+    title_json: 编辑 JSON
+    title_text: 编辑文本
+  create_dashboard:
+    name_label: 仪表盘名称
+    title: 新建仪表盘
+    validation:
+      empty_name: 名称不能为空
+    cancel: 取消
+    confirm: 创建
+  delete_confirm:
+    dashboard:
+      title: 删除仪表盘
+      body: "删除仪表盘 %{name}？此操作无法撤销。"
+    saved_chart:
+      title: 删除已保存图表
+      body: "删除已保存图表 %{name}？此操作无法撤销。"
+      orphan_warning:
+        one: "此图表用于 1 个仪表盘：%{names}。引用它的面板将显示破损占位符。"
+        many: "此图表用于 %{count} 个仪表盘：%{names}。引用它的面板将显示破损占位符。"
+    cancel: 取消
+    confirm: 删除
+  delete_connection:
+    title: 删除连接
+    warning: 您即将删除以下连接。此操作无法撤销。
+    documents_closed: 使用此连接的所有已打开文档都将被关闭。
+    cancel: 取消
+    confirm: 删除
+  document_preview:
+    title: 文档预览
+  drop_table:
+    title: 删除表
+    confirm: 确认删除表
+    cancel: 取消
+    confirm_placeholder: 输入表名以确认
+    confirm_prompt: "输入 %{table} 以确认"
+    cascade_warning: "依赖对象也将被删除（CASCADE）："
+    delete_warning: 这将永久删除该表及所有依赖对象。
+    relation_kind:
+      view: 视图
+      materialized_view: 物化视图
+      foreign_key: FK
+      trigger: 触发器
+  import_dashboard:
+    title: 从 JSON 导入仪表盘
+    name_label: 仪表盘名称
+    name_placeholder: 仪表盘名称
+    json_label: 仪表盘 JSON
+    json_placeholder: 在此粘贴仪表盘 JSON…
+    name_error: 名称不能为空
+    format: 格式化
+    compact: 紧凑
+    cancel: 取消
+    confirm: 导入
+  mutation_confirm:
+    title: 确认变更
+    sample_unavailable: 示例预览不可用
+    type_to_confirm_label: 输入表名以确认：
+    type_to_confirm_placeholder: 输入表名以确认
+    opt_in_label: 我了解此操作将修改数据
+    cancel: 取消
+    confirm: 确认
+  rename:
+    placeholder: 输入名称
+    title:
+      dashboard: 重命名仪表盘
+      saved_chart: 重命名已保存图表
+    validation:
+      empty_name: 名称不能为空
+    cancel: 取消
+    confirm: 重命名
+  schema_drift:
+    title: 自此查询打开以来模式已发生更改
+    column_header: 列
+    local_header: 本地缓存
+    remote_header: 远程
+    change:
+      new_column: 新列
+      removed: 已移除
+      type_changed: 类型已更改
+      nullability_changed: 可空性已更改
+      pk_changed: 主键已更改
+      fk_changed: 外键已更改
+      default_changed: 默认值已更改
+      index_added: 已添加索引
+      index_removed: 已移除索引
+      cached: 已缓存
+      changed: 已更改
+      primary_key: (主键)
+      foreign_keys: (外键)
+      nullable: 可空
+    continue_stale: 继续使用过期模式
+    cancel: 取消
+    refreshing: 正在刷新…
+    refresh: 刷新并重新运行
+  tunnel_auth:
+    title: 需要 SSH 口令
+    prompt: "输入隧道 %{tunnel} 的口令"
+    connection_detail: "主机：%{host}:%{port} · 用户：%{user}"
+    placeholder: 输入口令
+    incorrect: 口令不正确。请重试。
+    empty_error: 口令不能为空
+    remember: 在此会话中记住
+    cancel: 取消
+    connect: 连接
+  unsaved_changes:
+    title: 未保存的更改
+    prompt: 以下文档中有未保存的更改。您想怎么做？
+    save_selected:
+      one: "保存所选（%{count}）"
+      many: "保存所选（%{count}）"
+    dont_save: 不保存
+    cancel: 取消
+palette:
+  search:
+    placeholder: 搜索命令、连接、表、脚本…
+  empty: 没有匹配项
+  section:
+    connections: 连接
+    commands: 命令
+    charts: 图表
+    tables: 表
+    scripts: 脚本
+  kind:
+    connection: 连接
+    chart: 图表
+    table: 表
+    collection: 集合
+    view: 视图
+    keyspace: 键空间
+    script: 脚本
+  chart:
+    browse_suffix: "[浏览]"
+  import_dashboard:
+    name: 从 JSON 导入仪表盘…
+  command:
+    new_query_tab:
+      name: 新建查询标签页
+    run_query:
+      name: 运行查询
+    run_query_in_new_tab:
+      name: 在新标签页中运行查询
+    save_query:
+      name: 保存查询
+    save_file_as:
+      name: 文件另存为
+    open_script_file:
+      name: 打开脚本文件
+    open_history:
+      name: 打开查询历史
+    cancel_query:
+      name: 取消运行中的查询
+    close_tab:
+      name: 关闭当前标签页
+    next_tab:
+      name: 下一个标签页
+    prev_tab:
+      name: 上一个标签页
+    export_results:
+      name: 导出结果
+    open_connection_manager:
+      name: 打开连接管理器
+    disconnect:
+      name: 断开当前连接
+    refresh_schema:
+      name: 刷新模式
+    focus_sidebar:
+      name: 聚焦侧边栏
+    focus_editor:
+      name: 聚焦编辑器
+    focus_results:
+      name: 聚焦结果
+    focus_tasks:
+      name: 聚焦任务面板
+    toggle_sidebar:
+      name: 切换侧边栏
+    toggle_editor:
+      name: 切换编辑器面板
+    toggle_results:
+      name: 切换结果面板
+    toggle_tasks:
+      name: 切换任务面板
+    open_settings:
+      name: 打开设置
+    open_login_modal:
+      name: 打开认证配置文件登录
+    open_sso_wizard:
+      name: 打开 AWS SSO 向导
+    open_mcp_approvals:
+      name: 打开 MCP 审批
+    refresh_mcp_governance:
+      name: 刷新 MCP 治理
+    open_audit_viewer:
+      name: 打开审计查看器
+    open_saved_chart:
+      name: 打开图表…
+    new_dashboard:
+      name: 新建仪表盘…
+  category:
+    editor: 编辑器
+    tabs: 标签页
+    results: 结果
+    connections: 连接
+    focus: 聚焦
+    view: 视图
+    charts: 图表
+    dashboards: 仪表盘
+scripts:
+  dialog:
+    title: 打开脚本
+    filter:
+      sql: SQL 文件
+      javascript_mongodb: JavaScript（MongoDB）
+      redis: Redis
+      all_files: 所有文件
+  error:
+    read_file_failed: "读取文件 %{path} 失败：%{error}"
+settings:
+  action:
+    default_connection_name: 连接
+    close: 关闭
+  discard:
+    title: 放弃未保存的更改
+    body: "您有未保存的更改。要放弃它们并切换到 %{section} 吗？"
+  editor_panel:
+    title:
+      edit: "编辑 %{noun}"
+      new: "新建 %{noun}"
+  mcp_governance:
+    persist_error: "持久化 MCP 治理失败：%{error}"
+  general:
+    header:
+      title: 常规
+      subtitle: 配置启动、会话、刷新和安全行为
+    appearance:
+      group: 外观
+    startup:
+      group: 启动与会话
+    refresh:
+      group: 刷新与后台
+    safety:
+      group: 执行安全
+    object_storage:
+      group: 对象存储
+    storage:
+      group: 存储
+    theme:
+      label: 主题
+    style:
+      label: 样式
+    language:
+      label: 语言
+      option:
+        system: 跟随系统
+      notice: 语言更改将在重启 DBFlux 后生效。
+    restore_session:
+      label: 启动时恢复会话
+    reopen_connections:
+      label: 重新打开上次的连接
+    default_focus:
+      label: 默认聚焦
+      option:
+        sidebar: 侧边栏
+        last_tab: 上一个标签页
+    max_history:
+      label: 最大历史条目数
+      error: 最大历史条目数必须是大于等于 10 的数字
+    auto_save_interval:
+      label: 自动保存间隔（ms）
+      error: 自动保存间隔必须大于等于 500 ms
+    refresh_policy:
+      label: 默认刷新策略
+      option:
+        manual: 手动
+        interval: 间隔
+    refresh_interval:
+      label: 默认刷新间隔（秒）
+      error: 刷新间隔必须大于等于 1 秒
+    max_background_tasks:
+      label: 最大并发后台任务数
+      error: 最大并发后台任务数必须大于等于 1
+    pause_refresh_on_error:
+      label: 出错时暂停自动刷新
+    refresh_only_if_visible:
+      label: 仅当标签页可见时自动刷新
+    confirm_dangerous:
+      label: 确认危险查询
+    requires_where:
+      label: DELETE / UPDATE 需要 WHERE
+    requires_preview:
+      label: 始终要求预览（忽略抑制）
+    object_preview_limit:
+      label: 对象预览大小上限（MiB）
+      error: 对象预览大小上限必须大于等于 1 MiB
+    object_preview_hint:
+      label: "超过此大小的对象绝不会下载用于预览；浏览器仅显示其元数据。"
+    share_stable_db:
+      label: 使用稳定数据库
+      error: 更新共享数据库设置失败
+      hint: 下次启动时生效。共享稳定数据库（dbflux.db），而非此 nightly 构建的 dbflux-nightly.db。
+    override_value_header: 覆盖值
+    placeholder:
+      refresh_policy: 刷新策略
+    save:
+      button: 保存
+      error: "保存常规设置失败：%{error}"
+      success: 设置已保存。部分更改将在下次启动时生效。
+  about:
+    title: 关于
+    subtitle: 项目信息
+    report_bug: 报告问题
+    or: 或
+    view_source: 查看源代码
+    on_github: 于 GitHub。
+    copyright: "版权所有 © 2026 %{author} 及贡献者。"
+    license: "基于 %{license} 许可证授权。"
+    third_party_licenses: 第三方许可证
+    lucide: UI 图标来自 Lucide（ISC 许可证）
+    simple_icons: 品牌图标来自 Simple Icons（CC0 1.0）
+  keybindings:
+    title: 键盘快捷键
+    subtitle: 按上下文查看所有键盘快捷键
+    filter_placeholder: 筛选快捷键…
+    binding_count:
+      one: （1 个绑定）
+      many: "（%{count} 个绑定）"
+    inherits_from: "继承自 %{parent}"
+    inherited: 继承的
+    conflict:
+      title: "冲突：%{chord} 还绑定到 %{others}"
+      body: 两个或更多命令在此上下文中共享此组合键。
+      unknown_other: 另一个绑定
+    command:
+      toggle_command_palette: 切换命令面板
+      new_query_tab: 新建查询标签页
+      close_tab: 关闭当前标签页
+      next_tab: 下一个标签页
+      prev_tab: 上一个标签页
+      switch_to_tab: 切换到标签页
+      open_tab_menu: 打开标签页菜单
+      focus_sidebar: 聚焦侧边栏
+      focus_editor: 聚焦编辑器
+      focus_results: 聚焦结果
+      focus_tasks: 聚焦后台任务
+      cycle_focus_forward: 向前循环聚焦
+      cycle_focus_backward: 向后循环聚焦
+      focus_left: 聚焦左侧
+      focus_right: 聚焦右侧
+      focus_up: 聚焦上方
+      focus_down: 聚焦下方
+      select_next: 选择下一项
+      select_prev: 选择上一项
+      select_first: 选择第一项
+      select_last: 选择最后一项
+      page_down: 向下翻页
+      page_up: 向上翻页
+      extend_select_next: 向下扩展选择
+      extend_select_prev: 向上扩展选择
+      toggle_selection: 切换选择
+      move_selected_up: 上移所选项
+      move_selected_down: 下移所选项
+      column_left: 左移一列
+      column_right: 右移一列
+      execute: 执行
+      cancel: 取消
+      expand_collapse: 展开 / 折叠
+      delete: 删除
+      rename: 重命名
+      focus_search: 聚焦搜索
+      toggle_favorite: 切换收藏
+      run_query: 运行查询
+      run_query_in_new_tab: 在新标签页中运行查询
+      cancel_query: 取消查询
+      open_history: 切换历史下拉菜单
+      open_saved_queries: 打开已保存查询
+      save_query: 保存
+      save_file_as: 文件另存为
+      open_script_file: 打开脚本文件
+      export_results: 导出结果
+      results_next_page: 结果下一页
+      results_prev_page: 结果上一页
+      focus_toolbar: 聚焦工具栏
+      toggle_panel: 切换面板
+      results_delete_row: 删除行
+      results_add_row: 添加行
+      results_duplicate_row: 复制行
+      results_copy_row: 复制行
+      results_copy_cell: 复制单元格
+      results_set_null: 将单元格设为 NULL
+      open_context_menu: 打开上下文菜单
+      menu_up: 菜单上移
+      menu_down: 菜单下移
+      menu_select: 菜单选择
+      menu_back: 菜单返回
+      sidebar_next_tab: 侧边栏下一个标签页
+      refresh_schema: 刷新模式
+      open_connection_manager: 打开连接管理器
+      export_connections: 导出连接…
+      disconnect: 断开连接
+      open_item_menu: 打开项目菜单
+      create_folder: 新建文件夹
+      toggle_editor: 切换编辑器面板
+      toggle_results: 切换结果面板
+      toggle_tasks: 切换任务面板
+      toggle_sidebar: 切换侧边栏
+      open_settings: 打开设置
+      open_login_modal: 打开认证配置文件登录
+      open_sso_wizard: 打开 AWS SSO 向导
+      open_audit_viewer: 打开审计查看器
+      open_mcp_approvals: 打开 MCP 审批
+      refresh_mcp_governance: 刷新 MCP 治理
+      open_saved_chart: 打开图表…
+      import_dashboard: 从 JSON 导入仪表盘…
+      new_dashboard: 新建仪表盘…
+    context:
+      global: 全局
+      sidebar: 侧边栏
+      editor: 编辑器
+      results: 结果
+      background_tasks: 后台任务
+      command_palette: 命令面板
+      connection_manager: 连接管理器
+      history_modal: 历史
+      text_input: 文本输入
+      dropdown: 下拉框
+      sql_preview_modal: SQL 预览
+      context_menu: 上下文菜单
+      confirm_modal: 确认
+      form_navigation: 表单导航
+      context_bar: 上下文栏
+      audit: 审计查看器
+      event_streams_picker: 事件流选择器
+    category:
+      global: 全局
+      focus: 聚焦
+      navigation: 导航
+      results: 结果
+      actions: 操作
+      editor: 编辑器
+      sidebar: 侧边栏
+      view: 视图
+      dashboards: 仪表盘
+  hooks:
+    header:
+      title: Hooks
+      subtitle: 创建可复用的 Hook 并从连接设置中关联它们
+    list:
+      new: 新建 Hook
+      empty: 未定义 Hook
+      unreadable:
+        title: 无法读取的 Hook
+        hint: 无法读取 — 无法编辑
+    form:
+      title:
+        edit: 编辑 Hook
+        new: 新建 Hook
+      id: Hook ID
+      kind: 类型
+      command: 命令
+      args: 参数
+      args_hint: 参数以空格分隔
+      language: 语言
+      file_path: 文件路径
+      file_path_hint: 脚本在应用编辑器中编辑，默认存储在 hooks/ 目录下
+      open_in_app: 在应用中打开
+      open_in_editor: 在编辑器中打开
+      interpreter: 解释器
+      interpreter_hint: "留空使用 %{default_interpreter}"
+      interpreter_auto: "自动（%{value}）"
+      interpreter_unsupported: 此平台不支持
+      capabilities: 能力
+      capability:
+        logging: 日志
+        env_read: 环境读取
+        connection_metadata: 连接元数据
+        process_run: 受控的进程运行
+        process_run_hint: "启用 `dbflux.process.run(...)` 而不暴露 Lua `os` 库"
+      execution_mode: 执行模式
+      execution_mode_hint: 分离模式在后台运行，不会阻塞连接 / 断开
+      ready_signal: 就绪信号
+      ready_signal_hint: DBFlux 会等待 Hook 输出中出现此文本后再继续。分离式预连接 Hook 必需。
+      cwd: 工作目录
+      env: 环境变量
+      env_hint: 逗号分隔的 KEY=value 对
+      env_denylist: 环境变量黑名单
+      env_denylist_hint: 逗号分隔的、要从继承环境中剥离的变量名
+      timeout: 超时（ms）
+      resolved_command: 解析后的命令
+      enabled: 已启用
+      inherit_env: 继承父级环境
+      on_failure: 失败时
+      preview_placeholder: <输入命令>
+    status:
+      unsupported_platform: 此平台不支持
+      script_missing: 脚本文件尚不存在
+      interpreter_missing: "在 PATH 中未找到解释器 %{interpreter}"
+      language_unsupported: 所选语言在此平台上不受支持
+      lua_process_run_warning: Lua process.run 已启用：此 Hook 可以您的用户权限执行外部程序。程序允许列表只是便利性过滤，并非安全隔离边界 — $PATH 中靠前的同名程序可能被替换。
+    error:
+      open_script: "打开脚本失败：%{error}"
+      command_not_editable: 命令不会在脚本编辑器中打开
+      write_script: "写入脚本文件失败：%{error}"
+      no_scripts_dir: 此会话中脚本目录不可用
+      create_dir: "创建 Hook 目录失败：%{error}"
+      save: 保存 Hook 失败
+      delete_unreadable: 删除无法读取的 Hook 失败
+    validation:
+      id_required: Hook ID 为必填项
+      timeout: 超时必须是有效的数字（毫秒）
+      command_required: 命令为必填项
+      script_path_required: 脚本文件路径为必填项
+      lua_path_required: Lua 脚本文件路径为必填项
+      duplicate_id: "已存在 ID 为 %{id} 的 Hook"
+      env_pair: "无效的环境变量对 %{pair} 。应为 KEY=value 格式"
+      env_key_empty: 环境变量键不能为空
+    toast:
+      saved: Hook 已保存
+      deleted: Hook 已删除
+      unreadable_deleted: 无法读取的 Hook 已删除
+  auth_profiles:
+    profiles_label: 配置文件
+    new_profile: 新建认证配置文件
+    import: 导入…
+    source_label: 来源
+    leave_blank_hint: 留空以保留当前值。
+    auth_profile_label: 认证配置文件
+    editor_subtitle: 用于访问与值解析的可复用认证配置文件
+    changed_on_disk: 配置文件已在磁盘上更改
+    reload: 重新加载
+    name_label: 名称
+    provider_label: 提供程序
+    placeholder_name: 配置文件名称
+    select_provider_ellipsis: 选择提供程序…
+    select_ellipsis: 选择…
+    select_none: — 无 —
+    enabled: 已启用
+    export: 导出
+    delete: 删除
+    save_to_file: 保存到文件
+    cancel: 取消
+    mirror_label_fallback: 只读 — 由外部管理
+    conflict_message: "此配置文件在您打开后已在磁盘上被修改（%{label}）。请先重新加载查看当前值再保存。"
+    partial_saved_message: "%{written_label} 已成功保存，但 %{conflicted_label} 在您打开表单后已在磁盘上被修改。请重新加载以刷新并重新应用您的更改。"
+    login_required_hint: 需要登录 — 点击 登录 加载下拉选项。
+    session_expired_hint: 会话已过期 — 请重新登录以重新加载选项
+    session_expired_click_hint: 会话已过期 — 点击 登录 刷新下拉选项。
+    select_before_login: 请先选择认证提供程序再登录。
+    interactive_login_unavailable: 此提供程序不支持交互式登录。
+    fields_required_before_login: 请在登录前提供配置文件名称和提供程序字段。
+    starting_login: "正在为配置文件 %{name} 启动认证提供程序登录…"
+    login_completed: "配置文件 %{name} 的认证提供程序登录已完成。"
+    login_failed: "配置文件 %{name} 的认证提供程序登录失败：%{error}"
+    login_cancelled: 登录已被用户取消。
+    login_url_panel_description: 在浏览器中打开此 URL 以完成登录。完成认证后 DBFlux 将自动继续。
+    open_browser: 打开浏览器
+    copy_url: 复制 URL
+    login_action: 登录
+    logging_in: 正在登录…
+    runs_interactive_login_hint: 为此认证配置文件运行交互式登录
+    update: 更新
+    create: 创建
+    section_title: 认证配置文件
+    section_description: 管理用于连接访问的可复用认证配置文件
+    delete_dialog_title: 删除认证配置文件
+    delete_dialog:
+      body_none: "确定要删除 %{name} 吗？"
+      body_one: "确定要删除 %{name} 吗？使用此认证配置文件的 1 个连接将被更新。"
+      body_many: "确定要删除 %{name} 吗？使用此认证配置文件的 %{count} 个连接将被更新。"
+    saved_fallback: 配置文件已保存。
+    reference_invalid_title: 配置文件引用无效
+    reference_invalid_body: 无法加载此配置文件。
+    login_hint: 登录以加载选项
+    inherited_from: "继承自 %{trigger}。"
+    inherited_from_named: "继承自 %{trigger} %{name} 。"
+    error:
+      secret_store_failed: 配置文件的密钥无法存储（操作系统密钥环可能已锁定或不可用），重启后不会保留。
+      write_config_failed: "将配置文件写入配置失败：%{error}"
+  mcp:
+    tool:
+      list_connections:
+        name: 列出连接
+        description: 枚举所有已配置的数据库连接
+      get_connection:
+        name: 获取连接
+        description: 检索特定连接的完整详情
+      get_connection_metadata:
+        name: 连接元数据
+        description: 获取连接的驱动能力与元数据
+      list_databases:
+        name: 列出数据库
+        description: 列出连接上可访问的所有数据库
+      list_schemas:
+        name: 列出模式
+        description: 列出数据库中的模式
+      list_tables:
+        name: 列出表
+        description: 列出模式中的表和集合
+      list_collections:
+        name: 列出集合
+        description: 列出 MongoDB 集合或类似的文档存储
+      describe_object:
+        name: 描述对象
+        description: 获取表或集合的列 / 字段定义和索引
+      read_query:
+        name: 读取查询
+        description: 执行 SELECT 或等效的只读查询
+      explain_query:
+        name: 解释查询
+        description: 显示查询执行计划而不实际运行
+      preview_mutation:
+        name: 预览变更
+        description: 试运行写入 / 删除查询并报告受影响的行
+      list_scripts:
+        name: 列出脚本
+        description: 列出脚本目录中的已保存脚本
+      get_script:
+        name: 获取脚本
+        description: 检索特定已保存脚本的源码
+      create_script:
+        name: 创建脚本
+        description: 将新脚本保存到脚本目录
+      update_script:
+        name: 更新脚本
+        description: 覆盖现有的已保存脚本
+      delete_script:
+        name: 删除脚本
+        description: 从脚本目录中永久移除脚本
+      run_script:
+        name: 运行脚本
+        description: 对连接执行已保存的 Lua / SQL / shell 脚本
+      request_execution:
+        name: 请求执行
+        description: 在变更运行前提交给人工审批
+      list_pending_executions:
+        name: 列出待处理项
+        description: 查看所有等待审批的执行
+      get_pending_execution:
+        name: 获取待处理项
+        description: 检索特定待处理执行的详情
+      approve_execution:
+        name: 批准执行
+        description: 批准并触发待处理的变更
+      reject_execution:
+        name: 拒绝执行
+        description: 拒绝并丢弃待处理的变更
+      query_audit_logs:
+        name: 查询审计日志
+        description: 搜索和筛选审计记录
+      get_audit_entry:
+        name: 获取审计条目
+        description: 按 ID 检索单条审计日志
+      export_audit_logs:
+        name: 导出审计日志
+        description: 将审计日志条目下载为文件
+    class:
+      metadata:
+        label: 元数据
+        description: 模式检查 — 列出数据库、表和描述对象
+      read:
+        label: 读取
+        description: 运行只读查询和获取数据
+      write:
+        label: 写入
+        description: 插入、更新或运行会修改数据的脚本
+      destructive:
+        label: 破坏性
+        description: DELETE、DROP、TRUNCATE 及其他不可逆操作
+      admin:
+        label: 管理
+        description: 批准执行、导出审计日志及特权操作
+    group:
+      discovery: 发现
+      schema: 模式
+      query: 查询
+      scripts: 脚本
+      approval: 审批
+      audit: 审计
+    trusted_clients_title: 受信客户端
+    trusted_clients_description: 管理允许通过 MCP 连接的 AI 智能体身份
+    trusted_clients_form_description: 允许通过 MCP 连接的 AI 智能体身份
+    roles_title: 角色
+    roles_description: 管理 MCP 治理的命名角色包
+    roles_form_description: 将策略分组为命名角色，按连接分配给执行者
+    policies_title: 策略
+    policies_description: 管理 MCP 治理的工具和执行类别策略规则
+    policies_form_description: 定义允许哪些工具和执行类别
+    new_client: 新建受信客户端
+    new_role: 新建角色
+    new_policy: 新建策略
+    empty:
+      clients: 未配置受信客户端。
+      roles: 未配置角色。
+      policies: 未配置策略。
+    field:
+      client_id: 客户端 ID
+      name: 名称
+      issuer_optional: 签发者（可选）
+      active: 活动
+      role_id: 角色 ID
+      policies: 策略
+      policy_id: 策略 ID
+      allowed_execution_classes: 允许的执行类别
+      allowed_tools: 允许的工具
+      policy_count:
+        one: 1 个策略
+        many: "%{count} 个策略"
+      tools_classes_summary: "%{tools} 个工具 · %{classes} 个类别"
+      builtin_badge: 内置
+    placeholder:
+      client_name: 智能体 / 集成名称
+      no_policies_selected: 未选择策略
+    hint:
+      select_policies: 选择在 策略 标签页中定义的策略
+    error:
+      client_id_name_required: 客户端 ID 和名称为必填项
+      role_id_required: 角色 ID 为必填项
+      builtin_role_readonly: 内置角色无法修改
+      policy_id_required: 策略 ID 为必填项
+      builtin_policy_readonly: 内置策略无法修改
+    toast:
+      client_saved: 受信客户端已保存
+      select_client_first: 请先选择一个受信客户端
+      client_deleted: 受信客户端已删除
+      client_activated: 受信客户端已激活
+      client_deactivated: 受信客户端已停用
+      role_saved: 角色已保存
+      select_role_first: 请先选择一个角色
+      role_deleted: 角色已删除
+      policy_saved: 策略已保存
+      select_policy_first: 请先选择一个策略
+      policy_deleted: 策略已删除
+    status:
+      unsaved: 表单有未保存的更改
+      saved: 所有更改已应用
+    action:
+      update_client: 更新客户端
+      create_client: 创建客户端
+      activate: 激活
+      deactivate: 停用
+      delete: 删除
+      update_role: 更新角色
+      create_role: 创建角色
+      update_policy: 更新策略
+      create_policy: 创建策略
+  drivers:
+    section_title: 驱动
+    section_description: 配置各驱动的覆盖项和驱动定义的设置
+    empty: 没有已注册的驱动
+    select_hint: 选择一个驱动以配置设置
+    action:
+      save: 保存
+    field:
+      capabilities: 能力
+      global_overrides: 全局覆盖项
+      driver_settings: 驱动设置
+    global_overrides_hint: 启用覆盖以替换此驱动的全局默认值。
+    no_custom_settings: 此驱动没有自定义设置。
+    use_global: 使用全局
+    error:
+      refresh_interval_empty: 刷新间隔覆盖项不能为空
+      refresh_interval_invalid: 刷新间隔覆盖项必须是大于 0 的数字
+      save_failed: "保存驱动设置失败：%{error}"
+    toast:
+      saved: 驱动设置已保存。
+      saved_warnings: 驱动设置已保存，但有警告
+    capability:
+      multiple_databases: 多数据库
+      schemas: 模式
+      ssh_tunnel: SSH 隧道
+      ssl_tls: SSL / TLS
+      authentication: 认证
+      query_cancellation: 查询取消
+      query_timeout: 查询超时
+      transactions: 事务
+      prepared_statements: 预编译语句
+      views: 视图
+      foreign_keys: 外键
+      indexes: 索引
+      custom_types: 自定义类型
+      insert: 插入
+      update: 更新
+      delete: 删除
+      pagination: 分页
+      sorting: 排序
+      filtering: 筛选
+      export_csv: 导出 CSV
+      export_json: 导出 JSON
+      nested_documents: 嵌套文档
+      arrays: 数组
+      aggregation: 聚合
+      kv_scan: KV 扫描
+      kv_get: KV 获取
+      kv_set: KV 设置
+      kv_delete: KV 删除
+      kv_exists: KV 存在性
+      kv_ttl: KV TTL
+      kv_key_types: KV 键类型
+      kv_value_size: KV 值大小
+      kv_rename: KV 重命名
+      kv_bulk_get: KV 批量获取
+      kv_stream_range: KV 流范围
+      kv_stream_add: KV 流添加
+      kv_stream_delete: KV 流删除
+      pub_sub: 发布 / 订阅
+      graph_traversal: 图遍历
+      edge_properties: 边属性
+  rpc_services:
+    section_title: RPC 服务
+    section_description: 管理已配置的 RPC 服务。更改需要重启。
+    empty: 未配置 RPC 服务
+    edit_title: 编辑 RPC 服务
+    new_title: 新建 RPC 服务
+    delete_dialog_title: 删除服务
+    delete_dialog:
+      body: "确定要删除 %{name} 吗？"
+    error:
+      socket_id_required: Socket ID 为必填项
+      timeout_invalid: 超时必须是有效的数字（毫秒）
+      duplicate_socket_id: "已存在 Socket ID 为 %{id} 的服务"
+      save_failed: "保存 RPC 服务配置失败：%{error}"
+    toast:
+      saved: RPC 服务已保存。需要重启以应用更改。
+      deleted: RPC 服务已删除。需要重启以应用更改。
+    field:
+      disabled: 已禁用
+      socket_id: Socket ID
+      command: 命令
+      startup_timeout: 启动超时（ms）
+      enable: 启用此服务
+      service_type: 服务类型
+      arguments: 参数
+      env_vars: 环境变量
+      default_command: （默认）
+    kind:
+      driver: 驱动
+      auth_provider: 认证提供程序
+    action:
+      delete: 删除
+      update: 更新
+      create: 创建
+  ssh_tunnels:
+    placeholder_name: SSH 隧道
+    placeholder_password: 密码
+    placeholder_passphrase: 口令
+    section_title: SSH 隧道
+    section_description: 管理用于堡垒机和跳板机访问的可复用 SSH 隧道
+    empty: 没有已保存的 SSH 隧道
+    new: 新建隧道
+    field:
+      name: 名称
+    delete_dialog_title: 删除 SSH 隧道
+    delete_dialog:
+      body: "确定要删除 %{name} 吗？"
+    action:
+      import: 导入…
+      export: 导出
+      delete: 删除
+    error:
+      host_and_user_required: 主机和用户为必填项
+      save_failed: "保存 SSH 隧道配置失败：%{error}"
+  proxies:
+    placeholder_name: 代理名称
+    placeholder_username: 用户名
+    placeholder_password: 密码
+    section_title: 代理配置
+    section_description: 管理用于数据库连接的代理配置
+    empty: 没有已保存的代理
+    new: 新建代理
+    panel_title: 代理
+    kind:
+      http: HTTP
+      https: HTTPS
+      socks5: SOCKS5
+    field:
+      name: 名称
+      protocol: 协议
+      authentication: 认证
+      username: 用户名
+      password: 密码
+      host: 主机
+      port: 端口
+      no_proxy: 不使用代理
+      enabled: 已启用
+    hint:
+      no_proxy_list: 逗号分隔的绕过代理的主机 / CIDR
+    auth:
+      none: 无
+      basic: Basic
+    status:
+      disabled_caption: 关
+    error:
+      save_failed: "保存代理配置失败：%{error}"
+    action:
+      save: 保存
+      import: 导入…
+      export: 导出
+      delete: 删除
+      update: 更新
+      create: 创建
+    delete_dialog_title: 删除代理
+    delete_dialog:
+      body_none: "确定要删除 %{name} 吗？"
+      body_one: "确定要删除 %{name} 吗？使用此代理的 1 个连接将被更新。"
+      body_many: "确定要删除 %{name} 吗？使用此代理的 %{count} 个连接将被更新。"
+    discard_dialog_title: 放弃代理更改
+    discard_dialog:
+      body: 您有未保存的代理更改。要放弃它们吗？
+  audit:
+    placeholder_level: 级别
+    section_title: 审计
+    section_description: 配置全局审计事件捕获和保留
+    group:
+      status: 状态
+      enable_disable: 启用 / 禁用
+      capture_settings: 捕获设置
+      privacy: 隐私
+      retention: 保留
+      purge: 清理
+      log_capture: 日志捕获
+    field:
+      enable_global: 启用全局审计
+      capture_user_actions: 捕获用户操作
+      capture_system_events: 捕获系统事件
+      capture_full_query_text: 捕获完整查询文本（禁用后仅记录指纹）
+      capture_hook_output: 捕获 Hook / 脚本输出元数据
+      redact_sensitive: 脱敏敏感值（密码、令牌、密钥）
+      retention_days: 保留天数
+      max_detail_bytes: 详情最大字节数
+      purge_on_startup: 启动时清理过期事件
+      purge_interval_minutes: 后台清理间隔（分钟）
+      min_log_level: 捕获到审计的最低日志级别
+      not_wired: （暂未生效）
+    action:
+      save: 保存
+    status:
+      degraded: 审计处于降级状态（需要重启）
+      enabled: 审计已启用
+      disabled: 审计已禁用
+    error:
+      retention_days_invalid: 保留天数必须是大于等于 1 的数字
+      max_detail_bytes_invalid: 详情最大字节数必须大于等于 1024
+      purge_interval_invalid: 后台清理间隔必须是数字
+      cannot_enable: 无法启用审计
+      cannot_enable_body: 无法启用审计：审计数据库无法打开。请重启应用。如果问题持续存在，请检查 dbflux 数据目录的磁盘空间和文件权限。
+      cannot_enable_copy: 无法启用审计：无法启用审计：审计数据库无法打开。请重启应用。如果问题持续存在，请检查 dbflux 数据目录的磁盘空间和文件权限。
+      save_failed: 保存失败
+      save_failed_copy: "保存失败：%{error}"
+    toast:
+      saved: 审计设置已保存。
+  nav:
+    general_group: 常规
+    general: 常规
+    keybindings: 键盘快捷键
+    audit: 审计
+    about: 关于
+    network: 网络
+    ssh_tunnels: SSH 隧道
+    proxies: 代理
+    auth_profiles: 访问提供程序
+    connection: 连接
+    hooks: Hooks
+    drivers: 驱动
+    services: RPC 服务
+    mcp_governance: MCP 治理
+    mcp_clients: 客户端
+    mcp_roles: 角色
+    mcp_policies: 策略
+shutdown:
+  signal_sent: 正在关闭…
+  cancelling_tasks: 正在取消任务…
+  closing_connections: 正在关闭连接…
+  flushing_logs: 正在刷新日志…
+  complete: 关闭完成
+  failed: 关闭失败
+sidebar:
+  confirm:
+    delete_hint: 按 x 确认删除，按 ESC 取消
+    items:
+      one: 1 项
+      many: "%{count} 项"
+  dialog:
+    import_script_title: 导入脚本
+    script_files_filter: 脚本文件
+  empty:
+    connections_title: 还没有连接
+    connections_hint: 使用 + 添加新连接
+    scripts_title: 还没有脚本
+    scripts_hint: 使用 + 创建新脚本或导入现有文件
+  error:
+    cannot_load_schema_types: 无法加载模式类型
+    cannot_load_schema_indexes: 无法加载模式索引
+    cannot_load_schema_foreign_keys: 无法加载模式外键
+    cannot_load_schema_routines: 无法加载模式例程
+  filter:
+    connections_placeholder: 筛选连接和模式…
+    scripts_placeholder: 筛选脚本…
+    stream_placeholder: 筛选流名称…
+  menu:
+    open: 打开
+    browse_event_streams: 浏览事件流
+    view_schema: 查看模式
+    refresh: 刷新
+    generate_sql: 生成 SQL
+    export_table: 导出表…
+    export_tables_many: "导出 %{count} 张表…"
+    migrate_table: 迁移表…
+    migrate_tables_many: "迁移 %{count} 张表…"
+    drop_view: 删除视图
+    drop_table: 删除表
+    query_measurement: 查询测量
+    generate_query: 生成查询
+    drop_collection: 删除集合
+    connect: 连接
+    disconnect: 断开连接
+    edit: 编辑
+    duplicate: 复制
+    rename: 重命名
+    export_ellipsis: 导出…
+    import_ellipsis: 导入…
+    compare_schema: 对比模式…
+    move_to: 移动到…
+    delete: 删除
+    delete_count: "删除 %{count} 项"
+    close: 关闭
+    new_query: 新建查询
+    drop_database: 删除数据库
+    new_connection: 新建连接
+    new_folder: 新建文件夹
+    root: 根目录
+    new_script_file: 新建文件
+    new_script_folder: 新建文件夹
+    reveal_file_manager: 在文件管理器中显示
+    copy_path: 复制路径
+    schema_diff_unsupported: 模式差异仅适用于关系型连接。
+    new_dashboard: 新建仪表盘…
+    import_dashboard: 从 JSON 导入仪表盘…
+    new_saved_chart: 新建已保存图表…
+    rename_ellipsis: 重命名…
+    delete_ellipsis: 删除…
+    copy_metric_id: 复制指标 ID
+    copy_inspector_id: 复制检查器 ID
+  overlay:
+    add_folder: 新建文件夹
+    add_connection: 新建连接
+    add_script_file: 新建文件
+    add_script_folder: 新建文件夹
+    import_file: 导入文件
+    child_picker:
+      title: "事件流：%{name}"
+      column_name: 流名称
+      column_last_event: 最近事件
+      empty: 未找到事件流
+      prev: 上一页
+      next: 下一页
+      page_label: "第 %{current}/%{total} 页（%{start}-%{end}）"
+      page_label_empty: 第 0/0 页
+      unsupported: 此集合不支持事件流
+    skipped_tables:
+      one: 跳过了 1 张活动配置 / 数据库之外的表
+      many: "跳过了 %{count} 张活动配置 / 数据库之外的表"
+  status:
+    connection_summary: "%{connected} 已连接 · %{idle} 空闲"
+    profile_fallback_name: 连接
+  tabs:
+    connections: 连接
+    scripts: 脚本
+  task:
+    connecting: "正在连接 %{name}"
+    disconnecting: "正在断开 %{name}"
+    connection_hook_cancelled: 连接 Hook 已取消
+    post_connect_hook_cancelled: 后连接 Hook 已取消
+    disconnect_hook_cancelled: 断开 Hook 已取消
+    post_disconnect_hook_cancelled: 后断开 Hook 已取消
+    loading_event_streams: "正在加载事件流：%{name}"
+    listing_buckets: "正在列出存储桶：%{name}"
+    loading_database_schema: "正在加载模式：%{name}"
+    connecting_to_database: "正在连接数据库：%{name}"
+    refreshing_database: "正在刷新数据库：%{name}"
+    refreshing_schema_object: "正在刷新模式对象：%{name}"
+    dropping:
+      table: "正在删除表 %{name}"
+      view: "正在删除视图 %{name}"
+      collection: "正在删除集合 %{name}"
+      database: "正在删除数据库 %{name}"
+    pipeline:
+      connecting: "正在连接 %{name}（流水线）"
+      cancelled: 流水线已取消
+      failed: "流水线失败：%{error}"
+      completed: 流水线已完成
+      stage:
+        authenticating: "流水线：正在认证（%{provider}）"
+        waiting_for_login: "流水线：等待 %{provider} 登录"
+        resolving_values: "流水线：正在解析值（%{resolved}/%{total}）"
+        opening_access: "流水线：正在打开访问通道（%{method}）"
+        connecting: "流水线：正在连接驱动（%{driver}）"
+        fetching_schema: "流水线：正在获取模式"
+  toast:
+    edit_reconnect_updated: "%{name} 已更新"
+    edit_reconnect_body: 重新连接以将更改应用到当前会话。
+    edit_reconnect_now: 立即重新连接
+    edit_reconnect_later: 稍后
+    connection_already_pending: 连接已在等待中
+    operation_started_elsewhere: 操作已由其他线程启动
+    background_task_limit: 后台任务运行过多，请稍候
+    connection_cancelled_by_hook: 连接被 Hook 取消
+    connection_cancelled_by_post_connect_hook: 连接被后连接 Hook 取消
+    disconnect_cancelled_by_hook: 断开连接被 Hook 取消
+    disconnected_hook_cancelled: 已断开连接，但后断开 Hook 被取消
+    disconnected_hook_error: "已断开与 %{name} 的连接，但 %{error}"
+    profile_not_found: 未找到配置文件
+    schema_drop_cancelled: 模式删除已取消
+    drop_failed: "删除失败：%{error}"
+    reveal_failed: "在文件管理器中显示失败：%{error}"
+    schema_snapshot_failed: "捕获模式快照失败：%{error}"
+    load_failed:
+      table: "加载 %{name} 的模式失败：%{error}"
+      collection: "加载 %{name} 的事件流失败：%{error}"
+      data_types: "加载数据类型失败：%{error}"
+      indexes: "加载索引失败：%{error}"
+      foreign_keys: "加载外键失败：%{error}"
+      routines: "加载例程失败：%{error}"
+    list_buckets_failed: "列出存储桶失败：%{error}"
+    code_generation_failed: "代码生成失败：%{error}"
+    loading_event_streams: 正在加载事件流…
+    load_schema_failed: "加载模式失败：%{error}"
+    connect_database_failed: "连接数据库失败：%{error}"
+    refresh_database_failed: "刷新数据库失败：%{error}"
+    database_refresh_pending: 数据库刷新已在等待中
+    prepare_schema_object_refresh_failed: 准备模式对象刷新失败
+    refresh_schema_object_failed: "刷新模式对象失败：%{error}"
+    connected:
+      plain: "已连接到 %{name}"
+      one: "已连接到 %{name}（有 1 个 Hook 警告）"
+      many: "已连接到 %{name}（有 %{count} 个 Hook 警告）"
+    disconnected:
+      plain: "已断开与 %{name} 的连接"
+      one: "已断开与 %{name} 的连接（有 1 个 Hook 警告）"
+      many: "已断开与 %{name} 的连接（有 %{count} 个 Hook 警告）"
+    external_driver_unavailable:
+      config: "外部驱动 %{driver_id} 不可用：服务 %{socket_id} 的配置无效：%{summary}"
+      launch: "外部驱动 %{driver_id} 不可用：服务 %{socket_id} 未能启动：%{summary}"
+      probe: "外部驱动 %{driver_id} 不可用：服务 %{socket_id} 在驱动探测期间失败：%{summary}"
+  tree:
+    container:
+      relational: "表（%{count}）"
+      document: "集合（%{count}）"
+      key_value: "键（%{count}）"
+      graph: "节点（%{count}）"
+      time_series: "测量（%{count}）"
+      wide_column: "表（%{count}）"
+      log_stream: "日志组（%{count}）"
+      object_storage: "存储桶（%{count}）"
+    folder:
+      databases: 数据库
+      new_default: 新建文件夹
+      fields: "字段（%{count}）"
+      indexes: "索引（%{count}）"
+      indexes_plain: 索引
+      foreign_keys: "外键（%{count}）"
+      foreign_keys_plain: 外键
+      routines: "例程（%{count}）"
+      routines_plain: 例程
+      columns: "列（%{count}）"
+      constraints: "约束（%{count}）"
+      data_types: "数据类型（%{count}）"
+      data_types_plain: 数据类型
+      views: "视图（%{count}）"
+      storage: "存储（%{count}）"
+      dashboards: 仪表盘
+      saved_charts: 已保存图表
+      instance_metrics: 实例指标
+      instance_inspectors: 实例检查器
+      metrics: 指标
+    node:
+      instance_overview: 实例概览
+      untitled_chart: 未命名图表
+    status:
+      loading: 加载中…
+      profile_connecting: "正在连接 %{name}…"
+      database_loading: "%{name}（加载中…）"
+      error_retry: "错误：%{error} — 点击重试"
+      remote_listing_count: "%{label}（%{count}）"
+      remote_dashboards_error_retry: "错误：%{error} — 折叠再展开以重试"
+      used_by_objects:
+        one: 被 1 个对象使用
+        many: "被 %{count} 个对象使用"
+      dependent_kind:
+        view: 视图
+        materialized_view: 物化视图
+        foreign_key_child: 外键子表
+        trigger: 触发器
+    empty:
+      buckets: 无存储桶
+      dashboards: 还没有仪表盘 — 右键点击以创建
+      dashboards_with_import: 还没有仪表盘 — 右键点击以创建或导入
+      saved_charts: 还没有已保存的图表 — 从查询结果保存图表
+      metrics: 无可用指标
+      inspectors: 无可用检查器
+      remote_dashboards: 此账户 / 区域中没有仪表盘
+sql_preview:
+  title:
+    sql: SQL 预览
+    query: 查询预览
+  options:
+    label: 选项
+    fully_qualified: 完全限定名称
+    compact: 紧凑 SQL
+  action:
+    refresh: 刷新
+    copy: 复制
+    close: 关闭
+ssh:
+  agent_default: SSH Agent / 默认
+  authentication: 认证
+  private_key: 私钥
+  password: 密码
+  private_key_path: 私钥路径
+  browse: 浏览
+  key_passphrase: 密钥口令
+  save: 保存
+  passphrase_hint: 如果密钥没有口令则留空
+  ssh_password: SSH 密码
+  ssh_server: SSH 服务器
+  host: 主机
+  port: 端口
+  username: 用户名
+  private_key_short: 私钥
+  update: 更新
+  create: 创建
+  test: 测试
+  private_key_with_path: "私钥（%{path}）"
+  private_key_hint: 留空以使用 SSH agent 或默认密钥（~/.ssh/id_rsa）
+  auth_label: 认证
+sso_wizard:
+  title: AWS SSO 向导
+  step:
+    start: 第 1 步：起始 URL
+    account: 第 2 步：账户
+    role: 第 3 步：角色
+    confirm: 第 4 步：确认
+  account:
+    hint: 使用 AWS SSO 账户发现中的账户 ID
+    discovering: 正在发现账户…
+    discover_button: 登录并发现账户
+    no_matches: 没有符合当前筛选条件的账户
+  role:
+    hint: 使用 AWS SSO 角色列表中的角色名称
+    discovering: 正在发现角色…
+    discover_button: 发现所选账户的角色
+    no_matches: 没有符合当前筛选条件的角色
+  confirm:
+    profile: "配置文件：%{value}"
+    start_url: "起始 URL：%{value}"
+    region: "区域：%{value}"
+    account: "账户：%{value}"
+    role: "角色：%{value}"
+  back: 返回
+  next: 下一步
+  save: 保存
+  status:
+    missing_required: 配置文件名称、起始 URL 和区域为必填项
+    fill_before_account_discovery: 请在发现前填写配置文件名称、起始 URL 和区域
+    discovering_accounts: 正在登录并获取 SSO 账户…
+    accounts_discovered: SSO 账户发现已完成
+    accounts_failed: "发现账户失败：%{error}"
+    fill_before_role_discovery: 请先填写配置文件 / 区域 / 起始 URL 并选择一个账户
+    discovering_roles: 正在获取 SSO 角色…
+    roles_discovered: SSO 角色发现已完成
+    roles_failed: "发现角色失败：%{error}"
+    profile_created: 已创建 AWS SSO 认证配置文件
+status_bar:
+  disconnected: 已断开
+  tasks_label: 任务
+  tasks_running:
+    one: "1 个运行中"
+    many: "%{count} 个运行中"
+tasks_panel:
+  empty: 无后台任务
+  output_truncated: …面板中输出已截断
+toast:
+  action:
+    copy: 复制
+    show_details: 显示详情
+    hide_details: 隐藏详情
+workspace:
+  background_tasks: 后台任务
+  empty_documents: 没有打开的文档
+  hint:
+    new_query: 新建查询
+    command_palette: 命令面板
+    open: 从磁盘打开脚本
+    new_connection: 新建连接
+  mcp_approvals: MCP 审批
+  event_streams: 事件流
+  action:
+    delete: 删除
+    drop: 删除
+    delete_folder: 删除文件夹
+    delete_connection: 删除连接
+    cancel: 取消
+  confirm:
+    delete_selected: "删除 %{count} 个所选项？"
+    drop_object: "删除 %{object_type} %{name}？"
+    delete_folder: "删除文件夹 %{name}？"
+    delete_connection: "删除连接 %{name}？"
+  default_object_type: 对象
