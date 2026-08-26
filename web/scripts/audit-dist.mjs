@@ -96,35 +96,13 @@ if (
   )
 )
   fail('/install metadata leaks code or shell content');
-const acquisition =
+const thinRoutes =
   '/install/postgresql/ /install/mysql/ /install/mongodb/ /features/sql-editor/ /features/local-mcp-governance/'.split(
     ' ',
   );
-const acquisitionFiles = acquisition.map(fileFor);
 if (mode === 'site')
-  for (const [index, file] of acquisitionFiles.entries()) {
-    const html = text(file);
-    if ((html.match(/<h1[ >]/g) ?? []).length !== 1 || !html.includes('>Install DBFlux<'))
-      fail(`invalid acquisition ${acquisition[index]}`);
-    if (
-      !html.includes('docs.dbflux.dev') ||
-      !/"@type":"WebPage"/.test(html) ||
-      !/"@type":"BreadcrumbList"/.test(html)
-    )
-      fail(`missing acquisition facts ${acquisition[index]}`);
-    if (/SoftwareApplication|rating|review|offer|price/i.test(html))
-      fail(`unsupported acquisition schema ${acquisition[index]}`);
-  }
-else if (acquisitionFiles.some(existsSync)) fail('acquisition route appears in docs mode');
-if (mode === 'site')
-  for (const route of acquisition) if (!llms.includes(`- ${route}`)) fail(`llms lacks ${route}`);
-const mcp = mode === 'site' && text(fileFor('/features/local-mcp-governance/'));
-if (
-  mcp &&
-  (!/local dbflux mcp subprocess.*stdio.*newline-delimited JSON-RPC 2\.0/i.test(mcp) ||
-    /hosted|oauth|saas|remote.proxy|live.policy.reload/i.test(mcp))
-)
-  fail('invalid MCP governance copy');
+  for (const route of thinRoutes)
+    if (existsSync(fileFor(route))) fail(`thin route appears in site output: ${route}`);
 const markdownFiles = new Set(
   readdirSync(root, { recursive: true })
     .filter((file) => file.endsWith('index.md'))

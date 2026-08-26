@@ -2,8 +2,6 @@
 import { getCollection, render } from 'astro:content';
 import DocsLayout from '../layouts/DocsLayout.astro';
 import DocsIndex from '../components/DocsIndex.astro';
-import Acquisition from '../components/Acquisition.astro';
-import { ACQUISITION } from '../data/acquisition';
 import {
   docRoutePolicy,
   docTitle,
@@ -36,11 +34,7 @@ export async function getStaticPaths() {
   // are answered by a 301 written into `_redirects`, not by a page: a page
   // would have to answer 200, and a 200 at a moved URL is what makes a reader
   // — human or otherwise — think the site is still in motion.
-  if (DOCS_MODE === 'site')
-    return ACQUISITION.map((record) => ({
-      params: { path: record.route.slice(1, -1) },
-      props: { record },
-    }));
+  if (DOCS_MODE === 'site') return [];
 
   const docs = await getCollection('docs');
   const pages = buildLocalizedDocumentMatrix(docs).map(
@@ -90,49 +84,49 @@ export async function getStaticPaths() {
   return [...pages, ...indexes];
 }
 
-const { versionId, path, doc, locale, translated, policy, record } = Astro.props;
-const version = record ? undefined : versionById(versionId)!;
-const allDocs = record ? [] : await getCollection('docs');
-const available = record ? [] : pathsForVersion(allDocs, versionId);
-const titlesByLocale = record ? {} : localizedTitlesFor(allDocs, versionId);
-const rendered = record || !doc ? undefined : await render(doc);
+const { versionId, path, doc, locale, translated, policy } = Astro.props;
+
+const version = versionById(versionId)!;
+const allDocs = await getCollection('docs');
+const available = pathsForVersion(allDocs, versionId);
+const titlesByLocale = localizedTitlesFor(allDocs, versionId);
+const rendered = doc ? await render(doc) : undefined;
+
+// A translated page uses its own H1; a fallback keeps the English rail title.
 const localizedTitle =
   locale !== DEFAULT_LOCALE && translated && path ? titlesByLocale[locale]?.[path] : undefined;
 const title = path ? (localizedTitle ?? docTitle(path)) : 'Documentation';
+
 const description = doc
   ? safeDescription(doc.body)
-  : policy?.indexable
+  : policy.indexable
     ? 'Guides for installing, connecting, querying, charting and governing DBFlux.'
-    : `DBFlux ${version ? versionLabel(version) : ''} documentation.`;
+    : `DBFlux ${versionLabel(version)} documentation.`;
 ---
 
-{
-  record ? (
-    <Acquisition record={record} />
-  ) : (
-    <DocsLayout
-      version={version!}
-      currentPath={path}
-      available={available}
-      headings={rendered?.headings ?? []}
-      title={title}
-      description={description}
-      editPath={doc?.filePath ? repoPathFor(doc.filePath, versionId) : undefined}
-      locale={locale}
-      translated={translated}
-      policy={policy}
-      titlesByLocale={titlesByLocale}
-    >
-      {rendered ? (
-        <rendered.Content />
-      ) : (
-        <DocsIndex
-          versionId={versionId}
-          available={available}
-          locale={locale}
-          titlesByLocale={titlesByLocale}
-        />
-      )}
-    </DocsLayout>
-  )
-}
+<DocsLayout
+  version={version}
+  currentPath={path}
+  available={available}
+  headings={rendered?.headings ?? []}
+  title={title}
+  description={description}
+  editPath={doc?.filePath ? repoPathFor(doc.filePath, versionId) : undefined}
+  locale={locale}
+  translated={translated}
+  policy={policy}
+  titlesByLocale={titlesByLocale}
+>
+  {
+    rendered ? (
+      <rendered.Content />
+    ) : (
+      <DocsIndex
+        versionId={versionId}
+        available={available}
+        locale={locale}
+        titlesByLocale={titlesByLocale}
+      />
+    )
+  }
+</DocsLayout>
