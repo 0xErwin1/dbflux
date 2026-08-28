@@ -50,6 +50,7 @@ export const DOCS_SECTIONS: readonly DocsSection[] = [
     title: 'Contributing',
     entries: [
       'contributing',
+      'translations',
       'security',
       'architecture',
       'driver_authoring',
@@ -81,6 +82,7 @@ export const DOC_TITLES: Readonly<Record<string, string>> = {
   release: 'Release process',
   architecture: 'Architecture',
   contributing: 'Contributing',
+  translations: 'Translations',
   security: 'Security',
   'drivers/postgres': 'PostgreSQL',
   'drivers/mysql': 'MySQL / MariaDB',
