@@ -75,4 +75,4 @@ jobs:
 
       - name: Check for links to pages that do not exist
         working-directory: web
-        run: node scripts/check-links.mjs
+        run: node scripts/check-links.ts

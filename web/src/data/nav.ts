@@ -2,7 +2,7 @@ import { docsUrl } from './site';
 import { CURRENT } from './versions';
 import { DEFAULT_LOCALE } from '../i18n';
 import type { Locale } from '../i18n';
-import { localizedDocPath } from '../i18n/locale-registry.mjs';
+import { localizedDocPath } from '../i18n/locale-registry.ts';
 
 export const REPO = 'https://github.com/0xErwin1/dbflux';
 

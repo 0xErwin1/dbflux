@@ -7,9 +7,12 @@
   //
   //   wrangler deploy --config wrangler.docs.jsonc
   "name": "dbflux-docs",
+  "main": "worker.ts",
   "compatibility_date": "2026-08-19",
   "assets": {
     "directory": "./dist",
+    "binding": "ASSETS",
     "not_found_handling": "404-page",
+    "run_worker_first": true,
   },
 }

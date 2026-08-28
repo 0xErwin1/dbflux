@@ -16,8 +16,8 @@ import { fileURLToPath } from 'node:url';
 
 const DIST = fileURLToPath(new URL('../dist/', import.meta.url));
 
-async function htmlFiles(dir) {
-  const found = [];
+async function htmlFiles(dir: string): Promise<string[]> {
+  const found: string[] = [];
 
   for (const entry of await readdir(dir, { withFileTypes: true })) {
     const path = join(dir, entry.name);
@@ -32,13 +32,13 @@ async function htmlFiles(dir) {
 const files = await htmlFiles(DIST);
 
 /** `relative()` is platform-separator aware; URLs are always forward slashes. */
-const toPosix = (path) => relative(DIST, path).split('\\').join('/');
+const toPosix = (path: string) => relative(DIST, path).split('\\').join('/');
 
 const pages = new Set(
   files.map((file) => `/${toPosix(file).replace(/index\.html$/, '')}`.replace(/\/$/, '/')),
 );
 
-const broken = [];
+const broken: string[] = [];
 
 for (const file of files) {
   const html = await readFile(file, 'utf8');

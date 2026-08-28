@@ -1,0 +1,12 @@
+{
+  "linkset": [
+    {
+      "anchor": "https://dbflux.dev/",
+      "service-doc": [
+        { "href": "https://docs.dbflux.dev/", "type": "text/html" },
+        { "href": "https://docs.dbflux.dev/usage/", "type": "text/html" }
+      ],
+      "service-meta": [{ "href": "https://dbflux.dev/llms.txt", "type": "text/plain" }]
+    }
+  ]
+}

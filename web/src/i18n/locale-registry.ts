@@ -3,6 +3,12 @@
  * TypeScript i18n facade. A docs directory is deliberately separate from the
  * canonical locale id so filesystem naming cannot accidentally change URLs.
  */
+export interface LocaleDefinition {
+  id: string;
+  name: string;
+  docsDirectory: string | null;
+}
+
 export const DEFAULT_LOCALE = 'en';
 
 export const LOCALE_REGISTRY = validateLocaleRegistry(
@@ -14,20 +20,13 @@ export const LOCALE_REGISTRY = validateLocaleRegistry(
   DEFAULT_LOCALE,
 );
 
-/**
- * @typedef {{ id: string, name: string, docsDirectory: string | null }} LocaleDefinition
- */
-
-/**
- * Validate and freeze locale metadata at its shared runtime boundary.
- *
- * @param {ReadonlyArray<LocaleDefinition>} registry
- * @param {string} defaultLocale
- * @returns {ReadonlyArray<Readonly<LocaleDefinition>>}
- */
-export function validateLocaleRegistry(registry, defaultLocale) {
-  const ids = new Set();
-  const directories = new Set();
+/** Validate and freeze locale metadata at its shared runtime boundary. */
+export function validateLocaleRegistry(
+  registry: ReadonlyArray<LocaleDefinition>,
+  defaultLocale: string,
+): ReadonlyArray<Readonly<LocaleDefinition>> {
+  const ids = new Set<string>();
+  const directories = new Set<string>();
 
   for (const locale of registry) {
     if (ids.has(locale.id)) {
@@ -67,11 +66,10 @@ export function validateLocaleRegistry(registry, defaultLocale) {
  * Repository-relative glob patterns for documentation tracked by each locale.
  * The default locale remains directly under docs/; localized files must exist
  * in their explicitly registered directories.
- *
- * @param {ReadonlyArray<LocaleDefinition>} registry
- * @returns {string[]}
  */
-export function docsRepoPatterns(registry = LOCALE_REGISTRY) {
+export function docsRepoPatterns(
+  registry: ReadonlyArray<LocaleDefinition> = LOCALE_REGISTRY,
+): string[] {
   return [
     'docs/*.md',
     ...registry.flatMap(({ id, docsDirectory }) =>
@@ -82,14 +80,11 @@ export function docsRepoPatterns(registry = LOCALE_REGISTRY) {
   ];
 }
 
-/**
- * Match the concrete path shapes represented by docsRepoPatterns().
- *
- * @param {string} path
- * @param {ReadonlyArray<LocaleDefinition>} registry
- * @returns {boolean}
- */
-export function isDocsRepoPath(path, registry = LOCALE_REGISTRY) {
+/** Match the concrete path shapes represented by docsRepoPatterns(). */
+export function isDocsRepoPath(
+  path: string,
+  registry: ReadonlyArray<LocaleDefinition> = LOCALE_REGISTRY,
+): boolean {
   if (/^docs\/[^/]+\.md$/.test(path)) return true;
 
   return registry.some(({ id, docsDirectory }) => {
@@ -103,17 +98,11 @@ export function isDocsRepoPath(path, registry = LOCALE_REGISTRY) {
   });
 }
 
-/**
- * @param {string} repoPath
- * @param {ReadonlyArray<LocaleDefinition>} registry
- * @param {string} defaultLocale
- * @returns {string}
- */
 export function localeForRepoPath(
-  repoPath,
-  registry = LOCALE_REGISTRY,
-  defaultLocale = DEFAULT_LOCALE,
-) {
+  repoPath: string,
+  registry: ReadonlyArray<LocaleDefinition> = LOCALE_REGISTRY,
+  defaultLocale: string = DEFAULT_LOCALE,
+): string {
   const localized = registry.find(
     ({ id, docsDirectory }) =>
       id !== defaultLocale &&
@@ -127,17 +116,12 @@ export function localeForRepoPath(
 /**
  * Resolve a repository documentation path to its canonical locale and route path.
  * Unregistered nested docs directories are deliberately not treated as English.
- *
- * @param {string} repoPath
- * @param {ReadonlyArray<LocaleDefinition>} registry
- * @param {string} defaultLocale
- * @returns {{ locale: string, path: string } | undefined}
  */
 export function localizedDocPath(
-  repoPath,
-  registry = LOCALE_REGISTRY,
-  defaultLocale = DEFAULT_LOCALE,
-) {
+  repoPath: string,
+  registry: ReadonlyArray<LocaleDefinition> = LOCALE_REGISTRY,
+  defaultLocale: string = DEFAULT_LOCALE,
+): { locale: string; path: string } | undefined {
   const localized = registry.find(
     ({ id, docsDirectory }) =>
       id !== defaultLocale &&
@@ -156,19 +140,12 @@ export function localizedDocPath(
   return document ? { locale: defaultLocale, path: document[1].toLowerCase() } : undefined;
 }
 
-/**
- * Split a generated collection id while preserving the registered locale id.
- *
- * @param {string} id
- * @param {ReadonlyArray<LocaleDefinition>} registry
- * @param {string} defaultLocale
- * @returns {{ version: string, locale: string, path: string }}
- */
+/** Split a generated collection id while preserving the registered locale id. */
 export function splitContentEntryId(
-  id,
-  registry = LOCALE_REGISTRY,
-  defaultLocale = DEFAULT_LOCALE,
-) {
+  id: string,
+  registry: ReadonlyArray<LocaleDefinition> = LOCALE_REGISTRY,
+  defaultLocale: string = DEFAULT_LOCALE,
+): { version: string; locale: string; path: string } {
   const [version, ...segments] = id.split('/');
   const localized = registry.find(
     ({ id: localeId }) => localeId !== defaultLocale && localeId === segments[0],
@@ -179,33 +156,29 @@ export function splitContentEntryId(
     : { version, locale: defaultLocale, path: segments.join('/') };
 }
 
+export interface LocalizedDocumentMatrixEntry<T> {
+  version: string;
+  path: string;
+  locale: string;
+  entry: T;
+  translated: boolean;
+  alternateLocales: string[];
+}
+
 /**
  * Materialize one route descriptor per canonical document and registered locale.
  * A missing localized entry reuses the English entry but remains explicitly
  * untranslated. alternateLocales contains only real content siblings.
- *
- * @template {{ id: string }} T
- * @param {ReadonlyArray<T>} entries
- * @param {ReadonlyArray<LocaleDefinition>} registry
- * @param {string} defaultLocale
- * @returns {Array<{
- *   version: string,
- *   path: string,
- *   locale: string,
- *   entry: T,
- *   translated: boolean,
- *   alternateLocales: string[],
- * }>}
  */
-export function buildLocalizedDocumentMatrix(
-  entries,
-  registry = LOCALE_REGISTRY,
-  defaultLocale = DEFAULT_LOCALE,
-) {
+export function buildLocalizedDocumentMatrix<T extends { id: string }>(
+  entries: ReadonlyArray<T>,
+  registry: ReadonlyArray<LocaleDefinition> = LOCALE_REGISTRY,
+  defaultLocale: string = DEFAULT_LOCALE,
+): Array<LocalizedDocumentMatrixEntry<T>> {
   const entriesByKey = new Map(
     entries.map((entry) => {
       const { version, locale, path } = splitContentEntryId(entry.id, registry, defaultLocale);
-      return [`${version}\0${locale}\0${path}`, entry];
+      return [`${version}\0${locale}\0${path}`, entry] as const;
     }),
   );
   const canonicalEntries = entries.filter(
@@ -237,21 +210,14 @@ export function buildLocalizedDocumentMatrix(
  * Select one search source per canonical document for a version and locale.
  * Missing translations deliberately retain the English source while the locale
  * remains on the descriptor so callers can link to the localized fallback route.
- *
- * @template {{ id: string }} T
- * @param {ReadonlyArray<T>} entries
- * @param {string} versionId
- * @param {string} locale
- * @param {ReadonlyArray<LocaleDefinition>} registry
- * @param {string} defaultLocale
  */
-export function selectLocaleSearchEntries(
-  entries,
-  versionId,
-  locale,
-  registry = LOCALE_REGISTRY,
-  defaultLocale = DEFAULT_LOCALE,
-) {
+export function selectLocaleSearchEntries<T extends { id: string }>(
+  entries: ReadonlyArray<T>,
+  versionId: string,
+  locale: string,
+  registry: ReadonlyArray<LocaleDefinition> = LOCALE_REGISTRY,
+  defaultLocale: string = DEFAULT_LOCALE,
+): Array<LocalizedDocumentMatrixEntry<T>> {
   if (!registry.some(({ id }) => id === locale)) {
     throw new Error(`Cannot build search index for unregistered locale "${locale}"`);
   }
@@ -263,11 +229,11 @@ export function selectLocaleSearchEntries(
 
 /** Preserve the existing English index paths while adding canonical locale segments. */
 export function searchIndexPath(
-  versionId,
-  currentVersionId,
-  locale,
-  defaultLocale = DEFAULT_LOCALE,
-) {
+  versionId: string,
+  currentVersionId: string,
+  locale: string,
+  defaultLocale: string = DEFAULT_LOCALE,
+): string {
   const versionPrefix = versionId === currentVersionId ? '' : `/${versionId}`;
   const localeSuffix = locale === defaultLocale ? '' : `/${locale}`;
 
@@ -277,13 +243,12 @@ export function searchIndexPath(
 /**
  * Generate a content collection id without normalizing the canonical locale id.
  * Only the document portion is lowercased to preserve the site's existing URLs.
- *
- * @param {string} entry
- * @param {ReadonlyArray<LocaleDefinition>} registry
- * @param {string} defaultLocale
- * @returns {string}
  */
-export function contentEntryId(entry, registry = LOCALE_REGISTRY, defaultLocale = DEFAULT_LOCALE) {
+export function contentEntryId(
+  entry: string,
+  registry: ReadonlyArray<LocaleDefinition> = LOCALE_REGISTRY,
+  defaultLocale: string = DEFAULT_LOCALE,
+): string {
   const [version, ...rest] = entry.split('/');
   const repoPath = rest.join('/');
 

@@ -27,3 +27,15 @@
 
 /img/*
   Cache-Control: public, max-age=86400
+
+# Agent-discovery entry points. The homepage links to the linkset and
+# documentation host so an agent that only fetches `/` still finds them.
+/
+  Link: </.well-known/api-catalog>; rel="api-catalog", <https://docs.dbflux.dev/>; rel="service-doc"
+
+# Every well-known agent-discovery file is meant to be fetched cross-origin
+# and rarely changes within an hour, so it gets a short shared cache instead
+# of the revalidating HTML default.
+/.well-known/*
+  Access-Control-Allow-Origin: *
+  Cache-Control: public, max-age=3600

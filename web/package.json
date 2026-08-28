@@ -6,20 +6,20 @@
     "dev": "pnpm run sync-docs && astro dev",
     "build": "pnpm run sync-docs && astro build",
     "preview": "astro preview",
-    "test": "node --test src/i18n/locale-registry.test.mjs",
+    "test": "node --test src/i18n/locale-registry.test.ts",
     "check": "pnpm run sync-docs && astro check",
     "clean": "rm -rf dist .astro node_modules/.astro node_modules/.vite",
     "rebuild": "pnpm clean && pnpm build",
     "stop": "astro dev stop; astro preview stop",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "sync-docs": "node scripts/fetch-docs.mjs",
+    "sync-docs": "node scripts/fetch-docs.ts",
     "build:site": "DOCS_MODE=site pnpm run build",
     "build:docs": "DOCS_MODE=docs pnpm run build",
     "dev:docs": "DOCS_MODE=docs pnpm run dev",
     "deploy:site": "pnpm run build:site && wrangler deploy",
     "deploy:docs": "pnpm run build:docs && wrangler deploy --config wrangler.docs.jsonc",
-    "audit:dist": "node scripts/audit-dist.mjs"
+    "audit:dist": "node scripts/audit-dist.ts"
   },
   "dependencies": {
     "@astrojs/markdown-remark": "^7.2.3",

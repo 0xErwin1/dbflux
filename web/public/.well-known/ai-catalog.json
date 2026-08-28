@@ -1,0 +1,37 @@
+{
+  "specVersion": "0.1",
+  "host": { "name": "DBFlux", "url": "https://dbflux.dev" },
+  "entries": [
+    {
+      "id": "urn:air:dbflux.dev:docs:documentation",
+      "displayName": "DBFlux documentation",
+      "type": "text/html",
+      "url": "https://docs.dbflux.dev/",
+      "representativeQueries": [
+        "How do I install DBFlux?",
+        "How do I connect DBFlux to PostgreSQL?",
+        "How does DBFlux MCP governance work?"
+      ]
+    },
+    {
+      "id": "urn:air:dbflux.dev:docs:llms-txt",
+      "displayName": "DBFlux llms.txt index",
+      "type": "text/plain",
+      "url": "https://dbflux.dev/llms.txt",
+      "representativeQueries": [
+        "Which DBFlux documentation pages exist?",
+        "Where is the agent-readable DBFlux content?"
+      ]
+    },
+    {
+      "id": "urn:air:dbflux.dev:skills:dbflux",
+      "displayName": "DBFlux agent skill",
+      "type": "text/markdown",
+      "url": "https://dbflux.dev/.well-known/agent-skills/dbflux/SKILL.md",
+      "representativeQueries": [
+        "How can an agent operate DBFlux?",
+        "How do I run the DBFlux MCP server?"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "$schema": "https://agentskills.io/schemas/index/v0.2.0.json",
+  "skills": [
+    {
+      "name": "dbflux",
+      "type": "skill",
+      "description": "Operate DBFlux, a keyboard-first database client, and its local MCP server for AI-driven database access.",
+      "url": "https://dbflux.dev/.well-known/agent-skills/dbflux/SKILL.md",
+      "sha256": "382c43b63055f61b921914c79e878315bed1975a8ccdbe7f1f4ecb254be06245"
+    }
+  ]
+}

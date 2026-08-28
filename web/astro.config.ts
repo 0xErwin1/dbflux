@@ -10,7 +10,7 @@ import { DOCS_MODE, ORIGIN } from './src/data/site';
 import { hostRedirects } from './src/integrations/host-redirects';
 import { DEFAULT_LOCALE } from './src/i18n';
 import type { Locale } from './src/i18n';
-import { LOCALE_REGISTRY, localeForRepoPath } from './src/i18n/locale-registry.mjs';
+import { LOCALE_REGISTRY, localeForRepoPath } from './src/i18n/locale-registry.ts';
 
 const REPO_ROOT = fileURLToPath(new URL('../', import.meta.url));
 const sitemapPaths = sitemapPathsFor(
@@ -28,7 +28,7 @@ function textOf(node: any): string {
  * locale it renders in.
  *
  * `content.config.ts` mirrors each version's repository tree under
- * `.versions/<version>/` (see `scripts/fetch-docs.mjs`), so a source file's
+ * `.versions/<version>/` (see `scripts/fetch-docs.ts`), so a source file's
  * `fromDir` sits inside that per-version mirror, not inside the actual
  * checkout `REPO_ROOT` points at. Resolving a relative link against
  * `REPO_ROOT` therefore left `web/.versions/<version>/` in the computed repo

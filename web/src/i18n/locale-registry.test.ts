@@ -14,7 +14,7 @@ import {
   selectLocaleSearchEntries,
   splitContentEntryId,
   validateLocaleRegistry,
-} from './locale-registry.mjs';
+} from './locale-registry.ts';
 
 const extendedRegistry = [
   { id: 'en', name: 'English', docsDirectory: null },
