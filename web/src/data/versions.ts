@@ -50,7 +50,7 @@ export const VERSIONS: readonly DocsVersion[] = registry;
 
 export const CURRENT = VERSIONS.find((version) => version.current) ?? VERSIONS[0];
 
-/** One record written by `scripts/fetch-docs.mjs` while it pulls that ref. */
+/** One record written by `scripts/fetch-docs.ts` while it pulls that ref. */
 interface ManifestEntry {
   id: string;
   ref: string;

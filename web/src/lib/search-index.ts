@@ -2,7 +2,7 @@ import { getCollection, render } from 'astro:content';
 import { docTitle } from '../data/docs';
 import { docsHref } from '../data/versions';
 import type { Locale } from '../i18n';
-import { selectLocaleSearchEntries } from '../i18n/locale-registry.mjs';
+import { selectLocaleSearchEntries } from '../i18n/locale-registry.ts';
 
 export interface Section {
   /** Page path. */

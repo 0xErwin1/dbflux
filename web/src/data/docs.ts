@@ -1,7 +1,7 @@
 import type { CollectionEntry } from 'astro:content';
 import { DEFAULT_LOCALE, LOCALES } from '../i18n';
 import type { Locale } from '../i18n';
-import { splitContentEntryId } from '../i18n/locale-registry.mjs';
+import { splitContentEntryId } from '../i18n/locale-registry.ts';
 import { CURRENT, docsRoute } from './versions';
 import { DOCS_SECTIONS, docTitle } from './nav';
 
@@ -131,6 +131,18 @@ export interface DocRoutePolicy {
   readonly indexable: boolean;
   readonly alternateLocales: readonly Locale[];
 }
+
+/** Derived from the PR 1 policy: only current, real English documents get Markdown. */
+export const markdownPathFor = (
+  versionId: string,
+  path: string,
+  locale: Locale,
+  translated: boolean,
+  policy: DocRoutePolicy,
+): string | undefined =>
+  versionId === CURRENT.id && locale === DEFAULT_LOCALE && translated && policy.indexable
+    ? `/${docsRoute(versionId, path, locale)}/index.md`.replace(/\/+/g, '/')
+    : undefined;
 
 const routePath = (versionId: string, path: string, locale: Locale): string =>
   `/${docsRoute(versionId, path, locale)}/`.replace(/\/+/g, '/');

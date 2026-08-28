@@ -17,7 +17,7 @@ import {
   contentEntryId,
   isDocsRepoPath,
   splitContentEntryId,
-} from '../src/i18n/locale-registry.mjs';
+} from '../src/i18n/locale-registry.ts';
 
 const WEB = fileURLToPath(new URL('../', import.meta.url));
 const REPO = fileURLToPath(new URL('../../', import.meta.url));
@@ -28,9 +28,9 @@ export const VERSIONS_DIR = join(WEB, '.versions');
 const WANTED_REPOSITORY_PATH =
   /^(ARCHITECTURE\.md|CONTRIBUTING\.md|SECURITY\.md|crates\/dbflux_driver_[^/]+\/README\.md)$/;
 
-const wantedPath = (path) => isDocsRepoPath(path) || WANTED_REPOSITORY_PATH.test(path);
+const wantedPath = (path: string) => isDocsRepoPath(path) || WANTED_REPOSITORY_PATH.test(path);
 
-const git = (args) =>
+const git = (args: string[]) =>
   execFileSync('git', args, { cwd: REPO, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
 
 /**
@@ -41,7 +41,7 @@ const git = (args) =>
  * every deployment to clone the full history, and it fails loudly enough to be
  * caught by the caller when there is no network or no remote.
  */
-function readTree(ref) {
+function readTree(ref: string): string[] {
   const list = () => git(['ls-tree', '-r', '--name-only', ref]).split('\n').filter(wantedPath);
 
   try {
@@ -60,7 +60,7 @@ function readTree(ref) {
  * place worth reading. Hard-coding these in the site is how the 0.6 entry ended
  * up claiming a release that was never cut.
  */
-function workspaceVersion(ref) {
+function workspaceVersion(ref: string): string {
   const manifest = git(['show', `${ref}:Cargo.toml`]);
   const match = manifest.match(/^version\s*=\s*"([^"]+)"/m);
 
@@ -76,23 +76,34 @@ function workspaceVersion(ref) {
  * the same `-dev` number for months, and a release branch keeps its number
  * across cherry-picked fixes.
  */
-function buildOf(ref) {
+function buildOf(ref: string): { commit: string; date: string } {
   const [commit, date] = git(['show', '-s', '--format=%h%n%cs', ref]).trim().split('\n');
 
   return { commit, date };
 }
 
-/**
- * @param {ReadonlyArray<{ id: string, ref: string }>} versions
- * @returns {Array<{ id: string, ref: string, version: string }>} what was materialised
- */
-export function fetchDocs(versions) {
+export interface DocsVersionRef {
+  id: string;
+  ref: string;
+}
+
+export interface MaterializedVersion {
+  id: string;
+  ref: string;
+  version: string;
+  commit: string;
+  date: string;
+  sourceFacts: Array<{ path: string; locales: string[] }>;
+}
+
+/** @returns what was materialised */
+export function fetchDocs(versions: ReadonlyArray<DocsVersionRef>): MaterializedVersion[] {
   rmSync(VERSIONS_DIR, { recursive: true, force: true });
 
-  const done = [];
+  const done: MaterializedVersion[] = [];
 
   for (const { id, ref } of versions) {
-    let files;
+    let files: string[];
 
     try {
       files = readTree(ref);
@@ -110,7 +121,7 @@ export function fetchDocs(versions) {
     const version = workspaceVersion(ref);
     const { commit, date } = buildOf(ref);
 
-    const localesByPath = new Map();
+    const localesByPath = new Map<string, string[]>();
     for (const file of files) {
       const source = splitContentEntryId(contentEntryId(`${id}/${file}`));
       const locales = localesByPath.get(source.path) ?? [];
@@ -131,6 +142,6 @@ export function fetchDocs(versions) {
   return done;
 }
 
-const registry = JSON.parse(readFileSync(join(WEB, 'versions.json'), 'utf8'));
+const registry: DocsVersionRef[] = JSON.parse(readFileSync(join(WEB, 'versions.json'), 'utf8'));
 
 fetchDocs(registry);

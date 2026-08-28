@@ -1,6 +1,6 @@
 import { defineCollection } from 'astro:content';
 import { glob } from 'astro/loaders';
-import { contentEntryId, docsRepoPatterns } from './i18n/locale-registry.mjs';
+import { contentEntryId, docsRepoPatterns } from './i18n/locale-registry.ts';
 
 /**
  * Documentation for every published version.
