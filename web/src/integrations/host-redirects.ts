@@ -20,8 +20,8 @@ import { DEFAULT_LOCALE, LOCALES } from '../i18n';
  */
 function rules(): string[] {
   if (DOCS_MODE === 'site') {
-    // Each version gets an English rule and a Spanish rule, one locale-prefixed
-    // pair of paths per version rather than a parallel set of version loops.
+    // Each version gets one rule per locale, a locale-prefixed pair of paths
+    // per version rather than a parallel set of version loops.
     const moved = VERSIONS.flatMap((version) => {
       const prefix = version.id === CURRENT.id ? '' : version.id;
 

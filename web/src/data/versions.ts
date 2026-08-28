@@ -103,9 +103,10 @@ function prefixFor(versionId: string): string {
 /**
  * Documentation URL for an entry id of the form `<version>/<path>`.
  *
- * `entryId` is always the canonical English id, never the `<version>/es/<path>`
- * shape a Spanish collection entry carries — `locale` is what selects the
- * `/es/` URL prefix, independent of which entry's content is being linked to.
+ * `entryId` is always the canonical English id, never the
+ * `<version>/<locale>/<path>` shape a translated collection entry carries —
+ * `locale` is what selects the `/<locale>/` URL prefix, independent of which
+ * entry's content is being linked to.
  */
 export function docsHref(entryId: string, locale: Locale = DEFAULT_LOCALE): string {
   const separator = entryId.indexOf('/');

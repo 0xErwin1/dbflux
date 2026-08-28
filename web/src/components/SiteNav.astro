@@ -22,9 +22,9 @@ const LINKS = [
 ] as const;
 
 /**
- * Home, docs and about all have an `/es/` counterpart now — a real translation
- * where one exists, the English body with a fallback notice otherwise for docs
- * (never a 404).
+ * Home, docs and about all have a `/es/` and `/zh_Hans/` counterpart now — a
+ * real translation where one exists, the English body with a fallback notice
+ * otherwise for docs (never a 404).
  */
 const pathname = Astro.url.pathname;
 const showSwitcher = current === 'home' || current === 'docs' || current === 'about';
