@@ -3,7 +3,7 @@ import { es } from './es';
 import { zh_Hans } from './zh_Hans';
 import { DEFAULT_LOCALE as REGISTRY_DEFAULT_LOCALE, LOCALE_REGISTRY } from './locale-registry.mjs';
 
-const DICTIONARY_MODULES = { en, es, zh_Hans };
+const DICTIONARY_MODULES = { en, es, 'zh-Hans': zh_Hans };
 
 export type Locale = keyof typeof DICTIONARY_MODULES;
 
@@ -280,7 +280,7 @@ export function dictionary(locale: Locale): Dictionary {
  *
  * Routing is manual (`i18n.routing: 'manual'`), so the locale is never in
  * `Astro.currentLocale` — it is read back from the leading locale segment (e.g.
- * `/es/`, `/zh_Hans/`) the same way `[...path].astro` will compute it when
+ * `/es/`, `/zh-Hans/`) the same way `[...path].astro` will compute it when
  * emitting that segment.
  */
 export function localeFromPathname(pathname: string): Locale {
