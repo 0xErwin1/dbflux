@@ -9,7 +9,7 @@ export const LOCALE_REGISTRY = validateLocaleRegistry(
   [
     { id: 'en', name: 'English', docsDirectory: null },
     { id: 'es', name: 'Español', docsDirectory: 'es' },
-    { id: 'zh_Hans', name: '简体中文', docsDirectory: 'zh_Hans' },
+    { id: 'zh-Hans', name: '简体中文', docsDirectory: 'zh_Hans' },
   ],
   DEFAULT_LOCALE,
 );
