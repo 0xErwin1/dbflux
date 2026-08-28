@@ -445,9 +445,9 @@ connections:
   toast:
     disconnecting: "正在断开与 %{name} 的连接…"
     no_active_connection: 无活动连接
-    refreshing_schema: 正在刷新模式…
+    refreshing_schema: 正在刷新 Schema…
   error:
-    refresh_schema_failed: "刷新模式失败：%{error}"
+    refresh_schema_failed: "刷新 Schema 失败：%{error}"
 document:
   audit:
     actor:
@@ -628,15 +628,15 @@ document:
         one: "%{count} 个点"
         many: "%{count} 个点"
     shell:
-      run: 运行
-      running: 正在运行…
+      run: 执行
+      running: 正在执行…
       save: 保存
       cancel: 取消
       name_placeholder: 图表名称
       degraded:
         loading_metric: 正在加载指标数据…
         no_data_points: 所选时间窗口内没有数据点。
-        run_query: 运行查询以填充图表。
+        run_query: 执行查询以填充图表。
         no_time_column: 结果中未检测到时间列。
         no_numeric_series: 结果中未检测到数值序列。
         build_failed: 图表构建失败。
@@ -695,7 +695,7 @@ document:
       refresh: 刷新
       cancel: 取消
       checking: 正在检查…
-      run: 运行
+      run: 执行
       shortcut_hint_with_selection: "%{shortcut}（选区 / 全部）"
       new_tab: 新建标签页
       selection: 选区
@@ -707,7 +707,7 @@ document:
       explain_query: 解释查询
       open_in_chart: 在图表文档中打开当前查询
     output:
-      running: 正在运行…
+      running: 正在执行…
       stopped: 已停止
       output: 输出
       lines:
@@ -719,26 +719,26 @@ document:
         one: "%{count} 个结果"
         many: "%{count} 个结果"
       loading:
-        title: 正在运行…
+        title: 正在执行…
         body: 查询进行中
       error:
         title: 查询错误
-      empty: 运行查询以查看结果
+      empty: 执行查询以查看结果
       awaiting_connection: 连接到此数据库以查看例程定义。
     script_confirm:
-      title: 运行整个脚本
+      title: 执行整个脚本
       message:
-        one: "未选中文本，因此整个脚本将按顺序作为 %{count} 条语句运行。是否继续？"
-        many: "未选中文本，因此整个脚本将按顺序作为 %{count} 条语句运行。是否继续？"
+        one: "未选中文本，因此整个脚本将按顺序作为 %{count} 条语句执行。是否继续？"
+        many: "未选中文本，因此整个脚本将按顺序作为 %{count} 条语句执行。是否继续？"
       cancel: 取消
-      run: 运行脚本
+      run: 执行脚本
     dangerous_query:
       fallback:
         title: 警告
         body: 此查询可能具有危险性。
       dont_ask_again: 不再询问
       cancel: 取消
-      run_anyway: 仍要运行
+      run_anyway: 仍要执行
       kind:
         delete_no_where:
           title: 不带 WHERE 的 DELETE
@@ -789,12 +789,12 @@ document:
       placeholder:
         connection: 无连接
         database: 数据库
-        schema: 模式
+        schema: Schema
       label:
         connection: 连接：
         source: 来源：
         database: 数据库：
-        schema: 模式：
+        schema: Schema：
       fallback:
         syntax: 语法
         sources: 来源
@@ -806,14 +806,14 @@ document:
       connect_failed: "连接数据库 %{database} 失败：%{error}"
     execution:
       toast:
-        select_query: 选择要运行的查询文本
-        enter_query: 输入要运行的查询
+        select_query: 选择要执行的查询文本
+        enter_query: 输入要执行的查询
         no_active_connection: 无活动连接
         connection_not_found: 未找到连接
         auto_refresh_blocked: 已阻止自动刷新：查询会修改数据
         explain_unavailable: 脚本不支持 Explain
         enter_query_to_explain: 输入要解释的查询
-        enter_script_content: 输入要运行的脚本内容
+        enter_script_content: 输入要执行的脚本内容
         write_query_first: 请先编写查询才能在图表中打开
         connecting: "正在连接数据库 %{database}，请稍候…"
         redis_flush_disabled: FLUSHALL / FLUSHDB 已在设置中禁用
@@ -821,7 +821,7 @@ document:
         query_failed: 查询失败
         script_failed: 脚本失败
       task:
-        run_script: "运行 %{name} 脚本"
+        run_script: "执行 %{name} 脚本"
       copy_error: 复制错误
       result_tab_title: "结果 %{index}"
       error:
@@ -855,7 +855,7 @@ document:
         export_png: 导出 PNG
         stats: 统计
       apply: 应用
-      bindings_hint: 请先至少运行一次图表以配置绑定。
+      bindings_hint: 请先至少执行一次图表以配置绑定。
       cancel: 取消
       chart_kind:
         area: 面积图
@@ -908,7 +908,7 @@ document:
           body: 此结果没有可绘制为序列的 Float 或 Integer 列。
         no_data:
           title: 暂无数据
-          body: 运行查询以填充图表视图。
+          body: 执行查询以填充图表视图。
         build_failed:
           title: 图表构建失败
           body: 查询结果包含可绘图的列，但无法构建图表。
@@ -1207,7 +1207,7 @@ document:
         no: 否
       references:
         empty: 无引用
-        loading: 正在加载模式…
+        loading: 正在加载 Schema…
         not_found: — 未找到
         resolving: 正在解析…
       section:
@@ -1224,7 +1224,7 @@ document:
       tables: 表
       format_options: 格式与选项
       confirm: 确认
-      run: 运行
+      run: 执行
     tables:
       selected_count: "已选择 %{count} 张表用于导出"
     format_options:
@@ -1258,7 +1258,7 @@ document:
     toast:
       cancelled: 导出已取消
       success: "%{summary}。已保存到 %{folder}"
-      schema_fetch_failed: "读取表模式时导出失败：%{error}"
+      schema_fetch_failed: "读取表 Schema 时导出失败：%{error}"
       table_failed: "表 %{table} 导出失败：%{error}"
       failed: "导出失败：%{error}"
     summary:
@@ -1292,7 +1292,7 @@ document:
       pick_folder: 选择文件夹
       configure: 配置
       confirm: 确认
-      run: 运行
+      run: 执行
     pick_folder:
       description: 选择包含 manifest.json 和导出的表文件的文件夹。
       choose_folder: 选择文件夹…
@@ -1501,7 +1501,7 @@ document:
       tables_mapping: 表映射
       options: 选项
       confirm: 确认
-      run: 运行
+      run: 执行
     mapping_mode:
       create: 创建
       existing: 已存在（仅插入）
@@ -1546,10 +1546,10 @@ document:
     error:
       no_source_connection: 源配置没有活动连接
       no_target_connection: 目标配置没有活动连接
-      table_schema_read_failed: "无法读取表模式：%{error}"
+      table_schema_read_failed: "无法读取表 Schema：%{error}"
       foreign_keys_read_failed: "无法读取外键：%{error}"
       table_failed: "表 %{table} 迁移失败：%{error}"
-      cyclic_order: "迁移失败：外键顺序在运行中出现循环"
+      cyclic_order: "迁移失败：外键顺序在执行中出现循环"
       failed: "迁移失败：%{error}"
     summary:
       with_failures: "已迁移 %{completed} 张表，共 %{rows} 行（跳过 %{skipped} 张，失败 %{failed} 张）"
@@ -1577,7 +1577,7 @@ document:
       header_mapping_mode: 映射模式
       header_transform: 转换
       error:
-        target_schema_read_failed: "无法读取目标表模式：%{error}"
+        target_schema_read_failed: "无法读取目标表 Schema：%{error}"
     source_target:
       source_title: 源
       target_title: 目标
@@ -1833,7 +1833,7 @@ document:
       add_button: + 添加赋值
       column_placeholder: 列
       value_placeholder: 值
-      raw_sql_warning: 原生 SQL — 表达式将按原样插值。运行前请核实。
+      raw_sql_warning: 原生 SQL — 表达式将按原样插值。执行前请核实。
       kind:
         literal: 字面量
         raw_sql: 原生 SQL
@@ -1923,7 +1923,7 @@ document:
       valid_lines:
         one: "有效 · %{count} 行"
         many: "有效 · %{count} 行"
-      run: 运行
+      run: 执行
       apply_update: 应用更新
       open_in_editor: 在编辑器中打开
       incomplete_aggregate_rows:
@@ -1935,7 +1935,7 @@ document:
       compute_diff: 计算差异
       preview_ddl: 预览 DDL
     apply:
-      read_only: 此连接为只读，不允许执行模式更改。
+      read_only: 此连接为只读，不允许执行 Schema 更改。
     change:
       column_added: "添加列 %{name} %{type_name}"
       column_removed: "删除列 %{name}"
@@ -1953,14 +1953,14 @@ document:
         destructive: 破坏性
         safe: 安全
         warning: 警告
-      schema_not_loaded: "%{database} 的模式尚未加载。请先在侧边栏展开该数据库，然后再次运行计算差异。"
+      schema_not_loaded: "%{database} 的 Schema 尚未加载。请先在侧边栏展开该数据库，然后再次执行计算差异。"
     status:
       computing: 正在计算差异…
-      empty: 两个模式之间未发现差异。
-      idle: 选择一个来源并运行计算差异以查看模式更改。
+      empty: 两个 Schema 之间未发现差异。
+      idle: 选择一个来源并执行计算差异以查看 Schema 更改。
       unsupported: 不支持
     summary:
-      apply: "将 %{count} 项模式更改应用到 %{target}"
+      apply: "将 %{count} 项 Schema 更改应用到 %{target}"
       this_connection: 此连接
     table_action:
       create: "创建表 %{table}"
@@ -1969,11 +1969,11 @@ document:
       applied: "已在 %{tables} 张表上应用 %{statements} 条 DDL 语句。"
       apply_partial_failure: "在表 %{table} 上失败之前，已应用 %{total} 张表中的 %{applied} 张（%{statements} 条 DDL 语句）：%{error}。剩余 %{remaining} 张表未尝试。"
       approval_queue_failed: "排队等待审批失败：%{error}"
-      approval_queued: 模式更改已排队等待审批。
+      approval_queued: Schema 更改已排队等待审批。
       approval_unavailable: 此连接需要审批，但当前版本不支持审批。
       connection_unavailable: 目标连接不再可用。
       ddl_build_failed: "无法构建 DDL：%{error}"
-      read_only: 此连接为只读，不允许执行模式更改。
+      read_only: 此连接为只读，不允许执行 Schema 更改。
       reference_connection_disconnected: 所选的参照连接未连接。
       reference_not_picked: 请选择要对比的参照数据库或连接。
       select_at_least_one: 请先至少选择一项更改。
@@ -1991,8 +1991,8 @@ document:
         database_section: 此连接上的其他数据库
         empty: 连接第二个数据库或连接以进行对比。
         no_snapshots: 此连接尚未捕获快照。
-      title: "模式差异 — %{database}"
-      title_default: 模式差异
+      title: "Schema 差异 — %{database}"
+      title_default: Schema 差异
       unsupported_action:
         create: 创建表
         drop: 删除表
@@ -2035,7 +2035,7 @@ documents:
   default_title: 未命名
   new_query_name: 查询
   toast:
-    schema_diff_opened: 已打开模式差异
+    schema_diff_opened: 已打开 Schema 差异
     no_active_connection_for:
       table: 此表没有活动连接
       collection: 此集合没有活动连接
@@ -2151,9 +2151,9 @@ login:
     no_url_provided: 提供程序未提供登录 URL
 modals:
   active_query:
-    title: 有查询正在运行
-    prompt: 此连接上仍有查询在运行。您想怎么做？
-    elapsed: "已运行 %{seconds}s"
+    title: 有查询正在执行
+    prompt: 此连接上仍有查询在执行。您想怎么做？
+    elapsed: "已执行 %{seconds}s"
     disconnect_anyway: 仍然断开
     quit_anyway: 仍然退出
     keep_waiting: 继续等待
@@ -2269,7 +2269,7 @@ modals:
     cancel: 取消
     confirm: 重命名
   schema_drift:
-    title: 自此查询打开以来模式已发生更改
+    title: 自此查询打开以来 Schema 已发生更改
     column_header: 列
     local_header: 本地缓存
     remote_header: 远程
@@ -2288,10 +2288,10 @@ modals:
       primary_key: (主键)
       foreign_keys: (外键)
       nullable: 可空
-    continue_stale: 继续使用过期模式
+    continue_stale: 继续使用过期 Schema
     cancel: 取消
     refreshing: 正在刷新…
-    refresh: 刷新并重新运行
+    refresh: 刷新并重新执行
   tunnel_auth:
     title: 需要 SSH 口令
     prompt: "输入隧道 %{tunnel} 的口令"
@@ -2336,9 +2336,9 @@ palette:
     new_query_tab:
       name: 新建查询标签页
     run_query:
-      name: 运行查询
+      name: 执行查询
     run_query_in_new_tab:
-      name: 在新标签页中运行查询
+      name: 在新标签页中执行查询
     save_query:
       name: 保存查询
     save_file_as:
@@ -2348,7 +2348,7 @@ palette:
     open_history:
       name: 打开查询历史
     cancel_query:
-      name: 取消运行中的查询
+      name: 取消执行中的查询
     close_tab:
       name: 关闭当前标签页
     next_tab:
@@ -2362,7 +2362,7 @@ palette:
     disconnect:
       name: 断开当前连接
     refresh_schema:
-      name: 刷新模式
+      name: 刷新 Schema
     focus_sidebar:
       name: 聚焦侧边栏
     focus_editor:
@@ -2567,8 +2567,8 @@ settings:
       rename: 重命名
       focus_search: 聚焦搜索
       toggle_favorite: 切换收藏
-      run_query: 运行查询
-      run_query_in_new_tab: 在新标签页中运行查询
+      run_query: 执行查询
+      run_query_in_new_tab: 在新标签页中执行查询
       cancel_query: 取消查询
       open_history: 切换历史下拉菜单
       open_saved_queries: 打开已保存查询
@@ -2592,7 +2592,7 @@ settings:
       menu_select: 菜单选择
       menu_back: 菜单返回
       sidebar_next_tab: 侧边栏下一个标签页
-      refresh_schema: 刷新模式
+      refresh_schema: 刷新 Schema
       open_connection_manager: 打开连接管理器
       export_connections: 导出连接…
       disconnect: 断开连接
@@ -2755,7 +2755,7 @@ settings:
     copy_url: 复制 URL
     login_action: 登录
     logging_in: 正在登录…
-    runs_interactive_login_hint: 为此认证配置文件运行交互式登录
+    runs_interactive_login_hint: 为此认证配置文件执行交互式登录
     update: 更新
     create: 创建
     section_title: 认证配置文件
@@ -2789,11 +2789,11 @@ settings:
         name: 列出数据库
         description: 列出连接上可访问的所有数据库
       list_schemas:
-        name: 列出模式
-        description: 列出数据库中的模式
+        name: 列出 Schema
+        description: 列出数据库中的 Schema
       list_tables:
         name: 列出表
-        description: 列出模式中的表和集合
+        description: 列出 Schema 中的表和集合
       list_collections:
         name: 列出集合
         description: 列出 MongoDB 集合或类似的文档存储
@@ -2805,10 +2805,10 @@ settings:
         description: 执行 SELECT 或等效的只读查询
       explain_query:
         name: 解释查询
-        description: 显示查询执行计划而不实际运行
+        description: 显示查询执行计划而不实际执行
       preview_mutation:
         name: 预览变更
-        description: 试运行写入 / 删除查询并报告受影响的行
+        description: 试执行写入 / 删除查询并报告受影响的行
       list_scripts:
         name: 列出脚本
         description: 列出脚本目录中的已保存脚本
@@ -2825,11 +2825,11 @@ settings:
         name: 删除脚本
         description: 从脚本目录中永久移除脚本
       run_script:
-        name: 运行脚本
+        name: 执行脚本
         description: 对连接执行已保存的 Lua / SQL / shell 脚本
       request_execution:
         name: 请求执行
-        description: 在变更运行前提交给人工审批
+        description: 在变更执行前提交给人工审批
       list_pending_executions:
         name: 列出待处理项
         description: 查看所有等待审批的执行
@@ -2854,13 +2854,13 @@ settings:
     class:
       metadata:
         label: 元数据
-        description: 模式检查 — 列出数据库、表和描述对象
+        description: Schema 检查 — 列出数据库、表和描述对象
       read:
         label: 读取
-        description: 运行只读查询和获取数据
+        description: 执行只读查询和获取数据
       write:
         label: 写入
-        description: 插入、更新或运行会修改数据的脚本
+        description: 插入、更新或执行会修改数据的脚本
       destructive:
         label: 破坏性
         description: DELETE、DROP、TRUNCATE 及其他不可逆操作
@@ -2869,7 +2869,7 @@ settings:
         description: 批准执行、导出审计日志及特权操作
     group:
       discovery: 发现
-      schema: 模式
+      schema: Schema
       query: 查询
       scripts: 脚本
       approval: 审批
@@ -2964,7 +2964,7 @@ settings:
       saved_warnings: 驱动设置已保存，但有警告
     capability:
       multiple_databases: 多数据库
-      schemas: 模式
+      schemas: Schema
       ssh_tunnel: SSH 隧道
       ssl_tls: SSL / TLS
       authentication: 认证
@@ -3186,18 +3186,18 @@ sidebar:
     scripts_title: 还没有脚本
     scripts_hint: 使用 + 创建新脚本或导入现有文件
   error:
-    cannot_load_schema_types: 无法加载模式类型
-    cannot_load_schema_indexes: 无法加载模式索引
-    cannot_load_schema_foreign_keys: 无法加载模式外键
-    cannot_load_schema_routines: 无法加载模式例程
+    cannot_load_schema_types: 无法加载 Schema 类型
+    cannot_load_schema_indexes: 无法加载 Schema 索引
+    cannot_load_schema_foreign_keys: 无法加载 Schema 外键
+    cannot_load_schema_routines: 无法加载 Schema 例程
   filter:
-    connections_placeholder: 筛选连接和模式…
+    connections_placeholder: 筛选连接和 Schema…
     scripts_placeholder: 筛选脚本…
     stream_placeholder: 筛选流名称…
   menu:
     open: 打开
     browse_event_streams: 浏览事件流
-    view_schema: 查看模式
+    view_schema: 查看 Schema
     refresh: 刷新
     generate_sql: 生成 SQL
     export_table: 导出表…
@@ -3216,7 +3216,7 @@ sidebar:
     rename: 重命名
     export_ellipsis: 导出…
     import_ellipsis: 导入…
-    compare_schema: 对比模式…
+    compare_schema: 对比 Schema…
     move_to: 移动到…
     delete: 删除
     delete_count: "删除 %{count} 项"
@@ -3230,7 +3230,7 @@ sidebar:
     new_script_folder: 新建文件夹
     reveal_file_manager: 在文件管理器中显示
     copy_path: 复制路径
-    schema_diff_unsupported: 模式差异仅适用于关系型连接。
+    schema_diff_unsupported: Schema 差异仅适用于关系型连接。
     new_dashboard: 新建仪表盘…
     import_dashboard: 从 JSON 导入仪表盘…
     new_saved_chart: 新建已保存图表…
@@ -3272,10 +3272,10 @@ sidebar:
     post_disconnect_hook_cancelled: 后断开 Hook 已取消
     loading_event_streams: "正在加载事件流：%{name}"
     listing_buckets: "正在列出存储桶：%{name}"
-    loading_database_schema: "正在加载模式：%{name}"
+    loading_database_schema: "正在加载 Schema：%{name}"
     connecting_to_database: "正在连接数据库：%{name}"
     refreshing_database: "正在刷新数据库：%{name}"
-    refreshing_schema_object: "正在刷新模式对象：%{name}"
+    refreshing_schema_object: "正在刷新 Schema 对象：%{name}"
     dropping:
       table: "正在删除表 %{name}"
       view: "正在删除视图 %{name}"
@@ -3292,7 +3292,7 @@ sidebar:
         resolving_values: "流水线：正在解析值（%{resolved}/%{total}）"
         opening_access: "流水线：正在打开访问通道（%{method}）"
         connecting: "流水线：正在连接驱动（%{driver}）"
-        fetching_schema: "流水线：正在获取模式"
+        fetching_schema: "流水线：正在获取 Schema"
   toast:
     edit_reconnect_updated: "%{name} 已更新"
     edit_reconnect_body: 重新连接以将更改应用到当前会话。
@@ -3307,12 +3307,12 @@ sidebar:
     disconnected_hook_cancelled: 已断开连接，但后断开 Hook 被取消
     disconnected_hook_error: "已断开与 %{name} 的连接，但 %{error}"
     profile_not_found: 未找到配置文件
-    schema_drop_cancelled: 模式删除已取消
+    schema_drop_cancelled: Schema 删除已取消
     drop_failed: "删除失败：%{error}"
     reveal_failed: "在文件管理器中显示失败：%{error}"
-    schema_snapshot_failed: "捕获模式快照失败：%{error}"
+    schema_snapshot_failed: "捕获 Schema 快照失败：%{error}"
     load_failed:
-      table: "加载 %{name} 的模式失败：%{error}"
+      table: "加载 %{name} 的 Schema 失败：%{error}"
       collection: "加载 %{name} 的事件流失败：%{error}"
       data_types: "加载数据类型失败：%{error}"
       indexes: "加载索引失败：%{error}"
@@ -3321,12 +3321,12 @@ sidebar:
     list_buckets_failed: "列出存储桶失败：%{error}"
     code_generation_failed: "代码生成失败：%{error}"
     loading_event_streams: 正在加载事件流…
-    load_schema_failed: "加载模式失败：%{error}"
+    load_schema_failed: "加载 Schema 失败：%{error}"
     connect_database_failed: "连接数据库失败：%{error}"
     refresh_database_failed: "刷新数据库失败：%{error}"
     database_refresh_pending: 数据库刷新已在等待中
-    prepare_schema_object_refresh_failed: 准备模式对象刷新失败
-    refresh_schema_object_failed: "刷新模式对象失败：%{error}"
+    prepare_schema_object_refresh_failed: 准备 Schema 对象刷新失败
+    refresh_schema_object_failed: "刷新 Schema 对象失败：%{error}"
     connected:
       plain: "已连接到 %{name}"
       one: "已连接到 %{name}（有 1 个 Hook 警告）"
