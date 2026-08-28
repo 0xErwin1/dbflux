@@ -21,13 +21,14 @@ const extendedRegistry = [
   { id: 'zh-Hans', name: '简体中文', docsDirectory: 'zh-hans' },
 ];
 
-test('ships only the current English and Spanish locale metadata', () => {
+test('ships only the current English, Spanish and Simplified Chinese locale metadata', () => {
   assert.equal(DEFAULT_LOCALE, 'en');
   assert.deepEqual(
     LOCALE_REGISTRY.map(({ id, name, docsDirectory }) => ({ id, name, docsDirectory })),
     [
       { id: 'en', name: 'English', docsDirectory: null },
       { id: 'es', name: 'Español', docsDirectory: 'es' },
+      { id: 'zh_Hans', name: '简体中文', docsDirectory: 'zh_Hans' },
     ],
   );
 });
@@ -79,6 +80,8 @@ test('derives only registered documentation include patterns', () => {
     'docs/*.md',
     'docs/es/*.md',
     'docs/es/drivers/*.md',
+    'docs/zh_Hans/*.md',
+    'docs/zh_Hans/drivers/*.md',
   ]);
   assert.deepEqual(docsRepoPatterns(extendedRegistry), [
     'docs/*.md',

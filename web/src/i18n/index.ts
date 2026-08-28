@@ -1,8 +1,9 @@
 import { en } from './en';
 import { es } from './es';
+import { zh_Hans } from './zh_Hans';
 import { DEFAULT_LOCALE as REGISTRY_DEFAULT_LOCALE, LOCALE_REGISTRY } from './locale-registry.mjs';
 
-const DICTIONARY_MODULES = { en, es };
+const DICTIONARY_MODULES = { en, es, zh_Hans };
 
 export type Locale = keyof typeof DICTIONARY_MODULES;
 
@@ -28,9 +29,10 @@ export const LOCALE_NAMES = Object.fromEntries(
 /**
  * The complete shape of every chrome string the site renders.
  *
- * `en.ts` is the canonical `satisfies Dictionary` object. `es.ts` is typed
- * `Dictionary` directly (not `satisfies`), so a key missing from the Spanish
- * dictionary is a compile error rather than a silently widened type.
+ * `en.ts` is the canonical `satisfies Dictionary` object. Every translated
+ * dictionary (`es.ts`, `zh_Hans.ts`) is typed `Dictionary` directly (not
+ * `satisfies`), so a key missing from a translation is a compile error rather
+ * than a silently widened type.
  */
 export interface Dictionary {
   nav: {
@@ -277,8 +279,9 @@ export function dictionary(locale: Locale): Dictionary {
  * Derive the active locale from a request path.
  *
  * Routing is manual (`i18n.routing: 'manual'`), so the locale is never in
- * `Astro.currentLocale` — it is read back from the leading `/es/` segment the
- * same way `[...path].astro` will compute it when emitting that segment.
+ * `Astro.currentLocale` — it is read back from the leading locale segment (e.g.
+ * `/es/`, `/zh_Hans/`) the same way `[...path].astro` will compute it when
+ * emitting that segment.
  */
 export function localeFromPathname(pathname: string): Locale {
   const [, first] = pathname.split('/');

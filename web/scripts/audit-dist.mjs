@@ -12,7 +12,7 @@ const text = (path) => (existsSync(path) ? readFileSync(path, 'utf8') : fail(`mi
 const root = resolve('dist');
 const fileFor = (pathname) => resolve(root, pathname.replace(/^\//, ''), 'index.html');
 const pathnameFor = (path) => {
-  const output = relative(root, path).replaceAll('\\', '/');
+  const output = relative(root, path).split('\\').join('/');
   return output === 'index.html' ? '/' : `/${output.replace(/index\.html$/, '')}`;
 };
 const locales = LOCALE_REGISTRY.map(({ id }) => id);
@@ -35,7 +35,7 @@ const locations = [...sitemap.matchAll(/<loc>([^<]+)<\/loc>/g)].map(([, url]) =>
 const expected = new Set();
 for (const file of readdirSync(root, { recursive: true })) {
   const path = resolve(root, file);
-  if (!path.endsWith('/index.html')) continue;
+  if (!/[/\\]index\.html$/.test(path)) continue;
   const pathname = pathnameFor(path);
   const html = text(path);
   if (

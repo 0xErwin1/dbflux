@@ -12,14 +12,15 @@
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   contentEntryId,
   isDocsRepoPath,
   splitContentEntryId,
 } from '../src/i18n/locale-registry.mjs';
 
-const WEB = new URL('..', import.meta.url).pathname;
-const REPO = new URL('../..', import.meta.url).pathname;
+const WEB = fileURLToPath(new URL('../', import.meta.url));
+const REPO = fileURLToPath(new URL('../../', import.meta.url));
 
 export const VERSIONS_DIR = join(WEB, '.versions');
 
