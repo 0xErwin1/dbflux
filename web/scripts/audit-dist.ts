@@ -275,6 +275,7 @@ for (const [method, path, status, body] of [
   ['GET', '/redirect/', 302, ''],
   ['GET', '/error/', 500, 'error'],
   ['GET', '/missing-sibling/', 200, 'html'],
+  ['GET', '/usage/?_mfa=1788008465661', 200, 'markdown'],
 ] as const) {
   const response = await request('text/markdown', method, path);
   if (response.status !== status || (await response.text()) !== body)
