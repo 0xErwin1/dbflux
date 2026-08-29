@@ -319,7 +319,9 @@ const APPLICATION = {
     height: 7px;
     border-radius: var(--radius-full);
     background: var(--success);
-    animation: pulse 2.4s ease-out infinite;
+    /* Finite so the viewport settles: an infinite pulse keeps repainting and
+       tanks the mobile Speed Index while adding nothing after a few beats. */
+    animation: pulse 2.4s ease-out 3;
   }
 
   .sec-head {
