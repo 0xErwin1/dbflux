@@ -34,8 +34,33 @@ Driver de clave-valor Redis para DBFlux, construido sobre el crate
     `Client::build_with_tls`.
 - Soporte de túnel SSH para llegar a Redis a través de un bastion host (solo en
   modo manual; ver Limitaciones).
+- La topología de despliegue puede detectarse automáticamente o configurarse
+  explícitamente (`standalone`, `cluster`, `sentinel`):
+  - La detección automática sondea `ROLE` e `INFO cluster` al conectar y
+    enruta hacia el manejo de standalone o de Cluster.
+  - `cluster` omite la detección y conecta directamente vía `ClusterClient`,
+    usando el host/port primario más cualquier nodo semilla adicional
+    configurado. Una conexión Cluster solo expone jamás la database 0; una
+    database distinta de cero en un perfil Cluster se rechaza al conectar en
+    lugar de aplicarse silenciosamente contra la db 0.
+  - `sentinel` conecta a través de `SentinelClient`, resolviendo el master
+    nombrado desde uno o más nodos Sentinel (host/port primario más
+    cualquier nodo adicional configurado). Tras resolver, el driver ejecuta
+    `CLIENT SETNAME`, `PING` y una comprobación de sanidad `ROLE` de que el
+    nodo resuelto es efectivamente un master.
+  - Recuperación ante failover de Sentinel: un fallo de clase conexión
+    (conexión caída, error de IO) en una conexión respaldada por Sentinel
+    dispara exactamente una re-resolución vía Sentinel y un reintento del
+    comando fallido antes de propagar el error.
 - Exploración y descubrimiento de claves:
   - Escaneo de claves basado en cursor (`KV_SCAN`, `PaginationStyle::Cursor`).
+    En una conexión Cluster, un `SCAN` plano no tiene sentido de nodo único,
+    así que el driver lo reparte entre todos los masters: el presupuesto de
+    página se divide equitativamente entre los masters aún pendientes, el
+    cursor de cada nodo se rastrea de forma independiente, y el cursor
+    agregado viaja como un objeto JSON opaco que mapea `"<host>:<port>"` a su
+    cursor `SCAN` pendiente. El escaneo completo termina cuando todos los
+    masters reportan cursor 0.
   - Descubrimiento de tipo por clave (`KV_KEY_TYPES`) entre string, hash, list,
     set, sorted set y stream.
   - Inspección de TTL (`KV_TTL`) y reporte de tamaño de valor (`KV_VALUE_SIZE`).
@@ -59,10 +84,18 @@ Driver de clave-valor Redis para DBFlux, construido sobre el crate
   afectados, y las lecturas de stream que alcanzan el tope de fetch se reportan
   como truncadas.
 
+La introspección de schema reporta un único keyspace `db0` agregado en una
+conexión Cluster: el conteo de claves y el TTL promedio se suman/promedian a
+partir del `DBSIZE`/estadísticas de keyspace de cada master, en lugar de
+reportarse por nodo.
+
 ### Instance Metrics
 
 Expone un conjunto seleccionado de métricas de servidor en vivo tomadas de la
-salida del comando `INFO`:
+salida del comando `INFO`. No disponible en una conexión Cluster — no hay un
+único nodo contra el cual muestrear `INFO`, así que `instance_catalog()`
+devuelve `None` y el Instance Overview, las métricas y los inspectores no
+están disponibles para perfiles Cluster:
 
 - `redis.connected_clients` — clientes actualmente conectados
 - `redis.blocked_clients` — clientes esperando en un comando bloqueante
@@ -118,6 +151,24 @@ evitar exponer direcciones IP y hostnames de clientes.
   read-only ni soporte deferrable.
 - Pub/Sub no está expuesto (la capacidad `PUBSUB` no está establecida).
 - El túnel SSH no está disponible cuando el modo URI está habilitado; la ruta
-  del túnel solo está conectada para el modo de conexión manual.
+  del túnel solo está conectada para el modo de conexión manual. Combinar un
+  túnel SSH con nodos semilla adicionales de Cluster o Sentinel no está
+  soportado: el túnel solo reenvía el host/port primario, así que los nodos
+  adicionales quedan inalcanzables a través de él.
 - Los grupos de consumidores de stream no están modelados; solo se soportan
   lecturas de rango, adición de entradas y eliminación de entradas.
+- Los nodos semilla adicionales de Sentinel y Cluster siempre se contactan por
+  `redis://` plano; la configuración de TLS por nodo para esos nodos extra no
+  está soportada. La propia conexión al master resuelto de Sentinel también es
+  plana (sin TLS) en esta iteración.
+- La autenticación de Sentinel solo aplica a la conexión al master resuelto
+  (vía el username/password configurados); los propios nodos Sentinel se
+  contactan sin autenticación.
+- El formulario de configuración de conexión todavía no expone los campos de
+  topología/Sentinel/nodos-semilla-de-Cluster; los campos `topology`,
+  `sentinel_master_name` y `additional_nodes` de `DbConfig::Redis` existen y se
+  respetan al conectar, pero por ahora deben configurarse editando el perfil
+  guardado directamente. La configuración de topología/Sentinel/Cluster de un
+  perfil guardado tampoco se persiste todavía en el almacén de conexiones
+  respaldado por SQLite (`ConnectionDriverConfigsRepository`), así que solo
+  sobrevive mientras dura el `DbConfig` en memoria que creó la conexión.

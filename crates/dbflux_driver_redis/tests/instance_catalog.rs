@@ -29,6 +29,9 @@ fn connect(uri: String) -> Result<Box<dyn dbflux_core::Connection>, DbError> {
             ssl_client_key_path: None,
             ssh_tunnel: None,
             ssh_tunnel_profile_id: None,
+            topology: None,
+            sentinel_master_name: None,
+            additional_nodes: None,
         },
     );
 

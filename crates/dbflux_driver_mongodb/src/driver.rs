@@ -280,6 +280,7 @@ impl DbDriver for MongoDriver {
                             enabled_when_checked: None,
                             enabled_when_unchecked: None,
                             disabled_when_field_set: None,
+                            enabled_when_field_equals: None,
                             help: None,
                         },
                         FormFieldDef {
@@ -292,6 +293,7 @@ impl DbDriver for MongoDriver {
                             enabled_when_checked: None,
                             enabled_when_unchecked: None,
                             disabled_when_field_set: None,
+                            enabled_when_field_equals: None,
                             help: None,
                         },
                     ],

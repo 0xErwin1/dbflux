@@ -840,7 +840,76 @@ impl ConnectionManagerWindow {
                     Self::field_row_cm(field_def.label.clone(), false, control, None::<&str>, cx)
                         .into_any_element()
                 } else {
-                    div().into_any_element()
+                    let field_id = field_def.id.clone();
+                    let field_enabled = self.is_field_enabled(field_def);
+                    let selected_value = self
+                        .form
+                        .select_values
+                        .get(&field_id)
+                        .cloned()
+                        .unwrap_or_else(|| field_def.default_value.clone());
+
+                    let control = div()
+                        .flex()
+                        .gap_2()
+                        .when(!field_enabled, |d| d.opacity(0.5))
+                        .children(options.iter().map(|opt| {
+                            let is_selected = opt.value == selected_value;
+                            let field_id = field_id.clone();
+                            let opt_value = opt.value.clone();
+
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .when(field_enabled, |d| d.cursor_pointer())
+                                .when(field_enabled, |d| {
+                                    d.on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |this, _, window, cx| {
+                                            this.form
+                                                .select_values
+                                                .insert(field_id.clone(), opt_value.clone());
+                                            window.focus(&this.focus_handle);
+                                            cx.notify();
+                                        }),
+                                    )
+                                })
+                                .child(
+                                    div()
+                                        .w(Heights::ICON_SM)
+                                        .h(Heights::ICON_SM)
+                                        .rounded(px(3.0))
+                                        .border_2()
+                                        .border_color(cx.theme().muted_foreground)
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .when(is_selected, |d| {
+                                            d.bg(cx.theme().ring).border_color(cx.theme().ring)
+                                        })
+                                        .when(is_selected, |d| {
+                                            d.child(
+                                                div()
+                                                    .w(Spacing::SM)
+                                                    .h(Spacing::SM)
+                                                    .rounded(px(1.0))
+                                                    .bg(cx.theme().primary_foreground),
+                                            )
+                                        }),
+                                )
+                                .child(div().text_sm().child(opt.label.clone()))
+                                .into_any_element()
+                        }));
+
+                    Self::field_row_cm(
+                        field_def.label.clone(),
+                        field_def.required && field_enabled,
+                        control,
+                        field_def.help.clone(),
+                        cx,
+                    )
+                    .into_any_element()
                 }
             }
 

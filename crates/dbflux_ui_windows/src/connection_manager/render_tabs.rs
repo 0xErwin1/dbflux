@@ -598,6 +598,7 @@ impl ConnectionManagerWindow {
                         let enabled = form_renderer::is_field_enabled(
                             field,
                             &self.settings_tab.conn_form_state.checkboxes,
+                            &form_renderer::select_values(&self.settings_tab.conn_form_state, cx),
                         );
 
                         match &field.kind {

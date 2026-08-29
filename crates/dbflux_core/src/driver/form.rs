@@ -96,6 +96,16 @@ pub enum FormFieldKind {
     },
 }
 
+/// Names the field a `FieldEquals` gate reads from and the value set it
+/// compares against, mirroring the checkbox-driven `enabled_when_checked`
+/// gate for select-driven visibility (e.g. showing a Redis Sentinel field
+/// only when the `topology` select is set to `"sentinel"`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FieldEquals {
+    pub field: String,
+    pub values: Vec<String>,
+}
+
 /// Definition of a single form field.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FormFieldDef {
@@ -104,14 +114,20 @@ pub struct FormFieldDef {
     pub kind: FormFieldKind,
     pub placeholder: String,
     /// Whether this field is required for validation.
-    /// If `enabled_when_checked` or `enabled_when_unchecked` is set,
-    /// the field is only required when it's enabled.
+    /// If `enabled_when_checked`, `enabled_when_unchecked`, or
+    /// `enabled_when_field_equals` is set, the field is only required when
+    /// it's enabled.
     pub required: bool,
     pub default_value: String,
     /// Field is enabled only when this checkbox field is checked.
     pub enabled_when_checked: Option<String>,
     /// Field is enabled only when this checkbox field is unchecked.
     pub enabled_when_unchecked: Option<String>,
+    /// Field is enabled only when the referenced field's current value is
+    /// one of `FieldEquals::values`. The generic, select-driven counterpart
+    /// to `enabled_when_checked`/`enabled_when_unchecked`.
+    #[serde(default)]
+    pub enabled_when_field_equals: Option<FieldEquals>,
     /// Field is disabled whenever the named field has a non-empty value.
     /// Used for fields whose value is supplied by an `AuthProfileRef`
     /// expansion (e.g. `sso_start_url` disabled when `sso_session_ref` is
@@ -207,6 +223,7 @@ pub fn field(id: &str, label: &str, kind: FormFieldKind, placeholder: &str) -> F
         default_value: String::new(),
         enabled_when_checked: None,
         enabled_when_unchecked: None,
+        enabled_when_field_equals: None,
         disabled_when_field_set: None,
         help: None,
     }
@@ -241,6 +258,14 @@ pub fn when_checked(mut f: FormFieldDef, dep: &str) -> FormFieldDef {
 
 pub fn when_unchecked(mut f: FormFieldDef, dep: &str) -> FormFieldDef {
     f.enabled_when_unchecked = Some(dep.into());
+    f
+}
+
+pub fn when_field_equals(mut f: FormFieldDef, field_id: &str, values: &[&str]) -> FormFieldDef {
+    f.enabled_when_field_equals = Some(FieldEquals {
+        field: field_id.into(),
+        values: values.iter().map(|value| value.to_string()).collect(),
+    });
     f
 }
 
@@ -433,6 +458,60 @@ mod tests {
             let deserialized: RefreshTrigger = serde_json::from_str(&serialized).unwrap();
             assert_eq!(trigger, deserialized);
         }
+    }
+
+    #[test]
+    fn when_field_equals_sets_field_and_values() {
+        let f = when_field_equals(
+            field(
+                "additional_nodes",
+                "Additional Nodes",
+                FormFieldKind::Text,
+                "",
+            ),
+            "topology",
+            &["cluster", "sentinel"],
+        );
+
+        let gate = f.enabled_when_field_equals.expect("gate should be set");
+        assert_eq!(gate.field, "topology");
+        assert_eq!(
+            gate.values,
+            vec!["cluster".to_string(), "sentinel".to_string()]
+        );
+    }
+
+    #[test]
+    fn field_equals_round_trips_via_serde() {
+        let gate = FieldEquals {
+            field: "topology".to_string(),
+            values: vec!["sentinel".to_string()],
+        };
+
+        let serialized = serde_json::to_string(&gate).unwrap();
+        let deserialized: FieldEquals = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(gate, deserialized);
+    }
+
+    #[test]
+    fn enabled_when_field_equals_defaults_to_none_when_omitted_from_json() {
+        let json = r#"{
+            "id": "sentinel_master_name",
+            "label": "Sentinel Master Name",
+            "kind": "Text",
+            "placeholder": "",
+            "required": false,
+            "default_value": "",
+            "enabled_when_checked": null,
+            "enabled_when_unchecked": null,
+            "disabled_when_field_set": null,
+            "help": null
+        }"#;
+
+        let field: FormFieldDef = serde_json::from_str(json).unwrap();
+
+        assert!(field.enabled_when_field_equals.is_none());
     }
 
     #[test]

@@ -9,7 +9,8 @@ pub use capabilities::{
     TransactionCapabilities, TransferFamily, WhereOperator, transfer_compatible,
 };
 pub use form::{
-    DriverFormDef, ExportFieldHint, FieldExportTransform, FormFieldDef, FormFieldKind, FormSection,
-    FormTab, FormValues, RefreshTrigger, SelectOption, field, field_file_path, field_password,
-    field_required, field_use_uri, ssh_tab, when_checked, when_unchecked, with_default, with_help,
+    DriverFormDef, ExportFieldHint, FieldEquals, FieldExportTransform, FormFieldDef, FormFieldKind,
+    FormSection, FormTab, FormValues, RefreshTrigger, SelectOption, field, field_file_path,
+    field_password, field_required, field_use_uri, ssh_tab, when_checked, when_field_equals,
+    when_unchecked, with_default, with_help,
 };
