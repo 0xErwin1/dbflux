@@ -228,13 +228,14 @@ mod tests {
         parse_members, parse_stream_entries, render_value_preview, serde_json_to_value,
     };
     use dbflux_components::icons::AppIcon;
-    use dbflux_core::{KeyEntry, KeyGetResult, KeyType, Value, ValueRepr};
+    use dbflux_core::{KeyEntry, KeyGetResult, KeyLoadState, KeyType, Value, ValueRepr};
 
     fn make_result(value: Vec<u8>, repr: ValueRepr) -> KeyGetResult {
         KeyGetResult {
             entry: KeyEntry::new("test-key"),
             value,
             repr,
+            load_state: KeyLoadState::Loaded,
         }
     }
 

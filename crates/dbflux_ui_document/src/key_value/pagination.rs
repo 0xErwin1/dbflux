@@ -197,6 +197,7 @@ impl super::KeyValueDocument {
                         include_type: true,
                         include_ttl: true,
                         include_size: true,
+                        max_value_bytes: None,
                     })
                 })
                 .await;
