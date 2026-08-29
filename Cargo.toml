@@ -131,6 +131,10 @@ secrecy = "0.10"
 age = { version = "0.11", features = ["armor"] }
 dirs = "6"
 rusqlite = { version = "0.40", features = ["bundled"] }
+# Pinned to match the aes/cbc versions already vendored transitively via
+# gpui -> oo7, avoiding a second copy of the RustCrypto block-cipher stack.
+aes = "0.8"
+cbc = "0.1"
 tokio-postgres = "0.7"
 tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
 log = "0.4"
