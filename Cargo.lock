@@ -2388,6 +2388,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "crc16"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "338089f42c427b86394a5ee60ff321da23a5c89c9d89514c829687b26359fcff"
+
+[[package]]
 name = "crc32fast"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8381,10 +8387,12 @@ checksum = "09d8f99a4090c89cc489a94833c901ead69bfbf3877b4867d5482e321ee875bc"
 dependencies = [
  "arc-swap",
  "combine",
+ "crc16",
  "itertools 0.13.0",
  "itoa",
  "num-bigint",
  "percent-encoding",
+ "rand 0.8.6",
  "rustls 0.23.42",
  "rustls-native-certs 0.7.3",
  "rustls-pemfile 2.2.0",

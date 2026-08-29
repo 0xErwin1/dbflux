@@ -17,7 +17,7 @@ async-trait = { workspace = true }
 dbflux_core.workspace = true
 dbflux_ssh.workspace = true
 log.workspace = true
-redis = { version = "0.27", features = ["tls-rustls"] }
+redis = { version = "0.27", features = ["tls-rustls", "cluster", "sentinel"] }
 serde_json.workspace = true
 urlencoding = "2"
 

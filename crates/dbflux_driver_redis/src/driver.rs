@@ -30,6 +30,10 @@ use dbflux_core::{
 };
 use dbflux_ssh::SshTunnel;
 
+use crate::transport::{
+    RedisTransport, RoleClassification, TopologyProbe, classify_role_reply, parse_cluster_enabled,
+};
+
 pub static REDIS_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef {
     tabs: vec![
         FormTab {
@@ -299,6 +303,14 @@ impl RedisDriver {
         authenticate(&mut connection, params.user, params.password)
             .map_err(|e| format_redis_error(&e, params.host, params.port))?;
 
+        match detect_topology(&mut connection)
+            .map_err(|e| format_redis_error(&e, params.host, params.port))?
+        {
+            TopologyProbe::Standalone => {}
+            TopologyProbe::Cluster => return Err(unsupported_cluster_topology()),
+            TopologyProbe::SentinelService => return Err(unsupported_sentinel_topology()),
+        }
+
         if let Some(db) = params.database {
             select_db(&mut connection, db)
                 .map_err(|e| format_redis_error(&e, params.host, params.port))?;
@@ -311,7 +323,9 @@ impl RedisDriver {
             .map_err(|e| format_redis_error(&e, params.host, params.port))?;
 
         Ok(Box::new(RedisConnection {
-            connection: Arc::new(Mutex::new(connection)),
+            connection: Arc::new(Mutex::new(RedisTransport::Standalone(Arc::new(
+                Mutex::new(connection),
+            )))),
             active_database: Mutex::new(params.database),
             _ssh_tunnel: params.ssh_tunnel,
         }))
@@ -335,6 +349,12 @@ impl RedisDriver {
                 .map_err(|e| format_redis_uri_error(&e, uri))?;
         }
 
+        match detect_topology(&mut connection).map_err(|e| format_redis_uri_error(&e, uri))? {
+            TopologyProbe::Standalone => {}
+            TopologyProbe::Cluster => return Err(unsupported_cluster_topology()),
+            TopologyProbe::SentinelService => return Err(unsupported_sentinel_topology()),
+        }
+
         if let Some(db) = database {
             select_db(&mut connection, db).map_err(|e| format_redis_uri_error(&e, uri))?;
         }
@@ -346,7 +366,9 @@ impl RedisDriver {
             .map_err(|e| format_redis_uri_error(&e, uri))?;
 
         Ok(Box::new(RedisConnection {
-            connection: Arc::new(Mutex::new(connection)),
+            connection: Arc::new(Mutex::new(RedisTransport::Standalone(Arc::new(
+                Mutex::new(connection),
+            )))),
             active_database: Mutex::new(database),
             _ssh_tunnel: None,
         }))
@@ -865,7 +887,7 @@ fn non_empty(s: &str) -> Option<&str> {
 }
 
 pub struct RedisConnection {
-    connection: Arc<Mutex<redis::Connection>>,
+    connection: Arc<Mutex<RedisTransport>>,
     active_database: Mutex<Option<u32>>,
     _ssh_tunnel: Option<SshTunnel>,
 }
@@ -890,9 +912,9 @@ impl RedisConnection {
     fn with_connection<T>(
         &self,
         keyspace: Option<u32>,
-        f: impl FnOnce(&mut redis::Connection) -> Result<T, DbError>,
+        f: impl FnOnce(&mut dyn redis::ConnectionLike) -> Result<T, DbError>,
     ) -> Result<T, DbError> {
-        let mut conn = self
+        let mut transport = self
             .connection
             .lock()
             .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
@@ -900,21 +922,23 @@ impl RedisConnection {
         let active = self.active_db_index()?;
         let target_db = keyspace.or(active);
 
-        if let Some(db) = target_db {
-            select_db(&mut conn, db).map_err(|e| format_redis_query_error(&e))?;
-        }
+        transport.with_connection_like(|conn| {
+            if let Some(db) = target_db {
+                select_db(conn, db).map_err(|e| format_redis_query_error(&e))?;
+            }
 
-        let result = f(&mut conn);
+            let result = f(conn);
 
-        // Restore the active database if we temporarily switched to a different one
-        if keyspace.is_some()
-            && keyspace != active
-            && let Some(db) = active
-        {
-            let _ = select_db(&mut conn, db);
-        }
+            // Restore the active database if we temporarily switched to a different one
+            if keyspace.is_some()
+                && keyspace != active
+                && let Some(db) = active
+            {
+                let _ = select_db(conn, db);
+            }
 
-        result
+            result
+        })
     }
 }
 
@@ -937,8 +961,11 @@ impl Connection for RedisConnection {
     }
 
     fn instance_catalog(&self) -> Option<Box<dyn InstanceCatalog>> {
+        let transport = self.connection.lock().ok()?;
+        let standalone = transport.standalone()?;
+
         Some(Box::new(
-            crate::instance_catalog::RedisInstanceCatalog::new_probed(Arc::clone(&self.connection)),
+            crate::instance_catalog::RedisInstanceCatalog::new_probed(standalone),
         ))
     }
 
@@ -950,13 +977,31 @@ impl Connection for RedisConnection {
         {
             match source {
                 ExecutionSourceContext::InstanceMetricQuery { metric_id, .. } => {
-                    let mut conn = self.connection.lock().map_err(|_| {
+                    let transport = self.connection.lock().map_err(|_| {
+                        DbError::QueryFailed("redis connection mutex poisoned".to_string().into())
+                    })?;
+                    let standalone = transport.standalone().ok_or_else(|| {
+                        DbError::NotSupported(
+                            "Instance metrics are not supported for Redis Cluster connections"
+                                .to_string(),
+                        )
+                    })?;
+                    let mut conn = standalone.lock().map_err(|_| {
                         DbError::QueryFailed("redis connection mutex poisoned".to_string().into())
                     })?;
                     return crate::instance_catalog::dispatch_metric_series(&mut conn, metric_id);
                 }
                 ExecutionSourceContext::InstanceInspectorQuery { metric_id } => {
-                    let mut conn = self.connection.lock().map_err(|_| {
+                    let transport = self.connection.lock().map_err(|_| {
+                        DbError::QueryFailed("redis connection mutex poisoned".to_string().into())
+                    })?;
+                    let standalone = transport.standalone().ok_or_else(|| {
+                        DbError::NotSupported(
+                            "Instance inspectors are not supported for Redis Cluster connections"
+                                .to_string(),
+                        )
+                    })?;
+                    let mut conn = standalone.lock().map_err(|_| {
                         DbError::QueryFailed("redis connection mutex poisoned".to_string().into())
                     })?;
                     return crate::instance_catalog::dispatch_inspector_snapshot(
@@ -1072,16 +1117,18 @@ impl Connection for RedisConnection {
     fn set_active_database(&self, database: Option<&str>) -> Result<(), DbError> {
         let target = database.map(parse_database_name).transpose()?;
 
-        let mut conn = self
+        let mut transport = self
             .connection
             .lock()
             .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
 
         if let Some(db) = target {
-            select_db(&mut conn, db).map_err(|e| format_redis_query_error(&e))?;
+            transport.with_connection_like(|conn| {
+                select_db(conn, db).map_err(|e| format_redis_query_error(&e))
+            })?;
         }
 
-        drop(conn);
+        drop(transport);
         self.set_active_db_index(target)
     }
 
@@ -2012,9 +2059,64 @@ fn authenticate(
     Ok(())
 }
 
-fn select_db(conn: &mut redis::Connection, db_index: u32) -> redis::RedisResult<()> {
+fn select_db(conn: &mut dyn redis::ConnectionLike, db_index: u32) -> redis::RedisResult<()> {
     redis::cmd("SELECT").arg(db_index).query::<String>(conn)?;
     Ok(())
+}
+
+/// Detects the topology of the server behind `conn` via `ROLE` and, when
+/// that does not identify a Sentinel, `INFO cluster`.
+///
+/// Called once at connect time, before the connection is wrapped in a
+/// `RedisTransport`. Only a genuine transport/IO error on either probe
+/// aborts detection; a `ROLE` reply that some managed providers reject as an
+/// unsupported command is treated as "not a Sentinel" (see
+/// `classify_role_reply`) and detection falls through to `INFO cluster`.
+fn detect_topology(conn: &mut redis::Connection) -> redis::RedisResult<TopologyProbe> {
+    let role_reply = redis::cmd("ROLE").query::<redis::Role>(conn);
+
+    match (classify_role_reply(&role_reply), role_reply) {
+        (RoleClassification::Sentinel, _) => Ok(TopologyProbe::SentinelService),
+        (RoleClassification::Aborted, Err(error)) => Err(error),
+        // Unreachable in practice: `classify_role_reply` only returns `Aborted`
+        // from the `Err(_)` arm. Fall through to the INFO check defensively
+        // instead of panicking on a value that cannot occur.
+        (RoleClassification::Aborted, Ok(_)) | (RoleClassification::NotSentinel, _) => {
+            detect_topology_via_cluster_info(conn)
+        }
+    }
+}
+
+fn detect_topology_via_cluster_info(
+    conn: &mut redis::Connection,
+) -> redis::RedisResult<TopologyProbe> {
+    let info: String = redis::cmd("INFO").arg("cluster").query(conn)?;
+
+    Ok(if parse_cluster_enabled(&info) {
+        TopologyProbe::Cluster
+    } else {
+        TopologyProbe::Standalone
+    })
+}
+
+/// Batches 2/3 add real Cluster connect logic; until then a detected Redis
+/// Cluster deployment fails fast with this message.
+fn unsupported_cluster_topology() -> DbError {
+    DbError::NotSupported(
+        "dbflux detected a Redis Cluster; select the Cluster topology mode for this connection \
+         once Cluster support ships."
+            .to_string(),
+    )
+}
+
+/// Batches 2/3 add real Sentinel connect logic; until then a detected Redis
+/// Sentinel deployment fails fast with this message.
+fn unsupported_sentinel_topology() -> DbError {
+    DbError::NotSupported(
+        "dbflux detected a Redis Sentinel deployment; select the Sentinel topology mode for \
+         this connection once Sentinel support ships."
+            .to_string(),
+    )
 }
 
 /// Reports the client identity to the server via `CLIENT SETNAME` so it is
@@ -2058,7 +2160,7 @@ fn parse_database_name(database: &str) -> Result<u32, DbError> {
     })
 }
 
-fn fetch_database_count(conn: &mut redis::Connection) -> Result<u32, DbError> {
+fn fetch_database_count(conn: &mut dyn redis::ConnectionLike) -> Result<u32, DbError> {
     let values: Vec<String> = redis::cmd("CONFIG")
         .arg("GET")
         .arg("databases")
@@ -2080,7 +2182,7 @@ fn fetch_database_count(conn: &mut redis::Connection) -> Result<u32, DbError> {
 }
 
 fn fetch_keyspace_stats(
-    conn: &mut redis::Connection,
+    conn: &mut dyn redis::ConnectionLike,
 ) -> Result<HashMap<u32, KeyspaceStats>, DbError> {
     let info = redis::cmd("INFO")
         .arg("keyspace")
@@ -2166,7 +2268,7 @@ fn gate_decision(size_bytes: u64, max_value_bytes: Option<u64>) -> SizeGateDecis
 }
 
 fn fetch_key_payload(
-    conn: &mut redis::Connection,
+    conn: &mut dyn redis::ConnectionLike,
     key: &str,
     key_type: KeyType,
     max_value_bytes: Option<u64>,
