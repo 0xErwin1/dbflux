@@ -1,0 +1,10 @@
+{
+  "serverInfo": {
+    "name": "dbflux-docs",
+    "title": "DBFlux documentation",
+    "version": "0.1.0",
+    "description": "Read-only MCP server exposing the DBFlux documentation: full-text search, page listing, and markdown page retrieval."
+  },
+  "transport": { "type": "streamable-http", "url": "https://mcp.dbflux.dev/mcp" },
+  "capabilities": { "tools": {} }
+}

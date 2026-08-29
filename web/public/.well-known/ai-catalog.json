@@ -32,6 +32,16 @@
         "How can an agent operate DBFlux?",
         "How do I run the DBFlux MCP server?"
       ]
+    },
+    {
+      "id": "urn:air:dbflux.dev:mcp:docs",
+      "displayName": "DBFlux docs MCP server",
+      "type": "application/json",
+      "url": "https://mcp.dbflux.dev/mcp",
+      "representativeQueries": [
+        "Search the DBFlux documentation",
+        "Read the DBFlux usage guide as markdown"
+      ]
     }
   ]
 }
