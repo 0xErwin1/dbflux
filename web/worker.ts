@@ -22,7 +22,9 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     if (!['GET', 'HEAD'].includes(request.method)) return env.ASSETS.fetch(request);
 
-    if (new URL(request.url).pathname === '/.well-known/api-catalog') {
+    const url = new URL(request.url);
+
+    if (url.pathname === '/.well-known/api-catalog') {
       const apiCatalog = await env.ASSETS.fetch(request);
       if (!apiCatalog.ok) return apiCatalog;
       const headers = new Headers(apiCatalog.headers);
@@ -35,13 +37,14 @@ export default {
     }
 
     const html = await env.ASSETS.fetch(request);
+    // Negotiation keys on the pathname, not the raw URL: clients (and scanners)
+    // append cache-busting query strings, and those must still negotiate.
     if (
       !html.ok ||
-      !request.url.endsWith('/') ||
+      !url.pathname.endsWith('/') ||
       !html.headers.get('content-type')?.includes('text/html')
     ) {
-      const pathname = new URL(request.url).pathname;
-      if (pathname.endsWith('.md') || pathname === '/search-index.json') {
+      if (url.pathname.endsWith('.md') || url.pathname === '/search-index.json') {
         const headers = new Headers(html.headers);
         headers.set('Access-Control-Allow-Origin', '*');
         return new Response(request.method === 'HEAD' ? null : html.body, {
@@ -52,7 +55,7 @@ export default {
       }
       return html;
     }
-    const markdownUrl = new URL('index.md', request.url).href;
+    const markdownUrl = new URL(`${url.pathname}index.md`, url.origin).href;
     const markdown = await env.ASSETS.fetch(new Request(markdownUrl));
     if (!markdown.ok) return html;
     const headers = new Headers(html.headers);
@@ -65,7 +68,7 @@ export default {
       headers.delete('content-length');
       headers.set(
         'Link',
-        `${html.headers.get('Link') ? `${html.headers.get('Link')}, ` : ''}<${request.url}>; rel="alternate"; type="text/html"`,
+        `${html.headers.get('Link') ? `${html.headers.get('Link')}, ` : ''}<${url.origin}${url.pathname}>; rel="alternate"; type="text/html"`,
       );
       const markdownText = await markdown.text();
       headers.set('x-markdown-tokens', String(Math.ceil(markdownText.length / 4)));
