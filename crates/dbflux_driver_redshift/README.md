@@ -21,6 +21,7 @@ Amazon Redshift driver for DBFlux (read-only v1), built directly on the [`postgr
 - Table details surface Redshift-specific storage metadata through the generic `TableInfo.storage_hints` seam (read from `SVV_TABLE_INFO` and `PG_TABLE_DEF`): distribution key (`KEY`/`EVEN`/`ALL`/`AUTO`, with the key column when applicable) and sort key (compound or interleaved, with its ordered columns). Declared primary key, foreign key, and unique constraints are still surfaced through the standard core metadata shapes, each labeled advisory/non-enforced — Redshift accepts but never enforces these constraints, and no index list is fabricated from them.
 - Query execution (`SELECT`/browse) returns rows with typed columns via the standard `Connection::execute` path; query cancellation is supported through the wire client's cancel token.
 - `RedshiftErrorFormatter` maps common connection and query failures (timeouts, refused connections, authentication failures, unreachable clusters, `SQLSTATE`-bearing query errors) to clear, driver-formatted messages instead of raw debug output.
+- Reports `application_name` as `dbflux/<version>` on every connection, unless the connection URI already sets its own `application_name` query parameter.
 
 ## Limitations
 

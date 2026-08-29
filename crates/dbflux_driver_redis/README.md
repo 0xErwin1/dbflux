@@ -17,6 +17,7 @@ Redis key-value driver for DBFlux, built on the [`redis`](https://crates.io/crat
 - Connection modes: manual (host/port/user/password/database) and URI mode. URI mode accepts `redis://` and `rediss://` connection strings.
 - Multiple logical databases via `SELECT <db>` (`MULTIPLE_DATABASES`). The active database index is tracked on the connection.
 - Authentication with optional username + password (`AUTHENTICATION`).
+- Reports its client identity to the server via `CLIENT SETNAME` on connect (`dbflux/<version>`, visible in `CLIENT LIST`); best-effort, since some managed providers restrict `CLIENT` commands.
 - TLS/SSL with three modes (`off`, `on`, `verify`):
   - `off` — plain `redis://` connection.
   - `on` — `rediss://` with the certificate trusted without chain validation (insecure marker).

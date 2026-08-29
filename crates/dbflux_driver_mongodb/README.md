@@ -26,6 +26,7 @@ MongoDB document driver for DBFlux.
 - Mutations: insert, update (including upsert), and delete (`supports_upsert: true`). The `MongoShellGenerator` emits `insertOne`/`insertMany`, `updateOne`/`updateMany` (with `{ upsert: true }`), and `deleteOne`/`deleteMany` for previews and copy-as-query.
 - DDL: drop database, drop collection, create index, and drop index.
 - JSON export of results (`EXPORT_JSON`).
+- Reports client identity as `appName=dbflux/<version>` on connect (visible in server logs and `db.currentOp()`), unless the connection URI already sets an `appName`.
 
 ### Instance Metrics
 

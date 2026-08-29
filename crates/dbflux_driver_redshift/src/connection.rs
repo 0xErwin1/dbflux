@@ -113,7 +113,8 @@ fn build_base_config(params: &RedshiftConnectParams, ssl_mode: RedshiftSslMode) 
         .password(params.password)
         .dbname(params.database)
         .connect_timeout(DEFAULT_CONNECT_TIMEOUT)
-        .ssl_mode(ssl_mode.config_ssl_mode());
+        .ssl_mode(ssl_mode.config_ssl_mode())
+        .application_name(dbflux_core::client_identity());
 
     config
 }
@@ -1027,6 +1028,26 @@ mod tests {
         assert_eq!(config.get_ssl_mode(), SslMode::Require);
         assert_eq!(config.get_dbname(), Some("dev"));
         assert_eq!(config.get_user(), Some("awsuser"));
+    }
+
+    #[test]
+    fn build_base_config_reports_dbflux_as_the_application_name() {
+        let tls_certs = RedshiftTlsCerts::default();
+        let params = RedshiftConnectParams {
+            host: "cluster.example.com",
+            port: 5439,
+            user: "awsuser",
+            password: "secret",
+            database: "dev",
+            ssl_mode: "require",
+            tls_certs: &tls_certs,
+        };
+        let config = build_base_config(&params, RedshiftSslMode::parse(params.ssl_mode));
+
+        assert_eq!(
+            config.get_application_name(),
+            Some(dbflux_core::client_identity())
+        );
     }
 
     #[test]

@@ -304,6 +304,8 @@ impl RedisDriver {
                 .map_err(|e| format_redis_error(&e, params.host, params.port))?;
         }
 
+        set_client_name(&mut connection);
+
         redis::cmd("PING")
             .query::<String>(&mut connection)
             .map_err(|e| format_redis_error(&e, params.host, params.port))?;
@@ -336,6 +338,8 @@ impl RedisDriver {
         if let Some(db) = database {
             select_db(&mut connection, db).map_err(|e| format_redis_uri_error(&e, uri))?;
         }
+
+        set_client_name(&mut connection);
 
         redis::cmd("PING")
             .query::<String>(&mut connection)
@@ -1995,6 +1999,20 @@ fn authenticate(
 fn select_db(conn: &mut redis::Connection, db_index: u32) -> redis::RedisResult<()> {
     redis::cmd("SELECT").arg(db_index).query::<String>(conn)?;
     Ok(())
+}
+
+/// Reports the client identity to the server via `CLIENT SETNAME` so it is
+/// visible in `CLIENT LIST`/`CLIENT INFO`. Some managed Redis providers
+/// restrict the `CLIENT` command family, so a failure here must not fail the
+/// connection.
+fn set_client_name(conn: &mut redis::Connection) {
+    if let Err(error) = redis::cmd("CLIENT")
+        .arg("SETNAME")
+        .arg(dbflux_core::client_identity())
+        .query::<String>(conn)
+    {
+        log::warn!("Redis CLIENT SETNAME failed (server may restrict CLIENT commands): {error}");
+    }
 }
 
 fn uri_authority_has_credentials(uri: &str) -> bool {

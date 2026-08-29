@@ -552,6 +552,10 @@ fn build_uri_config(
         config.connect_timeout(DEFAULT_URI_CONNECT_TIMEOUT);
     }
 
+    if config.get_application_name().is_none() {
+        config.application_name(dbflux_core::client_identity());
+    }
+
     Ok((config, ssl_mode))
 }
 
@@ -1043,6 +1047,29 @@ mod tests {
             .expect("URI should parse after sslmode is stripped");
 
             assert_eq!(ssl_mode, RedshiftSslMode::Verify);
+        }
+
+        #[test]
+        fn build_uri_config_defaults_application_name_when_uri_omits_one() {
+            let (config, _) =
+                build_uri_config("postgresql://awsuser:pw@cluster.example.com:5439/dev", None)
+                    .expect("URI should parse");
+
+            assert_eq!(
+                config.get_application_name(),
+                Some(dbflux_core::client_identity())
+            );
+        }
+
+        #[test]
+        fn build_uri_config_preserves_a_user_supplied_application_name() {
+            let (config, _) = build_uri_config(
+                "postgresql://awsuser:pw@cluster.example.com:5439/dev?application_name=custom",
+                None,
+            )
+            .expect("URI should parse");
+
+            assert_eq!(config.get_application_name(), Some("custom"));
         }
 
         #[test]

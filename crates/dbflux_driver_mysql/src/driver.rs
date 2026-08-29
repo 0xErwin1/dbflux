@@ -1200,7 +1200,11 @@ fn build_mysql_opts(
         .tcp_port(port)
         .prefer_socket(false)
         .user(Some(user))
-        .pass(password);
+        .pass(password)
+        .connect_attrs(Some(HashMap::from([(
+            "program_name".to_string(),
+            dbflux_core::client_identity().to_string(),
+        )])));
 
     if let Some(db) = database {
         builder = builder.db_name(Some(db));
@@ -1279,6 +1283,14 @@ impl MysqlDriver {
         let uri = inject_password_into_mysql_uri(base_uri, password);
 
         let opts = Opts::from_url(&uri).map_err(|e| format_mysql_uri_error(&e, base_uri))?;
+        // MySQL connection URIs have no program_name/application_name query key,
+        // so the identity attr must be applied unconditionally after parsing.
+        let opts: Opts = OptsBuilder::from_opts(opts)
+            .connect_attrs(Some(HashMap::from([(
+                "program_name".to_string(),
+                dbflux_core::client_identity().to_string(),
+            )])))
+            .into();
 
         let catalog_conn =
             Conn::new(opts.clone()).map_err(|e| format_mysql_uri_error(&e, base_uri))?;
@@ -3917,9 +3929,9 @@ pub fn fetch_dependents(
 #[cfg(test)]
 mod tests {
     use super::{
-        MysqlCodeGenerator, MysqlDialect, MysqlDriver, inject_password_into_mysql_uri,
-        mysql_routine_type_to_kind, mysql_text_literal, normalize_mysql_tcp_host,
-        plan_mysql_semantic_request,
+        MysqlCodeGenerator, MysqlDialect, MysqlDriver, MysqlSslPaths, build_mysql_opts,
+        inject_password_into_mysql_uri, mysql_routine_type_to_kind, mysql_text_literal,
+        normalize_mysql_tcp_host, plan_mysql_semantic_request,
     };
     use dbflux_core::{
         AddColumnRequest, AlterColumnRequest, CodeGenerator, DatabaseCategory, DbConfig, DbDriver,
@@ -3927,6 +3939,7 @@ mod tests {
         OrderByColumn, QueryLanguage, RoutineKind, RowInsert, SemanticRequest, SqlDialect,
         SqlMutationGenerator, TableBrowseRequest, TableRef, TransferFamily, Value,
     };
+    use mysql::{Opts, OptsBuilder};
 
     #[test]
     fn build_and_parse_uri_roundtrip_basics() {
@@ -4051,6 +4064,47 @@ mod tests {
                 .parse_uri("postgres://postgres@localhost:5432/app")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn build_mysql_opts_sends_client_identity_program_name() {
+        let opts = build_mysql_opts(
+            "localhost",
+            3306,
+            "root",
+            None,
+            None,
+            "DISABLED",
+            &MysqlSslPaths {
+                root_cert: None,
+                client_cert: None,
+                client_key: None,
+            },
+        );
+
+        let program_name = opts
+            .get_connect_attrs()
+            .and_then(|attrs| attrs.get("program_name"))
+            .map(String::as_str);
+        assert_eq!(program_name, Some(dbflux_core::client_identity()));
+    }
+
+    #[test]
+    fn uri_opts_send_client_identity_program_name() {
+        let opts = Opts::from_url("mysql://root@localhost:3306/app")
+            .expect("uri should parse into mysql Opts");
+        let opts: Opts = OptsBuilder::from_opts(opts)
+            .connect_attrs(Some(std::collections::HashMap::from([(
+                "program_name".to_string(),
+                dbflux_core::client_identity().to_string(),
+            )])))
+            .into();
+
+        let program_name = opts
+            .get_connect_attrs()
+            .and_then(|attrs| attrs.get("program_name"))
+            .map(String::as_str);
+        assert_eq!(program_name, Some(dbflux_core::client_identity()));
     }
 
     #[test]

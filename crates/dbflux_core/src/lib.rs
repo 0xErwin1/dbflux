@@ -23,7 +23,7 @@ pub use access::{AccessHandle, AccessKind, AccessManager};
 
 pub use document_id::DocumentId;
 
-pub use release_channel::ReleaseChannel;
+pub use release_channel::{ReleaseChannel, client_identity};
 
 pub use auth::{
     AuthEditCapabilities, AuthEditSnapshot, AuthEditTarget, AuthFormDef, AuthProfile,

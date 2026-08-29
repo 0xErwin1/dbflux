@@ -1016,10 +1016,10 @@ struct PostgresConnectParams<'a> {
 /// - `"require"` — TLS required, self-signed certs accepted
 /// - `"verify-ca"` / `"verify-full"` — TLS required with certificate validation
 fn connect_postgres(params: &PostgresConnectParams) -> Result<Client, DbError> {
-    let conn_string = format!(
+    let conn_string = with_client_identity(&format!(
         "host={} port={} user={} password={} dbname={} connect_timeout=30",
         params.host, params.port, params.user, params.password, params.database
-    );
+    ));
 
     match params.ssl_mode {
         "disable" => Client::connect(&conn_string, NoTls)
@@ -1098,6 +1098,7 @@ impl PostgresDriver {
         password: Option<&str>,
     ) -> Result<Box<dyn Connection>, DbError> {
         let uri = inject_password_into_pg_uri(base_uri, password);
+        let uri = with_client_identity(&uri);
 
         let ssl_mode = parse_pg_uri_sslmode(&uri);
 
@@ -4725,6 +4726,32 @@ fn inject_password_into_pg_uri(base_uri: &str, password: Option<&str>) -> String
     base_uri.to_string()
 }
 
+/// Appends dbflux's client identity as `application_name` unless the connection string
+/// already declares one, so a user-supplied `application_name` always wins.
+fn with_client_identity(conn_str: &str) -> String {
+    if has_application_name(conn_str) {
+        return conn_str.to_string();
+    }
+
+    let identity = dbflux_core::client_identity();
+    let is_uri = conn_str.starts_with("postgres://") || conn_str.starts_with("postgresql://");
+
+    if is_uri {
+        let separator = if conn_str.contains('?') { '&' } else { '?' };
+        format!("{}{}application_name={}", conn_str, separator, identity)
+    } else {
+        format!("{} application_name={}", conn_str, identity)
+    }
+}
+
+/// Detects an `application_name` key in both the libpq keyword syntax (space-separated
+/// `key=value` pairs) and the URI query syntax (`?application_name=` / `&application_name=`).
+fn has_application_name(conn_str: &str) -> bool {
+    conn_str.match_indices("application_name=").any(|(idx, _)| {
+        idx == 0 || matches!(conn_str.as_bytes().get(idx - 1), Some(b' ' | b'?' | b'&'))
+    })
+}
+
 fn pg_quote_ident(ident: &str) -> String {
     debug_assert!(!ident.is_empty(), "identifier cannot be empty");
     format!("\"{}\"", ident.replace('"', "\"\""))
@@ -5168,7 +5195,7 @@ mod tests {
         format_pgvector_float4, format_pgvector_sparse, inject_password_into_pg_uri,
         parse_pg_uri_sslmode, pgvector_array_decode_to_value, pgvector_array_values_to_value,
         plan_postgres_semantic_request, prokind_to_routine_kind, text_search_array_values_to_value,
-        unsupported_type_names,
+        unsupported_type_names, with_client_identity,
     };
     use dbflux_core::{
         AddColumnRequest, AlterColumnRequest, CodeGenerator, ColumnAssignment, CreateTableSpec,
@@ -5639,6 +5666,74 @@ mod tests {
         let uri =
             inject_password_into_pg_uri("postgresql://user@localhost:5432/app", Some("new pass"));
         assert_eq!(uri, "postgresql://user:new%20pass@localhost:5432/app");
+    }
+
+    #[test]
+    fn with_client_identity_appends_to_keyword_string_when_absent() {
+        let identity = dbflux_core::client_identity();
+        let conn_str = "host=localhost port=5432 user=app password=secret dbname=app";
+
+        let result = with_client_identity(conn_str);
+
+        assert_eq!(
+            result,
+            format!("{} application_name={}", conn_str, identity)
+        );
+    }
+
+    #[test]
+    fn with_client_identity_keeps_user_supplied_value_in_keyword_string() {
+        let conn_str =
+            "host=localhost port=5432 user=app password=secret dbname=app application_name=myapp";
+
+        let result = with_client_identity(conn_str);
+
+        assert_eq!(result, conn_str);
+    }
+
+    #[test]
+    fn with_client_identity_appends_query_param_to_uri_without_existing_query() {
+        let identity = dbflux_core::client_identity();
+        let conn_str = "postgresql://user:pass@localhost:5432/app";
+
+        let result = with_client_identity(conn_str);
+
+        assert_eq!(
+            result,
+            format!("{}?application_name={}", conn_str, identity)
+        );
+    }
+
+    #[test]
+    fn with_client_identity_appends_query_param_to_uri_with_existing_query() {
+        let identity = dbflux_core::client_identity();
+        let conn_str = "postgresql://user:pass@localhost:5432/app?sslmode=require";
+
+        let result = with_client_identity(conn_str);
+
+        assert_eq!(
+            result,
+            format!("{}&application_name={}", conn_str, identity)
+        );
+    }
+
+    #[test]
+    fn with_client_identity_keeps_user_supplied_value_in_uri_query() {
+        let conn_str = "postgresql://user:pass@localhost:5432/app?application_name=myapp";
+
+        let result = with_client_identity(conn_str);
+
+        assert_eq!(result, conn_str);
+    }
+
+    #[test]
+    fn with_client_identity_keeps_user_supplied_value_as_first_query_param() {
+        let conn_str =
+            "postgres://user:pass@localhost:5432/app?application_name=myapp&sslmode=require";
+
+        let result = with_client_identity(conn_str);
+
+        assert_eq!(result, conn_str);
     }
 
     #[test]

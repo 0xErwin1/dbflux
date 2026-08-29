@@ -946,7 +946,19 @@ fn build_tiberius_config(params: &MssqlConnectParams) -> Config {
         config.trust_cert();
     }
 
+    // The manual-field connection form has no field for it, so our identity
+    // always applies here — unlike the ADO/JDBC and URL-scheme paths, there
+    // is no user-supplied value that could ever win.
+    config.application_name(manual_mode_application_name());
+
     config
+}
+
+/// The `Application Name` reported for connections built from discrete
+/// profile fields (host/port/user/...), where the caller has no way to set
+/// their own value.
+fn manual_mode_application_name() -> &'static str {
+    dbflux_core::client_identity()
 }
 
 struct MssqlConnectParams<'a> {
@@ -1038,9 +1050,19 @@ impl MssqlDriver {
         let config = if is_mssql_url {
             parse_mssql_url(&uri).map_err(|e| format_mssql_uri_error(&e, base_uri))?
         } else {
-            Config::from_ado_string(&uri)
+            let mut config = Config::from_ado_string(&uri)
                 .or_else(|_| Config::from_jdbc_string(&uri))
-                .map_err(|e| format_mssql_uri_error(&e, base_uri))?
+                .map_err(|e| format_mssql_uri_error(&e, base_uri))?;
+
+            // tiberius parses `Application Name=` / `ApplicationName=` out of
+            // the raw string but exposes no getter on `Config`, so we scan
+            // the same raw string ourselves to decide whether the caller
+            // already set one before applying our default.
+            if !ado_sets_application_name(&uri) {
+                config.application_name(dbflux_core::client_identity());
+            }
+
+            config
         };
 
         let reconnect_config = config.clone();
@@ -3374,6 +3396,7 @@ struct UriQueryParams {
     encryption: EncryptionLevel,
     trust_cert_override: Option<bool>,
     instance_from_query: Option<String>,
+    application_name: Option<String>,
 }
 
 fn split_mssql_uri(uri: &str) -> Result<ParsedMssqlUri<'_>, tiberius::error::Error> {
@@ -3429,6 +3452,22 @@ fn split_mssql_uri(uri: &str) -> Result<ParsedMssqlUri<'_>, tiberius::error::Err
     })
 }
 
+/// Detects whether a raw ADO/JDBC connection string already declares an
+/// `Application Name` (tiberius also accepts the no-space `ApplicationName`
+/// alias), so we know not to override the caller's own value.
+///
+/// `Config` parses this out internally but exposes no getter, so we scan the
+/// same raw string tiberius parsed rather than re-deriving it from a `Config`.
+fn ado_sets_application_name(s: &str) -> bool {
+    s.split(';').any(|pair| {
+        let Some((key, _)) = pair.split_once('=') else {
+            return false;
+        };
+        let normalized = key.trim().to_ascii_lowercase();
+        normalized == "application name" || normalized == "applicationname"
+    })
+}
+
 fn parse_uri_query_params(params: &str) -> UriQueryParams {
     // SSL Mode is the single user-facing knob; trust_cert is derived from
     // it unless the caller explicitly overrides via `?trust=` in the URI.
@@ -3440,6 +3479,7 @@ fn parse_uri_query_params(params: &str) -> UriQueryParams {
         encryption: EncryptionLevel::On,
         trust_cert_override: None,
         instance_from_query: None,
+        application_name: None,
     };
 
     for pair in params.split('&').filter(|p| !p.is_empty()) {
@@ -3466,6 +3506,12 @@ fn parse_uri_query_params(params: &str) -> UriQueryParams {
                     .map(|cow| cow.into_owned())
                     .unwrap_or_else(|_| value.to_string());
                 out.instance_from_query = Some(decoded);
+            }
+            "applicationname" if !value.is_empty() => {
+                let decoded = urlencoding::decode(value)
+                    .map(|cow| cow.into_owned())
+                    .unwrap_or_else(|_| value.to_string());
+                out.application_name = Some(decoded);
             }
             _ => {}
         }
@@ -3536,6 +3582,13 @@ fn parse_mssql_url(uri: &str) -> Result<Config, tiberius::error::Error> {
     if trust_cert {
         config.trust_cert();
     }
+
+    // A user-supplied `?applicationname=` always wins over our default.
+    config.application_name(
+        query
+            .application_name
+            .unwrap_or_else(|| dbflux_core::client_identity().to_string()),
+    );
 
     Ok(config)
 }
@@ -4251,6 +4304,60 @@ mod tests {
     #[test]
     fn parse_mssql_url_accepts_instance_query_param() {
         let result = parse_mssql_url("sqlserver://sa:pw@localhost:1433/?instance=SQLEXPRESS");
+        assert!(result.is_ok(), "expected Ok, got {:?}", result.err());
+    }
+
+    #[test]
+    fn manual_mode_application_name_is_our_client_identity() {
+        // The manual connection form has no field for it, so our identity
+        // always applies — there is nothing for a user value to win over.
+        assert_eq!(
+            manual_mode_application_name(),
+            dbflux_core::client_identity()
+        );
+    }
+
+    #[test]
+    fn ado_sets_application_name_detects_space_and_no_space_keys() {
+        assert!(ado_sets_application_name(
+            "Server=host;Application Name=Foo;User Id=sa"
+        ));
+        assert!(ado_sets_application_name("Server=host;ApplicationName=Foo"));
+        // Case-insensitive and tolerant of surrounding whitespace.
+        assert!(ado_sets_application_name(
+            "Server=host; APPLICATION NAME = Foo "
+        ));
+    }
+
+    #[test]
+    fn ado_sets_application_name_ignores_absent_key() {
+        assert!(!ado_sets_application_name("Server=host;User Id=sa"));
+    }
+
+    #[test]
+    fn ado_sets_application_name_does_not_match_value_substring() {
+        // A value that merely contains the text must not be mistaken for the
+        // key itself.
+        assert!(!ado_sets_application_name(
+            "Server=host;Description=Application Name lookalike"
+        ));
+    }
+
+    #[test]
+    fn parse_uri_query_params_captures_application_name() {
+        let query = parse_uri_query_params("applicationname=MyTool");
+        assert_eq!(query.application_name.as_deref(), Some("MyTool"));
+    }
+
+    #[test]
+    fn parse_uri_query_params_leaves_application_name_absent_without_param() {
+        let query = parse_uri_query_params("instance=SQLEXPRESS");
+        assert!(query.application_name.is_none());
+    }
+
+    #[test]
+    fn parse_mssql_url_accepts_applicationname_query_param() {
+        let result = parse_mssql_url("sqlserver://sa:pw@localhost:1433/?applicationname=MyTool");
         assert!(result.is_ok(), "expected Ok, got {:?}", result.err());
     }
 

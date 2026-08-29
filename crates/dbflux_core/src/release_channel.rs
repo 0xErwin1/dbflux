@@ -67,9 +67,27 @@ impl ReleaseChannel {
     }
 }
 
+/// Client identity string reported to database servers on connect
+/// (PostgreSQL `application_name`, MySQL `program_name`, SQL Server
+/// `Application Name`, MongoDB `appName`, Redis `CLIENT SETNAME`).
+///
+/// The version is the shared workspace version, which CI stamps before
+/// building, so every driver reports the app's version rather than the
+/// version of the crate that happens to compile the call.
+pub fn client_identity() -> &'static str {
+    concat!("dbflux/", env!("CARGO_PKG_VERSION"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn client_identity_carries_app_prefix_and_version() {
+        let identity = client_identity();
+        assert!(identity.starts_with("dbflux/"));
+        assert_eq!(&identity["dbflux/".len()..], env!("CARGO_PKG_VERSION"));
+    }
 
     #[test]
     fn classifies_versions() {
