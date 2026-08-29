@@ -432,6 +432,19 @@ pub enum DbConfig {
         ssh_tunnel: Option<SshTunnelConfig>,
         #[serde(default)]
         ssh_tunnel_profile_id: Option<Uuid>,
+        /// Explicit deployment topology: `"standalone"`, `"cluster"`, or `"sentinel"`.
+        /// Absent or empty means standalone-with-detection, the historical behavior
+        /// where the driver probes `ROLE` / `INFO cluster` at connect time.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        topology: Option<String>,
+        /// The Sentinel master/service name. Required when `topology` is `"sentinel"`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sentinel_master_name: Option<String>,
+        /// Comma-separated extra seed `host:port` pairs, beyond the primary
+        /// `host`/`port` above. Used as extra Cluster seed nodes when `topology` is
+        /// `"cluster"`, or as extra Sentinel nodes when `topology` is `"sentinel"`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        additional_nodes: Option<String>,
     },
     DynamoDB {
         region: String,
@@ -693,6 +706,9 @@ impl DbConfig {
             ssl_client_key_path: None,
             ssh_tunnel: None,
             ssh_tunnel_profile_id: None,
+            topology: None,
+            sentinel_master_name: None,
+            additional_nodes: None,
         }
     }
 
@@ -1128,6 +1144,9 @@ impl DbConfig {
                 ssl_client_key_path,
                 ssh_tunnel,
                 ssh_tunnel_profile_id,
+                topology,
+                sentinel_master_name,
+                additional_nodes,
                 ..
             } => {
                 let db_index: u32 = database
@@ -1147,6 +1166,9 @@ impl DbConfig {
                     ssl_client_key_path,
                     ssh_tunnel,
                     ssh_tunnel_profile_id,
+                    topology,
+                    sentinel_master_name,
+                    additional_nodes,
                 })
             }
             DbConfig::SqlServer {
@@ -2098,6 +2120,9 @@ mod tests {
             ssl_client_key_path: None,
             ssh_tunnel: None,
             ssh_tunnel_profile_id: None,
+            topology: None,
+            sentinel_master_name: None,
+            additional_nodes: None,
         };
 
         let extracted = config.strip_uri_password();

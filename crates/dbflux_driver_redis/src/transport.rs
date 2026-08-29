@@ -12,34 +12,44 @@ use dbflux_core::DbError;
 /// dispatch. `Cluster` has no single connection to hand out; `standalone()`
 /// returns `None` for it.
 ///
-/// Batch 2 adds real Cluster connect logic, so `Cluster` is now constructed
-/// by `RedisDriver::connect_direct`/`connect_with_uri` whenever topology
-/// detection reports a Redis Cluster deployment. `SentinelMaster` remains a
-/// prepared seam for batch 3: topology detection still rejects Sentinel
-/// deployments with `DbError::NotSupported` before a `RedisConnection` is
-/// built.
+/// `SentinelMaster` also carries the `SentinelClient` (`resolver`) used to
+/// resolve the master, so `with_connection_like` can re-resolve and swap in a
+/// fresh connection after a failover instead of failing outright. Those
+/// instance-catalog/metric bypasses go through `standalone()` directly and do
+/// NOT get failover retry — see the batch 3 report for that known gap.
 pub(crate) enum RedisTransport {
     Standalone(Arc<Mutex<redis::Connection>>),
     Cluster(Box<redis::cluster::ClusterConnection>),
-    #[allow(dead_code)]
-    SentinelMaster(Arc<Mutex<redis::Connection>>),
+    SentinelMaster {
+        connection: Arc<Mutex<redis::Connection>>,
+        resolver: Mutex<redis::sentinel::SentinelClient>,
+    },
 }
 
 impl RedisTransport {
     /// Runs `f` against whichever transport variant is active, dispatching
     /// through `redis::ConnectionLike` so query call sites stay topology-agnostic.
+    ///
+    /// `f` must be callable more than once (`Fn`, not `FnOnce`): the
+    /// `SentinelMaster` arm retries it exactly once, against a freshly
+    /// re-resolved master connection, when the first attempt fails with a
+    /// connection-class error (see `is_connection_level_error`).
     pub(crate) fn with_connection_like<T>(
         &mut self,
-        f: impl FnOnce(&mut dyn redis::ConnectionLike) -> Result<T, DbError>,
+        f: impl Fn(&mut dyn redis::ConnectionLike) -> Result<T, DbError>,
     ) -> Result<T, DbError> {
         match self {
-            RedisTransport::Standalone(conn) | RedisTransport::SentinelMaster(conn) => {
+            RedisTransport::Standalone(conn) => {
                 let mut guard = conn
                     .lock()
                     .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
                 f(&mut *guard)
             }
             RedisTransport::Cluster(conn) => f(conn.as_mut()),
+            RedisTransport::SentinelMaster {
+                connection,
+                resolver,
+            } => run_sentinel_master_command(connection, resolver, f),
         }
     }
 
@@ -50,11 +60,109 @@ impl RedisTransport {
     /// meaningful behavior against a cluster (`None` in that case).
     pub(crate) fn standalone(&self) -> Option<Arc<Mutex<redis::Connection>>> {
         match self {
-            RedisTransport::Standalone(conn) | RedisTransport::SentinelMaster(conn) => {
-                Some(Arc::clone(conn))
-            }
+            RedisTransport::Standalone(conn) => Some(Arc::clone(conn)),
+            RedisTransport::SentinelMaster { connection, .. } => Some(Arc::clone(connection)),
             RedisTransport::Cluster(_) => None,
         }
+    }
+}
+
+/// Runs `f` against the current Sentinel master connection, retrying exactly
+/// once against a freshly re-resolved master when the first attempt fails
+/// with a connection-class error.
+///
+/// A second failure (whether from the retried command or from re-resolution
+/// itself) propagates without a further attempt — this is one re-resolve and
+/// one retry, not a generic retry loop.
+fn run_sentinel_master_command<T>(
+    connection: &Arc<Mutex<redis::Connection>>,
+    resolver: &Mutex<redis::sentinel::SentinelClient>,
+    f: impl Fn(&mut dyn redis::ConnectionLike) -> Result<T, DbError>,
+) -> Result<T, DbError> {
+    let first_error = {
+        let mut guard = connection
+            .lock()
+            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
+
+        match f(&mut *guard) {
+            Ok(value) => return Ok(value),
+            Err(error) => error,
+        }
+    };
+
+    if !should_retry_sentinel_command(&first_error) {
+        return Err(first_error);
+    }
+
+    let fresh_connection = {
+        let mut resolver_guard = resolver
+            .lock()
+            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
+
+        resolver_guard.get_connection().map_err(|e| {
+            DbError::query_failed(format!(
+                "Redis Sentinel failover: could not re-resolve the master: {e}"
+            ))
+        })?
+    };
+
+    let mut guard = connection
+        .lock()
+        .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
+    *guard = fresh_connection;
+    f(&mut *guard)
+}
+
+/// Decides whether a failed Sentinel-master command is worth retrying once
+/// against a freshly re-resolved master.
+///
+/// Only a connection-class `DbError` (populated from a connection-class
+/// `redis::RedisError` — see `is_connection_level_error`) triggers a retry.
+/// A query-level error (bad command, wrong type, syntax) is not a failover
+/// symptom and must propagate immediately.
+pub(crate) fn should_retry_sentinel_command(error: &DbError) -> bool {
+    matches!(error, DbError::ConnectionFailed(_))
+}
+
+/// Classifies a `redis::RedisError` as connection-class (worth reconnecting
+/// over) versus a query-level error that a fresh connection would not fix.
+///
+/// Delegates to `RedisError::is_unrecoverable_error()`, which the crate
+/// already derives from the error's `RetryMethod` (IO errors, dropped
+/// connections, and similar transport failures map to `Reconnect` /
+/// `ReconnectFromInitialConnections`; ordinary command-level errors do not).
+pub(crate) fn is_connection_level_error(error: &redis::RedisError) -> bool {
+    error.is_unrecoverable_error()
+}
+
+/// The sanity outcome of a `ROLE` check run against a freshly Sentinel-resolved
+/// master connection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MasterRoleSanity {
+    /// The connection confirmed it is a master.
+    Verified,
+    /// `ROLE` failed or is unsupported by this server; some managed providers
+    /// reject it. Tolerated as "cannot verify" rather than an error, mirroring
+    /// `classify_role_reply`'s handling of the same case at connect time.
+    CannotVerify,
+    /// The connection reported it is a replica — Sentinel resolved a stale
+    /// address, most likely because a failover is still in progress.
+    ResolvedReplica,
+}
+
+/// Evaluates a `ROLE` reply against a Sentinel-resolved master connection.
+///
+/// Unlike `classify_role_reply` (used at connect time to distinguish a
+/// Sentinel node from a regular one), this check already knows it is talking
+/// to what Sentinel claims is the master: any error is tolerated as
+/// unverifiable, and only an explicit replica reply is treated as a problem.
+pub(crate) fn evaluate_master_role_sanity(
+    reply: &Result<redis::Role, redis::RedisError>,
+) -> MasterRoleSanity {
+    match reply {
+        Ok(redis::Role::Replica { .. }) => MasterRoleSanity::ResolvedReplica,
+        Ok(_) => MasterRoleSanity::Verified,
+        Err(_) => MasterRoleSanity::CannotVerify,
     }
 }
 
@@ -65,6 +173,36 @@ pub(crate) enum TopologyProbe {
     Standalone,
     Cluster,
     SentinelService,
+}
+
+/// The deployment topology explicitly configured on `DbConfig::Redis::topology`.
+///
+/// `Standalone` means "no explicit mode": the driver falls back to the
+/// historical detect-then-branch behavior (`ROLE` / `INFO cluster` probes).
+/// `Cluster` and `Sentinel` are explicit and skip those probes entirely.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ConfiguredTopology {
+    Standalone,
+    Cluster,
+    Sentinel,
+}
+
+/// Parses `DbConfig::Redis::topology` into a `ConfiguredTopology`.
+///
+/// `None` or an empty string means "standalone with detection" (today's
+/// behavior, and the only mode existing saved profiles have). Any other value
+/// must be exactly `"standalone"`, `"cluster"`, or `"sentinel"`; anything else
+/// is a clear, rejected configuration error rather than a silent fallback.
+pub(crate) fn parse_configured_topology(raw: Option<&str>) -> Result<ConfiguredTopology, DbError> {
+    match raw.map(str::trim) {
+        None | Some("") => Ok(ConfiguredTopology::Standalone),
+        Some("standalone") => Ok(ConfiguredTopology::Standalone),
+        Some("cluster") => Ok(ConfiguredTopology::Cluster),
+        Some("sentinel") => Ok(ConfiguredTopology::Sentinel),
+        Some(other) => Err(DbError::InvalidProfile(format!(
+            "Unknown Redis topology '{other}'; expected 'standalone', 'cluster', or 'sentinel'"
+        ))),
+    }
 }
 
 /// The classification of a `ROLE` reply, used to decide whether the node is
@@ -206,19 +344,14 @@ fn parse_cluster_node_descriptor(value: &redis::Value) -> Result<(String, u16), 
     Ok((host, port))
 }
 
-/// Parses a comma-separated `host:port` node list, as would be supplied for
-/// a user-configured cluster seed list.
+/// Parses a comma-separated `host:port` node list.
 ///
-/// Not yet wired into `ExtractedRedisConfig`: `DbConfig::Redis` (in
-/// `dbflux_core`) has no field to carry it, and adding one is out of scope
-/// for the driver-only batch that introduced this function. `ClusterClient`
-/// only needs one reachable seed node to discover the full topology via
-/// `CLUSTER SLOTS`, so this is a resilience improvement (tolerating the
-/// first configured node being down at connect time) rather than a
-/// correctness requirement. See the batch report for the follow-up needed
-/// to wire it in.
-#[allow(dead_code)]
-pub(crate) fn parse_cluster_node_list(raw: &str) -> Result<Vec<(String, u16)>, DbError> {
+/// Shared by both explicit topologies that carry an `additional_nodes` field
+/// on `DbConfig::Redis`: as extra Cluster seed nodes (alongside the primary
+/// host/port `ClusterClientBuilder` already connects with) and as extra
+/// Sentinel nodes (alongside the primary host/port, which together form the
+/// Sentinel node set).
+pub(crate) fn parse_node_list(raw: &str) -> Result<Vec<(String, u16)>, DbError> {
     raw.split(',')
         .map(str::trim)
         .filter(|entry| !entry.is_empty())
@@ -513,8 +646,8 @@ mod tests {
     }
 
     #[test]
-    fn parse_cluster_node_list_parses_multiple_entries() {
-        let parsed = parse_cluster_node_list("10.0.0.1:6379, 10.0.0.2:6380").unwrap();
+    fn parse_node_list_parses_multiple_entries() {
+        let parsed = parse_node_list("10.0.0.1:6379, 10.0.0.2:6380").unwrap();
         assert_eq!(
             parsed,
             vec![
@@ -525,15 +658,15 @@ mod tests {
     }
 
     #[test]
-    fn parse_cluster_node_list_skips_empty_entries() {
-        let parsed = parse_cluster_node_list("10.0.0.1:6379,,  ").unwrap();
+    fn parse_node_list_skips_empty_entries() {
+        let parsed = parse_node_list("10.0.0.1:6379,,  ").unwrap();
         assert_eq!(parsed, vec![("10.0.0.1".to_string(), 6379)]);
     }
 
     #[test]
-    fn parse_cluster_node_list_rejects_malformed_entry() {
-        assert!(parse_cluster_node_list("10.0.0.1").is_err());
-        assert!(parse_cluster_node_list("10.0.0.1:not-a-port").is_err());
+    fn parse_node_list_rejects_malformed_entry() {
+        assert!(parse_node_list("10.0.0.1").is_err());
+        assert!(parse_node_list("10.0.0.1:not-a-port").is_err());
     }
 
     #[test]
@@ -620,5 +753,105 @@ mod tests {
         cursor.retain_known_nodes(&known);
 
         assert_eq!(cursor.addresses(), vec!["10.0.0.1:6379".to_string()]);
+    }
+
+    #[test]
+    fn parse_configured_topology_defaults_to_standalone() {
+        assert_eq!(
+            parse_configured_topology(None).unwrap(),
+            ConfiguredTopology::Standalone
+        );
+        assert_eq!(
+            parse_configured_topology(Some("")).unwrap(),
+            ConfiguredTopology::Standalone
+        );
+    }
+
+    #[test]
+    fn parse_configured_topology_accepts_known_values() {
+        assert_eq!(
+            parse_configured_topology(Some("standalone")).unwrap(),
+            ConfiguredTopology::Standalone
+        );
+        assert_eq!(
+            parse_configured_topology(Some("cluster")).unwrap(),
+            ConfiguredTopology::Cluster
+        );
+        assert_eq!(
+            parse_configured_topology(Some("sentinel")).unwrap(),
+            ConfiguredTopology::Sentinel
+        );
+    }
+
+    #[test]
+    fn parse_configured_topology_rejects_unknown_value() {
+        let error = parse_configured_topology(Some("replica-set")).unwrap_err();
+        assert!(matches!(error, DbError::InvalidProfile(_)));
+    }
+
+    #[test]
+    fn is_connection_level_error_true_for_connection_refused() {
+        assert!(is_connection_level_error(&connection_refused_error()));
+    }
+
+    #[test]
+    fn is_connection_level_error_true_for_dropped_connection() {
+        let error = redis::RedisError::from(io::Error::from(io::ErrorKind::ConnectionReset));
+        assert!(is_connection_level_error(&error));
+    }
+
+    #[test]
+    fn is_connection_level_error_false_for_response_error() {
+        assert!(!is_connection_level_error(&unknown_command_error()));
+    }
+
+    #[test]
+    fn should_retry_sentinel_command_true_for_connection_failed() {
+        let error = DbError::ConnectionFailed("boom".to_string().into());
+        assert!(should_retry_sentinel_command(&error));
+    }
+
+    #[test]
+    fn should_retry_sentinel_command_false_for_query_failed() {
+        let error = DbError::QueryFailed("boom".to_string().into());
+        assert!(!should_retry_sentinel_command(&error));
+    }
+
+    #[test]
+    fn evaluate_master_role_sanity_verified_for_primary() {
+        let reply = Ok(redis::Role::Primary {
+            replication_offset: 0,
+            replicas: Vec::new(),
+        });
+        assert_eq!(
+            evaluate_master_role_sanity(&reply),
+            MasterRoleSanity::Verified
+        );
+    }
+
+    #[test]
+    fn evaluate_master_role_sanity_detects_resolved_replica() {
+        let reply = Ok(redis::Role::Replica {
+            primary_ip: "127.0.0.1".to_string(),
+            primary_port: 6379,
+            replication_state: "connected".to_string(),
+            data_received: 0,
+        });
+        assert_eq!(
+            evaluate_master_role_sanity(&reply),
+            MasterRoleSanity::ResolvedReplica
+        );
+    }
+
+    #[test]
+    fn evaluate_master_role_sanity_tolerates_any_error_as_unverifiable() {
+        assert_eq!(
+            evaluate_master_role_sanity(&Err(unknown_command_error())),
+            MasterRoleSanity::CannotVerify
+        );
+        assert_eq!(
+            evaluate_master_role_sanity(&Err(connection_refused_error())),
+            MasterRoleSanity::CannotVerify
+        );
     }
 }

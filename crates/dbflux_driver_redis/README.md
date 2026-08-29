@@ -23,6 +23,11 @@ Redis key-value driver for DBFlux, built on the [`redis`](https://crates.io/crat
   - `on` — `rediss://` with the certificate trusted without chain validation (insecure marker).
   - `verify` — `rediss://` with a supplied root certificate and optional client certificate/key, built through `Client::build_with_tls`.
 - SSH tunnel support for reaching Redis through a bastion host (manual mode only; see Limitations).
+- Deployment topology can be detected automatically or set explicitly (`standalone`, `cluster`, `sentinel`):
+  - Automatic detection probes `ROLE` and `INFO cluster` at connect time and routes to standalone or Cluster handling.
+  - `cluster` skips detection and connects directly via `ClusterClient`, using the primary host/port plus any configured additional seed nodes.
+  - `sentinel` connects through `SentinelClient`, resolving the named master from one or more Sentinel nodes (primary host/port plus any configured additional nodes). After resolving, the driver runs `CLIENT SETNAME`, `PING`, and a `ROLE` sanity check that the resolved node is actually a master.
+  - Sentinel failover recovery: a connection-class failure (dropped connection, IO error) on a Sentinel-backed connection triggers exactly one re-resolve through Sentinel and one retry of the failed command before the error is surfaced.
 - Key browsing and discovery:
   - Cursor-based key scanning (`KV_SCAN`, `PaginationStyle::Cursor`).
   - Per-key type discovery (`KV_KEY_TYPES`) across string, hash, list, set, sorted set, and stream.
@@ -75,5 +80,8 @@ Sensitive fields (`addr`, `laddr`, `name`) are redacted to `[redacted]` to avoid
 - DDL capabilities are all disabled (no tables, views, indexes, schemas) — this is a key-value store, not relational.
 - Transactions are advertised at the capability level (`supports_transactions: true`) but without isolation levels, savepoints, nested transactions, read-only, or deferrable support.
 - Pub/Sub is not exposed (`PUBSUB` capability is not set).
-- SSH tunneling is not available when URI mode is enabled; the tunnel path is wired only for manual connection mode.
+- SSH tunneling is not available when URI mode is enabled; the tunnel path is wired only for manual connection mode. Combining an SSH tunnel with Cluster or Sentinel additional seed nodes is not supported: the tunnel forwards only the primary host/port, so additional nodes are unreachable through it.
 - Stream consumer groups are not modeled; only range reads, entry add, and entry delete are supported.
+- Sentinel and Cluster additional seed nodes are always contacted over plain `redis://`; per-node TLS configuration for those extra nodes is not supported. The resolved Sentinel master connection itself is also plain (no TLS) in this iteration.
+- Sentinel authentication applies only to the resolved master connection (via the configured username/password); the Sentinel nodes themselves are contacted without authentication.
+- The connection settings form does not yet expose topology/Sentinel/Cluster-seed-node fields; `DbConfig::Redis`'s `topology`, `sentinel_master_name`, and `additional_nodes` fields exist and are honored at connect time, but must currently be set by editing the stored profile directly. A saved profile's topology/Sentinel/Cluster settings are also not yet persisted to the SQLite-backed connection store (`ConnectionDriverConfigsRepository`), so they only survive for the lifetime of the in-memory `DbConfig` that created the connection.

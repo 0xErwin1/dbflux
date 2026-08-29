@@ -463,6 +463,9 @@ impl ConnectionDriverConfigDto {
                     ssl_client_key_path: self.ssl_key.clone(),
                     ssh_tunnel,
                     ssh_tunnel_profile_id: None,
+                    topology: None,
+                    sentinel_master_name: None,
+                    additional_nodes: None,
                 })
             }
             DbKind::SQLite => Some(DbConfig::SQLite {
