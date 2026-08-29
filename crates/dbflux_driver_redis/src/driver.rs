@@ -16,9 +16,9 @@ use dbflux_core::{
     ExecutionSourceContext, FormFieldDef, FormFieldKind, FormSection, FormTab, FormValues,
     FormattedError, HashDeleteRequest, HashSetRequest, Icon, InstanceCatalog, KeyBulkGetRequest,
     KeyDeleteRequest, KeyEntry, KeyExistsRequest, KeyExpireRequest, KeyGetRequest, KeyGetResult,
-    KeyPersistRequest, KeyRenameRequest, KeyScanPage, KeyScanRequest, KeySetRequest, KeySpaceInfo,
-    KeyTtlRequest, KeyType, KeyTypeRequest, KeyValueApi, KeyValueConnection, KeyValueSchema,
-    LanguageService, ListEnd, ListPushRequest, ListRemoveRequest, ListSetRequest,
+    KeyLoadState, KeyPersistRequest, KeyRenameRequest, KeyScanPage, KeyScanRequest, KeySetRequest,
+    KeySpaceInfo, KeyTtlRequest, KeyType, KeyTypeRequest, KeyValueApi, KeyValueConnection,
+    KeyValueSchema, LanguageService, ListEnd, ListPushRequest, ListRemoveRequest, ListSetRequest,
     MutationCapabilities, OrderByColumn, PaginationStyle, QueryCapabilities, QueryErrorFormatter,
     QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult, RelationalConnection,
     SchemaDropTarget, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan, SemanticRequest,
@@ -1310,7 +1310,8 @@ impl KeyValueApi for RedisConnection {
                 )));
             }
 
-            let (value, repr) = fetch_key_payload(conn, &request.key, key_type)?;
+            let (value, repr, load_state) =
+                fetch_key_payload(conn, &request.key, key_type, request.max_value_bytes)?;
 
             let ttl_seconds = if request.include_ttl {
                 let ttl = redis::cmd("TTL")
@@ -1325,6 +1326,13 @@ impl KeyValueApi for RedisConnection {
 
             let key_type = normalize_key_type_for_payload(key_type, repr);
 
+            // `size_bytes` reflects the true value size even when gated: the
+            // `TooLarge` STRLEN probe already knows it without fetching.
+            let size_bytes = match load_state {
+                KeyLoadState::TooLarge { size_bytes, .. } => Some(size_bytes),
+                _ => Some(value.len() as u64),
+            };
+
             let entry = KeyEntry {
                 key: request.key.clone(),
                 key_type: if request.include_type {
@@ -1334,13 +1342,18 @@ impl KeyValueApi for RedisConnection {
                 },
                 ttl_seconds,
                 size_bytes: if request.include_size {
-                    Some(value.len() as u64)
+                    size_bytes
                 } else {
                     None
                 },
             };
 
-            Ok(KeyGetResult { entry, value, repr })
+            Ok(KeyGetResult {
+                entry,
+                value,
+                repr,
+                load_state,
+            })
         })
     }
 
@@ -1482,7 +1495,9 @@ impl KeyValueApi for RedisConnection {
                     continue;
                 }
 
-                let (payload, repr) =
+                // Bulk fetches carry no per-key byte budget, so the whole
+                // payload is always transferred here.
+                let (payload, repr, load_state) =
                     if matches!(key_type, KeyType::String | KeyType::Json | KeyType::Unknown) {
                         let fetched = redis::cmd("GET")
                             .arg(key)
@@ -1492,7 +1507,7 @@ impl KeyValueApi for RedisConnection {
                         match fetched {
                             Some(v) => {
                                 let repr = detect_value_repr(&v);
-                                (v, repr)
+                                (v, repr, KeyLoadState::Loaded)
                             }
                             None => {
                                 values.push(None);
@@ -1500,7 +1515,7 @@ impl KeyValueApi for RedisConnection {
                             }
                         }
                     } else {
-                        fetch_key_payload(conn, key, key_type)?
+                        fetch_key_payload(conn, key, key_type, None)?
                     };
 
                 let ttl_seconds = if request.include_ttl {
@@ -1533,6 +1548,7 @@ impl KeyValueApi for RedisConnection {
                     },
                     value: payload,
                     repr,
+                    load_state,
                 }));
             }
 
@@ -2121,13 +2137,61 @@ fn fetch_keyspace_stats(
     Ok(stats)
 }
 
+/// Number of entries requested per `XRANGE` call. Kept as an existing safety
+/// cap on stream reads; `fetch_key_payload` now reports `KeyLoadState::Truncated`
+/// when a stream returns exactly this many entries, since the stream may hold
+/// more that were not fetched.
+const STREAM_FETCH_COUNT: usize = 50;
+
+/// Outcome of comparing a probed value size against an optional byte budget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SizeGateDecision {
+    Fetch,
+    TooLarge { size_bytes: u64, limit_bytes: u64 },
+}
+
+/// Pure size-gate decision: whether a whole-payload value may be fetched
+/// given its known size and an optional byte budget.
+///
+/// `None` budget always allows the fetch (unbounded read path). A size
+/// exactly at the budget is allowed; only sizes strictly over it are gated.
+fn gate_decision(size_bytes: u64, max_value_bytes: Option<u64>) -> SizeGateDecision {
+    match max_value_bytes {
+        Some(limit_bytes) if size_bytes > limit_bytes => SizeGateDecision::TooLarge {
+            size_bytes,
+            limit_bytes,
+        },
+        _ => SizeGateDecision::Fetch,
+    }
+}
+
 fn fetch_key_payload(
     conn: &mut redis::Connection,
     key: &str,
     key_type: KeyType,
-) -> Result<(Vec<u8>, ValueRepr), DbError> {
+    max_value_bytes: Option<u64>,
+) -> Result<(Vec<u8>, ValueRepr, KeyLoadState), DbError> {
     match key_type {
         KeyType::String | KeyType::Json | KeyType::Unknown => {
+            if max_value_bytes.is_some() {
+                let size_bytes = redis::cmd("STRLEN")
+                    .arg(key)
+                    .query::<u64>(conn)
+                    .map_err(|e| format_redis_query_error(&e))?;
+
+                if let SizeGateDecision::TooLarge {
+                    size_bytes,
+                    limit_bytes,
+                } = gate_decision(size_bytes, max_value_bytes)
+                {
+                    let load_state = KeyLoadState::TooLarge {
+                        size_bytes,
+                        limit_bytes,
+                    };
+                    return Ok((Vec::new(), ValueRepr::Binary, load_state));
+                }
+            }
+
             let fetched = redis::cmd("GET")
                 .arg(key)
                 .query::<Option<Vec<u8>>>(conn)
@@ -2136,7 +2200,7 @@ fn fetch_key_payload(
             let value = fetched
                 .ok_or_else(|| DbError::object_not_found(format!("Key '{}' not found", key)))?;
             let repr = detect_value_repr(&value);
-            Ok((value, repr))
+            Ok((value, repr, KeyLoadState::Loaded))
         }
         KeyType::Hash => {
             let entries = redis::cmd("HGETALL")
@@ -2153,7 +2217,7 @@ fn fetch_key_payload(
 
             let value = serde_json::to_vec(&serde_json::Value::Object(object))
                 .map_err(|e| DbError::query_failed(e.to_string()))?;
-            Ok((value, ValueRepr::Structured))
+            Ok((value, ValueRepr::Structured, KeyLoadState::Loaded))
         }
         KeyType::List => {
             let entries = redis::cmd("LRANGE")
@@ -2165,7 +2229,7 @@ fn fetch_key_payload(
 
             let value =
                 serde_json::to_vec(&entries).map_err(|e| DbError::query_failed(e.to_string()))?;
-            Ok((value, ValueRepr::Structured))
+            Ok((value, ValueRepr::Structured, KeyLoadState::Loaded))
         }
         KeyType::Set => {
             let entries = redis::cmd("SMEMBERS")
@@ -2175,7 +2239,7 @@ fn fetch_key_payload(
 
             let value =
                 serde_json::to_vec(&entries).map_err(|e| DbError::query_failed(e.to_string()))?;
-            Ok((value, ValueRepr::Structured))
+            Ok((value, ValueRepr::Structured, KeyLoadState::Loaded))
         }
         KeyType::SortedSet => {
             let entries = redis::cmd("ZRANGE")
@@ -2199,7 +2263,7 @@ fn fetch_key_payload(
 
             let value =
                 serde_json::to_vec(&items).map_err(|e| DbError::query_failed(e.to_string()))?;
-            Ok((value, ValueRepr::Structured))
+            Ok((value, ValueRepr::Structured, KeyLoadState::Loaded))
         }
         KeyType::Stream => {
             let raw_entries: Vec<(String, Vec<String>)> = redis::cmd("XRANGE")
@@ -2207,9 +2271,11 @@ fn fetch_key_payload(
                 .arg("-")
                 .arg("+")
                 .arg("COUNT")
-                .arg(50)
+                .arg(STREAM_FETCH_COUNT)
                 .query(conn)
                 .map_err(|e| format_redis_query_error(&e))?;
+
+            let hit_fetch_cap = raw_entries.len() == STREAM_FETCH_COUNT;
 
             let entries: Vec<serde_json::Value> = raw_entries
                 .into_iter()
@@ -2226,14 +2292,24 @@ fn fetch_key_payload(
 
             let value =
                 serde_json::to_vec(&entries).map_err(|e| DbError::query_failed(e.to_string()))?;
-            Ok((value, ValueRepr::Stream))
+
+            let load_state = if hit_fetch_cap {
+                KeyLoadState::Truncated {
+                    returned_bytes: value.len() as u64,
+                    total_bytes: None,
+                }
+            } else {
+                KeyLoadState::Loaded
+            };
+
+            Ok((value, ValueRepr::Stream, load_state))
         }
         KeyType::Bytes => {
             let payload = redis::cmd("DUMP")
                 .arg(key)
                 .query::<Vec<u8>>(conn)
                 .map_err(|e| format_redis_query_error(&e))?;
-            Ok((payload, ValueRepr::Binary))
+            Ok((payload, ValueRepr::Binary, KeyLoadState::Loaded))
         }
     }
 }
@@ -2526,6 +2602,32 @@ mod tests {
         DatabaseCategory, DbDriver, KeySetRequest, MutationRequest, QueryLanguage,
         SemanticPlanKind, SemanticRequest, TableBrowseRequest, TableRef, ValidationResult,
     };
+
+    #[test]
+    fn gate_decision_allows_fetch_when_size_under_budget() {
+        assert_eq!(gate_decision(50, Some(100)), SizeGateDecision::Fetch);
+    }
+
+    #[test]
+    fn gate_decision_allows_fetch_when_size_equals_budget() {
+        assert_eq!(gate_decision(100, Some(100)), SizeGateDecision::Fetch);
+    }
+
+    #[test]
+    fn gate_decision_rejects_fetch_when_size_over_budget() {
+        assert_eq!(
+            gate_decision(101, Some(100)),
+            SizeGateDecision::TooLarge {
+                size_bytes: 101,
+                limit_bytes: 100,
+            }
+        );
+    }
+
+    #[test]
+    fn gate_decision_allows_fetch_when_budget_is_unbounded() {
+        assert_eq!(gate_decision(u64::MAX, None), SizeGateDecision::Fetch);
+    }
 
     #[test]
     fn build_config_requires_uri_when_uri_mode_enabled() {

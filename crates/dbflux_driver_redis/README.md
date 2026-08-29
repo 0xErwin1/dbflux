@@ -32,6 +32,7 @@ Redis key-value driver for DBFlux, built on the [`redis`](https://crates.io/crat
 - Configurable stream preview limit exposed as a connection setting.
 - Mutations: insert, update, delete, batch operations, and bulk delete. The `RedisCommandGenerator` emits Redis commands for set/delete, hash set/delete, list push/set/remove, set add/remove, sorted-set add/remove, and stream add/delete, for use in previews and copy-as-command.
 - JSON export of results (`EXPORT_JSON`).
+- Size gate on whole-payload reads: when the request carries a byte budget, string/JSON values are probed with `STRLEN` before `GET` and oversized values return a placeholder with the real size instead of transferring the payload; collection types are unaffected, and stream reads that hit the fetch cap report themselves as truncated.
 
 ### Instance Metrics
 

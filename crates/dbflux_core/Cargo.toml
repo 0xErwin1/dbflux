@@ -29,6 +29,11 @@ futures = "0.3"
 dbflux_policy.workspace = true
 sha2 = { workspace = true }
 hex = { workspace = true }
+flate2 = { workspace = true }
+zstd = { workspace = true }
+snap = { workspace = true }
+lz4_flex = { workspace = true }
+rmp-serde = { workspace = true }
 tracing = { workspace = true, optional = true }
 tracing-subscriber = { workspace = true, optional = true }
 tracing-log = { workspace = true, optional = true }

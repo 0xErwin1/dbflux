@@ -405,7 +405,16 @@ impl super::KeyValueDocument {
             return;
         };
         let key_type = value.entry.key_type.unwrap_or(KeyType::Unknown);
-        if !matches!(key_type, KeyType::String | KeyType::Json) {
+
+        // The raw `Vec<u8>` in `KeyGetResult::value` is the only thing ever
+        // written back on save, so the editor must never open over a decoded
+        // re-interpretation of it: see `decode::may_edit_value`.
+        if !super::decode::may_edit_value(
+            key_type,
+            value.repr,
+            self.kv_encoding_choice,
+            self.kv_decode_outcome.as_ref(),
+        ) {
             return;
         }
 

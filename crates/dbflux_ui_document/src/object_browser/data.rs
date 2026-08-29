@@ -7,21 +7,21 @@
 //! once via `report_error_async`.
 
 use super::ObjectBrowserDocument;
-use super::editor::PendingTextBody;
+use super::editor::{GuardedNavigation, PendingTextBody};
 use super::metadata::{
     ObjectMetadataState, ObjectVersionsState, PreviewGate, evaluate_preview_gate,
 };
 use super::preview_content::{
-    ImagePreview, PreviewContentState, PreviewKind, decode_image_dimensions, detect_preview_kind,
-    validate_svg_body,
+    EncodingChoice, PreparedPreview, PreviewContentState, PreviewKind, detect_preview_kind,
+    prepare_preview,
 };
 use super::tree::PrefixLoadState;
 use crate::buckets_table::{BucketDetailsState, OperationTiming};
-use crate::object_text::decode_text_body;
+use crate::object_text::{LineEnding, TextBody};
 use crate::types::DocumentState;
 use dbflux_core::{DbError, ObjectListingPage, ObjectMetadata};
 use dbflux_ui_base::user_error::report_error_async;
-use gpui::{Context, Image, ImageFormat};
+use gpui::Context;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -231,8 +231,7 @@ impl ObjectBrowserDocument {
             return;
         }
 
-        let mut image_request = None;
-        let mut text_request = None;
+        let mut body_request = None;
 
         self.metadata = Some(match result {
             Ok(metadata) => {
@@ -244,19 +243,19 @@ impl ObjectBrowserDocument {
 
                 let gate = evaluate_preview_gate(&metadata, limit_bytes);
 
-                if gate == PreviewGate::Allowed {
-                    match detect_preview_kind(metadata.content_type.as_deref(), &metadata.key) {
-                        PreviewKind::Image(format) => {
-                            image_request = Some((metadata.key.clone(), format));
-                        }
-                        // A metadata refresh after a save-back must not reload
-                        // the buffer the user is still working in.
-                        PreviewKind::Text if !self.has_editor_for(&metadata.key) => {
-                            text_request =
-                                Some((metadata.key.clone(), metadata.content_type.clone()));
-                        }
-                        _ => {}
-                    }
+                // A metadata refresh after a save-back must not reload the
+                // buffer the user is still working in. PDFs stay unfetched:
+                // `dbflux_core` has no PDF magic to detect, and the
+                // content-type/extension guess is already authoritative for
+                // them, so fetching would only spend bandwidth on an object
+                // the pane cannot render anyway.
+                let should_fetch = gate == PreviewGate::Allowed
+                    && !self.has_editor_for(&metadata.key)
+                    && detect_preview_kind(metadata.content_type.as_deref(), &metadata.key)
+                        != PreviewKind::Pdf;
+
+                if should_fetch {
+                    body_request = Some((metadata.key.clone(), metadata.content_type.clone()));
                 }
 
                 ObjectMetadataState::Loaded {
@@ -267,12 +266,8 @@ impl ObjectBrowserDocument {
             Err(err) => ObjectMetadataState::Error(err.to_string()),
         });
 
-        if let Some((key, format)) = image_request {
-            self.load_preview_image(key, format, cx);
-        }
-
-        if let Some((key, content_type)) = text_request {
-            self.load_preview_text(key, content_type, cx);
+        if let Some((key, content_type)) = body_request {
+            self.load_preview_body(key, content_type, cx);
         }
 
         cx.notify();
@@ -280,104 +275,19 @@ impl ObjectBrowserDocument {
 
     // -- Preview body --------------------------------------------------------
 
-    /// Fetches an image object's bytes and proves they decode before handing
-    /// them to the renderer. Only ever reached for objects the gate allowed, so
-    /// the transfer is bounded by the configured preview size limit.
-    pub(super) fn load_preview_image(
-        &mut self,
-        key: String,
-        format: ImageFormat,
-        cx: &mut Context<Self>,
-    ) {
-        self.preview_content_generation = self.preview_content_generation.wrapping_add(1);
-        let generation = self.preview_content_generation;
-
-        self.preview_content = PreviewContentState::Loading;
-
-        let Some(connection) = self.get_connection(cx) else {
-            self.preview_content = PreviewContentState::Failed(dbflux_i18n::t!(
-                "document.object_browser.error.connection_unavailable"
-            ));
-            cx.notify();
-            return;
-        };
-
-        let entity = cx.entity().clone();
-        let bucket = self.bucket.clone();
-        let key_for_task = key.clone();
-
-        let task = cx.background_executor().spawn(async move {
-            let started = Instant::now();
-
-            let bytes = match connection.object_store_api() {
-                Some(api) => api.get_object(&bucket, &key_for_task),
-                None => Err(DbError::NotSupported(dbflux_i18n::t!(
-                    "document.object_browser.error.api_unavailable"
-                ))),
-            };
-
-            let elapsed_millis = started.elapsed().as_millis();
-
-            let decoded = bytes.map(|bytes| {
-                let dimensions = if format == ImageFormat::Svg {
-                    validate_svg_body(&bytes).map(|_| None)
-                } else {
-                    decode_image_dimensions(&bytes).map(Some)
-                };
-
-                dimensions.map(|dimensions| ImagePreview {
-                    byte_len: bytes.len() as u64,
-                    image: Arc::new(Image::from_bytes(format, bytes)),
-                    dimensions,
-                })
-            });
-
-            (decoded, elapsed_millis)
-        });
-
-        cx.spawn(async move |_this, cx| {
-            let (decoded, elapsed_millis) = task.await;
-
-            // Transfer failures are the user's problem to see; a decode failure
-            // is a presentation fallback and stays inside the pane.
-            if let Err(ref err) = decoded {
-                report_error_async(db_error_to_user_facing(err), cx);
-            }
-
-            let state = match decoded {
-                Ok(Ok(preview)) => PreviewContentState::Image(Box::new(preview)),
-                Ok(Err(message)) => PreviewContentState::Failed(message),
-                Err(err) => PreviewContentState::Failed(err.to_string()),
-            };
-
-            cx.update(|cx| {
-                entity.update(cx, |doc, cx| {
-                    doc.last_operation = Some(OperationTiming {
-                        label: "GetObject",
-                        millis: elapsed_millis,
-                    });
-                    doc.apply_preview_content(generation, key, state, cx);
-                });
-            })
-            .ok();
-        })
-        .detach();
-    }
-
     /// Whether an editor is already open on `key` — used to keep a metadata
     /// refresh from pulling the buffer out from under the user.
     pub(super) fn has_editor_for(&self, key: &str) -> bool {
         self.editor_for(key).is_some()
     }
 
-    /// Fetches a text object's bytes for the inline editor. Like the image
-    /// path, only ever reached for objects the gate allowed, so the transfer is
-    /// bounded by the configured preview size limit.
-    ///
-    /// The decoded body is parked in `pending_text_body` instead of being
-    /// installed here: building the buffer's `InputState` needs a `Window`,
-    /// which only the render pass has.
-    pub(super) fn load_preview_text(
+    /// Fetches the object's raw bytes and resolves how to present them
+    /// through the shared `dbflux_core` decoder (magic-byte detection first,
+    /// the extension/content-type guess as fallback). Only ever reached for
+    /// objects the gate allowed, or explicitly overridden via "Load anyway",
+    /// so the transfer itself carries no separate size cap here — the gate
+    /// already decided whether this call may happen at all.
+    pub(super) fn load_preview_body(
         &mut self,
         key: String,
         content_type: Option<String>,
@@ -410,17 +320,13 @@ impl ObjectBrowserDocument {
                 ))),
             };
 
-            let elapsed_millis = started.elapsed().as_millis();
-
-            (bytes.map(decode_text_body), elapsed_millis)
+            (bytes, started.elapsed().as_millis())
         });
 
         cx.spawn(async move |_this, cx| {
-            let (decoded, elapsed_millis) = task.await;
+            let (bytes, elapsed_millis) = task.await;
 
-            // A transfer failure is the user's problem to see; a body that is
-            // not text degrades inside the pane to the download/open actions.
-            if let Err(ref err) = decoded {
+            if let Err(ref err) = bytes {
                 report_error_async(db_error_to_user_facing(err), cx);
             }
 
@@ -431,25 +337,23 @@ impl ObjectBrowserDocument {
                         millis: elapsed_millis,
                     });
 
-                    match decoded {
-                        Ok(Ok(body)) => {
-                            doc.accept_text_body(generation, key, content_type, body, cx)
-                        }
-                        Ok(Err(message)) => {
-                            doc.apply_preview_content(
-                                generation,
-                                key,
-                                PreviewContentState::Failed(message),
-                                cx,
-                            );
+                    let is_current = generation == doc.preview_content_generation
+                        && doc.preview_key.as_deref() == Some(key.as_str());
+
+                    if !is_current {
+                        return;
+                    }
+
+                    match bytes {
+                        Ok(raw) => {
+                            let raw = Arc::new(raw);
+                            doc.preview_raw_bytes = Some(raw.clone());
+                            doc.preview_content_type = content_type.clone();
+                            doc.resolve_and_apply_preview(key, content_type, raw, cx);
                         }
                         Err(err) => {
-                            doc.apply_preview_content(
-                                generation,
-                                key,
-                                PreviewContentState::Failed(err.to_string()),
-                                cx,
-                            );
+                            doc.preview_content = PreviewContentState::Failed(err.to_string());
+                            cx.notify();
                         }
                     }
                 });
@@ -459,36 +363,116 @@ impl ObjectBrowserDocument {
         .detach();
     }
 
-    /// Hands a decoded body to the next render pass, subject to the same
-    /// staleness guard as every other preview response.
-    pub(super) fn accept_text_body(
-        &mut self,
-        generation: u64,
-        key: String,
-        content_type: Option<String>,
-        body: crate::object_text::TextBody,
-        cx: &mut Context<Self>,
-    ) {
-        let is_current = generation == self.preview_content_generation
-            && self.preview_key.as_deref() == Some(&key);
+    /// Bypasses `PreviewGate::TooLarge` for `key` at the user's explicit
+    /// "Load anyway" request. One-shot: the override lives on `preview_key`
+    /// and is cleared by the next selection change (`open_preview_now`,
+    /// `close_preview_now`).
+    pub(super) fn load_preview_body_override(&mut self, key: String, cx: &mut Context<Self>) {
+        self.size_gate_override = true;
 
-        if !is_current {
-            return;
-        }
+        let content_type = match self.metadata.as_ref() {
+            Some(ObjectMetadataState::Loaded { metadata, .. }) if metadata.key == key => {
+                metadata.content_type.clone()
+            }
+            _ => None,
+        };
 
-        self.pending_text_body = Some(PendingTextBody {
-            key,
-            body,
-            content_type,
-        });
-        cx.notify();
+        self.load_preview_body(key, content_type, cx);
     }
 
-    pub(super) fn apply_preview_content(
+    /// Requests the user's encoding override, parking it behind the
+    /// unsaved-edits confirmation when the current buffer is dirty — a
+    /// reinterpretation replaces the buffer's content exactly like
+    /// navigating away from it would.
+    pub(super) fn set_encoding_override(
+        &mut self,
+        choice: Option<EncodingChoice>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.guard_navigation(GuardedNavigation::SetEncodingOverride(choice), cx) {
+            return;
+        }
+
+        self.set_encoding_override_now(choice, cx);
+    }
+
+    /// Sets the user's encoding override and, when the raw bytes for the
+    /// current preview are already cached, re-resolves them under it without
+    /// a second `GetObject` round trip.
+    pub(super) fn set_encoding_override_now(
+        &mut self,
+        choice: Option<EncodingChoice>,
+        cx: &mut Context<Self>,
+    ) {
+        self.encoding_override = choice;
+
+        let (Some(key), Some(raw)) = (self.preview_key.clone(), self.preview_raw_bytes.clone())
+        else {
+            cx.notify();
+            return;
+        };
+
+        let content_type = self.preview_content_type.clone();
+        self.resolve_and_apply_preview(key, content_type, raw, cx);
+    }
+
+    /// Resolves `raw` bytes into a `PreparedPreview` on the background
+    /// executor and applies the result once it resolves. Shared by the
+    /// initial body fetch and every subsequent encoding-override recompute,
+    /// so the two paths can never classify the same bytes differently.
+    fn resolve_and_apply_preview(
+        &mut self,
+        key: String,
+        content_type: Option<String>,
+        raw: Arc<Vec<u8>>,
+        cx: &mut Context<Self>,
+    ) {
+        self.preview_content_generation = self.preview_content_generation.wrapping_add(1);
+        let generation = self.preview_content_generation;
+        self.preview_content = PreviewContentState::Loading;
+        cx.notify();
+
+        let limit_bytes = self
+            .app_state
+            .read(cx)
+            .general_settings()
+            .object_preview_size_limit_bytes() as usize;
+        let override_choice = self.encoding_override;
+        let entity = cx.entity().clone();
+        let key_for_task = key.clone();
+
+        let task = cx.background_executor().spawn(async move {
+            prepare_preview(
+                &raw,
+                content_type.as_deref(),
+                &key_for_task,
+                limit_bytes,
+                override_choice,
+            )
+        });
+
+        cx.spawn(async move |_this, cx| {
+            let prepared = task.await;
+
+            cx.update(|cx| {
+                entity.update(cx, |doc, cx| {
+                    doc.apply_prepared_preview(generation, key, prepared, cx);
+                });
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Installs a resolved body: an image or a notice go straight to
+    /// `preview_content`; text is parked in `pending_text_body` for the next
+    /// render pass, which is the only place that can build the `InputState`
+    /// buffer (it needs a `Window`).
+    fn apply_prepared_preview(
         &mut self,
         generation: u64,
         key: String,
-        state: PreviewContentState,
+        prepared: PreparedPreview,
         cx: &mut Context<Self>,
     ) {
         let is_current = generation == self.preview_content_generation
@@ -498,7 +482,55 @@ impl ObjectBrowserDocument {
             return;
         }
 
-        self.preview_content = state;
+        match prepared {
+            PreparedPreview::Image(Ok(preview)) => {
+                self.drop_editor();
+                self.preview_content = PreviewContentState::Image(Box::new(preview));
+            }
+            PreparedPreview::Image(Err(message)) => {
+                self.drop_editor();
+                self.preview_content = PreviewContentState::Failed(message);
+            }
+            PreparedPreview::Text { text, source } => {
+                let line_ending = LineEnding::detect(&text);
+                let byte_len = self
+                    .preview_raw_bytes
+                    .as_ref()
+                    .map(|raw| raw.len() as u64)
+                    .unwrap_or(text.len() as u64);
+                let content_type = self.preview_content_type.clone();
+
+                self.pending_text_body = Some(PendingTextBody {
+                    key,
+                    body: TextBody {
+                        text,
+                        line_ending,
+                        byte_len,
+                    },
+                    content_type,
+                    source,
+                });
+            }
+            PreparedPreview::Pdf | PreparedPreview::Binary => {
+                self.drop_editor();
+                self.preview_content = PreviewContentState::Unavailable;
+            }
+            PreparedPreview::DecodeFailed { encoding, reason } => {
+                self.drop_editor();
+                self.preview_content = PreviewContentState::DecodeFailed { encoding, reason };
+            }
+            PreparedPreview::DecodeTooLarge {
+                encoding,
+                limit_bytes,
+            } => {
+                self.drop_editor();
+                self.preview_content = PreviewContentState::DecodeTooLarge {
+                    encoding,
+                    limit_bytes,
+                };
+            }
+        }
+
         cx.notify();
     }
 

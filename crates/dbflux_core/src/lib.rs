@@ -97,15 +97,16 @@ pub use core::{
 };
 
 pub use data::{
-    ColumnAssignment, CrudResult, DataViewKind, DocumentDelete, DocumentFilter, DocumentInsert,
-    DocumentUpdate, HashDeleteRequest, HashSetRequest, KeyBulkGetRequest, KeyDeleteRequest,
-    KeyEntry, KeyExistsRequest, KeyExpireRequest, KeyGetRequest, KeyGetResult, KeyPersistRequest,
+    ColumnAssignment, CrudResult, DataViewKind, DecodeOutcome, DecodedPayload, DecodedValue,
+    DocumentDelete, DocumentFilter, DocumentInsert, DocumentUpdate, Encoding, HashDeleteRequest,
+    HashSetRequest, KeyBulkGetRequest, KeyDeleteRequest, KeyEntry, KeyExistsRequest,
+    KeyExpireRequest, KeyGetRequest, KeyGetResult, KeyLoadState, KeyPersistRequest,
     KeyRenameRequest, KeyScanPage, KeyScanRequest, KeySetRequest, KeyTtlRequest, KeyType,
     KeyTypeRequest, ListEnd, ListPushRequest, ListRemoveRequest, ListSetRequest, MutationRequest,
     RecordIdentity, RowDelete, RowIdentity, RowInsert, RowPatch, RowState, SetAddRequest,
     SetCondition, SetRemoveRequest, SqlDeleteRequest, SqlUpdateRequest, SqlUpsertRequest,
     StreamAddRequest, StreamDeleteRequest, StreamEntryId, StreamMaxLen, ValueRepr, ZSetAddRequest,
-    ZSetRemoveRequest,
+    ZSetRemoveRequest, decode, decode_as, detect, probe_message_pack,
 };
 
 pub use driver::{

@@ -18,7 +18,7 @@
 //! `guard_navigation`, which parks the request behind a Save / Discard /
 //! Cancel confirmation. Edits are never dropped silently.
 
-use super::preview_content::PreviewContentState;
+use super::preview_content::{EncodingChoice, PreviewContentState, TextSource, decode_label};
 use super::{ObjectBrowserDocument, ObjectBrowserFocusMode};
 use crate::object_text::{
     FIND_SHORTCUT_HINT, LineEnding, SAVE_SHORTCUT_HINT, TextBody, body_meta_line, build_text_input,
@@ -50,6 +50,9 @@ pub(super) struct PendingTextBody {
     pub(super) key: String,
     pub(super) body: TextBody,
     pub(super) content_type: Option<String>,
+    /// What produced this text — the object's raw bytes, or a value decoded
+    /// from them. Drives whether the installed buffer is editable.
+    pub(super) source: TextSource,
 }
 
 /// The editable buffer for one object.
@@ -63,6 +66,10 @@ pub(super) struct ObjectEditor {
     pub(super) byte_len: u64,
     pub(super) dirty: bool,
     pub(super) saving: bool,
+    /// What produced the buffer's text. Only `TextSource::Raw` may be saved
+    /// back — a decoded view never writes its re-encoded form over the
+    /// object's real bytes.
+    pub(super) source: TextSource,
     _subscription: Subscription,
 }
 
@@ -75,6 +82,16 @@ impl ObjectEditor {
             self.byte_len,
             self.line_ending,
         )
+    }
+
+    /// "gzip → JSON"-style label for a decoded buffer, or `None` for the
+    /// object's own raw text.
+    pub(super) fn decode_label(&self) -> Option<String> {
+        decode_label(&self.baseline, self.source)
+    }
+
+    pub(super) fn is_editable(&self) -> bool {
+        self.source.is_editable()
     }
 }
 
@@ -90,6 +107,10 @@ pub(super) enum GuardedNavigation {
     /// Renaming `key` while its editor is open and dirty — same rationale as
     /// `DeleteObject`: the key is about to change under the open buffer.
     RenameObject(String),
+    /// Switching the encoding override while the current (raw) buffer is
+    /// dirty — the switch replaces the buffer's content with a fresh
+    /// resolve, exactly like navigating away from it.
+    SetEncodingOverride(Option<EncodingChoice>),
 }
 
 impl GuardedNavigation {
@@ -117,6 +138,9 @@ impl GuardedNavigation {
                 "document.object_browser.editor.nav.rename",
                 key = key.as_str()
             ),
+            GuardedNavigation::SetEncodingOverride(_) => {
+                dbflux_i18n::t!("document.object_browser.editor.nav.reinterpret")
+            }
         }
     }
 }
@@ -190,6 +214,7 @@ impl ObjectBrowserDocument {
             byte_len: pending.body.byte_len,
             dirty: false,
             saving: false,
+            source: pending.source,
             _subscription: subscription,
         });
 
@@ -249,7 +274,12 @@ impl ObjectBrowserDocument {
             return;
         };
 
-        if editor.saving {
+        // A decoded view is never the object's real bytes — writing it back
+        // would silently replace the object's actual content with a
+        // re-encoding of its decoded form. The footer never offers Save for
+        // this state, but the guard stays here too since it is reachable
+        // from the Ctrl/Cmd+S shortcut regardless of what is rendered.
+        if !editor.is_editable() || editor.saving {
             return;
         }
 
@@ -447,6 +477,9 @@ impl ObjectBrowserDocument {
             GuardedNavigation::ClosePreview => self.close_preview_now(cx),
             GuardedNavigation::DeleteObject(key) => self.open_delete_confirm_now(key, cx),
             GuardedNavigation::RenameObject(key) => self.open_rename_confirm_now(key, window, cx),
+            GuardedNavigation::SetEncodingOverride(choice) => {
+                self.set_encoding_override_now(choice, cx)
+            }
         }
     }
 
@@ -462,6 +495,7 @@ impl ObjectBrowserDocument {
         let position = editor.input.read(cx).cursor_position();
         let is_saving = editor.saving;
         let is_dirty = editor.dirty;
+        let is_editable = editor.is_editable();
 
         div()
             .flex_1()
@@ -492,24 +526,27 @@ impl ObjectBrowserDocument {
                     .child(
                         GpuiInput::new(&editor.input)
                             .appearance(false)
+                            .disabled(!is_editable)
                             .w_full()
                             .h_full(),
                     ),
             )
-            .child(self.render_editor_footer(is_dirty, is_saving, position, cx))
+            .child(self.render_editor_footer(is_dirty, is_saving, is_editable, position, cx))
             .into_any_element()
     }
 
-    /// Footer: Save (with its shortcut), Discard, and the cursor position.
+    /// Footer: Save (with its shortcut), Discard, and the cursor position —
+    /// or, for a decoded read-only buffer, a hint to switch back to Raw.
     fn render_editor_footer(
         &self,
         is_dirty: bool,
         is_saving: bool,
+        is_editable: bool,
         position: dbflux_components::controls::InputPosition,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = cx.theme();
-        let can_act = is_dirty && !is_saving;
+        let can_act = is_editable && is_dirty && !is_saving;
 
         div()
             .flex()
@@ -526,67 +563,84 @@ impl ObjectBrowserDocument {
                     .flex()
                     .items_center()
                     .gap(Spacing::XS)
-                    .child(
-                        div()
-                            .id("object-browser-editor-save")
-                            .flex()
-                            .items_center()
-                            .gap(Spacing::XS)
-                            .h(Heights::CONTROL)
-                            .px(Spacing::SM)
-                            .rounded(Radii::SM)
-                            .bg(theme.primary)
-                            .when(!can_act, |d| d.opacity(0.5))
-                            .when(can_act, |d| {
-                                d.cursor_pointer()
-                                    .hover(|d| d.opacity(0.9))
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.save_object_edits(cx);
-                                    }))
-                            })
-                            .child(
-                                Icon::new(if is_saving {
-                                    AppIcon::Loader
-                                } else {
-                                    AppIcon::Save
+                    .when(!is_editable, |this| {
+                        this.child(
+                            Text::caption(dbflux_i18n::t!(
+                                "document.object_browser.preview.body.decoded_read_only"
+                            ))
+                            .muted_foreground(),
+                        )
+                    })
+                    .when(is_editable, |this| {
+                        this.child(
+                            div()
+                                .id("object-browser-editor-save")
+                                .flex()
+                                .items_center()
+                                .gap(Spacing::XS)
+                                .h(Heights::CONTROL)
+                                .px(Spacing::SM)
+                                .rounded(Radii::SM)
+                                .bg(theme.primary)
+                                .when(!can_act, |d| d.opacity(0.5))
+                                .when(can_act, |d| {
+                                    d.cursor_pointer().hover(|d| d.opacity(0.9)).on_click(
+                                        cx.listener(|this, _, _, cx| {
+                                            this.save_object_edits(cx);
+                                        }),
+                                    )
                                 })
-                                .small()
-                                .color(theme.primary_foreground),
-                            )
-                            .child(
-                                Text::caption(if is_saving {
-                                    dbflux_i18n::t!("document.object_browser.editor.footer.saving")
-                                } else {
-                                    dbflux_i18n::t!("document.object_browser.editor.footer.save")
+                                .child(
+                                    Icon::new(if is_saving {
+                                        AppIcon::Loader
+                                    } else {
+                                        AppIcon::Save
+                                    })
+                                    .small()
+                                    .color(theme.primary_foreground),
+                                )
+                                .child(
+                                    Text::caption(if is_saving {
+                                        dbflux_i18n::t!(
+                                            "document.object_browser.editor.footer.saving"
+                                        )
+                                    } else {
+                                        dbflux_i18n::t!(
+                                            "document.object_browser.editor.footer.save"
+                                        )
+                                    })
+                                    .color(theme.primary_foreground),
+                                )
+                                .child(
+                                    Text::key_hint(SAVE_SHORTCUT_HINT)
+                                        .color(theme.primary_foreground),
+                                ),
+                        )
+                    })
+                    .when(is_editable, |this| {
+                        this.child(
+                            div()
+                                .id("object-browser-editor-discard")
+                                .flex()
+                                .items_center()
+                                .gap(Spacing::XS)
+                                .h(Heights::CONTROL)
+                                .px(Spacing::SM)
+                                .rounded(Radii::SM)
+                                .when(!can_act, |d| d.opacity(0.5))
+                                .when(can_act, |d| {
+                                    d.cursor_pointer()
+                                        .hover(|d| d.bg(theme.secondary))
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.discard_object_edits(window, cx);
+                                        }))
                                 })
-                                .color(theme.primary_foreground),
-                            )
-                            .child(
-                                Text::key_hint(SAVE_SHORTCUT_HINT).color(theme.primary_foreground),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .id("object-browser-editor-discard")
-                            .flex()
-                            .items_center()
-                            .gap(Spacing::XS)
-                            .h(Heights::CONTROL)
-                            .px(Spacing::SM)
-                            .rounded(Radii::SM)
-                            .when(!can_act, |d| d.opacity(0.5))
-                            .when(can_act, |d| {
-                                d.cursor_pointer()
-                                    .hover(|d| d.bg(theme.secondary))
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.discard_object_edits(window, cx);
-                                    }))
-                            })
-                            .child(Icon::new(AppIcon::RotateCcw).small().muted())
-                            .child(Text::caption(dbflux_i18n::t!(
-                                "document.object_browser.editor.footer.discard"
-                            ))),
-                    )
+                                .child(Icon::new(AppIcon::RotateCcw).small().muted())
+                                .child(Text::caption(dbflux_i18n::t!(
+                                    "document.object_browser.editor.footer.discard"
+                                ))),
+                        )
+                    })
                     .child(
                         div()
                             .id("object-browser-editor-find")

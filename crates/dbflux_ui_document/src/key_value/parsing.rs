@@ -41,18 +41,23 @@ pub(super) fn key_type_label(key_type: KeyType) -> String {
     }
 }
 
+/// Truncates a text preview at a fixed character budget so a huge decoded or
+/// raw text value never renders unbounded into the value panel.
+pub(super) fn truncate_preview_text(text: &str) -> String {
+    let max_chars = 4000;
+
+    if text.chars().count() > max_chars {
+        let truncated: String = text.chars().take(max_chars).collect();
+        format!("{}\n... (truncated)", truncated)
+    } else {
+        text.to_string()
+    }
+}
+
 pub(super) fn render_value_preview(value: &KeyGetResult) -> String {
     match value.repr {
         ValueRepr::Text | ValueRepr::Json | ValueRepr::Structured | ValueRepr::Stream => {
-            let text = String::from_utf8_lossy(&value.value);
-            let max_chars = 4000;
-
-            if text.chars().count() > max_chars {
-                let truncated: String = text.chars().take(max_chars).collect();
-                format!("{}\n... (truncated)", truncated)
-            } else {
-                text.to_string()
-            }
+            truncate_preview_text(&String::from_utf8_lossy(&value.value))
         }
         ValueRepr::Binary => format!("{} bytes (binary)", value.value.len()),
     }
@@ -228,13 +233,14 @@ mod tests {
         parse_members, parse_stream_entries, render_value_preview, serde_json_to_value,
     };
     use dbflux_components::icons::AppIcon;
-    use dbflux_core::{KeyEntry, KeyGetResult, KeyType, Value, ValueRepr};
+    use dbflux_core::{KeyEntry, KeyGetResult, KeyLoadState, KeyType, Value, ValueRepr};
 
     fn make_result(value: Vec<u8>, repr: ValueRepr) -> KeyGetResult {
         KeyGetResult {
             entry: KeyEntry::new("test-key"),
             value,
             repr,
+            load_state: KeyLoadState::Loaded,
         }
     }
 

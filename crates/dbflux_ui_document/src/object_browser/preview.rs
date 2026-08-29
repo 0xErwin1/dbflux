@@ -10,14 +10,17 @@ use super::metadata::{
     ObjectMetadataState, ObjectVersionsState, PreviewGate, format_size_detail, short_version_id,
     versioning_tracks_history,
 };
-use super::preview_content::{ImagePreview, PreviewContentState, PreviewKind};
+use super::preview_content::{
+    EncodingChoice, ImagePreview, OVERRIDABLE_ENCODINGS, PreviewContentState, PreviewKind,
+    encoding_label,
+};
 use super::render::{format_modified, object_icon};
 use super::{ObjectAction, ObjectBrowserDocument};
 use crate::labels::object_browser_versions_count_label;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Text};
 use dbflux_components::tokens::{Heights, Radii, Spacing};
-use dbflux_core::ObjectVersionSummary;
+use dbflux_core::{Encoding, ObjectVersionSummary};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -194,6 +197,7 @@ impl ObjectBrowserDocument {
                     .when_some(resize_listeners, |el, listeners| el.child(listeners))
                     .child(self.render_preview_header(key, cx))
                     .when(editing, |this| this.child(self.render_editor_meta(key, cx)))
+                    .child(self.render_encoding_override_row(cx))
                     .child(
                         div()
                             .flex_1()
@@ -216,15 +220,36 @@ impl ObjectBrowserDocument {
         };
 
         let theme = cx.theme();
+        let decode_label = editor.decode_label();
+        let is_editable = editor.is_editable();
 
         div()
             .flex()
             .items_center()
+            .justify_between()
+            .gap(Spacing::SM)
             .px(Spacing::SM)
             .py(Spacing::XS)
             .border_b_1()
             .border_color(theme.border)
             .child(Text::caption(editor.meta_line()).muted_foreground())
+            .when_some(decode_label, |this, label| {
+                this.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(Spacing::XS)
+                        .child(Text::caption(label).primary())
+                        .when(!is_editable, |this| {
+                            this.child(
+                                Text::caption(dbflux_i18n::t!(
+                                    "document.object_browser.preview.body.decoded_read_only"
+                                ))
+                                .muted_foreground(),
+                            )
+                        }),
+                )
+            })
             .into_any_element()
     }
 
@@ -344,8 +369,96 @@ impl ObjectBrowserDocument {
         match self.preview_content() {
             PreviewContentState::Image(preview) => self.render_image_body(preview, cx),
             PreviewContentState::Text => self.render_text_editor(key, cx),
-            _ => self.render_body_notice(cx),
+            _ => self.render_body_notice(key, cx),
         }
+    }
+
+    /// "Interpret as" row: lets the user override the auto-detected encoding
+    /// once a body has been fetched, regardless of how it is currently shown.
+    /// Absent until a body exists, since there is nothing yet to reinterpret.
+    pub(super) fn render_encoding_override_row(&self, cx: &mut Context<Self>) -> AnyElement {
+        if self.preview_raw_bytes.is_none() {
+            return div().into_any_element();
+        }
+
+        let theme = cx.theme();
+        let current = self.encoding_override;
+
+        div()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap(Spacing::XS)
+            .px(Spacing::SM)
+            .py(Spacing::XS)
+            .border_b_1()
+            .border_color(theme.border)
+            .child(
+                Text::caption(dbflux_i18n::t!(
+                    "document.object_browser.preview.body.interpret_as"
+                ))
+                .muted_foreground(),
+            )
+            .child(self.render_encoding_pill(
+                "object-browser-encoding-auto",
+                dbflux_i18n::t!("document.object_browser.preview.body.encoding_auto"),
+                current.is_none(),
+                None,
+                cx,
+            ))
+            .child(self.render_encoding_pill(
+                "object-browser-encoding-raw",
+                dbflux_i18n::t!("document.object_browser.preview.body.encoding_raw"),
+                current == Some(EncodingChoice::Raw),
+                Some(EncodingChoice::Raw),
+                cx,
+            ))
+            .children(OVERRIDABLE_ENCODINGS.iter().map(|encoding| {
+                let choice = EncodingChoice::Encoding(*encoding);
+
+                self.render_encoding_pill(
+                    SharedString::from(format!("object-browser-encoding-{}", *encoding as u8)),
+                    encoding_label(*encoding).to_string(),
+                    current == Some(choice),
+                    Some(choice),
+                    cx,
+                )
+            }))
+            .into_any_element()
+    }
+
+    fn render_encoding_pill(
+        &self,
+        id: impl Into<ElementId>,
+        label: impl Into<SharedString>,
+        selected: bool,
+        choice: Option<EncodingChoice>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let theme = cx.theme();
+        let label = label.into();
+
+        div()
+            .id(id)
+            .flex()
+            .items_center()
+            .h(Heights::CONTROL)
+            .px(Spacing::XS)
+            .rounded(Radii::SM)
+            .cursor_pointer()
+            .when(selected, |d| d.bg(theme.primary))
+            .when(!selected, |d| {
+                d.bg(theme.secondary).hover(|d| d.bg(theme.muted))
+            })
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.set_encoding_override(choice, cx);
+            }))
+            .child(if selected {
+                Text::caption(label).color(theme.primary_foreground)
+            } else {
+                Text::caption(label)
+            })
+            .into_any_element()
     }
 
     /// The S3-3 image block: the image itself over a neutral backdrop, its
@@ -420,49 +533,97 @@ impl ObjectBrowserDocument {
 
     /// Everything that is not a rendered image: still loading, refused by the
     /// gate, undecodable, or simply not previewable in-app.
-    fn render_body_notice(&self, cx: &Context<Self>) -> AnyElement {
+    fn render_body_notice(&self, key: &str, cx: &mut Context<Self>) -> AnyElement {
         if let PreviewContentState::Loading = self.preview_content() {
             return self.render_notice(
                 AppIcon::Loader,
                 &dbflux_i18n::t!("document.object_browser.preview.body.loading"),
                 NoticeTone::Neutral,
+                None,
                 cx,
             );
         }
 
         if let PreviewContentState::Failed(message) = self.preview_content() {
-            return self.render_notice(AppIcon::TriangleAlert, message, NoticeTone::Warning, cx);
+            return self.render_notice(
+                AppIcon::TriangleAlert,
+                message,
+                NoticeTone::Warning,
+                None,
+                cx,
+            );
         }
 
-        let (icon, message, tone) = match &self.metadata {
+        if let PreviewContentState::DecodeFailed { encoding, reason } = self.preview_content() {
+            let message = dbflux_i18n::t!(
+                "document.object_browser.preview.body.decode_failed",
+                encoding = encoding_label(*encoding),
+                reason = reason.as_str()
+            );
+            return self.render_notice(
+                AppIcon::TriangleAlert,
+                &message,
+                NoticeTone::Warning,
+                None,
+                cx,
+            );
+        }
+
+        if let PreviewContentState::DecodeTooLarge {
+            encoding,
+            limit_bytes,
+        } = self.preview_content()
+        {
+            let message = dbflux_i18n::t!(
+                "document.object_browser.preview.body.decode_too_large",
+                encoding = encoding_label(*encoding),
+                limit = crate::buckets_table::format_bytes(*limit_bytes as u64).as_str()
+            );
+            return self.render_notice(
+                AppIcon::TriangleAlert,
+                &message,
+                NoticeTone::Warning,
+                None,
+                cx,
+            );
+        }
+
+        let (icon, message, tone, action) = match &self.metadata {
             None | Some(ObjectMetadataState::Loading) => (
                 AppIcon::Loader,
                 dbflux_i18n::t!("document.object_browser.preview.body.loading_metadata"),
                 NoticeTone::Neutral,
+                None,
             ),
-            Some(ObjectMetadataState::Error(message)) => {
-                (AppIcon::TriangleAlert, message.clone(), NoticeTone::Danger)
-            }
+            Some(ObjectMetadataState::Error(message)) => (
+                AppIcon::TriangleAlert,
+                message.clone(),
+                NoticeTone::Danger,
+                None,
+            ),
             Some(ObjectMetadataState::Loaded { gate, .. }) => match gate {
                 PreviewGate::Allowed => (
                     AppIcon::Eye,
                     self.unpreviewable_message(),
                     NoticeTone::Neutral,
+                    None,
                 ),
                 PreviewGate::Archived => (
                     AppIcon::Lock,
                     gate.message().unwrap_or_default(),
                     NoticeTone::Warning,
+                    None,
                 ),
                 PreviewGate::TooLarge { .. } => (
                     AppIcon::TriangleAlert,
                     gate.message().unwrap_or_default(),
                     NoticeTone::Warning,
+                    Some(self.render_load_anyway_button(key, cx)),
                 ),
             },
         };
 
-        self.render_notice(icon, &message, tone, cx)
+        self.render_notice(icon, &message, tone, action, cx)
     }
 
     /// Copy for an object the gate allows but the pane cannot render itself.
@@ -475,12 +636,41 @@ impl ObjectBrowserDocument {
         }
     }
 
+    /// "Load anyway" action offered under a `PreviewGate::TooLarge` refusal:
+    /// bypasses the gate once, for this object only.
+    fn render_load_anyway_button(&self, key: &str, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme();
+        let key = key.to_string();
+
+        div()
+            .id("object-browser-load-anyway")
+            .flex()
+            .items_center()
+            .gap(Spacing::XS)
+            .h(Heights::CONTROL)
+            .px(Spacing::SM)
+            .rounded(Radii::SM)
+            .cursor_pointer()
+            .border_1()
+            .border_color(theme.border)
+            .hover(|d| d.bg(theme.secondary))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.load_preview_body_override(key.clone(), cx);
+            }))
+            .child(Icon::new(AppIcon::Download).small().muted())
+            .child(Text::caption(dbflux_i18n::t!(
+                "document.object_browser.preview.body.load_anyway"
+            )))
+            .into_any_element()
+    }
+
     fn render_notice(
         &self,
         icon: AppIcon,
         message: &str,
         tone: NoticeTone,
-        cx: &Context<Self>,
+        action: Option<AnyElement>,
+        cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = cx.theme();
 
@@ -502,6 +692,7 @@ impl ObjectBrowserDocument {
                 NoticeTone::Danger => Text::caption(message.to_string()).danger(),
                 _ => Text::caption(message.to_string()).muted_foreground(),
             })
+            .when_some(action, |this, action| this.child(action))
             .into_any_element()
     }
 

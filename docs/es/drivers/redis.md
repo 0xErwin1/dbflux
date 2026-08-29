@@ -52,6 +52,12 @@ Driver de clave-valor Redis para DBFlux, construido sobre el crate
   set/delete, list push/set/remove, set add/remove, sorted-set add/remove y
   stream add/delete, para su uso en vistas previas y copy-as-command.
 - Exportación de resultados a JSON (`EXPORT_JSON`).
+- Gate de tamaño en lecturas de payload completo: cuando el request trae un
+  presupuesto de bytes, los valores string/JSON se sondean con `STRLEN` antes
+  del `GET` y los valores que lo exceden devuelven un placeholder con el tamaño
+  real en lugar de transferir el payload; los tipos de colección no se ven
+  afectados, y las lecturas de stream que alcanzan el tope de fetch se reportan
+  como truncadas.
 
 ### Instance Metrics
 

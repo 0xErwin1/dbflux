@@ -17,9 +17,11 @@ pub mod pane;
 mod render;
 
 use crate::handle::DocumentEvent;
+use crate::object_browser::{
+    EncodingChoice, PreparedPreview, PreviewGate, TextSource, prepare_preview,
+};
 use crate::object_text::{
-    LineEnding, TextBody, build_text_input, db_error_to_user_facing, decode_text_body,
-    detect_editable_text, record_save_audit,
+    LineEnding, TextBody, build_text_input, db_error_to_user_facing, record_save_audit,
 };
 use crate::pane::ObjectSavedCallback;
 use crate::types::{DocumentId, DocumentState};
@@ -34,8 +36,24 @@ use std::time::Instant;
 use uuid::Uuid;
 
 /// Why an object could not be opened for editing. Carries the message the tab
-/// shows in place of the buffer.
-type LoadRefusal = String;
+/// shows in place of the buffer, and whether it is specifically the size gate
+/// — the only refusal the tab lets the user bypass with "Load anyway".
+enum LoadRefusal {
+    TooLarge(String),
+    Other(String),
+}
+
+impl LoadRefusal {
+    fn message(&self) -> &str {
+        match self {
+            LoadRefusal::TooLarge(message) | LoadRefusal::Other(message) => message,
+        }
+    }
+
+    fn is_too_large(&self) -> bool {
+        matches!(self, LoadRefusal::TooLarge(_))
+    }
+}
 
 /// State of the object's body.
 enum LoadState {
@@ -49,6 +67,9 @@ enum LoadState {
 struct PendingBody {
     body: TextBody,
     content_type: Option<String>,
+    /// What produced this text — the object's raw bytes, or a value decoded
+    /// from them. Drives whether the installed buffer is editable.
+    source: TextSource,
 }
 
 /// The editable buffer, with the content last loaded or saved as the baseline
@@ -60,7 +81,17 @@ struct Buffer {
     content_type: Option<String>,
     byte_len: u64,
     dirty: bool,
+    /// What produced the buffer's text. Only `TextSource::Raw` may be saved
+    /// back — a decoded view never writes its re-encoded form over the
+    /// object's real bytes.
+    source: TextSource,
     _subscription: Subscription,
+}
+
+impl Buffer {
+    fn is_editable(&self) -> bool {
+        self.source.is_editable()
+    }
 }
 
 /// One object-store text object, open in its own tab.
@@ -77,6 +108,14 @@ pub struct ObjectEditorDocument {
     pending_body: Option<PendingBody>,
     buffer: Option<Buffer>,
     saving: bool,
+    /// Set once the user accepts "Load anyway" on a size-gate refusal. The
+    /// tab has exactly one object, so this stays sticky for its lifetime
+    /// rather than resetting per selection like the browser's preview pane.
+    size_gate_override: bool,
+    /// User's explicit override of the auto-detected encoding, or `None` to
+    /// use magic-byte detection. The tab only ever offers "Raw" — a full
+    /// per-format picker belongs to the browser's preview toolbar.
+    encoding_override: Option<EncodingChoice>,
     /// Invoked with the key after every successful save so the document that
     /// asked for this tab can refresh its own view of the object.
     on_saved: ObjectSavedCallback,
@@ -106,6 +145,8 @@ impl ObjectEditorDocument {
             pending_body: None,
             buffer: None,
             saving: false,
+            size_gate_override: false,
+            encoding_override: None,
             on_saved,
         };
 
@@ -225,17 +266,19 @@ impl ObjectEditorDocument {
             .map(|connected| connected.connection.clone())
     }
 
-    /// Fetches the object's metadata and body. The metadata comes first so the
-    /// same preview gate the browser applies (size limit, archived tiers, and
-    /// the text-kind check) decides whether the body may be fetched at all.
+    /// Fetches the object's metadata and body through the same shared
+    /// decoder as the browser preview pane: the gate (size limit, archived
+    /// tiers) decides whether the body may be fetched at all, magic-byte
+    /// detection (or `encoding_override`) decides how to present it, and only
+    /// a text result is accepted — this tab edits text, nothing else.
     fn load_object(&mut self, cx: &mut Context<Self>) {
         self.load = LoadState::Loading;
         cx.notify();
 
         let Some(connection) = self.get_connection(cx) else {
-            self.load = LoadState::Failed(dbflux_i18n::t!(
+            self.load = LoadState::Failed(LoadRefusal::Other(dbflux_i18n::t!(
                 "document.object_browser.error.connection_unavailable"
-            ));
+            )));
             cx.notify();
             return;
         };
@@ -245,6 +288,8 @@ impl ObjectEditorDocument {
             .read(cx)
             .general_settings()
             .object_preview_size_limit_bytes();
+        let bypass_size_gate = self.size_gate_override;
+        let override_choice = self.encoding_override;
 
         let entity = cx.entity().clone();
         let bucket = self.bucket.clone();
@@ -253,7 +298,14 @@ impl ObjectEditorDocument {
         let task = cx.background_executor().spawn(async move {
             let started = Instant::now();
 
-            let result = load_editable_body(&*connection, &bucket, &key, limit_bytes);
+            let result = load_editable_body(
+                &*connection,
+                &bucket,
+                &key,
+                limit_bytes,
+                bypass_size_gate,
+                override_choice,
+            );
 
             (result, started.elapsed().as_millis())
         });
@@ -275,6 +327,39 @@ impl ObjectEditorDocument {
         .detach();
     }
 
+    /// Bypasses the size gate at the user's explicit "Load anyway" request
+    /// and reloads the object under the override.
+    pub fn load_anyway(&mut self, cx: &mut Context<Self>) {
+        self.size_gate_override = true;
+        self.load_object(cx);
+    }
+
+    /// Toggles between magic-byte auto-detection and forcing the object's raw
+    /// bytes, then reloads to apply the change.
+    ///
+    /// Refuses while the buffer is dirty: reloading under the new override
+    /// replaces the buffer's content outright, and this tab has no
+    /// unsaved-edits confirmation of its own to park the request behind.
+    pub fn set_raw_override(&mut self, raw: bool, cx: &mut Context<Self>) {
+        if self.is_dirty() {
+            return;
+        }
+
+        self.encoding_override = raw.then_some(EncodingChoice::Raw);
+        self.buffer = None;
+        self.load_object(cx);
+    }
+
+    /// Whether the currently loaded body is the object's own raw bytes
+    /// (editable) or a decoded view of them (read-only).
+    pub fn is_editable(&self) -> bool {
+        self.buffer.as_ref().is_some_and(Buffer::is_editable)
+    }
+
+    pub fn has_raw_override(&self) -> bool {
+        self.encoding_override == Some(EncodingChoice::Raw)
+    }
+
     #[allow(clippy::result_large_err)]
     fn apply_load_outcome(
         &mut self,
@@ -286,11 +371,12 @@ impl ObjectEditorDocument {
                 self.pending_body = Some(PendingBody {
                     body: loaded.body,
                     content_type: loaded.content_type,
+                    source: loaded.source,
                 });
                 self.load = LoadState::Ready;
             }
             Ok(Err(refusal)) => self.load = LoadState::Failed(refusal),
-            Err(err) => self.load = LoadState::Failed(err.to_string()),
+            Err(err) => self.load = LoadState::Failed(LoadRefusal::Other(err.to_string())),
         }
 
         cx.emit(DocumentEvent::MetaChanged);
@@ -336,6 +422,7 @@ impl ObjectEditorDocument {
             content_type: pending.content_type,
             byte_len: pending.body.byte_len,
             dirty: false,
+            source: pending.source,
             _subscription: subscription,
         });
 
@@ -376,7 +463,12 @@ impl ObjectEditorDocument {
             return;
         };
 
-        if self.saving {
+        // A decoded view is never the object's real bytes — writing it back
+        // would silently replace the object's actual content with a
+        // re-encoding of its decoded form. The footer never offers Save for
+        // this state, but the guard stays here too since it is reachable
+        // from the Ctrl/Cmd+S shortcut regardless of what is rendered.
+        if !buffer.is_editable() || self.saving {
             return;
         }
 
@@ -539,6 +631,7 @@ impl ObjectEditorDocument {
                     byte_len: text.len() as u64,
                 },
                 content_type: Some("text/plain".to_string()),
+                source: TextSource::Raw,
             },
             window,
             cx,
@@ -547,7 +640,7 @@ impl ObjectEditorDocument {
 
     #[cfg(test)]
     pub(crate) fn fail_load_for_test(&mut self, message: &str) {
-        self.load = LoadState::Failed(message.to_string());
+        self.load = LoadState::Failed(LoadRefusal::Other(message.to_string()));
     }
 
     #[cfg(test)]
@@ -571,14 +664,39 @@ impl ObjectEditorDocument {
     }
 }
 
-/// A body that passed the gate and decoded as UTF-8 text.
+/// A body that resolved to text, whether the object's own raw bytes or a
+/// decoded view of them.
 struct LoadedBody {
     body: TextBody,
     content_type: Option<String>,
+    source: TextSource,
 }
 
-/// Reads `key`'s metadata, applies the preview gate and the text-kind check,
-/// and only then fetches and decodes the body.
+/// Decides whether the shared preview gate lets `metadata`'s bytes be
+/// fetched at all — the same size limit and archived-storage-tier check the
+/// object browser preview pane applies — before any network call.
+/// `bypass_size_gate` is the tab's "Load anyway" override.
+fn gate_refusal(
+    metadata: &ObjectMetadata,
+    limit_bytes: u64,
+    bypass_size_gate: bool,
+) -> Option<LoadRefusal> {
+    let gate = crate::object_browser::evaluate_preview_gate(metadata, limit_bytes);
+
+    match gate {
+        PreviewGate::Allowed => None,
+        PreviewGate::TooLarge { .. } if bypass_size_gate => None,
+        PreviewGate::TooLarge { .. } => {
+            Some(LoadRefusal::TooLarge(gate.message().unwrap_or_default()))
+        }
+        PreviewGate::Archived => Some(LoadRefusal::Other(gate.message().unwrap_or_default())),
+    }
+}
+
+/// Reads `key`'s metadata, applies the shared preview gate, and only then
+/// fetches the body and resolves it through the shared decoder
+/// (`prepare_preview`). Only a text result is accepted — this tab edits text,
+/// nothing else — with every other resolved kind refused by message.
 ///
 /// Runs entirely on the background executor: every call here is a blocking
 /// driver call.
@@ -588,6 +706,8 @@ fn load_editable_body(
     bucket: &str,
     key: &str,
     limit_bytes: u64,
+    bypass_size_gate: bool,
+    override_choice: Option<EncodingChoice>,
 ) -> Result<Result<LoadedBody, LoadRefusal>, DbError> {
     let Some(api) = connection.object_store_api() else {
         return Err(DbError::NotSupported(dbflux_i18n::t!(
@@ -597,14 +717,44 @@ fn load_editable_body(
 
     let metadata: ObjectMetadata = api.head_object(bucket, key)?;
 
-    if let Err(refusal) = detect_editable_text(&metadata, limit_bytes) {
+    if let Some(refusal) = gate_refusal(&metadata, limit_bytes, bypass_size_gate) {
         return Ok(Err(refusal));
     }
 
     let content_type = metadata.content_type.clone();
     let bytes = api.get_object(bucket, key)?;
+    let prepared = prepare_preview(
+        &bytes,
+        content_type.as_deref(),
+        key,
+        limit_bytes as usize,
+        override_choice,
+    );
 
-    Ok(decode_text_body(bytes).map(|body| LoadedBody { body, content_type }))
+    let outcome = match prepared {
+        PreparedPreview::Text { text, source } => Ok(LoadedBody {
+            body: TextBody {
+                line_ending: LineEnding::detect(&text),
+                byte_len: bytes.len() as u64,
+                text,
+            },
+            content_type,
+            source,
+        }),
+        PreparedPreview::Image(_) | PreparedPreview::Pdf | PreparedPreview::Binary => {
+            Err(dbflux_i18n::t!("document.object_editor.error.not_text"))
+        }
+        PreparedPreview::DecodeFailed { reason, .. } => Err(reason),
+        PreparedPreview::DecodeTooLarge {
+            limit_bytes: decode_limit,
+            ..
+        } => Err(dbflux_i18n::t!(
+            "document.object_editor.error.decode_too_large",
+            limit = crate::buckets_table::format_bytes(decode_limit as u64).as_str()
+        )),
+    };
+
+    Ok(outcome.map_err(LoadRefusal::Other))
 }
 
 #[cfg(test)]
@@ -612,8 +762,7 @@ mod tests {
     // Deliberately narrow imports: `use super::*` would pull in the module's
     // `gpui::*` glob, whose `test` attribute macro would shadow the plain
     // `#[test]` attribute below.
-    use super::ObjectEditorDocument;
-    use crate::object_text::detect_editable_text;
+    use super::{ObjectEditorDocument, gate_refusal};
     use crate::types::DocumentState;
     use dbflux_core::ObjectMetadata;
     use std::cell::RefCell;
@@ -632,67 +781,50 @@ mod tests {
         }
     }
 
-    /// A text object under the limit opens; the tab applies exactly the gate
-    /// the preview pane applies.
+    /// An object under the limit clears the gate — the body may be fetched.
     #[test]
-    fn editable_text_within_the_limit_is_accepted() {
-        assert!(detect_editable_text(&metadata("a.txt", 10, Some("text/plain")), 1024).is_ok());
+    fn objects_within_the_limit_clear_the_gate() {
+        assert!(gate_refusal(&metadata("a.txt", 10, Some("text/plain")), 1024, false).is_none());
     }
 
     /// Past the limit the tab refuses with the gate's own explanation rather
-    /// than fetching a body it would not render.
+    /// than fetching a body it would not render — unless the size gate was
+    /// explicitly bypassed via "Load anyway".
     #[test]
-    fn oversized_objects_are_refused_with_the_gate_message() {
-        let refusal = detect_editable_text(&metadata("a.txt", 4096, Some("text/plain")), 1024)
-            .expect_err("over the limit");
+    fn oversized_objects_are_refused_with_the_gate_message_unless_bypassed() {
+        let refusal = gate_refusal(&metadata("a.txt", 4096, Some("text/plain")), 1024, false)
+            .expect("over the limit");
 
-        assert!(refusal.contains("preview limit"));
+        assert!(refusal.is_too_large());
+        assert!(refusal.message().contains("preview limit"));
+
+        assert!(gate_refusal(&metadata("a.txt", 4096, Some("text/plain")), 1024, true).is_none());
     }
 
-    /// A binary object is refused before its bytes are fetched.
-    #[test]
-    fn non_text_objects_are_refused() {
-        let refusal = detect_editable_text(&metadata("a.png", 10, Some("image/png")), 1024)
-            .expect_err("not text");
-
-        assert!(refusal.contains("text"));
-    }
-
-    /// The "not text" refusal routes through the catalog and diverges between
-    /// locales, matching the reused `PreviewGate::message()` pattern from
-    /// PR 19: both refusal paths in `detect_editable_text` are translated,
-    /// not just the gate check.
-    #[test]
-    fn non_text_refusal_message_resolves_in_both_locales() {
-        let refusal = detect_editable_text(&metadata("a.png", 10, Some("image/png")), 1024)
-            .expect_err("not text");
-
-        assert_ne!(refusal, "document.object_editor.error.not_text");
-
-        let es = dbflux_i18n::t!("document.object_editor.error.not_text", locale = "es");
-        assert_ne!(refusal, es);
-    }
-
-    /// The size-refusal path reuses `PreviewGate::message()` exactly as the
-    /// object browser preview pane does (PR 19) — the editor never carries
-    /// its own copy of the gate's explanation.
+    /// The size-refusal message reuses `PreviewGate::message()` exactly as
+    /// the object browser preview pane does — the editor never carries its
+    /// own copy of the gate's explanation.
     #[test]
     fn oversized_refusal_message_matches_the_shared_gate_mapping() {
         let metadata = metadata("a.txt", 4096, Some("text/plain"));
         let gate = crate::object_browser::evaluate_preview_gate(&metadata, 1024);
 
-        let refusal = detect_editable_text(&metadata, 1024).expect_err("over the limit");
+        let refusal =
+            gate_refusal(&metadata, 1024, false).expect("over the limit refuses without bypass");
 
-        assert_eq!(Some(refusal), gate.message());
+        assert_eq!(Some(refusal.message().to_string()), gate.message());
     }
 
-    /// An archived object is refused even when it would fit under the limit.
+    /// An archived object is refused even when it would fit under the limit,
+    /// and bypassing the size gate does not lift it — archival is a
+    /// different refusal entirely.
     #[test]
-    fn archived_objects_are_refused() {
+    fn archived_objects_are_refused_regardless_of_the_size_bypass() {
         let mut archived = metadata("a.txt", 10, Some("text/plain"));
         archived.storage_class = Some("GLACIER".to_string());
 
-        assert!(detect_editable_text(&archived, 1024).is_err());
+        let refusal = gate_refusal(&archived, 1024, true).expect("archived objects are refused");
+        assert!(!refusal.is_too_large());
     }
 
     /// Records every key the document reports as saved, so a test can prove

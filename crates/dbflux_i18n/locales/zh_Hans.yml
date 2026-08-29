@@ -1810,9 +1810,7 @@ document:
           many: "（%{count} 个上传失败）"
   object_editor:
     error:
-      not_previewable_fallback: 此对象无法在应用内打开。
       not_text: 此对象不是文本，无法在应用内编辑。
-      not_utf8: 此对象不是有效的 UTF-8 文本，无法在应用内编辑。
     status:
       bucket_tooltip: 存储桶
       key_tooltip: 对象键

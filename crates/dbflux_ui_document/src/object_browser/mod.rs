@@ -23,9 +23,13 @@ pub use delete_prefix::{
 pub use presign::{PresignExpiry, PresignMethodChoice, PresignState, PresignUrlState};
 pub use rename::RenameObjectState;
 
-pub use crate::object_text::{LineEnding, TextBody, decode_text_body};
+pub use crate::object_text::{LineEnding, TextBody};
 pub use metadata::{ObjectMetadataState, ObjectVersionsState, PreviewGate, evaluate_preview_gate};
-pub use preview_content::{ImagePreview, PreviewContentState, PreviewKind, detect_preview_kind};
+pub use preview_content::{
+    EncodingChoice, ImagePreview, OVERRIDABLE_ENCODINGS, PreparedPreview, PreviewContentState,
+    PreviewKind, ResolvedBody, TextSource, decode_label, detect_preview_kind, encoding_label,
+    prepare_preview, resolve_body,
+};
 pub use tree::{ObjectTree, ObjectTreeEntry, ObjectTreeNodeId, PrefixLoadState};
 
 use context_menu::ObjectContextMenu;
@@ -121,6 +125,20 @@ pub struct ObjectBrowserDocument {
     preview_content: PreviewContentState,
     /// Same stale-response guard as `metadata_generation`, for the body fetch.
     preview_content_generation: u64,
+    /// Raw bytes last fetched for `preview_key`, kept so switching
+    /// `encoding_override` can re-resolve the presentation without a second
+    /// `GetObject` round trip. Reset with every selection change.
+    preview_raw_bytes: Option<std::sync::Arc<Vec<u8>>>,
+    /// Content type reported for `preview_raw_bytes`, cached alongside it for
+    /// the same override-recompute path.
+    preview_content_type: Option<String>,
+    /// Set once the user accepts "Load anyway" on a `PreviewGate::TooLarge`
+    /// refusal for `preview_key`. One-shot: reset on every selection change.
+    size_gate_override: bool,
+    /// User's explicit override of the auto-detected encoding for
+    /// `preview_key`, or `None` to use magic-byte detection. Reset on every
+    /// selection change.
+    encoding_override: Option<EncodingChoice>,
     /// User-chosen preview-pane width; `None` uses the mode's preferred width.
     preview_custom_width: Option<Pixels>,
     preview_resize_start: Option<(Pixels, Pixels)>,
@@ -225,6 +243,10 @@ impl ObjectBrowserDocument {
             metadata_generation: 0,
             preview_content: PreviewContentState::Unavailable,
             preview_content_generation: 0,
+            preview_raw_bytes: None,
+            preview_content_type: None,
+            size_gate_override: false,
+            encoding_override: None,
             preview_custom_width: None,
             preview_resize_start: None,
             editor: None,
@@ -686,6 +708,10 @@ impl ObjectBrowserDocument {
         // Drops the previous object's decoded bytes before the new metadata
         // request even starts.
         self.preview_content = PreviewContentState::Unavailable;
+        self.preview_raw_bytes = None;
+        self.preview_content_type = None;
+        self.size_gate_override = false;
+        self.encoding_override = None;
         self.focus_mode = ObjectBrowserFocusMode::Listing;
 
         self.ensure_bucket_details(cx);
@@ -706,6 +732,10 @@ impl ObjectBrowserDocument {
         self.preview_key = None;
         self.metadata = None;
         self.preview_content = PreviewContentState::Unavailable;
+        self.preview_raw_bytes = None;
+        self.preview_content_type = None;
+        self.size_gate_override = false;
+        self.encoding_override = None;
         self.versions = ObjectVersionsState::Idle;
         cx.notify();
     }
@@ -827,8 +857,12 @@ impl ObjectBrowserDocument {
         state: PreviewContentState,
         cx: &mut Context<Self>,
     ) {
-        let generation = self.preview_content_generation;
-        self.apply_preview_content(generation, key.to_string(), state, cx);
+        if self.preview_key.as_deref() != Some(key) {
+            return;
+        }
+
+        self.preview_content = state;
+        cx.notify();
     }
 
     #[cfg(test)]
@@ -848,6 +882,7 @@ impl ObjectBrowserDocument {
                     byte_len: text.len() as u64,
                 },
                 content_type: Some("text/plain".to_string()),
+                source: TextSource::Raw,
             },
             window,
             cx,

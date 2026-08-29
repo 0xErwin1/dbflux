@@ -1491,6 +1491,19 @@ document:
         no_limit: Sin límite
         missing: Ausente
         expired: Expirado
+      gate:
+        too_large: "El valor pesa %{size}, por encima del límite de vista previa de %{limit}"
+        load_anyway: Cargar de todos modos
+        truncated: "Valor parcial — mostrando %{returned} de %{total}"
+        truncated_unknown_total: "Valor parcial — mostrando %{returned}"
+      decode:
+        failed: no se pudo decodificar
+        too_large: la salida decodificada es demasiado grande
+        edit_locked: Cambia a Raw para editar
+        kind:
+          text: texto
+          bytes: bytes
+          image: imagen
   migrate_wizard:
     title: Migrar datos
     task:
@@ -1667,6 +1680,7 @@ document:
         leave_for: "salir hacia %{prefix}"
         close_preview: cerrar esta vista previa
         delete: "eliminar %{key}"
+        reinterpret: cambiar cómo se interpreta este objeto
         rename: "renombrar %{key}"
       unsaved_summary: "Cambios sin guardar en %{key}"
       toast:
@@ -1734,9 +1748,17 @@ document:
         open: Abrir
         presign: Prefirmar
       body:
+        decode_failed: "Detectado como %{encoding}, pero no se pudo decodificar: %{reason}"
+        decode_too_large: "Detectado como %{encoding}, pero decodificarlo supera el límite de vista previa de %{limit}."
+        decoded_not_utf8: "Los bytes decodificados no son UTF-8 válido."
+        decoded_read_only: "Solo lectura — cambia a Raw para editar"
+        encoding_auto: Automático
+        encoding_raw: Raw
         fit_to_width: Ajustar al ancho
         image_decode_error: "No se pudo decodificar la imagen: %{error}"
         image_header_error: "No se pudo leer el encabezado de la imagen: %{error}"
+        interpret_as: "Interpretar como:"
+        load_anyway: Cargar de todas formas
         loading: "Cargando vista previa…"
         loading_metadata: "Cargando metadatos…"
         svg_invalid_utf8: "Este objeto no es UTF-8 válido, por lo que no puede ser un SVG."
@@ -1810,9 +1832,8 @@ document:
           many: " (%{count} subidas fallidas)"
   object_editor:
     error:
-      not_previewable_fallback: Este objeto no se puede abrir en la aplicación.
+      decode_too_large: "Decodificar este objeto supera el límite de vista previa de %{limit}."
       not_text: Este objeto no es de texto y no se puede editar en la aplicación.
-      not_utf8: Este objeto no es texto UTF-8 válido y no se puede editar en la aplicación.
     status:
       bucket_tooltip: Bucket
       key_tooltip: Clave del objeto
@@ -2493,6 +2514,13 @@ settings:
       error: El límite de tamaño para la vista previa de objetos debe ser >= 1 MiB
     object_preview_hint:
       label: "Los objetos más grandes que este límite nunca se descargan para la vista previa; el navegador solo muestra sus metadatos."
+    key_value:
+      group: Vista previa de clave-valor
+    key_value_size_limit:
+      label: Límite de tamaño para la vista previa de clave-valor (MiB)
+      error: El límite de tamaño para la vista previa de clave-valor debe ser >= 1 MiB
+    key_value_size_limit_hint:
+      label: "Los valores más grandes que este límite no se descargan automáticamente; usa \"Cargar de todos modos\" para obtener el valor completo."
     share_stable_db:
       label: Usar la base de datos estable
       error: No se pudo actualizar la configuración de base de datos compartida

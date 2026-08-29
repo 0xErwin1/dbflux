@@ -73,25 +73,6 @@ pub struct TextBody {
     pub byte_len: u64,
 }
 
-/// Decodes an object body for the editor. Only UTF-8 is accepted: a lossy
-/// decode would let the user save back a file whose undecodable bytes had been
-/// replaced by placeholders.
-pub fn decode_text_body(bytes: Vec<u8>) -> Result<TextBody, String> {
-    let byte_len = bytes.len() as u64;
-
-    let text = String::from_utf8(bytes)
-        .map_err(|_| dbflux_i18n::t!("document.object_editor.error.not_utf8"))?;
-
-    let line_ending = LineEnding::detect(&text);
-    let normalised = text.replace("\r\n", "\n");
-
-    Ok(TextBody {
-        text: normalised,
-        line_ending,
-        byte_len,
-    })
-}
-
 /// Highlighter language for the buffer, from the key's extension. Unknown
 /// extensions resolve to the plain highlighter inside the editor component.
 ///
@@ -178,33 +159,6 @@ pub fn open_find_panel(input: &Entity<InputState>, window: &mut Window, cx: &mut
     window.dispatch_action(Box::new(InputSearch), cx);
 }
 
-/// Whether `metadata`'s object may be opened in an in-app text editor.
-///
-/// Returns the reason it may not, ready to be shown in place of the buffer.
-/// This is the preview gate — the configured size limit and the archived
-/// storage tiers — plus the text-kind check, so an editor never fetches a body
-/// the preview pane would have refused.
-pub fn detect_editable_text(
-    metadata: &dbflux_core::ObjectMetadata,
-    limit_bytes: u64,
-) -> Result<(), String> {
-    use crate::object_browser::{PreviewGate, PreviewKind, detect_preview_kind};
-
-    let gate = crate::object_browser::evaluate_preview_gate(metadata, limit_bytes);
-
-    if gate != PreviewGate::Allowed {
-        return Err(gate.message().unwrap_or_else(|| {
-            dbflux_i18n::t!("document.object_editor.error.not_previewable_fallback")
-        }));
-    }
-
-    if detect_preview_kind(metadata.content_type.as_deref(), &metadata.key) != PreviewKind::Text {
-        return Err(dbflux_i18n::t!("document.object_editor.error.not_text"));
-    }
-
-    Ok(())
-}
-
 /// Meta line describing a loaded object body: what it is, how big it is, and
 /// how its text is encoded.
 pub fn body_meta_line(
@@ -284,10 +238,7 @@ pub fn record_save_audit(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        LineEnding, body_meta_line, cursor_label, decode_text_body, editor_language,
-        highlight_language,
-    };
+    use super::{LineEnding, body_meta_line, cursor_label, editor_language, highlight_language};
 
     /// T30: a CRLF body is recognised so the convention survives a round-trip.
     #[test]
@@ -298,41 +249,6 @@ mod tests {
 
         assert_eq!(LineEnding::Crlf.apply("a\nb"), "a\r\nb");
         assert_eq!(LineEnding::Lf.apply("a\nb"), "a\nb");
-    }
-
-    /// T30: the buffer always holds LF, and the original byte length is kept
-    /// for the meta line.
-    #[test]
-    fn decoding_normalises_to_lf() {
-        let body = decode_text_body(b"first\r\nsecond".to_vec()).expect("valid UTF-8");
-
-        assert_eq!(body.text, "first\nsecond");
-        assert_eq!(body.line_ending, LineEnding::Crlf);
-        assert_eq!(body.byte_len, 13);
-    }
-
-    /// T30: a body that is not UTF-8 is refused rather than lossily decoded —
-    /// saving a placeholder-mangled buffer would corrupt the object.
-    #[test]
-    fn decoding_refuses_non_utf8_bodies() {
-        assert!(decode_text_body(vec![0xff, 0xfe, 0x00]).is_err());
-    }
-
-    /// The UTF-8 refusal message routes through the catalog rather than
-    /// staying a literal, so it renders in the active locale.
-    #[test]
-    fn decoding_refusal_message_resolves_in_both_locales() {
-        let message = decode_text_body(vec![0xff, 0xfe, 0x00]).expect_err("not UTF-8");
-
-        assert!(!message.is_empty());
-        assert_ne!(message, "document.object_editor.error.not_utf8");
-        assert_ne!(
-            message,
-            format!("en.{}", "document.object_editor.error.not_utf8")
-        );
-
-        let es = dbflux_i18n::t!("document.object_editor.error.not_utf8", locale = "es");
-        assert_ne!(message, es);
     }
 
     /// T30: the highlighter language comes from the extension, with a plain
