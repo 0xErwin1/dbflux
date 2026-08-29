@@ -184,6 +184,16 @@ for (const skill of skillIndex.skills ?? []) {
     );
 }
 
+interface McpServerCard {
+  serverInfo?: { name?: string };
+  transport?: { url?: string };
+}
+const serverCard: McpServerCard = JSON.parse(text(resolve(wellKnownRoot, 'mcp/server-card.json')));
+if (!serverCard.serverInfo?.name)
+  fail('.well-known/mcp/server-card.json is missing serverInfo.name');
+if (!serverCard.transport?.url?.startsWith('https://'))
+  fail('.well-known/mcp/server-card.json transport.url must start with https://');
+
 const homeMarkdownPath = resolve(root, 'index.md');
 if (mode === 'site' && !existsSync(homeMarkdownPath)) fail('site build is missing dist/index.md');
 if (mode === 'docs' && existsSync(homeMarkdownPath))

@@ -57,6 +57,14 @@ jobs:
         working-directory: web
         run: pnpm install --frozen-lockfile
 
+      - name: Install MCP worker
+        working-directory: web/mcp
+        run: pnpm install --frozen-lockfile
+
+      - name: Types (MCP worker)
+        working-directory: web/mcp
+        run: pnpm check
+
       - name: Format
         working-directory: web
         run: pnpm format:check

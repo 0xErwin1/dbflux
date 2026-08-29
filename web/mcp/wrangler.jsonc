@@ -1,0 +1,27 @@
+{
+  // Deploy configuration for the DBFlux documentation MCP server.
+  //
+  // This Worker is a Durable Object host: the MCP session itself needs to
+  // remember prior messages within one streamable-HTTP connection, and that
+  // state has to live on one machine for the connection's lifetime. A plain
+  // stateless Worker cannot do that, so the entry script binds one Durable
+  // Object class per session.
+  "name": "dbflux-mcp",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-19",
+  "compatibility_flags": ["nodejs_compat"],
+
+  // Binds the Durable Object class that backs each MCP session.
+  "durable_objects": {
+    "bindings": [{ "name": "DBFLUX_DOCS_MCP", "class_name": "DbfluxDocsMcp" }],
+  },
+
+  // Durable Object classes must be declared in a migration before Cloudflare
+  // will provision storage for them. `new_sqlite_classes` uses the cheaper
+  // SQLite-backed storage backend rather than the legacy key-value backend.
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["DbfluxDocsMcp"] }],
+
+  // Serves the Worker at its production hostname instead of the default
+  // workers.dev subdomain.
+  "routes": [{ "pattern": "mcp.dbflux.dev", "custom_domain": true }],
+}
