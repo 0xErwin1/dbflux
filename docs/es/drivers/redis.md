@@ -22,6 +22,9 @@ Driver de clave-valor Redis para DBFlux, construido sobre el crate
 - Múltiples databases lógicas mediante `SELECT <db>` (`MULTIPLE_DATABASES`). El
   índice de la database activa se rastrea en la conexión.
 - Autenticación con username + password opcionales (`AUTHENTICATION`).
+- Reporta su identidad de cliente al servidor vía `CLIENT SETNAME` al conectar
+  (`dbflux/<version>`, visible en `CLIENT LIST`); best-effort, ya que algunos
+  proveedores managed restringen los comandos `CLIENT`.
 - TLS/SSL con tres modos (`off`, `on`, `verify`):
   - `off` — conexión `redis://` plana.
   - `on` — `rediss://` con el certificado confiado sin validación de cadena

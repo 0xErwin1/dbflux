@@ -19,6 +19,10 @@ Driver de Microsoft SQL Server para DBFlux, construido sobre el cliente TDS
 - Autenticación mediante logins de SQL Server (usuario + contraseña); el modo
   URI acepta connection strings ADO, JDBC y
   `sqlserver://user:pass@host:port/db`.
+- Reporta `Application Name` como `dbflux/<version>` salvo que la connection
+  string o URI ya definan uno, en cuyo caso el valor del usuario siempre gana;
+  el esquema de URL `sqlserver://`/`mssql://` acepta un parámetro de query
+  `applicationname` para esto.
 - Modos de encriptación TLS (`off`, `on`, `required`) vía el `EncryptionLevel`
   de tiberius. El formulario expone un único desplegable **SSL Mode**; el flag
   `TrustServerCertificate` se deriva automáticamente:

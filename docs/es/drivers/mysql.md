@@ -39,6 +39,8 @@ Base de datos relacional open-source popular.
   de una tabla origen, soporte de `TRUNCATE TABLE`, y un toggle de integridad
   referencial (`SET FOREIGN_KEY_CHECKS`) para migraciones seguras con FK. Tanto
   MySQL como MariaDB comparten este soporte.
+- Envía el atributo de conexión `program_name` como `dbflux/<version>`, visible
+  en `performance_schema.session_connect_attrs`.
 
 ### Instance Metrics
 

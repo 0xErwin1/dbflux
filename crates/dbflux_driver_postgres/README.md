@@ -21,6 +21,7 @@ Advanced open-source relational database.
 - Data-transfer engine: native multi-row `INSERT` bulk-load (`BULK_INSERT`), driver-native `CREATE TABLE` DDL from a source table's columns, `TRUNCATE TABLE` support, and a referential-integrity toggle (`SET session_replication_role`) for FK-safe migrations.
 - Displays `pgvector` `vector`, `halfvec`, and `sparsevec` values, including verified one-dimensional arrays, as textual results.
 - Displays full-text search `tsvector` and `tsquery` values, including one-dimensional arrays, in PostgreSQL's canonical text form.
+- Reports its client identity to the server as `application_name=dbflux/<version>` unless the connection string already sets `application_name`, in which case the user-supplied value is kept.
 
 ### Instance Metrics
 
