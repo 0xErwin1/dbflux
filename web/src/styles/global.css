@@ -119,16 +119,18 @@ kbd {
   left: var(--s-5);
   top: -100px;
   z-index: calc(var(--z-nav) + 1);
-  background: var(--accent);
-  color: var(--accent-on);
+  background: var(--bg);
+  color: var(--text);
+  border: var(--bw) solid var(--border-interactive);
   font-family: var(--font-mono);
   font-size: var(--fs-small);
-  font-weight: 700;
   padding: var(--s-4) var(--s-5);
   transition: top var(--t-instant) var(--ease-std);
 }
 
-.skip-link:focus {
+/* focus-visible, not focus: programmatic focus (closing devtools, dialog
+   returns) must not slide the link in — only real keyboard navigation. */
+.skip-link:focus-visible {
   top: var(--s-5);
   text-decoration: none;
 }
