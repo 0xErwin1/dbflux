@@ -1,6 +1,7 @@
 mod commands;
 mod context_menu;
 mod copy_command;
+pub(super) mod decode;
 mod document_view;
 mod mutations;
 mod pagination;
@@ -67,6 +68,20 @@ pub struct KeyValueDocument {
     selected_index: Option<usize>,
     selected_value: Option<KeyGetResult>,
     last_error: Option<String>,
+
+    // Size gate + payload decoder (issue #354)
+    /// One-shot override for the next `reload_selected_value` call: fetches
+    /// the value unbounded instead of applying the configured size limit.
+    /// Consumed (reset to `false`) as soon as that fetch starts.
+    kv_load_anyway: bool,
+    kv_encoding_choice: decode::KvEncodingChoice,
+    kv_decode_outcome: Option<dbflux_core::DecodeOutcome>,
+    /// Bumped every time the selected value or the encoding choice changes,
+    /// so a background decode that finishes after the user has moved on
+    /// never overwrites a newer result.
+    kv_decode_generation: u64,
+    kv_encoding_dropdown: Entity<Dropdown>,
+    _kv_encoding_dropdown_subscription: Subscription,
 
     // Cursor-based pagination
     current_page: u64,
@@ -243,6 +258,27 @@ impl KeyValueDocument {
             },
         ));
 
+        let kv_encoding_dropdown = cx.new(|_cx| {
+            let items = decode::encoding_choice_labels()
+                .into_iter()
+                .map(DropdownItem::new)
+                .collect();
+
+            Dropdown::new("kv-encoding-choice")
+                .items(items)
+                .selected_index(Some(decode::index_for_choice(
+                    decode::KvEncodingChoice::default(),
+                )))
+                .compact_trigger(true)
+        });
+
+        let kv_encoding_dropdown_subscription = cx.subscribe(
+            &kv_encoding_dropdown,
+            |this, _, event: &DropdownSelectionChanged, cx| {
+                this.set_kv_encoding_choice(decode::choice_for_index(event.index), cx);
+            },
+        );
+
         let mut doc = Self {
             id: DocumentId::new(),
             title: format!("Redis {}", database),
@@ -270,6 +306,12 @@ impl KeyValueDocument {
             selected_index: None,
             selected_value: None,
             last_error: None,
+            kv_load_anyway: false,
+            kv_encoding_choice: decode::KvEncodingChoice::default(),
+            kv_decode_outcome: None,
+            kv_decode_generation: 0,
+            kv_encoding_dropdown,
+            _kv_encoding_dropdown_subscription: kv_encoding_dropdown_subscription,
             current_page: 1,
             current_cursor: None,
             next_cursor: None,

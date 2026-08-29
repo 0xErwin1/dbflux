@@ -27,6 +27,7 @@ pub(super) enum GeneralFormRow {
     RequiresWhere,
     RequiresPreview,
     ObjectPreviewLimit,
+    KeyValueSizeLimit,
     ShareStableDb,
     SaveButton,
 }
@@ -49,6 +50,7 @@ pub(super) struct GeneralSection {
     pub(super) input_refresh_interval: Entity<InputState>,
     pub(super) input_max_bg_tasks: Entity<InputState>,
     pub(super) input_object_preview_limit: Entity<InputState>,
+    pub(super) input_key_value_size_limit: Entity<InputState>,
     pub(super) content_focused: bool,
     pub(super) switching_input: bool,
     _subscriptions: Vec<Subscription>,
@@ -73,6 +75,7 @@ impl GeneralSection {
         let refresh_interval = settings.default_refresh_interval_secs.to_string();
         let max_background_tasks = settings.max_concurrent_background_tasks.to_string();
         let object_preview_limit = settings.object_preview_size_limit_mib.to_string();
+        let key_value_size_limit = settings.key_value_size_limit_mib.to_string();
 
         let dropdown_theme = cx.new(move |_cx| {
             Dropdown::new("general-theme")
@@ -132,6 +135,12 @@ impl GeneralSection {
             InputState::new(window, cx)
                 .placeholder("10")
                 .default_value(object_preview_limit.clone())
+        });
+
+        let input_key_value_size_limit = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("10")
+                .default_value(key_value_size_limit.clone())
         });
 
         let theme_subscription = cx.subscribe(
@@ -234,6 +243,19 @@ impl GeneralSection {
             },
         );
 
+        let blur_key_value_size_limit = cx.subscribe(
+            &input_key_value_size_limit,
+            |this, _, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::Blur) {
+                    if this.switching_input {
+                        this.switching_input = false;
+                        return;
+                    }
+                    cx.emit(SectionFocusEvent::RequestFocusReturn);
+                }
+            },
+        );
+
         Self {
             app_state,
             gen_settings: settings,
@@ -250,6 +272,7 @@ impl GeneralSection {
             input_refresh_interval,
             input_max_bg_tasks,
             input_object_preview_limit,
+            input_key_value_size_limit,
             content_focused: false,
             switching_input: false,
             _subscriptions: vec![
@@ -263,6 +286,7 @@ impl GeneralSection {
                 blur_refresh_interval,
                 blur_max_bg_tasks,
                 blur_object_preview_limit,
+                blur_key_value_size_limit,
             ],
         }
     }

@@ -90,6 +90,7 @@ pub fn save_general_settings(
         schema_snapshot_retention: settings.schema_snapshot_retention as i64,
         object_preview_size_limit_mib: settings.object_preview_size_limit_mib as i64,
         language: settings.language.clone(),
+        key_value_size_limit_mib: settings.key_value_size_limit_mib as i64,
         updated_at: String::new(),
     };
     repo.upsert(&dto)?;
@@ -1065,6 +1066,7 @@ fn load_general_settings(
         schema_snapshot_retention: dto.schema_snapshot_retention as usize,
         object_preview_size_limit_mib: dto.object_preview_size_limit_mib as u64,
         language: language_setting_from_storage(&dto.language),
+        key_value_size_limit_mib: dto.key_value_size_limit_mib as u64,
     }
 }
 
@@ -2405,6 +2407,7 @@ mod tests {
             schema_snapshot_retention: 10,
             object_preview_size_limit_mib: 10,
             language: String::new(),
+            key_value_size_limit_mib: 10,
             updated_at: String::new(),
         };
 
@@ -2489,6 +2492,7 @@ mod tests {
             schema_snapshot_retention: 10,
             object_preview_size_limit_mib: 10,
             language: "de".to_string(),
+            key_value_size_limit_mib: 10,
             updated_at: String::new(),
         };
         runtime
@@ -2621,6 +2625,7 @@ mod tests {
             schema_snapshot_retention: 10,
             object_preview_size_limit_mib: 10,
             language: String::new(),
+            key_value_size_limit_mib: 10,
             updated_at: String::new(),
         };
         runtime

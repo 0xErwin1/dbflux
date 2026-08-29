@@ -56,8 +56,14 @@ impl GeneralSection {
             return true;
         }
 
-        self.input_object_preview_limit.read(cx).value().trim()
+        if self.input_object_preview_limit.read(cx).value().trim()
             != saved.object_preview_size_limit_mib.to_string()
+        {
+            return true;
+        }
+
+        self.input_key_value_size_limit.read(cx).value().trim()
+            != saved.key_value_size_limit_mib.to_string()
     }
 
     pub(super) fn gen_form_rows(&self) -> Vec<GeneralFormRow> {
@@ -79,6 +85,7 @@ impl GeneralSection {
             GeneralFormRow::RequiresWhere,
             GeneralFormRow::RequiresPreview,
             GeneralFormRow::ObjectPreviewLimit,
+            GeneralFormRow::KeyValueSizeLimit,
         ];
 
         // The shared-database toggle only makes sense on nightly, which is the
@@ -214,7 +221,8 @@ impl GeneralSection {
             | Some(GeneralFormRow::AutoSaveInterval)
             | Some(GeneralFormRow::DefaultRefreshInterval)
             | Some(GeneralFormRow::MaxBackgroundTasks)
-            | Some(GeneralFormRow::ObjectPreviewLimit) => {
+            | Some(GeneralFormRow::ObjectPreviewLimit)
+            | Some(GeneralFormRow::KeyValueSizeLimit) => {
                 self.gen_focus_current_input(window, cx);
             }
             Some(GeneralFormRow::SaveButton) => {
@@ -246,6 +254,10 @@ impl GeneralSection {
             }
             Some(GeneralFormRow::ObjectPreviewLimit) => {
                 self.input_object_preview_limit
+                    .update(cx, |state, cx| state.focus(window, cx));
+            }
+            Some(GeneralFormRow::KeyValueSizeLimit) => {
+                self.input_key_value_size_limit
                     .update(cx, |state, cx| state.focus(window, cx));
             }
             _ => {
@@ -471,11 +483,30 @@ impl GeneralSection {
             }
         };
 
+        let kv_size_limit_str = self
+            .input_key_value_size_limit
+            .read(cx)
+            .value()
+            .trim()
+            .to_string();
+        let key_value_size_limit = match kv_size_limit_str.parse::<u64>() {
+            Ok(value) if value >= 1 => value,
+            _ => {
+                let message = dbflux_i18n::t!("settings.general.key_value_size_limit.error");
+                Toast::error(message.clone())
+                    .meta_right(now_hms())
+                    .action(copy_action(message))
+                    .push(cx);
+                return;
+            }
+        };
+
         self.gen_settings.max_history_entries = max_history;
         self.gen_settings.auto_save_interval_ms = auto_save_ms;
         self.gen_settings.default_refresh_interval_secs = refresh_interval;
         self.gen_settings.max_concurrent_background_tasks = max_bg_tasks;
         self.gen_settings.object_preview_size_limit_mib = object_preview_limit;
+        self.gen_settings.key_value_size_limit_mib = key_value_size_limit;
 
         let runtime = self.app_state.read(cx).storage_runtime();
         if let Err(e) =
@@ -707,6 +738,27 @@ impl GeneralSection {
                     div().px_2().child(
                         Body::new(dbflux_i18n::t!(
                             "settings.general.object_preview_hint.label"
+                        ))
+                        .color(muted_fg),
+                    ),
+                )
+                .child(self.render_gen_group_header(
+                    dbflux_i18n::t!("settings.general.key_value.group"),
+                    border,
+                    muted_fg,
+                ))
+                .child(self.render_gen_input_field(
+                    dbflux_i18n::t!("settings.general.key_value_size_limit.label"),
+                    &self.input_key_value_size_limit,
+                    is_at(GeneralFormRow::KeyValueSizeLimit),
+                    primary,
+                    GeneralFormRow::KeyValueSizeLimit,
+                    cx,
+                ))
+                .child(
+                    div().px_2().child(
+                        Body::new(dbflux_i18n::t!(
+                            "settings.general.key_value_size_limit_hint.label"
                         ))
                         .color(muted_fg),
                     ),

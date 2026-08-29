@@ -364,6 +364,13 @@ pub struct GeneralSettings {
     /// preview. Objects above this bound show metadata only.
     #[serde(default = "default_object_preview_size_limit_mib")]
     pub object_preview_size_limit_mib: u64,
+
+    // -- Key-value storage --
+    /// Largest key-value entry (in MiB) whose bytes may be fetched for an
+    /// in-app preview. Values above this bound show metadata only, until the
+    /// user explicitly requests the full value.
+    #[serde(default = "default_key_value_size_limit_mib")]
+    pub key_value_size_limit_mib: u64,
 }
 
 impl Default for GeneralSettings {
@@ -390,6 +397,7 @@ impl Default for GeneralSettings {
             workspace_inspector_width_px: None,
             schema_snapshot_retention: default_schema_snapshot_retention(),
             object_preview_size_limit_mib: default_object_preview_size_limit_mib(),
+            key_value_size_limit_mib: default_key_value_size_limit_mib(),
         }
     }
 }
@@ -475,12 +483,22 @@ fn default_object_preview_size_limit_mib() -> u64 {
     10
 }
 
+fn default_key_value_size_limit_mib() -> u64 {
+    10
+}
+
 impl GeneralSettings {
     /// Preview size limit expressed in bytes, for comparison against an
     /// object's `size_bytes` before any body fetch.
     pub fn object_preview_size_limit_bytes(&self) -> u64 {
         self.object_preview_size_limit_mib
             .saturating_mul(1024 * 1024)
+    }
+
+    /// Key-value preview size limit expressed in bytes, passed as
+    /// `KeyGetRequest::max_value_bytes` before any value fetch.
+    pub fn key_value_size_limit_bytes(&self) -> u64 {
+        self.key_value_size_limit_mib.saturating_mul(1024 * 1024)
     }
 
     pub fn resolve_refresh_policy(&self) -> crate::RefreshPolicy {
@@ -627,6 +645,37 @@ pub fn driver_maps_differ(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // =========================================================================
+    // GeneralSettings: key-value preview size limit
+    // =========================================================================
+
+    #[test]
+    fn key_value_size_limit_defaults_to_ten_mib() {
+        let settings = GeneralSettings::default();
+
+        assert_eq!(settings.key_value_size_limit_mib, 10);
+        assert_eq!(settings.key_value_size_limit_bytes(), 10 * 1024 * 1024);
+    }
+
+    #[test]
+    fn key_value_size_limit_bytes_converts_mib_to_bytes() {
+        let settings = GeneralSettings {
+            key_value_size_limit_mib: 25,
+            ..GeneralSettings::default()
+        };
+
+        assert_eq!(settings.key_value_size_limit_bytes(), 25 * 1024 * 1024);
+    }
+
+    #[test]
+    fn key_value_size_limit_missing_on_wire_deserializes_to_default() {
+        // Simulates a persisted settings file that predates this field.
+        let json = serde_json::json!({});
+        let settings: GeneralSettings = serde_json::from_value(json).expect("deserialize");
+
+        assert_eq!(settings.key_value_size_limit_mib, 10);
+    }
 
     // =========================================================================
     // GlobalOverrides

@@ -1,9 +1,11 @@
 use super::context_menu::KvMenuTarget;
-use super::parsing::{key_type_icon, key_type_label, render_value_preview};
+use super::decode::{self, KvEncodingChoice};
+use super::parsing::{key_type_icon, key_type_label};
 use super::view::{icon_button_base, render_delete_confirm_modal, render_kv_context_menu};
 use super::{KeyValueFocusMode, KvValueViewMode, TtlState};
+use crate::buckets_table::format_bytes;
 use crate::handle::DocumentEvent;
-use dbflux_components::controls::Input;
+use dbflux_components::controls::{Dropdown, Input};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Text};
 use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
@@ -11,6 +13,103 @@ use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::scroll::ScrollableElement;
+
+/// Theme colors used by the size-gate placeholder and truncation notice,
+/// copied out of `cx.theme()` up front since those renderers also need a
+/// mutable `cx` for their `cx.listener(...)` handlers.
+#[derive(Clone, Copy)]
+struct KvGateColors {
+    border: Hsla,
+    warning: Hsla,
+    muted_foreground: Hsla,
+    list_active: Hsla,
+}
+
+impl super::KeyValueDocument {
+    fn render_kv_gate_too_large(
+        &self,
+        size_bytes: u64,
+        limit_bytes: u64,
+        colors: KvGateColors,
+        cx: &Context<Self>,
+    ) -> impl IntoElement + use<> {
+        div()
+            .flex_1()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap(Spacing::SM)
+            .p(Spacing::LG)
+            .border_l_1()
+            .border_color(colors.border)
+            .child(Icon::new(AppIcon::TriangleAlert).color(colors.warning))
+            .child(
+                Text::body(dbflux_i18n::t!(
+                    "document.key_value.render.gate.too_large",
+                    size = format_bytes(size_bytes),
+                    limit = format_bytes(limit_bytes)
+                ))
+                .color(colors.muted_foreground),
+            )
+            .child(
+                div()
+                    .id("kv-load-anyway")
+                    .cursor_pointer()
+                    .px(Spacing::MD)
+                    .py(Spacing::XS)
+                    .rounded(Radii::SM)
+                    .border_1()
+                    .border_color(colors.border)
+                    .hover(|d| d.bg(colors.list_active))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _, cx| {
+                            this.load_selected_value_without_limit(cx);
+                        }),
+                    )
+                    .child(Text::body(dbflux_i18n::t!(
+                        "document.key_value.render.gate.load_anyway"
+                    ))),
+            )
+    }
+
+    fn render_kv_truncated_notice(
+        &self,
+        returned_bytes: u64,
+        total_bytes: Option<u64>,
+        colors: &KvGateColors,
+    ) -> impl IntoElement + use<> {
+        let message = match total_bytes {
+            Some(total) => dbflux_i18n::t!(
+                "document.key_value.render.gate.truncated",
+                returned = format_bytes(returned_bytes),
+                total = format_bytes(total)
+            ),
+            None => dbflux_i18n::t!(
+                "document.key_value.render.gate.truncated_unknown_total",
+                returned = format_bytes(returned_bytes)
+            ),
+        };
+
+        div()
+            .flex()
+            .items_center()
+            .gap(Spacing::XS)
+            .px(Spacing::MD)
+            .py(Spacing::XS)
+            .border_b_1()
+            .border_l_1()
+            .border_color(colors.border)
+            .bg(colors.warning.opacity(0.1))
+            .child(
+                Icon::new(AppIcon::TriangleAlert)
+                    .small()
+                    .color(colors.warning),
+            )
+            .child(Text::caption(message).color(colors.muted_foreground))
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -269,7 +368,44 @@ impl Render for super::KeyValueDocument {
                     .child(Text::caption(size_label)),
             );
 
-            if is_structured
+            let load_state = value.load_state;
+            let is_too_large = matches!(load_state, dbflux_core::KeyLoadState::TooLarge { .. });
+            let gate_colors = KvGateColors {
+                border: theme.border,
+                warning: theme.warning,
+                muted_foreground: theme.muted_foreground,
+                list_active: theme.list_active,
+            };
+
+            if let dbflux_core::KeyLoadState::TooLarge {
+                size_bytes,
+                limit_bytes,
+            } = load_state
+            {
+                panel = panel.child(self.render_kv_gate_too_large(
+                    size_bytes,
+                    limit_bytes,
+                    gate_colors,
+                    cx,
+                ));
+            }
+
+            if let dbflux_core::KeyLoadState::Truncated {
+                returned_bytes,
+                total_bytes,
+            } = load_state
+            {
+                panel = panel.child(self.render_kv_truncated_notice(
+                    returned_bytes,
+                    total_bytes,
+                    &gate_colors,
+                ));
+            }
+
+            if is_too_large {
+                // The gate placeholder above is the entire content: `value`
+                // is empty for `TooLarge`, so there is nothing to preview.
+            } else if is_structured
                 && self.value_view_mode == KvValueViewMode::Document
                 && self.supports_document_view()
             {
@@ -473,11 +609,52 @@ impl Render for super::KeyValueDocument {
                 );
             } else {
                 // Read-only value preview for String/JSON/Binary
-                let is_editable = matches!(
-                    value.entry.key_type,
-                    Some(dbflux_core::KeyType::String) | Some(dbflux_core::KeyType::Json)
+                let key_type = value
+                    .entry
+                    .key_type
+                    .unwrap_or(dbflux_core::KeyType::Unknown);
+                let is_editable = decode::may_edit_value(
+                    key_type,
+                    value.repr,
+                    self.kv_encoding_choice,
+                    self.kv_decode_outcome.as_ref(),
                 );
-                let value_preview = render_value_preview(value);
+                let is_binary = value.repr == dbflux_core::ValueRepr::Binary;
+                let value_preview = decode::render_value_preview_with_decode(
+                    value,
+                    self.kv_encoding_choice,
+                    self.kv_decode_outcome.as_ref(),
+                );
+                let could_edit_if_raw = !is_editable
+                    && matches!(
+                        key_type,
+                        dbflux_core::KeyType::String | dbflux_core::KeyType::Json
+                    )
+                    && is_binary
+                    && !matches!(self.kv_encoding_choice, KvEncodingChoice::Raw);
+
+                if is_binary {
+                    let summary = self
+                        .kv_decode_outcome
+                        .as_ref()
+                        .and_then(decode::encoding_summary_label);
+
+                    panel = panel.child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(Spacing::SM)
+                            .px(Spacing::MD)
+                            .py(Spacing::XS)
+                            .border_b_1()
+                            .border_l_1()
+                            .border_color(theme.border)
+                            .child(self.kv_encoding_dropdown.clone())
+                            .when_some(summary, |d, summary| {
+                                d.child(Text::caption(summary).color(theme.muted_foreground))
+                            }),
+                    );
+                }
 
                 panel = panel.child(
                     div()
@@ -514,6 +691,11 @@ impl Render for super::KeyValueDocument {
                         .when(is_editable, |d| {
                             d.child(div().pt(Spacing::SM).child(Text::caption(dbflux_i18n::t!(
                                 "document.key_value.render.click_to_edit"
+                            ))))
+                        })
+                        .when(could_edit_if_raw, |d| {
+                            d.child(div().pt(Spacing::SM).child(Text::caption(dbflux_i18n::t!(
+                                "document.key_value.render.decode.edit_locked"
                             ))))
                         }),
                 );

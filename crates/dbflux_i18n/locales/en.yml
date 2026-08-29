@@ -1491,6 +1491,19 @@ document:
         no_limit: No limit
         missing: Missing
         expired: Expired
+      gate:
+        too_large: "Value is %{size}, over the %{limit} preview limit"
+        load_anyway: Load anyway
+        truncated: "Partial value — showing %{returned} of %{total}"
+        truncated_unknown_total: "Partial value — showing %{returned}"
+      decode:
+        failed: failed to decode
+        too_large: decoded output too large
+        edit_locked: Switch to Raw to edit
+        kind:
+          text: text
+          bytes: bytes
+          image: image
   migrate_wizard:
     title: Migrate Data
     task:
@@ -1667,6 +1680,7 @@ document:
         leave_for: "leave for %{prefix}"
         close_preview: close this preview
         delete: "delete %{key}"
+        reinterpret: change how this object is interpreted
         rename: "rename %{key}"
       unsaved_summary: "Unsaved edits to %{key}"
       toast:
@@ -1734,9 +1748,17 @@ document:
         open: Open
         presign: Presign
       body:
+        decode_failed: "Detected as %{encoding} but could not be decoded: %{reason}"
+        decode_too_large: "Detected as %{encoding}, but decoding it exceeds the %{limit} preview limit."
+        decoded_not_utf8: "The decoded bytes are not valid UTF-8 text."
+        decoded_read_only: "Read-only — switch to Raw to edit"
+        encoding_auto: Auto
+        encoding_raw: Raw
         fit_to_width: Fit to width
         image_decode_error: "Could not decode the image: %{error}"
         image_header_error: "Could not read the image header: %{error}"
+        interpret_as: "Interpret as:"
+        load_anyway: Load anyway
         loading: "Loading preview…"
         loading_metadata: "Loading metadata…"
         svg_invalid_utf8: "This object is not valid UTF-8, so it cannot be an SVG."
@@ -1810,9 +1832,8 @@ document:
           many: " (%{count} failed uploads)"
   object_editor:
     error:
-      not_previewable_fallback: This object cannot be opened in-app.
+      decode_too_large: "Decoding this object exceeds the %{limit} preview limit."
       not_text: This object is not text and cannot be edited in-app.
-      not_utf8: This object is not valid UTF-8 text and cannot be edited in-app.
     status:
       bucket_tooltip: Bucket
       key_tooltip: Object key
@@ -2493,6 +2514,13 @@ settings:
       error: Object preview size limit must be >= 1 MiB
     object_preview_hint:
       label: "Objects larger than this are never downloaded for preview; the browser shows their metadata only."
+    key_value:
+      group: Key-Value Preview
+    key_value_size_limit:
+      label: Key-value preview size limit (MiB)
+      error: Key-value preview size limit must be >= 1 MiB
+    key_value_size_limit_hint:
+      label: "Values larger than this are not downloaded automatically; use \"Load anyway\" to fetch the full value."
     share_stable_db:
       label: Use the stable database
       error: Failed to update the shared-database setting

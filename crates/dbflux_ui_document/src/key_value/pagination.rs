@@ -181,6 +181,15 @@ impl super::KeyValueDocument {
         let (task_id, cancel_token) = self.runner.start_primary(TaskKind::KeyGet, description, cx);
         cx.notify();
 
+        // One-shot: consumed here so a later plain refresh of this same key
+        // goes back to the configured limit.
+        let load_anyway = std::mem::take(&mut self.kv_load_anyway);
+        let max_value_bytes = if load_anyway {
+            None
+        } else {
+            Some(self.kv_size_limit_bytes(cx))
+        };
+
         let keyspace = self.keyspace_index();
         let entity = cx.entity().clone();
 
@@ -197,7 +206,7 @@ impl super::KeyValueDocument {
                         include_type: true,
                         include_ttl: true,
                         include_size: true,
-                        max_value_bytes: None,
+                        max_value_bytes,
                     })
                 })
                 .await;
@@ -225,6 +234,7 @@ impl super::KeyValueDocument {
                             } else {
                                 super::KvValueViewMode::Table
                             };
+                            this.reset_kv_decode_state_for_new_value(cx);
                             this.rebuild_cached_members(cx);
                         }
                         Err(error) => {
@@ -232,6 +242,7 @@ impl super::KeyValueDocument {
                             this.clear_ttl_state();
                             this.selected_value = None;
                             this.last_error = Some(error.to_string());
+                            this.reset_kv_decode_state_for_new_value(cx);
                             this.rebuild_cached_members(cx);
                         }
                     }
