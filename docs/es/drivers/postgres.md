@@ -33,6 +33,9 @@ Base de datos relacional open-source avanzada.
 - Muestra valores `tsvector` y `tsquery` de búsqueda de texto completo,
   incluyendo arrays unidimensionales, en la forma de texto canónica de
   PostgreSQL.
+- Reporta su identidad de cliente al servidor como
+  `application_name=dbflux/<version>`, salvo que la connection string ya defina
+  `application_name`, en cuyo caso se conserva el valor del usuario.
 
 ### Instance Metrics
 

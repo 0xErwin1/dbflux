@@ -58,6 +58,9 @@ directamente sobre el cliente de wire protocol
   (timeouts, conexiones rechazadas, fallos de autenticación, clusters
   inalcanzables, errores de query con `SQLSTATE`) a mensajes claros formateados
   por el driver en lugar de output de debug crudo.
+- Reporta `application_name` como `dbflux/<version>` en cada conexión, salvo
+  que la URI de conexión ya defina su propio parámetro de query
+  `application_name`.
 
 ## Limitaciones
 

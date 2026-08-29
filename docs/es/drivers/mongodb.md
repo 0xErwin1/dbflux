@@ -46,6 +46,9 @@ Driver de documentos MongoDB para DBFlux.
   para vistas previas y copy-as-query.
 - DDL: drop database, drop collection, create index y drop index.
 - Exportación de resultados a JSON (`EXPORT_JSON`).
+- Reporta la identidad de cliente como `appName=dbflux/<version>` al conectar
+  (visible en los logs del servidor y en `db.currentOp()`), salvo que la URI de
+  conexión ya defina un `appName`.
 
 ### Instance Metrics
 
