@@ -83,14 +83,18 @@ for (const url of locations) {
   if (html.includes('name="robots" content="noindex, follow"'))
     fail(`indexed noindex page ${url.pathname}`);
 }
+if (!/^# DBFlux\n\n> /.test(llms)) fail('llms lacks the llmstxt.org H1 + blockquote preamble');
 for (const path of ['/', '/install/', '/usage/']) {
-  if (!llms.includes(`- ${mode === 'docs' ? path : `https://docs.dbflux.dev${path}`}`))
+  if (!llms.includes(`](${mode === 'docs' ? path : `https://docs.dbflux.dev${path}`})`))
     fail(`llms lacks ${path}`);
 }
-for (const link of llms.matchAll(/^- (https?:\/\/[^\s]+)$/gm)) {
-  const url = new URL(link[1]);
-  if (url.hostname !== 'docs.dbflux.dev' || /nightly|v0\.6/.test(url.pathname))
-    fail(`unsafe llms link ${url}`);
+const llmsLinks = [...llms.matchAll(/^- \[[^\]]+\]\((\/[^)\s]*|https?:\/\/[^)\s]+)\): \S/gm)];
+if (llmsLinks.length < 3) fail('llms has fewer than 3 markdown links with descriptions');
+for (const link of llmsLinks) {
+  const url = new URL(link[1], 'https://docs.dbflux.dev');
+  const docsLink = url.hostname === 'docs.dbflux.dev' && !/nightly|v0\.6/.test(url.pathname);
+  const wellKnownLink = url.hostname === 'dbflux.dev' && url.pathname.startsWith('/.well-known/');
+  if (!docsLink && !wellKnownLink) fail(`unsafe llms link ${url}`);
 }
 if (
   mode === 'docs' &&
