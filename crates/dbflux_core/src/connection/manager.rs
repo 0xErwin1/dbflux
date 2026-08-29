@@ -298,6 +298,62 @@ pub enum MutationPolicy {
     ApprovalRequired,
 }
 
+/// Tri-state result of `Connection::probe_write_privilege`.
+///
+/// `Unknown` covers drivers that have not implemented the probe and probes
+/// that could not determine an answer; it never changes a resolved
+/// `MutationPolicy`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WritePrivilege {
+    /// The connection can perform mutations against the server.
+    Writable,
+    /// The server rejects mutations for this connection (replica, read-only
+    /// role, read-only transaction mode, etc.).
+    ReadOnly,
+    /// The driver did not implement the probe, or the probe could not
+    /// determine an answer.
+    Unknown,
+}
+
+/// Explains why a `ConnectedProfile`'s effective `MutationPolicy` is
+/// `MutationPolicy::ReadOnly`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReadOnlyReason {
+    /// The connection profile itself was configured as read-only.
+    ProfileSetting,
+    /// The server rejected mutations, as reported by `probe_write_privilege`.
+    ServerEnforced,
+}
+
+/// Composes the profile-resolved `MutationPolicy` with a best-effort server
+/// write-privilege probe.
+///
+/// Precedence, most restrictive wins: `ReadOnly` > `ApprovalRequired` >
+/// `Allowed`. `WritePrivilege::Unknown` never changes the profile policy —
+/// an inconclusive probe must not loosen or tighten anything. A profile
+/// already configured as `ReadOnly` stays `ReadOnly` even when the probe
+/// reports `Writable`: the profile setting is a user intent, not just an
+/// observation, so a writable server does not override it. A probe that
+/// reports `ReadOnly` tightens `Allowed` or `ApprovalRequired` into
+/// `ReadOnly`, since the server rejecting mutations is more restrictive than
+/// either.
+pub fn compose_mutation_policy(
+    profile_policy: MutationPolicy,
+    probe: WritePrivilege,
+) -> (MutationPolicy, Option<ReadOnlyReason>) {
+    match (profile_policy, probe) {
+        (MutationPolicy::ReadOnly, _) => (
+            MutationPolicy::ReadOnly,
+            Some(ReadOnlyReason::ProfileSetting),
+        ),
+        (_, WritePrivilege::ReadOnly) => (
+            MutationPolicy::ReadOnly,
+            Some(ReadOnlyReason::ServerEnforced),
+        ),
+        (policy, _) => (policy, None),
+    }
+}
+
 /// Resolves the `MutationPolicy` for a given connection profile and actor context.
 ///
 /// Injected into `AppState` at startup. The default `DefaultMutationPolicyResolver`
@@ -328,8 +384,12 @@ pub struct ConnectedProfile {
     pub profile: ConnectionProfile,
     pub connection: Arc<dyn Connection>,
     pub schema: Option<SchemaSnapshot>,
-    /// Mutation policy resolved at connect time.
+    /// Mutation policy resolved at connect time, composed from the profile
+    /// resolver's decision and the connection's write-privilege probe.
     pub mutation_policy: MutationPolicy,
+    /// Set when `mutation_policy` is `MutationPolicy::ReadOnly`, explaining
+    /// whether the profile itself or the server enforced it.
+    pub read_only_reason: Option<ReadOnlyReason>,
     /// Lazy-loaded schemas per database (MySQL/MariaDB).
     pub database_schemas: HashMap<String, DbSchemaInfo>,
     /// Table details keyed by `(database, schema, table)` — the schema is part
@@ -688,9 +748,11 @@ impl ConnectionManager {
         schema: Option<SchemaSnapshot>,
         proxy_tunnel: Option<Box<dyn Any + Send + Sync>>,
         is_mcp_actor: bool,
+        probe: WritePrivilege,
     ) {
         let id = profile.id;
-        let mutation_policy = self.policy_resolver.resolve(&profile, is_mcp_actor);
+        let resolved_policy = self.policy_resolver.resolve(&profile, is_mcp_actor);
+        let (mutation_policy, read_only_reason) = compose_mutation_policy(resolved_policy, probe);
         self.connections.insert(
             id,
             ConnectedProfile {
@@ -698,6 +760,7 @@ impl ConnectionManager {
                 connection,
                 schema,
                 mutation_policy,
+                read_only_reason,
                 database_schemas: HashMap::new(),
                 table_details: HashMap::new(),
                 collection_children: HashMap::new(),
@@ -1202,8 +1265,16 @@ impl ConnectionManager {
         schema: Option<SchemaSnapshot>,
         proxy_tunnel: Option<Box<dyn Any + Send + Sync>>,
         is_mcp_actor: bool,
+        probe: WritePrivilege,
     ) {
-        self.add_connection(profile, connection, schema, proxy_tunnel, is_mcp_actor);
+        self.add_connection(
+            profile,
+            connection,
+            schema,
+            proxy_tunnel,
+            is_mcp_actor,
+            probe,
+        );
     }
 
     pub fn prepare_switch_database(
@@ -1339,6 +1410,7 @@ impl ConnectionManager {
                 connection,
                 schema,
                 mutation_policy: MutationPolicy::default(),
+                read_only_reason: None,
                 database_schemas: HashMap::new(),
                 table_details: HashMap::new(),
                 collection_children: HashMap::new(),
@@ -1665,11 +1737,14 @@ impl ConnectProfileParams {
             }
         };
 
+        let probe = connection.probe_write_privilege();
+
         Ok(ConnectProfileResult {
             profile,
             connection: connection.into(),
             schema,
             proxy_tunnel,
+            probe,
         })
     }
 
@@ -1703,6 +1778,10 @@ pub struct ConnectProfileResult {
     pub schema: Option<SchemaSnapshot>,
     /// Type-erased proxy tunnel handle kept alive for RAII drop semantics.
     pub proxy_tunnel: Option<Box<dyn Any + Send + Sync>>,
+    /// Result of `Connection::probe_write_privilege`, run right after connect.
+    /// Callers pass this through to `apply_connect_profile`/`add_connection`
+    /// so it can be composed with the resolved `MutationPolicy`.
+    pub probe: WritePrivilege,
 }
 
 pub struct SwitchDatabaseParams {
@@ -2114,6 +2193,7 @@ mod tests {
             connection: primary,
             schema,
             mutation_policy: MutationPolicy::default(),
+            read_only_reason: None,
             database_schemas: HashMap::new(),
             table_details: HashMap::new(),
             collection_children: HashMap::new(),
@@ -2908,7 +2988,14 @@ mod tests {
             SchemaLoadingStrategy::ConnectionPerDatabase,
         );
         let mut manager = ConnectionManager::new(HashMap::new());
-        manager.add_connection(profile.clone(), connection, None, None, false);
+        manager.add_connection(
+            profile.clone(),
+            connection,
+            None,
+            None,
+            false,
+            WritePrivilege::Unknown,
+        );
 
         let profile_id = profile.id;
 
@@ -3025,6 +3112,94 @@ mod tests {
         );
     }
 
+    // =========================================================================
+    // compose_mutation_policy — write-privilege probe composition (issue #355)
+    // =========================================================================
+
+    #[test]
+    fn compose_allowed_with_writable_probe_stays_allowed() {
+        let (policy, reason) =
+            compose_mutation_policy(MutationPolicy::Allowed, WritePrivilege::Writable);
+        assert_eq!(policy, MutationPolicy::Allowed);
+        assert_eq!(reason, None);
+    }
+
+    #[test]
+    fn compose_allowed_with_read_only_probe_tightens_to_read_only() {
+        let (policy, reason) =
+            compose_mutation_policy(MutationPolicy::Allowed, WritePrivilege::ReadOnly);
+        assert_eq!(policy, MutationPolicy::ReadOnly);
+        assert_eq!(
+            reason,
+            Some(ReadOnlyReason::ServerEnforced),
+            "server-rejected mutations must be reported as ServerEnforced"
+        );
+    }
+
+    #[test]
+    fn compose_allowed_with_unknown_probe_stays_allowed() {
+        let (policy, reason) =
+            compose_mutation_policy(MutationPolicy::Allowed, WritePrivilege::Unknown);
+        assert_eq!(policy, MutationPolicy::Allowed);
+        assert_eq!(reason, None);
+    }
+
+    #[test]
+    fn compose_read_only_profile_with_writable_probe_stays_read_only() {
+        let (policy, reason) =
+            compose_mutation_policy(MutationPolicy::ReadOnly, WritePrivilege::Writable);
+        assert_eq!(
+            policy,
+            MutationPolicy::ReadOnly,
+            "a profile configured as read-only must stay read-only even when the server allows writes"
+        );
+        assert_eq!(
+            reason,
+            Some(ReadOnlyReason::ProfileSetting),
+            "profile-driven read-only must report ProfileSetting even if the probe disagrees"
+        );
+    }
+
+    #[test]
+    fn compose_read_only_profile_with_unknown_probe_stays_read_only() {
+        let (policy, reason) =
+            compose_mutation_policy(MutationPolicy::ReadOnly, WritePrivilege::Unknown);
+        assert_eq!(policy, MutationPolicy::ReadOnly);
+        assert_eq!(reason, Some(ReadOnlyReason::ProfileSetting));
+    }
+
+    #[test]
+    fn compose_approval_required_with_read_only_probe_tightens_to_read_only() {
+        let (policy, reason) =
+            compose_mutation_policy(MutationPolicy::ApprovalRequired, WritePrivilege::ReadOnly);
+        assert_eq!(
+            policy,
+            MutationPolicy::ReadOnly,
+            "ReadOnly must win over ApprovalRequired: it is more restrictive"
+        );
+        assert_eq!(reason, Some(ReadOnlyReason::ServerEnforced));
+    }
+
+    #[test]
+    fn compose_approval_required_with_unknown_probe_stays_approval_required() {
+        let (policy, reason) =
+            compose_mutation_policy(MutationPolicy::ApprovalRequired, WritePrivilege::Unknown);
+        assert_eq!(
+            policy,
+            MutationPolicy::ApprovalRequired,
+            "an inconclusive probe must never loosen or tighten ApprovalRequired"
+        );
+        assert_eq!(reason, None);
+    }
+
+    #[test]
+    fn compose_approval_required_with_writable_probe_stays_approval_required() {
+        let (policy, reason) =
+            compose_mutation_policy(MutationPolicy::ApprovalRequired, WritePrivilege::Writable);
+        assert_eq!(policy, MutationPolicy::ApprovalRequired);
+        assert_eq!(reason, None);
+    }
+
     /// Connection whose `cancel_active` blocks until the test releases a gate,
     /// mimicking a driver opening a kill connection over a slow tunnel.
     struct GatedCancelConnection {
@@ -3093,7 +3268,14 @@ mod tests {
         let profile_id = profile.id;
 
         let mut manager = ConnectionManager::new(HashMap::new());
-        manager.add_connection(profile, connection, None, None, false);
+        manager.add_connection(
+            profile,
+            connection,
+            None,
+            None,
+            false,
+            WritePrivilege::Unknown,
+        );
 
         let teardown = manager
             .disconnect(profile_id)

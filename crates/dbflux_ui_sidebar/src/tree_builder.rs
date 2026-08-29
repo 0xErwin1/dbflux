@@ -3946,6 +3946,7 @@ mod tests {
             connection: Arc::new(CapabilityConnection::with_capabilities(capabilities)),
             schema: None,
             mutation_policy: dbflux_core::MutationPolicy::default(),
+            read_only_reason: None,
             database_schemas: HashMap::new(),
             table_details: HashMap::new(),
             collection_children: HashMap::new(),

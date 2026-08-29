@@ -733,6 +733,7 @@ impl Sidebar {
                         connected.schema,
                         connected.proxy_tunnel,
                         false,
+                        connected.probe,
                     );
                     cx.emit(AppStateChanged);
                     cx.notify();
