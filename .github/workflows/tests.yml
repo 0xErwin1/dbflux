@@ -113,6 +113,7 @@ jobs:
             mysql:8.4
             mongo:7
             redis:7
+            grokzen/redis-cluster:7.0.10
             clickhouse/clickhouse-server:25.8.30.16
             mcr.microsoft.com/mssql/server:2022-latest
             amazon/dynamodb-local:latest
@@ -144,6 +145,12 @@ jobs:
 
       - name: Run Redis live integration tests
         run: cargo test -p dbflux_driver_redis --locked --test live_integration -- --ignored
+
+      # The all-in-one cluster image publishes fixed host ports (7000-7005),
+      # so this suite runs single-threaded to avoid two test binaries racing
+      # to bind the same ports.
+      - name: Run Redis Cluster live integration tests
+        run: cargo test -p dbflux_driver_redis --locked --test live_cluster -- --ignored --test-threads=1
 
       - name: DynamoDB live integration
         run: cargo test -p dbflux_driver_dynamodb --locked --test live_integration -- --ignored

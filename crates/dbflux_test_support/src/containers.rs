@@ -102,6 +102,55 @@ where
     run(url)
 }
 
+/// Host TCP ports of the six nodes (3 masters + 3 replicas) started by the
+/// `grokzen/redis-cluster` all-in-one image.
+pub const REDIS_CLUSTER_PORTS: [u16; 6] = [7000, 7001, 7002, 7003, 7004, 7005];
+
+/// Spin up a six-node Redis Cluster via the `grokzen/redis-cluster`
+/// all-in-one image and pass the per-node connection URLs
+/// (`redis://127.0.0.1:<port>/0`, ordered by `REDIS_CLUSTER_PORTS`) to `run`.
+///
+/// # Port mapping
+///
+/// A Redis Cluster client does not stay pinned to the node it dialed: it
+/// reads `CLUSTER SLOTS`/`CLUSTER SHARDS` and routes every command to
+/// whatever address each master advertises there. Under testcontainers'
+/// usual random host-port mapping, that reply would carry the container's
+/// *internal* ports, which are unreachable from the host the moment the
+/// client starts following slot ranges instead of the seed address the test
+/// dialed in on.
+///
+/// This is worked around the way the image's own docs recommend: `IP=0.0.0.0`
+/// makes every node advertise `0.0.0.0` (which the OS resolves back to
+/// loopback on connect), and each container port is mapped 1:1 onto the same
+/// host port via `with_mapped_port` so a client dialing `0.0.0.0:<port>`
+/// lands on the right node through the identical published mapping. This
+/// means ports 7000-7005 must be free on the host — acceptable on a CI
+/// runner, but it can collide with a Redis Cluster already running locally.
+pub fn with_redis_cluster_urls<T, E, F>(run: F) -> Result<T, E>
+where
+    F: FnOnce(Vec<String>) -> Result<T, E>,
+{
+    let mut image = GenericImage::new("grokzen/redis-cluster", "7.0.10")
+        .with_wait_for(WaitFor::seconds(5))
+        .with_env_var("IP", "0.0.0.0");
+
+    for port in REDIS_CLUSTER_PORTS {
+        image = image.with_mapped_port(port, ContainerPort::Tcp(port));
+    }
+
+    let _container = image
+        .start()
+        .expect("failed to start redis cluster container");
+
+    let urls: Vec<String> = REDIS_CLUSTER_PORTS
+        .iter()
+        .map(|port| format!("redis://127.0.0.1:{port}/0"))
+        .collect();
+
+    run(urls)
+}
+
 /// Connection parameters for a ClickHouse test container.
 pub struct ClickHouseConfig {
     pub endpoint: String,

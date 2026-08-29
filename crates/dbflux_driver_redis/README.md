@@ -25,11 +25,11 @@ Redis key-value driver for DBFlux, built on the [`redis`](https://crates.io/crat
 - SSH tunnel support for reaching Redis through a bastion host (manual mode only; see Limitations).
 - Deployment topology can be detected automatically or set explicitly (`standalone`, `cluster`, `sentinel`):
   - Automatic detection probes `ROLE` and `INFO cluster` at connect time and routes to standalone or Cluster handling.
-  - `cluster` skips detection and connects directly via `ClusterClient`, using the primary host/port plus any configured additional seed nodes.
+  - `cluster` skips detection and connects directly via `ClusterClient`, using the primary host/port plus any configured additional seed nodes. A Cluster connection only ever exposes database 0; a nonzero database on a Cluster profile is rejected at connect time instead of being silently applied to db 0.
   - `sentinel` connects through `SentinelClient`, resolving the named master from one or more Sentinel nodes (primary host/port plus any configured additional nodes). After resolving, the driver runs `CLIENT SETNAME`, `PING`, and a `ROLE` sanity check that the resolved node is actually a master.
   - Sentinel failover recovery: a connection-class failure (dropped connection, IO error) on a Sentinel-backed connection triggers exactly one re-resolve through Sentinel and one retry of the failed command before the error is surfaced.
 - Key browsing and discovery:
-  - Cursor-based key scanning (`KV_SCAN`, `PaginationStyle::Cursor`).
+  - Cursor-based key scanning (`KV_SCAN`, `PaginationStyle::Cursor`). On a Cluster connection, a plain `SCAN` has no single-node meaning, so the driver fans it out across every master: the page budget is split evenly across masters still pending, each node's cursor is tracked independently, and the aggregated cursor round-trips as an opaque JSON object mapping `"<host>:<port>"` to its pending `SCAN` cursor. The overall scan is exhausted once every master reports cursor 0.
   - Per-key type discovery (`KV_KEY_TYPES`) across string, hash, list, set, sorted set, and stream.
   - TTL inspection (`KV_TTL`) and value size reporting (`KV_VALUE_SIZE`).
   - Existence checks (`KV_GET`/`KV_EXISTS`), key rename (`KV_RENAME`), and bulk get of multiple keys (`KV_BULK_GET`).
@@ -39,9 +39,11 @@ Redis key-value driver for DBFlux, built on the [`redis`](https://crates.io/crat
 - JSON export of results (`EXPORT_JSON`).
 - Size gate on whole-payload reads: when the request carries a byte budget, string/JSON values are probed with `STRLEN` before `GET` and oversized values return a placeholder with the real size instead of transferring the payload; collection types are unaffected, and stream reads that hit the fetch cap report themselves as truncated.
 
+Schema introspection reports a single aggregated `db0` keyspace on a Cluster connection: the key count and average TTL are summed/averaged across every master's `DBSIZE`/keyspace stats rather than reported per-node.
+
 ### Instance Metrics
 
-Exposes a curated set of live server metrics sourced from the `INFO` command output:
+Exposes a curated set of live server metrics sourced from the `INFO` command output. Not available on a Cluster connection — there is no single node to sample `INFO` against, so `instance_catalog()` returns `None` and Instance Overview/metrics/inspectors are unavailable for Cluster profiles.
 
 - `redis.connected_clients` — currently connected clients
 - `redis.blocked_clients` — clients waiting on a blocking command
