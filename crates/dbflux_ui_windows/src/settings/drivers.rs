@@ -1355,6 +1355,7 @@ impl DriversSection {
                                 let enabled = form_renderer::is_field_enabled(
                                     field,
                                     &self.drv_form_state.checkboxes,
+                                    &form_renderer::select_values(&self.drv_form_state, cx),
                                 );
 
                                 match &field.kind {

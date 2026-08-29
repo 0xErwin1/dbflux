@@ -1332,7 +1332,9 @@ mod tests {
             ssh_tunnel_profile_id: None,
             topology: Some("sentinel".to_string()),
             sentinel_master_name: Some("mymaster".to_string()),
-            additional_nodes: Some("redis-2.example.com:26379,redis-3.example.com:26379".to_string()),
+            additional_nodes: Some(
+                "redis-2.example.com:26379,redis-3.example.com:26379".to_string(),
+            ),
         };
 
         let dto = ConnectionDriverConfigDto::from_db_config(profile_id.clone(), &config);

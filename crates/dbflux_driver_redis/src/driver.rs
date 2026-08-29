@@ -23,12 +23,12 @@ use dbflux_core::{
     KeyValueSchema, LanguageService, ListEnd, ListPushRequest, ListRemoveRequest, ListSetRequest,
     MutationCapabilities, OrderByColumn, PaginationStyle, QueryCapabilities, QueryErrorFormatter,
     QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult, RelationalConnection,
-    SchemaDropTarget, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan, SemanticRequest,
-    SetAddRequest, SetCondition, SetRemoveRequest, SqlDialect, SshTunnelConfig, StreamAddRequest,
-    StreamDeleteRequest, StreamEntryId, TextPosition, TextPositionRange, TransactionCapabilities,
-    TransferFamily, Value, ValueRepr, ZSetAddRequest, ZSetRemoveRequest, field, field_password,
-    field_required, field_use_uri, sanitize_uri, ssh_tab, when_checked, when_unchecked,
-    with_default,
+    SchemaDropTarget, SchemaLoadingStrategy, SchemaSnapshot, SelectOption, SemanticPlan,
+    SemanticRequest, SetAddRequest, SetCondition, SetRemoveRequest, SqlDialect, SshTunnelConfig,
+    StreamAddRequest, StreamDeleteRequest, StreamEntryId, TextPosition, TextPositionRange,
+    TransactionCapabilities, TransferFamily, Value, ValueRepr, ZSetAddRequest, ZSetRemoveRequest,
+    field, field_password, field_required, field_use_uri, sanitize_uri, ssh_tab, when_checked,
+    when_field_equals, when_unchecked, with_default,
 };
 use dbflux_ssh::SshTunnel;
 
@@ -92,11 +92,55 @@ pub static REDIS_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef 
                         field_password(),
                     ],
                 },
+                FormSection {
+                    title: "Topology".into(),
+                    fields: vec![
+                        with_default(
+                            field(
+                                "topology",
+                                "Topology",
+                                FormFieldKind::Select {
+                                    options: redis_topology_options(),
+                                },
+                                "",
+                            ),
+                            "standalone",
+                        ),
+                        when_field_equals(
+                            field(
+                                "additional_nodes",
+                                "Additional Nodes",
+                                FormFieldKind::Text,
+                                "host1:6379,host2:6379",
+                            ),
+                            "topology",
+                            &["cluster", "sentinel"],
+                        ),
+                        when_field_equals(
+                            field_required(
+                                "sentinel_master_name",
+                                "Sentinel Master Name",
+                                FormFieldKind::Text,
+                                "mymaster",
+                            ),
+                            "topology",
+                            &["sentinel"],
+                        ),
+                    ],
+                },
             ],
         },
         ssh_tab(),
     ],
 });
+
+fn redis_topology_options() -> Vec<SelectOption> {
+    vec![
+        SelectOption::new("standalone", "Standalone"),
+        SelectOption::new("cluster", "Cluster"),
+        SelectOption::new("sentinel", "Sentinel"),
+    ]
+}
 
 fn plan_redis_mutation(mutation: &dbflux_core::MutationRequest) -> Result<SemanticPlan, DbError> {
     static GENERATOR: crate::command_generator::RedisCommandGenerator =
@@ -596,6 +640,7 @@ impl DbDriver for RedisDriver {
                                 enabled_when_checked: None,
                                 enabled_when_unchecked: None,
                                 disabled_when_field_set: None,
+                                enabled_when_field_equals: None,
                                 help: None,
                             },
                             FormFieldDef {
@@ -608,6 +653,7 @@ impl DbDriver for RedisDriver {
                                 enabled_when_checked: None,
                                 enabled_when_unchecked: None,
                                 disabled_when_field_set: None,
+                                enabled_when_field_equals: None,
                                 help: None,
                             },
                         ],
@@ -624,6 +670,7 @@ impl DbDriver for RedisDriver {
                             enabled_when_checked: None,
                             enabled_when_unchecked: None,
                             disabled_when_field_set: None,
+                            enabled_when_field_equals: None,
                             help: None,
                         }],
                     },
@@ -647,6 +694,16 @@ impl DbDriver for RedisDriver {
             .transpose()
             .map_err(|_| DbError::InvalidProfile("Invalid database index".to_string()))?;
 
+        let topology = values.get("topology").filter(|s| !s.is_empty()).cloned();
+        let sentinel_master_name = values
+            .get("sentinel_master_name")
+            .filter(|s| !s.trim().is_empty())
+            .cloned();
+        let additional_nodes = values
+            .get("additional_nodes")
+            .filter(|s| !s.trim().is_empty())
+            .cloned();
+
         if use_uri {
             if uri.is_none() {
                 return Err(DbError::InvalidProfile(
@@ -668,12 +725,9 @@ impl DbDriver for RedisDriver {
                 ssl_client_key_path: None,
                 ssh_tunnel: None,
                 ssh_tunnel_profile_id: None,
-                // Batch 4 wires topology/sentinel_master_name/additional_nodes form
-                // fields into `build_config`; until then every profile built through
-                // the form is standalone-with-detection.
-                topology: None,
-                sentinel_master_name: None,
-                additional_nodes: None,
+                topology,
+                sentinel_master_name,
+                additional_nodes,
             });
         }
 
@@ -703,9 +757,9 @@ impl DbDriver for RedisDriver {
             ssl_client_key_path: None,
             ssh_tunnel: None,
             ssh_tunnel_profile_id: None,
-            topology: None,
-            sentinel_master_name: None,
-            additional_nodes: None,
+            topology,
+            sentinel_master_name,
+            additional_nodes,
         })
     }
 
@@ -719,6 +773,9 @@ impl DbDriver for RedisDriver {
             port,
             user,
             database,
+            topology,
+            sentinel_master_name,
+            additional_nodes,
             ..
         } = config
         {
@@ -733,6 +790,18 @@ impl DbDriver for RedisDriver {
             values.insert(
                 "database".to_string(),
                 database.map(|d| d.to_string()).unwrap_or_default(),
+            );
+            values.insert(
+                "topology".to_string(),
+                topology.clone().unwrap_or_else(|| "standalone".to_string()),
+            );
+            values.insert(
+                "sentinel_master_name".to_string(),
+                sentinel_master_name.clone().unwrap_or_default(),
+            );
+            values.insert(
+                "additional_nodes".to_string(),
+                additional_nodes.clone().unwrap_or_default(),
             );
         }
 
@@ -3404,6 +3473,135 @@ mod tests {
         assert_eq!(values.get("database").map(String::as_str), Some("3"));
         // SSL mode is owned by the generic TRANSPORT control, not by the form values.
         assert!(!values.contains_key("tls"));
+    }
+
+    #[test]
+    fn extract_values_defaults_topology_to_standalone_when_unset() {
+        let driver = RedisDriver::new();
+        let config = base_redis_config();
+
+        let values = driver.extract_values(&config);
+
+        assert_eq!(
+            values.get("topology").map(String::as_str),
+            Some("standalone")
+        );
+        assert_eq!(
+            values.get("sentinel_master_name").map(String::as_str),
+            Some("")
+        );
+        assert_eq!(values.get("additional_nodes").map(String::as_str), Some(""));
+    }
+
+    #[test]
+    fn extract_values_round_trips_sentinel_topology_fields() {
+        let driver = RedisDriver::new();
+        let mut config = base_redis_config();
+        if let DbConfig::Redis {
+            topology,
+            sentinel_master_name,
+            additional_nodes,
+            ..
+        } = &mut config
+        {
+            *topology = Some("sentinel".to_string());
+            *sentinel_master_name = Some("mymaster".to_string());
+            *additional_nodes = Some("10.0.0.2:26379,10.0.0.3:26379".to_string());
+        }
+
+        let values = driver.extract_values(&config);
+
+        assert_eq!(values.get("topology").map(String::as_str), Some("sentinel"));
+        assert_eq!(
+            values.get("sentinel_master_name").map(String::as_str),
+            Some("mymaster")
+        );
+        assert_eq!(
+            values.get("additional_nodes").map(String::as_str),
+            Some("10.0.0.2:26379,10.0.0.3:26379")
+        );
+    }
+
+    #[test]
+    fn build_config_round_trips_cluster_topology_fields_in_manual_mode() {
+        let driver = RedisDriver::new();
+        let mut values = FormValues::new();
+        values.insert("host".to_string(), "localhost".to_string());
+        values.insert("port".to_string(), "6379".to_string());
+        values.insert("topology".to_string(), "cluster".to_string());
+        values.insert(
+            "additional_nodes".to_string(),
+            "10.0.0.2:6379,10.0.0.3:6379".to_string(),
+        );
+
+        let config = driver.build_config(&values).expect("valid manual config");
+
+        let DbConfig::Redis {
+            topology,
+            sentinel_master_name,
+            additional_nodes,
+            ..
+        } = config
+        else {
+            panic!("expected Redis config");
+        };
+
+        assert_eq!(topology.as_deref(), Some("cluster"));
+        assert_eq!(sentinel_master_name, None);
+        assert_eq!(
+            additional_nodes.as_deref(),
+            Some("10.0.0.2:6379,10.0.0.3:6379")
+        );
+    }
+
+    #[test]
+    fn build_config_round_trips_sentinel_topology_fields_in_uri_mode() {
+        let driver = RedisDriver::new();
+        let mut values = FormValues::new();
+        values.insert("use_uri".to_string(), "true".to_string());
+        values.insert("uri".to_string(), "redis://localhost:6379/0".to_string());
+        values.insert("topology".to_string(), "sentinel".to_string());
+        values.insert("sentinel_master_name".to_string(), "mymaster".to_string());
+
+        let config = driver.build_config(&values).expect("valid uri config");
+
+        let DbConfig::Redis {
+            topology,
+            sentinel_master_name,
+            additional_nodes,
+            ..
+        } = config
+        else {
+            panic!("expected Redis config");
+        };
+
+        assert_eq!(topology.as_deref(), Some("sentinel"));
+        assert_eq!(sentinel_master_name.as_deref(), Some("mymaster"));
+        assert_eq!(additional_nodes, None);
+    }
+
+    #[test]
+    fn build_config_omits_topology_fields_when_left_blank() {
+        let driver = RedisDriver::new();
+        let mut values = FormValues::new();
+        values.insert("host".to_string(), "localhost".to_string());
+        values.insert("port".to_string(), "6379".to_string());
+
+        let config = driver.build_config(&values).expect("valid manual config");
+
+        let DbConfig::Redis {
+            topology,
+            sentinel_master_name,
+            additional_nodes,
+            ..
+        } = config
+        else {
+            panic!("expected Redis config");
+        };
+
+        assert_eq!(topology, None);
+        assert_eq!(sentinel_master_name, None);
+        assert_eq!(additional_nodes, None);
     }
 
     #[test]

@@ -243,6 +243,10 @@ struct FormState {
     password_value_source_selector: Entity<ValueSourceSelector>,
     /// Checkbox states keyed by field ID (e.g., "use_uri" -> true).
     checkbox_states: HashMap<String, bool>,
+    /// Selected value of each driver-defined `Select` field, keyed by field
+    /// ID (e.g., "topology" -> "sentinel"). Falls back to the field's
+    /// declared `default_value` when absent.
+    select_values: HashMap<String, String>,
     /// Active SSL mode id for the TRANSPORT section segmented control.
     selected_ssl_mode: String,
     /// SSL certificate path inputs — shown conditionally based on selected_ssl_mode and driver metadata.
@@ -780,6 +784,7 @@ impl ConnectionManagerWindow {
                 user_value_source_selector,
                 password_value_source_selector,
                 checkbox_states: HashMap::new(),
+                select_values: HashMap::new(),
                 selected_ssl_mode: String::new(),
                 ssl_ca_cert_input,
                 ssl_client_cert_input,
@@ -1183,6 +1188,7 @@ impl ConnectionManagerWindow {
         cx: &mut Context<Self>,
     ) {
         self.form.driver_inputs.clear();
+        self.form.select_values.clear();
 
         let fields: Vec<&FormFieldDef> = form
             .tabs
@@ -1191,6 +1197,9 @@ impl ConnectionManagerWindow {
             .flat_map(|tab| tab.sections.iter())
             .flat_map(|section| section.fields.iter())
             .filter(|field| field.id != "password")
+            // Select fields are rendered as a segmented control backed by
+            // `self.form.select_values`, not a plain `InputState`.
+            .filter(|field| !matches!(field.kind, FormFieldKind::Select { .. }))
             .collect();
 
         for field in fields {
@@ -1250,6 +1259,12 @@ impl ConnectionManagerWindow {
                         self.form
                             .checkbox_states
                             .insert(field.id.clone(), is_checked);
+                    } else if matches!(field.kind, FormFieldKind::Select { .. }) {
+                        let selected = values
+                            .get(&field.id)
+                            .cloned()
+                            .unwrap_or_else(|| field.default_value.clone());
+                        self.form.select_values.insert(field.id.clone(), selected);
                     }
                 }
             }
@@ -1271,13 +1286,19 @@ impl ConnectionManagerWindow {
     ) -> dbflux_core::FormValues {
         let dropdowns = HashMap::new();
 
-        form_renderer::collect_values(
+        let mut values = form_renderer::collect_values(
             form,
             &self.form.driver_inputs,
             &self.form.checkbox_states,
             &dropdowns,
             cx,
-        )
+        );
+
+        for (field_id, value) in &self.form.select_values {
+            values.insert(field_id.clone(), value.clone());
+        }
+
+        values
     }
 
     fn reset_value_source_selectors(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1622,7 +1643,7 @@ impl ConnectionManagerWindow {
 
     /// Check if a field is enabled based on its conditional dependencies.
     fn is_field_enabled(&self, field: &FormFieldDef) -> bool {
-        form_renderer::is_field_enabled(field, &self.form.checkbox_states)
+        form_renderer::is_field_enabled(field, &self.form.checkbox_states, &self.form.select_values)
     }
 
     /// Map a field ID to its FormFocus variant.
@@ -3963,6 +3984,7 @@ mod tests {
                             enabled_when_checked: None,
                             enabled_when_unchecked: None,
                             disabled_when_field_set: None,
+                            enabled_when_field_equals: None,
                             help: None,
                         }],
                     }],
