@@ -433,7 +433,21 @@ jobs:
         # present), and keeps both macOS binaries self-contained at runtime.
         # No --locked: the version stamp above mutates Cargo.toml; see the Linux build
         # step for the full rationale.
-        run: cargo build --release --features "$FEATURES,vendored-openssl" --target ${{ matrix.target }}
+        #
+        # The amd64 entry relaxes the release profile's link-time optimization. It is
+        # the only job that holds two build trees on one runner — the cross target and
+        # the host artifacts that produce it — and `lto = "thin"` with a single codegen
+        # unit makes the final binary the peak of both memory and temporary disk. That
+        # peak is what kills rustc there with SIGBUS. Splitting the work across codegen
+        # units trades some speed and size in the Intel binary for a build that fits.
+        # Every other target keeps the profile from Cargo.toml untouched.
+        run: |
+          if [ "${{ matrix.arch }}" = "amd64" ]; then
+            export CARGO_PROFILE_RELEASE_LTO=false
+            export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
+          fi
+
+          cargo build --release --features "$FEATURES,vendored-openssl" --target ${{ matrix.target }}
 
       - name: Create app bundle
         run: |
