@@ -95,6 +95,7 @@ const xDefaultHref =
     <link rel="icon" href="/brand/favicon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="/brand/mark-256.png" />
     <link rel="sitemap" href="/sitemap-index.xml" />
+    <link rel="ai-catalog" href="/.well-known/ai-catalog.json" />
     <link
       rel="preload"
       href="/fonts/jetbrains-mono-latin-wght-normal.woff2"
@@ -118,5 +119,6 @@ const xDefaultHref =
     <BackToTop />
     <Mermaid />
     <SearchDialog indexUrl={searchIndex} locale={locale} />
+    <script is:inline src="/webmcp.js" defer></script>
   </body>
 </html>
