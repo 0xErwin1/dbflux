@@ -507,10 +507,6 @@ The `os` library is blocked entirely. If you need timing, you'll have to measure
 
 The process allowlists are hardcoded. Adding a new tool requires a code change, rebuild, and new release. There's no user-configurable allowlist mechanism (yet). The current six allowlists cover the most common use cases (cloud CLIs, SSH, Python scripts).
 
-### No Lua Syntax Highlighting in Editor
-
-gpui-component (v0.5.0) does not include a `tree-sitter-lua` grammar. When editing Lua scripts in the code editor, there's no syntax highlighting. The `editor_mode()` returns `"lua"` which gracefully falls back to plaintext. Python and Bash scripts get full highlighting.
-
 ### Bounded Memory
 
 Each VM is capped at 16 MiB of Lua-allocated memory. Scripts that try to build very large data structures in memory will hit this ceiling and fail. This is a sandbox guard, not a tunable per-hook setting.

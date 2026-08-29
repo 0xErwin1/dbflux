@@ -20,6 +20,7 @@ pub mod common;
 pub mod components;
 pub mod composites;
 pub mod controls;
+pub mod highlighting;
 pub mod icons;
 pub mod modals;
 pub mod primitives;

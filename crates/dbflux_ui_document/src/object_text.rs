@@ -73,8 +73,10 @@ pub struct TextBody {
     pub byte_len: u64,
 }
 
-/// Highlighter language for the buffer, from the key's extension. Unknown
-/// extensions resolve to the plain highlighter inside the editor component.
+/// Highlighter language for the buffer, from the key's extension. Only
+/// extensions with a grammar registered in `dbflux_components::highlighting`
+/// map to their own language; every other extension resolves to the plain
+/// highlighter inside the editor component.
 ///
 /// Dotenv files (`.env`, `.env.local`, `production.env`, ...) have no
 /// registered grammar of their own, but their `KEY=value` + `#` comment shape
@@ -90,9 +92,20 @@ pub fn editor_language(key: &str) -> String {
         return "bash".to_string();
     }
 
-    name.rsplit_once('.')
-        .map(|(_, extension)| extension.to_lowercase())
-        .unwrap_or_else(|| "text".to_string())
+    let extension = name
+        .rsplit_once('.')
+        .map(|(_, extension)| extension.to_lowercase());
+
+    match extension.as_deref() {
+        Some("json" | "jsonc") => "json".to_string(),
+        Some("sql") => "sql".to_string(),
+        Some("js" | "mjs" | "cjs") => "javascript".to_string(),
+        Some("py") => "python".to_string(),
+        Some("sh" | "bash") => "bash".to_string(),
+        Some("lua") => "lua".to_string(),
+        Some("cypher" | "cql") => "cypher".to_string(),
+        _ => "text".to_string(),
+    }
 }
 
 const MAX_HIGHLIGHT_BYTES: usize = 1024 * 1024;
@@ -256,8 +269,17 @@ mod tests {
     #[test]
     fn editor_language_follows_the_extension() {
         assert_eq!(editor_language("logs/app.JSON"), "json");
-        assert_eq!(editor_language("notes.md"), "md");
         assert_eq!(editor_language("data/dump"), "text");
+    }
+
+    /// Extensions without a registered grammar (issue #357 narrowed the set
+    /// to what `QueryLanguage::editor_mode()` can return) fall back to the
+    /// plain highlighter rather than being mis-rendered with the JSON grammar.
+    #[test]
+    fn unregistered_extensions_fall_back_to_plain() {
+        assert_eq!(editor_language("notes.md"), "text");
+        assert_eq!(editor_language("site/index.html"), "text");
+        assert_eq!(editor_language("config.yaml"), "text");
     }
 
     /// Dotenv files open with the bash highlighter in every naming shape:
@@ -283,10 +305,10 @@ mod tests {
 
     #[test]
     fn small_multi_line_files_keep_their_language() {
-        let body = "<html>\n<body>hello</body>\n</html>\n";
+        let body = "select * from users;\n";
         assert_eq!(
-            highlight_language("site/index.html", body),
-            Some("html".to_string())
+            highlight_language("query.sql", body),
+            Some("sql".to_string())
         );
     }
 
