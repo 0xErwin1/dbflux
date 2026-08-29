@@ -1,9 +1,11 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 use std::sync::Mutex;
 use std::time::Instant;
 
 use std::sync::Arc;
+
+use redis::cluster_routing::{RoutingInfo, SingleNodeRoutingInfo};
 
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 
@@ -31,7 +33,8 @@ use dbflux_core::{
 use dbflux_ssh::SshTunnel;
 
 use crate::transport::{
-    RedisTransport, RoleClassification, TopologyProbe, classify_role_reply, parse_cluster_enabled,
+    ClusterScanCursor, RedisTransport, RoleClassification, TopologyProbe, classify_role_reply,
+    parse_cluster_enabled, parse_cluster_slots_masters, split_host_port, validate_cluster_database,
 };
 
 pub static REDIS_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef {
@@ -306,29 +309,49 @@ impl RedisDriver {
         match detect_topology(&mut connection)
             .map_err(|e| format_redis_error(&e, params.host, params.port))?
         {
-            TopologyProbe::Standalone => {}
-            TopologyProbe::Cluster => return Err(unsupported_cluster_topology()),
-            TopologyProbe::SentinelService => return Err(unsupported_sentinel_topology()),
+            TopologyProbe::Standalone => {
+                if let Some(db) = params.database {
+                    select_db(&mut connection, db)
+                        .map_err(|e| format_redis_error(&e, params.host, params.port))?;
+                }
+
+                set_client_name(&mut connection);
+
+                redis::cmd("PING")
+                    .query::<String>(&mut connection)
+                    .map_err(|e| format_redis_error(&e, params.host, params.port))?;
+
+                Ok(Box::new(RedisConnection {
+                    connection: Arc::new(Mutex::new(RedisTransport::Standalone(Arc::new(
+                        Mutex::new(connection),
+                    )))),
+                    active_database: Mutex::new(params.database),
+                    _ssh_tunnel: params.ssh_tunnel,
+                }))
+            }
+            TopologyProbe::Cluster => {
+                validate_cluster_database(params.database)?;
+
+                let mut cluster_connection =
+                    build_cluster_connection(&uri, &tls, params.user, params.password)
+                        .map_err(|e| format_redis_error(&e, params.host, params.port))?;
+
+                set_client_name(&mut cluster_connection);
+
+                redis::cmd("PING")
+                    .query::<String>(&mut cluster_connection)
+                    .map_err(|e| format_redis_error(&e, params.host, params.port))?;
+
+                Ok(Box::new(RedisConnection {
+                    connection: Arc::new(Mutex::new(RedisTransport::Cluster(Box::new(
+                        cluster_connection,
+                    )))),
+                    active_database: Mutex::new(None),
+                    _ssh_tunnel: params.ssh_tunnel,
+                }))
+            }
+            TopologyProbe::SentinelService => Err(unsupported_sentinel_topology()),
         }
-
-        if let Some(db) = params.database {
-            select_db(&mut connection, db)
-                .map_err(|e| format_redis_error(&e, params.host, params.port))?;
-        }
-
-        set_client_name(&mut connection);
-
-        redis::cmd("PING")
-            .query::<String>(&mut connection)
-            .map_err(|e| format_redis_error(&e, params.host, params.port))?;
-
-        Ok(Box::new(RedisConnection {
-            connection: Arc::new(Mutex::new(RedisTransport::Standalone(Arc::new(
-                Mutex::new(connection),
-            )))),
-            active_database: Mutex::new(params.database),
-            _ssh_tunnel: params.ssh_tunnel,
-        }))
     }
 
     fn connect_with_uri(
@@ -350,28 +373,58 @@ impl RedisDriver {
         }
 
         match detect_topology(&mut connection).map_err(|e| format_redis_uri_error(&e, uri))? {
-            TopologyProbe::Standalone => {}
-            TopologyProbe::Cluster => return Err(unsupported_cluster_topology()),
-            TopologyProbe::SentinelService => return Err(unsupported_sentinel_topology()),
+            TopologyProbe::Standalone => {
+                if let Some(db) = database {
+                    select_db(&mut connection, db).map_err(|e| format_redis_uri_error(&e, uri))?;
+                }
+
+                set_client_name(&mut connection);
+
+                redis::cmd("PING")
+                    .query::<String>(&mut connection)
+                    .map_err(|e| format_redis_uri_error(&e, uri))?;
+
+                Ok(Box::new(RedisConnection {
+                    connection: Arc::new(Mutex::new(RedisTransport::Standalone(Arc::new(
+                        Mutex::new(connection),
+                    )))),
+                    active_database: Mutex::new(database),
+                    _ssh_tunnel: None,
+                }))
+            }
+            TopologyProbe::Cluster => {
+                validate_cluster_database(database)?;
+
+                // URI mode carries no separate TLS cert configuration; the
+                // scheme (`redis://` / `rediss://`) alone decides TLS, same
+                // as the plain `Client::open(uri)` call above.
+                let cluster_password = if has_credentials { None } else { password };
+                let cluster_user = if has_credentials { None } else { user };
+
+                let mut cluster_connection = build_cluster_connection(
+                    uri,
+                    &RedisTlsConfig::Plain,
+                    cluster_user,
+                    cluster_password,
+                )
+                .map_err(|e| format_redis_uri_error(&e, uri))?;
+
+                set_client_name(&mut cluster_connection);
+
+                redis::cmd("PING")
+                    .query::<String>(&mut cluster_connection)
+                    .map_err(|e| format_redis_uri_error(&e, uri))?;
+
+                Ok(Box::new(RedisConnection {
+                    connection: Arc::new(Mutex::new(RedisTransport::Cluster(Box::new(
+                        cluster_connection,
+                    )))),
+                    active_database: Mutex::new(None),
+                    _ssh_tunnel: None,
+                }))
+            }
+            TopologyProbe::SentinelService => Err(unsupported_sentinel_topology()),
         }
-
-        if let Some(db) = database {
-            select_db(&mut connection, db).map_err(|e| format_redis_uri_error(&e, uri))?;
-        }
-
-        set_client_name(&mut connection);
-
-        redis::cmd("PING")
-            .query::<String>(&mut connection)
-            .map_err(|e| format_redis_uri_error(&e, uri))?;
-
-        Ok(Box::new(RedisConnection {
-            connection: Arc::new(Mutex::new(RedisTransport::Standalone(Arc::new(
-                Mutex::new(connection),
-            )))),
-            active_database: Mutex::new(database),
-            _ssh_tunnel: None,
-        }))
     }
 
     fn connect_via_ssh_tunnel(
@@ -922,6 +975,10 @@ impl RedisConnection {
         let active = self.active_db_index()?;
         let target_db = keyspace.or(active);
 
+        if matches!(&*transport, RedisTransport::Cluster(_)) {
+            validate_cluster_database(target_db)?;
+        }
+
         transport.with_connection_like(|conn| {
             if let Some(db) = target_db {
                 select_db(conn, db).map_err(|e| format_redis_query_error(&e))?;
@@ -938,6 +995,113 @@ impl RedisConnection {
             }
 
             result
+        })
+    }
+
+    /// Fans a key scan out across every Redis Cluster master, since a plain
+    /// `SCAN` is unroutable against a `ClusterConnection` (redis-rs has no
+    /// single-node "current" concept for it, unlike single-key commands).
+    ///
+    /// The page budget (`request.limit`, defaulting to 100) is split evenly
+    /// across the masters still pending this round, rounded up so every
+    /// node gets at least one slot per page. Each node's returned cursor is
+    /// tracked independently and round-tripped via `ClusterScanCursor`; the
+    /// overall scan is exhausted once every node has reported cursor 0.
+    fn scan_keys_cluster(&self, request: &KeyScanRequest) -> Result<KeyScanPage, DbError> {
+        validate_cluster_database(request.keyspace)?;
+
+        let mut transport = self
+            .connection
+            .lock()
+            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
+
+        let RedisTransport::Cluster(conn) = &mut *transport else {
+            return Err(DbError::query_failed(
+                "Redis Cluster scan requested on a non-cluster connection".to_string(),
+            ));
+        };
+        let conn: &mut redis::cluster::ClusterConnection = conn.as_mut();
+
+        let mut cursor_state = match request.cursor.as_deref() {
+            None => ClusterScanCursor::fresh(&fetch_cluster_masters(conn)?),
+            Some(raw) => {
+                let mut decoded = ClusterScanCursor::decode(raw)?;
+                let masters = fetch_cluster_masters(conn)?;
+                let known: HashSet<String> = masters
+                    .iter()
+                    .map(|(host, port)| format!("{host}:{port}"))
+                    .collect();
+                decoded.retain_known_nodes(&known);
+                decoded
+            }
+        };
+
+        if cursor_state.is_exhausted() {
+            return Ok(KeyScanPage {
+                entries: Vec::new(),
+                next_cursor: None,
+            });
+        }
+
+        let total_limit = if request.limit == 0 {
+            100
+        } else {
+            request.limit
+        } as usize;
+        let addresses = cursor_state.addresses();
+        let per_node_count = total_limit.div_ceil(addresses.len()).max(1) as u32;
+
+        let mut entries = Vec::new();
+
+        for address in &addresses {
+            let (host, port) = split_host_port(address)?;
+            let node_cursor = cursor_state.cursor_for(address);
+
+            let mut command = redis::cmd("SCAN");
+            command.arg(node_cursor);
+
+            if let Some(filter) = request.filter.as_ref()
+                && !filter.is_empty()
+            {
+                command.arg("MATCH").arg(filter);
+            }
+
+            command.arg("COUNT").arg(per_node_count);
+
+            let value = conn
+                .route_command(
+                    &command,
+                    RoutingInfo::SingleNode(SingleNodeRoutingInfo::ByAddress { host, port }),
+                )
+                .map_err(|e| format_redis_query_error(&e))?;
+
+            let (next_cursor, keys): (u64, Vec<String>) =
+                redis::FromRedisValue::from_redis_value(&value)
+                    .map_err(|e| format_redis_query_error(&e))?;
+
+            cursor_state.record_result(address, next_cursor);
+
+            // Each key routes to its own node by slot through `ConnectionLike`
+            // dispatch regardless of which master's SCAN page produced it, so
+            // this works unchanged from the standalone TYPE lookup below.
+            for key in keys {
+                let type_name = redis::cmd("TYPE")
+                    .arg(&key)
+                    .query::<String>(conn)
+                    .map_err(|e| format_redis_query_error(&e))?;
+
+                entries.push(KeyEntry {
+                    key,
+                    key_type: Some(parse_key_type(&type_name)),
+                    ttl_seconds: None,
+                    size_bytes: None,
+                });
+            }
+        }
+
+        Ok(KeyScanPage {
+            entries,
+            next_cursor: cursor_state.encode(),
         })
     }
 }
@@ -1052,6 +1216,29 @@ impl Connection for RedisConnection {
     }
 
     fn schema(&self) -> Result<SchemaSnapshot, DbError> {
+        {
+            let mut transport = self
+                .connection
+                .lock()
+                .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
+
+            if let RedisTransport::Cluster(conn) = &mut *transport {
+                let conn: &mut redis::cluster::ClusterConnection = conn.as_mut();
+                let masters = fetch_cluster_masters(conn)?;
+                let stats = fetch_cluster_keyspace_stats(conn, &masters)?;
+
+                return Ok(SchemaSnapshot::key_value(KeyValueSchema {
+                    keyspaces: vec![KeySpaceInfo {
+                        db_index: 0,
+                        key_count: Some(stats.key_count),
+                        memory_bytes: None,
+                        avg_ttl_seconds: stats.avg_ttl_seconds,
+                    }],
+                    current_keyspace: Some(0),
+                }));
+            }
+        }
+
         self.with_connection(None, |conn| {
             let current_db = self.active_db_index()?.unwrap_or(0);
             let keyspace_stats = fetch_keyspace_stats(conn)?;
@@ -1123,6 +1310,10 @@ impl Connection for RedisConnection {
             .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
 
         if let Some(db) = target {
+            if matches!(&*transport, RedisTransport::Cluster(_)) {
+                validate_cluster_database(Some(db))?;
+            }
+
             transport.with_connection_like(|conn| {
                 select_db(conn, db).map_err(|e| format_redis_query_error(&e))
             })?;
@@ -1283,6 +1474,18 @@ impl ConnectionExt for RedisConnection {
 
 impl KeyValueApi for RedisConnection {
     fn scan_keys(&self, request: &KeyScanRequest) -> Result<KeyScanPage, DbError> {
+        let is_cluster = {
+            let transport = self
+                .connection
+                .lock()
+                .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
+            matches!(&*transport, RedisTransport::Cluster(_))
+        };
+
+        if is_cluster {
+            return self.scan_keys_cluster(request);
+        }
+
         let cursor = request
             .cursor
             .as_deref()
@@ -2099,17 +2302,7 @@ fn detect_topology_via_cluster_info(
     })
 }
 
-/// Batches 2/3 add real Cluster connect logic; until then a detected Redis
-/// Cluster deployment fails fast with this message.
-fn unsupported_cluster_topology() -> DbError {
-    DbError::NotSupported(
-        "dbflux detected a Redis Cluster; select the Cluster topology mode for this connection \
-         once Cluster support ships."
-            .to_string(),
-    )
-}
-
-/// Batches 2/3 add real Sentinel connect logic; until then a detected Redis
+/// Batch 3 adds real Sentinel connect logic; until then a detected Redis
 /// Sentinel deployment fails fast with this message.
 fn unsupported_sentinel_topology() -> DbError {
     DbError::NotSupported(
@@ -2119,11 +2312,100 @@ fn unsupported_sentinel_topology() -> DbError {
     )
 }
 
+/// Builds a live `ClusterConnection` from a single seed node URI.
+///
+/// `ClusterClient` only needs one reachable node to discover the rest of the
+/// topology via `CLUSTER SLOTS`, so the caller's already-configured
+/// host/port is a sufficient seed. TLS mode is derived by the builder from
+/// `node_uri`'s scheme (and `#insecure` fragment); `certs` is only consulted
+/// for `RedisTlsConfig::TlsVerify`, mirroring the standalone connect path.
+fn build_cluster_connection(
+    node_uri: &str,
+    tls: &RedisTlsConfig,
+    user: Option<&str>,
+    password: Option<&str>,
+) -> redis::RedisResult<redis::cluster::ClusterConnection> {
+    let mut builder = redis::cluster::ClusterClientBuilder::new(vec![node_uri]);
+
+    if let Some(user) = user.filter(|value| !value.is_empty()) {
+        builder = builder.username(user.to_string());
+    }
+
+    if let Some(password) = password {
+        builder = builder.password(password.to_string());
+    }
+
+    if let RedisTlsConfig::TlsVerify(certs) = tls {
+        builder = builder.certs(redis::TlsCertificates {
+            client_tls: certs.client_tls.clone(),
+            root_cert: certs.root_cert.clone(),
+        });
+    }
+
+    builder.build()?.get_connection()
+}
+
+/// Issues `CLUSTER SLOTS` and returns the unique master `(host, port)` pairs
+/// backing the cluster. There is no public redis-rs API to enumerate
+/// masters directly, so this parses the raw reply via
+/// `parse_cluster_slots_masters`.
+fn fetch_cluster_masters(
+    conn: &mut redis::cluster::ClusterConnection,
+) -> Result<Vec<(String, u16)>, DbError> {
+    let reply = redis::cmd("CLUSTER")
+        .arg("SLOTS")
+        .query::<redis::Value>(conn)
+        .map_err(|e| format_redis_query_error(&e))?;
+
+    parse_cluster_slots_masters(&reply)
+}
+
+/// Aggregates `db0` key/TTL stats across every Redis Cluster master.
+///
+/// A plain `INFO keyspace` on a `ClusterConnection` fans out to every master
+/// (`ResponsePolicy::Special`) and returns a `Value::Map` keyed by node
+/// address rather than a single string, so it cannot reuse
+/// `fetch_keyspace_stats`'s standalone `.query::<String>()` call. Each
+/// master is queried individually via `route_command` instead, and the
+/// per-node results are summed by `aggregate_keyspace_stats`.
+fn fetch_cluster_keyspace_stats(
+    conn: &mut redis::cluster::ClusterConnection,
+    masters: &[(String, u16)],
+) -> Result<KeyspaceStats, DbError> {
+    let mut per_master = Vec::with_capacity(masters.len());
+
+    for (host, port) in masters {
+        let mut command = redis::cmd("INFO");
+        command.arg("keyspace");
+
+        let reply = conn
+            .route_command(
+                &command,
+                RoutingInfo::SingleNode(SingleNodeRoutingInfo::ByAddress {
+                    host: host.clone(),
+                    port: *port,
+                }),
+            )
+            .map_err(|e| format_redis_query_error(&e))?;
+
+        let info_text: String = redis::FromRedisValue::from_redis_value(&reply)
+            .map_err(|e| format_redis_query_error(&e))?;
+
+        per_master.push(parse_keyspace_info(&info_text));
+    }
+
+    Ok(aggregate_keyspace_stats(&per_master))
+}
+
 /// Reports the client identity to the server via `CLIENT SETNAME` so it is
 /// visible in `CLIENT LIST`/`CLIENT INFO`. Some managed Redis providers
 /// restrict the `CLIENT` command family, so a failure here must not fail the
 /// connection.
-fn set_client_name(conn: &mut redis::Connection) {
+///
+/// On a Redis Cluster connection this broadcasts to every node (redis-rs
+/// routes `CLIENT SETNAME` as `AllNodes`/`AllSucceeded`), so the identity is
+/// visible from any node's `CLIENT LIST`.
+fn set_client_name(conn: &mut dyn redis::ConnectionLike) {
     if let Err(error) = redis::cmd("CLIENT")
         .arg("SETNAME")
         .arg(dbflux_core::client_identity())
@@ -2142,7 +2424,7 @@ fn uri_authority_has_credentials(uri: &str) -> bool {
     false
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct KeyspaceStats {
     key_count: u64,
     avg_ttl_seconds: Option<u64>,
@@ -2189,6 +2471,15 @@ fn fetch_keyspace_stats(
         .query::<String>(conn)
         .map_err(|e| format_redis_query_error(&e))?;
 
+    Ok(parse_keyspace_info(&info))
+}
+
+/// Parses an `INFO keyspace` reply body into per-database key/TTL stats.
+///
+/// Extracted as a pure function so both the standalone path (a single
+/// `INFO keyspace` call) and the Redis Cluster path (one call per master,
+/// aggregated by `aggregate_keyspace_stats`) share the same parsing logic.
+fn parse_keyspace_info(info: &str) -> HashMap<u32, KeyspaceStats> {
     let mut stats = HashMap::new();
 
     for line in info.lines() {
@@ -2236,7 +2527,45 @@ fn fetch_keyspace_stats(
         );
     }
 
-    Ok(stats)
+    stats
+}
+
+/// Sums per-master `db0` key counts into a single aggregate entry, since a
+/// Redis Cluster's `INFO keyspace` only ever reports the local master's
+/// slice of `db0` (there is no cluster-wide `INFO` aggregation for
+/// keyspace stats, unlike `DBSIZE`'s built-in cluster-wide sum).
+///
+/// `avg_ttl_seconds` is combined as a key-count-weighted average across the
+/// masters that reported one; nodes with no TTL data are skipped rather than
+/// treated as zero.
+fn aggregate_keyspace_stats(per_master: &[HashMap<u32, KeyspaceStats>]) -> KeyspaceStats {
+    let mut key_count = 0_u64;
+    let mut weighted_ttl_sum = 0_u128;
+    let mut weighted_ttl_count = 0_u64;
+
+    for stats in per_master {
+        let Some(db0) = stats.get(&0) else {
+            continue;
+        };
+
+        key_count += db0.key_count;
+
+        if let Some(avg_ttl_seconds) = db0.avg_ttl_seconds {
+            weighted_ttl_sum += u128::from(avg_ttl_seconds) * u128::from(db0.key_count);
+            weighted_ttl_count += db0.key_count;
+        }
+    }
+
+    let avg_ttl_seconds = if weighted_ttl_count == 0 {
+        None
+    } else {
+        Some((weighted_ttl_sum / u128::from(weighted_ttl_count)) as u64)
+    };
+
+    KeyspaceStats {
+        key_count,
+        avg_ttl_seconds,
+    }
 }
 
 /// Number of entries requested per `XRANGE` call. Kept as an existing safety
@@ -3145,5 +3474,113 @@ mod tests {
                 .contains(DriverCapabilities::INSTANCE_METRICS),
             "INSTANCE_METRICS must remain set on Redis driver"
         );
+    }
+
+    #[test]
+    fn parse_keyspace_info_extracts_key_count_and_avg_ttl() {
+        let info = "# Keyspace\r\ndb0:keys=42,expires=1,avg_ttl=5000\r\n";
+        let stats = parse_keyspace_info(info);
+
+        assert_eq!(
+            stats.get(&0),
+            Some(&KeyspaceStats {
+                key_count: 42,
+                avg_ttl_seconds: Some(5),
+            })
+        );
+    }
+
+    #[test]
+    fn parse_keyspace_info_treats_zero_avg_ttl_as_none() {
+        let info = "db0:keys=10,expires=0,avg_ttl=0\r\n";
+        let stats = parse_keyspace_info(info);
+
+        assert_eq!(
+            stats.get(&0),
+            Some(&KeyspaceStats {
+                key_count: 10,
+                avg_ttl_seconds: None,
+            })
+        );
+    }
+
+    #[test]
+    fn parse_keyspace_info_empty_when_no_databases_reported() {
+        let info = "# Keyspace\r\n";
+        assert!(parse_keyspace_info(info).is_empty());
+    }
+
+    #[test]
+    fn aggregate_keyspace_stats_sums_key_counts_across_masters() {
+        let per_master = vec![
+            HashMap::from([(
+                0,
+                KeyspaceStats {
+                    key_count: 10,
+                    avg_ttl_seconds: None,
+                },
+            )]),
+            HashMap::from([(
+                0,
+                KeyspaceStats {
+                    key_count: 5,
+                    avg_ttl_seconds: None,
+                },
+            )]),
+        ];
+
+        let aggregated = aggregate_keyspace_stats(&per_master);
+        assert_eq!(aggregated.key_count, 15);
+        assert_eq!(aggregated.avg_ttl_seconds, None);
+    }
+
+    #[test]
+    fn aggregate_keyspace_stats_weights_avg_ttl_by_key_count() {
+        let per_master = vec![
+            HashMap::from([(
+                0,
+                KeyspaceStats {
+                    key_count: 10,
+                    avg_ttl_seconds: Some(100),
+                },
+            )]),
+            HashMap::from([(
+                0,
+                KeyspaceStats {
+                    key_count: 30,
+                    avg_ttl_seconds: Some(200),
+                },
+            )]),
+        ];
+
+        // Weighted average: (10*100 + 30*200) / 40 = 175.
+        let aggregated = aggregate_keyspace_stats(&per_master);
+        assert_eq!(aggregated.key_count, 40);
+        assert_eq!(aggregated.avg_ttl_seconds, Some(175));
+    }
+
+    #[test]
+    fn aggregate_keyspace_stats_skips_masters_without_db0() {
+        let per_master = vec![
+            HashMap::new(),
+            HashMap::from([(
+                0,
+                KeyspaceStats {
+                    key_count: 7,
+                    avg_ttl_seconds: Some(50),
+                },
+            )]),
+        ];
+
+        let aggregated = aggregate_keyspace_stats(&per_master);
+        assert_eq!(aggregated.key_count, 7);
+        assert_eq!(aggregated.avg_ttl_seconds, Some(50));
+    }
+
+    #[test]
+    fn aggregate_keyspace_stats_empty_input_reports_zero() {
+        let aggregated = aggregate_keyspace_stats(&[]);
+        assert_eq!(aggregated.key_count, 0);
+        assert_eq!(aggregated.avg_ttl_seconds, None);
     }
 }
