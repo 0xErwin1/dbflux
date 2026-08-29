@@ -1167,6 +1167,8 @@ document:
         bulk_delete_no_rows_identified: "Cannot delete: failed to identify any rows"
         bulk_delete_no_documents_identified: "Cannot delete: failed to identify any documents"
         read_only_connection: This connection is read-only. Mutations are not allowed.
+        read_only_connection_profile: This connection's profile is set to read-only. Mutations are not allowed.
+        read_only_connection_server: The server rejected mutations for this connection. Mutations are not allowed.
         approval_queue_failed: "Failed to queue mutation for approval: %{error}"
         approval_requires_mcp: Mutations require approval for this connection. Enable the MCP feature to activate the approval workflow.
         connection_not_found: "Connection not found — cannot execute mutation."
@@ -1957,6 +1959,8 @@ document:
       preview_ddl: Preview DDL
     apply:
       read_only: This connection is read-only. Schema changes are not allowed.
+      read_only_profile: This connection's profile is set to read-only. Schema changes are not allowed.
+      read_only_server: The server rejected mutations for this connection. Schema changes are not allowed.
     change:
       column_added: "Add column %{name} %{type_name}"
       column_removed: "Drop column %{name}"
@@ -1995,6 +1999,8 @@ document:
       connection_unavailable: Target connection is no longer available.
       ddl_build_failed: "Cannot build DDL: %{error}"
       read_only: This connection is read-only. Schema changes are not allowed.
+      read_only_profile: This connection's profile is set to read-only. Schema changes are not allowed.
+      read_only_server: The server rejected mutations for this connection. Schema changes are not allowed.
       reference_connection_disconnected: The chosen reference connection is not connected.
       reference_not_picked: Pick a reference database or connection to compare against.
       select_at_least_one: Select at least one change first.
@@ -3499,6 +3505,13 @@ sso_wizard:
     profile_created: Created AWS SSO auth profile
 status_bar:
   disconnected: disconnected
+  read_only:
+    profile:
+      label: Read-only (profile)
+      tooltip: This connection's profile is configured as read-only.
+    server:
+      label: Read-only (server)
+      tooltip: The server rejected mutations for this connection.
   tasks_label: Tasks
   tasks_running:
     one: "1 running"

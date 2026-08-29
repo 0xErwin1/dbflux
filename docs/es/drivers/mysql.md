@@ -41,6 +41,12 @@ Base de datos relacional open-source popular.
   MySQL como MariaDB comparten este soporte.
 - Envía el atributo de conexión `program_name` como `dbflux/<version>`, visible
   en `performance_schema.session_connect_attrs`.
+- Sondeo de privilegio de escritura: después de conectar, revisa `@@read_only`/
+  `@@super_read_only` y `SHOW GRANTS` del usuario actual para detectar una
+  réplica de solo lectura o un rol sin grants de `INSERT`/`UPDATE`/`DELETE`,
+  ajustando la política de mutación resuelta a solo lectura cuando el servidor
+  igual rechazaría escrituras (sin efectos secundarios; en MariaDB, que no
+  tiene `@@super_read_only`, recae solo en `@@read_only`).
 
 ### Instance Metrics
 

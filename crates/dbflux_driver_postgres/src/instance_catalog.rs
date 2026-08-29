@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use dbflux_core::{
     ColumnKind, ColumnMeta, DbError, DefaultDashboardPanel, DefaultInstanceDashboard,
     DriverCapabilities, InstanceCatalog, InstanceInspectorDef, InstanceMetricDef,
-    InstanceMetricUnit, QueryResult, QueryResultShape, Row, Value,
+    InstanceMetricUnit, QueryResult, QueryResultShape, Row, Value, WritePrivilege,
 };
 use postgres::Client;
 
@@ -743,6 +743,100 @@ pub fn postgres_advertises_instance_capabilities() -> bool {
         && caps.contains(DriverCapabilities::INSTANCE_INSPECTOR)
 }
 
+/// Detects a replica or a session forced into read-only transaction mode.
+///
+/// `pg_is_in_recovery()` covers streaming replicas; `transaction_read_only`
+/// covers a session-level or `default_transaction_read_only` GUC override.
+/// Either one being true makes the connection read-only regardless of the
+/// authenticated role's table grants.
+const READ_ONLY_SIGNAL_QUERY: &str =
+    "SELECT pg_is_in_recovery() OR current_setting('transaction_read_only')::boolean";
+
+/// Single-scan probe over every base table visible to `current_user`.
+///
+/// `bool_or(true)` yields `NULL` when the query matches zero rows (empty
+/// database) and `true` otherwise, so column 0 doubles as a row-count check
+/// without a second round trip. Column 1 is `NULL` under the same empty-set
+/// condition and otherwise reports whether at least one of those tables
+/// grants `INSERT`, `UPDATE`, or `DELETE` to the current role.
+const TABLE_WRITE_PRIVILEGE_QUERY: &str = "\
+    SELECT \
+        bool_or(true), \
+        bool_or(has_table_privilege(current_user, format('%I.%I', table_schema, table_name), 'INSERT, UPDATE, DELETE')) \
+    FROM information_schema.tables \
+    WHERE table_type = 'BASE TABLE' \
+      AND table_schema NOT IN ('pg_catalog', 'information_schema')";
+
+/// Runs [`READ_ONLY_SIGNAL_QUERY`], collapsing a query error to `None` so the
+/// caller can fall back to the table-privilege probe.
+fn probe_read_only_signal(client: &mut Client) -> Option<bool> {
+    client
+        .query_one(READ_ONLY_SIGNAL_QUERY, &[])
+        .ok()
+        .and_then(|row| row.try_get::<_, Option<bool>>(0).ok())
+        .flatten()
+}
+
+/// Runs [`TABLE_WRITE_PRIVILEGE_QUERY`] and reports whether the visible base
+/// tables grant write access to `current_user`.
+///
+/// Returns `None` when the query fails or the database has no user-visible
+/// base tables — an empty schema is inconclusive, not evidence of a
+/// read-only role, so it must not be conflated with an explicit privilege
+/// denial.
+fn probe_has_writable_table(client: &mut Client) -> Option<bool> {
+    let row = client.query_one(TABLE_WRITE_PRIVILEGE_QUERY, &[]).ok()?;
+
+    let has_any_table = row
+        .try_get::<_, Option<bool>>(0)
+        .ok()
+        .flatten()
+        .unwrap_or(false);
+    if !has_any_table {
+        return None;
+    }
+
+    row.try_get::<_, Option<bool>>(1).ok().flatten()
+}
+
+/// Maps the two independent probe signals to a [`WritePrivilege`] verdict.
+///
+/// `read_only_signal` takes precedence: a replica or a read-only transaction
+/// mode overrides table grants entirely. `has_writable_table` is `None` for
+/// both a probe failure and an empty database, since neither is evidence
+/// that writes are forbidden.
+pub(crate) fn decide_write_privilege(
+    read_only_signal: Option<bool>,
+    has_writable_table: Option<bool>,
+) -> WritePrivilege {
+    if read_only_signal == Some(true) {
+        return WritePrivilege::ReadOnly;
+    }
+
+    match has_writable_table {
+        None => WritePrivilege::Unknown,
+        Some(true) => WritePrivilege::Writable,
+        Some(false) => WritePrivilege::ReadOnly,
+    }
+}
+
+/// Best-effort write-privilege probe backing
+/// `Connection::probe_write_privilege` for PostgreSQL.
+///
+/// Runs at most two read-only round trips (replica/read-only-transaction
+/// check, then table-grant check) and never propagates an error: any
+/// failure resolves to [`WritePrivilege::Unknown`], which leaves the
+/// resolved `MutationPolicy` unchanged.
+pub(crate) fn probe_postgres_write_privilege(client: &mut Client) -> WritePrivilege {
+    let read_only_signal = probe_read_only_signal(client);
+    if read_only_signal == Some(true) {
+        return WritePrivilege::ReadOnly;
+    }
+
+    let has_writable_table = probe_has_writable_table(client);
+    decide_write_privilege(read_only_signal, has_writable_table)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -944,5 +1038,65 @@ mod tests {
                 panel.metric_id
             );
         }
+    }
+
+    #[test]
+    fn decide_write_privilege_read_only_signal_wins_over_writable_table() {
+        assert_eq!(
+            decide_write_privilege(Some(true), Some(true)),
+            WritePrivilege::ReadOnly,
+            "a replica or read-only transaction must override table grants"
+        );
+    }
+
+    #[test]
+    fn decide_write_privilege_read_only_signal_wins_over_missing_table_probe() {
+        assert_eq!(
+            decide_write_privilege(Some(true), None),
+            WritePrivilege::ReadOnly,
+            "read-only signal must not require a successful table probe"
+        );
+    }
+
+    #[test]
+    fn decide_write_privilege_writable_role_with_grants() {
+        assert_eq!(
+            decide_write_privilege(Some(false), Some(true)),
+            WritePrivilege::Writable
+        );
+    }
+
+    #[test]
+    fn decide_write_privilege_no_read_only_signal_but_missing_grants_is_read_only() {
+        assert_eq!(
+            decide_write_privilege(Some(false), Some(false)),
+            WritePrivilege::ReadOnly
+        );
+    }
+
+    #[test]
+    fn decide_write_privilege_empty_database_is_unknown_not_read_only() {
+        assert_eq!(
+            decide_write_privilege(Some(false), None),
+            WritePrivilege::Unknown,
+            "no visible tables to write to is inconclusive, not proof of a read-only role"
+        );
+    }
+
+    #[test]
+    fn decide_write_privilege_falls_back_to_table_probe_when_read_only_signal_unavailable() {
+        assert_eq!(
+            decide_write_privilege(None, Some(true)),
+            WritePrivilege::Writable
+        );
+        assert_eq!(
+            decide_write_privilege(None, Some(false)),
+            WritePrivilege::ReadOnly
+        );
+    }
+
+    #[test]
+    fn decide_write_privilege_both_probes_failing_is_unknown() {
+        assert_eq!(decide_write_privilege(None, None), WritePrivilege::Unknown);
     }
 }

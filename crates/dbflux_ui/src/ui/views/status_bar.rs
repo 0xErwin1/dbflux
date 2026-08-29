@@ -189,6 +189,23 @@ impl StatusBar {
     fn status_text(text: impl Into<SharedString>) -> MonoCaption {
         MonoCaption::new(text).font_size(FontSizes::SM)
     }
+
+    /// Compact badge label and tooltip explaining why the active connection
+    /// is read-only, differentiated by `ReadOnlyReason`.
+    fn read_only_copy(reason: dbflux_core::ReadOnlyReason) -> (SharedString, SharedString) {
+        use dbflux_core::ReadOnlyReason;
+
+        match reason {
+            ReadOnlyReason::ProfileSetting => (
+                dbflux_i18n::t!("status_bar.read_only.profile.label").into(),
+                dbflux_i18n::t!("status_bar.read_only.profile.tooltip").into(),
+            ),
+            ReadOnlyReason::ServerEnforced => (
+                dbflux_i18n::t!("status_bar.read_only.server.label").into(),
+                dbflux_i18n::t!("status_bar.read_only.server.tooltip").into(),
+            ),
+        }
+    }
 }
 
 impl Render for StatusBar {
@@ -200,6 +217,10 @@ impl Render for StatusBar {
             .map(|c| c.profile.name.clone())
             .unwrap_or_default();
         let is_connected = connection.is_some();
+        let read_only_copy = connection
+            .filter(|c| c.mutation_policy == dbflux_core::MutationPolicy::ReadOnly)
+            .and_then(|c| c.read_only_reason)
+            .map(Self::read_only_copy);
 
         let running_tasks = app_state.tasks().running_tasks();
         let running_count = running_tasks.len();
@@ -274,6 +295,23 @@ impl Render for StatusBar {
                                 )))
                             }),
                     )
+                    // Read-only indicator — shown only for the active connection,
+                    // differentiating whether the profile or the server enforced it.
+                    .when_some(read_only_copy, |this, (label, tooltip)| {
+                        this.child(Self::vertical_divider(divider_color)).child(
+                            div()
+                                .id("status-bar-read-only")
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .px(px(10.0))
+                                .h(px(22.0))
+                                .child(Self::metadata_text(label))
+                                .tooltip(move |window, cx| {
+                                    Tooltip::new(tooltip.clone()).build(window, cx)
+                                }),
+                        )
+                    })
                     // Running task info — shown with a divider when a task is active
                     .when_some(current_task.cloned(), |this, task| {
                         let description = Self::single_line(&task.description);
@@ -434,5 +472,66 @@ mod tests {
             assert!(inspection.uses_muted_foreground_override);
             assert!(!inspection.has_custom_color_override);
         }
+    }
+
+    #[test]
+    fn read_only_copy_selects_profile_label_for_profile_setting() {
+        let (label, tooltip) =
+            StatusBar::read_only_copy(dbflux_core::ReadOnlyReason::ProfileSetting);
+
+        assert_eq!(
+            label,
+            gpui::SharedString::from(dbflux_i18n::t!("status_bar.read_only.profile.label"))
+        );
+        assert_eq!(
+            tooltip,
+            gpui::SharedString::from(dbflux_i18n::t!("status_bar.read_only.profile.tooltip"))
+        );
+    }
+
+    #[test]
+    fn read_only_copy_selects_server_label_for_server_enforced() {
+        let (label, tooltip) =
+            StatusBar::read_only_copy(dbflux_core::ReadOnlyReason::ServerEnforced);
+
+        assert_eq!(
+            label,
+            gpui::SharedString::from(dbflux_i18n::t!("status_bar.read_only.server.label"))
+        );
+        assert_eq!(
+            tooltip,
+            gpui::SharedString::from(dbflux_i18n::t!("status_bar.read_only.server.tooltip"))
+        );
+    }
+
+    #[test]
+    fn read_only_copy_keys_resolve_and_differ_between_reasons_and_locales() {
+        let keys = [
+            "status_bar.read_only.profile.label",
+            "status_bar.read_only.profile.tooltip",
+            "status_bar.read_only.server.label",
+            "status_bar.read_only.server.tooltip",
+        ];
+
+        for key in keys {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, key, "{key} resolved to its own key");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+
+        let profile_label_en = dbflux_i18n::t!("status_bar.read_only.profile.label", locale = "en");
+        let server_label_en = dbflux_i18n::t!("status_bar.read_only.server.label", locale = "en");
+        assert_ne!(
+            profile_label_en, server_label_en,
+            "profile and server labels must be distinguishable"
+        );
     }
 }

@@ -49,6 +49,11 @@ Driver de documentos MongoDB para DBFlux.
 - Reporta la identidad de cliente como `appName=dbflux/<version>` al conectar
   (visible en los logs del servidor y en `db.currentOp()`), salvo que la URI de
   conexión ya defina un `appName`.
+- Sondeo de privilegio de escritura: tras conectar, clasifica la sesión como
+  writable, read-only o unknown inspeccionando `connectionStatus`
+  (`showPrivileges: true`) en busca de privilegios o roles que otorguen
+  escritura, con `hello` forzando el veredicto a read-only cuando la conexión
+  es directa a un nodo no writable (por ejemplo, un secundario).
 
 ### Instance Metrics
 

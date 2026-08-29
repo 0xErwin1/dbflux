@@ -243,6 +243,83 @@ fn is_unknown_command_error(error: &redis::RedisError) -> bool {
         .contains("unknown command")
 }
 
+/// Outcome of an `ACL DRYRUN` reply once the command itself is known to be
+/// supported.
+///
+/// `ACL DRYRUN` never returns a RESP error for a permission answer: it
+/// replies `OK` when the user could run the probed command, or a bulk string
+/// explaining why not. Any reply other than a bare `OK` is treated as a
+/// denial, matching the documented contract rather than pattern-matching the
+/// denial wording (which varies by Redis version).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AclDryRunReply {
+    /// The probed command would have been permitted.
+    Permitted,
+    /// The probed command would have been denied.
+    Denied,
+}
+
+/// Classifies an `ACL DRYRUN` reply string.
+pub(crate) fn classify_acl_dryrun_reply(reply: &str) -> AclDryRunReply {
+    if reply == "OK" {
+        AclDryRunReply::Permitted
+    } else {
+        AclDryRunReply::Denied
+    }
+}
+
+/// Whether an error from `ACL WHOAMI` / `ACL DRYRUN` indicates the `ACL`
+/// command family itself is unavailable on this connection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AclCommandAvailability {
+    /// The server does not support this `ACL` subcommand (older server), or
+    /// this user is not permitted to run `ACL` at all (restricted managed
+    /// provider). The privilege probe should fall back to a direct write
+    /// attempt.
+    Unsupported,
+    /// An error occurred that is not explained by `ACL` being unavailable;
+    /// the probe cannot draw a conclusion from it.
+    Unexpected,
+}
+
+/// Classifies an `ACL WHOAMI` / `ACL DRYRUN` error message.
+pub(crate) fn classify_acl_command_error(message: &str) -> AclCommandAvailability {
+    let lower = message.to_ascii_lowercase();
+
+    if lower.contains("unknown command") || lower.contains("unknown subcommand") {
+        return AclCommandAvailability::Unsupported;
+    }
+
+    if lower.contains("noperm") && lower.contains("acl") {
+        return AclCommandAvailability::Unsupported;
+    }
+
+    AclCommandAvailability::Unexpected
+}
+
+/// Outcome of the fallback namespaced-key write probe used when `ACL` is
+/// unavailable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FallbackProbeOutcome {
+    /// The server rejected the write because of a permission or read-only
+    /// role restriction (`NOPERM` / `READONLY`).
+    PermissionDenied,
+    /// An error occurred that is not explained by a permission restriction
+    /// (timeout, unexpected error, ...); the probe cannot draw a conclusion.
+    Other,
+}
+
+/// Classifies the error from the fallback `SET ... NX` probe write.
+pub(crate) fn classify_fallback_probe_error(message: &str) -> FallbackProbeOutcome {
+    let upper = message.to_ascii_uppercase();
+
+    if upper.contains("NOPERM") || upper.contains("READONLY") {
+        FallbackProbeOutcome::PermissionDenied
+    } else {
+        FallbackProbeOutcome::Other
+    }
+}
+
 /// Parses `cluster_enabled:<0|1>` out of an `INFO cluster` response.
 ///
 /// Returns `false` when the field is absent or malformed, treating those
@@ -520,6 +597,71 @@ mod tests {
     fn classify_role_reply_aborts_on_connection_refused() {
         let reply = Err(connection_refused_error());
         assert_eq!(classify_role_reply(&reply), RoleClassification::Aborted);
+    }
+
+    #[test]
+    fn classify_acl_dryrun_reply_permits_on_ok() {
+        assert_eq!(classify_acl_dryrun_reply("OK"), AclDryRunReply::Permitted);
+    }
+
+    #[test]
+    fn classify_acl_dryrun_reply_denies_on_explanation_text() {
+        let reply = "This user has no permissions to run the 'set' command";
+        assert_eq!(classify_acl_dryrun_reply(reply), AclDryRunReply::Denied);
+    }
+
+    #[test]
+    fn classify_acl_command_error_unsupported_on_unknown_command() {
+        let message = "ERR unknown command 'ACL', with args beginning with: 'WHOAMI'";
+        assert_eq!(
+            classify_acl_command_error(message),
+            AclCommandAvailability::Unsupported
+        );
+    }
+
+    #[test]
+    fn classify_acl_command_error_unsupported_on_noperm_for_acl() {
+        let message = "NOPERM this user has no permissions to run the 'acl' command";
+        assert_eq!(
+            classify_acl_command_error(message),
+            AclCommandAvailability::Unsupported
+        );
+    }
+
+    #[test]
+    fn classify_acl_command_error_unexpected_for_other_errors() {
+        let message = "ERR internal server error";
+        assert_eq!(
+            classify_acl_command_error(message),
+            AclCommandAvailability::Unexpected
+        );
+    }
+
+    #[test]
+    fn classify_fallback_probe_error_denies_on_noperm() {
+        let message = "NOPERM this user has no permissions to run the 'set' command";
+        assert_eq!(
+            classify_fallback_probe_error(message),
+            FallbackProbeOutcome::PermissionDenied
+        );
+    }
+
+    #[test]
+    fn classify_fallback_probe_error_denies_on_readonly_replica() {
+        let message = "READONLY You can't write against a read only replica.";
+        assert_eq!(
+            classify_fallback_probe_error(message),
+            FallbackProbeOutcome::PermissionDenied
+        );
+    }
+
+    #[test]
+    fn classify_fallback_probe_error_other_for_unrelated_errors() {
+        let message = "ERR internal server error";
+        assert_eq!(
+            classify_fallback_probe_error(message),
+            FallbackProbeOutcome::Other
+        );
     }
 
     #[test]

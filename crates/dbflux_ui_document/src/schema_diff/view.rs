@@ -18,8 +18,8 @@ use dbflux_components::modals::{
 use dbflux_components::primitives::{Badge, BadgeVariant, Icon, Text};
 use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_core::{
-    Connection, ExecutionClassification, MutationPolicy, QueryLanguage, RefreshPolicy,
-    RiskedChange, SchemaChange, TableInfo, TableRef, diff_schema,
+    Connection, ExecutionClassification, MutationPolicy, QueryLanguage, ReadOnlyReason,
+    RefreshPolicy, RiskedChange, SchemaChange, TableInfo, TableRef, diff_schema,
 };
 use dbflux_ui_base::AppStateEntity;
 use dbflux_ui_base::sql_preview_modal::SqlPreviewModal;
@@ -681,6 +681,7 @@ impl SchemaDiffDocument {
                     connection: Arc::clone(&connection),
                     event_sink: None,
                     policy: MutationPolicy::Allowed,
+                    read_only_reason: None,
                 },
             );
             let stmts = executor.preview_statements().map_err(|e| {
@@ -775,7 +776,7 @@ impl SchemaDiffDocument {
             return;
         }
 
-        let (connection, event_sink, policy) = {
+        let (connection, event_sink, policy, read_only_reason) = {
             let state = self.app_state.read(cx);
             let Some(connected) = state.connections().get(&self.profile_id) else {
                 self.pending_toast = Some(PendingToast {
@@ -788,7 +789,12 @@ impl SchemaDiffDocument {
             let connection = Arc::clone(&connected.connection);
             let event_sink: Option<Arc<dyn dbflux_core::EventSink>> =
                 Some(Arc::new(state.audit_service().clone()) as Arc<dyn dbflux_core::EventSink>);
-            (connection, event_sink, connected.mutation_policy)
+            (
+                connection,
+                event_sink,
+                connected.mutation_policy,
+                connected.read_only_reason,
+            )
         };
 
         if matches!(policy, MutationPolicy::ApprovalRequired) {
@@ -798,7 +804,7 @@ impl SchemaDiffDocument {
 
         if matches!(policy, MutationPolicy::ReadOnly) {
             self.pending_toast = Some(PendingToast {
-                message: dbflux_i18n::t!("document.schema_diff.toast.read_only"),
+                message: read_only_toast_message(read_only_reason),
                 is_error: true,
             });
             cx.notify();
@@ -822,6 +828,7 @@ impl SchemaDiffDocument {
                         connection: Arc::clone(&connection),
                         event_sink: event_sink.clone(),
                         policy,
+                        read_only_reason,
                     },
                 );
                 match executor.apply() {
@@ -1082,6 +1089,26 @@ fn build_executor_for_work(work: SelectedTableWork, deps: DdlApplyDeps) -> DdlAp
     match work.table_action {
         Some((action, _risk)) => executor.with_table_action(action),
         None => executor,
+    }
+}
+
+/// Text for the `run_apply` refusal toast when the connection is read-only,
+/// differentiated by why it is read-only. Mirrors
+/// `apply::read_only_message`'s reason branching under the `toast.*` key
+/// family so the two refusal surfaces never drift.
+///
+/// `None` falls back to the generic message: `ConnectedProfile` only sets
+/// `read_only_reason` when `mutation_policy` is `ReadOnly`, but a `None`
+/// reason on a `ReadOnly` policy is still handled instead of panicking.
+fn read_only_toast_message(reason: Option<ReadOnlyReason>) -> String {
+    match reason {
+        Some(ReadOnlyReason::ProfileSetting) => {
+            dbflux_i18n::t!("document.schema_diff.toast.read_only_profile")
+        }
+        Some(ReadOnlyReason::ServerEnforced) => {
+            dbflux_i18n::t!("document.schema_diff.toast.read_only_server")
+        }
+        None => dbflux_i18n::t!("document.schema_diff.toast.read_only"),
     }
 }
 
@@ -1767,12 +1794,12 @@ mod tests {
     // Import only what the tests need — deliberately NOT `use super::*`, which
     // would re-glob `gpui::*` into this module and trigger pathological
     // `#[test]` macro-expansion recursion in this GPUI-heavy crate.
-    use super::{ComputeState, deep_resolve, document_state_for};
+    use super::{ComputeState, deep_resolve, document_state_for, read_only_toast_message};
     use crate::types::DocumentState;
     use dbflux_core::{
         CodeGenerator, ColumnInfo, Connection, DatabaseCategory, DbError, DbKind,
         DefaultSqlDialect, DriverCapabilities, DriverMetadata, DriverMetadataBuilder,
-        NoOpCodeGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
+        NoOpCodeGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult, ReadOnlyReason,
         SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, TableInfo,
     };
 
@@ -2023,6 +2050,8 @@ mod tests {
 
     const SCHEMA_DIFF_TOAST_AND_SUMMARY_KEYS: &[&str] = &[
         "document.schema_diff.apply.read_only",
+        "document.schema_diff.apply.read_only_profile",
+        "document.schema_diff.apply.read_only_server",
         "document.schema_diff.summary.apply",
         "document.schema_diff.summary.this_connection",
         "document.schema_diff.toast.applied",
@@ -2033,6 +2062,8 @@ mod tests {
         "document.schema_diff.toast.connection_unavailable",
         "document.schema_diff.toast.ddl_build_failed",
         "document.schema_diff.toast.read_only",
+        "document.schema_diff.toast.read_only_profile",
+        "document.schema_diff.toast.read_only_server",
         "document.schema_diff.toast.reference_connection_disconnected",
         "document.schema_diff.toast.reference_not_picked",
         "document.schema_diff.toast.select_at_least_one",
@@ -2079,6 +2110,58 @@ mod tests {
         let toast = dbflux_i18n::t!("document.schema_diff.toast.read_only", locale = "en");
 
         assert_eq!(apply, toast);
+    }
+
+    #[test]
+    fn schema_diff_apply_read_only_reason_variants_match_toast_variants_in_english() {
+        // The reason-aware `apply.read_only_profile`/`apply.read_only_server`
+        // keys must stay textually identical to their `toast.*` counterparts,
+        // for the same reason the generic `read_only` pair is kept in sync.
+        for suffix in ["profile", "server"] {
+            let apply = dbflux_i18n::t!(
+                &format!("document.schema_diff.apply.read_only_{suffix}"),
+                locale = "en"
+            );
+            let toast = dbflux_i18n::t!(
+                &format!("document.schema_diff.toast.read_only_{suffix}"),
+                locale = "en"
+            );
+
+            assert_eq!(
+                apply, toast,
+                "read_only_{suffix} text drifted between surfaces"
+            );
+        }
+    }
+
+    #[test]
+    fn read_only_toast_message_selects_profile_key_for_profile_setting() {
+        let value = read_only_toast_message(Some(ReadOnlyReason::ProfileSetting));
+
+        assert_eq!(
+            value,
+            dbflux_i18n::t!("document.schema_diff.toast.read_only_profile")
+        );
+    }
+
+    #[test]
+    fn read_only_toast_message_selects_server_key_for_server_enforced() {
+        let value = read_only_toast_message(Some(ReadOnlyReason::ServerEnforced));
+
+        assert_eq!(
+            value,
+            dbflux_i18n::t!("document.schema_diff.toast.read_only_server")
+        );
+    }
+
+    #[test]
+    fn read_only_toast_message_falls_back_to_generic_key_when_reason_missing() {
+        let value = read_only_toast_message(None);
+
+        assert_eq!(
+            value,
+            dbflux_i18n::t!("document.schema_diff.toast.read_only")
+        );
     }
 
     #[test]

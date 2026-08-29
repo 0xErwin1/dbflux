@@ -21,20 +21,22 @@ use dbflux_core::{
     KeyLoadState, KeyPersistRequest, KeyRenameRequest, KeyScanPage, KeyScanRequest, KeySetRequest,
     KeySpaceInfo, KeyTtlRequest, KeyType, KeyTypeRequest, KeyValueApi, KeyValueConnection,
     KeyValueSchema, LanguageService, ListEnd, ListPushRequest, ListRemoveRequest, ListSetRequest,
-    MutationCapabilities, OrderByColumn, PaginationStyle, QueryCapabilities, QueryErrorFormatter,
-    QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult, RelationalConnection,
-    SchemaDropTarget, SchemaLoadingStrategy, SchemaSnapshot, SelectOption, SemanticPlan,
-    SemanticRequest, SetAddRequest, SetCondition, SetRemoveRequest, SqlDialect, SshTunnelConfig,
-    StreamAddRequest, StreamDeleteRequest, StreamEntryId, TextPosition, TextPositionRange,
-    TransactionCapabilities, TransferFamily, Value, ValueRepr, ZSetAddRequest, ZSetRemoveRequest,
-    field, field_password, field_required, field_use_uri, sanitize_uri, ssh_tab, when_checked,
-    when_field_equals, when_unchecked, with_default,
+    LogErr, MutationCapabilities, OrderByColumn, PaginationStyle, QueryCapabilities,
+    QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult,
+    RelationalConnection, SchemaDropTarget, SchemaLoadingStrategy, SchemaSnapshot, SelectOption,
+    SemanticPlan, SemanticRequest, SetAddRequest, SetCondition, SetRemoveRequest, SqlDialect,
+    SshTunnelConfig, StreamAddRequest, StreamDeleteRequest, StreamEntryId, TextPosition,
+    TextPositionRange, TransactionCapabilities, TransferFamily, Value, ValueRepr, WritePrivilege,
+    ZSetAddRequest, ZSetRemoveRequest, field, field_password, field_required, field_use_uri,
+    sanitize_uri, ssh_tab, when_checked, when_field_equals, when_unchecked, with_default,
 };
 use dbflux_ssh::SshTunnel;
 
 use crate::transport::{
-    ClusterScanCursor, ConfiguredTopology, MasterRoleSanity, RedisTransport, RoleClassification,
-    TopologyProbe, classify_role_reply, evaluate_master_role_sanity, is_connection_level_error,
+    AclCommandAvailability, AclDryRunReply, ClusterScanCursor, ConfiguredTopology,
+    FallbackProbeOutcome, MasterRoleSanity, RedisTransport, RoleClassification, TopologyProbe,
+    classify_acl_command_error, classify_acl_dryrun_reply, classify_fallback_probe_error,
+    classify_role_reply, evaluate_master_role_sanity, is_connection_level_error,
     parse_cluster_enabled, parse_cluster_slots_masters, parse_configured_topology, parse_node_list,
     split_host_port, validate_cluster_database,
 };
@@ -1358,6 +1360,11 @@ impl Connection for RedisConnection {
         Ok(())
     }
 
+    fn probe_write_privilege(&self) -> WritePrivilege {
+        self.with_connection(None, |conn| Ok(probe_write_privilege_over(conn)))
+            .unwrap_or(WritePrivilege::Unknown)
+    }
+
     fn instance_catalog(&self) -> Option<Box<dyn InstanceCatalog>> {
         let transport = self.connection.lock().ok()?;
         let standalone = transport.standalone()?;
@@ -2487,6 +2494,83 @@ fn format_redis_query_error(error: &redis::RedisError) -> DbError {
         formatted.into_connection_error()
     } else {
         formatted.into_query_error()
+    }
+}
+
+/// Best-effort write-privilege probe for `Connection::probe_write_privilege`.
+///
+/// Prefers `ACL WHOAMI` + `ACL DRYRUN`, which answers the question without
+/// touching the keyspace at all. Falls through to a short-TTL namespaced
+/// write probe (`probe_write_privilege_fallback`) when `ACL` itself is
+/// unavailable: older servers predate `ACL DRYRUN` (added in Redis 7.0), and
+/// some managed providers restrict `ACL` entirely.
+fn probe_write_privilege_over(conn: &mut dyn redis::ConnectionLike) -> WritePrivilege {
+    let probe_key = format!("dbflux:privilege-probe:{}", uuid::Uuid::new_v4());
+
+    let whoami = redis::cmd("ACL").arg("WHOAMI").query::<String>(conn);
+
+    let user = match whoami {
+        Ok(user) => user,
+        Err(error) => {
+            return match classify_acl_command_error(&error.to_string()) {
+                AclCommandAvailability::Unsupported => {
+                    probe_write_privilege_fallback(conn, &probe_key)
+                }
+                AclCommandAvailability::Unexpected => WritePrivilege::Unknown,
+            };
+        }
+    };
+
+    let dryrun = redis::cmd("ACL")
+        .arg("DRYRUN")
+        .arg(&user)
+        .arg("SET")
+        .arg(&probe_key)
+        .arg("1")
+        .query::<String>(conn);
+
+    match dryrun {
+        Ok(reply) => match classify_acl_dryrun_reply(&reply) {
+            AclDryRunReply::Permitted => WritePrivilege::Writable,
+            AclDryRunReply::Denied => WritePrivilege::ReadOnly,
+        },
+        Err(error) => match classify_acl_command_error(&error.to_string()) {
+            AclCommandAvailability::Unsupported => probe_write_privilege_fallback(conn, &probe_key),
+            AclCommandAvailability::Unexpected => WritePrivilege::Unknown,
+        },
+    }
+}
+
+/// Fallback write-privilege probe used when `ACL` is unavailable: attempts a
+/// namespaced key write with a 1 second TTL, then immediately deletes it.
+///
+/// The short TTL is the safety net, not the cleanup mechanism: even if the
+/// `DEL` below fails (connection drop, etc.), the probe key expires on its
+/// own a moment later and never lingers in the keyspace.
+fn probe_write_privilege_fallback(
+    conn: &mut dyn redis::ConnectionLike,
+    probe_key: &str,
+) -> WritePrivilege {
+    let set_result = redis::cmd("SET")
+        .arg(probe_key)
+        .arg("1")
+        .arg("PX")
+        .arg(1000)
+        .arg("NX")
+        .query::<Option<String>>(conn);
+
+    match set_result {
+        Ok(_) => {
+            redis::cmd("DEL")
+                .arg(probe_key)
+                .query::<i64>(conn)
+                .log_err();
+            WritePrivilege::Writable
+        }
+        Err(error) => match classify_fallback_probe_error(&error.to_string()) {
+            FallbackProbeOutcome::PermissionDenied => WritePrivilege::ReadOnly,
+            FallbackProbeOutcome::Other => WritePrivilege::Unknown,
+        },
     }
 }
 
