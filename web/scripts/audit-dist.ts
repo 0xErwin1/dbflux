@@ -147,21 +147,26 @@ else if (!apiCatalog.linkset[0]?.anchor)
   fail('.well-known/api-catalog linkset entry is missing an anchor');
 
 interface AiCatalogEntry {
-  id?: string;
+  identifier?: string;
   url?: string;
   representativeQueries?: string[];
 }
-const aiCatalog: { specVersion?: string; host?: { url?: string }; entries?: AiCatalogEntry[] } =
-  JSON.parse(text(resolve(wellKnownRoot, 'ai-catalog.json')));
+const aiCatalog: {
+  specVersion?: string;
+  host?: { displayName?: string; identifier?: string; url?: string };
+  entries?: AiCatalogEntry[];
+} = JSON.parse(text(resolve(wellKnownRoot, 'ai-catalog.json')));
 if (!aiCatalog.specVersion) fail('.well-known/ai-catalog.json is missing specVersion');
 if (!aiCatalog.host?.url) fail('.well-known/ai-catalog.json is missing host.url');
+if (!aiCatalog.host?.displayName) fail('.well-known/ai-catalog.json is missing host.displayName');
+if (!aiCatalog.host?.identifier) fail('.well-known/ai-catalog.json is missing host.identifier');
 for (const entry of aiCatalog.entries ?? []) {
-  if (!entry.id?.startsWith('urn:air:'))
-    fail(`.well-known/ai-catalog.json entry has an invalid id: ${entry.id}`);
-  if (!entry.url) fail(`.well-known/ai-catalog.json entry "${entry.id}" is missing a url`);
+  if (!entry.identifier?.startsWith('urn:air:'))
+    fail(`.well-known/ai-catalog.json entry has an invalid identifier: ${entry.identifier}`);
+  if (!entry.url) fail(`.well-known/ai-catalog.json entry "${entry.identifier}" is missing a url`);
   const queryCount = entry.representativeQueries?.length ?? 0;
   if (queryCount < 2 || queryCount > 5)
-    fail(`.well-known/ai-catalog.json entry "${entry.id}" needs 2-5 representativeQueries`);
+    fail(`.well-known/ai-catalog.json entry "${entry.identifier}" needs 2-5 representativeQueries`);
 }
 
 interface AgentSkillEntry {
@@ -199,6 +204,10 @@ if (mode === 'site' && !existsSync(homeMarkdownPath)) fail('site build is missin
 if (mode === 'docs' && existsSync(homeMarkdownPath))
   fail('docs build must not publish a homepage dist/index.md');
 
+const homeHtml = text(fileFor('/'));
+if (!homeHtml.includes('rel="ai-catalog"')) fail('homepage is missing rel="ai-catalog" link');
+if (!homeHtml.includes('/webmcp.js')) fail('homepage is missing the webmcp.js script');
+
 const headersPath = existsSync(resolve(root, '_headers'))
   ? resolve(root, '_headers')
   : resolve('public/_headers');
@@ -214,6 +223,8 @@ const assets = {
     const path = new URL(request.url).pathname;
     if (path === '/.well-known/api-catalog')
       return new Response('{}', { headers: { 'content-type': 'application/json' } });
+    if (path === '/search-index.json')
+      return new Response('[]', { headers: { 'content-type': 'application/json' } });
     if (path.endsWith('index.md'))
       return path.includes('missing-sibling')
         ? new Response('', { status: 404 })
@@ -246,6 +257,7 @@ for (const [accept, body] of [
   ['text/html;q=0.4,text/markdown;q=0.9', 'markdown'],
   ['text/html,text/markdown', 'markdown'],
   ['text/markdown;q=0', 'html'],
+  ['text/html,application/xhtml+xml;q=0.9,text/markdown;q=0.5', 'markdown'],
 ]) {
   const response = await request(accept);
   if (
@@ -254,6 +266,8 @@ for (const [accept, body] of [
     !response.headers.get('link')?.includes('old')
   )
     fail(`Worker negotiation failed for ${accept || 'absent'}`);
+  if (body === 'markdown' && !response.headers.get('x-markdown-tokens'))
+    fail(`Worker did not set x-markdown-tokens for ${accept}`);
 }
 for (const [method, path, status, body] of [
   ['HEAD', '/usage/', 200, ''],
@@ -270,5 +284,9 @@ for (const [method, path, status, body] of [
 const apiCatalogResponse = await request('*/*', 'GET', '/.well-known/api-catalog');
 if (apiCatalogResponse.headers.get('content-type') !== 'application/linkset+json')
   fail('Worker did not set application/linkset+json for /.well-known/api-catalog');
+
+const searchIndexResponse = await request('*/*', 'GET', '/search-index.json');
+if (searchIndexResponse.headers.get('access-control-allow-origin') !== '*')
+  fail('Worker did not set Access-Control-Allow-Origin for /search-index.json');
 
 console.log(`ok: SEO foundation audit (${mode})`);

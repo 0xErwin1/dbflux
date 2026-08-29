@@ -1,9 +1,13 @@
 {
-  "specVersion": "0.1",
-  "host": { "name": "DBFlux", "url": "https://dbflux.dev" },
+  "specVersion": "1.0",
+  "host": {
+    "displayName": "DBFlux",
+    "identifier": "did:web:dbflux.dev",
+    "url": "https://dbflux.dev"
+  },
   "entries": [
     {
-      "id": "urn:air:dbflux.dev:docs:documentation",
+      "identifier": "urn:air:dbflux.dev:docs:documentation",
       "displayName": "DBFlux documentation",
       "type": "text/html",
       "url": "https://docs.dbflux.dev/",
@@ -14,7 +18,7 @@
       ]
     },
     {
-      "id": "urn:air:dbflux.dev:docs:llms-txt",
+      "identifier": "urn:air:dbflux.dev:docs:llms-txt",
       "displayName": "DBFlux llms.txt index",
       "type": "text/plain",
       "url": "https://dbflux.dev/llms.txt",
@@ -24,7 +28,7 @@
       ]
     },
     {
-      "id": "urn:air:dbflux.dev:skills:dbflux",
+      "identifier": "urn:air:dbflux.dev:skills:dbflux",
       "displayName": "DBFlux agent skill",
       "type": "text/markdown",
       "url": "https://dbflux.dev/.well-known/agent-skills/dbflux/SKILL.md",
@@ -34,10 +38,10 @@
       ]
     },
     {
-      "id": "urn:air:dbflux.dev:mcp:docs",
+      "identifier": "urn:air:dbflux.dev:mcp:docs",
       "displayName": "DBFlux docs MCP server",
-      "type": "application/json",
-      "url": "https://mcp.dbflux.dev/mcp",
+      "type": "application/mcp-server-card+json",
+      "url": "https://dbflux.dev/.well-known/mcp/server-card.json",
       "representativeQueries": [
         "Search the DBFlux documentation",
         "Read the DBFlux usage guide as markdown"

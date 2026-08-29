@@ -39,8 +39,19 @@ export default {
       !html.ok ||
       !request.url.endsWith('/') ||
       !html.headers.get('content-type')?.includes('text/html')
-    )
+    ) {
+      const pathname = new URL(request.url).pathname;
+      if (pathname.endsWith('.md') || pathname === '/search-index.json') {
+        const headers = new Headers(html.headers);
+        headers.set('Access-Control-Allow-Origin', '*');
+        return new Response(request.method === 'HEAD' ? null : html.body, {
+          status: html.status,
+          statusText: html.statusText,
+          headers,
+        });
+      }
       return html;
+    }
     const markdownUrl = new URL('index.md', request.url).href;
     const markdown = await env.ASSETS.fetch(new Request(markdownUrl));
     if (!markdown.ok) return html;
@@ -48,11 +59,7 @@ export default {
     merge(headers, 'Vary', 'Accept');
     merge(headers, 'Link', `<${markdownUrl}>; rel="alternate"; type="text/markdown"`);
     const markdownQuality = quality(request.headers.get('Accept'), 'text/markdown');
-    const htmlQuality = quality(request.headers.get('Accept'), 'text/html');
-    const selected =
-      markdownQuality !== undefined &&
-      markdownQuality > 0 &&
-      (htmlQuality === undefined || markdownQuality >= htmlQuality);
+    const selected = markdownQuality !== undefined && markdownQuality > 0;
     if (selected) {
       headers.set('content-type', 'text/markdown; charset=utf-8');
       headers.delete('content-length');
@@ -60,8 +67,15 @@ export default {
         'Link',
         `${html.headers.get('Link') ? `${html.headers.get('Link')}, ` : ''}<${request.url}>; rel="alternate"; type="text/html"`,
       );
+      const markdownText = await markdown.text();
+      headers.set('x-markdown-tokens', String(Math.ceil(markdownText.length / 4)));
+      return new Response(request.method === 'HEAD' ? null : markdownText, {
+        status: html.status,
+        statusText: html.statusText,
+        headers,
+      });
     }
-    return new Response(request.method === 'HEAD' ? null : (selected ? markdown : html).body, {
+    return new Response(request.method === 'HEAD' ? null : html.body, {
       status: html.status,
       statusText: html.statusText,
       headers,
