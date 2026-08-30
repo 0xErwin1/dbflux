@@ -72,6 +72,7 @@ InfluxDB driver for DBFlux.
 - **"Query Measurement" context menu** — right-clicking a measurement in the sidebar shows "Query Measurement". The action opens a new code document pre-populated with a template query (`SELECT * FROM ...` for InfluxQL, `from(bucket: ...) |> range(...)` for Flux).
 - **"New Query" context menu on buckets** — right-clicking a bucket/database node shows "New Query", opening a blank code document with the connection activated.
 - **Read-template generation** — `InfluxQueryGenerator` produces select-all and per-measurement read templates for both InfluxQL and Flux (used by the context-menu actions and copy-as-query), version-aware via the connection's configured version and default bucket.
+- **Client identity** — every HTTP request reports `dbflux/<version>` as the `User-Agent` header, visible in server-side request logs.
 
 ## Limitations
 

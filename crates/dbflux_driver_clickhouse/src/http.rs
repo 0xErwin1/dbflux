@@ -71,6 +71,7 @@ impl ClickHouseHttpClient {
             .tcp_nodelay(true)
             .use_rustls_tls()
             .redirect(Policy::none())
+            .user_agent(dbflux_core::client_identity())
             .build()
             .map_err(|error| ClickHouseHttpError::Transport(error.to_string()))?;
 

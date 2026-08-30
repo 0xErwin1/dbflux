@@ -132,6 +132,8 @@ Driver de InfluxDB para DBFlux.
   para Flux (usadas por las acciones del menú contextual y copy-as-query),
   sensibles a la versión según la versión configurada de la conexión y el bucket
   por defecto.
+- **Identidad del cliente** — cada request HTTP reporta `dbflux/<versión>` como
+  header `User-Agent`, visible en los logs de request del lado del servidor.
 
 ## Limitaciones
 

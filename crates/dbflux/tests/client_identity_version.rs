@@ -10,3 +10,9 @@ fn client_identity_matches_app_version() {
     let expected = format!("dbflux/{}", env!("CARGO_PKG_VERSION"));
     assert_eq!(dbflux_core::client_identity(), expected);
 }
+
+#[test]
+fn client_identity_token_matches_app_version() {
+    let expected = format!("dbflux-{}", env!("CARGO_PKG_VERSION"));
+    assert_eq!(dbflux_core::client_identity_token(), expected);
+}

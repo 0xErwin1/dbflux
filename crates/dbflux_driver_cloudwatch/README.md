@@ -28,6 +28,7 @@ AWS CloudWatch Logs driver for DBFlux, built on the [`aws-sdk-cloudwatchlogs`](h
 - CloudWatch Metrics via `GetMetricData`: executes a single `MetricDataQuery` per request, maps the response to a two-column (timestamp, value) `QueryResult` ordered ascending by timestamp. Timestamps from AWS (second-precision) are converted to milliseconds. Multi-metric pivot to wide format is supported when multiple `MetricDataResult` entries are returned.
 - Browse CloudWatch metric catalog (namespaces and per-namespace metrics with dimension combinations) via `ListMetrics` pagination. Namespace listing is synthesized by sweeping `ListMetrics` with no filter and collecting distinct namespace strings. Results are cached in-session by `MetricCatalogCache`.
 - Metric catalog is browsable from the connection sidebar tree (Metrics > Namespace > Metric). Clicking a metric leaf opens a chart pre-populated with defaults (Average / 5 min period / aggregate across all dimensions) and immediately executes it. The picker rail in the chart document allows refining dimensions, period, and statistic.
+- Client identity: every request carries `dbflux-<version>` as the AWS SDK app name, visible in CloudTrail's `userAgent` field.
 
 ## Limitations
 

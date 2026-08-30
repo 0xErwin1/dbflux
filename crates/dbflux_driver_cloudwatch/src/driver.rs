@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use aws_config::{BehaviorVersion, Region};
+use aws_config::{AppName, BehaviorVersion, Region};
 use aws_sdk_cloudwatch::config::Builder as CloudWatchMetricsConfigBuilder;
 use aws_sdk_cloudwatch::error::ProvideErrorMetadata as CloudWatchProvideErrorMetadata;
 use aws_sdk_cloudwatch::primitives::DateTime as MetricsDateTime;
@@ -1166,6 +1166,11 @@ fn build_clients(
 ) -> Result<(Client, aws_sdk_cloudwatch::Client), DbError> {
     let mut loader =
         aws_config::defaults(BehaviorVersion::latest()).region(Region::new(config.region.clone()));
+
+    match AppName::new(dbflux_core::client_identity_token()) {
+        Ok(app_name) => loader = loader.app_name(app_name),
+        Err(error) => log::warn!("failed to set AWS SDK app name: {error}"),
+    }
 
     if let Some(profile) = &config.profile {
         loader = loader.profile_name(profile);

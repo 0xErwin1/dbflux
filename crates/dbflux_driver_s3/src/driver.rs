@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
-use aws_config::{BehaviorVersion, Region};
+use aws_config::{AppName, BehaviorVersion, Region};
 use aws_sdk_s3::Client;
 use aws_sdk_s3::config::{Builder as S3ConfigBuilder, Credentials};
 use aws_sdk_s3::presigning::PresigningConfig;
@@ -326,6 +326,11 @@ fn build_client(
 ) -> Result<Client, DbError> {
     let mut loader =
         aws_config::defaults(BehaviorVersion::latest()).region(Region::new(config.region.clone()));
+
+    match AppName::new(dbflux_core::client_identity_token()) {
+        Ok(app_name) => loader = loader.app_name(app_name),
+        Err(error) => log::warn!("failed to set AWS SDK app name: {error}"),
+    }
 
     if let Some(profile) = &config.profile {
         loader = loader.profile_name(profile);
