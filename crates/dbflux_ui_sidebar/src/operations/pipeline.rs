@@ -658,6 +658,8 @@ impl Sidebar {
                     log::warn!("{}", warning);
                 }
 
+                let probe = connection.probe_write_privilege();
+
                 app_state.update(cx, |state, cx| {
                     state.complete_task(task_id);
                     state.finish_pending_operation(profile_id, None);
@@ -667,6 +669,7 @@ impl Sidebar {
                         schema,
                         tunnel_handle,
                         false,
+                        probe,
                     );
                     cx.emit(dbflux_ui_base::AppStateChanged);
                     cx.notify();

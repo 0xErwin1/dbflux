@@ -1827,6 +1827,14 @@ impl Connection for MongoConnection {
         Ok(())
     }
 
+    fn probe_write_privilege(&self) -> dbflux_core::WritePrivilege {
+        let Ok(client_guard) = self.client.lock() else {
+            return dbflux_core::WritePrivilege::Unknown;
+        };
+
+        crate::instance_catalog::MongoInstanceCatalog::probe_write_privilege(&client_guard)
+    }
+
     fn instance_catalog(&self) -> Option<Box<dyn InstanceCatalog>> {
         let client_guard = self.client.lock().ok()?;
         let cluster_monitor =

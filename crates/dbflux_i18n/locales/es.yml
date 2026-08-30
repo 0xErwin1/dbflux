@@ -1167,6 +1167,8 @@ document:
         bulk_delete_no_rows_identified: "No se puede eliminar: no se pudo identificar ninguna fila"
         bulk_delete_no_documents_identified: "No se puede eliminar: no se pudo identificar ningún documento"
         read_only_connection: Esta conexión es de solo lectura. No se permiten mutaciones.
+        read_only_connection_profile: El perfil de esta conexión está configurado como solo lectura. No se permiten mutaciones.
+        read_only_connection_server: El servidor rechazó las mutaciones para esta conexión. No se permiten mutaciones.
         approval_queue_failed: "No se pudo encolar la mutación para aprobación: %{error}"
         approval_requires_mcp: Las mutaciones en esta conexión requieren aprobación. Activa la función MCP para habilitar el flujo de aprobación.
         connection_not_found: "Conexión no encontrada — no se puede ejecutar la mutación."
@@ -1957,6 +1959,8 @@ document:
       preview_ddl: Vista previa del DDL
     apply:
       read_only: Esta conexión es de solo lectura. No se permiten cambios de esquema.
+      read_only_profile: El perfil de esta conexión está configurado como solo lectura. No se permiten cambios de esquema.
+      read_only_server: El servidor rechazó las mutaciones para esta conexión. No se permiten cambios de esquema.
     change:
       column_added: "Agregar columna %{name} %{type_name}"
       column_removed: "Eliminar columna %{name}"
@@ -1995,6 +1999,8 @@ document:
       connection_unavailable: La conexión de destino ya no está disponible.
       ddl_build_failed: "No se puede generar el DDL: %{error}"
       read_only: Esta conexión es de solo lectura. No se permiten cambios de esquema.
+      read_only_profile: El perfil de esta conexión está configurado como solo lectura. No se permiten cambios de esquema.
+      read_only_server: El servidor rechazó las mutaciones para esta conexión. No se permiten cambios de esquema.
       reference_connection_disconnected: La conexión de referencia elegida no está conectada.
       reference_not_picked: Elige una base de datos o conexión de referencia para comparar.
       select_at_least_one: Selecciona al menos un cambio primero.
@@ -3499,6 +3505,13 @@ sso_wizard:
     profile_created: Perfil de autenticación de AWS SSO creado
 status_bar:
   disconnected: desconectado
+  read_only:
+    profile:
+      label: Solo lectura (perfil)
+      tooltip: El perfil de esta conexión está configurado como solo lectura.
+    server:
+      label: Solo lectura (servidor)
+      tooltip: El servidor rechazó las mutaciones para esta conexión.
   tasks_label: Tareas
   tasks_running:
     one: "1 en curso"

@@ -3669,14 +3669,18 @@ impl DataGridPanel {
             _ => return,
         };
 
-        let (policy, connection) = {
+        let (policy, read_only_reason, connection) = {
             let state = self.app_state.read(cx);
             let connected = match state.connections().get(&profile_id) {
                 Some(c) => c,
                 None => return,
             };
 
-            (connected.mutation_policy, Arc::clone(&connected.connection))
+            (
+                connected.mutation_policy,
+                connected.read_only_reason,
+                Arc::clone(&connected.connection),
+            )
         };
 
         // Gate on mutation policy — state borrow has been released above.
@@ -3685,7 +3689,7 @@ impl DataGridPanel {
                 dbflux_ui_base::user_error::report_error(
                     dbflux_ui_base::user_error::UserFacingError::new(
                         dbflux_ui_base::user_error::ErrorKind::User,
-                        dbflux_i18n::t!("document.data.mutation.error.read_only_connection"),
+                        crate::labels::mutation_read_only_error(read_only_reason),
                     ),
                     cx,
                 );
@@ -5186,6 +5190,7 @@ mod tests {
                     connection: Arc::new(StubBuilderConnection { metadata }),
                     schema: None,
                     mutation_policy: dbflux_core::MutationPolicy::default(),
+                    read_only_reason: None,
                     database_schemas: Default::default(),
                     table_details: Default::default(),
                     collection_children: Default::default(),
@@ -5964,6 +5969,7 @@ mod tests {
                     connection: Arc::new(StubSqlConnection2),
                     schema: None,
                     mutation_policy: MutationPolicy::ApprovalRequired,
+                    read_only_reason: None,
                     database_schemas: Default::default(),
                     table_details: Default::default(),
                     collection_children: Default::default(),
@@ -6375,6 +6381,7 @@ mod tests {
                     },
                     schema: None,
                     mutation_policy: MutationPolicy::default(),
+                    read_only_reason: None,
                     database_schemas: Default::default(),
                     table_details: Default::default(),
                     collection_children: Default::default(),
@@ -6676,6 +6683,7 @@ mod tests {
                     connection,
                     schema: None,
                     mutation_policy: MutationPolicy::default(),
+                    read_only_reason: None,
                     database_schemas: Default::default(),
                     table_details: Default::default(),
                     collection_children: Default::default(),

@@ -1576,6 +1576,14 @@ impl Connection for PostgresConnection {
         Ok(())
     }
 
+    fn probe_write_privilege(&self) -> dbflux_core::WritePrivilege {
+        self.client
+            .lock()
+            .ok()
+            .map(|mut c| crate::instance_catalog::probe_postgres_write_privilege(&mut c))
+            .unwrap_or(dbflux_core::WritePrivilege::Unknown)
+    }
+
     fn instance_catalog(&self) -> Option<Box<dyn InstanceCatalog>> {
         let pg_signal_backend = self
             .client

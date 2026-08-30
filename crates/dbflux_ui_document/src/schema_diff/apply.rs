@@ -3,9 +3,28 @@ use std::sync::Arc;
 use dbflux_core::{
     AddColumnRequest, AlterColumnRequest, CodeGenerator, Connection, DdlRejection, DefaultSpec,
     DropColumnRequest, EventCategory, EventOutcome, EventRecord, EventSeverity, EventSink,
-    MutationPolicy, QueryRequest, RiskedChange, SchemaChange, TableInfo, TableRef,
+    MutationPolicy, QueryRequest, ReadOnlyReason, RiskedChange, SchemaChange, TableInfo, TableRef,
     TransactionVocab,
 };
+
+/// Text explaining why DDL apply is refused for a read-only connection,
+/// differentiated by why it is read-only. Shared with the `read_only` toast
+/// in `view.rs::run_apply` so the two refusal paths never drift.
+///
+/// `None` falls back to the generic message: `ConnectedProfile` only sets
+/// `read_only_reason` when `mutation_policy` is `ReadOnly`, but a `None`
+/// reason on a `ReadOnly` policy is still handled instead of panicking.
+pub(crate) fn read_only_message(reason: Option<ReadOnlyReason>) -> String {
+    match reason {
+        Some(ReadOnlyReason::ProfileSetting) => {
+            dbflux_i18n::t!("document.schema_diff.apply.read_only_profile")
+        }
+        Some(ReadOnlyReason::ServerEnforced) => {
+            dbflux_i18n::t!("document.schema_diff.apply.read_only_server")
+        }
+        None => dbflux_i18n::t!("document.schema_diff.apply.read_only"),
+    }
+}
 
 /// Outcome of a completed (or short-circuited) `DdlApplyExecutor::apply` run.
 #[derive(Debug, Clone, PartialEq)]
@@ -258,6 +277,11 @@ pub struct DdlApplyDeps {
     pub connection: Arc<dyn Connection>,
     pub event_sink: Option<Arc<dyn EventSink>>,
     pub policy: MutationPolicy,
+    /// Set when `policy` is `MutationPolicy::ReadOnly`, explaining whether the
+    /// profile itself or the server enforced it. Mirrors
+    /// `ConnectedProfile::read_only_reason` — drives the reason-aware refusal
+    /// message in `apply()`.
+    pub read_only_reason: Option<ReadOnlyReason>,
 }
 
 /// Plain (non-GPUI) struct that applies the DDL for a reviewed schema diff.
@@ -322,7 +346,7 @@ impl DdlApplyExecutor {
             MutationPolicy::ApprovalRequired => return Ok(DdlApplyOutcome::Deferred),
             MutationPolicy::ReadOnly => {
                 return Ok(DdlApplyOutcome::Blocked {
-                    reason: dbflux_i18n::t!("document.schema_diff.apply.read_only"),
+                    reason: read_only_message(self.deps.read_only_reason),
                 });
             }
             MutationPolicy::Allowed => {}
@@ -1114,6 +1138,7 @@ mod tests {
             connection: connection as Arc<dyn Connection>,
             event_sink: sink.map(|s| s as Arc<dyn EventSink>),
             policy: MutationPolicy::Allowed,
+            read_only_reason: None,
         }
     }
 
@@ -1243,6 +1268,59 @@ mod tests {
         let outcome = executor.apply().unwrap();
         assert!(matches!(outcome, DdlApplyOutcome::Blocked { .. }));
         assert!(conn_ref.recorded_calls().is_empty());
+    }
+
+    #[test]
+    fn read_only_blocked_message_selects_profile_key_for_profile_setting() {
+        let conn = FakeConnection::new(DbKind::Postgres, true);
+        let changes = vec![add_column_change("email")];
+        let mut d = deps(conn, None);
+        d.policy = MutationPolicy::ReadOnly;
+        d.read_only_reason = Some(ReadOnlyReason::ProfileSetting);
+        let executor = DdlApplyExecutor::new(users_table(), changes, d);
+
+        let outcome = executor.apply().unwrap();
+        assert_eq!(
+            outcome,
+            DdlApplyOutcome::Blocked {
+                reason: dbflux_i18n::t!("document.schema_diff.apply.read_only_profile"),
+            }
+        );
+    }
+
+    #[test]
+    fn read_only_blocked_message_selects_server_key_for_server_enforced() {
+        let conn = FakeConnection::new(DbKind::Postgres, true);
+        let changes = vec![add_column_change("email")];
+        let mut d = deps(conn, None);
+        d.policy = MutationPolicy::ReadOnly;
+        d.read_only_reason = Some(ReadOnlyReason::ServerEnforced);
+        let executor = DdlApplyExecutor::new(users_table(), changes, d);
+
+        let outcome = executor.apply().unwrap();
+        assert_eq!(
+            outcome,
+            DdlApplyOutcome::Blocked {
+                reason: dbflux_i18n::t!("document.schema_diff.apply.read_only_server"),
+            }
+        );
+    }
+
+    #[test]
+    fn read_only_blocked_message_falls_back_to_generic_key_when_reason_missing() {
+        let conn = FakeConnection::new(DbKind::Postgres, true);
+        let changes = vec![add_column_change("email")];
+        let mut d = deps(conn, None);
+        d.policy = MutationPolicy::ReadOnly;
+        let executor = DdlApplyExecutor::new(users_table(), changes, d);
+
+        let outcome = executor.apply().unwrap();
+        assert_eq!(
+            outcome,
+            DdlApplyOutcome::Blocked {
+                reason: dbflux_i18n::t!("document.schema_diff.apply.read_only"),
+            }
+        );
     }
 
     // 3.5 — audit: Pending -> Success with a shared correlation id

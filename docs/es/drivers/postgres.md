@@ -36,6 +36,12 @@ Base de datos relacional open-source avanzada.
 - Reporta su identidad de cliente al servidor como
   `application_name=dbflux/<version>`, salvo que la connection string ya defina
   `application_name`, en cuyo caso se conserva el valor del usuario.
+- Verifica el privilegio de escritura al conectar: una réplica o una
+  transacción en modo solo lectura resuelve a solo lectura sin importar los
+  grants, y en caso contrario decide según los privilegios `INSERT`/`UPDATE`/
+  `DELETE` del rol autenticado sobre las tablas base visibles; una base vacía
+  o un fallo en la verificación es inconcluyente y deja intacta la política de
+  mutación del perfil.
 
 ### Instance Metrics
 

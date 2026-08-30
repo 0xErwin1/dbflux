@@ -20,6 +20,7 @@ log.workspace = true
 redis = { version = "0.27", features = ["tls-rustls", "cluster", "sentinel"] }
 serde_json.workspace = true
 urlencoding = "2"
+uuid.workspace = true
 
 [dev-dependencies]
 dbflux_test_support.workspace = true

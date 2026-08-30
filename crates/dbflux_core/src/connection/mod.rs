@@ -57,8 +57,8 @@ pub use manager::{
     FetchSchemaRoutinesParams, FetchSchemaRoutinesResult, FetchSchemaTypesParams,
     FetchSchemaTypesResult, FetchTableDetailsParams, FetchTableDetailsResult, HookExecutionContext,
     MutationPolicy, OwnedCacheEntry, PendingOperation, PrepareConnectError, ProfilePolicyResolver,
-    RedisKeyCache, RedisKeyCacheEntry, ResolvedProxy, SchemaCacheKey, SwitchDatabaseParams,
-    SwitchDatabaseResult,
+    ReadOnlyReason, RedisKeyCache, RedisKeyCacheEntry, ResolvedProxy, SchemaCacheKey,
+    SwitchDatabaseParams, SwitchDatabaseResult, WritePrivilege, compose_mutation_policy,
 };
 #[allow(deprecated)]
 pub use profile::{

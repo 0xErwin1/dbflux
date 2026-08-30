@@ -2953,6 +2953,7 @@ dependencies = [
  "redis",
  "serde_json",
  "urlencoding",
+ "uuid",
 ]
 
 [[package]]

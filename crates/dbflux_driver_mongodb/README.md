@@ -27,6 +27,7 @@ MongoDB document driver for DBFlux.
 - DDL: drop database, drop collection, create index, and drop index.
 - JSON export of results (`EXPORT_JSON`).
 - Reports client identity as `appName=dbflux/<version>` on connect (visible in server logs and `db.currentOp()`), unless the connection URI already sets an `appName`.
+- Write-privilege probe: after connecting, classifies the session as writable, read-only, or unknown by inspecting `connectionStatus` (`showPrivileges: true`) for write-granting privileges/roles, with `hello` overriding the verdict to read-only when connected directly to a non-writable node (e.g. a secondary).
 
 ### Instance Metrics
 

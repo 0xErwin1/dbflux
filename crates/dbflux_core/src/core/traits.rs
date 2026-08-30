@@ -997,6 +997,19 @@ pub trait Connection: Send + Sync {
         Ok(Vec::new())
     }
 
+    /// Best-effort check of whether this connection can perform mutations
+    /// against the server (e.g. a read-only replica, a role without write
+    /// grants, or a read-only transaction mode).
+    ///
+    /// Called once after connecting to feed `compose_mutation_policy`.
+    /// Implementations must be side-effect free on the server: no persistent
+    /// keys, rows, or schema objects may be created to answer this question.
+    /// The default implementation returns `WritePrivilege::Unknown`, which
+    /// never changes the resolved `MutationPolicy`.
+    fn probe_write_privilege(&self) -> crate::connection::WritePrivilege {
+        crate::connection::WritePrivilege::Unknown
+    }
+
     /// Fetch tables and views for a database (without column details).
     /// Returns empty `columns`/`indexes`; use `table_details()` for full info.
     fn schema_for_database(&self, _database: &str) -> Result<DbSchemaInfo, DbError> {

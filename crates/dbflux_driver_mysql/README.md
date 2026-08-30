@@ -22,6 +22,7 @@ Popular open-source relational database.
 - Multi-statement scripts (several `;`-separated statements) are split and executed statement by statement, each through the typed prepared path, returning one result set per statement.
 - Data-transfer engine: native multi-row `INSERT` bulk-load (`BULK_INSERT`), driver-native `CREATE TABLE` DDL from a source table's columns, `TRUNCATE TABLE` support, and a referential-integrity toggle (`SET FOREIGN_KEY_CHECKS`) for FK-safe migrations. Both MySQL and MariaDB share this support.
 - Sends the `program_name` connection attribute as `dbflux/<version>`, visible in `performance_schema.session_connect_attrs`.
+- Write-privilege probe: after connecting, checks `@@read_only`/`@@super_read_only` and `SHOW GRANTS` for the current user to detect a read-only replica or a role without `INSERT`/`UPDATE`/`DELETE` grants, tightening the resolved mutation policy to read-only when the server would reject writes anyway (side-effect free; falls back to `@@read_only` alone on MariaDB, which has no `@@super_read_only`).
 
 ### Instance Metrics
 

@@ -72,6 +72,26 @@ pub(crate) fn query_failed_error(error: &str) -> String {
     dbflux_i18n::t!("document.data.grid.error.query_failed", error = error)
 }
 
+/// Error text shown when a mutation is rejected because the connection is
+/// read-only, differentiated by why it is read-only.
+///
+/// `None` falls back to the generic message: `ConnectedProfile` only sets
+/// `read_only_reason` when `mutation_policy` is `ReadOnly`, but a `None`
+/// reason on a `ReadOnly` policy is still handled instead of panicking.
+pub(crate) fn mutation_read_only_error(reason: Option<dbflux_core::ReadOnlyReason>) -> String {
+    use dbflux_core::ReadOnlyReason;
+
+    match reason {
+        Some(ReadOnlyReason::ProfileSetting) => {
+            dbflux_i18n::t!("document.data.mutation.error.read_only_connection_profile")
+        }
+        Some(ReadOnlyReason::ServerEnforced) => {
+            dbflux_i18n::t!("document.data.mutation.error.read_only_connection_server")
+        }
+        None => dbflux_i18n::t!("document.data.mutation.error.read_only_connection"),
+    }
+}
+
 /// Label for a [`dbflux_export::ExportFormat`] shown in the export menu and
 /// the export trigger button.
 pub(crate) fn export_format_label(format: dbflux_export::ExportFormat) -> String {
@@ -2256,7 +2276,7 @@ mod tests {
         mutation_delete_task_label, mutation_execution_cancelled_toast,
         mutation_execution_completed_toast, mutation_execution_failed_error,
         mutation_insert_document_task_label, mutation_insert_row_task_label,
-        mutation_save_document_task_label, mutation_save_row_task_label,
+        mutation_read_only_error, mutation_save_document_task_label, mutation_save_row_task_label,
         mutation_update_document_field_task_label, object_browser_copied_uri_toast,
         object_browser_status_summary, object_browser_versions_count_label, partial_delete_label,
         pending_change_count_label, pending_edits_summary, pk_details_fetch_failed_error,
@@ -5743,6 +5763,51 @@ mod tests {
         );
 
         assert_ne!(en, es);
+    }
+
+    #[test]
+    fn mutation_read_only_error_selects_profile_key_for_profile_setting() {
+        let value = mutation_read_only_error(Some(dbflux_core::ReadOnlyReason::ProfileSetting));
+
+        assert_eq!(
+            value,
+            dbflux_i18n::t!("document.data.mutation.error.read_only_connection_profile")
+        );
+    }
+
+    #[test]
+    fn mutation_read_only_error_selects_server_key_for_server_enforced() {
+        let value = mutation_read_only_error(Some(dbflux_core::ReadOnlyReason::ServerEnforced));
+
+        assert_eq!(
+            value,
+            dbflux_i18n::t!("document.data.mutation.error.read_only_connection_server")
+        );
+    }
+
+    #[test]
+    fn mutation_read_only_error_falls_back_to_generic_key_when_reason_missing() {
+        let value = mutation_read_only_error(None);
+
+        assert_eq!(
+            value,
+            dbflux_i18n::t!("document.data.mutation.error.read_only_connection")
+        );
+    }
+
+    #[test]
+    fn mutation_read_only_error_reason_keys_resolve_and_differ_between_locales() {
+        for key in [
+            "document.data.mutation.error.read_only_connection_profile",
+            "document.data.mutation.error.read_only_connection_server",
+        ] {
+            let en = dbflux_i18n::t!(key, locale = "en");
+            let es = dbflux_i18n::t!(key, locale = "es");
+
+            assert!(!en.is_empty(), "{key} resolved empty in en");
+            assert_ne!(en, key, "{key} resolved to its own key");
+            assert_ne!(en, es, "{key} did not differ between locales");
+        }
     }
 
     #[test]

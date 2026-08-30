@@ -25,6 +25,12 @@ Driver de clave-valor Redis para DBFlux, construido sobre el crate
 - Reporta su identidad de cliente al servidor vía `CLIENT SETNAME` al conectar
   (`dbflux/<version>`, visible en `CLIENT LIST`); best-effort, ya que algunos
   proveedores managed restringen los comandos `CLIENT`.
+- Sondeo best-effort de privilegios de escritura al conectar
+  (`probe_write_privilege`): intenta primero `ACL WHOAMI` + `ACL DRYRUN`, y
+  recurre a un `SET ... NX` / `DEL` con TTL corto sobre una clave con
+  namespace propio cuando `ACL` no está disponible (servidor antiguo o
+  proveedor managed restringido); una respuesta `READONLY` de una réplica o
+  una denegación `NOPERM` resuelven a una conexión de solo lectura.
 - TLS/SSL con tres modos (`off`, `on`, `verify`):
   - `off` — conexión `redis://` plana.
   - `on` — `rediss://` con el certificado confiado sin validación de cadena
