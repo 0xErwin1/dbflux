@@ -737,11 +737,96 @@ impl Connection for InfluxConnection {
     fn query_generator(&self) -> Option<&dyn dbflux_core::QueryGenerator> {
         Some(&self.query_gen)
     }
+
+    fn probe_write_privilege(&self) -> dbflux_core::WritePrivilege {
+        // v1 has no token-scoped authorization API to probe: its username
+        // grants are all-or-nothing per database and are not queryable
+        // through an HTTP endpoint, so this stays `Unknown` by design.
+        if self.version != InfluxVersion::V2 {
+            return dbflux_core::WritePrivilege::Unknown;
+        }
+
+        let response = match self.http.fetch_authorizations_v2(self.org.as_deref()) {
+            Ok(response) if response.status == 200 => response,
+            _ => return dbflux_core::WritePrivilege::Unknown,
+        };
+
+        let permissions = parse_influx_authorizations_permissions(&response.body);
+        classify_influx_permissions(&permissions)
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Private helpers
 // ---------------------------------------------------------------------------
+
+/// One permission entry from a v2 `/api/v2/authorizations` response.
+struct InfluxPermission {
+    action: String,
+    resource_type: String,
+}
+
+/// Parses the `authorizations[].permissions[]` entries out of a v2
+/// authorizations response body.
+///
+/// Tolerant of malformed or unexpected JSON: any parse failure, or an entry
+/// missing `action`/`resource.type`, is skipped rather than propagated. The
+/// caller treats an empty result the same as a probe failure.
+fn parse_influx_authorizations_permissions(body: &str) -> Vec<InfluxPermission> {
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(body) else {
+        return Vec::new();
+    };
+
+    let Some(authorizations) = json.get("authorizations").and_then(|v| v.as_array()) else {
+        return Vec::new();
+    };
+
+    authorizations
+        .iter()
+        .filter_map(|authorization| authorization.get("permissions")?.as_array())
+        .flatten()
+        .filter_map(|permission| {
+            let action = permission.get("action")?.as_str()?.to_string();
+            let resource_type = permission
+                .get("resource")?
+                .get("type")?
+                .as_str()?
+                .to_string();
+            Some(InfluxPermission {
+                action,
+                resource_type,
+            })
+        })
+        .collect()
+}
+
+/// Classifies the connecting token's permissions into a [`WritePrivilege`]
+/// verdict.
+///
+/// Any `write` permission scoped to `buckets` (all-buckets or a specific
+/// bucket) makes the result `Writable`. Otherwise, any `read` permission on
+/// `buckets` makes it `ReadOnly`. An empty or entirely unrecognized
+/// permission list is `Unknown`.
+fn classify_influx_permissions(permissions: &[InfluxPermission]) -> dbflux_core::WritePrivilege {
+    let mut saw_read_permission = false;
+
+    for permission in permissions {
+        if permission.resource_type != "buckets" {
+            continue;
+        }
+        match permission.action.as_str() {
+            "write" => return dbflux_core::WritePrivilege::Writable,
+            "read" => saw_read_permission = true,
+            _ => {}
+        }
+    }
+
+    if saw_read_permission {
+        dbflux_core::WritePrivilege::ReadOnly
+    } else {
+        dbflux_core::WritePrivilege::Unknown
+    }
+}
 
 impl InfluxConnection {
     fn fetch_measurements(&self) -> Result<Vec<MeasurementInfo>, DbError> {
@@ -994,6 +1079,7 @@ fn escape_influxql_ident(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dbflux_core::WritePrivilege;
 
     #[test]
     fn escape_flux_string_escapes_quotes_and_backslashes() {
@@ -1445,5 +1531,95 @@ mod tests {
             query.contains(&format!("|> tail(n: {limit})")),
             "must trim to requested page size"
         );
+    }
+
+    const AUTHORIZATIONS_FIXTURE_WRITE: &str = r#"{
+        "authorizations": [
+            {
+                "id": "0123456789abcdef",
+                "permissions": [
+                    {"action": "read", "resource": {"type": "buckets"}},
+                    {"action": "write", "resource": {"type": "buckets", "id": "abc123"}}
+                ]
+            }
+        ]
+    }"#;
+
+    const AUTHORIZATIONS_FIXTURE_READ_ONLY: &str = r#"{
+        "authorizations": [
+            {
+                "id": "0123456789abcdef",
+                "permissions": [
+                    {"action": "read", "resource": {"type": "buckets", "id": "abc123"}}
+                ]
+            }
+        ]
+    }"#;
+
+    const AUTHORIZATIONS_FIXTURE_NON_BUCKET_PERMISSIONS: &str = r#"{
+        "authorizations": [
+            {
+                "id": "0123456789abcdef",
+                "permissions": [
+                    {"action": "write", "resource": {"type": "orgs"}}
+                ]
+            }
+        ]
+    }"#;
+
+    #[test]
+    fn parse_influx_authorizations_permissions_reads_fixture_json() {
+        let permissions = parse_influx_authorizations_permissions(AUTHORIZATIONS_FIXTURE_WRITE);
+        assert_eq!(permissions.len(), 2);
+        assert!(
+            permissions
+                .iter()
+                .any(|p| p.action == "write" && p.resource_type == "buckets")
+        );
+    }
+
+    #[test]
+    fn parse_influx_authorizations_permissions_malformed_json_returns_empty() {
+        let permissions = parse_influx_authorizations_permissions("not json");
+        assert!(permissions.is_empty());
+    }
+
+    #[test]
+    fn parse_influx_authorizations_permissions_missing_authorizations_key_returns_empty() {
+        let permissions = parse_influx_authorizations_permissions(r#"{"foo": "bar"}"#);
+        assert!(permissions.is_empty());
+    }
+
+    #[test]
+    fn classify_influx_permissions_write_on_buckets_is_writable() {
+        let permissions = parse_influx_authorizations_permissions(AUTHORIZATIONS_FIXTURE_WRITE);
+        assert_eq!(
+            classify_influx_permissions(&permissions),
+            WritePrivilege::Writable
+        );
+    }
+
+    #[test]
+    fn classify_influx_permissions_read_only_on_buckets_is_read_only() {
+        let permissions = parse_influx_authorizations_permissions(AUTHORIZATIONS_FIXTURE_READ_ONLY);
+        assert_eq!(
+            classify_influx_permissions(&permissions),
+            WritePrivilege::ReadOnly
+        );
+    }
+
+    #[test]
+    fn classify_influx_permissions_non_bucket_permissions_is_unknown() {
+        let permissions =
+            parse_influx_authorizations_permissions(AUTHORIZATIONS_FIXTURE_NON_BUCKET_PERMISSIONS);
+        assert_eq!(
+            classify_influx_permissions(&permissions),
+            WritePrivilege::Unknown
+        );
+    }
+
+    #[test]
+    fn classify_influx_permissions_empty_is_unknown() {
+        assert_eq!(classify_influx_permissions(&[]), WritePrivilege::Unknown);
     }
 }

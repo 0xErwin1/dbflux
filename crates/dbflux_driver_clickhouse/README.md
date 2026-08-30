@@ -41,6 +41,7 @@ the endpoint is a URL and not a host/port pair.
 - Chart authoring from query results, and CSV and JSON export.
 - Every HTTP request reports `dbflux/<version>` as the `User-Agent` header, visible in server-side request logs.
 - Dangerous-query detection uses the shared `SqlLanguageService` (no ClickHouse-specific override): `ALTER TABLE ... DELETE WHERE ...` and `ALTER TABLE ... UPDATE ... WHERE ...` are already caught as `Alter` (any `ALTER`-prefixed statement is flagged regardless of sub-command), and `TRUNCATE`/`DROP` are caught as usual. `KILL QUERY`/`KILL MUTATION` and `OPTIMIZE TABLE ... FINAL` are not flagged — neither deletes rows or changes table structure — matching how other relational drivers treat comparable non-destructive administrative statements.
+- Write-privilege probe: after connecting, checks the `readonly` server setting and `system.grants` for the current user and their active session roles to detect a read-only session or a user without `INSERT`/`ALTER UPDATE`/`ALTER DELETE` grants, tightening the resolved mutation policy to read-only when the server would reject writes anyway (side-effect free; grants reachable only through a role-of-a-role are not resolved and leave the policy unchanged).
 
 ### Type handling
 

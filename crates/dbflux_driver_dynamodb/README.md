@@ -37,3 +37,4 @@ AWS DynamoDB driver for DBFlux, built on the [`aws-sdk-dynamodb`](https://crates
 - No SSL form (TLS is handled by the AWS SDK transport), no schemas, and no DDL beyond drop-table (no create/alter table, no index creation).
 - Aggregate requests are not supported by the semantic planner.
 - Collection browsing in the core request layer remains offset-based, while the underlying API is page-token based.
+- No write-privilege probe: `Connection::probe_write_privilege` intentionally stays at the trait default (`WritePrivilege::Unknown`), since a reliable check would need `iam:SimulatePrincipalPolicy`, a permission the connecting role typically lacks.

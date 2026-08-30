@@ -143,6 +143,13 @@ Driver de InfluxDB para DBFlux.
   destructivo, para que las políticas de gobernanza vean el impacto real en vez
   de una escritura genérica. `validate` es una verificación sintáctica básica
   (paréntesis y comillas balanceados), no un parser completo.
+- **Sondeo de privilegio de escritura (solo v2)** — tras conectar, hace
+  `GET /api/v2/authorizations` e inspecciona los permisos propios del token
+  de conexión: cualquier permiso `write` sobre `buckets` resuelve a
+  writable, solo permisos `read` resuelven a solo lectura, y una petición
+  fallida o prohibida (el token típicamente no tiene `read:authorizations`)
+  deja la política de mutación resuelta sin cambios. v1 no tiene una API
+  equivalente con alcance por token y nunca se sondea.
 
 ## Limitaciones
 

@@ -34,3 +34,4 @@ AWS S3 and S3-compatible object-storage driver for DBFlux, built on the [`aws-sd
 - `delete_bucket` only succeeds on an empty bucket; deleting a non-empty bucket is rejected client-side with a message pointing at the recursive prefix/bucket delete flow instead.
 - Preview and metadata display are HEAD-gated: an object's size and storage class are always fetched via `head_object` before any body preview is attempted.
 - MinIO-backed live integration tests require Docker and run with `cargo nextest run -p dbflux_driver_s3 --run-ignored all`.
+- No write-privilege probe: `Connection::probe_write_privilege` intentionally stays at the trait default (`WritePrivilege::Unknown`), since a reliable check would need `iam:SimulatePrincipalPolicy`, a permission the connecting role typically lacks.

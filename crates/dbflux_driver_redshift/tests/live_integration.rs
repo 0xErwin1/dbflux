@@ -425,3 +425,31 @@ fn redshift_live_verify_full_with_private_ca_and_client_cert() {
         .ping()
         .expect("ping over the mutually-authenticated TLS connection should succeed");
 }
+
+#[test]
+#[ignore = "requires a real Amazon Redshift cluster; see module docs for required env vars"]
+fn redshift_live_probe_write_privilege_stays_unknown() {
+    // Redshift is wire-enforced read-only by `ensure_read_only` (see
+    // `connection.rs`), so `RedshiftConnection` intentionally does not
+    // override `Connection::probe_write_privilege`. This pins that decision:
+    // a probe result would be redundant with the enforcement that already
+    // rejects every mutating statement, and any grant/role signal from the
+    // server would be misleading given writes never reach the wire either way.
+    let env = LiveRedshiftEnv::from_env();
+    let driver = RedshiftDriver::new();
+    let profile = env.profile_with_ssl_mode("require");
+
+    let connection = driver
+        .connect_with_secrets(
+            &profile,
+            Some(&SecretString::from(env.password.clone())),
+            None,
+        )
+        .expect("connection should succeed");
+
+    assert_eq!(
+        connection.probe_write_privilege(),
+        dbflux_core::WritePrivilege::Unknown,
+        "RedshiftConnection must keep the default WritePrivilege::Unknown probe"
+    );
+}
