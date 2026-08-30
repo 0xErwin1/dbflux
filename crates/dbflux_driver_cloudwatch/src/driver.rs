@@ -8,7 +8,7 @@ use aws_sdk_cloudwatch::error::ProvideErrorMetadata as CloudWatchProvideErrorMet
 use aws_sdk_cloudwatch::primitives::DateTime as MetricsDateTime;
 use aws_sdk_cloudwatch::types::{Dimension, Metric, MetricDataQuery, MetricStat};
 use aws_sdk_cloudwatchlogs::Client;
-use aws_sdk_cloudwatchlogs::config::Builder as CloudWatchConfigBuilder;
+use aws_sdk_cloudwatchlogs::config::{Builder as CloudWatchConfigBuilder, Credentials};
 use aws_sdk_cloudwatchlogs::error::ProvideErrorMetadata as CloudWatchLogsProvideErrorMetadata;
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
@@ -1179,12 +1179,47 @@ fn build_clients(
     if let Some(endpoint) = &config.endpoint {
         logs_builder = logs_builder.endpoint_url(endpoint);
         metrics_builder = metrics_builder.endpoint_url(endpoint);
+
+        // A local emulator (e.g. LocalStack) has no real IAM identity to
+        // resolve, so the default credential chain fails before a request is
+        // ever sent. Fall back to static dummy credentials the way the
+        // DynamoDB driver does for dynamodb-local, unless the caller already
+        // selected a named profile or exported real environment credentials.
+        if endpoint_looks_local(endpoint)
+            && config.profile.is_none()
+            && !has_environment_credentials()
+        {
+            let credentials =
+                Credentials::new("test", "test", None, None, "dbflux-cloudwatch-local");
+            logs_builder = logs_builder.credentials_provider(credentials.clone());
+            metrics_builder = metrics_builder.credentials_provider(credentials);
+        }
     }
 
     let logs_client = Client::from_conf(logs_builder.build());
     let metrics_client = aws_sdk_cloudwatch::Client::from_conf(metrics_builder.build());
 
     Ok((logs_client, metrics_client))
+}
+
+fn endpoint_looks_local(endpoint: &str) -> bool {
+    let without_scheme = endpoint
+        .strip_prefix("http://")
+        .or_else(|| endpoint.strip_prefix("https://"))
+        .unwrap_or(endpoint);
+
+    let host_with_port = without_scheme.split('/').next().unwrap_or_default();
+    let host = host_with_port.split(':').next().unwrap_or_default();
+
+    host.eq_ignore_ascii_case("localhost")
+        || host == "127.0.0.1"
+        || host == "::1"
+        || host == "[::1]"
+}
+
+fn has_environment_credentials() -> bool {
+    std::env::var_os("AWS_ACCESS_KEY_ID").is_some()
+        && std::env::var_os("AWS_SECRET_ACCESS_KEY").is_some()
 }
 
 /// Guard: reject period_s == 0 before any network I/O.

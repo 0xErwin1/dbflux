@@ -75,6 +75,15 @@ Driver de AWS CloudWatch Logs para DBFlux, construido sobre el SDK
 
 ## Limitaciones
 
+- `tests/live_integration.rs` ejecuta el data plane de Logs (descubrimiento de
+  log groups/streams, navegación de eventos) contra un contenedor de LocalStack
+  Community en CI. `DashboardImporter` es parseo puro de JSON y se verifica de
+  la misma forma. `DashboardSource` (que usa la API de la familia Metrics,
+  `GetDashboard`/`ListDashboards`) y Logs Insights
+  (`StartQuery`/`GetQueryResults`) se intentan contra LocalStack pero se
+  omiten con un mensaje registrado cuando el tier community rechaza la
+  llamada; ambos requieren una cuenta AWS real (o LocalStack Pro) para una
+  verificación completa de punta a punta.
 - El campo `profile` (perfil con nombre de AWS) es un campo de formulario
   `AuthProfileRef`. El seam genérico de portabilidad
   (`DbDriver::export_field_hint`) mapea todos los campos `AuthProfileRef` a

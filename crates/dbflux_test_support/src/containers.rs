@@ -493,6 +493,57 @@ where
     })
 }
 
+/// Spin up a LocalStack community container scoped to the CloudWatch Logs and
+/// CloudWatch (metrics/dashboards) APIs, and pass its endpoint to `run`.
+///
+/// `SERVICES=logs,cloudwatch` limits which backends LocalStack boots, keeping
+/// startup fast. Readiness combines LocalStack's documented "Ready." stdout
+/// marker with a poll of `/_localstack/health` so the test does not race a
+/// container that has printed the marker but not yet finished wiring up the
+/// scoped services.
+pub fn with_localstack_cloudwatch_endpoint<T, E, F>(run: F) -> Result<T, E>
+where
+    E: From<dbflux_core::DbError>,
+    F: FnOnce(String) -> Result<T, E>,
+{
+    let image = GenericImage::new("localstack/localstack", "3")
+        .with_exposed_port(ContainerPort::Tcp(4566))
+        .with_wait_for(WaitFor::message_on_stdout("Ready."))
+        .with_env_var("SERVICES", "logs,cloudwatch");
+
+    let container = image.start().expect("failed to start localstack container");
+    let port = container
+        .get_host_port_ipv4(4566)
+        .expect("failed to get localstack host port");
+    let endpoint = format!("http://127.0.0.1:{port}");
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .map_err(|error| dbflux_core::DbError::connection_failed(error.to_string()))
+        .map_err(E::from)?;
+
+    retry_db_operation(Duration::from_secs(60), || {
+        client
+            .get(format!("{endpoint}/_localstack/health"))
+            .send()
+            .map_err(|error| dbflux_core::DbError::connection_failed(error.to_string()))
+            .map_err(E::from)
+            .and_then(|response| {
+                if response.status().is_success() {
+                    Ok(())
+                } else {
+                    Err(E::from(dbflux_core::DbError::connection_failed(format!(
+                        "LocalStack health check returned {}",
+                        response.status()
+                    ))))
+                }
+            })
+    })?;
+
+    run(endpoint)
+}
+
 pub fn retry_db_operation<T, E, F>(timeout: Duration, mut operation: F) -> Result<T, E>
 where
     F: FnMut() -> Result<T, E>,

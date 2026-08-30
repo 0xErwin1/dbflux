@@ -120,6 +120,7 @@ jobs:
             influxdb:2.7
             influxdb:1.8
             minio/minio:RELEASE.2025-09-07T16-13-09Z
+            localstack/localstack:3
           )
           for image in "${images[@]}"; do
             for attempt in 1 2 3; do
@@ -181,6 +182,26 @@ jobs:
 
       - name: Run ClickHouse live integration tests
         run: cargo test -p dbflux_driver_clickhouse --locked --test live_integration -- --ignored --test-threads=1
+
+      # Each test spins up its own LocalStack container (~1.3 GB image), so
+      # this suite runs single-threaded like the MSSQL/InfluxDB/ClickHouse
+      # suites above.
+      - name: Run CloudWatch live integration tests
+        run: cargo test -p dbflux_driver_cloudwatch --locked --test live_integration -- --ignored --test-threads=1
+
+      # Redshift has no Docker-based emulator; these tests hit a real Amazon
+      # Redshift cluster and only run when the DBFLUX_TEST_REDSHIFT_* secrets
+      # are configured (never true on a fork PR, which gets no secrets), so
+      # the step reports a clean skip rather than failing.
+      - name: Run Redshift live integration tests
+        if: ${{ env.DBFLUX_TEST_REDSHIFT_HOST != '' }}
+        env:
+          DBFLUX_TEST_REDSHIFT_HOST: ${{ secrets.DBFLUX_TEST_REDSHIFT_HOST }}
+          DBFLUX_TEST_REDSHIFT_PORT: ${{ secrets.DBFLUX_TEST_REDSHIFT_PORT }}
+          DBFLUX_TEST_REDSHIFT_USER: ${{ secrets.DBFLUX_TEST_REDSHIFT_USER }}
+          DBFLUX_TEST_REDSHIFT_PASSWORD: ${{ secrets.DBFLUX_TEST_REDSHIFT_PASSWORD }}
+          DBFLUX_TEST_REDSHIFT_DATABASE: ${{ secrets.DBFLUX_TEST_REDSHIFT_DATABASE }}
+        run: cargo test -p dbflux_driver_redshift --locked --test live_integration -- --ignored
 
   cross-platform-check:
     name: Cross-platform check ${{ matrix.os }}
