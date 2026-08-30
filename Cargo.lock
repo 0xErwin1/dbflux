@@ -2769,6 +2769,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "snap",
+ "sqlformat",
  "tempfile",
  "thiserror 2.0.19",
  "tokio",
@@ -9655,6 +9656,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "sqlformat"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0705994df478b895f05b8e290e0d46e53187b26f8d889d37b2a0881234922d94"
+dependencies = [
+ "unicode_categories",
+ "winnow 0.7.15",
+]
+
+[[package]]
 name = "sqlite-wasm-rs"
 version = "0.5.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11068,6 +11079,12 @@ name = "unicode-xid"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853"
+
+[[package]]
+name = "unicode_categories"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "39ec24b3121d976906ece63c9daad25b85969647682eee313cb5779fdd69e14e"
 
 [[package]]
 name = "universal-hash"

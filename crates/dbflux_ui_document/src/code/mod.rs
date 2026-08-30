@@ -10,7 +10,8 @@ use dbflux_components::common::time_range::state::TimeRange;
 use dbflux_components::common::time_range::view::{TimeRangeChanged, TimeRangePanel};
 use dbflux_components::components::multi_select::{MultiSelect, MultiSelectChanged};
 use dbflux_components::controls::{
-    Button, CompletionProvider, GpuiInput as Input, InputEvent, InputPosition, InputState, Rope,
+    Button, CodeActionProvider, CompletionProvider, GpuiInput as Input, InputEvent, InputPosition,
+    InputState, Rope, RopeExt,
 };
 use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use dbflux_components::icons::AppIcon;
@@ -54,6 +55,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use uuid::Uuid;
 
+mod code_actions;
 mod completion;
 mod context_bar;
 mod diagnostics;
@@ -64,6 +66,7 @@ mod live_output;
 pub mod pane;
 mod render;
 
+use code_actions::SqlCodeActionProvider;
 use completion::QueryCompletionProvider;
 use live_output::LiveOutputState;
 
@@ -796,9 +799,16 @@ impl CodeDocument {
                 completion_query_generation.clone(),
             ));
 
+        let code_action_provider: Rc<dyn CodeActionProvider> = Rc::new(SqlCodeActionProvider::new(
+            app_state.clone(),
+            connection_id,
+            exec_ctx.database.clone(),
+        ));
+
         input_state.update(cx, |state, _cx| {
             state.lsp.completion_provider =
                 supports_connection_context.then_some(completion_provider.clone());
+            state.lsp.code_action_providers = vec![code_action_provider.clone()];
         });
 
         let (connection_dropdown, conn_sub) =
@@ -1096,6 +1106,7 @@ impl CodeDocument {
         // blocks the actual text insertion).
         self.editor.input_state.update(cx, |state, _cx| {
             state.lsp.completion_provider = None;
+            state.lsp.code_action_providers = Vec::new();
         });
 
         self

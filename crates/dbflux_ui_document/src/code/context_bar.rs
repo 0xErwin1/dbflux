@@ -148,12 +148,18 @@ impl CodeDocument {
                 self.source.exec_ctx.database.clone(),
                 self.editor.completion_query_generation.clone(),
             ));
+        let code_action_provider: Rc<dyn CodeActionProvider> = Rc::new(SqlCodeActionProvider::new(
+            self.app_state.clone(),
+            connection_id,
+            self.source.exec_ctx.database.clone(),
+        ));
 
         let editor_mode_changed = editor_mode != self.editor.current_editor_mode;
         self.editor.current_editor_mode = editor_mode.clone();
 
         self.editor.input_state.update(cx, |state, cx| {
             state.lsp.completion_provider = Some(completion_provider);
+            state.lsp.code_action_providers = vec![code_action_provider];
 
             // `set_highlighter` resets the cached SyntaxHighlighter to `None`
             // and gpui-component only rebuilds it on the next text edit, so

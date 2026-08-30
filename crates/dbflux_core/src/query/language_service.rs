@@ -1,8 +1,11 @@
+use std::collections::BTreeSet;
+
 use crate::QueryLanguage;
 use dbflux_policy::ExecutionClassification;
 use tree_sitter::{Node, Parser};
 
 use super::safety::classify_sql_execution;
+use super::sql_context::SqlContextEngine;
 
 /// Severity level for a diagnostic message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -18,6 +21,49 @@ pub enum DiagnosticSeverity {
 pub struct TextRange {
     pub start: usize,
     pub end: usize,
+}
+
+/// A single text edit applied by a [`CodeAction`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodeActionEdit {
+    pub range: TextRange,
+    pub new_text: String,
+}
+
+/// A deterministic, driver-defined refactor offered at the cursor.
+///
+/// Unlike [`Diagnostic`], a code action is actionable: applying `edit`
+/// resolves the situation the action was offered for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodeAction {
+    pub title: String,
+    pub edit: CodeActionEdit,
+}
+
+/// Column-name lookup per relation, used by
+/// [`LanguageService::code_actions_with_schema`] to resolve ambiguous
+/// bare-column references against the tables in scope at the cursor.
+///
+/// Implemented by the UI's own schema metadata cache; core action logic never
+/// depends on a concrete cache type. `table_key` is the same normalized key a
+/// caller would use to look up a relation: schema-qualified
+/// (`"schema.table"`, lowercased, unquoted) when the reference carried a
+/// schema, bare (`"table"`, lowercased, unquoted) otherwise.
+pub trait SchemaColumns {
+    /// Columns known for `table_key`, or `None` when the table's columns
+    /// have not been fetched yet.
+    fn columns_of(&self, table_key: &str) -> Option<&BTreeSet<String>>;
+}
+
+/// No-op [`SchemaColumns`] used as the default schema source. Every lookup
+/// misses, so schema-dependent actions (e.g. qualify ambiguous column) never
+/// fire against it; schema-independent actions are unaffected.
+struct NoSchemaColumns;
+
+impl SchemaColumns for NoSchemaColumns {
+    fn columns_of(&self, _table_key: &str) -> Option<&BTreeSet<String>> {
+        None
+    }
 }
 
 /// A position in a document (zero-based line and column).
@@ -407,6 +453,28 @@ pub trait LanguageService: Send + Sync {
     fn classify_execution(&self, _query: &str) -> Option<ExecutionClassification> {
         None
     }
+
+    /// Suggests deterministic refactors at the cursor (byte offset).
+    ///
+    /// Returns an empty vec (the default) for services with no bespoke
+    /// actions. Delegates to [`Self::code_actions_with_schema`] with a no-op
+    /// schema, so schema-independent actions still work without a schema
+    /// cache.
+    fn code_actions(&self, query: &str, offset: usize) -> Vec<CodeAction> {
+        self.code_actions_with_schema(query, offset, &NoSchemaColumns)
+    }
+
+    /// Like [`Self::code_actions`], with a [`SchemaColumns`] seam for actions
+    /// that need column metadata (e.g. qualifying an ambiguous column
+    /// reference). Returns an empty vec by default.
+    fn code_actions_with_schema(
+        &self,
+        _query: &str,
+        _offset: usize,
+        _schema: &dyn SchemaColumns,
+    ) -> Vec<CodeAction> {
+        Vec::new()
+    }
 }
 
 /// Default SQL language service that handles standard SQL dangerous-query detection.
@@ -427,6 +495,269 @@ impl LanguageService for SqlLanguageService {
     fn editor_diagnostics(&self, query: &str) -> Vec<EditorDiagnostic> {
         sql_editor_diagnostics(query)
     }
+
+    fn code_actions_with_schema(
+        &self,
+        query: &str,
+        offset: usize,
+        schema: &dyn SchemaColumns,
+    ) -> Vec<CodeAction> {
+        sql_code_actions(query, offset, schema)
+    }
+}
+
+/// Byte range of the SQL identifier touching `offset` in `statement`, or
+/// `None` when `offset` sits in whitespace/punctuation on both sides.
+fn word_range_at(statement: &str, offset: usize) -> Option<std::ops::Range<usize>> {
+    let bytes = statement.as_bytes();
+    let is_ident_byte = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+
+    let mut start = offset.min(bytes.len());
+    while start > 0 && is_ident_byte(bytes[start - 1]) {
+        start -= 1;
+    }
+
+    let mut end = offset.min(bytes.len());
+    while end < bytes.len() && is_ident_byte(bytes[end]) {
+        end += 1;
+    }
+
+    (start != end).then_some(start..end)
+}
+
+/// Normalized key for a scope relation, matching the convention
+/// [`SchemaColumns`] implementors are expected to key their columns under:
+/// schema-qualified when the reference carried a schema, bare otherwise,
+/// lowercased and stripped of double-quote identifier quoting.
+fn normalize_relation_key(schema: Option<&str>, table: &str) -> String {
+    let clean = |value: &str| value.trim_matches('"').to_lowercase();
+
+    match schema {
+        Some(schema) => format!("{}.{}", clean(schema), clean(table)),
+        None => clean(table),
+    }
+}
+
+/// Whether `keyword` appears as a standalone token (bounded by whitespace or
+/// parentheses) anywhere in `normalized_sql`, which must already be
+/// lowercased with string-literal contents blanked out.
+fn contains_keyword_token(normalized_sql: &str, keyword: &str) -> bool {
+    normalized_sql
+        .split(|c: char| c.is_whitespace() || c == '(' || c == ')')
+        .any(|token| token == keyword)
+}
+
+/// Byte length of `statement` up to (and excluding) its trailing whitespace,
+/// the insertion point every code action here appends its edit at. The
+/// statement text returned by `statement_bounds_at` never carries the `;`
+/// separator itself, only whitespace that preceded it (or trailed the
+/// buffer), so trimming the end lands right after the last real token.
+fn statement_content_end(statement: &str) -> usize {
+    statement.trim_end().len()
+}
+
+fn sql_code_actions(query: &str, offset: usize, schema: &dyn SchemaColumns) -> Vec<CodeAction> {
+    let range = QueryLanguage::Sql.statement_bounds_at(query, offset);
+    if range.is_empty() {
+        return Vec::new();
+    }
+
+    let statement = &query[range.clone()];
+    if statement.trim().is_empty() {
+        return Vec::new();
+    }
+
+    let mut actions = Vec::new();
+
+    if let Some(action) = add_where_action(statement, range.start) {
+        actions.push(action);
+    }
+
+    if let Some(action) = add_limit_action(statement, range.start) {
+        actions.push(action);
+    }
+
+    actions.extend(qualify_column_actions(
+        statement,
+        range.start,
+        offset,
+        schema,
+    ));
+
+    if let Some(action) = format_statement_action(statement, range.clone()) {
+        actions.push(action);
+    }
+
+    actions
+}
+
+/// Offers to append a no-op `WHERE 1 = 0` to an UPDATE/DELETE statement that
+/// has no WHERE clause, using the same detection as `detect_dangerous_sql`.
+fn add_where_action(statement: &str, base_offset: usize) -> Option<CodeAction> {
+    let normalized = statement.trim().to_lowercase();
+    if normalized.is_empty() {
+        return None;
+    }
+
+    let main_stmt = skip_cte_prefix(&normalized);
+    if !main_stmt.starts_with("delete") && !main_stmt.starts_with("update") {
+        return None;
+    }
+
+    if contains_where_clause(&normalized) {
+        return None;
+    }
+
+    let insertion_offset = base_offset + statement_content_end(statement);
+
+    Some(CodeAction {
+        title: "Add WHERE clause (matches no rows)".to_string(),
+        edit: CodeActionEdit {
+            range: TextRange {
+                start: insertion_offset,
+                end: insertion_offset,
+            },
+            new_text: " WHERE 1 = 0".to_string(),
+        },
+    })
+}
+
+/// Offers to append `LIMIT 100` to a SELECT statement with no row cap
+/// (`LIMIT`, `FETCH`, or `TOP`) anywhere in the statement.
+fn add_limit_action(statement: &str, base_offset: usize) -> Option<CodeAction> {
+    let lowered = statement.to_lowercase();
+    let normalized = strip_single_quoted_literals(&lowered);
+
+    let main_stmt = skip_cte_prefix(normalized.trim());
+    if !main_stmt.starts_with("select") {
+        return None;
+    }
+
+    if contains_keyword_token(&normalized, "limit")
+        || contains_keyword_token(&normalized, "fetch")
+        || contains_keyword_token(&normalized, "top")
+    {
+        return None;
+    }
+
+    let insertion_offset = base_offset + statement_content_end(statement);
+
+    Some(CodeAction {
+        title: "Add LIMIT 100".to_string(),
+        edit: CodeActionEdit {
+            range: TextRange {
+                start: insertion_offset,
+                end: insertion_offset,
+            },
+            new_text: " LIMIT 100".to_string(),
+        },
+    })
+}
+
+/// Offers one "Qualify as `<alias-or-table>.<column>`" action per relation
+/// that owns the bare column at the cursor, when the column exists in more
+/// than one relation currently in scope.
+fn qualify_column_actions(
+    statement: &str,
+    base_offset: usize,
+    global_offset: usize,
+    schema: &dyn SchemaColumns,
+) -> Vec<CodeAction> {
+    let Some(engine) = SqlContextEngine::new() else {
+        return Vec::new();
+    };
+
+    let local_offset = global_offset
+        .saturating_sub(base_offset)
+        .min(statement.len());
+    let Some(analysis) = engine.analyze(statement, local_offset) else {
+        return Vec::new();
+    };
+
+    if analysis.scope.relations.len() < 2 {
+        return Vec::new();
+    }
+
+    let Some(word_range) = word_range_at(statement, local_offset) else {
+        return Vec::new();
+    };
+
+    let word = &statement[word_range.clone()];
+    if word.is_empty() {
+        return Vec::new();
+    }
+
+    let mut candidates: Vec<String> = Vec::new();
+    for relation in &analysis.scope.relations {
+        let key = normalize_relation_key(relation.schema.as_deref(), &relation.table);
+        let Some(columns) = schema.columns_of(&key) else {
+            continue;
+        };
+
+        if columns
+            .iter()
+            .any(|column| column.eq_ignore_ascii_case(word))
+        {
+            candidates.push(
+                relation
+                    .alias
+                    .clone()
+                    .unwrap_or_else(|| relation.table.clone()),
+            );
+        }
+    }
+
+    if candidates.len() < 2 {
+        return Vec::new();
+    }
+
+    let edit_range = TextRange {
+        start: base_offset + word_range.start,
+        end: base_offset + word_range.end,
+    };
+
+    candidates
+        .into_iter()
+        .map(|qualifier| CodeAction {
+            title: format!("Qualify as {qualifier}.{word}"),
+            edit: CodeActionEdit {
+                range: edit_range.clone(),
+                new_text: format!("{qualifier}.{word}"),
+            },
+        })
+        .collect()
+}
+
+/// Offers to reformat the statement under the cursor with `sqlformat`
+/// defaults (2-space indent, uppercase keywords), unless it is already
+/// formatted that way.
+fn format_statement_action(statement: &str, range: std::ops::Range<usize>) -> Option<CodeAction> {
+    if statement.trim().is_empty() {
+        return None;
+    }
+
+    let options = sqlformat::FormatOptions {
+        indent: sqlformat::Indent::Spaces(2),
+        uppercase: Some(true),
+        ..sqlformat::FormatOptions::default()
+    };
+
+    let formatted = sqlformat::format(statement, &sqlformat::QueryParams::None, &options);
+
+    if formatted.trim() == statement.trim() {
+        return None;
+    }
+
+    Some(CodeAction {
+        title: "Format statement".to_string(),
+        edit: CodeActionEdit {
+            range: TextRange {
+                start: range.start,
+                end: range.end,
+            },
+            new_text: formatted,
+        },
+    })
 }
 
 /// Produce editor diagnostics for SQL using tree-sitter error nodes.
@@ -1557,6 +1888,268 @@ END $$;"#;
             };
             let result = classify_visual_mutation(&spec);
             assert!(result.requires_hard_confirm);
+        }
+    }
+
+    // ISSUE-359 — SQL code actions surfaced through `LanguageService`.
+    mod code_actions_tests {
+        use super::*;
+        use std::collections::HashMap;
+
+        #[derive(Default)]
+        struct TestSchema {
+            columns_by_table: HashMap<String, BTreeSet<String>>,
+        }
+
+        impl TestSchema {
+            fn with_table(mut self, table: &str, columns: &[&str]) -> Self {
+                self.columns_by_table.insert(
+                    table.to_string(),
+                    columns.iter().map(|c| c.to_string()).collect(),
+                );
+                self
+            }
+        }
+
+        impl SchemaColumns for TestSchema {
+            fn columns_of(&self, table_key: &str) -> Option<&BTreeSet<String>> {
+                self.columns_by_table.get(table_key)
+            }
+        }
+
+        fn action_titles(query: &str, offset: usize) -> Vec<String> {
+            SqlLanguageService
+                .code_actions(query, offset)
+                .into_iter()
+                .map(|action| action.title)
+                .collect()
+        }
+
+        // ==================== Add WHERE ====================
+
+        #[test]
+        fn update_without_where_offers_add_where_action() {
+            let query = "UPDATE users SET active = false";
+            let titles = action_titles(query, query.len());
+            assert!(titles.contains(&"Add WHERE clause (matches no rows)".to_string()));
+        }
+
+        #[test]
+        fn delete_without_where_offers_add_where_action() {
+            let query = "DELETE FROM users";
+            let titles = action_titles(query, query.len());
+            assert!(titles.contains(&"Add WHERE clause (matches no rows)".to_string()));
+        }
+
+        #[test]
+        fn update_with_where_offers_no_add_where_action() {
+            let query = "UPDATE users SET active = false WHERE id = 1";
+            let titles = action_titles(query, query.len());
+            assert!(!titles.contains(&"Add WHERE clause (matches no rows)".to_string()));
+        }
+
+        #[test]
+        fn select_never_offers_add_where_action() {
+            let query = "SELECT * FROM users";
+            let titles = action_titles(query, query.len());
+            assert!(!titles.contains(&"Add WHERE clause (matches no rows)".to_string()));
+        }
+
+        #[test]
+        fn add_where_action_inserts_before_trailing_semicolon() {
+            let query = "DELETE FROM users;";
+            let cursor_in_statement = "DELETE FROM users".len();
+            let actions = SqlLanguageService.code_actions(query, cursor_in_statement);
+            let action = actions
+                .iter()
+                .find(|a| a.title == "Add WHERE clause (matches no rows)")
+                .expect("add-where action present");
+
+            assert_eq!(action.edit.range.start, "DELETE FROM users".len());
+            assert_eq!(action.edit.range.end, action.edit.range.start);
+            assert_eq!(action.edit.new_text, " WHERE 1 = 0");
+
+            let mut applied = query.to_string();
+            applied.insert_str(action.edit.range.start, &action.edit.new_text);
+            assert_eq!(applied, "DELETE FROM users WHERE 1 = 0;");
+        }
+
+        #[test]
+        fn add_where_action_inserts_at_end_without_semicolon() {
+            let query = "DELETE FROM users";
+            let actions = SqlLanguageService.code_actions(query, query.len());
+            let action = actions
+                .iter()
+                .find(|a| a.title == "Add WHERE clause (matches no rows)")
+                .expect("add-where action present");
+
+            let mut applied = query.to_string();
+            applied.insert_str(action.edit.range.start, &action.edit.new_text);
+            assert_eq!(applied, "DELETE FROM users WHERE 1 = 0");
+        }
+
+        // ==================== Add LIMIT ====================
+
+        #[test]
+        fn select_without_limit_offers_add_limit_action() {
+            let query = "SELECT * FROM users";
+            let titles = action_titles(query, query.len());
+            assert!(titles.contains(&"Add LIMIT 100".to_string()));
+        }
+
+        #[test]
+        fn select_with_limit_offers_no_add_limit_action() {
+            let query = "SELECT * FROM users LIMIT 10";
+            let titles = action_titles(query, query.len());
+            assert!(!titles.contains(&"Add LIMIT 100".to_string()));
+        }
+
+        #[test]
+        fn select_with_fetch_offers_no_add_limit_action() {
+            let query = "SELECT * FROM users ORDER BY id FETCH FIRST 10 ROWS ONLY";
+            let titles = action_titles(query, query.len());
+            assert!(!titles.contains(&"Add LIMIT 100".to_string()));
+        }
+
+        #[test]
+        fn select_with_top_offers_no_add_limit_action() {
+            let query = "SELECT TOP 10 * FROM users";
+            let titles = action_titles(query, query.len());
+            assert!(!titles.contains(&"Add LIMIT 100".to_string()));
+        }
+
+        #[test]
+        fn update_statement_never_offers_add_limit_action() {
+            let query = "UPDATE users SET active = false WHERE id = 1";
+            let titles = action_titles(query, query.len());
+            assert!(!titles.contains(&"Add LIMIT 100".to_string()));
+        }
+
+        #[test]
+        fn add_limit_action_appends_at_end_of_statement() {
+            let query = "SELECT * FROM users";
+            let actions = SqlLanguageService.code_actions(query, query.len());
+            let action = actions
+                .iter()
+                .find(|a| a.title == "Add LIMIT 100")
+                .expect("add-limit action present");
+
+            let mut applied = query.to_string();
+            applied.insert_str(action.edit.range.start, &action.edit.new_text);
+            assert_eq!(applied, "SELECT * FROM users LIMIT 100");
+        }
+
+        // ==================== Qualify ambiguous column ====================
+
+        #[test]
+        fn ambiguous_column_offers_qualify_action_for_each_relation() {
+            let query = "SELECT id FROM invoices inv JOIN payments p ON inv.id = p.id WHERE id = 1";
+            let offset = query.rfind("id = 1").expect("bare column present");
+            let schema = TestSchema::default()
+                .with_table("invoices", &["id", "amount"])
+                .with_table("payments", &["id", "invoice_id"]);
+
+            let actions = SqlLanguageService.code_actions_with_schema(query, offset, &schema);
+            let titles: Vec<_> = actions.into_iter().map(|a| a.title).collect();
+
+            assert!(titles.contains(&"Qualify as inv.id".to_string()));
+            assert!(titles.contains(&"Qualify as p.id".to_string()));
+        }
+
+        #[test]
+        fn unambiguous_column_offers_no_qualify_action() {
+            let query =
+                "SELECT amount FROM invoices inv JOIN payments p ON inv.id = p.id WHERE amount = 1";
+            let offset = query.rfind("amount = 1").expect("bare column present");
+            let schema = TestSchema::default()
+                .with_table("invoices", &["id", "amount"])
+                .with_table("payments", &["id", "invoice_id"]);
+
+            let actions = SqlLanguageService.code_actions_with_schema(query, offset, &schema);
+            assert!(actions.iter().all(|a| !a.title.starts_with("Qualify as")));
+        }
+
+        #[test]
+        fn qualify_action_without_schema_offers_nothing() {
+            let query = "SELECT id FROM invoices inv JOIN payments p ON inv.id = p.id WHERE id = 1";
+            let offset = query.rfind("id = 1").expect("bare column present");
+
+            // Plain `code_actions` delegates to a no-op schema.
+            let titles = action_titles(query, offset);
+            assert!(titles.iter().all(|title| !title.starts_with("Qualify as")));
+        }
+
+        #[test]
+        fn qualify_action_edit_replaces_bare_column_with_qualified_reference() {
+            let query = "SELECT id FROM invoices inv JOIN payments p ON inv.id = p.id WHERE id = 1";
+            let offset = query.rfind("id = 1").expect("bare column present");
+            let schema = TestSchema::default()
+                .with_table("invoices", &["id", "amount"])
+                .with_table("payments", &["id", "invoice_id"]);
+
+            let actions = SqlLanguageService.code_actions_with_schema(query, offset, &schema);
+            let action = actions
+                .iter()
+                .find(|a| a.title == "Qualify as inv.id")
+                .expect("qualify action present");
+
+            let mut applied = query.to_string();
+            applied.replace_range(
+                action.edit.range.start..action.edit.range.end,
+                &action.edit.new_text,
+            );
+            assert_eq!(
+                applied,
+                "SELECT id FROM invoices inv JOIN payments p ON inv.id = p.id WHERE inv.id = 1"
+            );
+        }
+
+        // ==================== Format statement ====================
+
+        #[test]
+        fn messy_select_offers_format_action() {
+            let query = "select id,name from   users where id=1";
+            let titles = action_titles(query, query.len());
+            assert!(titles.contains(&"Format statement".to_string()));
+        }
+
+        #[test]
+        fn already_formatted_statement_offers_no_format_action() {
+            let query = sqlformat::format(
+                "SELECT id, name FROM users WHERE id = 1",
+                &sqlformat::QueryParams::None,
+                &sqlformat::FormatOptions {
+                    indent: sqlformat::Indent::Spaces(2),
+                    uppercase: Some(true),
+                    ..sqlformat::FormatOptions::default()
+                },
+            );
+            let titles = action_titles(&query, query.len());
+            assert!(!titles.contains(&"Format statement".to_string()));
+        }
+
+        // ==================== No-action cases ====================
+
+        #[test]
+        fn empty_query_offers_no_actions() {
+            assert!(SqlLanguageService.code_actions("", 0).is_empty());
+        }
+
+        #[test]
+        fn whitespace_only_query_offers_no_actions() {
+            assert!(SqlLanguageService.code_actions("   \n\t", 2).is_empty());
+        }
+
+        #[test]
+        fn cursor_between_empty_statements_offers_no_actions() {
+            assert!(SqlLanguageService.code_actions(";;;", 1).is_empty());
+        }
+
+        #[test]
+        fn safe_select_with_where_and_limit_offers_only_format_action() {
+            let query = "SELECT id FROM users WHERE id = 1 LIMIT 10";
+            let titles = action_titles(query, query.len());
+            assert_eq!(titles, vec!["Format statement".to_string()]);
         }
     }
 }

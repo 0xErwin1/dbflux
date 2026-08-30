@@ -24,6 +24,7 @@ dbflux_i18n.workspace = true
 dbflux_transfer.workspace = true
 uuid.workspace = true
 log.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 lsp-types = { workspace = true }
 anyhow = { workspace = true }
@@ -47,4 +48,3 @@ dbflux_driver_mssql = { workspace = true }
 dbflux_test_support = { workspace = true }
 flate2.workspace = true
 rmp-serde.workspace = true
-serde.workspace = true
