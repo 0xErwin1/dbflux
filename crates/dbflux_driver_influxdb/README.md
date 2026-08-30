@@ -73,6 +73,7 @@ InfluxDB driver for DBFlux.
 - **"New Query" context menu on buckets** — right-clicking a bucket/database node shows "New Query", opening a blank code document with the connection activated.
 - **Read-template generation** — `InfluxQueryGenerator` produces select-all and per-measurement read templates for both InfluxQL and Flux (used by the context-menu actions and copy-as-query), version-aware via the connection's configured version and default bucket.
 - **Client identity** — every HTTP request reports `dbflux/<version>` as the `User-Agent` header, visible in server-side request logs.
+- **Dialect-aware dangerous-query detection** — `InfluxLanguageService` sniffs InfluxQL vs. Flux from the query text (Flux is pipeline-shaped or opens with `import`) and flags InfluxQL `DROP DATABASE/MEASUREMENT/SERIES/RETENTION POLICY/SHARD` and `DELETE` without a `WHERE` clause, and Flux `delete()`/`influxdb.delete()` calls, before execution. `classify_execution` reports `SELECT`/`SHOW` as reads and `DELETE`/`DROP`/Flux `delete()` as destructive, so governance policies see accurate impact instead of a generic write. `validate` is a syntactic sanity check (balanced brackets and quotes), not a full parser.
 
 ## Limitations
 

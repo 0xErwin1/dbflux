@@ -9,9 +9,10 @@ use std::time::Instant;
 
 use dbflux_core::{
     CollectionBrowseRequest, CollectionCountRequest, Connection, DatabaseInfo, DbError, DbKind,
-    DefaultSqlDialect, DriverMetadata, InfluxVersion, MeasurementInfo, QueryLanguage, QueryRequest,
-    QueryResult, ResolvedWindow, SchemaFeatures, SchemaLoadingStrategy, SchemaSnapshot,
-    SourceContextSpec, SourceQueryMode, TimeSeriesSchema, contains_time_macros,
+    DefaultSqlDialect, DriverMetadata, InfluxVersion, LanguageService, MeasurementInfo,
+    QueryLanguage, QueryRequest, QueryResult, ResolvedWindow, SchemaFeatures,
+    SchemaLoadingStrategy, SchemaSnapshot, SourceContextSpec, SourceQueryMode, TimeSeriesSchema,
+    contains_time_macros,
 };
 
 use crate::error_formatter::InfluxErrorFormatter;
@@ -20,6 +21,7 @@ use crate::injection::{
     ResolvedWindow as InjectionWindow, flux_has_range_call, influxql_has_time_predicate,
     inject_flux_window, inject_influxql_window,
 };
+use crate::language_service::InfluxLanguageService;
 use crate::metadata::InfluxQueryMetadata;
 use crate::parser::flux::parse_flux_csv;
 use crate::parser::influxql::parse_influxql_json;
@@ -524,6 +526,10 @@ impl Connection for InfluxConnection {
 
     fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
         &DefaultSqlDialect
+    }
+
+    fn language_service(&self) -> &dyn LanguageService {
+        &InfluxLanguageService
     }
 
     fn source_context_spec(&self) -> Option<SourceContextSpec> {

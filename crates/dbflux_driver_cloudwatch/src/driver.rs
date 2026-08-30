@@ -21,11 +21,12 @@ use dbflux_core::{
     FormFieldKind, FormSection, FormTab, FormValues, FormattedError, Icon, MetricCatalog,
     MetricQuerySeries, QueryLanguage, QueryRequest, QueryResult, SchemaFeatures,
     SchemaLoadingStrategy, SchemaSnapshot, SourceContextSpec, SourceQueryMode, TableInfo,
-    TransferFamily, ValidationResult, Value, field, field_required,
+    TransferFamily, Value, field, field_required,
 };
 
 use crate::dashboard_import::CloudWatchDashboardImporter;
 use crate::dashboard_source::{CloudWatchDashboardSource, RealCloudWatchDashboardApi};
+use crate::language_service::CloudWatchLanguageService;
 use crate::metric_catalog::{CloudWatchMetricCatalog, RealCloudWatchClient};
 
 pub static CLOUDWATCH_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
@@ -124,8 +125,6 @@ struct CloudWatchConnection {
     /// Dashboard source — always present; returns `Some` from `dashboard_source()`.
     dashboard_source_impl: CloudWatchDashboardSource,
 }
-
-struct CloudWatchLanguageService;
 
 impl CloudWatchDriver {
     pub fn new() -> Self {
@@ -976,16 +975,6 @@ impl CloudWatchConnection {
         ];
 
         Ok(QueryResult::table(columns, rows, None, started.elapsed()))
-    }
-}
-
-impl dbflux_core::LanguageService for CloudWatchLanguageService {
-    fn validate(&self, _query: &str) -> ValidationResult {
-        ValidationResult::Valid
-    }
-
-    fn detect_dangerous(&self, _query: &str) -> Option<dbflux_core::DangerousQueryKind> {
-        None
     }
 }
 
