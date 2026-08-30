@@ -20,6 +20,7 @@ chrono = { workspace = true }
 bitflags = "2.10.0"
 tree-sitter = "0.25"
 tree-sitter-sequel = "0.3"
+sqlformat = { workspace = true }
 urlencoding = "2"
 tempfile = "3"
 secrecy = "0.10"

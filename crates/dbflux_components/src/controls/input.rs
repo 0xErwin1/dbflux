@@ -7,8 +7,9 @@ use gpui_component::Sizable;
 use crate::tokens::FontSizes;
 use crate::typography::AppFonts;
 
+pub use gpui_component::RopeExt;
 pub use gpui_component::input::{
-    CompletionProvider, Enter as InputEnter, Escape as InputEscape,
+    CodeActionProvider, CompletionProvider, Enter as InputEnter, Escape as InputEscape,
     IndentInline as InputIndentInline, Input as GpuiInput, InputEvent, InputState,
     MoveDown as InputMoveDown, MoveUp as InputMoveUp, OutdentInline as InputOutdentInline,
     Position as InputPosition, Rope, Search as InputSearch,
