@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 use testcontainers::core::{ContainerPort, WaitFor};
 use testcontainers::runners::SyncRunner;
-use testcontainers::{GenericImage, ImageExt};
+use testcontainers::{Container, GenericImage, ImageExt};
 
 pub fn with_postgres_url<T, E, F>(run: F) -> Result<T, E>
 where
@@ -100,6 +100,35 @@ where
     let url = format!("redis://127.0.0.1:{port}/0");
 
     run(url)
+}
+
+/// Like [`with_redis_url`], but also hands `run` a reference to the running
+/// container so it can `exec` into it (e.g. to `cat` a file written inside
+/// the container's filesystem).
+///
+/// Prefer this over a host bind mount for reading files Redis writes (such
+/// as `dump.rdb`): the official `redis` image declares `/data` as an
+/// anonymous `VOLUME`, and a rootless container runtime maps that volume's
+/// ownership to a subordinate UID/GID range that the host user does not
+/// necessarily have configured, causing bind-mount and direct-volume access
+/// to fail with a "potentially insufficient UIDs or GIDs" error. `docker
+/// exec`/`podman exec` runs as a process inside the container's own user
+/// namespace and has no such requirement.
+pub fn with_redis_container<T, E, F>(run: F) -> Result<T, E>
+where
+    F: FnOnce(String, &Container<GenericImage>) -> Result<T, E>,
+{
+    let image = GenericImage::new("redis", "7")
+        .with_exposed_port(ContainerPort::Tcp(6379))
+        .with_wait_for(WaitFor::message_on_stdout("Ready to accept connections"));
+
+    let container = image.start().expect("failed to start redis container");
+    let port = container
+        .get_host_port_ipv4(6379)
+        .expect("failed to get redis host port");
+    let url = format!("redis://127.0.0.1:{port}/0");
+
+    run(url, &container)
 }
 
 /// Host TCP ports of the six nodes (3 masters + 3 replicas) started by the
