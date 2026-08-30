@@ -596,6 +596,109 @@ pub(crate) fn import_action_use_profile(name: &str) -> String {
     dbflux_i18n::t!("connection_manager.import.action.use_profile", name = name)
 }
 
+/// Formats the pluralized "N entry/entries could not be imported" review-step
+/// intro for the external-client import flow's skip list.
+pub(crate) fn import_external_review_skips_intro(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!(
+            "connection_manager.import.external.review.skips_intro.one",
+            count = count
+        )
+    } else {
+        dbflux_i18n::t!(
+            "connection_manager.import.external.review.skips_intro.many",
+            count = count
+        )
+    }
+}
+
+/// Formats the pluralized "Import N connection(s)" primary button label for the
+/// external-client import review step.
+pub(crate) fn import_external_action_import_selected(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!(
+            "connection_manager.import.external.action.import_selected.one",
+            count = count
+        )
+    } else {
+        dbflux_i18n::t!(
+            "connection_manager.import.external.action.import_selected.many",
+            count = count
+        )
+    }
+}
+
+/// Short "host:port/db" (or file path) summary of an external-import candidate's
+/// config, shown in the review checklist.
+///
+/// Only the six `DbConfig` shapes an external importer can currently produce
+/// (Postgres, MySQL, SQLite, MongoDB, Redis, SQL Server) are handled; any other
+/// variant falls back to an empty string rather than a driver-specific branch,
+/// since no current importer emits one.
+pub(crate) fn import_external_host_summary(config: &dbflux_core::DbConfig) -> String {
+    use dbflux_core::DbConfig;
+
+    match config {
+        DbConfig::Postgres {
+            use_uri: true, uri, ..
+        } => uri.clone().unwrap_or_default(),
+        DbConfig::Postgres {
+            host,
+            port,
+            database,
+            ..
+        } => format!("{host}:{port}/{database}"),
+
+        DbConfig::MySQL {
+            use_uri: true, uri, ..
+        } => uri.clone().unwrap_or_default(),
+        DbConfig::MySQL {
+            host,
+            port,
+            database,
+            ..
+        } => match database {
+            Some(db) => format!("{host}:{port}/{db}"),
+            None => format!("{host}:{port}"),
+        },
+
+        DbConfig::SQLite { path, .. } => path.display().to_string(),
+
+        DbConfig::MongoDB {
+            use_uri: true, uri, ..
+        } => uri.clone().unwrap_or_default(),
+        DbConfig::MongoDB {
+            host,
+            port,
+            database,
+            ..
+        } => match database {
+            Some(db) => format!("{host}:{port}/{db}"),
+            None => format!("{host}:{port}"),
+        },
+
+        DbConfig::Redis {
+            use_uri: true, uri, ..
+        } => uri.clone().unwrap_or_default(),
+        DbConfig::Redis { host, port, .. } => format!("{host}:{port}"),
+
+        DbConfig::SqlServer {
+            use_uri: true, uri, ..
+        } => uri.clone().unwrap_or_default(),
+        DbConfig::SqlServer {
+            host,
+            port,
+            database,
+            ..
+        } => match database {
+            Some(db) => format!("{host}:{port}/{db}"),
+            None => format!("{host}:{port}"),
+        },
+
+        _ => String::new(),
+    }
+}
+
 /// Formats the "Export <kind>" window/dialog title for a resolved export target.
 pub(crate) fn export_title_with_kind(kind: &str) -> String {
     dbflux_i18n::t!("connection_manager.export.title_with_kind", kind = kind)
@@ -772,15 +875,17 @@ mod tests {
         hooks_write_script_failed, import_action_map_to, import_action_use_profile,
         import_conflict_kind_label, import_conflicts_row_label, import_error_cannot_read_file,
         import_error_decryption_error, import_error_import_failed, import_error_parse_error,
-        import_error_secret_failures_toast, import_outcome_config_failures,
-        import_outcome_needs_driver, import_outcome_secret_failures, import_outcome_succeeded,
-        import_outcome_unresolved_refs, import_preview_conflicts_banner,
-        import_preview_count_auth_profiles, import_preview_count_connections,
-        import_preview_count_proxies, import_preview_count_ssh_tunnels,
-        import_preview_required_banner, import_required_auth_profile_ref_label,
-        import_required_aws_reference_label, import_required_secret_label,
-        import_status_imported_toast, mcp_preview_summary, proxies_delete_body,
-        rpc_services_delete_body, ssh_private_key_with_path, ssh_tunnels_delete_body,
+        import_error_secret_failures_toast, import_external_action_import_selected,
+        import_external_host_summary, import_external_review_skips_intro,
+        import_outcome_config_failures, import_outcome_needs_driver,
+        import_outcome_secret_failures, import_outcome_succeeded, import_outcome_unresolved_refs,
+        import_preview_conflicts_banner, import_preview_count_auth_profiles,
+        import_preview_count_connections, import_preview_count_proxies,
+        import_preview_count_ssh_tunnels, import_preview_required_banner,
+        import_required_auth_profile_ref_label, import_required_aws_reference_label,
+        import_required_secret_label, import_status_imported_toast, mcp_preview_summary,
+        proxies_delete_body, rpc_services_delete_body, ssh_private_key_with_path,
+        ssh_tunnels_delete_body,
     };
     use super::{
         connection_manager_window_title_edit, connection_manager_window_title_new,
@@ -1307,6 +1412,118 @@ mod tests {
     fn import_action_segment_labels_embed_their_names() {
         assert!(import_action_map_to("staging-db").contains("staging-db"));
         assert!(import_action_use_profile("prod-sso").contains("prod-sso"));
+    }
+
+    #[test]
+    fn import_external_review_skips_intro_uses_singular_form_for_one() {
+        assert!(import_external_review_skips_intro(1).contains('1'));
+        assert!(import_external_review_skips_intro(3).contains('3'));
+        assert_ne!(
+            import_external_review_skips_intro(1),
+            import_external_review_skips_intro(2)
+        );
+    }
+
+    #[test]
+    fn import_external_action_import_selected_pluralizes_by_count() {
+        assert!(import_external_action_import_selected(1).contains('1'));
+        assert!(import_external_action_import_selected(4).contains('4'));
+        assert_ne!(
+            import_external_action_import_selected(1),
+            import_external_action_import_selected(2)
+        );
+    }
+
+    #[test]
+    fn import_external_host_summary_covers_every_importer_producible_kind() {
+        use dbflux_core::DbConfig;
+        use std::path::PathBuf;
+
+        let postgres_manual = DbConfig::Postgres {
+            use_uri: false,
+            uri: None,
+            host: "db.example.invalid".to_string(),
+            port: 5432,
+            user: "demo".to_string(),
+            database: "app".to_string(),
+            ssl_mode: None,
+            ssl_root_cert_path: None,
+            ssl_client_cert_path: None,
+            ssl_client_key_path: None,
+            ssh_tunnel: None,
+            ssh_tunnel_profile_id: None,
+        };
+        assert_eq!(
+            import_external_host_summary(&postgres_manual),
+            "db.example.invalid:5432/app"
+        );
+
+        let postgres_uri = DbConfig::Postgres {
+            use_uri: true,
+            uri: Some("postgresql://db.example.invalid:5432/app".to_string()),
+            host: String::new(),
+            port: 5432,
+            user: String::new(),
+            database: String::new(),
+            ssl_mode: None,
+            ssl_root_cert_path: None,
+            ssl_client_cert_path: None,
+            ssl_client_key_path: None,
+            ssh_tunnel: None,
+            ssh_tunnel_profile_id: None,
+        };
+        assert_eq!(
+            import_external_host_summary(&postgres_uri),
+            "postgresql://db.example.invalid:5432/app"
+        );
+
+        let sqlite = DbConfig::SQLite {
+            path: PathBuf::from("/tmp/example.db"),
+            connection_id: None,
+        };
+        assert_eq!(import_external_host_summary(&sqlite), "/tmp/example.db");
+
+        let mysql_no_database = DbConfig::MySQL {
+            use_uri: false,
+            uri: None,
+            host: "db.example.invalid".to_string(),
+            port: 3306,
+            user: "demo".to_string(),
+            database: None,
+            ssl_mode: None,
+            ssl_root_cert_path: None,
+            ssl_client_cert_path: None,
+            ssl_client_key_path: None,
+            ssh_tunnel: None,
+            ssh_tunnel_profile_id: None,
+        };
+        assert_eq!(
+            import_external_host_summary(&mysql_no_database),
+            "db.example.invalid:3306"
+        );
+
+        let redis = DbConfig::Redis {
+            use_uri: false,
+            uri: None,
+            host: "db.example.invalid".to_string(),
+            port: 6379,
+            user: None,
+            database: None,
+            tls: false,
+            ssl_mode: None,
+            ssl_root_cert_path: None,
+            ssl_client_cert_path: None,
+            ssl_client_key_path: None,
+            ssh_tunnel: None,
+            ssh_tunnel_profile_id: None,
+            topology: None,
+            sentinel_master_name: None,
+            additional_nodes: None,
+        };
+        assert_eq!(
+            import_external_host_summary(&redis),
+            "db.example.invalid:6379"
+        );
     }
 
     #[test]

@@ -550,6 +550,96 @@ pub fn confirm_summary(
 }
 
 // ---------------------------------------------------------------------------
+// External client import — pure candidate mapping and per-candidate
+// persistence, reusing the same `ImportPersistence` seam as bundle import.
+// ---------------------------------------------------------------------------
+
+/// Result of persisting a batch of confirmed external-import candidates.
+#[derive(Debug, Clone, Default)]
+pub struct ExternalPersistOutcome {
+    /// Names of candidates that were fully persisted.
+    pub succeeded: Vec<String>,
+    /// Names of persisted candidates whose secret failed to write to the keyring.
+    pub secret_failures: Vec<String>,
+    /// `(candidate_name, driver_id)` pairs whose driver is not registered.
+    pub needs_driver: Vec<(String, String)>,
+    /// `(candidate_name, error_message)` pairs where `build_config` returned an error.
+    pub config_failures: Vec<(String, String)>,
+}
+
+/// Maps one parsed external candidate into a `ConnectionProfile`.
+///
+/// Pure mapping: `save_password` is derived from whether a secret was
+/// recovered from the source format. The profile id is freshly generated —
+/// external client formats have no id dbflux can reuse across imports.
+pub fn external_candidate_to_profile(
+    candidate: &dbflux_portability::external::ExternalImportCandidate,
+) -> ConnectionProfile {
+    let mut profile = ConnectionProfile::new_with_kind(
+        candidate.name.clone(),
+        candidate.kind,
+        candidate.config.clone(),
+    );
+    profile.save_password = candidate.secret.is_some();
+    profile
+}
+
+/// Persists one confirmed external candidate through `deps`, writing its
+/// recovered secret (when present) under the new connection's own
+/// `connection_secret_ref`.
+///
+/// Takes the candidate by value because its `secret` field is not `Clone`
+/// (`secrecy::SecretString` deliberately does not implement `Clone` for
+/// string payloads); this mirrors the `Option::take()` ownership pattern
+/// used elsewhere in the import pipeline.
+pub fn persist_external_candidate(
+    candidate: dbflux_portability::external::ExternalImportCandidate,
+    deps: &mut dyn ImportPersistence,
+    outcome: &mut ExternalPersistOutcome,
+) {
+    let profile = external_candidate_to_profile(&candidate);
+    let name = candidate.name;
+    let secret = candidate.secret;
+    let profile_id = profile.id;
+    let driver_id = profile.driver_id().to_string();
+
+    match deps.add_connection(profile) {
+        ConnectionInsertResult::Ok => {
+            outcome.succeeded.push(name.clone());
+
+            if let Some(secret) = secret {
+                let secret_ref = dbflux_core::connection_secret_ref(&profile_id);
+                if !deps.write_secret(&secret_ref, &secret) {
+                    outcome.secret_failures.push(name);
+                }
+            }
+        }
+        ConnectionInsertResult::NeedsDriver => {
+            outcome.needs_driver.push((name, driver_id));
+        }
+        ConnectionInsertResult::ConfigFailed(reason) => {
+            outcome.config_failures.push((name, reason));
+        }
+    }
+}
+
+/// Selection-state reducer for the external-import review checklist: one
+/// include flag per parsed candidate, defaulting to included.
+pub fn default_candidate_includes(count: usize) -> Vec<bool> {
+    vec![true; count]
+}
+
+/// Toggles the include flag for one candidate index.
+///
+/// A no-op on an out-of-range index rather than a panic, since the index
+/// always comes from a rendered row that matches the current candidate list.
+pub fn toggle_candidate_include(includes: &mut [bool], index: usize) {
+    if let Some(flag) = includes.get_mut(index) {
+        *flag = !*flag;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Unit tests
 // ---------------------------------------------------------------------------
 
@@ -1002,6 +1092,10 @@ mod tests {
         conn_names: Vec<String>,
         /// `None` keys succeed; `Some(false)` simulates keyring-locked failure.
         secret_outcomes: HashMap<String, bool>,
+        /// When set, every `write_secret` call fails regardless of the ref,
+        /// for tests where the exact ref cannot be known ahead of time (e.g.
+        /// a freshly generated connection id).
+        fail_all_secrets: bool,
     }
 
     impl FakePersistence {
@@ -1013,6 +1107,7 @@ mod tests {
                 proxy_count: 0,
                 conn_names: Vec::new(),
                 secret_outcomes: HashMap::new(),
+                fail_all_secrets: false,
             }
         }
 
@@ -1024,6 +1119,11 @@ mod tests {
 
         fn with_keyring_failure(mut self, secret_ref: &str) -> Self {
             self.secret_outcomes.insert(secret_ref.to_string(), false);
+            self
+        }
+
+        fn with_all_secrets_failing(mut self) -> Self {
+            self.fail_all_secrets = true;
             self
         }
     }
@@ -1051,6 +1151,9 @@ mod tests {
         }
 
         fn write_secret(&self, secret_ref: &str, _secret: &SecretString) -> bool {
+            if self.fail_all_secrets {
+                return false;
+            }
             self.secret_outcomes
                 .get(secret_ref)
                 .copied()
@@ -1799,5 +1902,112 @@ mod tests {
             "the token field must be hydrated; got: {:?}",
             fields.keys().collect::<Vec<_>>()
         );
+    }
+
+    // -----------------------------------------------------------------
+    // External client import
+    // -----------------------------------------------------------------
+
+    fn make_external_candidate(
+        name: &str,
+        secret: Option<&str>,
+    ) -> dbflux_portability::external::ExternalImportCandidate {
+        dbflux_portability::external::ExternalImportCandidate {
+            name: name.to_string(),
+            config: dbflux_core::DbConfig::SQLite {
+                path: std::path::PathBuf::from("/tmp/example.db"),
+                connection_id: None,
+            },
+            kind: dbflux_core::DbKind::SQLite,
+            secret: secret.map(|s| SecretString::from(s.to_string())),
+            secret_skip_reason: None,
+        }
+    }
+
+    #[test]
+    fn external_candidate_to_profile_sets_save_password_from_secret_presence() {
+        let with_secret = make_external_candidate("Has Secret", Some("s3cret"));
+        let profile = external_candidate_to_profile(&with_secret);
+        assert_eq!(profile.name, "Has Secret");
+        assert_eq!(profile.kind, Some(dbflux_core::DbKind::SQLite));
+        assert!(profile.save_password);
+
+        let without_secret = make_external_candidate("No Secret", None);
+        let profile = external_candidate_to_profile(&without_secret);
+        assert!(!profile.save_password);
+    }
+
+    #[test]
+    fn external_candidate_to_profile_generates_a_fresh_id_each_time() {
+        let candidate = make_external_candidate("Demo", None);
+        let first = external_candidate_to_profile(&candidate);
+        let second = external_candidate_to_profile(&candidate);
+        assert_ne!(first.id, second.id);
+    }
+
+    #[test]
+    fn persist_external_candidate_writes_secret_under_the_new_connection_ref() {
+        let mut deps = FakePersistence::all_drivers();
+        let mut outcome = ExternalPersistOutcome::default();
+        let candidate = make_external_candidate("Demo", Some("s3cret"));
+
+        persist_external_candidate(candidate, &mut deps, &mut outcome);
+
+        assert_eq!(outcome.succeeded, vec!["Demo".to_string()]);
+        assert!(outcome.secret_failures.is_empty());
+        assert_eq!(deps.conn_names, vec!["Demo".to_string()]);
+    }
+
+    #[test]
+    fn persist_external_candidate_records_secret_failure_without_dropping_the_connection() {
+        let candidate = make_external_candidate("Demo", Some("s3cret"));
+        let mut deps = FakePersistence::all_drivers().with_all_secrets_failing();
+        let mut outcome = ExternalPersistOutcome::default();
+
+        persist_external_candidate(candidate, &mut deps, &mut outcome);
+
+        assert_eq!(
+            deps.conn_names,
+            vec!["Demo".to_string()],
+            "a keyring failure must not undo the already-persisted connection"
+        );
+        assert_eq!(outcome.succeeded, vec!["Demo".to_string()]);
+        assert_eq!(outcome.secret_failures, vec!["Demo".to_string()]);
+    }
+
+    #[test]
+    fn persist_external_candidate_reports_needs_driver_for_unregistered_driver() {
+        let mut deps = FakePersistence::with_drivers(&[]);
+        let mut outcome = ExternalPersistOutcome::default();
+        let candidate = make_external_candidate("Demo", None);
+
+        persist_external_candidate(candidate, &mut deps, &mut outcome);
+
+        assert!(outcome.succeeded.is_empty());
+        assert_eq!(outcome.needs_driver.len(), 1);
+        assert_eq!(outcome.needs_driver[0].0, "Demo");
+    }
+
+    #[test]
+    fn default_candidate_includes_defaults_every_slot_to_true() {
+        assert_eq!(default_candidate_includes(3), vec![true, true, true]);
+        assert_eq!(default_candidate_includes(0), Vec::<bool>::new());
+    }
+
+    #[test]
+    fn toggle_candidate_include_flips_only_the_targeted_index() {
+        let mut includes = default_candidate_includes(3);
+        toggle_candidate_include(&mut includes, 1);
+        assert_eq!(includes, vec![true, false, true]);
+
+        toggle_candidate_include(&mut includes, 1);
+        assert_eq!(includes, vec![true, true, true]);
+    }
+
+    #[test]
+    fn toggle_candidate_include_is_a_no_op_on_out_of_range_index() {
+        let mut includes = default_candidate_includes(2);
+        toggle_candidate_include(&mut includes, 5);
+        assert_eq!(includes, vec![true, true]);
     }
 }

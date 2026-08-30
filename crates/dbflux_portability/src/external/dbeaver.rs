@@ -305,6 +305,10 @@ fn connection_shape(
             .url
             .clone()
             .ok_or_else(|| "URL-mode connection has no url".to_string())?;
+        // DBeaver stores URL-mode connections with a `jdbc:` prefix
+        // (e.g. `jdbc:postgresql://host/db`); DBflux's own URI fields expect
+        // the driver's native scheme without it.
+        let url = url.strip_prefix("jdbc:").map(str::to_string).unwrap_or(url);
         return Ok((true, Some(url), String::new(), default_port, String::new()));
     }
 
@@ -503,7 +507,37 @@ mod tests {
                 assert!(use_uri);
                 assert_eq!(
                     uri.as_deref(),
-                    Some("jdbc:postgresql://db.example.invalid:5432/app")
+                    Some("postgresql://db.example.invalid:5432/app"),
+                    "the leading `jdbc:` prefix must be stripped before storing the URI"
+                );
+            }
+            other => panic!("expected Postgres config, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn url_mode_without_jdbc_prefix_is_stored_unchanged() {
+        let json = r#"{
+            "connections": {
+                "conn-1": {
+                    "provider": "postgresql",
+                    "name": "URL Postgres",
+                    "configuration": {
+                        "url": "postgresql://db.example.invalid:5432/app",
+                        "configurationType": "URL"
+                    }
+                }
+            }
+        }"#;
+
+        let outcome = parse_bytes(json);
+        assert_eq!(outcome.candidates.len(), 1);
+        match &outcome.candidates.first().expect("candidate").config {
+            DbConfig::Postgres { use_uri, uri, .. } => {
+                assert!(use_uri);
+                assert_eq!(
+                    uri.as_deref(),
+                    Some("postgresql://db.example.invalid:5432/app")
                 );
             }
             other => panic!("expected Postgres config, got {other:?}"),
