@@ -39,6 +39,7 @@ the endpoint is a URL and not a host/port pair.
 - Read-only visual SELECT generation, using ClickHouse identifier and literal
   quoting rules.
 - Chart authoring from query results, and CSV and JSON export.
+- Every HTTP request reports `dbflux/<version>` as the `User-Agent` header, visible in server-side request logs.
 
 ### Type handling
 

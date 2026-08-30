@@ -46,6 +46,8 @@ Driver de AWS DynamoDB para DBFlux, construido sobre el SDK
   (`NESTED_DOCUMENTS`, `ARRAYS`).
 - DDL: drop table (`supports_drop_table: true`).
 - Paginación vía page tokens (`PaginationStyle::PageToken`).
+- Identidad del cliente: cada request lleva `dbflux-<versión>` como app name del
+  SDK de AWS, visible en el campo `userAgent` de CloudTrail.
 
 ## Limitaciones
 

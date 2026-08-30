@@ -150,6 +150,7 @@ impl HttpClient {
             .gzip(true)
             .tcp_nodelay(true)
             .use_rustls_tls()
+            .user_agent(dbflux_core::client_identity())
             .build()
             .map_err(|error| HttpError::Transport(error.to_string()))?;
 

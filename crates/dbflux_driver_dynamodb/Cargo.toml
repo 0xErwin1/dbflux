@@ -16,6 +16,7 @@ path = "src/lib.rs"
 dbflux_core.workspace = true
 aws-config = { version = "1", features = ["behavior-version-latest"] }
 aws-sdk-dynamodb = "1"
+log.workspace = true
 tokio = { workspace = true }
 serde_json = { workspace = true }
 

@@ -43,6 +43,8 @@ así que el endpoint es una URL y no un par host/port.
   identificadores y literales de ClickHouse.
 - Creación de gráficos a partir de resultados de queries, y exportación a CSV y
   JSON.
+- Cada request HTTP reporta `dbflux/<versión>` como header `User-Agent`, visible
+  en los logs de request del lado del servidor.
 
 ### Manejo de tipos
 

@@ -23,6 +23,7 @@ AWS S3 and S3-compatible object-storage driver for DBFlux, built on the [`aws-sd
 - Presigned URLs: GET/PUT method choice, 15-minute/1-hour/12-hour/7-day expiry, copy-URL action, and warning text naming the expiry and signing identity.
 - Every CRUD/mutation operation (upload, delete, recursive delete, folder/bucket create, bucket delete, save-back edit, rename, presign) is audited under the object-storage `EventCategory`, with credentials and presigned URLs never logged or persisted.
 - Permission and not-found errors (`AccessDenied`, `NoSuchBucket`, `NoSuchKey`) are formatted with the affected bucket/key named in the message, not just AWS's generic error text.
+- Client identity: every request carries `dbflux-<version>` as the AWS SDK app name, visible in CloudTrail's `userAgent` field.
 
 ## Limitations
 

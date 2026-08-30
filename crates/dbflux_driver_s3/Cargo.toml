@@ -18,6 +18,7 @@ aws-config = { version = "1", features = ["behavior-version-latest"] }
 aws-sdk-s3 = "1"
 aws-smithy-types = "1"
 chrono = { workspace = true }
+log.workspace = true
 tokio = { workspace = true }
 urlencoding = { workspace = true }
 

@@ -2820,6 +2820,7 @@ dependencies = [
  "aws-sdk-dynamodb",
  "dbflux_core",
  "dbflux_test_support",
+ "log",
  "serde_json",
  "tokio",
 ]
@@ -2995,6 +2996,7 @@ dependencies = [
  "chrono",
  "dbflux_core",
  "dbflux_test_support",
+ "log",
  "tokio",
  "urlencoding",
 ]

@@ -63,6 +63,8 @@ Driver de AWS CloudWatch Logs para DBFlux, construido sobre el SDK
   min / agregado entre todas las dimensiones) y lo ejecuta de inmediato. El
   panel lateral (picker rail) en el documento de gráfico permite refinar
   dimensiones, período y estadística.
+- Identidad del cliente: cada request lleva `dbflux-<versión>` como app name del
+  SDK de AWS, visible en el campo `userAgent` de CloudTrail.
 
 ## Limitaciones
 
