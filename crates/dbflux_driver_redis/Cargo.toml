@@ -24,6 +24,8 @@ uuid.workspace = true
 
 [dev-dependencies]
 dbflux_test_support.workspace = true
+tempfile = "3"
+testcontainers = { version = "0.27", features = ["blocking"] }
 
 [lints]
 workspace = true

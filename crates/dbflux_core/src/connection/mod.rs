@@ -1,6 +1,7 @@
 pub(crate) mod context;
 pub mod dashboard_import;
 pub mod dashboard_source;
+pub mod dump_analysis;
 pub(crate) mod hook;
 pub mod instance_catalog;
 pub(crate) mod item_manager;

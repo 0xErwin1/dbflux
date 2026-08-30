@@ -39,6 +39,7 @@ Redis key-value driver for DBFlux, built on the [`redis`](https://crates.io/crat
 - Mutations: insert, update, delete, batch operations, and bulk delete. The `RedisCommandGenerator` emits Redis commands for set/delete, hash set/delete, list push/set/remove, set add/remove, sorted-set add/remove, and stream add/delete, for use in previews and copy-as-command.
 - JSON export of results (`EXPORT_JSON`).
 - Size gate on whole-payload reads: when the request carries a byte budget, string/JSON values are probed with `STRLEN` before `GET` and oversized values return a placeholder with the real size instead of transferring the payload; collection types are unaffected, and stream reads that hit the fetch cap report themselves as truncated.
+- Offline RDB dump analysis (`DumpAnalyzer`): a `.rdb` file is scanned key-by-key without connecting to a server, streaming the file at I/O speed with flat memory (key values are never decoded, only key names and value types). Reports total key count, a per-type breakdown, the 500 largest keys, and a by-prefix size rollup. Reported sizes are each key's **serialized size on disk**, not its footprint in live Redis memory — allocator overhead and in-memory encodings mean the two numbers diverge.
 
 Schema introspection reports a single aggregated `db0` keyspace on a Cluster connection: the key count and average TTL are summed/averaged across every master's `DBSIZE`/keyspace stats rather than reported per-node.
 

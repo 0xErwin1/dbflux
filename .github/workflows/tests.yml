@@ -152,6 +152,9 @@ jobs:
       - name: Run Redis Cluster live integration tests
         run: cargo test -p dbflux_driver_redis --locked --test live_cluster -- --ignored --test-threads=1
 
+      - name: Run Redis RDB analyzer live integration tests
+        run: cargo test -p dbflux_driver_redis --locked --test live_rdb -- --ignored
+
       - name: DynamoDB live integration
         run: cargo test -p dbflux_driver_dynamodb --locked --test live_integration -- --ignored
 

@@ -2233,6 +2233,76 @@ pub(crate) fn migrate_wizard_target_schema_read_failed_error(error: &str) -> Str
     )
 }
 
+/// Tab title for a dump-analysis document: the analyzer's display name plus
+/// the dump file's own file name (not the full path, which is often long).
+pub(crate) fn dump_analysis_title(analyzer_display_name: &str, file_name: &str) -> String {
+    dbflux_i18n::t!(
+        "document.dump_analysis.title",
+        analyzer = analyzer_display_name,
+        file = file_name
+    )
+}
+
+/// Progress label shown while a dump file is being parsed.
+///
+/// Uses the "of total" bucket only when the analyzer reported a total byte
+/// count; some formats cannot determine this upfront.
+pub(crate) fn dump_analysis_parsing_progress(bytes_read: u64, total_bytes: Option<u64>) -> String {
+    match total_bytes {
+        Some(total) if total > 0 => dbflux_i18n::t!(
+            "document.dump_analysis.parsing.progress.of_total",
+            read = crate::buckets_table::format_bytes(bytes_read),
+            total = crate::buckets_table::format_bytes(total)
+        ),
+        _ => dbflux_i18n::t!(
+            "document.dump_analysis.parsing.progress.only",
+            read = crate::buckets_table::format_bytes(bytes_read)
+        ),
+    }
+}
+
+/// Maps a `DumpAnalysisError` to its user-facing display message.
+pub(crate) fn dump_analysis_error_message(error: &dbflux_core::DumpAnalysisError) -> String {
+    use dbflux_core::DumpAnalysisError;
+
+    match error {
+        DumpAnalysisError::Io(message) => {
+            dbflux_i18n::t!(
+                "document.dump_analysis.error.io",
+                message = message.as_str()
+            )
+        }
+        DumpAnalysisError::Format { offset, message } => dbflux_i18n::t!(
+            "document.dump_analysis.error.format",
+            offset = offset,
+            message = message.as_str()
+        ),
+        DumpAnalysisError::Cancelled => {
+            dbflux_i18n::t!("document.dump_analysis.error.cancelled")
+        }
+    }
+}
+
+/// Task-panel description for a running dump analysis, with the analyzer's
+/// display name and file name interpolated.
+pub(crate) fn dump_analysis_task_label(analyzer_display_name: &str, file_name: &str) -> String {
+    dbflux_i18n::t!(
+        "document.dump_analysis.task",
+        analyzer = analyzer_display_name,
+        file = file_name
+    )
+}
+
+/// Summary header line for a finished dump analysis: total keys and total
+/// serialized bytes across every logical database in the dump.
+pub(crate) fn dump_analysis_summary_line(total_keys: u64, total_serialized_bytes: u64) -> String {
+    dbflux_i18n::t!(
+        "document.dump_analysis.done.summary",
+        keys = total_keys,
+        bytes = crate::buckets_table::format_bytes(total_serialized_bytes)
+    )
+}
+
 #[cfg(test)]
 mod tests {
     #[cfg(feature = "mcp")]
@@ -2257,7 +2327,8 @@ mod tests {
         context_menu_export_native_picker_fallback_toast, copy_query_language_label,
         dangerous_query_body, dangerous_query_title, delete_confirm_copy,
         delete_prefix_delete_button_label, delete_prefix_deleted_toast, delete_prefix_probe_totals,
-        delete_rows_label, error_with_detail_clipboard, execution_count_state_label,
+        delete_rows_label, dump_analysis_error_message, dump_analysis_parsing_progress,
+        dump_analysis_summary_line, dump_analysis_task_label, dump_analysis_title, error_with_detail_clipboard, execution_count_state_label,
         execution_mode_label, export_running_position_label, export_running_rows_label,
         export_summary_label, export_table_status_line, export_wizard_task_label,
         history_items_count_label, history_tab_label, image_decode_error, image_header_error,
@@ -6322,5 +6393,69 @@ mod tests {
             value,
             "document.data.grid.error.chart_save_no_profile_binding"
         );
+    }
+
+    #[test]
+    fn dump_analysis_title_interpolates_analyzer_and_file() {
+        let value = dump_analysis_title("Redis RDB", "dump.rdb");
+
+        assert!(value.contains("Redis RDB"));
+        assert!(value.contains("dump.rdb"));
+    }
+
+    #[test]
+    fn dump_analysis_parsing_progress_uses_of_total_bucket_when_total_known() {
+        let value = dump_analysis_parsing_progress(1024, Some(2048));
+
+        assert!(value.contains("1.0 KiB"));
+        assert!(value.contains("2.0 KiB"));
+    }
+
+    #[test]
+    fn dump_analysis_parsing_progress_falls_back_when_total_unknown() {
+        let value = dump_analysis_parsing_progress(1024, None);
+
+        assert!(value.contains("1.0 KiB"));
+        assert!(!value.contains("KiB of") && !value.contains("of 1.0 KiB"));
+    }
+
+    #[test]
+    fn dump_analysis_error_message_includes_offset_for_format_errors() {
+        let error = dbflux_core::DumpAnalysisError::Format {
+            offset: 4096,
+            message: "unexpected type byte".to_string(),
+        };
+
+        let value = dump_analysis_error_message(&error);
+
+        assert!(value.contains("4096"));
+        assert!(value.contains("unexpected type byte"));
+    }
+
+    #[test]
+    fn dump_analysis_error_message_maps_io_and_cancelled_variants() {
+        let io = dump_analysis_error_message(&dbflux_core::DumpAnalysisError::Io(
+            "permission denied".to_string(),
+        ));
+        let cancelled = dump_analysis_error_message(&dbflux_core::DumpAnalysisError::Cancelled);
+
+        assert!(io.contains("permission denied"));
+        assert_ne!(cancelled, "document.dump_analysis.error.cancelled");
+    }
+
+    #[test]
+    fn dump_analysis_task_label_interpolates_analyzer_and_file() {
+        let value = dump_analysis_task_label("Redis RDB", "dump.rdb");
+
+        assert!(value.contains("Redis RDB"));
+        assert!(value.contains("dump.rdb"));
+    }
+
+    #[test]
+    fn dump_analysis_summary_line_interpolates_keys_and_bytes() {
+        let value = dump_analysis_summary_line(42, 1024 * 1024);
+
+        assert!(value.contains('4') && value.contains('2'));
+        assert!(value.contains("1.0 MiB"));
     }
 }

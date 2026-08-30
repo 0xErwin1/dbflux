@@ -89,6 +89,15 @@ Driver de clave-valor Redis para DBFlux, construido sobre el crate
   real en lugar de transferir el payload; los tipos de colección no se ven
   afectados, y las lecturas de stream que alcanzan el tope de fetch se reportan
   como truncadas.
+- Análisis offline de dumps RDB (`DumpAnalyzer`): un archivo `.rdb` se escanea
+  clave por clave sin conectarse a un servidor, procesando el archivo a
+  velocidad de E/S con memoria plana (los valores de las claves nunca se
+  decodifican, solo los nombres de clave y el tipo de valor). Reporta el total
+  de claves, un desglose por tipo, las 500 claves más grandes y una
+  agregación por prefijo. Los tamaños reportados son el **tamaño serializado
+  en disco** de cada clave, no su huella en la memoria viva de Redis — el
+  overhead del allocator y las codificaciones en memoria hacen que ambos
+  números diverjan.
 
 La introspección de schema reporta un único keyspace `db0` agregado en una
 conexión Cluster: el conteo de claves y el TTL promedio se suman/promedian a

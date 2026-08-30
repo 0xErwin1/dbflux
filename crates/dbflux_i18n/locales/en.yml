@@ -1246,6 +1246,39 @@ document:
         references: REFERENCES
         row: ROW
       title: "Row %{row}"
+  dump_analysis:
+    title: "%{analyzer} — %{file}"
+    task: "Analyzing %{file} (%{analyzer})"
+    multiple_analyzers_note: "Multiple registered drivers can read this extension; analyzed with %{analyzer}."
+    parsing:
+      title: "Parsing dump…"
+      cancel: Cancel
+      progress:
+        of_total: "%{read} of %{total} read"
+        only: "%{read} read"
+    cancelled:
+      title: Analysis cancelled
+    error:
+      io: "I/O error reading dump: %{message}"
+      format: "Malformed dump at offset %{offset}: %{message}"
+      cancelled: Dump analysis was cancelled.
+    done:
+      summary: "%{keys} keys · %{bytes} serialized"
+      size_caveat_heading: "Why this differs from live memory usage"
+      largest_keys:
+        title: Largest keys
+        column:
+          key: Key
+          type: Type
+          size: Serialized size
+          expiry: Expiry
+        no_expiry: No expiry
+      by_prefix:
+        title: By prefix
+        column:
+          prefix: Prefix
+          count: Count
+          size: Serialized size
   export_wizard:
     title: Export Data
     task:
@@ -2103,6 +2136,15 @@ documents:
   error:
     write_initial_script_failed: "Failed to write initial script content: %{error}"
     save_session_failed: Failed to save session manifest
+dump_analysis:
+  dialog:
+    title: "Analyze database dump…"
+    filter:
+      dumps: Dump files
+      all_files: All Files
+  error:
+    no_dialog: File picker is unavailable in this environment.
+    unsupported_extension: "No registered driver can analyze a “.%{extension}” file."
 errors:
   action:
     view_in_audit: View in Audit
@@ -2451,6 +2493,8 @@ palette:
       name: "Open Chart..."
     new_dashboard:
       name: "New Dashboard..."
+    analyze_dump_file:
+      name: "Analyze database dump…"
   category:
     editor: Editor
     tabs: Tabs
@@ -2460,6 +2504,7 @@ palette:
     view: View
     charts: Charts
     dashboards: Dashboards
+    tools: Tools
 scripts:
   dialog:
     title: Open Script

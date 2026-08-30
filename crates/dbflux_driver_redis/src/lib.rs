@@ -13,8 +13,10 @@ pub mod command_generator;
 pub mod driver;
 pub mod instance_catalog;
 pub mod language_service;
+pub mod rdb;
 pub(crate) mod transport;
 
 pub use command_generator::RedisCommandGenerator;
 pub use driver::{REDIS_FORM, REDIS_METADATA, RedisDriver};
 pub use language_service::RedisLanguageService;
+pub use rdb::RdbAnalyzer;

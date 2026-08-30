@@ -484,6 +484,16 @@ pub trait DbDriver: Send + Sync {
         let _conn = self.connect_with_secrets(profile, password, ssh_secret)?;
         Ok(crate::TestConnectionResult::default())
     }
+
+    /// Return this driver's offline dump analyzer, if it supports one.
+    ///
+    /// Analyzing a dump file does not require a live connection, so this
+    /// lives on `DbDriver` rather than `Connection`. Drivers that implement
+    /// `DumpAnalyzer` override this and return `Some(analyzer)`. Drivers
+    /// without offline dump analysis inherit this default and return `None`.
+    fn dump_analyzer(&self) -> Option<Arc<dyn crate::connection::dump_analysis::DumpAnalyzer>> {
+        None
+    }
 }
 
 /// Key-value operations exposed by drivers in `DatabaseCategory::KeyValue`.

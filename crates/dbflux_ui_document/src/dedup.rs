@@ -104,6 +104,12 @@ pub enum DocumentKey {
         bucket: String,
         key: String,
     },
+
+    /// An offline dump-analysis report opened for a driver's native
+    /// export/dump file. Distinct from `File` (which implies a file-backed
+    /// code document). Deduplicated by `path` — analyzing the same file a
+    /// second time focuses the existing tab.
+    DumpAnalysis { path: PathBuf },
 }
 
 #[cfg(test)]
@@ -276,6 +282,20 @@ mod tests {
             key,
             DocumentKey::ObjectEditor { profile_id: pid, bucket, key }
                 if pid == profile_id && bucket == "my-bucket" && key == "logs/app.log"
+        ));
+    }
+
+    /// `DocumentKey::DumpAnalysis` must construct and round-trip through
+    /// clone and debug without panic, and is distinct by `path`.
+    #[test]
+    fn dump_analysis_key_constructs_and_clones() {
+        let path = PathBuf::from("/tmp/dump.rdb");
+        let key = DocumentKey::DumpAnalysis { path: path.clone() };
+        let cloned = key.clone();
+        let _ = format!("{:?}", cloned);
+        assert!(matches!(
+            key,
+            DocumentKey::DumpAnalysis { path: p } if p == path
         ));
     }
 

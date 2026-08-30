@@ -955,6 +955,10 @@ impl DbDriver for RedisDriver {
         let conn = self.connect_with_secrets(profile, None, None)?;
         conn.ping()
     }
+
+    fn dump_analyzer(&self) -> Option<Arc<dyn dbflux_core::DumpAnalyzer>> {
+        Some(Arc::new(crate::rdb::RdbAnalyzer))
+    }
 }
 
 #[derive(Debug)]

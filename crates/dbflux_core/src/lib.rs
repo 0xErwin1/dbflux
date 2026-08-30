@@ -79,6 +79,10 @@ pub use connection::dashboard_import::{
 
 pub use connection::dashboard_source::{DashboardRef, DashboardSource, RemoteDashboard};
 
+pub use connection::dump_analysis::{
+    DumpAnalysisError, DumpAnalysisReport, DumpAnalyzer, DumpKeyEntry, DumpPrefixEntry,
+};
+
 pub use connection::{
     DefaultDashboardPanel, DefaultInstanceDashboard, InspectorRowAction, InstanceCatalog,
     InstanceInspectorDef, InstanceMetricDef, InstanceMetricId, InstanceMetricUnit,

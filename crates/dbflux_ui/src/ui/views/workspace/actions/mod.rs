@@ -89,6 +89,7 @@ mod audit;
 mod charts_dashboards;
 mod connections;
 mod documents;
+mod dump_analysis;
 mod metrics;
 mod query;
 mod schema_diff;
@@ -102,6 +103,14 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Dynamically gated actions that are not part of the closed
+        // `Command` enum (their palette entry only appears when at least
+        // one registered driver supports it) are intercepted here.
+        if command_id == "analyze_dump_file" {
+            self.analyze_dump_file(window, cx);
+            return;
+        }
+
         let Some(command) = Command::from_palette_id(command_id) else {
             log::warn!("Unknown command: {}", command_id);
             return;

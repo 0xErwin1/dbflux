@@ -1904,6 +1904,22 @@ impl Workspace {
             items.push(PaletteItem::ImportDashboard);
         }
 
+        // "Analyze database dump…" only appears when at least one registered
+        // driver's `dump_analyzer()` supports offline dump analysis — the
+        // workspace never branches on driver id to decide this.
+        if app_state
+            .drivers()
+            .values()
+            .any(|driver| driver.dump_analyzer().is_some())
+        {
+            items.push(PaletteItem::Action {
+                id: "analyze_dump_file",
+                name: dbflux_i18n::t!("palette.command.analyze_dump_file.name").into(),
+                category: dbflux_i18n::t!("palette.category.tools").into(),
+                shortcut: None,
+            });
+        }
+
         items
     }
 

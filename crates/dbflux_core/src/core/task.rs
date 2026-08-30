@@ -37,6 +37,9 @@ pub enum TaskKind {
     KeyScan,
     KeyGet,
     KeyMutation,
+    /// Offline analysis of a driver's native dump/export format (e.g. a Redis
+    /// RDB file), run without a live connection.
+    DumpAnalysis,
 }
 
 impl TaskKind {
@@ -56,6 +59,7 @@ impl TaskKind {
             TaskKind::KeyScan => "Key Scan",
             TaskKind::KeyGet => "Key Get",
             TaskKind::KeyMutation => "Key Mutation",
+            TaskKind::DumpAnalysis => "Dump Analysis",
         }
     }
 }
@@ -573,6 +577,7 @@ mod tests {
             TaskKind::KeyScan,
             TaskKind::KeyGet,
             TaskKind::KeyMutation,
+            TaskKind::DumpAnalysis,
         ];
 
         for kind in kinds {

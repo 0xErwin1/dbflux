@@ -34,6 +34,8 @@ pub enum DocumentKind {
     ObjectBrowser,
     // A single object-storage text object opened in its own editor tab
     ObjectEditor,
+    // Offline analysis report for a driver's native dump/export file
+    DumpAnalysis,
 }
 
 /// Source kind for DataDocument (affects icon and behavior).
@@ -63,6 +65,7 @@ pub enum DocumentIcon {
     Dashboard,
     Buckets,
     ObjectBrowser,
+    DumpAnalysis,
 }
 
 impl DocumentIcon {
@@ -81,6 +84,7 @@ impl DocumentIcon {
             Self::Dashboard => "layout-dashboard",
             Self::Buckets => "box",
             Self::ObjectBrowser => "folder-open",
+            Self::DumpAnalysis => "hard-drive",
         }
     }
 }
