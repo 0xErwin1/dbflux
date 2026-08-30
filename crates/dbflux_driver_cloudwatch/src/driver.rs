@@ -1813,15 +1813,19 @@ fn fetch_log_stream_page(
 #[cfg(test)]
 mod tests {
     use super::{
-        CLOUDWATCH_FORM, CLOUDWATCH_METADATA, CloudWatchCollectionFilter, CloudWatchDriver,
-        CloudWatchProfileConfig, classify_cw, cloudwatch_column_kind, cwli_column_kind,
-        cwli_field_value, metric_data_output_to_multi_series_result,
+        CLOUDWATCH_FORM, CLOUDWATCH_METADATA, CloudWatchCollectionFilter, CloudWatchConnection,
+        CloudWatchDriver, CloudWatchProfileConfig, build_clients, classify_cw,
+        cloudwatch_column_kind, cwli_column_kind, cwli_field_value,
+        metric_data_output_to_multi_series_result,
     };
+    use crate::dashboard_import::CloudWatchDashboardImporter;
+    use crate::dashboard_source::{CloudWatchDashboardSource, RealCloudWatchDashboardApi};
+    use crate::metric_catalog::{CloudWatchMetricCatalog, RealCloudWatchClient};
     use aws_sdk_cloudwatch::operation::get_metric_data::GetMetricDataOutput;
     use aws_sdk_cloudwatch::primitives::DateTime;
     use aws_sdk_cloudwatch::types::MetricDataResult;
     use dbflux_core::{
-        ColumnKind, DbConfig, DbDriver, DriverCapabilities, FormFieldKind, FormValues,
+        ColumnKind, Connection, DbConfig, DbDriver, DriverCapabilities, FormFieldKind, FormValues,
         MetricQuerySeries, Value,
     };
     use std::collections::HashMap;
@@ -2423,5 +2427,35 @@ mod tests {
             !no_config_case.message.is_empty(),
             "Unknown error without config must produce a non-empty message"
         );
+    }
+
+    // CloudWatch Logs Insights, PPL, and OpenSearch SQL are all read-only query
+    // surfaces with no mutation/DDL shape to preview, so `query_generator()` stays
+    // at the trait default. This pins that decision against a future accidental
+    // override.
+    #[test]
+    fn connection_has_no_query_generator() {
+        let config = CloudWatchProfileConfig {
+            region: "us-east-1".to_string(),
+            profile: None,
+            endpoint: None,
+        };
+        let (client, metrics_client) =
+            build_clients(&config).expect("client construction is local and requires no network");
+
+        let connection = CloudWatchConnection {
+            client,
+            metrics_client: metrics_client.clone(),
+            config,
+            metric_catalog_impl: CloudWatchMetricCatalog::new(Box::new(RealCloudWatchClient::new(
+                metrics_client.clone(),
+            ))),
+            dashboard_importer_impl: CloudWatchDashboardImporter,
+            dashboard_source_impl: CloudWatchDashboardSource::new(Box::new(
+                RealCloudWatchDashboardApi::new(metrics_client),
+            )),
+        };
+
+        assert!(Connection::query_generator(&connection).is_none());
     }
 }

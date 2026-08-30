@@ -4669,6 +4669,24 @@ mod tests {
         );
     }
 
+    // DynamoDB's server-side metrics live in CloudWatch itself; an InstanceCatalog
+    // here would duplicate that surface per-driver instead of pointing at it. This
+    // pins the exclusion so the flags aren't added without revisiting that call.
+    #[test]
+    fn metadata_excludes_instance_catalog_capabilities() {
+        let excluded = [
+            DriverCapabilities::INSTANCE_METRICS,
+            DriverCapabilities::INSTANCE_INSPECTOR,
+        ];
+
+        for capability in excluded {
+            assert!(
+                !DYNAMODB_METADATA.capabilities.contains(capability),
+                "capability {capability:?} must be absent: DynamoDB's instance metrics belong to CloudWatch, not a per-driver InstanceCatalog"
+            );
+        }
+    }
+
     #[test]
     fn build_config_requires_region() {
         let driver = DynamoDriver::new();

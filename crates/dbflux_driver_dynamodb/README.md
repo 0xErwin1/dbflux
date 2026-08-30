@@ -38,3 +38,4 @@ AWS DynamoDB driver for DBFlux, built on the [`aws-sdk-dynamodb`](https://crates
 - Aggregate requests are not supported by the semantic planner.
 - Collection browsing in the core request layer remains offset-based, while the underlying API is page-token based.
 - No write-privilege probe: `Connection::probe_write_privilege` intentionally stays at the trait default (`WritePrivilege::Unknown`), since a reliable check would need `iam:SimulatePrincipalPolicy`, a permission the connecting role typically lacks.
+- No instance metrics or instance inspector (`INSTANCE_METRICS`/`INSTANCE_INSPECTOR` are not declared): DynamoDB's server-side metrics already live in CloudWatch, so a per-driver `InstanceCatalog` would duplicate that surface rather than add one.
