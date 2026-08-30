@@ -287,6 +287,7 @@ impl TabBar {
             super::types::DocumentIcon::Dashboard => AppIcon::ChartSpline,
             super::types::DocumentIcon::Buckets => AppIcon::Box,
             super::types::DocumentIcon::ObjectBrowser => AppIcon::Folder,
+            super::types::DocumentIcon::DumpAnalysis => AppIcon::HardDrive,
         };
 
         let center_x = self.active_tab_center_x.clone();

@@ -15,6 +15,7 @@ mod data_grid_panel;
 mod data_view;
 pub mod data_view_trait;
 pub mod dedup;
+pub mod dump_analysis;
 pub mod query_builder;
 pub mod schema_diff;
 mod style_guardrails;
@@ -54,6 +55,7 @@ pub use data_document::DataDocument;
 pub use data_grid_panel::{DataGridEvent, DataGridPanel, DataSource};
 pub use data_view::{DataViewConfig, DataViewMode};
 pub use data_view_trait::DataView;
+pub use dump_analysis::DumpAnalysisDocument;
 
 #[cfg(feature = "mcp")]
 pub use governance::McpApprovalsView;

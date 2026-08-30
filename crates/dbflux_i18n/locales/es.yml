@@ -1246,6 +1246,39 @@ document:
         references: REFERENCIAS
         row: FILA
       title: "Fila %{row}"
+  dump_analysis:
+    title: "%{analyzer} — %{file}"
+    task: "Analizando %{file} (%{analyzer})"
+    multiple_analyzers_note: "Varios controladores registrados pueden leer esta extensión; se analizó con %{analyzer}."
+    parsing:
+      title: "Analizando volcado…"
+      cancel: Cancelar
+      progress:
+        of_total: "%{read} de %{total} leídos"
+        only: "%{read} leídos"
+    cancelled:
+      title: Análisis cancelado
+    error:
+      io: "Error de E/S al leer el volcado: %{message}"
+      format: "Volcado con formato incorrecto en el desplazamiento %{offset}: %{message}"
+      cancelled: Se canceló el análisis del volcado.
+    done:
+      summary: "%{keys} claves · %{bytes} serializados"
+      size_caveat_heading: "Por qué esto difiere del uso de memoria en vivo"
+      largest_keys:
+        title: Claves más grandes
+        column:
+          key: Clave
+          type: Tipo
+          size: Tamaño serializado
+          expiry: Expiración
+        no_expiry: Sin expiración
+      by_prefix:
+        title: Por prefijo
+        column:
+          prefix: Prefijo
+          count: Cantidad
+          size: Tamaño serializado
   export_wizard:
     title: Exportar datos
     task:
@@ -2103,6 +2136,15 @@ documents:
   error:
     write_initial_script_failed: "No se pudo escribir el contenido inicial del script: %{error}"
     save_session_failed: No se pudo guardar el manifiesto de la sesión
+dump_analysis:
+  dialog:
+    title: "Analizar volcado de base de datos…"
+    filter:
+      dumps: Archivos de volcado
+      all_files: Todos los archivos
+  error:
+    no_dialog: El selector de archivos no está disponible en este entorno.
+    unsupported_extension: "Ningún controlador registrado puede analizar un archivo “.%{extension}”."
 errors:
   action:
     view_in_audit: Ver en auditoría
@@ -2451,6 +2493,8 @@ palette:
       name: "Abrir gráfico..."
     new_dashboard:
       name: "Nuevo dashboard..."
+    analyze_dump_file:
+      name: "Analizar volcado de base de datos…"
   category:
     editor: Editor
     tabs: Pestañas
@@ -2460,6 +2504,7 @@ palette:
     view: Vista
     charts: Gráficos
     dashboards: Dashboards
+    tools: Herramientas
 scripts:
   dialog:
     title: Abrir script

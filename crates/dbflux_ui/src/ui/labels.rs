@@ -299,6 +299,59 @@ pub(crate) fn scripts_read_file_failed_message(
     )
 }
 
+/// Formats the "Analyze database dump…" file dialog title.
+pub(crate) fn dump_analysis_dialog_title() -> String {
+    dbflux_i18n::t!("dump_analysis.dialog.title")
+}
+
+/// Formats the dump-files file-dialog filter label.
+pub(crate) fn dump_analysis_filter_dumps_label() -> String {
+    dbflux_i18n::t!("dump_analysis.dialog.filter.dumps")
+}
+
+/// Formats the "All Files" file-dialog filter label for the dump-analysis dialog.
+pub(crate) fn dump_analysis_filter_all_files_label() -> String {
+    dbflux_i18n::t!("dump_analysis.dialog.filter.all_files")
+}
+
+/// Formats the error shown when the native file picker is unavailable.
+pub(crate) fn dump_analysis_no_dialog_message() -> String {
+    dbflux_i18n::t!("dump_analysis.error.no_dialog")
+}
+
+/// Formats the error shown when no registered driver can analyze a file
+/// with the given extension.
+pub(crate) fn dump_analysis_unsupported_extension_message(extension: &str) -> String {
+    dbflux_i18n::t!(
+        "dump_analysis.error.unsupported_extension",
+        extension = extension
+    )
+}
+
+/// Selects which registered dump analyzer to use for a picked file, given
+/// the analyzers' `(display_name, file_extensions)` pairs already sorted by
+/// display name, and the file's extension (without the leading dot).
+///
+/// Returns the index of the first analyzer whose extensions contain a
+/// case-insensitive match, plus whether more than one analyzer matched
+/// (in which case the caller should note which one was chosen). Returns
+/// `None` when no analyzer supports the extension.
+pub(crate) fn select_dump_analyzer(
+    analyzers: &[(&str, &[&str])],
+    extension: &str,
+) -> Option<(usize, bool)> {
+    let mut matches = analyzers.iter().enumerate().filter(|(_, (_, extensions))| {
+        extensions
+            .iter()
+            .any(|candidate| candidate.eq_ignore_ascii_case(extension))
+    });
+
+    let first = matches.next()?;
+    let multiple_matched = matches.next().is_some();
+
+    Some((first.0, multiple_matched))
+}
+
 /// Formats the "Focusing existing audit viewer" toast.
 pub(crate) fn audit_focus_existing_viewer_message() -> String {
     dbflux_i18n::t!("audit.toast.focus_existing_viewer")
@@ -419,9 +472,12 @@ mod tests {
         connections_refreshing_schema_message, documents_default_title, documents_new_query_name,
         documents_no_active_connection_message, documents_save_session_failed_message,
         documents_schema_diff_opened_message, documents_write_initial_script_failed_message,
-        scripts_filter_all_files_label, scripts_filter_javascript_mongodb_label,
-        scripts_filter_redis_label, scripts_filter_sql_label, scripts_open_dialog_title,
-        scripts_read_file_failed_message, settings_default_connection_name, shutdown_phase_label,
+        dump_analysis_dialog_title, dump_analysis_filter_all_files_label,
+        dump_analysis_filter_dumps_label, dump_analysis_no_dialog_message,
+        dump_analysis_unsupported_extension_message, scripts_filter_all_files_label,
+        scripts_filter_javascript_mongodb_label, scripts_filter_redis_label,
+        scripts_filter_sql_label, scripts_open_dialog_title, scripts_read_file_failed_message,
+        select_dump_analyzer, settings_default_connection_name, shutdown_phase_label,
         tasks_running_label, workspace_delete_connection_message, workspace_delete_folder_message,
         workspace_delete_selected_message, workspace_drop_object_message,
     };
@@ -757,5 +813,43 @@ mod tests {
     fn charts_instance_overview_editable_name_embeds_source_title() {
         let name = charts_instance_overview_editable_name("Instance Overview");
         assert!(name.contains("Instance Overview"));
+    }
+
+    #[test]
+    fn dump_analysis_dialog_labels_resolve() {
+        assert!(!dump_analysis_dialog_title().is_empty());
+        assert!(!dump_analysis_filter_dumps_label().is_empty());
+        assert!(!dump_analysis_filter_all_files_label().is_empty());
+        assert!(!dump_analysis_no_dialog_message().is_empty());
+    }
+
+    #[test]
+    fn dump_analysis_unsupported_extension_message_embeds_extension() {
+        let message = dump_analysis_unsupported_extension_message("bak");
+        assert!(message.contains("bak"));
+    }
+
+    #[test]
+    fn select_dump_analyzer_returns_none_when_no_extension_matches() {
+        let analyzers: &[(&str, &[&str])] = &[("Redis RDB", &["rdb"])];
+        assert_eq!(select_dump_analyzer(analyzers, "sql"), None);
+    }
+
+    #[test]
+    fn select_dump_analyzer_matches_case_insensitively() {
+        let analyzers: &[(&str, &[&str])] = &[("Redis RDB", &["rdb"])];
+        assert_eq!(select_dump_analyzer(analyzers, "RDB"), Some((0, false)));
+    }
+
+    #[test]
+    fn select_dump_analyzer_picks_first_match_and_flags_multiple() {
+        let analyzers: &[(&str, &[&str])] = &[("Analyzer A", &["dump"]), ("Analyzer B", &["dump"])];
+        assert_eq!(select_dump_analyzer(analyzers, "dump"), Some((0, true)));
+    }
+
+    #[test]
+    fn select_dump_analyzer_single_match_reports_not_multiple() {
+        let analyzers: &[(&str, &[&str])] = &[("Analyzer A", &["rdb"]), ("Analyzer B", &["dump"])];
+        assert_eq!(select_dump_analyzer(analyzers, "dump"), Some((1, false)));
     }
 }
