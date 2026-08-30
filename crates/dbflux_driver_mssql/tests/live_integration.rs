@@ -671,6 +671,13 @@ fn mssql_probe_write_privilege_sa_is_writable() -> Result<(), DbError> {
     containers::with_mssql_url(|uri| {
         let (connection, _) = connect_mssql(uri)?;
 
+        // The probe resolves an empty database to Unknown by design (nothing
+        // to write to is not the same as forbidden), so a visible base table
+        // must exist before the writable verdict can be asserted.
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE probe_privilege_test (id INT PRIMARY KEY)",
+        ))?;
+
         // `sa` is sysadmin, so `DATABASEPROPERTYEX(..., 'Updateability')`
         // reports `READ_WRITE` and `HAS_PERMS_BY_NAME` grants INSERT/UPDATE/
         // DELETE on every visible base table — this exercises both real
