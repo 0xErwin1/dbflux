@@ -100,6 +100,10 @@ directamente sobre el cliente de wire protocol
   renderiza).
 - Sin métricas de instancia ni inspector de instancia
   (`INSTANCE_METRICS`/`INSTANCE_INSPECTOR` no están declaradas).
+- Sin sondeo de privilegio de escritura: `Connection::probe_write_privilege`
+  se queda intencionalmente en el valor por defecto del trait
+  (`WritePrivilege::Unknown`), ya que el driver ya rechaza toda sentencia de
+  mutación a nivel de wire, sin importar los grants reales del rol conectado.
 - Los valores de OID de tipo extendido usados para
   `SUPER`/`VARBYTE`/`GEOMETRY`/`GEOGRAPHY`/`HLLSKETCH`, y las formas exactas de
   query de `SVV_TABLE_INFO`/`PG_TABLE_DEF` usadas para los storage hints, solo

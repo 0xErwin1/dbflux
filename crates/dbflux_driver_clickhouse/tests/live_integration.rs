@@ -192,3 +192,22 @@ fn clickhouse_rejects_query_parameters_and_multiple_statements() -> Result<(), D
         Ok(())
     })
 }
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn clickhouse_probe_write_privilege_default_user_is_writable() -> Result<(), DbError> {
+    containers::with_clickhouse(|config| {
+        let connection = connect(&config)?;
+
+        // `CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1` (set by `with_clickhouse`)
+        // makes the container's default user an implicit admin with full
+        // grants, so `system.grants` (direct + `system.current_roles` join)
+        // and `getSetting('readonly')` should resolve to `Writable`.
+        assert_eq!(
+            connection.probe_write_privilege(),
+            dbflux_core::WritePrivilege::Writable
+        );
+
+        Ok(())
+    })
+}

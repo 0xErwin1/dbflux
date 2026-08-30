@@ -76,3 +76,8 @@ Driver de AWS DynamoDB para DBFlux, construido sobre el SDK
 - Las requests de agregación no están soportadas por el planificador semántico.
 - El browsing de collections en la capa de request del núcleo permanece basado
   en offset, mientras que la API subyacente está basada en page-token.
+- Sin sondeo de privilegio de escritura: `Connection::probe_write_privilege`
+  se queda intencionalmente en el valor por defecto del trait
+  (`WritePrivilege::Unknown`), ya que un chequeo confiable necesitaría
+  `iam:SimulatePrincipalPolicy`, un permiso que el rol conectado típicamente
+  no tiene.

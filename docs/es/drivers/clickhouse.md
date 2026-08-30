@@ -53,6 +53,14 @@ así que el endpoint es una URL y no un par host/port.
   y `OPTIMIZE TABLE ... FINAL` no se marcan — ninguno borra filas ni cambia la
   estructura de la tabla — igual que otros drivers relacionales tratan
   statements administrativos no destructivos comparables.
+- Sondeo de privilegio de escritura: tras conectar, revisa el setting de
+  servidor `readonly` y `system.grants` para el usuario actual y sus roles de
+  sesión activos, para detectar una sesión de solo lectura o un usuario sin
+  grants `INSERT`/`ALTER UPDATE`/`ALTER DELETE`, ajustando la política de
+  mutación resuelta a solo lectura cuando el servidor rechazaría las
+  escrituras de todos modos (sin efectos secundarios; los grants alcanzables
+  solo a través de un rol dentro de otro rol no se resuelven y dejan la
+  política sin cambios).
 
 ### Manejo de tipos
 

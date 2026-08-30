@@ -58,6 +58,14 @@ Driver de Microsoft SQL Server para DBFlux, construido sobre el cliente TDS
   filas de `VALUES` de T-SQL, expuesto vía `DriverLimits::max_bulk_insert_rows`)
   y DDL `CREATE TABLE` nativo del driver a partir de las columnas de una tabla
   origen (`TRUNCATE_TABLE` también está soportado).
+- Sondeo de privilegio de escritura: tras conectar, revisa
+  `DATABASEPROPERTYEX(DB_NAME(), 'Updateability')` para detectar una base de
+  datos de solo lectura (p. ej. una secundaria legible de Always On) y, si no
+  lo es, si el login tiene `INSERT`/`UPDATE`/`DELETE` sobre alguna tabla base
+  visible que no sea del sistema vía `HAS_PERMS_BY_NAME`, ajustando la política
+  de mutación resuelta a solo lectura cuando el servidor rechazaría las
+  escrituras de todos modos (sin efectos secundarios; una base de datos vacía
+  es inconcluyente y deja la política sin cambios).
 
 ### Instance Metrics
 

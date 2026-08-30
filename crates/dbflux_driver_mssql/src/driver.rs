@@ -1670,6 +1670,14 @@ impl Connection for MssqlConnection {
         &crate::TSqlLanguageService
     }
 
+    fn probe_write_privilege(&self) -> dbflux_core::WritePrivilege {
+        self.inner
+            .lock()
+            .ok()
+            .map(|mut inner| crate::instance_catalog::probe_mssql_write_privilege(&mut inner))
+            .unwrap_or(dbflux_core::WritePrivilege::Unknown)
+    }
+
     fn instance_catalog(&self) -> Option<Box<dyn InstanceCatalog>> {
         let mut inner = self.inner.lock().ok()?;
         let view_server_state_available =

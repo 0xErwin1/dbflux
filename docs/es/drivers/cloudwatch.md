@@ -109,3 +109,8 @@ Driver de AWS CloudWatch Logs para DBFlux, construido sobre el SDK
   (`live_execute_cloudwatch_metric`) requieren credenciales reales de AWS y
   están marcadas `#[ignore]` por defecto. LocalStack Community no soporta la API
   de CloudWatch Metrics.
+- Sin sondeo de privilegio de escritura: `Connection::probe_write_privilege`
+  se queda intencionalmente en el valor por defecto del trait
+  (`WritePrivilege::Unknown`), ya que un chequeo confiable necesitaría
+  `iam:SimulatePrincipalPolicy`, un permiso que el rol conectado típicamente
+  no tiene.

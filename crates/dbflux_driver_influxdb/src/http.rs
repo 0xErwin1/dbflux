@@ -107,6 +107,23 @@ pub fn build_flux_request_body(query: &str) -> serde_json::Value {
     })
 }
 
+/// Build the InfluxDB v2 authorizations listing URL.
+///
+/// Used only to probe the connecting token's own write privilege: the v2 API
+/// scopes the returned list to what the presenting token is allowed to see,
+/// so a token without `read:authorizations` gets an HTTP 403 rather than an
+/// empty list. `org` is included when known, matching the v2 query API.
+pub fn build_v2_authorizations_url(base: &str, org: Option<&str>) -> String {
+    let base = base.trim_end_matches('/');
+    match org.filter(|org| !org.is_empty()) {
+        Some(org) => {
+            let org_enc = urlencoding::encode(org);
+            format!("{base}/api/v2/authorizations?org={org_enc}")
+        }
+        None => format!("{base}/api/v2/authorizations"),
+    }
+}
+
 /// Build the Authorization header value for the given credentials.
 ///
 /// v2 tokens use the `Token <value>` scheme. v1 credentials use HTTP Basic
@@ -189,6 +206,20 @@ impl HttpClient {
     pub fn execute_flux_v2(&self, org: &str, query: &str) -> Result<HttpResponseBody, HttpError> {
         let url = build_v2_flux_url(&self.base_url, org);
         self.post_flux(&url, query)
+    }
+
+    /// Fetch the v2 authorizations visible to the connecting token.
+    ///
+    /// Used solely by the write-privilege probe. Returns whatever HTTP status
+    /// the server sends (including 403) rather than mapping it to `HttpError`,
+    /// since a 403 here is a meaningful, expected classification signal and
+    /// not a transport failure.
+    pub fn fetch_authorizations_v2(
+        &self,
+        org: Option<&str>,
+    ) -> Result<HttpResponseBody, HttpError> {
+        let url = build_v2_authorizations_url(&self.base_url, org);
+        self.get(&url)
     }
 
     /// Issue a GET request, applying auth headers.
@@ -376,6 +407,25 @@ mod tests {
     #[test]
     fn auth_header_none_returns_none() {
         assert!(auth_header(&AuthCreds::None).is_none());
+    }
+
+    #[test]
+    fn build_v2_authorizations_url_includes_org_when_present() {
+        let url = build_v2_authorizations_url("http://localhost:8086", Some("my-org"));
+        assert!(url.contains("/api/v2/authorizations"));
+        assert!(url.contains("org=my-org"));
+    }
+
+    #[test]
+    fn build_v2_authorizations_url_omits_org_param_when_absent() {
+        let url = build_v2_authorizations_url("http://localhost:8086", None);
+        assert_eq!(url, "http://localhost:8086/api/v2/authorizations");
+    }
+
+    #[test]
+    fn build_v2_authorizations_url_omits_org_param_when_empty() {
+        let url = build_v2_authorizations_url("http://localhost:8086", Some(""));
+        assert_eq!(url, "http://localhost:8086/api/v2/authorizations");
     }
 
     #[test]
