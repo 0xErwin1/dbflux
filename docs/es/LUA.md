@@ -644,13 +644,6 @@ un mecanismo de allowlist configurable por el usuario. Las seis allowlists
 actuales cubren los casos de uso más comunes (CLIs de nube, SSH, scripts de
 Python).
 
-### Sin syntax highlighting de Lua en el editor
-
-gpui-component (v0.5.0) no incluye una grammar `tree-sitter-lua`. Al editar
-scripts de Lua en el editor de código, no hay syntax highlighting.
-`editor_mode()` retorna `"lua"`, que cae con gracia a plaintext. Los scripts de
-Python y Bash tienen highlighting completo.
-
 ### Memoria acotada
 
 Cada VM tiene un cap de 16 MiB de memoria asignada por Lua. Los scripts que

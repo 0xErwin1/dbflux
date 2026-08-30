@@ -102,7 +102,20 @@ dbflux_i18n = { path = "crates/dbflux_i18n" }
 mysql = "28"
 
 gpui = "0.2.2"
-gpui-component = { version = "0.5.0", features = ["tree-sitter-languages"] }
+gpui-component = { version = "0.5.0" }
+# Grammars for the code-editor highlighter (gpui-component's highlighter::LanguageRegistry).
+# gpui-component's own `tree-sitter-languages` feature pulls in ~30 grammars; DBFlux only
+# ever asks the editor for the modes `QueryLanguage::editor_mode()` can return (sql,
+# javascript, cypher, lua, python, bash, plaintext) plus json, so those are registered
+# individually at startup instead (see dbflux_components::highlighting).
+tree-sitter = "0.25.4"
+tree-sitter-sequel = "0.3.8"
+tree-sitter-javascript = "0.23.1"
+tree-sitter-cypher = "0.2.6"
+tree-sitter-lua = "0.5.0"
+tree-sitter-python = "0.23.6"
+tree-sitter-bash = "0.23.3"
+tree-sitter-json = "0.24.8"
 core-text = ">=21.0.0, <21.1.0"
 smallvec = "1.13.2"
 rfd = "0.17"
