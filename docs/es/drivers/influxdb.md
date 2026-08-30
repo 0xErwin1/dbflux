@@ -189,3 +189,8 @@ Driver de InfluxDB para DBFlux.
   campo obligatorio `bucket_or_database` se siguen cargando correctamente. El
   campo se deserializa como `default_bucket` mediante un alias de serde. Los
   perfiles guardados tras este cambio usan la clave `default_bucket`.
+- **Todavía sin métricas de instancia ni instance inspector**
+  (`INSTANCE_METRICS`/`INSTANCE_INSPECTOR` no se declaran). El bucket de
+  monitoreo interno de InfluxDB y el endpoint `/metrics` son candidatos
+  naturales para un futuro `InstanceCatalog`, así que esto está planeado y no
+  excluido permanentemente.

@@ -81,3 +81,7 @@ Driver de AWS DynamoDB para DBFlux, construido sobre el SDK
   (`WritePrivilege::Unknown`), ya que un chequeo confiable necesitaría
   `iam:SimulatePrincipalPolicy`, un permiso que el rol conectado típicamente
   no tiene.
+- Sin métricas de instancia ni instance inspector (`INSTANCE_METRICS`/
+  `INSTANCE_INSPECTOR` no se declaran): las métricas del lado del servidor de
+  DynamoDB ya viven en CloudWatch, así que un `InstanceCatalog` por driver
+  duplicaría esa superficie en lugar de agregar una nueva.

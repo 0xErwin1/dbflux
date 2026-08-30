@@ -90,3 +90,9 @@ texto crudo:
 - Las zonas horarias con nombre de ClickHouse no se interpretan del lado del
   cliente. Los timestamps ISO con un offset se manejan correctamente; los
   timestamps sin uno se tratan como UTC.
+- Todavía sin métricas de instancia ni instance inspector
+  (`INSTANCE_METRICS`/`INSTANCE_INSPECTOR` no se declaran). A diferencia de
+  DynamoDB y CloudWatch, ClickHouse no tiene un servicio de métricas externo al
+  cual apuntar en su lugar: `system.metrics`, `system.events` y
+  `system.processes` son candidatos naturales para un futuro `InstanceCatalog`,
+  así que esto está planeado y no excluido permanentemente.

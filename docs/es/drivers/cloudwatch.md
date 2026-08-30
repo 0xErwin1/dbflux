@@ -114,3 +114,12 @@ Driver de AWS CloudWatch Logs para DBFlux, construido sobre el SDK
   (`WritePrivilege::Unknown`), ya que un chequeo confiable necesitaría
   `iam:SimulatePrincipalPolicy`, un permiso que el rol conectado típicamente
   no tiene.
+- Sin métricas de instancia ni instance inspector (`INSTANCE_METRICS`/
+  `INSTANCE_INSPECTOR` no se declaran): las métricas propias del lado del
+  servidor de CloudWatch Logs pertenecen a CloudWatch Metrics, así que un
+  `InstanceCatalog` por driver duplicaría esa superficie en lugar de agregar
+  una nueva.
+- Sin `QueryGenerator`: `Connection::query_generator()` se queda en el valor
+  por defecto del trait (`None`). Logs Insights QL, PPL y OpenSearch SQL son
+  superficies de query de solo lectura sin forma de mutation/DDL que
+  previsualizar.
