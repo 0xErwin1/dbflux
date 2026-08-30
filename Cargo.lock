@@ -2807,6 +2807,7 @@ dependencies = [
  "aws-sdk-cloudwatch",
  "aws-sdk-cloudwatchlogs",
  "dbflux_core",
+ "dbflux_test_support",
  "log",
  "serde_json",
  "tokio",
