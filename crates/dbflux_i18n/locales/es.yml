@@ -270,6 +270,7 @@ connection_manager:
     subtitle: elige un tipo de base de datos
     empty_state: Ningún driver coincide con tu filtro
     import_from_file: "Importar desde archivo…"
+    import_from_client: "Importar desde otro cliente…"
     cancel: Cancelar
     configure: Configurar
     configure_named: "Configurar %{name}"
@@ -438,6 +439,34 @@ connection_manager:
       load: Cargar
       continue_: Continuar
       import: Importar
+    source:
+      label: "Importar desde"
+      bundle: Paquete de DBflux
+    external:
+      dialog:
+        open_title: Abrir archivo
+      filter:
+        primary: Archivo de conexión
+        secondary: Archivo de credenciales
+      field:
+        primary_file: Archivo de conexión
+        secondary_file: "Archivo de credenciales (opcional)"
+      hint:
+        secondary_optional: Omite esto para importar conexiones sin sus contraseñas guardadas.
+      error:
+        choose_primary_file: Elige un archivo para importar.
+      review:
+        intro: "Revisa las conexiones encontradas en este archivo. Desmarca las que no quieras importar."
+        skips_intro:
+          one: "%{count} entrada no se pudo importar:"
+          many: "%{count} entradas no se pudieron importar:"
+      secret:
+        will_store: La contraseña se guardará en el llavero del sistema.
+        none: No se encontró ninguna contraseña en el archivo de origen.
+      action:
+        import_selected:
+          one: "Importar %{count} conexión"
+          many: "Importar %{count} conexiones"
 connections:
   window:
     manager_title: Administrador de conexiones

@@ -3122,13 +3122,17 @@ dependencies = [
 name = "dbflux_portability"
 version = "0.8.0-dev.0"
 dependencies = [
+ "aes",
  "age",
  "base64 0.22.1",
+ "cbc",
  "chrono",
  "dbflux_core",
+ "rusqlite",
  "secrecy",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.19",
  "toml 1.1.3+spec-1.1.0",
  "uuid",

@@ -273,6 +273,16 @@ impl ConnectionManagerWindow {
                     )
                     .child(
                         Button::new(
+                            "cm-driver-import-external",
+                            dbflux_i18n::t!("connection_manager.driver_select.import_from_client"),
+                        )
+                        .small()
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.open_import_external(window, cx);
+                        })),
+                    )
+                    .child(
+                        Button::new(
                             "cm-driver-cancel",
                             dbflux_i18n::t!("connection_manager.driver_select.cancel"),
                         )

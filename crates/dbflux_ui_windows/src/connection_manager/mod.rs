@@ -889,6 +889,17 @@ impl ConnectionManagerWindow {
         cx.notify();
     }
 
+    /// Switch to the in-window import panel, pre-selecting an external-client
+    /// source (DBeaver, Beekeeper Studio, ...) instead of the native bundle.
+    pub(super) fn open_import_external(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.import_panel.update(cx, |panel, cx| {
+            panel.reset(window, cx);
+            panel.preselect_external_source(cx);
+        });
+        self.view = View::Import;
+        cx.notify();
+    }
+
     pub fn new_for_edit(
         app_state: Entity<AppStateEntity>,
         profile: &dbflux_core::ConnectionProfile,
@@ -4186,6 +4197,7 @@ mod tests {
         "connection_manager.driver_select.subtitle",
         "connection_manager.driver_select.empty_state",
         "connection_manager.driver_select.import_from_file",
+        "connection_manager.driver_select.import_from_client",
         "connection_manager.driver_select.cancel",
         "connection_manager.driver_select.configure",
         "connection_manager.driver_select.configure_named",
