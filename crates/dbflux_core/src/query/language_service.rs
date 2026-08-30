@@ -287,15 +287,20 @@ pub fn classify_query_for_language(
     classify_query_for_language_with_service(query_language, query, None)
 }
 
-/// Classify a query's execution impact, optionally delegating a `Custom`
-/// language to the driver's own [`LanguageService`].
+/// Classify a query's execution impact, optionally delegating driver-owned
+/// languages to the driver's own [`LanguageService`].
 ///
-/// For the built-in languages the classification is keyed off the language. For
-/// a `Custom(_)` language the classifier consults `service` (when present) so a
-/// driver-defined surface (e.g. PartiQL) is classified by the driver rather than
-/// dead-ending at a conservative `Write`. With no service it falls back to
-/// `Write`, preserving the previous conservative default for non-connection
-/// callers.
+/// `Sql`, `MongoQuery`, and `RedisCommands` have a shared heuristic in core and
+/// are classified directly from the language, ignoring `service`. Every other
+/// language — `Custom(_)` as well as the fixed non-SQL variants that still have
+/// no shared core heuristic (`CloudWatchLogsInsightsQl`, `OpenSearchPpl`,
+/// `OpenSearchSql`, `InfluxQuery`, `Flux`) — consults `service.classify_execution`
+/// (when present) first, so a driver-defined surface is classified by the
+/// driver rather than dead-ending at a conservative default. With no service,
+/// or when the service's `classify_execution` returns `None` (its default),
+/// each of those languages falls back to the same conservative default it used
+/// before delegation existed: `Read` for the CloudWatch/OpenSearch trio, `Write`
+/// for everything else in this group.
 pub fn classify_query_for_language_with_service(
     query_language: &QueryLanguage,
     query: &str,
@@ -303,14 +308,27 @@ pub fn classify_query_for_language_with_service(
 ) -> ExecutionClassification {
     match query_language {
         QueryLanguage::Sql => classify_sql_execution(query),
+
+        // These languages are fixed (non-`Custom`) variants, but like `Custom`
+        // they are driver-owned dialects with no shared heuristic in core. A
+        // driver whose `LanguageService` overrides `classify_execution` gets
+        // consulted first; a driver that does not (the default returns `None`)
+        // falls back to the same conservative default this language used
+        // before delegation existed, so behavior for those drivers is
+        // unchanged.
         QueryLanguage::CloudWatchLogsInsightsQl
         | QueryLanguage::OpenSearchPpl
-        | QueryLanguage::OpenSearchSql => ExecutionClassification::Read,
+        | QueryLanguage::OpenSearchSql => service
+            .and_then(|service| service.classify_execution(query))
+            .unwrap_or(ExecutionClassification::Read),
+
         QueryLanguage::MongoQuery => classify_mongo_query(query),
         QueryLanguage::RedisCommands => classify_redis_query(query),
-        QueryLanguage::Custom(_) => service
+
+        QueryLanguage::InfluxQuery | QueryLanguage::Flux | QueryLanguage::Custom(_) => service
             .and_then(|service| service.classify_execution(query))
             .unwrap_or(ExecutionClassification::Write),
+
         _ => ExecutionClassification::Write,
     }
 }
@@ -1684,6 +1702,134 @@ END $$;"#;
         assert_eq!(
             classify_query_for_language_with_service(&language, "weird", Some(&service)),
             ExecutionClassification::Write
+        );
+    }
+
+    // ==================== Fixed non-SQL language delegation ====================
+    // DEC — classify_query_for_language_with_service also delegates fixed
+    // (non-Custom) driver-owned languages to the driver's LanguageService, not
+    // just Custom(_). See InfluxDB/CloudWatch drivers for real services.
+
+    struct DestructiveOnDropService;
+    impl LanguageService for DestructiveOnDropService {
+        fn validate(&self, _query: &str) -> ValidationResult {
+            ValidationResult::Valid
+        }
+        fn detect_dangerous(&self, _query: &str) -> Option<DangerousQueryKind> {
+            None
+        }
+        fn classify_execution(&self, query: &str) -> Option<ExecutionClassification> {
+            if query.to_ascii_uppercase().contains("DROP") {
+                Some(ExecutionClassification::Destructive)
+            } else {
+                None
+            }
+        }
+    }
+
+    struct NeverOverridesService;
+    impl LanguageService for NeverOverridesService {
+        fn validate(&self, _query: &str) -> ValidationResult {
+            ValidationResult::Valid
+        }
+        fn detect_dangerous(&self, _query: &str) -> Option<DangerousQueryKind> {
+            None
+        }
+        // classify_execution intentionally left at its default (returns None).
+    }
+
+    #[test]
+    fn influxquery_and_flux_delegate_to_service_when_it_classifies() {
+        let service = DestructiveOnDropService;
+
+        assert_eq!(
+            classify_query_for_language_with_service(
+                &QueryLanguage::InfluxQuery,
+                "DROP DATABASE mydb",
+                Some(&service),
+            ),
+            ExecutionClassification::Destructive
+        );
+        assert_eq!(
+            classify_query_for_language_with_service(
+                &QueryLanguage::Flux,
+                "drop(bucket: \"b\")",
+                Some(&service),
+            ),
+            ExecutionClassification::Destructive
+        );
+    }
+
+    #[test]
+    fn cloudwatch_languages_delegate_to_service_when_it_classifies() {
+        let service = DestructiveOnDropService;
+
+        for language in [
+            QueryLanguage::CloudWatchLogsInsightsQl,
+            QueryLanguage::OpenSearchPpl,
+            QueryLanguage::OpenSearchSql,
+        ] {
+            assert_eq!(
+                classify_query_for_language_with_service(
+                    &language,
+                    "fields @message | filter @message like /DROP/",
+                    Some(&service),
+                ),
+                ExecutionClassification::Destructive
+            );
+        }
+    }
+
+    #[test]
+    fn sql_variant_is_unaffected_by_service_delegation() {
+        // Sql keeps its own core heuristic and never consults the service,
+        // even when one is supplied and would otherwise classify this query
+        // as Destructive.
+        let service = DestructiveOnDropService;
+
+        assert_eq!(
+            classify_query_for_language_with_service(
+                &QueryLanguage::Sql,
+                "SELECT * FROM t WHERE note = 'DROP'",
+                Some(&service),
+            ),
+            ExecutionClassification::Read
+        );
+    }
+
+    #[test]
+    fn influxquery_falls_back_to_write_when_service_returns_none() {
+        assert_eq!(
+            classify_query_for_language_with_service(
+                &QueryLanguage::InfluxQuery,
+                "SELECT * FROM cpu",
+                Some(&NeverOverridesService),
+            ),
+            ExecutionClassification::Write
+        );
+        assert_eq!(
+            classify_query_for_language(&QueryLanguage::Flux, "from(bucket:\"b\")"),
+            ExecutionClassification::Write
+        );
+    }
+
+    #[test]
+    fn cloudwatch_languages_fall_back_to_read_when_service_returns_none() {
+        assert_eq!(
+            classify_query_for_language_with_service(
+                &QueryLanguage::CloudWatchLogsInsightsQl,
+                "fields @timestamp",
+                Some(&NeverOverridesService),
+            ),
+            ExecutionClassification::Read
+        );
+        assert_eq!(
+            classify_query_for_language(&QueryLanguage::OpenSearchPpl, "source=logs"),
+            ExecutionClassification::Read
+        );
+        assert_eq!(
+            classify_query_for_language(&QueryLanguage::OpenSearchSql, "SELECT * FROM logs"),
+            ExecutionClassification::Read
         );
     }
 

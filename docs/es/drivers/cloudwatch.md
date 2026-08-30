@@ -65,6 +65,13 @@ Driver de AWS CloudWatch Logs para DBFlux, construido sobre el SDK
   dimensiones, período y estadística.
 - Identidad del cliente: cada request lleva `dbflux-<versión>` como app name del
   SDK de AWS, visible en el campo `userAgent` de CloudTrail.
+- `CloudWatchLanguageService` (`language_service.rs`) es honesto sobre que las
+  tres superficies de query son de solo lectura: `detect_dangerous` siempre
+  devuelve `None` y `classify_execution` siempre reporta `Read`, en vez de
+  ejecutar las heurísticas de queries peligrosas o la gramática SQL contra
+  texto de Logs Insights QL / PPL / OpenSearch SQL (ninguno de estos dialectos
+  tiene una superficie de mutación o borrado en forma de query; borrar un log
+  group/stream es una acción de la API de administración, no una query).
 
 ## Limitaciones
 

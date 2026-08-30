@@ -134,6 +134,15 @@ Driver de InfluxDB para DBFlux.
   por defecto.
 - **Identidad del cliente** — cada request HTTP reporta `dbflux/<versión>` como
   header `User-Agent`, visible en los logs de request del lado del servidor.
+- **Detección de queries peligrosas sensible al dialecto** — `InfluxLanguageService`
+  detecta si el texto es InfluxQL o Flux (Flux tiene forma de pipeline o empieza
+  con `import`) y marca `DROP DATABASE/MEASUREMENT/SERIES/RETENTION POLICY/SHARD`
+  y `DELETE` sin cláusula `WHERE` en InfluxQL, y llamadas a `delete()`/
+  `influxdb.delete()` en Flux, antes de ejecutar. `classify_execution` reporta
+  `SELECT`/`SHOW` como lectura y `DELETE`/`DROP`/`delete()` de Flux como
+  destructivo, para que las políticas de gobernanza vean el impacto real en vez
+  de una escritura genérica. `validate` es una verificación sintáctica básica
+  (paréntesis y comillas balanceados), no un parser completo.
 
 ## Limitaciones
 

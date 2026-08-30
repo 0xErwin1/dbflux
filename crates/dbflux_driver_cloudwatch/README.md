@@ -29,6 +29,7 @@ AWS CloudWatch Logs driver for DBFlux, built on the [`aws-sdk-cloudwatchlogs`](h
 - Browse CloudWatch metric catalog (namespaces and per-namespace metrics with dimension combinations) via `ListMetrics` pagination. Namespace listing is synthesized by sweeping `ListMetrics` with no filter and collecting distinct namespace strings. Results are cached in-session by `MetricCatalogCache`.
 - Metric catalog is browsable from the connection sidebar tree (Metrics > Namespace > Metric). Clicking a metric leaf opens a chart pre-populated with defaults (Average / 5 min period / aggregate across all dimensions) and immediately executes it. The picker rail in the chart document allows refining dimensions, period, and statistic.
 - Client identity: every request carries `dbflux-<version>` as the AWS SDK app name, visible in CloudTrail's `userAgent` field.
+- `CloudWatchLanguageService` (`language_service.rs`) is honest about all three query surfaces being read-only: `detect_dangerous` always returns `None` and `classify_execution` always reports `Read`, instead of running SQL dangerous-query heuristics or the SQL grammar against Logs Insights QL / PPL / OpenSearch SQL text (none of these dialects have a query-shaped mutation or delete surface; log group/stream deletion is a management-API action, not a query).
 
 ## Limitations
 

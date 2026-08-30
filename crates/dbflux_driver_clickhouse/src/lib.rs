@@ -15,6 +15,8 @@ pub mod driver;
 pub mod error_formatter;
 mod http;
 mod introspection;
+#[cfg(test)]
+mod language_service;
 pub mod types;
 
 pub use connection::ClickHouseConnection;

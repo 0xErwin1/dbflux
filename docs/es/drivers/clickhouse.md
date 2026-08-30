@@ -45,6 +45,14 @@ así que el endpoint es una URL y no un par host/port.
   JSON.
 - Cada request HTTP reporta `dbflux/<versión>` como header `User-Agent`, visible
   en los logs de request del lado del servidor.
+- La detección de queries peligrosas usa el `SqlLanguageService` compartido (sin
+  override específico de ClickHouse): `ALTER TABLE ... DELETE WHERE ...` y
+  `ALTER TABLE ... UPDATE ... WHERE ...` ya se detectan como `Alter` (cualquier
+  statement que empiece con `ALTER` se marca sin importar el subcomando), y
+  `TRUNCATE`/`DROP` se detectan como de costumbre. `KILL QUERY`/`KILL MUTATION`
+  y `OPTIMIZE TABLE ... FINAL` no se marcan — ninguno borra filas ni cambia la
+  estructura de la tabla — igual que otros drivers relacionales tratan
+  statements administrativos no destructivos comparables.
 
 ### Manejo de tipos
 
