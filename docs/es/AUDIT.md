@@ -413,14 +413,10 @@ a campos de `EventRecord`:
 | ---------------- | ----------------------------------- |
 | `message`        | `summary`                           |
 | `category`       | `category` (coaccionado a `System`) |
-| `actor_type`     | `actor_type`                        |
-| `actor_id`       | `actor_id`                          |
-| `connection_id`  | `connection_id`                     |
-| `database_name`  | `database_name`                     |
-| `driver_id`      | `driver_id`                         |
-| `action`         | `action`                            |
-| `outcome`        | `outcome`                           |
-| `details_json`   | `details_json`                      |
+
+Los campos `actor_type`, `actor_id`, `connection_id`, `database_name`,
+`driver_id`, `action`, `outcome` y `details_json` también se reconocen y se
+mapean al campo de `EventRecord` con el mismo nombre.
 
 Los campos desconocidos se acumulan en `details_json` como un objeto JSON. Si el
 mensaje excede los 512 caracteres, se trunca con `…` y el mensaje completo se

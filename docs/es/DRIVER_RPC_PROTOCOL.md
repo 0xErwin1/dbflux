@@ -236,14 +236,14 @@ default es `false`.
 
 Flujo de request/response soportado:
 
-| Request               | Response                            | Propósito                                                                                   |
-| --------------------- | ----------------------------------- | ------------------------------------------------------------------------------------------- |
-| `Hello`               | `Hello`                             | negociación de protocolo + identidad del provider                                           |
-| `ValidateSession`     | `SessionState`                      | validar el estado de auth cacheado                                                          |
-| `Login`               | `LoginUrlProgress?` + `LoginResult` | URL de verificación opcional + resultado de login terminal                                  |
-| `ResolveCredentials`  | `Credentials`                       | resolver los campos de credenciales en runtime                                              |
-| `FetchDynamicOptions` | `DynamicOptions`                    | resolver opciones de dropdown dinámicas para un campo de formulario `DynamicSelect` (v1.2+) |
-| (cualquier request)   | `EmitAuditEvent` (intermedio)       | emisión de audit event (v1.3+)                                                              |
+| Request → Response                            | Propósito                                                                                   |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `Hello` → `Hello`                             | negociación de protocolo + identidad del provider                                           |
+| `ValidateSession` → `SessionState`            | validar el estado de auth cacheado                                                          |
+| `Login` → `LoginUrlProgress?` + `LoginResult` | URL de verificación opcional + resultado de login terminal                                  |
+| `ResolveCredentials` → `Credentials`          | resolver los campos de credenciales en runtime                                              |
+| `FetchDynamicOptions` → `DynamicOptions`      | resolver opciones de dropdown dinámicas para un campo de formulario `DynamicSelect` (v1.2+) |
+| (cualquier request) → `EmitAuditEvent` (intermedio) | emisión de audit event (v1.3+)                                                        |
 
 Notas:
 
@@ -315,15 +315,15 @@ de nuevo los campos obligatorios del lado del servidor.
 
 ## Resumen de request/response
 
-| Request         | Response        | Propósito                                       |
-| --------------- | --------------- | ----------------------------------------------- |
-| `Hello`         | `Hello`         | negociación de protocolo + identidad del driver |
-| `OpenSession`   | `SessionOpened` | abrir conexión/sesión                           |
-| `CloseSession`  | `SessionClosed` | cerrar sesión                                   |
-| `Ping`          | `Pong`          | liveness                                        |
-| `Execute`       | `ExecuteResult` | ejecución de query                              |
-| `Schema`        | `Schema`        | snapshot de schema                              |
-| `ListDatabases` | `Databases`     | listado de bases de datos                       |
+| Request → Response               | Propósito                                       |
+| -------------------------------- | ----------------------------------------------- |
+| `Hello` → `Hello`                | negociación de protocolo + identidad del driver |
+| `OpenSession` → `SessionOpened`  | abrir conexión/sesión                           |
+| `CloseSession` → `SessionClosed` | cerrar sesión                                   |
+| `Ping` → `Pong`                  | liveness                                        |
+| `Execute` → `ExecuteResult`      | ejecución de query                              |
+| `Schema` → `Schema`              | snapshot de schema                              |
+| `ListDatabases` → `Databases`    | listado de bases de datos                       |
 
 El protocolo también soporta operaciones de browse, CRUD, key-value y generación
 de código. Ver `crates/dbflux_ipc/src/driver_protocol.rs` para el conjunto

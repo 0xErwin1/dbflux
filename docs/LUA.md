@@ -214,14 +214,14 @@ hook.ok()
 
 **Return value:**
 
-| Field       | Type        | Description                                |
-| ----------- | ----------- | ------------------------------------------ |
-| `ok`        | boolean     | `true` if the process was detached, or if exit code is 0 and not timed out |
-| `detached`  | boolean     | `true` if the process was handed off as detached (in which case the output/exit fields below are empty/nil) |
-| `exit_code` | integer/nil | Process exit code                          |
-| `stdout`    | string      | Captured stdout                            |
-| `stderr`    | string      | Captured stderr                            |
-| `timed_out` | boolean     | `true` if per-process timeout fired        |
+| Field       | Description                                |
+| ----------- | ------------------------------------------ |
+| `ok`        | boolean. `true` if the process was detached, or if exit code is 0 and not timed out |
+| `detached`  | boolean. `true` if the process was handed off as detached (in which case the output/exit fields below are empty/nil) |
+| `exit_code` | integer/nil. Process exit code             |
+| `stdout`    | string. Captured stdout                    |
+| `stderr`    | string. Captured stderr                    |
+| `timed_out` | boolean. `true` if per-process timeout fired |
 
 **Available allowlists:**
 

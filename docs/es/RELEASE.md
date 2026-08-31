@@ -10,11 +10,11 @@ Este documento es la referencia orientada a humanos. El skill automatizado
 
 ## Canales
 
-| Canal       | Branch de origen | Patrón de tag       | Tipo de GitHub release | Construido por |
-| ----------- | ---------------- | ------------------- | ---------------------- | -------------- |
-| **nightly** | `main` HEAD      | `nightly` (rolling) | prerelease             | Cron — diario  |
-| **rc**      | `release/vX.Y`   | `vX.Y.Z-rc.N`       | prerelease             | Push del tag   |
-| **stable**  | `release/vX.Y`   | `vX.Y.Z`            | published              | Push del tag   |
+| Canal (branch de origen)    | Patrón de tag       | GitHub release                       |
+| --------------------------- | ------------------- | ------------------------------------ |
+| **nightly** (`main` HEAD)   | `nightly` (rolling) | prerelease, construido por cron diario |
+| **rc** (`release/vX.Y`)     | `vX.Y.Z-rc.N`       | prerelease, construido con push del tag |
+| **stable** (`release/vX.Y`) | `vX.Y.Z`            | published, construido con push del tag |
 
 El canal `-dev.N` está **retirado**. Nightly lo reemplaza. Los tags `-dev.N`
 antiguos permanecen en GitHub pero no se crean nuevos.
@@ -84,11 +84,11 @@ git push origin vX.Y.Z[-suffix.N]
 El workflow de release (`.github/workflows/release.yml`) clasifica los tags
 automáticamente:
 
-| Patrón de tag  | Branch de origen permitido | Tipo de GitHub release |
-| -------------- | -------------------------- | ---------------------- |
-| `vX.Y.Z-rc.N`  | `release/vX.Y`             | prerelease             |
-| `vX.Y.Z`       | `release/vX.Y`             | stable (published)     |
-| cualquier otro | (red de seguridad)         | draft                  |
+| Patrón de tag (branch de origen permitido) | Tipo de GitHub release |
+| ------------------------------------------ | ---------------------- |
+| `vX.Y.Z-rc.N` desde `release/vX.Y`          | prerelease             |
+| `vX.Y.Z` desde `release/vX.Y`               | stable (published)     |
+| cualquier otro (red de seguridad)           | draft                  |
 
 ## Reglas de Versionado
 
@@ -321,11 +321,11 @@ git log --grep='cherry picked from' release/vX.Y
 
 ## Canales Downstream
 
-| Tipo de tag     | GitHub Release | AUR         | Nix flake (este repo)                                      | nixpkgs (futuro) |
-| --------------- | -------------- | ----------- | ---------------------------------------------------------- | ---------------- |
-| nightly         | prerelease     | se omite    | auto-fijado — `#dbflux-nightly` en la ref nightly          | se omite         |
-| `-rc.N`         | prerelease     | se omite    | actualiza el `release-info` de la release branch y de main | se omite         |
-| Stable `vX.Y.Z` | published      | bump + push | actualiza el `release-info` de la release branch y de main | bump + PR        |
+| Tipo de tag (GitHub Release) | AUR         | Nix flake (este repo)                                      | nixpkgs (futuro) |
+| ---------------------------- | ----------- | ---------------------------------------------------------- | ---------------- |
+| nightly (prerelease)         | se omite    | auto-fijado — `#dbflux-nightly` en la ref nightly          | se omite         |
+| `-rc.N` (prerelease)         | se omite    | actualiza el `release-info` de la release branch y de main | se omite         |
+| Stable `vX.Y.Z` (published)  | bump + push | actualiza el `release-info` de la release branch y de main | bump + PR        |
 
 ### AUR
 
