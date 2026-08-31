@@ -69,11 +69,11 @@ drivers and query languages. There is no per-database toggle — the same rules
 apply to SQL `DELETE`/`DROP`/`TRUNCATE`, MongoDB `deleteMany`/`drop`, Redis
 `FLUSHALL`/`FLUSHDB`, and so on.
 
-| Setting | Default | What it does |
-|---------|---------|--------------|
-| **Confirm dangerous queries** | On | Show a confirmation before running a dangerous query. Turn off to allow them without prompting. |
-| **Require WHERE for DELETE/UPDATE** | On | Treat a `DELETE`/`UPDATE` with no `WHERE` as dangerous. |
-| **Always require preview (ignore suppressions)** | Off | Force the confirm/preview modal even for queries you previously chose to stop confirming. |
+| Setting | What it does |
+|---------|--------------|
+| **Confirm dangerous queries** | On by default; show a confirmation before running a dangerous query. Turn off to allow them without prompting. |
+| **Require WHERE for DELETE/UPDATE** | On by default; treat a `DELETE`/`UPDATE` with no `WHERE` as dangerous. |
+| **Always require preview (ignore suppressions)** | Off by default; force the confirm/preview modal even for queries you previously chose to stop confirming. |
 
 ### Storage (Nightly builds only)
 
@@ -200,12 +200,12 @@ default.
 
 A Lua hook only gets the abilities you enable:
 
-| Capability | Default | Grants |
-|------------|---------|--------|
-| **Logging** | On | Write to the hook's output. |
-| **Environment read** | On | Read environment variables. |
-| **Connection metadata** | On | Read the connecting profile's metadata. |
-| **Controlled process run** | Off | Call `dbflux.process.run(...)` to launch external processes. |
+| Capability | Grants |
+|------------|--------|
+| **Logging** | On by default; write to the hook's output. |
+| **Environment read** | On by default; read environment variables. |
+| **Connection metadata** | On by default; read the connecting profile's metadata. |
+| **Controlled process run** | Off by default; call `dbflux.process.run(...)` to launch external processes. |
 
 > Enabling **Controlled process run** lets the hook execute arbitrary external
 > commands. DBFlux shows a security warning when it's on, both in the hook
