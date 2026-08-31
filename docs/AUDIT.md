@@ -345,14 +345,8 @@ The bridge recognizes these named fields on tracing events and maps them to `Eve
 |---------------|---------------------|
 | `message` | `summary` |
 | `category` | `category` (coerced to `System`) |
-| `actor_type` | `actor_type` |
-| `actor_id` | `actor_id` |
-| `connection_id` | `connection_id` |
-| `database_name` | `database_name` |
-| `driver_id` | `driver_id` |
-| `action` | `action` |
-| `outcome` | `outcome` |
-| `details_json` | `details_json` |
+
+The fields `actor_type`, `actor_id`, `connection_id`, `database_name`, `driver_id`, `action`, `outcome`, and `details_json` are recognized as well and map to the `EventRecord` field of the same name.
 
 Unknown fields accumulate in `details_json` as a JSON object. If the message exceeds 512 characters it is truncated with `…` and the full message is stored in `details_json["message"]`.
 

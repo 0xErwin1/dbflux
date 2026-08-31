@@ -264,14 +264,14 @@ restricción.
 
 **Valor de retorno:**
 
-| Campo       | Tipo        | Descripción                                                                                                       |
-| ----------- | ----------- | ----------------------------------------------------------------------------------------------------------------- |
-| `ok`        | boolean     | `true` si el proceso fue detached, o si el exit code es 0 y no hubo timeout                                       |
-| `detached`  | boolean     | `true` si el proceso se entregó como detached (en cuyo caso los campos de output/exit de abajo quedan vacíos/nil) |
-| `exit_code` | integer/nil | Exit code del proceso                                                                                             |
-| `stdout`    | string      | stdout capturado                                                                                                  |
-| `stderr`    | string      | stderr capturado                                                                                                  |
-| `timed_out` | boolean     | `true` si se disparó el timeout por proceso                                                                       |
+| Campo       | Descripción                                                                                                                |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `ok`        | boolean. `true` si el proceso fue detached, o si el exit code es 0 y no hubo timeout                                       |
+| `detached`  | boolean. `true` si el proceso se entregó como detached (en cuyo caso los campos de output/exit de abajo quedan vacíos/nil) |
+| `exit_code` | integer/nil. Exit code del proceso                                                                                         |
+| `stdout`    | string. stdout capturado                                                                                                   |
+| `stderr`    | string. stderr capturado                                                                                                   |
+| `timed_out` | boolean. `true` si se disparó el timeout por proceso                                                                       |
 
 **Allowlists disponibles:**
 

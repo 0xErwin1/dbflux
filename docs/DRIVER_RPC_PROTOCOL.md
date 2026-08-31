@@ -201,14 +201,14 @@ The v1.3 `Hello` response additionally carries `audit_emit_opt_in` (`bool`). Set
 
 Supported request / response flow:
 
-| Request | Response | Purpose |
-|---|---|---|
-| `Hello` | `Hello` | protocol negotiation + provider identity |
-| `ValidateSession` | `SessionState` | validate cached auth state |
-| `Login` | `LoginUrlProgress?` + `LoginResult` | optional verification URL + terminal login result |
-| `ResolveCredentials` | `Credentials` | resolve runtime credential fields |
-| `FetchDynamicOptions` | `DynamicOptions` | resolve dynamic dropdown options for a `DynamicSelect` form field (v1.2+) |
-| (any request) | `EmitAuditEvent` (intermediate) | audit event emission (v1.3+) |
+| Request → Response | Purpose |
+|---|---|
+| `Hello` → `Hello` | protocol negotiation + provider identity |
+| `ValidateSession` → `SessionState` | validate cached auth state |
+| `Login` → `LoginUrlProgress?` + `LoginResult` | optional verification URL + terminal login result |
+| `ResolveCredentials` → `Credentials` | resolve runtime credential fields |
+| `FetchDynamicOptions` → `DynamicOptions` | resolve dynamic dropdown options for a `DynamicSelect` form field (v1.2+) |
+| (any request) → `EmitAuditEvent` (intermediate) | audit event emission (v1.3+) |
 
 Notes:
 
@@ -260,15 +260,15 @@ The service should parse `profile_json`, expect `DbConfig::External`, and valida
 
 ## Request/response overview
 
-| Request | Response | Purpose |
-|---|---|---|
-| `Hello` | `Hello` | protocol negotiation + driver identity |
-| `OpenSession` | `SessionOpened` | open connection/session |
-| `CloseSession` | `SessionClosed` | close session |
-| `Ping` | `Pong` | liveness |
-| `Execute` | `ExecuteResult` | query execution |
-| `Schema` | `Schema` | schema snapshot |
-| `ListDatabases` | `Databases` | database list |
+| Request → Response | Purpose |
+|---|---|
+| `Hello` → `Hello` | protocol negotiation + driver identity |
+| `OpenSession` → `SessionOpened` | open connection/session |
+| `CloseSession` → `SessionClosed` | close session |
+| `Ping` → `Pong` | liveness |
+| `Execute` → `ExecuteResult` | query execution |
+| `Schema` → `Schema` | schema snapshot |
+| `ListDatabases` → `Databases` | database list |
 
 The protocol also supports browse, CRUD, key-value, and code generation operations. See `crates/dbflux_ipc/src/driver_protocol.rs` for the full enum set.
 

@@ -187,11 +187,8 @@ modificarse.
 
 ### Roles integrados
 
-| ID                  | Policy asignada     |
-| ------------------- | ------------------- |
-| `builtin/read-only` | `builtin/read-only` |
-| `builtin/write`     | `builtin/write`     |
-| `builtin/admin`     | `builtin/admin`     |
+Hay tres roles integrados: `builtin/read-only`, `builtin/write` y
+`builtin/admin`. A cada uno se le asigna la policy con el mismo ID.
 
 Los built-ins se inyectan al arranque tanto en la app GUI (`AppState`) como en
 el servidor MCP (a través de los loops `builtin_policies()` / `builtin_roles()`

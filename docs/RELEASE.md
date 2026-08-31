@@ -6,11 +6,11 @@ This document is the human-facing reference. The automated `dbflux-release` skil
 
 ## Channels
 
-| Channel     | Source branch   | Tag pattern             | GitHub release kind | Built by          |
-|-------------|-----------------|-------------------------|---------------------|-------------------|
-| **nightly** | `main` HEAD     | `nightly` (rolling)     | prerelease          | Cron — daily      |
-| **rc**      | `release/vX.Y`  | `vX.Y.Z-rc.N`           | prerelease          | Tag push          |
-| **stable**  | `release/vX.Y`  | `vX.Y.Z`                | published           | Tag push          |
+| Channel (source branch)     | Tag pattern         | GitHub release                    |
+|-----------------------------|---------------------|-----------------------------------|
+| **nightly** (`main` HEAD)   | `nightly` (rolling) | prerelease, built by a daily cron |
+| **rc** (`release/vX.Y`)     | `vX.Y.Z-rc.N`       | prerelease, built on tag push     |
+| **stable** (`release/vX.Y`) | `vX.Y.Z`            | published, built on tag push      |
 
 The `-dev.N` channel is **retired**. Nightly replaces it. Old `-dev.N` tags remain on GitHub but no new ones are created.
 
@@ -55,11 +55,11 @@ git push origin vX.Y.Z[-suffix.N]
 
 The release workflow (`.github/workflows/release.yml`) classifies tags automatically:
 
-| Tag pattern    | Allowed source branch | GitHub release kind |
-|----------------|-----------------------|---------------------|
-| `vX.Y.Z-rc.N`  | `release/vX.Y`        | prerelease          |
-| `vX.Y.Z`       | `release/vX.Y`        | stable (published)  |
-| anything else  | (safety net)          | draft               |
+| Tag pattern (allowed source branch) | GitHub release kind |
+|-------------------------------------|---------------------|
+| `vX.Y.Z-rc.N` from `release/vX.Y`   | prerelease          |
+| `vX.Y.Z` from `release/vX.Y`        | stable (published)  |
+| anything else (safety net)          | draft               |
 
 ## Versioning Rules
 
@@ -224,11 +224,11 @@ git log --grep='cherry picked from' release/vX.Y
 
 ## Downstream Channels
 
-| Tag kind        | GitHub Release | AUR         | Nix flake (this repo)                         | nixpkgs (future) |
-|-----------------|----------------|-------------|-----------------------------------------------|------------------|
-| nightly         | prerelease     | skip        | auto-pinned — `#dbflux-nightly` on nightly ref | skip            |
-| `-rc.N`         | prerelease     | skip        | bump release branch's + main's `release-info` | skip             |
-| Stable `vX.Y.Z` | published      | bump + push | bump release branch's + main's `release-info` | bump + PR        |
+| Tag kind (GitHub Release)   | AUR         | Nix flake (this repo)                         | nixpkgs (future) |
+|-----------------------------|-------------|-----------------------------------------------|------------------|
+| nightly (prerelease)        | skip        | auto-pinned — `#dbflux-nightly` on nightly ref | skip            |
+| `-rc.N` (prerelease)        | skip        | bump release branch's + main's `release-info` | skip             |
+| Stable `vX.Y.Z` (published) | bump + push | bump release branch's + main's `release-info` | bump + PR        |
 
 ### AUR
 
