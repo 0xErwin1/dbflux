@@ -96,7 +96,7 @@ jobs:
           sudo apt-get install -y gettext imagemagick
 
       - name: Setup Rust cache
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16  # v2
         with:
           prefix-key: "v0-rust"
           shared-key: linux-${{ matrix.arch }}
@@ -404,7 +404,7 @@ jobs:
         run: rustup target add ${{ matrix.target }}
 
       - name: Setup Rust cache
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16  # v2
         with:
           prefix-key: "v0-rust"
           shared-key: macos-${{ matrix.arch }}
@@ -548,7 +548,7 @@ jobs:
           components: rust-src
 
       - name: Setup Rust cache
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32  # v2
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16  # v2
         with:
           prefix-key: "v0-rust"
           shared-key: windows-amd64
