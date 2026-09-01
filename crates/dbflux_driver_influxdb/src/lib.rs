@@ -16,6 +16,7 @@ pub mod driver;
 pub mod error_formatter;
 pub mod http;
 pub mod injection;
+pub mod instance_catalog;
 pub mod language_service;
 pub mod metadata;
 pub mod parser;

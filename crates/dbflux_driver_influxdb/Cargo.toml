@@ -14,6 +14,7 @@ path = "src/lib.rs"
 
 [dependencies]
 dbflux_core.workspace = true
+async-trait = { workspace = true }
 reqwest = { workspace = true, default-features = false, features = ["blocking", "rustls-tls", "gzip"] }
 csv = { workspace = true }
 serde_json.workspace = true

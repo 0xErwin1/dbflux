@@ -9,10 +9,10 @@ use std::time::Instant;
 
 use dbflux_core::{
     CollectionBrowseRequest, CollectionCountRequest, Connection, DatabaseInfo, DbError, DbKind,
-    DefaultSqlDialect, DriverMetadata, InfluxVersion, LanguageService, MeasurementInfo,
-    QueryLanguage, QueryRequest, QueryResult, ResolvedWindow, SchemaFeatures,
-    SchemaLoadingStrategy, SchemaSnapshot, SourceContextSpec, SourceQueryMode, TimeSeriesSchema,
-    contains_time_macros,
+    DefaultSqlDialect, DriverMetadata, ExecutionSourceContext, InfluxVersion, InstanceCatalog,
+    LanguageService, MeasurementInfo, QueryLanguage, QueryRequest, QueryResult, ResolvedWindow,
+    SchemaFeatures, SchemaLoadingStrategy, SchemaSnapshot, SourceContextSpec, SourceQueryMode,
+    TimeSeriesSchema, contains_time_macros,
 };
 
 use crate::error_formatter::InfluxErrorFormatter;
@@ -146,12 +146,12 @@ impl InfluxConnection {
             .as_ref()
             .and_then(|ctx| ctx.source.as_ref())
             .and_then(|src| {
-                use dbflux_core::ExecutionSourceContext;
                 match src {
                     ExecutionSourceContext::CollectionWindow { targets, .. } => {
                         targets.first().cloned()
                     }
-                    // MetricQuery is never produced by InfluxDB; return neutral default.
+                    // InstanceMetricQuery/InstanceInspectorQuery are intercepted at the
+                    // top of execute(), so only CollectionWindow reaches this point.
                     _ => None,
                 }
             })
@@ -168,12 +168,12 @@ impl InfluxConnection {
             .as_ref()
             .and_then(|ctx| ctx.source.as_ref())
             .and_then(|src| {
-                use dbflux_core::ExecutionSourceContext;
                 match src {
                     ExecutionSourceContext::CollectionWindow { query_mode, .. } => {
                         query_mode.as_deref()
                     }
-                    // MetricQuery is never produced by InfluxDB; return neutral default.
+                    // InstanceMetricQuery/InstanceInspectorQuery are intercepted at the
+                    // top of execute(), so only CollectionWindow reaches this point.
                     _ => None,
                 }
             });
@@ -205,12 +205,12 @@ impl InfluxConnection {
             .as_ref()
             .and_then(|ctx| ctx.source.as_ref())
             .map(|src| {
-                use dbflux_core::ExecutionSourceContext;
                 match src {
                     ExecutionSourceContext::CollectionWindow {
                         start_ms, end_ms, ..
                     } => (Some(*start_ms), Some(*end_ms)),
-                    // MetricQuery is never produced by InfluxDB; return neutral default.
+                    // InstanceMetricQuery/InstanceInspectorQuery are intercepted at the
+                    // top of execute(), so only CollectionWindow reaches this point.
                     _ => (None, None),
                 }
             })
@@ -340,7 +340,53 @@ impl Connection for InfluxConnection {
         Ok(())
     }
 
+    fn instance_catalog(&self) -> Option<Box<dyn InstanceCatalog>> {
+        // v1 has no `/metrics` or `/health` telemetry surface this catalog
+        // can rely on, mirroring the probe_write_privilege v1 gate below.
+        if self.version != InfluxVersion::V2 {
+            return None;
+        }
+
+        Some(Box::new(
+            crate::instance_catalog::InfluxInstanceCatalog::new(self.http.clone()),
+        ))
+    }
+
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
+        if let Some(source) = req
+            .execution_context
+            .as_ref()
+            .and_then(|ctx| ctx.source.as_ref())
+        {
+            // Gated on v2 for the same reason `instance_catalog()` is. v1 does
+            // serve `/metrics`, so without this an instance query routed to a
+            // v1 connection would answer from a catalog that connection
+            // reports it does not have.
+            let is_instance_query = matches!(
+                source,
+                ExecutionSourceContext::InstanceMetricQuery { .. }
+                    | ExecutionSourceContext::InstanceInspectorQuery { .. }
+            );
+
+            if is_instance_query && self.version != InfluxVersion::V2 {
+                return Err(DbError::NotSupported(
+                    "InfluxDB instance metrics and inspectors require v2".to_string(),
+                ));
+            }
+
+            match source {
+                ExecutionSourceContext::InstanceMetricQuery { metric_id, .. } => {
+                    return crate::instance_catalog::dispatch_metric_series(&self.http, metric_id);
+                }
+                ExecutionSourceContext::InstanceInspectorQuery { metric_id } => {
+                    return crate::instance_catalog::dispatch_inspector_snapshot(
+                        &self.http, metric_id,
+                    );
+                }
+                _ => {}
+            }
+        }
+
         let started = Instant::now();
         let language = self.resolve_language(req)?;
 

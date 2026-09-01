@@ -35,7 +35,9 @@ pub static INFLUXDB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| Driver
         | DriverCapabilities::PAGINATION
         | DriverCapabilities::EXPORT_CSV
         | DriverCapabilities::EXPORT_JSON
-        | DriverCapabilities::CHART_AUTHORING,
+        | DriverCapabilities::CHART_AUTHORING
+        | DriverCapabilities::INSTANCE_METRICS
+        | DriverCapabilities::INSTANCE_INSPECTOR,
     default_port: Some(8086),
     uri_scheme: "http".into(),
     icon: Icon::Influxdb,

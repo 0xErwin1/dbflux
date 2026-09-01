@@ -168,6 +168,8 @@ refresh resumes automatically on reconnect without re-arming.
 | MongoDB | ✓ | ✓ | [README](../crates/dbflux_driver_mongodb/README.md) |
 | Redis | ✓ | ✓ | [README](../crates/dbflux_driver_redis/README.md) |
 | SQL Server | ✓ | ✓ | [README](../crates/dbflux_driver_mssql/README.md) |
+| ClickHouse | ✓ | ✓ | [README](../crates/dbflux_driver_clickhouse/README.md) |
+| InfluxDB (v2 only) | ✓ | ✓ | [README](../crates/dbflux_driver_influxdb/README.md) |
 
 Each driver README lists the concrete metrics, inspectors, and row actions it
 exposes; this document does not duplicate them.

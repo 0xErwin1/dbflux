@@ -584,3 +584,140 @@ fn v2_influxql_metadata_extra_contains_audit_fields() -> Result<(), DbError> {
         Ok(())
     })
 }
+
+// ---------------------------------------------------------------------------
+// Instance catalog (issue #511)
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn v2_instance_metrics_fetch_through_execute() -> Result<(), DbError> {
+    containers::with_influxdb_v2(|cfg| {
+        let conn = connect_v2(&cfg.endpoint, &cfg.bucket, &cfg.org, &cfg.token)?;
+
+        // Collected rather than asserted per metric: a declared name missing
+        // from the scrape is the failure this test exists to catch, and one
+        // run should name every one of them instead of stopping at the first.
+        let mut unresolved: Vec<String> = Vec::new();
+
+        for (prom_name, metric_id, _, _, _) in
+            dbflux_driver_influxdb::instance_catalog::METRIC_FIELDS
+        {
+            let ctx = ExecutionContext {
+                source: Some(ExecutionSourceContext::InstanceMetricQuery {
+                    metric_id: metric_id.to_string(),
+                    start_ms: 0,
+                    end_ms: 1,
+                }),
+                ..Default::default()
+            };
+            let req = QueryRequest::new("").with_execution_context(Some(ctx));
+
+            let result = match conn.execute(&req) {
+                Ok(result) => result,
+                Err(error) => {
+                    unresolved.push(format!("{metric_id} ({prom_name}): {error}"));
+                    continue;
+                }
+            };
+
+            assert_eq!(
+                result.columns.len(),
+                2,
+                "metric '{metric_id}' must return exactly 2 columns"
+            );
+            assert_eq!(
+                result.columns[0].kind,
+                dbflux_core::ColumnKind::Timestamp,
+                "metric '{metric_id}' column 0 must be Timestamp"
+            );
+            assert_eq!(
+                result.columns[1].kind,
+                dbflux_core::ColumnKind::Float,
+                "metric '{metric_id}' column 1 must be Float"
+            );
+            assert_eq!(
+                result.rows.len(),
+                1,
+                "metric '{metric_id}' must return exactly one row"
+            );
+        }
+
+        assert!(
+            unresolved.is_empty(),
+            "declared metrics absent from this server's /metrics scrape:\n  {}",
+            unresolved.join("\n  ")
+        );
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn v2_instance_inspectors_fetch_through_execute() -> Result<(), DbError> {
+    containers::with_influxdb_v2(|cfg| {
+        let conn = connect_v2(&cfg.endpoint, &cfg.bucket, &cfg.org, &cfg.token)?;
+
+        for metric_id in ["influx.health", "influx.metrics"] {
+            let ctx = ExecutionContext {
+                source: Some(ExecutionSourceContext::InstanceInspectorQuery {
+                    metric_id: metric_id.to_string(),
+                }),
+                ..Default::default()
+            };
+            let req = QueryRequest::new("").with_execution_context(Some(ctx));
+
+            let result = conn
+                .execute(&req)
+                .unwrap_or_else(|e| panic!("inspector '{metric_id}' failed: {e}"));
+
+            assert!(
+                !result.columns.is_empty(),
+                "inspector '{metric_id}' must return at least one column"
+            );
+            assert!(
+                !result.rows.is_empty(),
+                "inspector '{metric_id}' must return at least one row"
+            );
+        }
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn v1_instance_catalog_is_none_and_degrades_cleanly() -> Result<(), DbError> {
+    containers::with_influxdb_v1(|cfg| {
+        setup_v1_database(&cfg.endpoint, "dbflux_test_db")?;
+
+        let conn = connect_v1(&cfg.endpoint, "dbflux_test_db")?;
+
+        assert!(
+            conn.instance_catalog().is_none(),
+            "InfluxDB v1 must not advertise an instance catalog"
+        );
+
+        let ctx = ExecutionContext {
+            source: Some(ExecutionSourceContext::InstanceInspectorQuery {
+                metric_id: "influx.health".to_string(),
+            }),
+            ..Default::default()
+        };
+        let req = QueryRequest::new("").with_execution_context(Some(ctx));
+
+        // v1 serves `/metrics` too, so the version gate in execute() is what
+        // stops an instance query routed here from being answered by a catalog
+        // this connection reports it does not have.
+        let error = conn
+            .execute(&req)
+            .expect_err("an instance query on v1 must be refused, not answered");
+        assert!(
+            matches!(error, DbError::NotSupported(_)),
+            "expected NotSupported, got {error:?}"
+        );
+
+        Ok(())
+    })
+}
