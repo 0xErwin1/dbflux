@@ -18,6 +18,10 @@ pub enum MetricSource {
     /// `system.metrics` — a current gauge value, keyed by the `metric` column.
     Metrics,
     /// `system.events` — a cumulative counter, keyed by the `event` column.
+    ///
+    /// The table lists only events that have fired at least once since the
+    /// server started, so a counter with no row yet reports zero, which is
+    /// its true value rather than a missing reading.
     Events,
     /// `system.asynchronous_metrics` — a periodically sampled gauge, keyed by
     /// the `metric` column.

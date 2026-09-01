@@ -336,11 +336,30 @@ fn clickhouse_instance_metric_query_rejects_unknown_metric_id() -> Result<(), Db
 /// A metric whose row is missing reports `0.0` rather than failing, so a
 /// misspelled name would chart a flat zero forever and every shape assertion
 /// above would still pass. This asserts the name itself.
+///
+/// `system.events` only lists events that have already fired at least once on
+/// this server, so the counters are exercised first: a fresh container has
+/// never inserted a row, and `InsertedRows` would be genuinely absent through
+/// no fault of the metric name.
 #[test]
 #[ignore = "requires Docker daemon"]
 fn clickhouse_metric_raw_names_exist_in_their_system_tables() -> Result<(), DbError> {
     containers::with_clickhouse(|config| {
         let connection = connect(&config)?;
+
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE dbflux_live_events_probe (id UInt64) ENGINE = MergeTree ORDER BY id",
+        ))?;
+        let _cleanup = TableCleanup {
+            connection: connection.as_ref(),
+            table: "dbflux_live_events_probe",
+        };
+        connection.execute(&QueryRequest::new(
+            "INSERT INTO dbflux_live_events_probe VALUES (1)",
+        ))?;
+        connection.execute(&QueryRequest::new(
+            "SELECT count() FROM dbflux_live_events_probe",
+        ))?;
 
         for (raw_name, metric_id, .., source) in METRIC_DEFS {
             let (table, key_column) = match source {
