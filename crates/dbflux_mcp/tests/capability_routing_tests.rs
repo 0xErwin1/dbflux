@@ -365,12 +365,18 @@ fn query_handler_classifies_queries_by_language() {
     // This test verifies that query classification works for different languages
     // We test the classification function directly to avoid policy engine complexity
 
-    let sql_classification =
-        dbflux_core::classify_query_for_governance(&QueryLanguage::Sql, "SELECT * FROM users");
+    let sql_classification = dbflux_core::classify_query_for_governance(
+        &QueryLanguage::Sql,
+        "SELECT * FROM users",
+        None,
+    );
     assert!(matches!(sql_classification, ExecutionClassification::Read));
 
-    let mongo_classification =
-        dbflux_core::classify_query_for_governance(&QueryLanguage::MongoQuery, "db.users.find({})");
+    let mongo_classification = dbflux_core::classify_query_for_governance(
+        &QueryLanguage::MongoQuery,
+        "db.users.find({})",
+        None,
+    );
     assert!(matches!(
         mongo_classification,
         ExecutionClassification::Read | ExecutionClassification::Metadata

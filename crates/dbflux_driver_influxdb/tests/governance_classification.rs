@@ -4,16 +4,13 @@
 //! function the governance layer's classifier (`classify_query_for_governance`
 //! in `dbflux_core::query::safety`) is built on.
 //!
-//! NOTE: `classify_query_for_governance`, which is what MCP/policy call
-//! directly (`dbflux_mcp::handlers::query::handle_query_tool`,
-//! `dbflux_mcp_server::tools::query`), does not thread any connection or
-//! `LanguageService` through — it always passes `None` for `service`. So a
-//! `DROP DATABASE` executed through the live MCP path still classifies as the
-//! pre-delegation default (`Write`) today; wiring the actor's live
-//! `Connection::language_service()` into that call is a separate, larger
-//! change (spanning `dbflux_mcp`/`dbflux_app`) outside this crate's scope.
-//! This test targets the API this repo's delegation mechanism is built on,
-//! which is what a future connection-aware governance call would use.
+//! `classify_query_for_governance` takes an `Option<&dyn LanguageService>`
+//! parameter that MCP call sites (`dbflux_mcp::handlers::query::handle_query_tool`,
+//! `dbflux_mcp_server::tools::query::run_explain_request`,
+//! `dbflux_mcp_server::tools::scripts::detect_execution_classification`) fill
+//! with the live connection's `Connection::language_service()` when one is
+//! available. This crate has no access to a live MCP connection, so it stays
+//! focused on the driver-level delegation mechanism those call sites rely on.
 
 use dbflux_core::{
     ExecutionClassification, QueryLanguage, classify_query_for_language_with_service,
