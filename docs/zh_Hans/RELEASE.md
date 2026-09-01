@@ -2,7 +2,7 @@
 
 DBFlux 采用**基于主干的开发模式，配合短生命周期的发布分支**。一条长期存在的分支（`main`）作为集成目标；每个次版本在稳定化阶段会从 `main` 切出一条 `release/vX.Y` 分支，并在 EOL 之后废弃。
 
-本文档是面向人工阅读的参考。自动化的 `dbflux-release` 技能（`skills/dbflux-release/SKILL.md`）遵循相同规则。
+本文档是供人工查阅的参考。自动化的 `dbflux-release` 技能（`skills/dbflux-release/SKILL.md`）遵循相同规则。
 
 ## 渠道
 
@@ -18,7 +18,7 @@ DBFlux 采用**基于主干的开发模式，配合短生命周期的发布分�
 
 ## 更新日志模型（git-cliff，模型 B）
 
-更新日志由 [git-cliff](https://git-cliff.org) **基于 git 历史派生生成**。不要手动编辑 `[Unreleased]`。
+更新日志由 [git-cliff](https://git-cliff.org) **根据 git 历史自动生成**。不要手动编辑 `[Unreleased]`。
 
 - 仓库根目录下的 `cliff.toml` 配置生成器。
 - `[Unreleased]` 表示“自上一个**稳定版**标签以来的每个用户可见约定式提交”。rc 与 nightly 标签是透明的：它们不会关闭 `[Unreleased]` 窗口（`cliff.toml` 中的 `skip_tags`）。
@@ -39,9 +39,9 @@ DBFlux 采用**基于主干的开发模式，配合短生命周期的发布分�
 
 ### 不可违反的规则
 
-- 提交**绝不**在发布分支上直接产生。它总是先合入 `main`，再通过 `git cherry-pick -x <sha>` 拣选到发布分支。
+- 提交**绝不**在发布分支上直接创建。它总是先合入 `main`，再通过 `git cherry-pick -x <sha>` 拣选到发布分支。
 - 发布分支**绝不**合并回 `main`。
-- 发布分支一旦切出，便不再加入新功能。只允许修复缺陷以及该发布自身的版本制品提升。
+- 发布分支一旦切出，便不再加入新功能。只允许修复缺陷以及该发布自身的版本制品更新。
 - `main` 始终开放开发。`main` 上无需手动添加更新日志条目——提交信息已包含相应内容。
 
 ## 标签
@@ -73,21 +73,21 @@ git push origin vX.Y.Z[-suffix.N]
 
 - 下一个 rc：若最后一个标签是 `vX.Y.Z-rc.N` → `-rc.(N+1)`；若没有 → `-rc.0`。
 - 升级为稳定版：去掉 rc 后缀 → `vX.Y.0`。
-- 补丁：递增 `Z` → `vX.Y.(Z+1)`。绝不在发布分支上提升次版本号。
+- 补丁：递增 `Z` → `vX.Y.(Z+1)`。绝不在发布分支上更新次版本号。
 
 ## 周期示例：`0.7.0`
 
 1. 新功能合入 `main`，无需手动添加更新日志条目。
 2. 准备稳定化时，从 `main` HEAD 切出 `release/v0.7`。
-   - 在 `release/v0.7` 上：将每个带版本号的制品提升到 `0.7.0-rc.0`。提交并推送。
-   - 在 `main` 上：将每个带版本号的制品提升到 `0.8.0-dev.0`。提交并推送。`main` 现在指向下一个次版本。
-   - 在发布分支上打标签 `v0.7.0-rc.0`。git-cliff 会自动将未发布区间渲染为 rc 的说明正文。
+   - 在 `release/v0.7` 上：将每个带版本号的制品更新到 `0.7.0-rc.0`。提交并推送。
+   - 在 `main` 上：将每个带版本号的制品更新到 `0.8.0-dev.0`。提交并推送。`main` 现在指向下一个次版本。
+   - 在发布分支上打标签 `v0.7.0-rc.0`。git-cliff 会自动将未发布区间渲染为 rc 的发布说明正文。
 3. rc 期间发现一个 bug：
    - 在 `main` 上提交修复。
    - 通过 `git cherry-pick -x <sha>` 拣选到 `release/v0.7`。
-   - 提升到 `v0.7.0-rc.1` 并打标签。
-4. 当状态干净时，将发布分支从 `v0.7.0-rc.N` 提升到 `v0.7.0`。打标签 `v0.7.0`。git-cliff 会将完整的未发布区间（自 `v0.6.0` 起）渲染为稳定版发布说明。
-5. `main` 已经处于 `0.8.0-dev.0`——稳定版发布后无需再提升。
+   - 更新到 `v0.7.0-rc.1` 并打标签。
+4. 当状态干净时，将发布分支从 `v0.7.0-rc.N` 更新到 `v0.7.0`。打标签 `v0.7.0`。git-cliff 会将完整的未发布区间（自 `v0.6.0` 起）渲染为稳定版发布说明。
+5. `main` 已经处于 `0.8.0-dev.0`——稳定版发布后无需再更新。
 6. 补丁（`v0.7.1`、`v0.7.2`……）通过从 `main` 拣选提交，来自同一条发布分支。
 
 ## 切出流程：`main` → `release/vX.Y`
@@ -103,13 +103,13 @@ git push origin vX.Y.Z[-suffix.N]
    ```
 
 4. 在 `release/vX.Y` 上：
-   - 将每个带版本号的制品提升到 `X.Y.0-rc.0`（见[需要提升的文件](#需要提升的文件)）。
+   - 将每个带版本号的制品更新到 `X.Y.0-rc.0`（见[需要更新的文件](#需要更新的文件)）。
    - 将新 rc 章节前置插入 `CHANGELOG.md`：
 
      ```bash
      git-cliff --tag vX.Y.0-rc.0 --unreleased --prepend CHANGELOG.md
      git add CHANGELOG.md
-     # 合并到与版本提升相同的 chore(release) 提交中
+     # 合并到与版本更新相同的 chore(release) 提交中
      ```
 
      > **警告：** 不要使用 `git-cliff -o CHANGELOG.md`。该命令会整体重新生成文件，并将自上一个稳定版起的所有历史章节合并为一个区块。
@@ -117,7 +117,7 @@ git push origin vX.Y.Z[-suffix.N]
    - 提交信息：`chore(release): cut release/vX.Y at vX.Y.0-rc.0`。
    - 推送：`git push -u origin release/vX.Y`。
 5. 回到 `main` 后：
-   - 将每个带版本号的制品提升到 `X.(Y+1).0-dev.0`（`main` 现在指向下一个次版本）。
+   - 将每个带版本号的制品更新到 `X.(Y+1).0-dev.0`（`main` 现在指向下一个次版本）。
    - 提交信息：`chore(version): move main to X.(Y+1).0-dev.0 marker`。
    - 推送。
 6. 在发布分支上打标签 `vX.Y.0-rc.0`。
@@ -128,13 +128,13 @@ git push origin vX.Y.Z[-suffix.N]
 
 当 rc 状态干净时，在 `release/vX.Y` 上执行：
 
-1. 将每个带版本号的制品从 `X.Y.0-rc.N` 提升到 `X.Y.0`。
+1. 将每个带版本号的制品从 `X.Y.0-rc.N` 更新到 `X.Y.0`。
 2. 将稳定版章节前置插入 `CHANGELOG.md`：
 
    ```bash
    git-cliff --tag vX.Y.0 --unreleased --prepend CHANGELOG.md
    git add CHANGELOG.md
-   # 合并到与版本提升相同的 chore(release) 提交中
+   # 合并到与版本更新相同的 chore(release) 提交中
    ```
 
    > **警告：** 不要使用 `git-cliff -o CHANGELOG.md`。该命令会整体重新生成文件，并将自上一个稳定版起的所有历史章节合并为一个区块。
@@ -148,9 +148,9 @@ git-cliff 会基于自上一个稳定版标签以来的全部用户可见提交�
 
 ## 下一开发周期
 
-`main` 会在**切出 `release/vX.Y` 时**提升到 `X.(Y+1).0-dev.0`（见切出流程第 5 步）。稳定版标签发布后无需再提升 `main`。nightly 构建会从 `main` HEAD 自动持续进行，在整个稳定化窗口期间生成 `X.(Y+1).0-nightly+<sha>`。
+`main` 会在**切出 `release/vX.Y` 时**更新到 `X.(Y+1).0-dev.0`（见切出流程第 5 步）。稳定版标签发布后无需再更新 `main`。nightly 构建会从 `main` HEAD 自动持续进行，在整个稳定化窗口期间生成 `X.(Y+1).0-nightly+<sha>`。
 
-## 需要提升的文件
+## 需要更新的文件
 
 每次发布，将以下所有文件更新为完全相同的版本：
 
@@ -163,7 +163,7 @@ git-cliff 会基于自上一个稳定版标签以来的全部用户可见提交�
 
 - `nix/release-info.nix` — `version` 以及两个预构建 tarball 的 `url` 与 `hash`（见[本仓库的 Nix flake](#本仓库的-nix-flake) 下文）。这是一个按分支的渠道指针。它需要已发布的制品，因此在发布工作流完成后才作为后续提交合入。
 
-AUR 的 `PKGBUILD` 位于**外部 AUR 仓库**，而非本仓库。它仅在稳定版标签时提升。
+AUR 的 `PKGBUILD` 位于**外部 AUR 仓库**，而非本仓库。它仅在稳定版标签时更新。
 
 ## nightly 工作机制
 
@@ -174,15 +174,15 @@ AUR 的 `PKGBUILD` 位于**外部 AUR 仓库**，而非本仓库。它仅在稳�
 3. 计算每个 Linux tarball 的 SHA256 SRI 哈希，并使用真实哈希与滚动发布 URL 重新生成 `nix/nightly-info.nix`。
 4. 将更新后的 `nix/nightly-info.nix` 提交到当前 `main` HEAD 之上。该提交**不会被推送到 `main`**——它将成为 `nightly` 标签唯一指向的目标。
 5. 将 `nightly` 标签强制移动到被固定的提交，并推送该标签。仅推送标签就足以让该提交在远程可达；无需推送分支。
-6. 发布或更新滚动 `nightly` 的 GitHub 预发布，附带新制品以及由 git-cliff 生成的、涵盖自上一个稳定版起所有提交的正文。该发布的标签指向被固定的提交，因此 `nightly` ref 上的 `nix/nightly-info.nix` 始终与已发布的制品一致。
+6. 发布或更新滚动 `nightly` 的 GitHub 预发布，附带新制品以及由 git-cliff 生成的、涵盖自上一个稳定版起所有提交的正文。该发布的标签指向被固定的提交，因此 `nightly` 引用上的 `nix/nightly-info.nix` 始终与已发布的制品一致。
 
 `nightly` 标签会被强制推送，发布内容在每次运行时被替换。只有官方仓库（`0xErwin1/dbflux`）会执行该定时任务。
 
-**当 `main` 没有前进时跳过。** 定时运行会先将当前 `main` HEAD 与上一个 nightly 所基于的提交（`git rev-parse nightly^`，即被固定提交的第一个父提交）进行比较。若两者相同，则整次运行直接跳过：不重新构建、不移动标签、不会对发布造成无意义变动。这避免了用一个新的、不可复现的哈希重新发布一份完全相同的构建，从而不必要地破坏 Nix 的固定引用。手动触发的 `workflow_dispatch` 运行始终会构建，即使没有新提交。
+**当 `main` 没有推进时跳过。** 定时运行会先将当前 `main` HEAD 与上一个 nightly 所基于的提交（`git rev-parse nightly^`，即被固定提交的第一个父提交）进行比较。若两者相同，则整次运行直接跳过：不重新构建、不移动标签、不会对发布造成无意义变动。这避免了用一个新的、不可复现的哈希重新发布一份完全相同的构建，从而不必要地破坏 Nix 的固定引用。手动触发的 `workflow_dispatch` 运行始终会构建，即使没有新提交。
 
 ### Nix nightly 包
 
-该工作流在每次运行时将 `nix/nightly-info.nix` 固定在 `nightly` ref 上。下游用户无需从源码编译即可获取预构建的 nightly 二进制：
+该工作流在每次运行时将 `nix/nightly-info.nix` 固定在 `nightly` 引用上。下游用户无需从源码编译即可获取预构建的 nightly 二进制：
 
 ```bash
 # 直接运行 nightly
@@ -198,9 +198,9 @@ nix profile install github:0xErwin1/dbflux/nightly#dbflux-nightly
 nix run github:0xErwin1/dbflux/nightly#dbflux-source
 ```
 
-**不要从 `main` 消费 `#dbflux-nightly`。** 在 `main` 上，`nix/nightly-info.nix` 包含的是占位哈希，无法拉取。请始终使用上文所示的 `nightly` ref。
+**请勿从 `main` 分支获取 `#dbflux-nightly`。** 在 `main` 上，`nix/nightly-info.nix` 包含的是占位哈希，无法拉取。请始终使用上文所示的 `nightly` 引用。
 
-## 拣选纪律
+## 拣选规范
 
 发布分支绝不应包含 `main` 中没有的提交，发布专属提交（`chore(release): ...`、`chore(version): ...`）除外。
 
@@ -224,9 +224,9 @@ git log --grep='cherry picked from' release/vX.Y
 
 | 标签类型（GitHub Release）   | AUR       | Nix flake（本仓库）                              | nixpkgs（未来） |
 |------------------------------|-----------|--------------------------------------------------|-----------------|
-| nightly（预发布）            | 跳过      | 自动固定——nightly ref 上的 `#dbflux-nightly`    | 跳过            |
-| `-rc.N`（预发布）            | 跳过      | 提升发布分支与 `main` 的 `release-info`          | 跳过            |
-| 稳定版 `vX.Y.Z`（已发布）    | 提升并推送 | 提升发布分支与 `main` 的 `release-info`          | 提升并发起 PR   |
+| nightly（预发布）            | 跳过      | 自动固定——nightly 引用上的 `#dbflux-nightly`    | 跳过            |
+| `-rc.N`（预发布）            | 跳过      | 更新发布分支与 `main` 的 `release-info`          | 跳过            |
+| 稳定版 `vX.Y.Z`（已发布）    | 更新并推送 | 更新发布分支与 `main` 的 `release-info`          | 更新并发起 PR   |
 
 ### AUR
 
@@ -243,7 +243,7 @@ AUR 的 `pkgver` 不允许包含 `-`（该字符保留给 `pkgrel`）。对于�
 | `dbflux`（默认）  | 有预构建稳定版/rc 时提供预构建二进制，否则提供源码构建  |
 | `dbflux-bin`      | 基于 `nix/release-info.nix` 的显式预构建                |
 | `dbflux-source`   | 通过 crane 进行的源码构建（全平台）                     |
-| `dbflux-nightly`  | 基于 `nix/nightly-info.nix` 的滚动 nightly 预构建（使用 nightly ref） |
+| `dbflux-nightly`  | 基于 `nix/nightly-info.nix` 的滚动 nightly 预构建（使用 nightly 引用） |
 
 **稳定版 / RC（`nix/release-info.nix`）：** 按分支的渠道指针。`main` 跟踪任意类型中最新发布的标签；每条 `release/vX.Y` 跟踪各自产品线中最新的标签。在某标签的制品发布后，于该标签所推进渠道对应的每条分支上刷新 `release-info.nix`。
 
@@ -261,7 +261,7 @@ done
 nix build .#dbflux-bin --no-link --print-out-paths
 ```
 
-**nightly（`nix/nightly-info.nix`）：** 由 nightly 工作流在 `nightly` ref 上自动更新。请勿手动更新此文件。通过以下方式使用：
+**nightly（`nix/nightly-info.nix`）：** 由 nightly 工作流在 `nightly` 引用上自动更新。请勿手动更新此文件。通过以下方式使用：
 
 ```bash
 nix run github:0xErwin1/dbflux/nightly#dbflux-nightly
@@ -277,9 +277,9 @@ nix run github:0xErwin1/dbflux/nightly#dbflux-nightly
 - 在 HEAD 位于 `main` 时打 rc 标签。
 - 将 `release/vX.Y` 合并回 `main`。
 - 在 `release/*` 分支上创建新功能（非修复提交）。
-- 在 `release/*` 分支内提升次版本或主版本号。
+- 在 `release/*` 分支内更新次版本或主版本号。
 - 在工作树不干净时推送标签。
-- 推送 AUR 提升时 `pkgver` 含有连字符。
+- 推送 AUR 更新时 `pkgver` 含有连字符。
 - 从 `main` HEAD 切出 `release/vX.Y`，但该 HEAD 的 `release.yml` 中不包含 `Classify release` 作业。
 - 创建新的 `-dev.N` 标签（该渠道已废弃，请改用 nightly）。
 
