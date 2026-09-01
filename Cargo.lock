@@ -2788,6 +2788,7 @@ dependencies = [
 name = "dbflux_driver_clickhouse"
 version = "0.8.0-dev.0"
 dependencies = [
+ "async-trait",
  "chrono",
  "dbflux_core",
  "dbflux_test_support",
