@@ -2,7 +2,7 @@ use dbflux_policy::ExecutionClassification;
 
 use crate::QueryLanguage;
 
-use super::language_service::classify_query_for_language;
+use super::language_service::{LanguageService, classify_query_for_language_with_service};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ScanState {
@@ -43,11 +43,21 @@ pub fn classify_sql_execution(sql: &str) -> ExecutionClassification {
     }
 }
 
+/// Classify a query's execution impact for MCP/policy governance.
+///
+/// Pass the live connection's `Connection::language_service()` as `service`
+/// whenever one is available, so driver-owned dialects (`InfluxQuery`, `Flux`,
+/// `Custom(_)`, and the CloudWatch/OpenSearch trio) are classified by the
+/// driver instead of a conservative default. `None` preserves the
+/// language-keyed fallback classification for those dialects; `Sql`,
+/// `MongoQuery`, and `RedisCommands` always use the shared core heuristic
+/// regardless of `service`.
 pub fn classify_query_for_governance(
     query_language: &QueryLanguage,
     query: &str,
+    service: Option<&dyn LanguageService>,
 ) -> ExecutionClassification {
-    classify_query_for_language(query_language, query)
+    classify_query_for_language_with_service(query_language, query, service)
 }
 
 pub fn is_safe_read_query(sql: &str) -> bool {
@@ -291,7 +301,46 @@ mod tests {
     #[test]
     fn ambiguous_query_escalates_conservatively() {
         assert_eq!(
-            classify_query_for_governance(&QueryLanguage::Sql, "VACUUM users"),
+            classify_query_for_governance(&QueryLanguage::Sql, "VACUUM users", None),
+            ExecutionClassification::Write
+        );
+    }
+
+    #[test]
+    fn language_service_delegation_overrides_the_conservative_default() {
+        use super::super::language_service::{
+            DangerousQueryKind, LanguageService, ValidationResult,
+        };
+
+        struct FakeService;
+
+        impl LanguageService for FakeService {
+            fn validate(&self, _query: &str) -> ValidationResult {
+                ValidationResult::Valid
+            }
+
+            fn detect_dangerous(&self, _query: &str) -> Option<DangerousQueryKind> {
+                None
+            }
+
+            fn classify_execution(&self, _query: &str) -> Option<ExecutionClassification> {
+                Some(ExecutionClassification::Destructive)
+            }
+        }
+
+        let service = FakeService;
+
+        assert_eq!(
+            classify_query_for_governance(
+                &QueryLanguage::InfluxQuery,
+                "DROP DATABASE x",
+                Some(&service)
+            ),
+            ExecutionClassification::Destructive
+        );
+
+        assert_eq!(
+            classify_query_for_governance(&QueryLanguage::InfluxQuery, "DROP DATABASE x", None),
             ExecutionClassification::Write
         );
     }

@@ -211,8 +211,11 @@ impl DbFluxServer {
                         )
                     })?;
 
-                    let classification =
-                        classify_query_for_governance(&planned_query.language, &planned_query.text);
+                    let classification = classify_query_for_governance(
+                        &planned_query.language,
+                        &planned_query.text,
+                        Some(connection.language_service()),
+                    );
                     if !matches!(
                         classification,
                         dbflux_policy::ExecutionClassification::Metadata
@@ -259,10 +262,11 @@ mod tests {
     use super::*;
 
     use dbflux_core::{
-        DbError, DbKind, DefaultSqlDialect, DriverCapabilities, DriverMetadata, ExplainRequest,
-        MutationCapabilities, PlaceholderStyle, QueryCapabilities, QueryHandle, QueryLanguage,
-        QueryResult, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan, SemanticPlanKind,
-        SyntaxInfo, TransactionCapabilities,
+        DangerousQueryKind, DbError, DbKind, DefaultSqlDialect, DriverCapabilities, DriverMetadata,
+        ExplainRequest, LanguageService, MutationCapabilities, PlaceholderStyle, QueryCapabilities,
+        QueryHandle, QueryLanguage, QueryResult, SchemaLoadingStrategy, SchemaSnapshot,
+        SemanticPlan, SemanticPlanKind, SqlLanguageService, SyntaxInfo, TransactionCapabilities,
+        ValidationResult,
     };
     use std::sync::LazyLock;
 
@@ -299,6 +303,25 @@ mod tests {
         editor_profile: None,
     });
 
+    struct DestructiveOverrideLanguageService;
+
+    impl LanguageService for DestructiveOverrideLanguageService {
+        fn validate(&self, _query: &str) -> ValidationResult {
+            ValidationResult::Valid
+        }
+
+        fn detect_dangerous(&self, _query: &str) -> Option<DangerousQueryKind> {
+            None
+        }
+
+        fn classify_execution(
+            &self,
+            _query: &str,
+        ) -> Option<dbflux_policy::ExecutionClassification> {
+            Some(dbflux_policy::ExecutionClassification::Destructive)
+        }
+    }
+
     struct TestConnection {
         plan: Option<SemanticPlan>,
         planner_supported: bool,
@@ -306,6 +329,7 @@ mod tests {
         execute_result: QueryResult,
         executed_queries: std::sync::Mutex<Vec<String>>,
         explain_queries: std::sync::Mutex<Vec<Option<String>>>,
+        language_service_override: bool,
     }
 
     impl TestConnection {
@@ -317,7 +341,13 @@ mod tests {
                 execute_result: QueryResult::empty(),
                 executed_queries: std::sync::Mutex::new(Vec::new()),
                 explain_queries: std::sync::Mutex::new(Vec::new()),
+                language_service_override: false,
             }
+        }
+
+        fn with_destructive_language_service(mut self) -> Self {
+            self.language_service_override = true;
+            self
         }
     }
 
@@ -360,6 +390,14 @@ mod tests {
 
         fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
             &DefaultSqlDialect
+        }
+
+        fn language_service(&self) -> &dyn LanguageService {
+            if self.language_service_override {
+                &DestructiveOverrideLanguageService
+            } else {
+                &SqlLanguageService
+            }
         }
 
         fn explain(&self, request: &ExplainRequest) -> Result<QueryResult, DbError> {
@@ -487,5 +525,37 @@ mod tests {
                 .expect("executed queries mutex poisoned")
                 .is_empty()
         );
+    }
+
+    #[tokio::test]
+    async fn run_explain_request_consults_the_connections_language_service() {
+        // `OpenSearchPpl` falls back to `Read` (and executes) with no driver
+        // service; a driver service overriding `classify_execution` to
+        // `Destructive` must be consulted and reject the preview instead.
+        let plan = Some(SemanticPlan::single_query(
+            SemanticPlanKind::Query,
+            dbflux_core::PlannedQuery::new(QueryLanguage::OpenSearchPpl, "source=logs | head 1"),
+        ));
+
+        let connection_without_override = Arc::new(TestConnection::new(plan.clone(), true));
+        DbFluxServer::run_explain_request(
+            connection_without_override.clone(),
+            ExplainRequest::new(TableRef::new("logs")).with_query("source=logs | head 1"),
+            "Preview",
+        )
+        .await
+        .expect("fallback classification allows a read-only preview");
+
+        let connection_with_override =
+            Arc::new(TestConnection::new(plan, true).with_destructive_language_service());
+        let error = DbFluxServer::run_explain_request(
+            connection_with_override,
+            ExplainRequest::new(TableRef::new("logs")).with_query("source=logs | head 1"),
+            "Preview",
+        )
+        .await
+        .expect_err("driver language service must be consulted and reject the preview");
+
+        assert!(error.contains("non-read-only preview query"));
     }
 }

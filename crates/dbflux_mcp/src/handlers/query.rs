@@ -1,4 +1,4 @@
-use dbflux_core::{QueryLanguage, classify_query_for_governance};
+use dbflux_core::{LanguageService, QueryLanguage, classify_query_for_governance};
 use dbflux_policy::{
     ExecutionClassification, PolicyDecision, PolicyEngine, PolicyEvaluationRequest,
 };
@@ -30,9 +30,11 @@ pub enum QueryHandlerError {
 
 pub fn handle_query_tool(
     request: &QueryExecutionRequest,
+    language_service: Option<&dyn LanguageService>,
     policy_engine: &PolicyEngine,
 ) -> Result<QueryExecutionResponse, QueryHandlerError> {
-    let classification = classify_query_for_governance(&request.query_language, &request.query);
+    let classification =
+        classify_query_for_governance(&request.query_language, &request.query, language_service);
 
     let decision = policy_engine.evaluate(&PolicyEvaluationRequest {
         actor_id: request.actor_id.clone(),
