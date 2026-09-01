@@ -34,7 +34,7 @@ yay -S dbflux
 
 ### Debian / Ubuntu
 
-从[Releases 页面](https://github.com/0xErwin1/dbflux/releases)下载 `.deb` 安装包：
+从 [Releases 页面](https://github.com/0xErwin1/dbflux/releases) 下载 `.deb` 安装包：
 
 ```bash
 # ARM 架构请将 amd64 替换为 arm64
@@ -44,7 +44,7 @@ sudo dpkg -i dbflux-linux-amd64.deb
 
 ### Fedora / RHEL / CentOS
 
-从[Releases 页面](https://github.com/0xErwin1/dbflux/releases)下载 `.rpm` 安装包：
+从 [Releases 页面](https://github.com/0xErwin1/dbflux/releases) 下载 `.rpm` 安装包：
 
 ```bash
 # ARM 架构请将 amd64 替换为 arm64
@@ -110,7 +110,7 @@ DBFlux 的 macOS 版本未使用 Apple 开发者证书签名。首次打开时�
 
 ### 安装
 
-1. 从[Releases 页面](https://github.com/0xErwin1/dbflux/releases)下载适用于你的架构的 DMG：
+1. 从 [Releases 页面](https://github.com/0xErwin1/dbflux/releases) 下载适用于你的架构的 DMG：
    - **Intel Mac**：`dbflux-macos-amd64.dmg`
    - **Apple Silicon（M1/M2/M3/M4）**：`dbflux-macos-arm64.dmg`
 2. 打开 DMG，将 DBFlux 拖入“应用程序”文件夹
