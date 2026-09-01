@@ -146,7 +146,7 @@ jobs:
           ls -R artifacts
 
       - name: Install git-cliff
-        uses: taiki-e/install-action@07b4745e0c39a41822af610387492e3e53aa222b  # v2
+        uses: taiki-e/install-action@5b4d68e2e660441203ab128a23676f1e4faf1532  # v2
         with:
           tool: git-cliff
           version: 2.13.1
@@ -286,7 +286,7 @@ jobs:
 
       - name: Attest build provenance
         if: env.ACT != 'true'
-        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373  # v4.1.1
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8  # v4.2.2
         with:
           subject-path: |
             artifacts/linux-*/*.tar.gz
