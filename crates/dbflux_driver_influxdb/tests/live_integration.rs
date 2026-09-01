@@ -595,6 +595,11 @@ fn v2_instance_metrics_fetch_through_execute() -> Result<(), DbError> {
     containers::with_influxdb_v2(|cfg| {
         let conn = connect_v2(&cfg.endpoint, &cfg.bucket, &cfg.org, &cfg.token)?;
 
+        // Collected rather than asserted per metric: a declared name missing
+        // from the scrape is the failure this test exists to catch, and one
+        // run should name every one of them instead of stopping at the first.
+        let mut unresolved: Vec<String> = Vec::new();
+
         for (prom_name, metric_id, _, _, _) in
             dbflux_driver_influxdb::instance_catalog::METRIC_FIELDS
         {
@@ -608,9 +613,13 @@ fn v2_instance_metrics_fetch_through_execute() -> Result<(), DbError> {
             };
             let req = QueryRequest::new("").with_execution_context(Some(ctx));
 
-            let result = conn
-                .execute(&req)
-                .unwrap_or_else(|e| panic!("metric '{metric_id}' ({prom_name}) failed: {e}"));
+            let result = match conn.execute(&req) {
+                Ok(result) => result,
+                Err(error) => {
+                    unresolved.push(format!("{metric_id} ({prom_name}): {error}"));
+                    continue;
+                }
+            };
 
             assert_eq!(
                 result.columns.len(),
@@ -633,6 +642,12 @@ fn v2_instance_metrics_fetch_through_execute() -> Result<(), DbError> {
                 "metric '{metric_id}' must return exactly one row"
             );
         }
+
+        assert!(
+            unresolved.is_empty(),
+            "declared metrics absent from this server's /metrics scrape:\n  {}",
+            unresolved.join("\n  ")
+        );
 
         Ok(())
     })
@@ -692,14 +707,15 @@ fn v1_instance_catalog_is_none_and_degrades_cleanly() -> Result<(), DbError> {
         };
         let req = QueryRequest::new("").with_execution_context(Some(ctx));
 
-        // v1's execute() has no InstanceInspectorQuery branch (it never runs on
-        // v1, since instance_catalog() is None), so this falls through to the
-        // normal InfluxQL dispatch path with an empty query string and must
-        // fail cleanly rather than panic.
-        let result = conn.execute(&req);
+        // v1 serves `/metrics` too, so the version gate in execute() is what
+        // stops an instance query routed here from being answered by a catalog
+        // this connection reports it does not have.
+        let error = conn
+            .execute(&req)
+            .expect_err("an instance query on v1 must be refused, not answered");
         assert!(
-            result.is_err(),
-            "an empty InfluxQL query must fail cleanly, not silently succeed"
+            matches!(error, DbError::NotSupported(_)),
+            "expected NotSupported, got {error:?}"
         );
 
         Ok(())

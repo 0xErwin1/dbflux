@@ -358,6 +358,22 @@ impl Connection for InfluxConnection {
             .as_ref()
             .and_then(|ctx| ctx.source.as_ref())
         {
+            // Gated on v2 for the same reason `instance_catalog()` is. v1 does
+            // serve `/metrics`, so without this an instance query routed to a
+            // v1 connection would answer from a catalog that connection
+            // reports it does not have.
+            let is_instance_query = matches!(
+                source,
+                ExecutionSourceContext::InstanceMetricQuery { .. }
+                    | ExecutionSourceContext::InstanceInspectorQuery { .. }
+            );
+
+            if is_instance_query && self.version != InfluxVersion::V2 {
+                return Err(DbError::NotSupported(
+                    "InfluxDB instance metrics and inspectors require v2".to_string(),
+                ));
+            }
+
             match source {
                 ExecutionSourceContext::InstanceMetricQuery { metric_id, .. } => {
                     return crate::instance_catalog::dispatch_metric_series(&self.http, metric_id);

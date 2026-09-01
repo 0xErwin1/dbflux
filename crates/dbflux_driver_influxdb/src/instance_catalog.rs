@@ -95,21 +95,12 @@ pub const METRIC_FIELDS: &[(&str, &str, &str, &str, InstanceMetricUnit)] = &[
         "HTTP",
         InstanceMetricUnit::Count,
     ),
-    (
-        "qc_all_active",
-        "influx.qc_all_active",
-        "Active queries",
-        "Queries",
-        InstanceMetricUnit::Count,
-    ),
-    (
-        "qc_requests_total",
-        "influx.qc_requests_total",
-        "Query requests (cumulative)",
-        "Queries",
-        InstanceMetricUnit::Count,
-    ),
 ];
+
+// The query-controller family (`qc_all_active`, `qc_requests_total`) is
+// deliberately absent: it is registered by some InfluxDB builds and not by
+// others, so declaring it would leave a permanently unresolvable metric on
+// the servers that lack it.
 
 /// One sample scraped from `/metrics`: name, label set, and numeric value.
 ///
@@ -292,7 +283,7 @@ impl InfluxInstanceCatalog {
                     grid_height: 3,
                 },
                 DefaultDashboardPanel {
-                    metric_id: "influx.qc_all_active".to_string(),
+                    metric_id: "influx.boltdb_writes_total".to_string(),
                     is_inspector: false,
                     grid_column: 6,
                     grid_row: 3,
