@@ -148,6 +148,12 @@ pub fn auth_header(creds: &AuthCreds) -> Option<(String, String)> {
 // ---------------------------------------------------------------------------
 
 /// Blocking HTTP client for InfluxDB queries.
+///
+/// Cheap to clone: `reqwest::blocking::Client` is internally reference-counted,
+/// so cloning shares the connection pool rather than opening a new one. This
+/// lets the instance-catalog seam hold its own copy without wrapping the
+/// connection in a mutex, since HTTP calls need no mutable state.
+#[derive(Clone)]
 pub struct HttpClient {
     client: reqwest::blocking::Client,
     pub base_url: String,
@@ -219,6 +225,17 @@ impl HttpClient {
         org: Option<&str>,
     ) -> Result<HttpResponseBody, HttpError> {
         let url = build_v2_authorizations_url(&self.base_url, org);
+        self.get(&url)
+    }
+
+    /// Issue an authenticated GET request against an arbitrary server-relative path.
+    ///
+    /// Used by the instance-catalog seam to reach endpoints outside the query
+    /// APIs above (e.g. `/health`, `/metrics`).
+    pub fn get_path(&self, path: &str) -> Result<HttpResponseBody, HttpError> {
+        let base = self.base_url.trim_end_matches('/');
+        let path = path.trim_start_matches('/');
+        let url = format!("{base}/{path}");
         self.get(&url)
     }
 

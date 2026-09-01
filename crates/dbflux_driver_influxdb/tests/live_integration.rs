@@ -584,3 +584,124 @@ fn v2_influxql_metadata_extra_contains_audit_fields() -> Result<(), DbError> {
         Ok(())
     })
 }
+
+// ---------------------------------------------------------------------------
+// Instance catalog (issue #511)
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn v2_instance_metrics_fetch_through_execute() -> Result<(), DbError> {
+    containers::with_influxdb_v2(|cfg| {
+        let conn = connect_v2(&cfg.endpoint, &cfg.bucket, &cfg.org, &cfg.token)?;
+
+        for (prom_name, metric_id, _, _, _) in
+            dbflux_driver_influxdb::instance_catalog::METRIC_FIELDS
+        {
+            let ctx = ExecutionContext {
+                source: Some(ExecutionSourceContext::InstanceMetricQuery {
+                    metric_id: metric_id.to_string(),
+                    start_ms: 0,
+                    end_ms: 1,
+                }),
+                ..Default::default()
+            };
+            let req = QueryRequest::new("").with_execution_context(Some(ctx));
+
+            let result = conn
+                .execute(&req)
+                .unwrap_or_else(|e| panic!("metric '{metric_id}' ({prom_name}) failed: {e}"));
+
+            assert_eq!(
+                result.columns.len(),
+                2,
+                "metric '{metric_id}' must return exactly 2 columns"
+            );
+            assert_eq!(
+                result.columns[0].kind,
+                dbflux_core::ColumnKind::Timestamp,
+                "metric '{metric_id}' column 0 must be Timestamp"
+            );
+            assert_eq!(
+                result.columns[1].kind,
+                dbflux_core::ColumnKind::Float,
+                "metric '{metric_id}' column 1 must be Float"
+            );
+            assert_eq!(
+                result.rows.len(),
+                1,
+                "metric '{metric_id}' must return exactly one row"
+            );
+        }
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn v2_instance_inspectors_fetch_through_execute() -> Result<(), DbError> {
+    containers::with_influxdb_v2(|cfg| {
+        let conn = connect_v2(&cfg.endpoint, &cfg.bucket, &cfg.org, &cfg.token)?;
+
+        for metric_id in ["influx.health", "influx.metrics"] {
+            let ctx = ExecutionContext {
+                source: Some(ExecutionSourceContext::InstanceInspectorQuery {
+                    metric_id: metric_id.to_string(),
+                }),
+                ..Default::default()
+            };
+            let req = QueryRequest::new("").with_execution_context(Some(ctx));
+
+            let result = conn
+                .execute(&req)
+                .unwrap_or_else(|e| panic!("inspector '{metric_id}' failed: {e}"));
+
+            assert!(
+                !result.columns.is_empty(),
+                "inspector '{metric_id}' must return at least one column"
+            );
+            assert!(
+                !result.rows.is_empty(),
+                "inspector '{metric_id}' must return at least one row"
+            );
+        }
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn v1_instance_catalog_is_none_and_degrades_cleanly() -> Result<(), DbError> {
+    containers::with_influxdb_v1(|cfg| {
+        setup_v1_database(&cfg.endpoint, "dbflux_test_db")?;
+
+        let conn = connect_v1(&cfg.endpoint, "dbflux_test_db")?;
+
+        assert!(
+            conn.instance_catalog().is_none(),
+            "InfluxDB v1 must not advertise an instance catalog"
+        );
+
+        let ctx = ExecutionContext {
+            source: Some(ExecutionSourceContext::InstanceInspectorQuery {
+                metric_id: "influx.health".to_string(),
+            }),
+            ..Default::default()
+        };
+        let req = QueryRequest::new("").with_execution_context(Some(ctx));
+
+        // v1's execute() has no InstanceInspectorQuery branch (it never runs on
+        // v1, since instance_catalog() is None), so this falls through to the
+        // normal InfluxQL dispatch path with an empty query string and must
+        // fail cleanly rather than panic.
+        let result = conn.execute(&req);
+        assert!(
+            result.is_err(),
+            "an empty InfluxQL query must fail cleanly, not silently succeed"
+        );
+
+        Ok(())
+    })
+}
