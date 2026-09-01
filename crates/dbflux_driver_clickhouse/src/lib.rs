@@ -14,6 +14,7 @@ pub mod dialect;
 pub mod driver;
 pub mod error_formatter;
 mod http;
+pub mod instance_catalog;
 mod introspection;
 #[cfg(test)]
 mod language_service;

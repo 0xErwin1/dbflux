@@ -13,6 +13,7 @@ license.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
+async-trait.workspace = true
 chrono.workspace = true
 dbflux_core = { path = "../dbflux_core" }
 hex.workspace = true

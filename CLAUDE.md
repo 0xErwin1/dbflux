@@ -493,7 +493,7 @@ MCP authentication is process-identity only: presenting `--client-id` is the sol
   - `DashboardSource` (`dbflux_core/src/connection/dashboard_source.rs`) — lists upstream dashboards; gated by `DriverCapabilities::DASHBOARD_SYNC`.
   - `DashboardImporter` (`dbflux_core/src/connection/dashboard_import.rs`) — parses upstream JSON into `WidgetImportSpec`s; gated by `DriverCapabilities::DASHBOARD_IMPORT`.
   - `InstanceCatalog` (`dbflux_core/src/connection/instance_catalog.rs`) — exposes per-driver metrics, inspectors, default-dashboard descriptor, and row actions; gated by `DriverCapabilities::INSTANCE_METRICS` / `INSTANCE_INSPECTOR`.
-  - CloudWatch is the reference implementation for `DashboardSource` / `DashboardImporter`. PostgreSQL, MySQL/MariaDB, MongoDB, Redis, and SQL Server are the reference implementations for `InstanceCatalog`.
+  - CloudWatch is the reference implementation for `DashboardSource` / `DashboardImporter`. PostgreSQL, MySQL/MariaDB, MongoDB, Redis, SQL Server, and ClickHouse are the reference implementations for `InstanceCatalog`.
 - Remote dashboard listings are session-scoped via `RemoteDashboardCache` (`crates/dbflux_app/src/remote_dashboard_cache.rs`); they do not persist across restart.
 
 Full reference: `docs/DASHBOARDS.md`.

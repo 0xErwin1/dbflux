@@ -4,9 +4,10 @@ use std::time::{Duration, Instant};
 
 use dbflux_core::{
     ColumnMeta, Connection, ConnectionExt, DatabaseInfo, DbError, DbKind, DbSchemaInfo,
-    DocumentConnection, DriverMetadata, KeyValueConnection, QueryCancelHandle, QueryGenerator,
-    QueryHandle, QueryRequest, QueryResult, RelationalConnection, RelationalSchema, Row,
-    SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, TableInfo, Value, WritePrivilege,
+    DocumentConnection, DriverMetadata, ExecutionSourceContext, InstanceCatalog,
+    KeyValueConnection, QueryCancelHandle, QueryGenerator, QueryHandle, QueryRequest, QueryResult,
+    RelationalConnection, RelationalSchema, Row, SchemaLoadingStrategy, SchemaSnapshot, SqlDialect,
+    TableInfo, Value, WritePrivilege,
 };
 use serde::Deserialize;
 
@@ -21,14 +22,14 @@ use crate::types::{
 };
 
 pub struct ClickHouseConnection {
-    client: ClickHouseHttpClient,
+    client: Arc<ClickHouseHttpClient>,
     active_database: RwLock<String>,
 }
 
 impl ClickHouseConnection {
     pub(crate) fn new(client: ClickHouseHttpClient, database: String) -> Self {
         Self {
-            client,
+            client: Arc::new(client),
             active_database: RwLock::new(database),
         }
     }
@@ -235,6 +236,28 @@ impl Connection for ClickHouseConnection {
     }
 
     fn execute(&self, request: &QueryRequest) -> Result<QueryResult, DbError> {
+        if let Some(source) = request
+            .execution_context
+            .as_ref()
+            .and_then(|context| context.source.as_ref())
+        {
+            match source {
+                ExecutionSourceContext::InstanceMetricQuery { metric_id, .. } => {
+                    return crate::instance_catalog::dispatch_metric_series(
+                        &self.client,
+                        metric_id,
+                    );
+                }
+                ExecutionSourceContext::InstanceInspectorQuery { metric_id } => {
+                    return crate::instance_catalog::dispatch_inspector_snapshot(
+                        &self.client,
+                        metric_id,
+                    );
+                }
+                _ => {}
+            }
+        }
+
         if !request.params.is_empty() {
             return Err(DbError::NotSupported(
                 "ClickHouse HTTP queries do not support QueryRequest parameters".to_string(),
@@ -328,6 +351,14 @@ impl Connection for ClickHouseConnection {
         let grants = self.probe_grants();
         resolve_clickhouse_write_privilege(readonly_setting, &grants)
     }
+
+    fn instance_catalog(&self) -> Option<Box<dyn InstanceCatalog>> {
+        Some(Box::new(
+            crate::instance_catalog::ClickHouseInstanceCatalog::new_probed(Arc::clone(
+                &self.client,
+            )),
+        ))
+    }
 }
 
 impl RelationalConnection for ClickHouseConnection {}
@@ -361,7 +392,7 @@ struct CompactColumn {
     type_name: String,
 }
 
-fn parse_response(
+pub(crate) fn parse_response(
     response: HttpResponse,
     execution_time: Duration,
 ) -> Result<QueryResult, DbError> {

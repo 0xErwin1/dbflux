@@ -14,9 +14,13 @@
 //! ```
 
 use dbflux_core::secrecy::SecretString;
-use dbflux_core::{ColumnKind, Connection, ConnectionProfile, DbConfig, DbDriver, DbError};
+use dbflux_core::{
+    ColumnKind, Connection, ConnectionProfile, DbConfig, DbDriver, DbError, ExecutionContext,
+    ExecutionSourceContext,
+};
 use dbflux_core::{QueryRequest, Value};
 use dbflux_driver_clickhouse::ClickHouseDriver;
+use dbflux_driver_clickhouse::instance_catalog::{METRIC_DEFS, MetricSource};
 use dbflux_test_support::containers::{self, ClickHouseConfig};
 use std::time::Duration;
 
@@ -207,6 +211,159 @@ fn clickhouse_probe_write_privilege_default_user_is_writable() -> Result<(), DbE
             connection.probe_write_privilege(),
             dbflux_core::WritePrivilege::Writable
         );
+
+        Ok(())
+    })
+}
+
+fn metric_request(metric_id: &str) -> QueryRequest {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock before UNIX epoch")
+        .as_millis() as i64;
+
+    QueryRequest {
+        execution_context: Some(ExecutionContext {
+            source: Some(ExecutionSourceContext::InstanceMetricQuery {
+                metric_id: metric_id.to_string(),
+                start_ms: now_ms - 60_000,
+                end_ms: now_ms,
+            }),
+            ..Default::default()
+        }),
+        ..Default::default()
+    }
+}
+
+fn inspector_request(metric_id: &str) -> QueryRequest {
+    QueryRequest {
+        execution_context: Some(ExecutionContext {
+            source: Some(ExecutionSourceContext::InstanceInspectorQuery {
+                metric_id: metric_id.to_string(),
+            }),
+            ..Default::default()
+        }),
+        ..Default::default()
+    }
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn clickhouse_instance_metrics_have_timestamp_and_float_columns() -> Result<(), DbError> {
+    containers::with_clickhouse(|config| {
+        let connection = connect(&config)?;
+
+        for metric in
+            dbflux_driver_clickhouse::instance_catalog::ClickHouseInstanceCatalog::static_metrics()
+        {
+            let result = connection.execute(&metric_request(&metric.id))?;
+
+            assert_eq!(
+                result.columns.len(),
+                2,
+                "metric {} must return exactly one timestamp and one value column",
+                metric.id
+            );
+            assert_eq!(
+                result.columns[0].kind,
+                ColumnKind::Timestamp,
+                "metric {} column 0 must be Timestamp",
+                metric.id
+            );
+            assert_eq!(
+                result.columns[1].kind,
+                ColumnKind::Float,
+                "metric {} column 1 must be Float",
+                metric.id
+            );
+            assert_eq!(
+                result.rows.len(),
+                1,
+                "metric {} must return exactly one sample row",
+                metric.id
+            );
+        }
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn clickhouse_processes_inspector_returns_typed_columns() -> Result<(), DbError> {
+    containers::with_clickhouse(|config| {
+        let connection = connect(&config)?;
+        let result = connection.execute(&inspector_request("clickhouse.processes"))?;
+
+        assert_eq!(result.columns.len(), 7);
+        assert_eq!(result.columns[0].name, "query_id");
+        assert_eq!(result.columns[0].kind, ColumnKind::Text);
+        assert_eq!(result.columns[1].name, "user");
+        assert_eq!(result.columns[1].kind, ColumnKind::Text);
+        assert_eq!(result.columns[2].name, "address");
+        assert_eq!(result.columns[2].kind, ColumnKind::Text);
+        assert_eq!(result.columns[3].name, "elapsed_secs");
+        assert_eq!(result.columns[3].kind, ColumnKind::Float);
+        assert_eq!(result.columns[4].name, "read_rows");
+        assert_eq!(result.columns[4].kind, ColumnKind::Float);
+        assert_eq!(result.columns[5].name, "memory_usage_bytes");
+        assert_eq!(result.columns[5].kind, ColumnKind::Float);
+        assert_eq!(result.columns[6].name, "query_preview");
+        assert_eq!(result.columns[6].kind, ColumnKind::Text);
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn clickhouse_instance_metric_query_rejects_unknown_metric_id() -> Result<(), DbError> {
+    containers::with_clickhouse(|config| {
+        let connection = connect(&config)?;
+        let error = connection
+            .execute(&metric_request("clickhouse.does_not_exist"))
+            .expect_err("unknown metric id must be rejected");
+
+        assert!(matches!(error, DbError::NotSupported(_)));
+
+        Ok(())
+    })
+}
+
+/// Guards the assumption every declared metric rests on: that its raw name
+/// exists in the system table it is read from.
+///
+/// A metric whose row is missing reports `0.0` rather than failing, so a
+/// misspelled name would chart a flat zero forever and every shape assertion
+/// above would still pass. This asserts the name itself.
+#[test]
+#[ignore = "requires Docker daemon"]
+fn clickhouse_metric_raw_names_exist_in_their_system_tables() -> Result<(), DbError> {
+    containers::with_clickhouse(|config| {
+        let connection = connect(&config)?;
+
+        for (raw_name, metric_id, .., source) in METRIC_DEFS {
+            let (table, key_column) = match source {
+                MetricSource::Metrics => ("system.metrics", "metric"),
+                MetricSource::Events => ("system.events", "event"),
+                MetricSource::AsynchronousMetrics => ("system.asynchronous_metrics", "metric"),
+            };
+
+            let result = connection.execute(&QueryRequest::new(format!(
+                "SELECT count() FROM {table} WHERE {key_column} = '{raw_name}'"
+            )))?;
+
+            let count = match result.rows.first().and_then(|row| row.first()) {
+                Some(Value::Int(count)) => *count,
+                Some(Value::Decimal(text)) => text.parse().unwrap_or(0),
+                other => panic!("unexpected count value for {metric_id}: {other:?}"),
+            };
+
+            assert_eq!(
+                count, 1,
+                "metric {metric_id} declares raw name '{raw_name}', absent from {table}"
+            );
+        }
 
         Ok(())
     })

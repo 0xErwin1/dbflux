@@ -42,6 +42,7 @@ the endpoint is a URL and not a host/port pair.
 - Every HTTP request reports `dbflux/<version>` as the `User-Agent` header, visible in server-side request logs.
 - Dangerous-query detection uses the shared `SqlLanguageService` (no ClickHouse-specific override): `ALTER TABLE ... DELETE WHERE ...` and `ALTER TABLE ... UPDATE ... WHERE ...` are already caught as `Alter` (any `ALTER`-prefixed statement is flagged regardless of sub-command), and `TRUNCATE`/`DROP` are caught as usual. `KILL QUERY`/`KILL MUTATION` and `OPTIMIZE TABLE ... FINAL` are not flagged — neither deletes rows or changes table structure — matching how other relational drivers treat comparable non-destructive administrative statements.
 - Write-privilege probe: after connecting, checks the `readonly` server setting and `system.grants` for the current user and their active session roles to detect a read-only session or a user without `INSERT`/`ALTER UPDATE`/`ALTER DELETE` grants, tightening the resolved mutation policy to read-only when the server would reject writes anyway (side-effect free; grants reachable only through a role-of-a-role are not resolved and leave the policy unchanged).
+- Instance metrics and inspector (`INSTANCE_METRICS`/`INSTANCE_INSPECTOR`): a curated set of gauges and counters from `system.metrics`, `system.events`, and `system.asynchronous_metrics` (active queries, tracked memory, TCP/HTTP connections, selected/inserted rows, OS memory available), plus a `system.processes` running-queries inspector with a "Kill query" row action. The kill action is gated by a `KILL QUERY` privilege probe run once when the catalog is built; the action stays hidden unless that probe succeeds, so a probe that fails for any reason leaves a destructive control out of the UI rather than offering one the session cannot execute.
 
 ### Type handling
 
@@ -68,8 +69,3 @@ arrives fully structured rather than as raw text:
 - Named ClickHouse time zones are not interpreted client-side. ISO timestamps
   carrying an offset are handled accurately; timestamps without one are treated
   as UTC.
-- No instance metrics or instance inspector yet (`INSTANCE_METRICS`/
-  `INSTANCE_INSPECTOR` are not declared). Unlike DynamoDB and CloudWatch,
-  ClickHouse has no external metrics service to point at instead: `system.metrics`,
-  `system.events`, and `system.processes` are natural candidates for a future
-  `InstanceCatalog`, so this is planned rather than permanently excluded.

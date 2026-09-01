@@ -37,7 +37,9 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
             | DriverCapabilities::FILTERING.bits()
             | DriverCapabilities::CHART_AUTHORING.bits()
             | DriverCapabilities::EXPORT_CSV.bits()
-            | DriverCapabilities::EXPORT_JSON.bits(),
+            | DriverCapabilities::EXPORT_JSON.bits()
+            | DriverCapabilities::INSTANCE_METRICS.bits()
+            | DriverCapabilities::INSTANCE_INSPECTOR.bits(),
     ),
     default_port: Some(8123),
     uri_scheme: "http".to_string(),
