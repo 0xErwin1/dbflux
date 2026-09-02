@@ -366,7 +366,7 @@ impl ChartColors {
             panel_border: from_hex(0xD9DEE8, 1.0),
             label_fg: from_hex(0x787E85, 1.0),
             value_fg: from_hex(0x5C6166, 1.0),
-            muted_fg: from_hex(0xABB0B6, 1.0),
+            muted_fg: from_hex(0x676E75, 1.0),
             hover_bg: from_hex(0x5C6166, 0.06),
             pill_bg: from_hex(0x5C6166, 0.06),
             pill_border: from_hex(0xD9DEE8, 1.0),

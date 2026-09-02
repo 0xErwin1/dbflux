@@ -159,6 +159,7 @@ fn apply_ayu_dark(style: AppStyle, cx: &mut App) {
     let background = rgb_to_hsla(0x0A0E14);
     let panel = rgb_to_hsla(0x0F1419);
     let foreground = rgb_to_hsla(0xB3B1AD);
+    let muted_foreground = rgb_to_hsla(0x828D9D);
     let muted = rgb_to_hsla(0x5C6773);
     let accent = rgb_to_hsla(0xFFB454);
     let border = rgb_to_hsla(0x1F2430);
@@ -182,7 +183,7 @@ fn apply_ayu_dark(style: AppStyle, cx: &mut App) {
 
     // Muted
     theme.muted = muted;
-    theme.muted_foreground = muted;
+    theme.muted_foreground = muted_foreground;
 
     // Primary (accent color)
     theme.primary = accent;
@@ -255,7 +256,7 @@ fn apply_ayu_dark(style: AppStyle, cx: &mut App) {
     // Tab bar
     theme.tab = panel;
     theme.tab_bar = panel;
-    theme.tab_foreground = muted;
+    theme.tab_foreground = muted_foreground;
     theme.tab_active = background;
     theme.tab_active_foreground = foreground;
     theme.tab_bar_segmented = raised;
@@ -263,7 +264,7 @@ fn apply_ayu_dark(style: AppStyle, cx: &mut App) {
     // Table
     theme.table = background;
     theme.table_head = panel;
-    theme.table_head_foreground = muted;
+    theme.table_head_foreground = muted_foreground;
     theme.table_even = rgb_to_hsla_alpha(0xB3B1AD, 0.02);
     theme.table_hover = rgb_to_hsla_alpha(0xB3B1AD, 0.05);
     theme.table_active = rgb_to_hsla_alpha(0x59C2FF, 0.15);
@@ -317,7 +318,7 @@ fn apply_ayu_dark(style: AppStyle, cx: &mut App) {
 
     // Description list
     theme.description_list_label = panel;
-    theme.description_list_label_foreground = muted;
+    theme.description_list_label_foreground = muted_foreground;
 
     // Drag and drop
     theme.drag_border = accent;
@@ -359,6 +360,7 @@ fn apply_ayu_mirage(style: AppStyle, cx: &mut App) {
     let background = rgb_to_hsla(0x1F2430);
     let panel = rgb_to_hsla(0x232834);
     let foreground = rgb_to_hsla(0xCBCCC6);
+    let muted_foreground = rgb_to_hsla(0x8F98AA);
     let muted = rgb_to_hsla(0x707A8C);
     let accent = rgb_to_hsla(0xFFCC66);
     let border = rgb_to_hsla(0x3A4052);
@@ -381,7 +383,7 @@ fn apply_ayu_mirage(style: AppStyle, cx: &mut App) {
     theme.caret = accent;
 
     theme.muted = muted;
-    theme.muted_foreground = muted;
+    theme.muted_foreground = muted_foreground;
 
     theme.primary = accent;
     theme.primary_hover = rgb_to_hsla(0xE6B85C);
@@ -438,14 +440,14 @@ fn apply_ayu_mirage(style: AppStyle, cx: &mut App) {
 
     theme.tab = panel;
     theme.tab_bar = panel;
-    theme.tab_foreground = muted;
+    theme.tab_foreground = muted_foreground;
     theme.tab_active = background;
     theme.tab_active_foreground = foreground;
     theme.tab_bar_segmented = raised;
 
     theme.table = background;
     theme.table_head = panel;
-    theme.table_head_foreground = muted;
+    theme.table_head_foreground = muted_foreground;
     theme.table_even = rgb_to_hsla_alpha(0xCBCCC6, 0.02);
     theme.table_hover = rgb_to_hsla_alpha(0xCBCCC6, 0.05);
     theme.table_active = rgb_to_hsla_alpha(0x73D0FF, 0.12);
@@ -483,7 +485,7 @@ fn apply_ayu_mirage(style: AppStyle, cx: &mut App) {
     theme.skeleton = raised;
 
     theme.description_list_label = panel;
-    theme.description_list_label_foreground = muted;
+    theme.description_list_label_foreground = muted_foreground;
 
     theme.drag_border = accent;
     theme.drop_target = rgb_to_hsla_alpha(0xFFCC66, 0.1);
@@ -520,6 +522,7 @@ fn apply_ayu_light(style: AppStyle, cx: &mut App) {
     let background = rgb_to_hsla(0xFAFAFA);
     let panel = rgb_to_hsla(0xF3F3F3);
     let foreground = rgb_to_hsla(0x5C6166);
+    let muted_foreground = rgb_to_hsla(0x676E75);
     let muted = rgb_to_hsla(0xABB0B6);
     let accent = rgb_to_hsla(0xFF9940);
     let border = rgb_to_hsla(0xD9DEE8);
@@ -541,7 +544,7 @@ fn apply_ayu_light(style: AppStyle, cx: &mut App) {
     theme.caret = accent;
 
     theme.muted = muted;
-    theme.muted_foreground = muted;
+    theme.muted_foreground = muted_foreground;
 
     theme.primary = accent;
     theme.primary_hover = rgb_to_hsla(0xE68A3A);
@@ -600,14 +603,14 @@ fn apply_ayu_light(style: AppStyle, cx: &mut App) {
 
     theme.tab = panel;
     theme.tab_bar = panel;
-    theme.tab_foreground = muted;
+    theme.tab_foreground = muted_foreground;
     theme.tab_active = background;
     theme.tab_active_foreground = foreground;
     theme.tab_bar_segmented = raised;
 
     theme.table = background;
     theme.table_head = panel;
-    theme.table_head_foreground = muted;
+    theme.table_head_foreground = muted_foreground;
     theme.table_even = rgb_to_hsla_alpha(0x5C6166, 0.03);
     theme.table_hover = rgb_to_hsla_alpha(0x5C6166, 0.06);
     theme.table_active = rgb_to_hsla_alpha(0x399EE6, 0.12);
@@ -649,7 +652,7 @@ fn apply_ayu_light(style: AppStyle, cx: &mut App) {
     theme.skeleton = raised;
 
     theme.description_list_label = panel;
-    theme.description_list_label_foreground = muted;
+    theme.description_list_label_foreground = muted_foreground;
 
     theme.drag_border = accent;
     theme.drop_target = rgb_to_hsla_alpha(0xFF9940, 0.1);

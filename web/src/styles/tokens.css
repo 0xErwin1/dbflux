@@ -21,8 +21,8 @@
 
   --text: #b3b1ad;
   --text-strong: #e6e1cf;
-  /* The app's muted #5c6773 measures 3.35:1 on --bg, below the 4.5:1 floor for
-     text. Secondary copy uses this lighter value (5.51:1 on --panel) instead. */
+  /* Mirrors the app's muted_foreground. 5.51:1 on --panel, above the 4.5:1 floor
+     for text. The darker --text-faint below is not readable enough for copy. */
   --text-muted: #828d9d;
   /* Decoration only: icon strokes, tree guides. Never the sole carrier of meaning. */
   --text-faint: #5c6773;
