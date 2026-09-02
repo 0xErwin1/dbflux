@@ -11,6 +11,16 @@ export interface LocaleDefinition {
 
 export const DEFAULT_LOCALE = 'en';
 
+/**
+ * The runnable driver example, which the site publishes as a page.
+ *
+ * It lives outside `docs/` because it is a working crate a reader compiles, not
+ * prose. Publishing it anyway keeps the driver authoring guide linking within
+ * the site instead of handing the reader off to the repository mid-guide.
+ */
+export const EXAMPLE_DRIVER_README = 'examples/custom_driver/README.md';
+export const EXAMPLE_DRIVER_PAGE = 'custom_driver_example';
+
 export const LOCALE_REGISTRY = validateLocaleRegistry(
   [
     { id: 'en', name: 'English', docsDirectory: null },
@@ -254,6 +264,8 @@ export function contentEntryId(
 
   const driver = repoPath.match(/^crates\/dbflux_driver_([^/]+)\/README\.md$/);
   if (driver) return `${version}/drivers/${driver[1]}`;
+
+  if (repoPath === EXAMPLE_DRIVER_README) return `${version}/${EXAMPLE_DRIVER_PAGE}`;
 
   const locale = localeForRepoPath(repoPath, registry, defaultLocale);
   const localeDefinition = registry.find(({ id }) => id === locale);

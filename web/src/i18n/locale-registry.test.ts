@@ -117,6 +117,13 @@ test('preserves canonical locale identity while lowercasing only document paths'
   );
 });
 
+test('routes the custom driver example to its own page id', () => {
+  assert.equal(
+    contentEntryId('nightly/examples/custom_driver/README.md', extendedRegistry, 'en'),
+    'nightly/custom_driver_example',
+  );
+});
+
 test('detects a localized repository path from its registered docs directory', () => {
   assert.equal(localeForRepoPath('docs/zh-hans/SETTINGS.md', extendedRegistry, 'en'), 'zh-Hans');
   assert.equal(localeForRepoPath('docs/SETTINGS.md', extendedRegistry, 'en'), 'en');
