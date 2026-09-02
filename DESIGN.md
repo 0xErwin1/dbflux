@@ -15,6 +15,7 @@ colors:
   tiles: "#111823"
   foreground: "#B3B1AD"
   muted: "#5C6773"
+  muted-foreground: "#828D9D"
   border: "#1F2430"
   ghost-border: "rgba(82, 68, 54, 0.15)"
   selection: "#273747"
@@ -181,7 +182,7 @@ components:
     size: "{spacing.border-thin}"
   tab-strip:
     backgroundColor: "{colors.panel}"
-    textColor: "{colors.muted}"
+    textColor: "{colors.muted-foreground}"
     typography: "{typography.label-sm}"
     height: "{spacing.tab}"
     padding: "{spacing.md}"
@@ -211,7 +212,7 @@ components:
     backgroundColor: "{colors.table-active}"
   table-header:
     backgroundColor: "{colors.panel}"
-    textColor: "{colors.muted}"
+    textColor: "{colors.muted-foreground}"
     typography: "{typography.label-sm}"
   panel:
     backgroundColor: "{colors.background}"
@@ -257,19 +258,19 @@ components:
     padding: "{spacing.xs}"
   badge-neutral:
     backgroundColor: "{colors.raised}"
-    textColor: "{colors.muted}"
+    textColor: "{colors.muted-foreground}"
     typography: "{typography.caption-xs}"
     rounded: "{rounded.sm}"
     padding: "{spacing.xs}"
   status-bar:
     backgroundColor: "{colors.background}"
-    textColor: "{colors.muted}"
+    textColor: "{colors.muted-foreground}"
     typography: "{typography.caption-xs}"
     height: "{spacing.toolbar}"
   status-bar-item-hover:
     backgroundColor: "{colors.raised}"
   key-hint:
-    textColor: "{colors.muted}"
+    textColor: "{colors.muted-foreground}"
     typography: "{typography.key-hint}"
 ---
 
@@ -303,7 +304,8 @@ Three palettes share one structure. Each defines the same twelve base slots and 
 | raised (secondary, popover) | `#151E2B` | `#242936` | `#F7F8FA` |
 | tiles | `#111823` | `#202734` | `#E8E8E8` |
 | foreground | `#B3B1AD` | `#CBCCC6` | `#5C6166` |
-| muted | `#5C6773` | `#707A8C` | `#ABB0B6` |
+| muted (decoration, switch, slider) | `#5C6773` | `#707A8C` | `#ABB0B6` |
+| muted foreground (secondary text, icons) | `#828D9D` | `#8F98AA` | `#676E75` |
 | border | `#1F2430` | `#3A4052` | `#D9DEE8` |
 | selection | `#273747` | `#33415E` | `#D3E8F8` |
 | primary (accent, caret, drag border) | `#FFB454` | `#FFCC66` | `#FF9940` |
@@ -354,7 +356,7 @@ The size scale has six steps and shifts down one notch under the Compact style:
 
 Weights are Medium for everything that reads and Bold for everything that labels a region: titles, headings, sidebar group labels, key hints. Semi-bold appears only on the third headline level. Line height is left to GPUI's default.
 
-Muted text has three levels: the muted color at full alpha for captions, at 70% for secondary dims, at 50% for tertiary dims. Never invent a fourth.
+Secondary text uses the muted foreground slot, a hand-picked readable value per palette. It has three levels: full alpha for captions, at 70% for secondary dims, at 50% for tertiary dims. Never invent a fourth.
 
 ## Layout
 
