@@ -27,6 +27,7 @@ const docs = defineCollection({
       '*/CONTRIBUTING.md',
       '*/SECURITY.md',
       '*/crates/dbflux_driver_*/README.md',
+      '*/examples/custom_driver/README.md',
     ],
     generateId: ({ entry }) => contentEntryId(entry),
   }),

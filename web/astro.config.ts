@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import manifest from './.versions/manifest.json';
 import { defineConfig } from 'astro/config';
 import sitemap from '@astrojs/sitemap';
-import { routeForRepoPath, titleForRepoPath } from './src/data/nav';
+import { repoBlobUrl, routeForRepoPath, titleForRepoPath } from './src/data/nav';
 import { sitemapPathsFor } from './src/data/docs';
 import { CURRENT } from './src/data/versions';
 import { DOCS_MODE, ORIGIN } from './src/data/site';
@@ -86,20 +86,30 @@ function rehypeRepoLinks() {
 
         if (typeof href === 'string' && !/^[a-z]+:|^\/|^#/i.test(href)) {
           const [target, hash] = href.split('#');
+          const suffix = hash ? `#${hash}` : '';
+          const resolved = relative(root, resolve(fromDir, target)).split('\\').join('/');
 
-          if (target.endsWith('.md')) {
-            const repoPath = relative(root, resolve(fromDir, target)).split('\\').join('/');
+          // A link climbing out of the version mirror names nothing in the
+          // repository, so the author's href is left exactly as written.
+          if (!resolved.startsWith('..')) {
+            const repoPath = target.endsWith('/') ? `${resolved}/` : resolved;
 
-            node.properties.href =
-              routeForRepoPath(repoPath, locale, version) + (hash ? `#${hash}` : '');
+            if (target.endsWith('.md')) {
+              node.properties.href = routeForRepoPath(repoPath, locale, version) + suffix;
 
-            // Only relabel when the text is the path itself. A link already
-            // written as a sentence is the author's wording and stays.
-            const label = textOf(node).trim();
-            const title = titleForRepoPath(repoPath);
+              // Only relabel when the text is the path itself. A link already
+              // written as a sentence is the author's wording and stays.
+              const label = textOf(node).trim();
+              const title = titleForRepoPath(repoPath);
 
-            if (title && /\.md$/.test(label)) {
-              node.children = [{ type: 'text', value: title }];
+              if (title && /\.md$/.test(label)) {
+                node.children = [{ type: 'text', value: title }];
+              }
+            } else {
+              // Everything else linked relatively is source the site does not
+              // publish: a module, a manifest, a directory. Left alone the href
+              // resolves against the page's own URL and 404s.
+              node.properties.href = repoBlobUrl(repoPath, version) + suffix;
             }
           }
         }

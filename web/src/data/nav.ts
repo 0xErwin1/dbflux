@@ -1,8 +1,12 @@
 import { docsUrl } from './site';
-import { CURRENT } from './versions';
+import { CURRENT, buildInfo } from './versions';
 import { DEFAULT_LOCALE } from '../i18n';
 import type { Locale } from '../i18n';
-import { localizedDocPath } from '../i18n/locale-registry.ts';
+import {
+  EXAMPLE_DRIVER_PAGE,
+  EXAMPLE_DRIVER_README,
+  localizedDocPath,
+} from '../i18n/locale-registry.ts';
 
 export const REPO = 'https://github.com/0xErwin1/dbflux';
 
@@ -54,6 +58,7 @@ export const DOCS_SECTIONS: readonly DocsSection[] = [
       'security',
       'architecture',
       'driver_authoring',
+      'custom_driver_example',
       'driver_rpc_protocol',
       'rpc_services_config',
       'release',
@@ -77,6 +82,7 @@ export const DOC_TITLES: Readonly<Record<string, string>> = {
   drivers: 'Drivers',
   concepts: 'Key concepts',
   driver_authoring: 'Driver authoring',
+  custom_driver_example: 'Custom driver example',
   driver_rpc_protocol: 'Driver RPC protocol',
   rpc_services_config: 'RPC services config',
   release: 'Release process',
@@ -138,11 +144,26 @@ export function routeForRepoPath(
     return docsUrl(doc.path, versionPrefix, routeLocale);
   }
 
+  if (path === EXAMPLE_DRIVER_README) return docsUrl(EXAMPLE_DRIVER_PAGE, versionPrefix, locale);
   if (path === 'ARCHITECTURE.md') return docsUrl('architecture', versionPrefix, locale);
   if (path === 'CONTRIBUTING.md') return docsUrl('contributing', versionPrefix, locale);
   if (path === 'SECURITY.md') return docsUrl('security', versionPrefix, locale);
 
-  return `${REPO}/blob/main/${path}`;
+  return repoBlobUrl(path, versionId);
+}
+
+/**
+ * A repository file at the revision the reader is reading about.
+ *
+ * The documentation cites source files the site does not publish, and those
+ * citations are only useful if they resolve to the code that version describes.
+ * A `main` link read from `/v0.6/` shows a file that may have moved or changed
+ * since, so the commit each version was built from is what the URL pins.
+ */
+export function repoBlobUrl(path: string, versionId: string = CURRENT.id): string {
+  const view = path.endsWith('/') ? 'tree' : 'blob';
+
+  return `${REPO}/${view}/${buildInfo(versionId).commit}/${path.replace(/\/$/, '')}`;
 }
 
 /**
@@ -159,6 +180,7 @@ export function titleForRepoPath(path: string): string | null {
   const doc = localizedDocPath(path);
   if (doc) return DOC_TITLES[doc.path] ?? null;
 
+  if (path === EXAMPLE_DRIVER_README) return DOC_TITLES[EXAMPLE_DRIVER_PAGE] ?? null;
   if (path === 'ARCHITECTURE.md') return DOC_TITLES.architecture ?? null;
   if (path === 'CONTRIBUTING.md') return DOC_TITLES.contributing ?? null;
   if (path === 'SECURITY.md') return DOC_TITLES.security ?? null;
