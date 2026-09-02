@@ -7,35 +7,35 @@ description: >-
   headings with a humanist sans for running text. Tokens are the CSS custom
   properties in web/src/styles/tokens.css.
 colors:
-  background: "#0a0e14"
-  panel: "#0f1419"
-  raised: "#151e2b"
-  selection: "#273747"
-  scrim: "rgba(0, 0, 0, 0.55)"
-  text: "#b3b1ad"
-  text-strong: "#e6e1cf"
-  text-muted: "#828d9d"
-  text-faint: "#5c6773"
-  border: "#1f2430"
-  border-interactive: "#5c6773"
-  primary: "#ffb454"
-  primary-hover: "#e6a34c"
-  primary-active: "#cc9143"
-  on-primary: "#0a0e14"
-  link: "#59c2ff"
-  link-hover: "#8dd6ff"
-  success: "#aad94c"
-  warning: "#ffb454"
-  danger: "#f07178"
-  on-danger: "#ffffff"
-  series-1: "#59c2ff"
-  series-2: "#aad94c"
-  series-3: "#ffb454"
-  series-4: "#f07178"
-  series-5: "#d2a6ff"
-  series-6: "#95e6cb"
-  scrollbar-thumb: "rgba(179, 177, 173, 0.15)"
-  scrollbar-thumb-hover: "rgba(179, 177, 173, 0.25)"
+  background: '#0a0e14'
+  panel: '#0f1419'
+  raised: '#151e2b'
+  selection: '#273747'
+  scrim: 'rgba(0, 0, 0, 0.55)'
+  text: '#b3b1ad'
+  text-strong: '#e6e1cf'
+  text-muted: '#828d9d'
+  text-faint: '#5c6773'
+  border: '#1f2430'
+  border-interactive: '#5c6773'
+  primary: '#ffb454'
+  primary-hover: '#e6a34c'
+  primary-active: '#cc9143'
+  on-primary: '#0a0e14'
+  link: '#59c2ff'
+  link-hover: '#8dd6ff'
+  success: '#aad94c'
+  warning: '#ffb454'
+  danger: '#f07178'
+  on-danger: '#ffffff'
+  series-1: '#59c2ff'
+  series-2: '#aad94c'
+  series-3: '#ffb454'
+  series-4: '#f07178'
+  series-5: '#d2a6ff'
+  series-6: '#95e6cb'
+  scrollbar-thumb: 'rgba(179, 177, 173, 0.15)'
+  scrollbar-thumb-hover: 'rgba(179, 177, 173, 0.25)'
 typography:
   display:
     fontFamily: JetBrains Mono
@@ -106,65 +106,65 @@ spacing:
   breakpoint-lg: 1024px
 components:
   button-primary:
-    backgroundColor: "{colors.primary}"
-    textColor: "{colors.on-primary}"
-    typography: "{typography.label}"
-    rounded: "{rounded.none}"
-    height: "{spacing.control-height}"
+    backgroundColor: '{colors.primary}'
+    textColor: '{colors.on-primary}'
+    typography: '{typography.label}'
+    rounded: '{rounded.none}'
+    height: '{spacing.control-height}'
   button-primary-hover:
-    backgroundColor: "{colors.primary-hover}"
+    backgroundColor: '{colors.primary-hover}'
   button-primary-active:
-    backgroundColor: "{colors.primary-active}"
+    backgroundColor: '{colors.primary-active}'
   button-secondary:
     backgroundColor: transparent
-    textColor: "{colors.text}"
-    typography: "{typography.label}"
-    rounded: "{rounded.none}"
-    height: "{spacing.control-height}"
+    textColor: '{colors.text}'
+    typography: '{typography.label}'
+    rounded: '{rounded.none}'
+    height: '{spacing.control-height}'
   button-secondary-hover:
-    textColor: "{colors.text-strong}"
+    textColor: '{colors.text-strong}'
   card:
-    backgroundColor: "{colors.panel}"
-    textColor: "{colors.text}"
-    rounded: "{rounded.none}"
-    padding: "{spacing.s-7}"
+    backgroundColor: '{colors.panel}'
+    textColor: '{colors.text}'
+    rounded: '{rounded.none}'
+    padding: '{spacing.s-7}'
   card-hover:
-    backgroundColor: "{colors.raised}"
+    backgroundColor: '{colors.raised}'
   code-block:
-    backgroundColor: "{colors.panel}"
-    textColor: "{colors.text}"
-    typography: "{typography.code}"
-    rounded: "{rounded.none}"
-    padding: "{spacing.s-5}"
+    backgroundColor: '{colors.panel}'
+    textColor: '{colors.text}'
+    typography: '{typography.code}'
+    rounded: '{rounded.none}'
+    padding: '{spacing.s-5}'
   callout:
-    backgroundColor: "{colors.panel}"
-    textColor: "{colors.text}"
-    rounded: "{rounded.none}"
-    padding: "{spacing.s-5}"
+    backgroundColor: '{colors.panel}'
+    textColor: '{colors.text}'
+    rounded: '{rounded.none}'
+    padding: '{spacing.s-5}'
   nav:
-    backgroundColor: "{colors.background}"
-    textColor: "{colors.text}"
-    typography: "{typography.label}"
-    height: "{spacing.nav-height}"
+    backgroundColor: '{colors.background}'
+    textColor: '{colors.text}'
+    typography: '{typography.label}'
+    height: '{spacing.nav-height}'
   sidebar-rail:
-    backgroundColor: "{colors.background}"
-    textColor: "{colors.text}"
-    width: "{spacing.rail-width}"
+    backgroundColor: '{colors.background}'
+    textColor: '{colors.text}'
+    width: '{spacing.rail-width}'
   table-header:
-    textColor: "{colors.text-muted}"
-    typography: "{typography.label}"
+    textColor: '{colors.text-muted}'
+    typography: '{typography.label}'
   table-row-odd:
-    backgroundColor: "{colors.panel}"
+    backgroundColor: '{colors.panel}'
   search-dialog:
-    backgroundColor: "{colors.raised}"
-    textColor: "{colors.text}"
-    rounded: "{rounded.none}"
+    backgroundColor: '{colors.raised}'
+    textColor: '{colors.text}'
+    rounded: '{rounded.none}'
   version-picker:
-    backgroundColor: "{colors.panel}"
-    textColor: "{colors.text}"
-    rounded: "{rounded.none}"
+    backgroundColor: '{colors.panel}'
+    textColor: '{colors.text}'
+    rounded: '{rounded.none}'
   version-picker-menu:
-    backgroundColor: "{colors.raised}"
+    backgroundColor: '{colors.raised}'
 ---
 
 # DBFlux Website
