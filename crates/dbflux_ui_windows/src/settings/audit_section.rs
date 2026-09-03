@@ -23,7 +23,6 @@ use gpui_component::{ActiveTheme, Sizable};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum AuditFormRow {
-    StatusIndicator,
     EnableAudit,
     RetentionDays,
     CaptureUserActions,
@@ -36,6 +35,23 @@ pub(super) enum AuditFormRow {
     BackgroundPurgeInterval,
     LogCaptureMinLevel,
     SaveButton,
+}
+
+fn audit_form_rows() -> Vec<AuditFormRow> {
+    vec![
+        AuditFormRow::EnableAudit,
+        AuditFormRow::RetentionDays,
+        AuditFormRow::CaptureUserActions,
+        AuditFormRow::CaptureSystemEvents,
+        AuditFormRow::CaptureQueryText,
+        AuditFormRow::CaptureHookOutputMetadata,
+        AuditFormRow::RedactSensitiveValues,
+        AuditFormRow::MaxDetailBytes,
+        AuditFormRow::PurgeOnStartup,
+        AuditFormRow::BackgroundPurgeInterval,
+        AuditFormRow::LogCaptureMinLevel,
+        AuditFormRow::SaveButton,
+    ]
 }
 
 #[allow(dead_code)]
@@ -183,30 +199,12 @@ impl AuditSection {
         repo.get().ok().flatten().unwrap_or_default()
     }
 
-    fn audit_form_rows(&self) -> Vec<AuditFormRow> {
-        vec![
-            AuditFormRow::StatusIndicator,
-            AuditFormRow::EnableAudit,
-            AuditFormRow::RetentionDays,
-            AuditFormRow::CaptureUserActions,
-            AuditFormRow::CaptureSystemEvents,
-            AuditFormRow::CaptureQueryText,
-            AuditFormRow::CaptureHookOutputMetadata,
-            AuditFormRow::RedactSensitiveValues,
-            AuditFormRow::MaxDetailBytes,
-            AuditFormRow::PurgeOnStartup,
-            AuditFormRow::BackgroundPurgeInterval,
-            AuditFormRow::LogCaptureMinLevel,
-            AuditFormRow::SaveButton,
-        ]
-    }
-
     fn audit_current_row(&self) -> Option<AuditFormRow> {
-        self.audit_form_rows().get(self.audit_form_cursor).copied()
+        audit_form_rows().get(self.audit_form_cursor).copied()
     }
 
     pub(super) fn audit_move_down(&mut self) {
-        let count = self.audit_form_rows().len();
+        let count = audit_form_rows().len();
         if self.audit_form_cursor + 1 < count {
             self.audit_form_cursor += 1;
         }
@@ -223,7 +221,7 @@ impl AuditSection {
     }
 
     fn audit_move_last(&mut self) {
-        self.audit_form_cursor = self.audit_form_rows().len().saturating_sub(1);
+        self.audit_form_cursor = audit_form_rows().len().saturating_sub(1);
     }
 
     pub(super) fn audit_activate_current_field(
@@ -272,7 +270,7 @@ impl AuditSection {
             Some(AuditFormRow::SaveButton) => {
                 self.save_audit_settings(window, cx);
             }
-            Some(AuditFormRow::StatusIndicator) | None => {}
+            None => {}
         }
     }
 
@@ -540,7 +538,7 @@ impl AuditSection {
         let muted_fg = theme.muted_foreground;
         let is_focused = self.content_focused;
         let cursor = self.audit_form_cursor;
-        let rows = self.audit_form_rows();
+        let rows = audit_form_rows();
 
         let is_at =
             |row: AuditFormRow| -> bool { is_focused && rows.get(cursor).copied() == Some(row) };
@@ -695,7 +693,7 @@ impl AuditSection {
 
     fn render_audit_footer_actions(&self, cx: &mut Context<Self>) -> AnyElement {
         let is_save_focused = self.content_focused
-            && self.audit_form_rows().get(self.audit_form_cursor).copied()
+            && audit_form_rows().get(self.audit_form_cursor).copied()
                 == Some(AuditFormRow::SaveButton);
 
         div()
@@ -714,8 +712,7 @@ impl AuditSection {
                 .w_full()
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.content_focused = true;
-                    this.audit_form_cursor = this
-                        .audit_form_rows()
+                    this.audit_form_cursor = audit_form_rows()
                         .iter()
                         .position(|row| *row == AuditFormRow::SaveButton)
                         .unwrap_or_default();
@@ -783,8 +780,7 @@ impl AuditSection {
                 MouseButton::Left,
                 cx.listener(move |this, _, _, cx| {
                     this.content_focused = true;
-                    if let Some(position) = this
-                        .audit_form_rows()
+                    if let Some(position) = audit_form_rows()
                         .iter()
                         .position(|candidate| *candidate == row)
                     {
@@ -871,8 +867,7 @@ impl AuditSection {
                 MouseButton::Left,
                 cx.listener(move |this, _, _, cx| {
                     this.content_focused = true;
-                    if let Some(position) = this
-                        .audit_form_rows()
+                    if let Some(position) = audit_form_rows()
                         .iter()
                         .position(|candidate| *candidate == row)
                     {
@@ -990,8 +985,7 @@ impl AuditSection {
                             cx.listener(move |this, _, window, cx| {
                                 this.switching_input = true;
                                 this.content_focused = true;
-                                if let Some(position) = this
-                                    .audit_form_rows()
+                                if let Some(position) = audit_form_rows()
                                     .iter()
                                     .position(|candidate| *candidate == row)
                                 {
@@ -1009,6 +1003,22 @@ impl AuditSection {
 
 #[cfg(test)]
 mod tests {
+    use super::{AuditFormRow, audit_form_rows};
+
+    #[test]
+    fn audit_form_rows_excludes_status_indicator_row() {
+        let rows = audit_form_rows();
+
+        assert_eq!(rows.len(), 12);
+    }
+
+    #[test]
+    fn audit_form_rows_starts_with_enable_audit() {
+        let rows = audit_form_rows();
+
+        assert_eq!(rows.first().copied(), Some(AuditFormRow::EnableAudit));
+    }
+
     const AUDIT_SECTION_KEYS: &[&str] = &[
         "settings.audit.placeholder_level",
         "settings.audit.section_title",
