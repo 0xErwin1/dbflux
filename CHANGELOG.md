@@ -56,6 +56,20 @@ All notable changes to DBFlux will be documented in this file.
   `crates/dbflux_i18n/locales/{en,es}.yml`, one file per locale, and are
   managed through Weblate.
 
+### Fixed
+
+* **Editing a cell and clicking another one lost the typed value (#539)** —
+  the inline editor closed through the input's blur event, which discarded
+  the edit buffer. Selecting or shift-selecting another cell now commits the
+  edit in progress, as Enter does, and the value survives as a pending
+  change; blur remains a fallback for focus leaving the grid entirely.
+
+* **Save Row shortcuts stopped working after an inline edit** — closing an
+  inline editor unmounted the focused element and left the window with no
+  focus, so every shortcut bound to the results grid went inert until the
+  next click: Cmd/Ctrl+Enter for Save Row, Cmd/Ctrl+A, the arrow keys and
+  the vim aliases. Closing an editor now returns focus to the grid.
+
 ## [0.7.0] - 2026-07-31
 
 ### Added
