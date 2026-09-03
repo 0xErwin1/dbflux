@@ -91,6 +91,7 @@ pub(super) fn render_record(
     let record_scroll_handle = state.record_scroll_handle().clone();
     let model = std::sync::Arc::clone(state.model_arc());
     let list_entity = state_entity.clone();
+    let state_for_empty = state_entity.clone();
 
     let mut list = uniform_list(
         "record-fields",
@@ -119,6 +120,18 @@ pub(super) fn render_record(
                 .flex_1()
                 .min_h_0()
                 .overflow_hidden()
+                // A click below the last field lands here, not on a row.
+                // Treat it like clicking another cell: commit the open edit
+                // and give the table back the keyboard. Rows stop propagation
+                // so a click inside the editor never reaches this handler.
+                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                    state_for_empty.update(cx, |state, cx| {
+                        if state.is_editing() {
+                            state.stop_editing(true, cx);
+                        }
+                        state.focus(window, cx);
+                    });
+                })
                 .child(list),
         )
         .child(
@@ -352,6 +365,9 @@ fn render_fields(
                     d.bg(theme.table_even)
                 })
                 .when(is_active, |d| d.bg(theme.table_active.opacity(0.45)))
+                // Keep row clicks off the record body: its handler commits the
+                // open edit, which must only happen for clicks beside the rows.
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 // The editor is a child of this row, so a click inside it
                 // bubbles here. While editing, the row must carry no handler
                 // that moves focus back to the table — doing so blurs the
