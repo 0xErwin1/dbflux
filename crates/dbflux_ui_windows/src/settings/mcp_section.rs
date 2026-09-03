@@ -581,6 +581,8 @@ impl McpSection {
             ms.set_items(policy_items, cx);
             ms.set_selected_values(&role.policy_ids, cx);
         });
+
+        self.validate_form_field();
     }
 
     fn clear_role_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -708,6 +710,8 @@ impl McpSection {
             .update(cx, |i, cx| i.set_value(policy.id.clone(), window, cx));
         self.draft_policy_classes = policy.allowed_classes.into_iter().collect();
         self.draft_policy_tools = policy.allowed_tools.into_iter().collect();
+
+        self.validate_form_field();
     }
 
     fn clear_policy_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1945,6 +1949,18 @@ impl FormSection for McpSection {
         self.mcp_focus = McpFocus::Form;
         self.mcp_form_field = Self::first_field_for(self.variant);
         self.editing_field = false;
+    }
+
+    /// Selecting a builtin role or policy drops the button row, so a cursor
+    /// left on Save or Delete must fall back to the variant's first field.
+    fn validate_form_field(&mut self) {
+        let current = self.mcp_form_field;
+
+        if self.form_rows().iter().any(|row| row.contains(&current)) {
+            return;
+        }
+
+        self.mcp_form_field = Self::first_field_for(self.variant);
     }
 }
 
