@@ -64,6 +64,14 @@ pub struct DataTableState {
     /// silently cancel it.
     _editing_subs: Vec<Subscription>,
 
+    /// Set when an editor closed and focus has to go back to the table.
+    ///
+    /// Closing an inline editor unmounts the focused element, which leaves the
+    /// window with no focus and disables every action bound to the table's key
+    /// context. Focusing needs a `Window`, which `stop_editing` does not have,
+    /// so the request is raised here and consumed by `DataTable::render`.
+    pending_refocus: bool,
+
     /// Buffer for tracking local edits before committing.
     edit_buffer: EditBuffer,
 
@@ -126,6 +134,7 @@ impl DataTableState {
             cell_input: None,
             enum_dropdown: None,
             _editing_subs: Vec::new(),
+            pending_refocus: false,
             edit_buffer,
             pk_columns: Vec::new(),
             fk_columns: HashSet::new(),
@@ -749,7 +758,9 @@ impl DataTableState {
         self._editing_subs.push(
             cx.subscribe(&input, |this, _input, event: &InputEvent, cx| match event {
                 InputEvent::PressEnter { .. } => this.stop_editing(true, cx),
-                InputEvent::Blur => this.stop_editing(false, cx),
+                // Focus left the input on its own, so it went somewhere the
+                // user chose. Close the editor but leave focus alone.
+                InputEvent::Blur => this.close_editor(false, false, cx),
                 _ => {}
             }),
         );
@@ -839,8 +850,21 @@ impl DataTableState {
     }
 
     /// Stop editing and optionally apply the change.
+    ///
+    /// Focus returns to the table, so the actions bound to its key context keep
+    /// working after the editor unmounts. Use [`Self::close_editor`] directly to
+    /// close an editor whose focus already belongs elsewhere.
+    ///
     /// Note: The stored `editing_cell` uses visual row indices.
     pub fn stop_editing(&mut self, apply: bool, cx: &mut Context<Self>) {
+        self.close_editor(apply, true, cx);
+    }
+
+    /// Close the inline editor, optionally applying the change and optionally
+    /// asking for focus back.
+    ///
+    /// Note: The stored `editing_cell` uses visual row indices.
+    fn close_editor(&mut self, apply: bool, refocus: bool, cx: &mut Context<Self>) {
         use super::model::VisualRowSource;
 
         let coord = match self.editing_cell.take() {
@@ -883,7 +907,15 @@ impl DataTableState {
             self.cell_input = None;
         }
 
+        self.pending_refocus |= refocus;
+
         cx.notify();
+    }
+
+    /// Whether an editor closed and focus is owed back to the table, clearing
+    /// the request. Consumed by `DataTable::render`, which has the `Window`.
+    pub fn take_pending_refocus(&mut self) -> bool {
+        std::mem::take(&mut self.pending_refocus)
     }
 
     /// Cancel editing without applying changes.
@@ -1407,6 +1439,76 @@ mod tests {
         assert!(
             is_dirty,
             "the typed value must survive as a pending change on the edited row"
+        );
+    }
+
+    /// Regression: closing the editor unmounts the focused element and leaves
+    /// the window with no focus, which disables every action bound to the
+    /// table's key context (Cmd+Enter for Save Row among them). Closing must
+    /// therefore request that focus goes back to the table.
+    #[gpui::test]
+    fn committing_an_edit_requests_a_refocus(cx: &mut gpui::TestAppContext) {
+        use super::super::selection::CellCoord;
+
+        let (state, _input, window) = editing_state(cx, CellCoord::new(0, 1));
+
+        window.update(|_, app| {
+            state.update(app, |s, cx| s.stop_editing(true, cx));
+        });
+
+        let refocus = window.update(|_, app| state.update(app, |s, _cx| s.take_pending_refocus()));
+
+        assert!(
+            refocus,
+            "committing an edit must hand focus back to the table"
+        );
+    }
+
+    /// Escape cancels the edit without leaving the table, so focus has to come
+    /// back there too.
+    #[gpui::test]
+    fn cancelling_an_edit_requests_a_refocus(cx: &mut gpui::TestAppContext) {
+        use super::super::selection::CellCoord;
+
+        let (state, _input, window) = editing_state(cx, CellCoord::new(0, 1));
+
+        window.update(|_, app| {
+            state.update(app, |s, cx| s.stop_editing(false, cx));
+        });
+
+        let refocus = window.update(|_, app| state.update(app, |s, _cx| s.take_pending_refocus()));
+
+        assert!(
+            refocus,
+            "cancelling an edit must hand focus back to the table"
+        );
+    }
+
+    /// The opposite case: focus left the input because the user moved it
+    /// somewhere else entirely, such as the filter input. Pulling it back to
+    /// the table would fight the user for the caret.
+    #[gpui::test]
+    fn blur_closes_the_editor_without_requesting_a_refocus(cx: &mut gpui::TestAppContext) {
+        use super::super::selection::CellCoord;
+        use crate::controls::InputEvent;
+
+        let (state, input, window) = editing_state(cx, CellCoord::new(0, 1));
+
+        window.update(|_, app| {
+            input.update(app, |_input, cx| cx.emit(InputEvent::Blur));
+        });
+
+        let (editing_cell, refocus) = window.update(|_, app| {
+            state.update(app, |s, _cx| (s.editing_cell(), s.take_pending_refocus()))
+        });
+
+        assert!(
+            editing_cell.is_none(),
+            "blur must still close the editor as a fallback"
+        );
+        assert!(
+            !refocus,
+            "focus leaving the table must not be pulled back into it"
         );
     }
 }
