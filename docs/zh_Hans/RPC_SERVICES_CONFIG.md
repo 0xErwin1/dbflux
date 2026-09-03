@@ -79,7 +79,7 @@ CREATE TABLE cfg_service_env (
 - `socket_id` 原样用作 Socket 文件名
 - DBFlux 在内部以 `rpc:<socket_id>` 标识每项服务
 - DBFlux 在运行时适配之前，先按 `service_kind` 对每项服务分类
-- 驱动的名称、图标、分类与表单来自服务的 `Hello` 响应（`driver_metadata`、`form_definition`），而非来自配置
+- 驱动的名称、图标、类别与表单来自服务的 `Hello` 响应（`driver_metadata`、`form_definition`），而非来自配置
 - `service_kind='driver'` 的服务若在启动期间未能完成 RPC 握手（`Hello`），则不会被注册
 - `service_kind='auth_provider'` 的服务在通过兼容性检查且探测成功后，会被载入认证提供程序注册表
 - 驱动路径的协商会在 `Hello` 阶段选择双方均支持的最高兼容次版本号，此后要求每条后续消息信封（envelope）都使用这一协商确定的版本
