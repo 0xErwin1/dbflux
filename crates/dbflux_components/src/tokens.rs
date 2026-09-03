@@ -416,6 +416,14 @@ impl Widths {
     /// Applied to the left panel (`border_r_1`) listing selectable items in
     /// MCP (clients, roles, policies) and driver settings sections. (300 px)
     pub const SETTINGS_LIST_PANEL: Pixels = px(300.0);
+
+    /// Left list-panel width for the Connection Manager MCP tab's trusted
+    /// client list.
+    ///
+    /// The Connection Manager window (720x620) is narrower than the Settings
+    /// window (950x700), so this panel uses a smaller width than
+    /// `SETTINGS_LIST_PANEL`. (220 px)
+    pub const CONNECTION_MCP_LIST_PANEL: Pixels = px(220.0);
 }
 
 #[cfg(test)]

@@ -145,13 +145,31 @@ pub(crate) fn auth_session_status_valid_expires(expires_at: &str) -> String {
     )
 }
 
-/// Formats the MCP tab's "Actor 'x' | role: y | policy: z" scope/policy preview line.
-pub(crate) fn mcp_preview_summary(actor: &str, role: &str, policy: &str) -> String {
+/// Formats the "N bindings reference clients that no longer exist" caption
+/// shown under the MCP tab's trusted-client list when it holds orphan bindings.
+#[cfg(feature = "mcp")]
+pub(crate) fn mcp_orphan_bindings_caption(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!("connection_manager.mcp_orphan_bindings.one")
+    } else {
+        dbflux_i18n::t!("connection_manager.mcp_orphan_bindings.many", count = count)
+    }
+}
+
+/// Formats the "Tools: a, b, c" effective-permissions caption in the MCP tab's
+/// client detail pane.
+#[cfg(feature = "mcp")]
+pub(crate) fn mcp_effective_tools_line(tools: &str) -> String {
+    dbflux_i18n::t!("connection_manager.mcp_effective_tools", tools = tools)
+}
+
+/// Formats the "Classes: Read, Write" effective-permissions caption in the
+/// MCP tab's client detail pane.
+#[cfg(feature = "mcp")]
+pub(crate) fn mcp_effective_classes_line(classes: &str) -> String {
     dbflux_i18n::t!(
-        "connection_manager.mcp_preview_summary",
-        actor = actor,
-        role = role,
-        policy = policy
+        "connection_manager.mcp_effective_classes",
+        classes = classes
     )
 }
 
@@ -883,9 +901,8 @@ mod tests {
         import_preview_count_connections, import_preview_count_proxies,
         import_preview_count_ssh_tunnels, import_preview_required_banner,
         import_required_auth_profile_ref_label, import_required_aws_reference_label,
-        import_required_secret_label, import_status_imported_toast, mcp_preview_summary,
-        proxies_delete_body, rpc_services_delete_body, ssh_private_key_with_path,
-        ssh_tunnels_delete_body,
+        import_required_secret_label, import_status_imported_toast, proxies_delete_body,
+        rpc_services_delete_body, ssh_private_key_with_path, ssh_tunnels_delete_body,
     };
     use super::{
         connection_manager_window_title_edit, connection_manager_window_title_new,
@@ -1148,14 +1165,44 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "mcp")]
     #[test]
-    fn mcp_preview_summary_embeds_actor_role_policy() {
-        let message = mcp_preview_summary("prod-agent", "read-only", "strict");
+    fn mcp_orphan_bindings_caption_uses_singular_form_for_one() {
+        use super::mcp_orphan_bindings_caption;
 
-        assert_eq!(
-            message,
-            "Actor 'prod-agent' | role: read-only | policy: strict"
-        );
+        let message = mcp_orphan_bindings_caption(1);
+
+        assert!(message.contains('1'));
+    }
+
+    #[cfg(feature = "mcp")]
+    #[test]
+    fn mcp_orphan_bindings_caption_embeds_count_for_many() {
+        use super::mcp_orphan_bindings_caption;
+
+        let message = mcp_orphan_bindings_caption(3);
+
+        assert!(message.contains('3'));
+    }
+
+    #[cfg(feature = "mcp")]
+    #[test]
+    fn mcp_effective_tools_line_embeds_tools() {
+        use super::mcp_effective_tools_line;
+
+        let message = mcp_effective_tools_line("read_query, list_tables");
+
+        assert!(message.contains("read_query, list_tables"));
+    }
+
+    #[cfg(feature = "mcp")]
+    #[test]
+    fn mcp_effective_classes_line_embeds_classes() {
+        use super::mcp_effective_classes_line;
+
+        let message = mcp_effective_classes_line("Read, Metadata");
+
+        assert!(message.contains("Read, Metadata"));
     }
 
     #[test]

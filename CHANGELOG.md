@@ -58,6 +58,13 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **Several MCP clients per connection (#542)** — the Connection Manager MCP
+  tab is now a master-detail view: a filterable list of every trusted client
+  on the left, and on the right whether the selected client may use this
+  connection, its roles and policies, and a preview of the tools and
+  classifications those grant. Previously the tab could bind a single client,
+  and saving a connection silently dropped every other binding it held.
+
 * **Keyboard navigation in Settings lists and forms (#543)** — MCP Clients,
   Roles and Policies can now be browsed, created and edited from the keyboard:
   `l`/`enter` opens the form, `n` starts a new item, `j`/`k` and `tab` move

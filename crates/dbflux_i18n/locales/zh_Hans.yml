@@ -174,6 +174,7 @@ connection_manager:
     use_connection_auth_profile: 使用连接认证配置文件
     select_additional_roles: 选择附加角色…
     select_additional_policies: 选择附加策略…
+    filter_trusted_clients: "按名称或 ID 筛选…"
   access_method:
     direct: 直连
     ssh_tunnel: SSH 隧道
@@ -222,20 +223,27 @@ connection_manager:
   driver_settings_title: 驱动设置
   driver_no_custom_settings: 此驱动没有自定义设置。
   mcp_disabled: 此连接已禁用 MCP
-  mcp_enabled_select_actor: MCP 已启用 — 请选择要绑定的受信客户端
-  mcp_preview_summary: "执行者 %{actor} | 角色：%{role} | 策略：%{policy}"
-  mcp_preview_none: 无
+  mcp_not_compiled: 此版本在编译时未包含 MCP 支持。
   mcp_governance_title: MCP 治理
   enable_mcp: 为此连接启用 MCP
-  trusted_client_actor: 受信客户端（执行者）
-  mcp_actor_hint: AI 智能体身份 — 在 设置 → MCP 中配置
+  mcp_badge_granted: 已授权
+  mcp_badge_no_access: 无访问权限
+  mcp_empty_clients: 尚未配置受信客户端。请在 设置 → MCP 中添加。
+  mcp_allow_client: 允许此客户端访问此连接
+  mcp_client_denied: 此客户端在此连接上被拒绝访问。
+  mcp_select_client: 选择一个受信客户端以配置其访问权限。
   role_label: 角色
   mcp_role_hint: 在 设置 → MCP → 角色 中配置角色
   additional_roles_optional: 附加角色（可选）
   policy_label: 策略
   mcp_policy_hint: 在 设置 → MCP → 策略 中配置策略
   additional_policies_optional: 附加策略（可选）
-  scope_policy_preview: 作用域 / 策略分配预览
+  mcp_effective_tools: "工具：%{tools}"
+  mcp_effective_classes: "分类：%{classes}"
+  mcp_effective_none: 无
+  mcp_orphan_bindings:
+    one: 有 1 个绑定引用了已不存在的客户端。
+    many: "有 %{count} 个绑定引用了已不存在的客户端。"
   mcp_governance_error:
     save_policy: "保存 MCP 连接策略分配失败：%{error}"
     clear_policy: "清除 MCP 连接策略分配失败：%{error}"

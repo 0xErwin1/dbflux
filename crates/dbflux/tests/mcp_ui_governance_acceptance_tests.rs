@@ -42,11 +42,11 @@ fn ui_contains_trusted_client_and_connection_policy_controls() {
 
     assert!(connection_form.contains("save_mcp_connection_policy_assignment"));
     assert!(connection_form.contains("ConnectionPolicyUpdated"));
-    assert!(connection_tabs.contains("connection_manager.scope_policy_preview"));
+    assert!(connection_tabs.contains("connection_manager.mcp_effective_tools"));
     assert!(connection_tabs.contains("connection_manager.enable_mcp"));
 
     let english_catalog = read_workspace_file("../dbflux_i18n/locales/en.yml");
-    assert!(english_catalog.contains("scope_policy_preview: Scope/policy assignment preview"));
+    assert!(english_catalog.contains("mcp_effective_tools:"));
     assert!(english_catalog.contains("enable_mcp: Enable MCP for this connection"));
 }
 
