@@ -241,7 +241,7 @@ pub(super) fn render_tree_item(
             indent_per_level,
             Heights::ROW,
             params.line_color,
-            true,
+            false,
         )
     } else {
         div()
