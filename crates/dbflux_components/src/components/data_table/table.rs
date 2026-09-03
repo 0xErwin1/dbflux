@@ -188,7 +188,19 @@ impl DataTable {
 }
 
 impl gpui::Render for DataTable {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // A closed inline editor unmounted the focused element, which leaves the
+        // window with no focus at all and every action bound to the table's key
+        // context inert — Save Row on `secondary-enter` among them. This is the
+        // nearest place that owns a `Window`, so the debt is settled here.
+        if self
+            .state
+            .update(cx, |state, _cx| state.take_pending_refocus())
+        {
+            let focus_handle = self.state.read(cx).focus_handle().clone();
+            focus_handle.focus(window);
+        }
+
         let state = self.state.read(cx);
         let theme = cx.theme();
 
