@@ -156,6 +156,12 @@ impl SettingsSection for ServicesSection {
                         self.request_delete_service(idx, cx);
                     }
                 }
+                ("n", modifiers) if modifiers == Modifiers::none() => {
+                    self.svc_selected_idx = None;
+                    self.svc_load_selected_profile(window, cx);
+                    self.svc_enter_form(window, cx);
+                    cx.notify();
+                }
                 ("g", modifiers) if modifiers == Modifiers::none() => {
                     self.svc_selected_idx = None;
                     self.svc_load_selected_profile(window, cx);

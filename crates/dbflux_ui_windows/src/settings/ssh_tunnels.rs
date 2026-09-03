@@ -558,6 +558,12 @@ impl SshTunnelsSection {
                 ("i", modifiers) if modifiers == Modifiers::none() => {
                     self.request_import(cx);
                 }
+                ("n", modifiers) if modifiers == Modifiers::none() => {
+                    self.ssh_selected_idx = None;
+                    self.ssh_load_selected_profile(window, cx);
+                    self.ssh_enter_form(window, cx);
+                    cx.notify();
+                }
                 ("g", modifiers) if modifiers == Modifiers::none() => {
                     self.ssh_selected_idx = None;
                     self.ssh_load_selected_profile(window, cx);

@@ -5,11 +5,9 @@ use super::form_section::FormSection;
 use super::section_trait::SectionFocusEvent;
 use crate::labels::{hooks_delete_message, hooks_delete_unreadable_message};
 use dbflux_app::config_loader::EditableGlobalHook;
-use dbflux_app::keymap::Modifiers;
 use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use dbflux_components::controls::{InputEvent, InputState};
 use dbflux_core::{HookExecutionMode, ScriptLanguage};
-use dbflux_ui_base::keymap::key_chord_from_gpui;
 use dbflux_ui_base::{AppStateChanged, AppStateEntity};
 use gpui::prelude::*;
 use gpui::*;
@@ -647,106 +645,7 @@ impl SettingsSection for HooksSection {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.content_focused {
-            return;
-        }
-
-        if self.handle_editing_keys(event, window, cx) {
-            return;
-        }
-
-        let chord = key_chord_from_gpui(&event.keystroke);
-
-        match self.hook_focus {
-            HookFocus::List => match (chord.key.as_str(), chord.modifiers) {
-                ("j", modifiers) | ("down", modifiers) if modifiers == Modifiers::none() => {
-                    self.hook_move_next(cx);
-                    cx.notify();
-                }
-                ("k", modifiers) | ("up", modifiers) if modifiers == Modifiers::none() => {
-                    self.hook_move_prev(cx);
-                    cx.notify();
-                }
-                ("l", modifiers) | ("right", modifiers) | ("enter", modifiers)
-                    if modifiers == Modifiers::none() =>
-                {
-                    if let Some(hook_id) = self.hook_selected_id.clone() {
-                        self.load_hook_values_without_focus(&hook_id, window, cx);
-                    }
-                    self.enter_form(window, cx);
-                    cx.notify();
-                }
-                ("d", modifiers) if modifiers == Modifiers::none() => {
-                    if let Some(hook_id) = self.hook_selected_id() {
-                        self.request_delete_hook(hook_id, cx);
-                    }
-                }
-                ("g", modifiers) if modifiers == Modifiers::none() => {
-                    self.hook_list_idx = None;
-                    self.hook_selected_id = None;
-                    cx.notify();
-                }
-                ("G", modifiers) if modifiers == Modifiers::none() => {
-                    let count = self.hook_count(cx);
-                    if count > 0 {
-                        self.hook_list_idx = Some(count - 1);
-                        let ids = self.hook_sorted_ids();
-                        if let Some(last_id) = ids.last() {
-                            self.hook_selected_id = Some(last_id.clone());
-                        }
-                    }
-                    cx.notify();
-                }
-                _ => {}
-            },
-            HookFocus::Form => match (chord.key.as_str(), chord.modifiers) {
-                ("escape", modifiers) if modifiers == Modifiers::none() => {
-                    self.exit_form(window, cx);
-                    cx.notify();
-                }
-                ("j", modifiers) | ("down", modifiers) if modifiers == Modifiers::none() => {
-                    self.move_down();
-                    cx.notify();
-                }
-                ("k", modifiers) | ("up", modifiers) if modifiers == Modifiers::none() => {
-                    self.move_up();
-                    cx.notify();
-                }
-                ("h", modifiers) if modifiers == Modifiers::none() && !self.hook_editing_field => {
-                    self.exit_form(window, cx);
-                    cx.notify();
-                }
-                ("h", modifiers) | ("left", modifiers) if modifiers == Modifiers::none() => {
-                    self.move_left();
-                    cx.notify();
-                }
-                ("l", modifiers) | ("right", modifiers) if modifiers == Modifiers::none() => {
-                    self.move_right();
-                    cx.notify();
-                }
-                ("enter", modifiers) if modifiers == Modifiers::none() => {
-                    self.activate_current_field(window, cx);
-                    cx.notify();
-                }
-                ("tab", modifiers) if modifiers == Modifiers::none() => {
-                    self.tab_next();
-                    cx.notify();
-                }
-                ("tab", modifiers) if modifiers == Modifiers::shift() => {
-                    self.tab_prev();
-                    cx.notify();
-                }
-                ("g", modifiers) if modifiers == Modifiers::none() => {
-                    self.move_first();
-                    cx.notify();
-                }
-                ("G", modifiers) if modifiers == Modifiers::none() => {
-                    self.move_last();
-                    cx.notify();
-                }
-                _ => {}
-            },
-        }
+        HooksSection::handle_key_event(self, event, window, cx);
     }
 
     fn focus_in(&mut self, _window: &mut Window, cx: &mut Context<Self>) {

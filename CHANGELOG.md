@@ -58,6 +58,17 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **Keyboard navigation in Settings lists and forms (#543)** — MCP Clients,
+  Roles and Policies can now be browsed, created and edited from the keyboard:
+  `l`/`enter` opens the form, `n` starts a new item, `j`/`k` and `tab` move
+  between fields with a visible focus ring, `enter` activates a field and
+  `h`/`escape` return to the list. Built-in roles and policies stay read-only
+  under the keyboard cursor. Hooks shows the focus ring on every form field,
+  so the cursor moved by `j`/`k` is no longer invisible. `n` creates a new
+  item in Proxies, SSH Tunnels and Services as well, and the Audit status
+  indicator is no longer a keyboard stop. The MCP sections render their list
+  through a new reusable master-detail composite.
+
 * **Editing a cell and clicking another one lost the typed value (#539)** —
   the inline editor closed through the input's blur event, which discarded
   the edit buffer. Selecting or shift-selecting another cell now commits the

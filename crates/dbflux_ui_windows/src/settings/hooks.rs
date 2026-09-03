@@ -3,7 +3,7 @@ use dbflux_app::keymap::Modifiers;
 use dbflux_components::controls::{Button, Checkbox, Input};
 use dbflux_components::controls::{InputEvent, InputState};
 use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::{Icon, Label};
+use dbflux_components::primitives::{Icon, Label, focus_frame};
 use dbflux_components::tokens::{Heights, Radii, Spacing, Widths};
 use dbflux_components::typography::{Body, MonoCaption, MonoLabel, PanelTitle};
 use dbflux_core::{
@@ -479,56 +479,6 @@ impl HooksSection {
         }
 
         self.form_has_hook_content(cx)
-    }
-
-    pub(super) fn hook_count(&self, cx: &App) -> usize {
-        self.app_state.read(cx).hook_definitions().len()
-    }
-
-    pub(super) fn hook_selected_id(&self) -> Option<String> {
-        self.hook_selected_id.clone()
-    }
-
-    pub(super) fn hook_move_next(&mut self, _cx: &App) {
-        let ids = self.hook_sorted_ids();
-        if ids.is_empty() {
-            self.hook_list_idx = None;
-            self.hook_selected_id = None;
-            return;
-        }
-
-        match self.hook_list_idx {
-            None => {
-                self.hook_list_idx = Some(0);
-                self.hook_selected_id = Some(ids[0].clone());
-            }
-            Some(idx) if idx + 1 < ids.len() => {
-                self.hook_list_idx = Some(idx + 1);
-                self.hook_selected_id = Some(ids[idx + 1].clone());
-            }
-            _ => {}
-        }
-    }
-
-    pub(super) fn hook_move_prev(&mut self, _cx: &App) {
-        let ids = self.hook_sorted_ids();
-        if ids.is_empty() {
-            self.hook_list_idx = None;
-            self.hook_selected_id = None;
-            return;
-        }
-
-        match self.hook_list_idx {
-            Some(idx) if idx > 0 => {
-                self.hook_list_idx = Some(idx - 1);
-                self.hook_selected_id = Some(ids[idx - 1].clone());
-            }
-            Some(0) => {
-                self.hook_list_idx = None;
-                self.hook_selected_id = None;
-            }
-            _ => {}
-        }
     }
 
     fn form_has_hook_content(&self, cx: &App) -> bool {
@@ -1559,8 +1509,201 @@ impl HooksSection {
             })
     }
 
+    fn hook_field_frame(
+        &self,
+        field: HookFormField,
+        primary: Hsla,
+        child: impl IntoElement,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let is_focused = self.hook_focus == HookFocus::Form && self.hook_form_field == field;
+
+        focus_frame(is_focused, Some(primary), child, cx).on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, _, window, cx| {
+                this.switching_input = true;
+                this.hook_focus = HookFocus::Form;
+                this.hook_form_field = field;
+                this.hook_focus_current_field(window, cx);
+                cx.notify();
+            }),
+        )
+    }
+
+    #[cfg(feature = "lua")]
+    fn render_hook_lua_capability_rows(&self, primary: Hsla, cx: &mut Context<Self>) -> Div {
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                self.hook_field_frame(
+                    HookFormField::LuaLogging,
+                    primary,
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            Checkbox::new("hook-lua-logging")
+                                .checked(self.hook_lua_logging)
+                                .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                    this.hook_lua_logging = *checked;
+                                    cx.notify();
+                                })),
+                        )
+                        .child(Body::new(dbflux_i18n::t!(
+                            "settings.hooks.form.capability.logging"
+                        ))),
+                    cx,
+                ),
+            )
+            .child(
+                self.hook_field_frame(
+                    HookFormField::LuaEnvRead,
+                    primary,
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            Checkbox::new("hook-lua-env-read")
+                                .checked(self.hook_lua_env_read)
+                                .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                    this.hook_lua_env_read = *checked;
+                                    cx.notify();
+                                })),
+                        )
+                        .child(Body::new(dbflux_i18n::t!(
+                            "settings.hooks.form.capability.env_read"
+                        ))),
+                    cx,
+                ),
+            )
+            .child(
+                self.hook_field_frame(
+                    HookFormField::LuaConnectionMetadata,
+                    primary,
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            Checkbox::new("hook-lua-connection-metadata")
+                                .checked(self.hook_lua_connection_metadata)
+                                .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                    this.hook_lua_connection_metadata = *checked;
+                                    cx.notify();
+                                })),
+                        )
+                        .child(Body::new(dbflux_i18n::t!(
+                            "settings.hooks.form.capability.connection_metadata"
+                        ))),
+                    cx,
+                ),
+            )
+            .child(
+                self.hook_field_frame(
+                    HookFormField::LuaProcessRun,
+                    primary,
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            Checkbox::new("hook-lua-process-run")
+                                .checked(self.hook_lua_process_run)
+                                .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                    this.hook_lua_process_run = *checked;
+                                    cx.notify();
+                                })),
+                        )
+                        .child(Body::new(dbflux_i18n::t!(
+                            "settings.hooks.form.capability.process_run"
+                        ))),
+                    cx,
+                ),
+            )
+    }
+
+    #[cfg(not(feature = "lua"))]
+    fn render_hook_lua_capability_rows(&self, _primary: Hsla, cx: &mut Context<Self>) -> Div {
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        Checkbox::new("hook-lua-logging")
+                            .checked(self.hook_lua_logging)
+                            .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                this.hook_lua_logging = *checked;
+                                cx.notify();
+                            })),
+                    )
+                    .child(Body::new(dbflux_i18n::t!(
+                        "settings.hooks.form.capability.logging"
+                    ))),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        Checkbox::new("hook-lua-env-read")
+                            .checked(self.hook_lua_env_read)
+                            .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                this.hook_lua_env_read = *checked;
+                                cx.notify();
+                            })),
+                    )
+                    .child(Body::new(dbflux_i18n::t!(
+                        "settings.hooks.form.capability.env_read"
+                    ))),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        Checkbox::new("hook-lua-connection-metadata")
+                            .checked(self.hook_lua_connection_metadata)
+                            .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                this.hook_lua_connection_metadata = *checked;
+                                cx.notify();
+                            })),
+                    )
+                    .child(Body::new(dbflux_i18n::t!(
+                        "settings.hooks.form.capability.connection_metadata"
+                    ))),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        Checkbox::new("hook-lua-process-run")
+                            .checked(self.hook_lua_process_run)
+                            .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                this.hook_lua_process_run = *checked;
+                                cx.notify();
+                            })),
+                    )
+                    .child(Body::new(dbflux_i18n::t!(
+                        "settings.hooks.form.capability.process_run"
+                    ))),
+            )
+    }
+
     fn render_hook_form(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
+        let theme = cx.theme().clone();
 
         let editing = self.editing_hook_id.is_some();
         let title = if editing {
@@ -1575,6 +1718,9 @@ impl HooksSection {
         let warnings = self.hook_form_warnings(cx);
         let preview = self.hook_form_preview(cx);
         let default_interpreter = self.default_script_interpreter_label(cx);
+        let primary = theme.primary;
+        let kind_focused =
+            self.hook_focus == HookFocus::Form && is_kind_form_field(self.hook_form_field);
 
         layout::sticky_form_shell(
             PanelTitle::new(title),
@@ -1596,7 +1742,12 @@ impl HooksSection {
                             .flex_col()
                             .gap_1()
                             .child(Label::new(dbflux_i18n::t!("settings.hooks.form.id")))
-                            .child(Input::new(&self.input_hook_id).small()),
+                            .child(self.hook_field_frame(
+                                HookFormField::HookId,
+                                primary,
+                                Input::new(&self.input_hook_id).small(),
+                                cx,
+                            )),
                     )
                     .child(
                         div()
@@ -1604,7 +1755,12 @@ impl HooksSection {
                             .flex_col()
                             .gap_1()
                             .child(Label::new(dbflux_i18n::t!("settings.hooks.form.kind")))
-                            .child(div().w(Widths::SETTINGS_FORM_LABEL).child(self.hook_kind_dropdown.clone())),
+                            .child(focus_frame(
+                                kind_focused,
+                                Some(primary),
+                                div().w(Widths::SETTINGS_FORM_LABEL).child(self.hook_kind_dropdown.clone()),
+                                cx,
+                            )),
                     )
                     .when(hook_kind == HookKindSelection::Command, |container| {
                         container.child(
@@ -1618,7 +1774,12 @@ impl HooksSection {
                                         .flex_col()
                                         .gap_1()
                                         .child(Label::new(dbflux_i18n::t!("settings.hooks.form.command")))
-                                        .child(Input::new(&self.input_hook_command).small()),
+                                        .child(self.hook_field_frame(
+                                            HookFormField::Command,
+                                            primary,
+                                            Input::new(&self.input_hook_command).small(),
+                                            cx,
+                                        )),
                                 )
                                 .child(
                                     div()
@@ -1629,7 +1790,12 @@ impl HooksSection {
                                         .child(Body::new(dbflux_i18n::t!("settings.hooks.form.args_hint")).color(
                                             theme.muted_foreground,
                                         ))
-                                        .child(Input::new(&self.input_hook_args).small()),
+                                        .child(self.hook_field_frame(
+                                            HookFormField::Arguments,
+                                            primary,
+                                            Input::new(&self.input_hook_args).small(),
+                                            cx,
+                                        )),
                                 ),
                         )
                     })
@@ -1646,11 +1812,14 @@ impl HooksSection {
                                             .flex_col()
                                             .gap_1()
                                             .child(Label::new(dbflux_i18n::t!("settings.hooks.form.language")))
-                                            .child(
+                                            .child(self.hook_field_frame(
+                                                HookFormField::ScriptLanguage,
+                                                primary,
                                                 div()
                                                     .w(Widths::SETTINGS_FORM_LABEL)
                                                     .child(self.script_language_dropdown.clone()),
-                                            ),
+                                                cx,
+                                            )),
                                     )
                                 })
                                 .child(
@@ -1666,27 +1835,36 @@ impl HooksSection {
                                         .flex_col()
                                         .gap_1()
                                         .child(Body::new(dbflux_i18n::t!("settings.hooks.form.file_path_hint")).color(theme.muted_foreground))
-                                        .child(
+                                        .child(self.hook_field_frame(
+                                            HookFormField::FilePath,
+                                            primary,
                                             Input::new(&self.input_hook_script_file_path).small(),
-                                        )
+                                            cx,
+                                        ))
                                         .child(
                                             div()
                                                 .flex()
                                                 .gap_2()
-                                                .child(
+                                                .child(self.hook_field_frame(
+                                                    HookFormField::OpenInApp,
+                                                    primary,
                                                     Button::new("open-script-app", dbflux_i18n::t!("settings.hooks.form.open_in_app"))
                                                         .small()
                                                         .on_click(cx.listener(|this, _, window, cx| {
                                                             this.open_script_in_app(window, cx);
                                                         })),
-                                                )
-                                                .child(
+                                                    cx,
+                                                ))
+                                                .child(self.hook_field_frame(
+                                                    HookFormField::OpenInEditor,
+                                                    primary,
                                                     Button::new("open-script-editor", dbflux_i18n::t!("settings.hooks.form.open_in_editor"))
                                                         .small()
                                                         .on_click(cx.listener(|this, _, window, cx| {
                                                             this.open_script_in_default_editor(window, cx);
                                                         })),
-                                                ),
+                                                    cx,
+                                                )),
                                         ),
                                 )
                                 .when(is_script, |container| {
@@ -1697,7 +1875,12 @@ impl HooksSection {
                                             .gap_1()
                                             .child(Label::new(dbflux_i18n::t!("settings.hooks.form.interpreter")))
                                             .child(Body::new(hooks_form_interpreter_hint(&default_interpreter)).color(theme.muted_foreground))
-                                            .child(Input::new(&self.input_hook_interpreter).small()),
+                                            .child(self.hook_field_frame(
+                                                HookFormField::Interpreter,
+                                                primary,
+                                                Input::new(&self.input_hook_interpreter).small(),
+                                                cx,
+                                            )),
                                     )
                                 })
                                 .when(is_lua, |container| {
@@ -1707,66 +1890,7 @@ impl HooksSection {
                                             .flex_col()
                                             .gap_2()
                                             .child(Label::new(dbflux_i18n::t!("settings.hooks.form.capabilities")))
-                                            .child(
-                                                div()
-                                                    .flex()
-                                                    .items_center()
-                                                    .gap_2()
-                                                    .child(
-                                                        Checkbox::new("hook-lua-logging")
-                                                            .checked(self.hook_lua_logging)
-                                                            .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                                                this.hook_lua_logging = *checked;
-                                                                cx.notify();
-                                                            })),
-                                                    )
-                                                    .child(Body::new(dbflux_i18n::t!("settings.hooks.form.capability.logging"))),
-                                            )
-                                            .child(
-                                                div()
-                                                    .flex()
-                                                    .items_center()
-                                                    .gap_2()
-                                                    .child(
-                                                        Checkbox::new("hook-lua-env-read")
-                                                            .checked(self.hook_lua_env_read)
-                                                            .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                                                this.hook_lua_env_read = *checked;
-                                                                cx.notify();
-                                                            })),
-                                                    )
-                                                    .child(Body::new(dbflux_i18n::t!("settings.hooks.form.capability.env_read"))),
-                                            )
-                                            .child(
-                                                div()
-                                                    .flex()
-                                                    .items_center()
-                                                    .gap_2()
-                                                    .child(
-                                                        Checkbox::new("hook-lua-connection-metadata")
-                                                            .checked(self.hook_lua_connection_metadata)
-                                                            .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                                                this.hook_lua_connection_metadata = *checked;
-                                                                cx.notify();
-                                                            })),
-                                                    )
-                                                    .child(Body::new(dbflux_i18n::t!("settings.hooks.form.capability.connection_metadata"))),
-                                            )
-                                            .child(
-                                                div()
-                                                    .flex()
-                                                    .items_center()
-                                                    .gap_2()
-                                                    .child(
-                                                        Checkbox::new("hook-lua-process-run")
-                                                            .checked(self.hook_lua_process_run)
-                                                            .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                                                this.hook_lua_process_run = *checked;
-                                                                cx.notify();
-                                                            })),
-                                                    )
-                                                    .child(Body::new(dbflux_i18n::t!("settings.hooks.form.capability.process_run"))),
-                                            )
+                                            .child(self.render_hook_lua_capability_rows(primary, cx))
                                             .child(Body::new(
                                                 dbflux_i18n::t!("settings.hooks.form.capability.process_run_hint"),
                                             )
@@ -1783,7 +1907,12 @@ impl HooksSection {
                             .gap_1()
                             .child(Label::new(dbflux_i18n::t!("settings.hooks.form.execution_mode")))
                             .child(Body::new(dbflux_i18n::t!("settings.hooks.form.execution_mode_hint")).color(theme.muted_foreground))
-                            .child(div().w(Widths::SETTINGS_FORM_LABEL).child(self.hook_execution_mode_dropdown.clone())),
+                            .child(self.hook_field_frame(
+                                HookFormField::ExecutionMode,
+                                primary,
+                                div().w(Widths::SETTINGS_FORM_LABEL).child(self.hook_execution_mode_dropdown.clone()),
+                                cx,
+                            )),
                     )
                     })
                     .when(!is_lua && self.selected_hook_execution_mode(cx) == HookExecutionMode::Detached, |container| {
@@ -1794,7 +1923,12 @@ impl HooksSection {
                             .gap_1()
                             .child(Label::new(dbflux_i18n::t!("settings.hooks.form.ready_signal")))
                             .child(Body::new(dbflux_i18n::t!("settings.hooks.form.ready_signal_hint")).color(theme.muted_foreground))
-                            .child(Input::new(&self.input_hook_ready_signal).small()),
+                            .child(self.hook_field_frame(
+                                HookFormField::ReadySignal,
+                                primary,
+                                Input::new(&self.input_hook_ready_signal).small(),
+                                cx,
+                            )),
                     )
                     })
                     .when(!is_lua, |container| {
@@ -1804,7 +1938,12 @@ impl HooksSection {
                             .flex_col()
                             .gap_1()
                             .child(Label::new(dbflux_i18n::t!("settings.hooks.form.cwd")))
-                            .child(Input::new(&self.input_hook_cwd).small()),
+                            .child(self.hook_field_frame(
+                                HookFormField::WorkingDirectory,
+                                primary,
+                                Input::new(&self.input_hook_cwd).small(),
+                                cx,
+                            )),
                     )
                     })
                     .when(!is_lua, |container| {
@@ -1815,7 +1954,12 @@ impl HooksSection {
                             .gap_1()
                             .child(Label::new(dbflux_i18n::t!("settings.hooks.form.env")))
                             .child(Body::new(dbflux_i18n::t!("settings.hooks.form.env_hint")).color(theme.muted_foreground))
-                            .child(Input::new(&self.input_hook_env).small()),
+                            .child(self.hook_field_frame(
+                                HookFormField::Environment,
+                                primary,
+                                Input::new(&self.input_hook_env).small(),
+                                cx,
+                            )),
                     )
                     })
                     .when(!is_lua, |container| {
@@ -1826,7 +1970,12 @@ impl HooksSection {
                             .gap_1()
                             .child(Label::new(dbflux_i18n::t!("settings.hooks.form.env_denylist")))
                             .child(Body::new(dbflux_i18n::t!("settings.hooks.form.env_denylist_hint")).color(theme.muted_foreground))
-                            .child(Input::new(&self.input_hook_env_denylist).small()),
+                            .child(self.hook_field_frame(
+                                HookFormField::EnvDenylist,
+                                primary,
+                                Input::new(&self.input_hook_env_denylist).small(),
+                                cx,
+                            )),
                     )
                     })
                     .child(
@@ -1835,7 +1984,12 @@ impl HooksSection {
                             .flex_col()
                             .gap_1()
                             .child(Label::new(dbflux_i18n::t!("settings.hooks.form.timeout")))
-                            .child(Input::new(&self.input_hook_timeout).small()),
+                            .child(self.hook_field_frame(
+                                HookFormField::Timeout,
+                                primary,
+                                Input::new(&self.input_hook_timeout).small(),
+                                cx,
+                            )),
                     )
                     .child(
                         div()
@@ -1871,7 +2025,9 @@ impl HooksSection {
                             })),
                         )
                     })
-                    .child(
+                    .child(self.hook_field_frame(
+                        HookFormField::Enabled,
+                        primary,
                         div()
                             .flex()
                             .items_center()
@@ -1885,9 +2041,12 @@ impl HooksSection {
                                     })),
                             )
                             .child(Body::new(dbflux_i18n::t!("settings.hooks.form.enabled"))),
-                    )
+                        cx,
+                    ))
                     .when(!is_lua, |container| {
-                        container.child(
+                        container.child(self.hook_field_frame(
+                            HookFormField::InheritEnv,
+                            primary,
                             div()
                                 .flex()
                                 .items_center()
@@ -1901,7 +2060,8 @@ impl HooksSection {
                                         })),
                                 )
                                 .child(Body::new(dbflux_i18n::t!("settings.hooks.form.inherit_env"))),
-                        )
+                            cx,
+                        ))
                     })
                     .child(
                         div()
@@ -1909,10 +2069,15 @@ impl HooksSection {
                             .flex_col()
                             .gap_1()
                             .child(Label::new(dbflux_i18n::t!("settings.hooks.form.on_failure")))
-                            .child(div().w(Widths::SETTINGS_FORM_LABEL).child(self.hook_failure_dropdown.clone())),
+                            .child(self.hook_field_frame(
+                                HookFormField::OnFailure,
+                                primary,
+                                div().w(Widths::SETTINGS_FORM_LABEL).child(self.hook_failure_dropdown.clone()),
+                                cx,
+                            )),
                     )),
             None,
-            theme,
+            &theme,
         )
     }
 
@@ -2200,6 +2365,22 @@ impl HooksSection {
             _ => {}
         }
     }
+}
+
+#[cfg(feature = "lua")]
+fn is_kind_form_field(field: HookFormField) -> bool {
+    matches!(
+        field,
+        HookFormField::KindCommand | HookFormField::KindScript | HookFormField::KindLua
+    )
+}
+
+#[cfg(not(feature = "lua"))]
+fn is_kind_form_field(field: HookFormField) -> bool {
+    matches!(
+        field,
+        HookFormField::KindCommand | HookFormField::KindScript
+    )
 }
 
 fn interpreter_exists(program: &str) -> bool {

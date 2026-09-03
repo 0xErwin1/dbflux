@@ -401,7 +401,7 @@ impl SettingsSection for DriversSection {
                     self.exit_form(window, cx);
                     cx.notify();
                 }
-                ("h", modifiers) | ("left", modifiers) if modifiers == Modifiers::none() => {
+                ("left", modifiers) if modifiers == Modifiers::none() => {
                     self.move_left();
                     cx.notify();
                 }
