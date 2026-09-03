@@ -1,6 +1,7 @@
 mod collapsible_section;
 mod control_shell;
 mod field_row;
+mod master_detail_list;
 mod menu_item;
 mod menu_popup;
 mod modal_frame;
@@ -18,6 +19,10 @@ pub use control_shell::control_shell;
 pub use field_row::{
     field_row, field_row_vertical, field_row_vertical_with_desc, field_row_with_desc,
     field_row_with_label_width,
+};
+pub use master_detail_list::{
+    BadgeTone, MasterDetailAction, MasterDetailActionKind, MasterDetailItem,
+    MasterDetailListConfig, RowKind, master_detail_row_kind, render_master_detail_list,
 };
 pub use menu_item::{MenuItem, render_menu_container, render_menu_item, render_separator};
 pub use menu_popup::{render_menu_items, render_menu_overlay};
