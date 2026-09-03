@@ -3,8 +3,8 @@ use dbflux_components::components::form_renderer;
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::values::ValueRef;
 use dbflux_core::{
-    AccessKind, CancelToken, ConnectionMcpGovernance, ConnectionMcpPolicyBinding,
-    ConnectionOverrides, ConnectionProfile, DbConfig, FormFieldKind, HookPhase, SshTunnelConfig,
+    AccessKind, CancelToken, ConnectionMcpGovernance, ConnectionOverrides, ConnectionProfile,
+    DbConfig, FormFieldKind, HookPhase, SshTunnelConfig,
 };
 use dbflux_ui_base::hook_phase_runner::{DetachedHookScope, HookPhaseState, run_hook_phase};
 use dbflux_ui_base::toast::{Toast, now_hms};
@@ -14,6 +14,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
+use super::mcp_bindings;
 use super::{ConnectionManagerWindow, DismissEvent, TestStatus};
 
 impl ConnectionManagerWindow {
@@ -22,65 +23,16 @@ impl ConnectionManagerWindow {
             return None;
         }
 
-        let actor_id = self
-            .mcp_tab
-            .conn_mcp_actor_dropdown
-            .read(cx)
-            .selected_value()
-            .map(|v| v.to_string())
-            .unwrap_or_default();
+        let mut policy_bindings = self.mcp_tab.bindings.clone();
 
-        let mut role_ids = Vec::new();
-        if let Some(primary_role) = self
-            .mcp_tab
-            .conn_mcp_role_dropdown
-            .read(cx)
-            .selected_value()
-        {
-            let primary_str = primary_role.to_string();
-            if !primary_str.is_empty() {
-                role_ids.push(primary_str);
-            }
+        // Defensive: the currently selected client's widgets should already be in
+        // sync via `handle_mcp_binding_field_change`, but flush once more before
+        // returning `policy_bindings` so a save can never race a still-pending
+        // widget event.
+        if let Some(actor_id) = self.mcp_tab.selected_actor_id.clone() {
+            let (role_ids, policy_ids) = self.read_selected_mcp_role_and_policy_ids(cx);
+            mcp_bindings::apply_selection(&mut policy_bindings, &actor_id, role_ids, policy_ids);
         }
-        role_ids.extend(
-            self.mcp_tab
-                .conn_mcp_role_multi_select
-                .read(cx)
-                .selected_values()
-                .into_iter()
-                .map(|s| s.to_string()),
-        );
-
-        let mut policy_ids = Vec::new();
-        if let Some(primary_policy) = self
-            .mcp_tab
-            .conn_mcp_policy_dropdown
-            .read(cx)
-            .selected_value()
-        {
-            let primary_str = primary_policy.to_string();
-            if !primary_str.is_empty() {
-                policy_ids.push(primary_str);
-            }
-        }
-        policy_ids.extend(
-            self.mcp_tab
-                .conn_mcp_policy_multi_select
-                .read(cx)
-                .selected_values()
-                .into_iter()
-                .map(|s| s.to_string()),
-        );
-
-        let policy_bindings = if actor_id.is_empty() {
-            Vec::new()
-        } else {
-            vec![ConnectionMcpPolicyBinding {
-                actor_id,
-                role_ids,
-                policy_ids,
-            }]
-        };
 
         Some(ConnectionMcpGovernance {
             enabled: true,

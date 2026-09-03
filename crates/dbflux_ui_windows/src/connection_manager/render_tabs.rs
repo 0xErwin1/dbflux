@@ -1,15 +1,21 @@
 use dbflux_components::components::form_renderer;
 use dbflux_components::controls::Input;
 use dbflux_components::icons::AppIcon;
+#[cfg(feature = "mcp")]
+use dbflux_components::primitives::Label;
 use dbflux_components::primitives::{
-    FilePicker, Icon as AppIconElement, Label, SegmentedControl, SegmentedItem, Text,
+    FilePicker, Icon as AppIconElement, SegmentedControl, SegmentedItem, Text,
 };
+#[cfg(feature = "mcp")]
+use dbflux_components::tokens::Spacing;
 use dbflux_components::tokens::{Radii, Widths};
 use dbflux_core::FormFieldKind;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::checkbox::Checkbox;
+#[cfg(feature = "mcp")]
+use gpui_component::scroll::ScrollableElement;
 
 use dbflux_components::typography::SubSectionLabel;
 
@@ -775,117 +781,300 @@ impl ConnectionManagerWindow {
         sections
     }
 
+    fn render_mcp_enabled_checkbox(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(
+                Checkbox::new("conn-mcp-enabled")
+                    .checked(self.mcp_tab.conn_mcp_enabled)
+                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                        this.mcp_tab.conn_mcp_enabled = *checked;
+                        cx.notify();
+                    })),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .child(dbflux_i18n::t!("connection_manager.enable_mcp")),
+            )
+    }
+
+    #[cfg(feature = "mcp")]
     pub(super) fn render_mcp_tab(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let theme = cx.theme().clone();
         let enabled = self.mcp_tab.conn_mcp_enabled;
         let opacity = if enabled { 1.0 } else { 0.5 };
 
-        let actor_label = self
-            .mcp_tab
-            .conn_mcp_actor_dropdown
+        let clients = self
+            .app_state
             .read(cx)
-            .selected_label()
-            .map(|l| l.to_string())
+            .list_mcp_trusted_clients()
             .unwrap_or_default();
-        let role_label = self
-            .mcp_tab
-            .conn_mcp_role_dropdown
+        let roles = self.app_state.read(cx).list_mcp_roles().unwrap_or_default();
+        let policies = self
+            .app_state
             .read(cx)
-            .selected_value()
-            .filter(|v| !v.is_empty())
-            .map(|v| v.to_string())
-            .unwrap_or_else(|| dbflux_i18n::t!("connection_manager.mcp_preview_none"));
-        let policy_label = self
-            .mcp_tab
-            .conn_mcp_policy_dropdown
-            .read(cx)
-            .selected_value()
-            .filter(|v| !v.is_empty())
-            .map(|v| v.to_string())
-            .unwrap_or_else(|| dbflux_i18n::t!("connection_manager.mcp_preview_none"));
+            .list_mcp_policies()
+            .unwrap_or_default();
 
-        let preview_text = if !enabled {
-            dbflux_i18n::t!("connection_manager.mcp_disabled")
-        } else if actor_label.is_empty() {
-            dbflux_i18n::t!("connection_manager.mcp_enabled_select_actor")
-        } else {
-            crate::labels::mcp_preview_summary(&actor_label, &role_label, &policy_label)
+        let filter_query = self
+            .mcp_tab
+            .conn_mcp_client_filter_input
+            .read(cx)
+            .value()
+            .to_string();
+        let filtered_clients = super::mcp_bindings::filter_clients(&clients, &filter_query);
+
+        let bindings = self.mcp_tab.bindings.clone();
+        let selected_actor_id = self.mcp_tab.selected_actor_id.clone();
+
+        let known_actor_ids: Vec<String> = clients.iter().map(|c| c.id.clone()).collect();
+        let orphan_count = super::mcp_bindings::orphan_binding_count(&bindings, &known_actor_ids);
+
+        let ids: Vec<String> = filtered_clients.iter().map(|c| c.id.clone()).collect();
+        let items: Vec<dbflux_components::composites::MasterDetailItem> = filtered_clients
+            .iter()
+            .map(|client| {
+                let has_binding = bindings.iter().any(|b| b.actor_id == client.id);
+                let is_selected = selected_actor_id.as_deref() == Some(client.id.as_str());
+
+                dbflux_components::composites::MasterDetailItem {
+                    id: SharedString::from(client.id.clone()),
+                    label: SharedString::from(client.name.clone()),
+                    detail: Some(SharedString::from(client.id.clone())),
+                    badge: Some(if has_binding {
+                        (
+                            SharedString::from(dbflux_i18n::t!(
+                                "connection_manager.mcp_badge_granted"
+                            )),
+                            dbflux_components::composites::BadgeTone::Success,
+                        )
+                    } else {
+                        (
+                            SharedString::from(dbflux_i18n::t!(
+                                "connection_manager.mcp_badge_no_access"
+                            )),
+                            dbflux_components::composites::BadgeTone::Neutral,
+                        )
+                    }),
+                    selected: is_selected,
+                    focused: false,
+                }
+            })
+            .collect();
+
+        let list_config = dbflux_components::composites::MasterDetailListConfig {
+            id: SharedString::from("connection-mcp-clients-list"),
+            width: Widths::CONNECTION_MCP_LIST_PANEL,
+            new_action: None,
+            secondary_action: None,
+            empty_message: Some(SharedString::from(dbflux_i18n::t!(
+                "connection_manager.mcp_empty_clients"
+            ))),
         };
 
-        let content = div()
+        let entity = cx.entity();
+        let list = dbflux_components::composites::render_master_detail_list(
+            &list_config,
+            &items,
+            &self.mcp_tab.conn_mcp_client_list_scroll_handle,
+            move |index: usize, window: &mut Window, cx: &mut App| {
+                let Some(id) = ids.get(index).cloned() else {
+                    return;
+                };
+                entity.update(cx, |this, cx| this.select_mcp_client(id, window, cx));
+            },
+            |_kind, _window, _cx| {},
+            cx,
+        );
+
+        let list_column = div()
+            .flex()
+            .flex_col()
+            .h_full()
+            .opacity(opacity)
+            .child(
+                div()
+                    .p(Spacing::SM)
+                    .child(Input::new(&self.mcp_tab.conn_mcp_client_filter_input)),
+            )
+            .child(div().flex_1().min_h_0().child(list));
+
+        let detail = self.render_mcp_client_detail(
+            selected_actor_id.as_deref(),
+            &bindings,
+            &roles,
+            &policies,
+            opacity,
+            cx,
+        );
+
+        let split = div()
+            .flex()
+            .h(px(340.0))
+            .overflow_hidden()
+            .child(list_column)
+            .child(detail);
+
+        let mut content = div()
             .flex()
             .flex_col()
             .gap_3()
+            .child(self.render_mcp_enabled_checkbox(cx))
+            .child(split);
+
+        if orphan_count > 0 {
+            content = content.child(Text::caption(crate::labels::mcp_orphan_bindings_caption(
+                orphan_count,
+            )));
+        }
+
+        vec![
+            self.render_section(
+                &dbflux_i18n::t!("connection_manager.mcp_governance_title"),
+                content,
+                &theme,
+            )
+            .into_any_element(),
+        ]
+    }
+
+    #[cfg(feature = "mcp")]
+    fn render_mcp_client_detail(
+        &self,
+        selected_actor_id: Option<&str>,
+        bindings: &[dbflux_core::ConnectionMcpPolicyBinding],
+        roles: &[dbflux_mcp::PolicyRoleDto],
+        policies: &[dbflux_mcp::ToolPolicyDto],
+        opacity: f32,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let Some(actor_id) = selected_actor_id else {
+            return div()
+                .flex_1()
+                .h_full()
+                .p(Spacing::SM)
+                .opacity(opacity)
+                .child(Text::caption(dbflux_i18n::t!(
+                    "connection_manager.mcp_select_client"
+                )))
+                .into_any_element();
+        };
+
+        let binding = bindings.iter().find(|b| b.actor_id == actor_id).cloned();
+        let has_binding = binding.is_some();
+        let actor_id_for_checkbox = actor_id.to_string();
+
+        let mut column = div()
+            .id("connection-mcp-client-detail")
+            .flex_1()
+            .h_full()
+            .track_scroll(&self.mcp_tab.conn_mcp_detail_scroll_handle)
+            .overflow_y_scrollbar()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .p(Spacing::SM)
+            .opacity(opacity)
             .child(
                 div()
                     .flex()
                     .items_center()
                     .gap_2()
-                    .child(Checkbox::new("conn-mcp-enabled").checked(enabled).on_click(
-                        cx.listener(|this, checked: &bool, _, cx| {
-                            this.mcp_tab.conn_mcp_enabled = *checked;
-                            cx.notify();
-                        }),
-                    ))
+                    .child(
+                        Checkbox::new("conn-mcp-client-allowed")
+                            .checked(has_binding)
+                            .on_click(cx.listener(move |this, checked: &bool, window, cx| {
+                                this.set_mcp_client_allowed(
+                                    actor_id_for_checkbox.clone(),
+                                    *checked,
+                                    window,
+                                    cx,
+                                );
+                            })),
+                    )
                     .child(
                         div()
                             .text_sm()
-                            .child(dbflux_i18n::t!("connection_manager.enable_mcp")),
+                            .child(dbflux_i18n::t!("connection_manager.mcp_allow_client")),
                     ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .opacity(opacity)
-                    .child(Label::new(dbflux_i18n::t!(
-                        "connection_manager.trusted_client_actor"
-                    )))
-                    .child(Text::caption(dbflux_i18n::t!(
-                        "connection_manager.mcp_actor_hint"
-                    )))
-                    .child(self.mcp_tab.conn_mcp_actor_dropdown.clone()),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .opacity(opacity)
-                    .child(Label::new(dbflux_i18n::t!("connection_manager.role_label")))
-                    .child(Text::caption(dbflux_i18n::t!(
-                        "connection_manager.mcp_role_hint"
-                    )))
-                    .child(self.mcp_tab.conn_mcp_role_dropdown.clone())
-                    .child(Text::caption(dbflux_i18n::t!(
-                        "connection_manager.additional_roles_optional"
-                    )))
-                    .child(self.mcp_tab.conn_mcp_role_multi_select.clone()),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .opacity(opacity)
-                    .child(Text::label(dbflux_i18n::t!(
-                        "connection_manager.policy_label"
-                    )))
-                    .child(Text::caption(dbflux_i18n::t!(
-                        "connection_manager.mcp_policy_hint"
-                    )))
-                    .child(self.mcp_tab.conn_mcp_policy_dropdown.clone())
-                    .child(Text::caption(dbflux_i18n::t!(
-                        "connection_manager.additional_policies_optional"
-                    )))
-                    .child(self.mcp_tab.conn_mcp_policy_multi_select.clone()),
-            )
-            .child(
-                Text::caption(dbflux_i18n::t!("connection_manager.scope_policy_preview"))
-                    .into_any_element(),
-            )
-            .child(Text::body(preview_text));
+            );
+
+        column = if let Some(binding) = &binding {
+            let effective = super::mcp_bindings::effective_permissions(binding, roles, policies);
+            let tools_text = if effective.tools.is_empty() {
+                dbflux_i18n::t!("connection_manager.mcp_effective_none")
+            } else {
+                effective.tools.join(", ")
+            };
+            let classes_text = if effective.classes.is_empty() {
+                dbflux_i18n::t!("connection_manager.mcp_effective_none")
+            } else {
+                effective.classes.join(", ")
+            };
+
+            column
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(Label::new(dbflux_i18n::t!("connection_manager.role_label")))
+                        .child(Text::caption(dbflux_i18n::t!(
+                            "connection_manager.mcp_role_hint"
+                        )))
+                        .child(self.mcp_tab.conn_mcp_role_dropdown.clone())
+                        .child(Text::caption(dbflux_i18n::t!(
+                            "connection_manager.additional_roles_optional"
+                        )))
+                        .child(self.mcp_tab.conn_mcp_role_multi_select.clone()),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(Text::label(dbflux_i18n::t!(
+                            "connection_manager.policy_label"
+                        )))
+                        .child(Text::caption(dbflux_i18n::t!(
+                            "connection_manager.mcp_policy_hint"
+                        )))
+                        .child(self.mcp_tab.conn_mcp_policy_dropdown.clone())
+                        .child(Text::caption(dbflux_i18n::t!(
+                            "connection_manager.additional_policies_optional"
+                        )))
+                        .child(self.mcp_tab.conn_mcp_policy_multi_select.clone()),
+                )
+                .child(Text::caption(crate::labels::mcp_effective_tools_line(
+                    &tools_text,
+                )))
+                .child(Text::caption(crate::labels::mcp_effective_classes_line(
+                    &classes_text,
+                )))
+        } else {
+            column.child(Text::caption(dbflux_i18n::t!(
+                "connection_manager.mcp_client_denied"
+            )))
+        };
+
+        column.into_any_element()
+    }
+
+    #[cfg(not(feature = "mcp"))]
+    pub(super) fn render_mcp_tab(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let theme = cx.theme().clone();
+
+        let content = div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(self.render_mcp_enabled_checkbox(cx))
+            .child(Text::caption(dbflux_i18n::t!(
+                "connection_manager.mcp_not_compiled"
+            )));
 
         vec![
             self.render_section(
@@ -1007,18 +1196,26 @@ mod driver_settings_and_mcp_governance_i18n_tests {
         "connection_manager.driver_no_custom_settings",
         "connection_manager.mcp_disabled",
         "connection_manager.enable_mcp",
-        "connection_manager.trusted_client_actor",
         "connection_manager.role_label",
         "connection_manager.additional_roles_optional",
         "connection_manager.policy_label",
         "connection_manager.additional_policies_optional",
-        "connection_manager.scope_policy_preview",
         "connection_manager.mcp_governance_title",
-        "connection_manager.mcp_enabled_select_actor",
-        "connection_manager.mcp_actor_hint",
         "connection_manager.mcp_role_hint",
         "connection_manager.mcp_policy_hint",
-        "connection_manager.mcp_preview_none",
+        "connection_manager.mcp_not_compiled",
+        "connection_manager.placeholder.filter_trusted_clients",
+        "connection_manager.mcp_badge_granted",
+        "connection_manager.mcp_badge_no_access",
+        "connection_manager.mcp_empty_clients",
+        "connection_manager.mcp_allow_client",
+        "connection_manager.mcp_client_denied",
+        "connection_manager.mcp_select_client",
+        "connection_manager.mcp_effective_tools",
+        "connection_manager.mcp_effective_classes",
+        "connection_manager.mcp_effective_none",
+        "connection_manager.mcp_orphan_bindings.one",
+        "connection_manager.mcp_orphan_bindings.many",
     ];
 
     #[test]

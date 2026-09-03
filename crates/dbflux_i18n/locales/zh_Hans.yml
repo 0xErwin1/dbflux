@@ -222,20 +222,14 @@ connection_manager:
   driver_settings_title: 驱动设置
   driver_no_custom_settings: 此驱动没有自定义设置。
   mcp_disabled: 此连接已禁用 MCP
-  mcp_enabled_select_actor: MCP 已启用 — 请选择要绑定的受信客户端
-  mcp_preview_summary: "执行者 %{actor} | 角色：%{role} | 策略：%{policy}"
-  mcp_preview_none: 无
   mcp_governance_title: MCP 治理
   enable_mcp: 为此连接启用 MCP
-  trusted_client_actor: 受信客户端（执行者）
-  mcp_actor_hint: AI 智能体身份 — 在 设置 → MCP 中配置
   role_label: 角色
   mcp_role_hint: 在 设置 → MCP → 角色 中配置角色
   additional_roles_optional: 附加角色（可选）
   policy_label: 策略
   mcp_policy_hint: 在 设置 → MCP → 策略 中配置策略
   additional_policies_optional: 附加策略（可选）
-  scope_policy_preview: 作用域 / 策略分配预览
   mcp_governance_error:
     save_policy: "保存 MCP 连接策略分配失败：%{error}"
     clear_policy: "清除 MCP 连接策略分配失败：%{error}"

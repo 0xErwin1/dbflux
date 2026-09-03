@@ -3,6 +3,7 @@ pub mod export_modal;
 mod form;
 mod hooks_tab;
 pub mod import_panel;
+mod mcp_bindings;
 mod navigation;
 mod render;
 mod render_driver_select;
@@ -14,16 +15,16 @@ pub use import_panel::{ImportConnectionsPanel, ImportConnectionsPanelEvent};
 use crate::ssh_shared::SshAuthSelection;
 use dbflux_app::keymap::KeymapStack;
 use dbflux_components::components::form_renderer::{self, FormRendererState};
-use dbflux_components::components::multi_select::MultiSelect;
+use dbflux_components::components::multi_select::{MultiSelect, MultiSelectChanged};
 use dbflux_components::components::value_source_selector::ValueSourceSelector;
 use dbflux_components::controls::{Dropdown, DropdownSelectionChanged};
 use dbflux_components::controls::{InputEvent, InputState};
 use dbflux_core::access::AccessKind;
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
-    AuthProfile, AuthSessionState, ConnectionHookBindings, DbConfig, DbDriver, DbKind,
-    DriverFormDef, FormFieldDef, FormFieldKind, GlobalOverrides, SshAuthMethod, SshTunnelProfile,
-    ValueRef,
+    AuthProfile, AuthSessionState, ConnectionHookBindings, ConnectionMcpPolicyBinding, DbConfig,
+    DbDriver, DbKind, DriverFormDef, FormFieldDef, FormFieldKind, GlobalOverrides, SshAuthMethod,
+    SshTunnelProfile, ValueRef,
 };
 use dbflux_ui_base::platform;
 use dbflux_ui_base::sso_wizard::SsoWizard;
@@ -324,13 +325,26 @@ struct SettingsTabState {
 }
 
 /// MCP governance tab widgets.
+///
+/// `bindings` holds every `ConnectionMcpPolicyBinding` for the connection
+/// being edited, independent of which trusted client is currently selected
+/// in the master-detail list. Widget changes write into the binding for
+/// `selected_actor_id` immediately (see `handle_mcp_binding_field_change`),
+/// so switching the selected client never loses edits.
 struct McpTabState {
     conn_mcp_enabled: bool,
-    conn_mcp_actor_dropdown: Entity<Dropdown>,
     conn_mcp_role_dropdown: Entity<Dropdown>,
     conn_mcp_role_multi_select: Entity<MultiSelect>,
     conn_mcp_policy_dropdown: Entity<Dropdown>,
     conn_mcp_policy_multi_select: Entity<MultiSelect>,
+    #[cfg(feature = "mcp")]
+    conn_mcp_client_filter_input: Entity<InputState>,
+    #[cfg(feature = "mcp")]
+    conn_mcp_client_list_scroll_handle: ScrollHandle,
+    #[cfg(feature = "mcp")]
+    conn_mcp_detail_scroll_handle: ScrollHandle,
+    bindings: Vec<ConnectionMcpPolicyBinding>,
+    selected_actor_id: Option<String>,
 }
 
 /// Deferred actions written by background tasks or event handlers and drained on the next render.
@@ -581,9 +595,10 @@ impl ConnectionManagerWindow {
                 "connection_manager.placeholder.extra_hook_ids"
             ))
         });
-        let conn_mcp_actor_dropdown = cx.new(|_cx| {
-            Dropdown::new("conn-mcp-actor").placeholder(dbflux_i18n::t!(
-                "connection_manager.placeholder.select_trusted_client"
+        #[cfg(feature = "mcp")]
+        let conn_mcp_client_filter_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(dbflux_i18n::t!(
+                "connection_manager.placeholder.filter_trusted_clients"
             ))
         });
         let conn_mcp_role_dropdown = cx.new(|_cx| {
@@ -637,6 +652,45 @@ impl ConnectionManagerWindow {
             &ssm_auth_profile_dropdown,
             |this, _dropdown, event: &DropdownSelectionChanged, cx| {
                 this.handle_ssm_auth_profile_dropdown_selection(event, cx);
+            },
+        );
+
+        let mcp_role_dropdown_sub = cx.subscribe(
+            &conn_mcp_role_dropdown,
+            |this, _dropdown, _event: &DropdownSelectionChanged, cx| {
+                this.handle_mcp_binding_field_change(cx);
+            },
+        );
+
+        let mcp_policy_dropdown_sub = cx.subscribe(
+            &conn_mcp_policy_dropdown,
+            |this, _dropdown, _event: &DropdownSelectionChanged, cx| {
+                this.handle_mcp_binding_field_change(cx);
+            },
+        );
+
+        let mcp_role_multi_select_sub = cx.subscribe(
+            &conn_mcp_role_multi_select,
+            |this, _multi_select, _event: &MultiSelectChanged, cx| {
+                this.handle_mcp_binding_field_change(cx);
+            },
+        );
+
+        let mcp_policy_multi_select_sub = cx.subscribe(
+            &conn_mcp_policy_multi_select,
+            |this, _multi_select, _event: &MultiSelectChanged, cx| {
+                this.handle_mcp_binding_field_change(cx);
+            },
+        );
+
+        #[cfg(feature = "mcp")]
+        let mcp_client_filter_sub = cx.subscribe_in(
+            &conn_mcp_client_filter_input,
+            window,
+            |_this, _, event: &InputEvent, _window, cx| {
+                if matches!(event, InputEvent::Change) {
+                    cx.notify();
+                }
             },
         );
 
@@ -722,7 +776,8 @@ impl ConnectionManagerWindow {
             },
         );
 
-        let subscriptions = vec![
+        #[cfg_attr(not(feature = "mcp"), allow(unused_mut))]
+        let mut subscriptions = vec![
             import_panel_sub,
             driver_filter_focus_sub,
             dropdown_subscription,
@@ -730,6 +785,10 @@ impl ConnectionManagerWindow {
             auth_profile_dropdown_sub,
             access_method_dropdown_sub,
             ssm_auth_profile_dropdown_sub,
+            mcp_role_dropdown_sub,
+            mcp_policy_dropdown_sub,
+            mcp_role_multi_select_sub,
+            mcp_policy_multi_select_sub,
             app_state_changed_sub,
             auth_profile_created_sub,
             subscribe_input(cx, window, &input_name),
@@ -744,6 +803,8 @@ impl ConnectionManagerWindow {
             subscribe_input(cx, window, &input_ssm_region),
             subscribe_input(cx, window, &input_ssm_remote_port),
         ];
+        #[cfg(feature = "mcp")]
+        subscriptions.push(mcp_client_filter_sub);
 
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle);
@@ -859,11 +920,18 @@ impl ConnectionManagerWindow {
             },
             mcp_tab: McpTabState {
                 conn_mcp_enabled: false,
-                conn_mcp_actor_dropdown,
                 conn_mcp_role_dropdown,
                 conn_mcp_role_multi_select,
                 conn_mcp_policy_dropdown,
                 conn_mcp_policy_multi_select,
+                #[cfg(feature = "mcp")]
+                conn_mcp_client_filter_input,
+                #[cfg(feature = "mcp")]
+                conn_mcp_client_list_scroll_handle: ScrollHandle::new(),
+                #[cfg(feature = "mcp")]
+                conn_mcp_detail_scroll_handle: ScrollHandle::new(),
+                bindings: Vec::new(),
+                selected_actor_id: None,
             },
             pending: PendingActions::default(),
         }
@@ -1010,15 +1078,29 @@ impl ConnectionManagerWindow {
 
         instance.mcp_tab.conn_mcp_enabled =
             profile.mcp_governance.as_ref().is_some_and(|g| g.enabled);
+        instance.mcp_tab.bindings = profile
+            .mcp_governance
+            .as_ref()
+            .map(|governance| governance.policy_bindings.clone())
+            .unwrap_or_default();
+        instance.mcp_tab.selected_actor_id = instance
+            .mcp_tab
+            .bindings
+            .first()
+            .map(|binding| binding.actor_id.clone());
 
         #[cfg(feature = "mcp")]
         {
-            let first_binding = profile
-                .mcp_governance
-                .as_ref()
-                .and_then(|governance| governance.policy_bindings.first().cloned());
+            let selected_binding = instance.mcp_tab.selected_actor_id.clone().and_then(|id| {
+                instance
+                    .mcp_tab
+                    .bindings
+                    .iter()
+                    .find(|binding| binding.actor_id == id)
+                    .cloned()
+            });
 
-            instance.load_mcp_dropdowns(first_binding.as_ref(), window, cx);
+            instance.load_mcp_dropdowns(selected_binding.as_ref(), window, cx);
         }
 
         instance.access.selected_proxy_id = profile.proxy_profile_id;
@@ -1178,6 +1260,8 @@ impl ConnectionManagerWindow {
         self.reset_value_source_selectors(window, cx);
 
         self.load_settings_tab(None, None, None, window, cx);
+        self.mcp_tab.bindings = Vec::new();
+        self.mcp_tab.selected_actor_id = None;
         #[cfg(feature = "mcp")]
         self.load_mcp_dropdowns(None, window, cx);
         self.populate_auth_profile_dropdown(cx);
@@ -1740,8 +1824,9 @@ impl ConnectionManagerWindow {
         }
     }
 
-    /// Populate the MCP actor/role/policy dropdowns from the global governance state and
-    /// optionally pre-select the actor/role/policy from an existing policy binding.
+    /// Populate the MCP role/policy dropdowns from the global governance state and
+    /// optionally pre-select the role/policy from an existing policy binding for the
+    /// currently selected trusted client.
     #[cfg(feature = "mcp")]
     fn load_mcp_dropdowns(
         &mut self,
@@ -1749,27 +1834,12 @@ impl ConnectionManagerWindow {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let clients = self
-            .app_state
-            .read(cx)
-            .list_mcp_trusted_clients()
-            .unwrap_or_default();
         let roles = self.app_state.read(cx).list_mcp_roles().unwrap_or_default();
         let policies = self
             .app_state
             .read(cx)
             .list_mcp_policies()
             .unwrap_or_default();
-
-        let actor_items: Vec<dbflux_components::controls::DropdownItem> = clients
-            .iter()
-            .map(|c| {
-                dbflux_components::controls::DropdownItem::with_value(
-                    format!("{} ({})", c.name, c.id),
-                    c.id.clone(),
-                )
-            })
-            .collect();
 
         let mut role_items = vec![dbflux_components::controls::DropdownItem::with_value(
             dbflux_i18n::t!("connection_manager.placeholder.no_role"),
@@ -1793,11 +1863,6 @@ impl ConnectionManagerWindow {
             dbflux_components::controls::DropdownItem::with_value(label, p.id.clone())
         }));
 
-        let actor_index = binding.and_then(|b| {
-            actor_items
-                .iter()
-                .position(|item| item.value.as_ref() == b.actor_id.as_str())
-        });
         let role_index = binding.and_then(|b| {
             b.role_ids.first().and_then(|role_id| {
                 role_items
@@ -1813,10 +1878,6 @@ impl ConnectionManagerWindow {
             })
         });
 
-        self.mcp_tab.conn_mcp_actor_dropdown.update(cx, |d, cx| {
-            d.set_items(actor_items, cx);
-            d.set_selected_index(actor_index, cx);
-        });
         self.mcp_tab.conn_mcp_role_dropdown.update(cx, |d, cx| {
             d.set_items(role_items, cx);
             d.set_selected_index(role_index.or(Some(0)), cx);
@@ -1859,23 +1920,126 @@ impl ConnectionManagerWindow {
                 ms.set_items(all_policy_items, cx);
             });
 
-        // Set selected values from binding
-        if let Some(binding) = binding {
-            let extra_roles: Vec<String> = binding.role_ids.iter().skip(1).cloned().collect();
-            let extra_policies: Vec<String> = binding.policy_ids.iter().skip(1).cloned().collect();
+        // Set selected values from the binding, clearing them when there is none
+        // (e.g. the selected client has no binding yet).
+        let extra_roles: Vec<String> = binding
+            .map(|b| b.role_ids.iter().skip(1).cloned().collect())
+            .unwrap_or_default();
+        let extra_policies: Vec<String> = binding
+            .map(|b| b.policy_ids.iter().skip(1).cloned().collect())
+            .unwrap_or_default();
 
-            self.mcp_tab
-                .conn_mcp_role_multi_select
-                .update(cx, |ms, cx| {
-                    ms.set_selected_values(&extra_roles, cx);
-                });
+        self.mcp_tab
+            .conn_mcp_role_multi_select
+            .update(cx, |ms, cx| {
+                ms.set_selected_values(&extra_roles, cx);
+            });
 
-            self.mcp_tab
-                .conn_mcp_policy_multi_select
-                .update(cx, |ms, cx| {
-                    ms.set_selected_values(&extra_policies, cx);
-                });
+        self.mcp_tab
+            .conn_mcp_policy_multi_select
+            .update(cx, |ms, cx| {
+                ms.set_selected_values(&extra_policies, cx);
+            });
+    }
+
+    /// Reads the role/policy dropdown and multi-select widgets and merges each
+    /// pair (primary dropdown + multi-select extras) into a deduped id list,
+    /// primary first.
+    pub(super) fn read_selected_mcp_role_and_policy_ids(
+        &self,
+        cx: &Context<Self>,
+    ) -> (Vec<String>, Vec<String>) {
+        let primary_role = self
+            .mcp_tab
+            .conn_mcp_role_dropdown
+            .read(cx)
+            .selected_value()
+            .map(|v| v.to_string());
+        let extra_roles: Vec<String> = self
+            .mcp_tab
+            .conn_mcp_role_multi_select
+            .read(cx)
+            .selected_values()
+            .into_iter()
+            .map(|v| v.to_string())
+            .collect();
+        let role_ids = mcp_bindings::merge_primary_and_extras(primary_role, extra_roles);
+
+        let primary_policy = self
+            .mcp_tab
+            .conn_mcp_policy_dropdown
+            .read(cx)
+            .selected_value()
+            .map(|v| v.to_string());
+        let extra_policies: Vec<String> = self
+            .mcp_tab
+            .conn_mcp_policy_multi_select
+            .read(cx)
+            .selected_values()
+            .into_iter()
+            .map(|v| v.to_string())
+            .collect();
+        let policy_ids = mcp_bindings::merge_primary_and_extras(primary_policy, extra_policies);
+
+        (role_ids, policy_ids)
+    }
+
+    /// Rewrites the binding for the currently selected trusted client from the
+    /// role/policy dropdown and multi-select widgets. No-op when no client is
+    /// selected. Called on every dropdown/multi-select change so switching the
+    /// selected client (which repopulates these widgets) never loses edits.
+    fn handle_mcp_binding_field_change(&mut self, cx: &mut Context<Self>) {
+        let Some(actor_id) = self.mcp_tab.selected_actor_id.clone() else {
+            return;
+        };
+
+        let (role_ids, policy_ids) = self.read_selected_mcp_role_and_policy_ids(cx);
+
+        mcp_bindings::apply_selection(&mut self.mcp_tab.bindings, &actor_id, role_ids, policy_ids);
+        cx.notify();
+    }
+
+    /// Selects a trusted client in the MCP tab's master-detail list and
+    /// repopulates the role/policy widgets from its existing binding, if any.
+    #[cfg(feature = "mcp")]
+    fn select_mcp_client(&mut self, actor_id: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.mcp_tab.selected_actor_id = Some(actor_id.clone());
+
+        let binding = self
+            .mcp_tab
+            .bindings
+            .iter()
+            .find(|binding| binding.actor_id == actor_id)
+            .cloned();
+
+        self.load_mcp_dropdowns(binding.as_ref(), window, cx);
+        cx.notify();
+    }
+
+    /// Adds or removes the binding for `actor_id`, then repopulates the
+    /// role/policy widgets when that client is the one currently selected.
+    #[cfg(feature = "mcp")]
+    fn set_mcp_client_allowed(
+        &mut self,
+        actor_id: String,
+        allowed: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        mcp_bindings::set_binding_presence(&mut self.mcp_tab.bindings, &actor_id, allowed);
+
+        if self.mcp_tab.selected_actor_id.as_deref() == Some(actor_id.as_str()) {
+            let binding = self
+                .mcp_tab
+                .bindings
+                .iter()
+                .find(|binding| binding.actor_id == actor_id)
+                .cloned();
+
+            self.load_mcp_dropdowns(binding.as_ref(), window, cx);
         }
+
+        cx.notify();
     }
 
     /// Initialize the Settings tab controls from the selected driver's defaults
@@ -4039,6 +4203,7 @@ mod tests {
         "connection_manager.placeholder.use_driver_default",
         "connection_manager.placeholder.no_hook",
         "connection_manager.placeholder.select_trusted_client",
+        "connection_manager.placeholder.filter_trusted_clients",
         "connection_manager.placeholder.no_role",
         "connection_manager.placeholder.no_policy",
         "connection_manager.access_method.direct",

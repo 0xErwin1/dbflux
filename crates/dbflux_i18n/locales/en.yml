@@ -168,6 +168,7 @@ connection_manager:
     use_driver_default: Use Driver Default
     no_hook: No hook
     select_trusted_client: Select trusted client
+    filter_trusted_clients: "Filter by name or id…"
     no_role: No role
     no_policy: No policy
     extra_hook_ids: extra hook IDs (comma-separated)
@@ -222,20 +223,27 @@ connection_manager:
   driver_settings_title: Driver Settings
   driver_no_custom_settings: This driver has no custom settings.
   mcp_disabled: MCP disabled for this connection
-  mcp_enabled_select_actor: MCP enabled — select a trusted client to bind
-  mcp_preview_summary: "Actor '%{actor}' | role: %{role} | policy: %{policy}"
-  mcp_preview_none: none
+  mcp_not_compiled: This build was compiled without MCP support.
   mcp_governance_title: MCP Governance
   enable_mcp: Enable MCP for this connection
-  trusted_client_actor: Trusted Client (Actor)
-  mcp_actor_hint: AI agent identity — configure in Settings → MCP
+  mcp_badge_granted: granted
+  mcp_badge_no_access: no access
+  mcp_empty_clients: No trusted clients configured. Add one in Settings → MCP.
+  mcp_allow_client: Allow this client on this connection
+  mcp_client_denied: This client is denied on this connection.
+  mcp_select_client: Select a trusted client to configure its access.
   role_label: Role
   mcp_role_hint: Configure roles in Settings → MCP → Roles
   additional_roles_optional: Additional roles (optional)
   policy_label: Policy
   mcp_policy_hint: Configure policies in Settings → MCP → Policies
   additional_policies_optional: Additional policies (optional)
-  scope_policy_preview: Scope/policy assignment preview
+  mcp_effective_tools: "Tools: %{tools}"
+  mcp_effective_classes: "Classes: %{classes}"
+  mcp_effective_none: none
+  mcp_orphan_bindings:
+    one: 1 binding references a client that no longer exists.
+    many: "%{count} bindings reference clients that no longer exist."
   mcp_governance_error:
     save_policy: "Failed to save MCP connection policy assignment: %{error}"
     clear_policy: "Failed to clear MCP connection policy assignment: %{error}"

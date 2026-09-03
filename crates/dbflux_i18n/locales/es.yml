@@ -168,6 +168,7 @@ connection_manager:
     use_driver_default: Usar valor predeterminado del driver
     no_hook: Sin hook
     select_trusted_client: Seleccionar cliente de confianza
+    filter_trusted_clients: "Filtrar por nombre o id…"
     no_role: Sin rol
     no_policy: Sin política
     extra_hook_ids: IDs de hooks extra (separados por coma)
@@ -222,20 +223,27 @@ connection_manager:
   driver_settings_title: Ajustes del driver
   driver_no_custom_settings: Este driver no tiene ajustes personalizados.
   mcp_disabled: MCP deshabilitado para esta conexión
-  mcp_enabled_select_actor: MCP habilitado — selecciona un cliente de confianza para vincular
-  mcp_preview_summary: "Actor '%{actor}' | rol: %{role} | política: %{policy}"
-  mcp_preview_none: ninguno
+  mcp_not_compiled: Esta compilación no incluye soporte para MCP.
   mcp_governance_title: Gobernanza de MCP
   enable_mcp: Habilitar MCP para esta conexión
-  trusted_client_actor: Cliente de confianza (actor)
-  mcp_actor_hint: Identidad del agente de IA — configúrala en Ajustes → MCP
+  mcp_badge_granted: concedido
+  mcp_badge_no_access: sin acceso
+  mcp_empty_clients: No hay clientes de confianza configurados. Agrega uno en Ajustes → MCP.
+  mcp_allow_client: Permitir este cliente en esta conexión
+  mcp_client_denied: Este cliente no tiene acceso en esta conexión.
+  mcp_select_client: Selecciona un cliente de confianza para configurar su acceso.
   role_label: Rol
   mcp_role_hint: Configura roles en Ajustes → MCP → Roles
   additional_roles_optional: Roles adicionales (opcional)
   policy_label: Política
   mcp_policy_hint: Configura políticas en Ajustes → MCP → Políticas
   additional_policies_optional: Políticas adicionales (opcional)
-  scope_policy_preview: Vista previa de alcance y políticas
+  mcp_effective_tools: "Herramientas: %{tools}"
+  mcp_effective_classes: "Clases: %{classes}"
+  mcp_effective_none: ninguna
+  mcp_orphan_bindings:
+    one: 1 asignación hace referencia a un cliente que ya no existe.
+    many: "%{count} asignaciones hacen referencia a clientes que ya no existen."
   mcp_governance_error:
     save_policy: "No se pudo guardar la asignación de política MCP de la conexión: %{error}"
     clear_policy: "No se pudo borrar la asignación de política MCP de la conexión: %{error}"
