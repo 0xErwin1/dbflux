@@ -262,15 +262,31 @@ impl DataTableState {
     }
 
     pub fn select_cell(&mut self, coord: CellCoord, cx: &mut Context<Self>) {
+        self.commit_edit_in_progress(cx);
         self.selection.select_cell(coord);
         cx.emit(DataTableEvent::SelectionChanged(self.selection.clone()));
         cx.notify();
     }
 
     pub fn extend_selection(&mut self, coord: CellCoord, cx: &mut Context<Self>) {
+        self.commit_edit_in_progress(cx);
         self.selection.extend_to(coord);
         cx.emit(DataTableEvent::SelectionChanged(self.selection.clone()));
         cx.notify();
+    }
+
+    /// Commit an open inline editor, the way Enter does.
+    ///
+    /// Selecting a cell is a deliberate act, so a value typed into the previous
+    /// cell survives as a pending change instead of being dropped. The input's
+    /// `Blur` cannot carry this: gpui dispatches it from inside `Window::draw`
+    /// by diffing the focus path of the last rendered frame against the new
+    /// one, gated on the window being active, so it arrives after the selection
+    /// has already moved — or not at all.
+    fn commit_edit_in_progress(&mut self, cx: &mut Context<Self>) {
+        if self.editing_cell.is_some() {
+            self.stop_editing(true, cx);
+        }
     }
 
     pub fn clear_selection(&mut self, cx: &mut Context<Self>) {
@@ -1261,6 +1277,136 @@ mod tests {
             editing_cell,
             Some(CellCoord::new(1, 1)),
             "a stale Blur from the previous input must not cancel the new edit"
+        );
+    }
+
+    /// Opens an editor on `coord` and returns the state entity plus its input.
+    fn editing_state<'a>(
+        cx: &'a mut gpui::TestAppContext,
+        coord: super::super::selection::CellCoord,
+    ) -> (
+        gpui::Entity<super::DataTableState>,
+        gpui::Entity<crate::controls::InputState>,
+        &'a mut gpui::VisualTestContext,
+    ) {
+        use std::collections::HashSet;
+
+        let state_holder = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let holder_clone = state_holder.clone();
+
+        let (_, window) = cx.add_window_view(move |_window, cx| {
+            let model = two_row_model();
+            let state = cx.new(|cx| {
+                let mut s = super::DataTableState::new(model, cx);
+                s.set_pk_columns(vec![0]);
+                s.set_readonly_columns(HashSet::new());
+                s
+            });
+            holder_clone.replace(Some(state.clone()));
+            StateHarness { state }
+        });
+
+        let state = state_holder
+            .borrow()
+            .clone()
+            .expect("state entity must be created");
+
+        let input = window.update(|window, app| {
+            state.update(app, |s, cx| {
+                assert!(s.start_editing(coord, window, cx));
+                s.cell_input().cloned().expect("cell input for the edit")
+            })
+        });
+
+        (state, input, window)
+    }
+
+    /// Regression: clicking another cell while a cell is being edited must keep
+    /// the typed value as a pending change, not discard it.
+    ///
+    /// Reproduces the click path in order: the cell handler focuses the table
+    /// first, which takes focus away from the input, and only then selects.
+    #[gpui::test]
+    fn selecting_another_cell_commits_the_edit_in_progress(cx: &mut gpui::TestAppContext) {
+        use super::super::selection::CellCoord;
+
+        let (state, input, window) = editing_state(cx, CellCoord::new(0, 1));
+
+        window.update(|window, app| {
+            input.update(app, |input, cx| input.set_value("carol", window, cx));
+        });
+
+        window.update(|window, app| {
+            state.update(app, |s, cx| {
+                s.focus(window, cx);
+                s.select_cell(CellCoord::new(1, 1), cx);
+            });
+        });
+
+        let (editing_cell, active, changes) = window.update(|_, app| {
+            let state = state.read(app);
+            (
+                state.editing_cell(),
+                state.selection().active,
+                state
+                    .edit_buffer()
+                    .row_changes(0)
+                    .into_iter()
+                    .map(|(col, value)| (col, value.display_text().to_string()))
+                    .collect::<Vec<_>>(),
+            )
+        });
+
+        assert!(
+            editing_cell.is_none(),
+            "the editor must close when another cell is selected"
+        );
+        assert_eq!(
+            active,
+            Some(CellCoord::new(1, 1)),
+            "the clicked cell must become the active cell"
+        );
+        assert_eq!(
+            changes,
+            vec![(1usize, "carol".to_string())],
+            "the typed value must survive as a pending change on the edited row"
+        );
+    }
+
+    /// Shift-clicking extends the selection, which is the same deliberate act:
+    /// it must commit the edit in progress rather than drop it.
+    #[gpui::test]
+    fn extending_the_selection_commits_the_edit_in_progress(cx: &mut gpui::TestAppContext) {
+        use super::super::selection::CellCoord;
+
+        let (state, input, window) = editing_state(cx, CellCoord::new(0, 1));
+
+        window.update(|window, app| {
+            input.update(app, |input, cx| input.set_value("carol", window, cx));
+        });
+
+        window.update(|window, app| {
+            state.update(app, |s, cx| {
+                s.focus(window, cx);
+                s.extend_selection(CellCoord::new(1, 1), cx);
+            });
+        });
+
+        let (editing_cell, is_dirty) = window.update(|_, app| {
+            let state = state.read(app);
+            (
+                state.editing_cell(),
+                state.edit_buffer().is_cell_dirty(0, 1),
+            )
+        });
+
+        assert!(
+            editing_cell.is_none(),
+            "the editor must close when the selection is extended"
+        );
+        assert!(
+            is_dirty,
+            "the typed value must survive as a pending change on the edited row"
         );
     }
 }
