@@ -898,6 +898,15 @@ impl ConnectionManagerWindow {
             .child(
                 div()
                     .p(Spacing::SM)
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, window, cx| {
+                            this.begin_inline_editor_interaction(cx);
+                            this.mcp_tab
+                                .conn_mcp_client_filter_input
+                                .update(cx, |state, cx| state.focus(window, cx));
+                        }),
+                    )
                     .child(Input::new(&self.mcp_tab.conn_mcp_client_filter_input)),
             )
             .child(div().flex_1().min_h_0().child(list));

@@ -687,10 +687,10 @@ impl ConnectionManagerWindow {
         let mcp_client_filter_sub = cx.subscribe_in(
             &conn_mcp_client_filter_input,
             window,
-            |_this, _, event: &InputEvent, _window, cx| {
-                if matches!(event, InputEvent::Change) {
-                    cx.notify();
-                }
+            |this, _, event: &InputEvent, window, cx| match event {
+                InputEvent::Change => cx.notify(),
+                InputEvent::Blur => this.exit_edit_mode_on_blur(window, cx),
+                _ => {}
             },
         );
 
