@@ -203,3 +203,4 @@ To wipe DBFlux's data:
 - [Settings & Hooks](SETTINGS.md) — the General/Audit/Storage controls referenced here.
 - [Connecting → Advanced Setup](CONNECTIONS.md) — where secrets are entered.
 - [Audit](AUDIT.md) — the full audit event schema and redaction details.
+- [Privacy Policy](../PRIVACY.md) — what the application and the website do not collect.
