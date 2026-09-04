@@ -76,7 +76,7 @@ DBFlux 各设置项以及连接 Hooks 的参考说明——连接 Hooks 指在�
 
 「审计」设置项控制统一的审计日志。面向用户的主要控件是 **日志捕获 → 最低日志级别**（跟踪 / 调试 / 信息 / 警告 / 错误），用于设定将 DBFlux 内部日志中的多少内容纳入审计记录。保存后无需重启即可生效。
 
-保留期（事件保留时长）在配置后会驱动周期性的后台清理。日常使用审计功能（打开查看器、筛选、导出）参见[仪表板与审计](DASHBOARDS_AND_AUDIT.md#audit-viewer)。完整的事件结构与脱敏行为参见[审计](AUDIT.md)与[数据与隐私](DATA_AND_PRIVACY.md#audit-and-privacy)。
+保留期（事件保留时长）在配置后会驱动周期性的后台清理。日常使用审计功能（打开查看器、筛选、导出）参见[仪表盘与审计](DASHBOARDS_AND_AUDIT.md#audit-viewer)。完整的事件结构与脱敏行为参见[审计](AUDIT.md)与[数据与隐私](DATA_AND_PRIVACY.md#audit-and-privacy)。
 
 ---
 
