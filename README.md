@@ -296,4 +296,4 @@ nix-shell
 
 ## License
 
-MIT & Apache-2.0
+MIT & Apache-2.0. The DBFlux name and logo are covered by the [Trademark Policy](TRADEMARK.md), not by the code license.
