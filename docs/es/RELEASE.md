@@ -135,6 +135,73 @@ agregando `-nightly+<short-sha>`.
 6. Los patches (`v0.7.1`, `v0.7.2`, …) vienen del mismo release branch vía
    cherry-picks desde `main`.
 
+## Identidad y Firma de Artefactos
+
+Tres cosas distintas llevan la señal de "quién construyó esto", y no se
+solapan:
+
+| Capa | Qué cubre | Secret | Si falta |
+|------|-----------|--------|----------|
+| Firma GPG separada (`.asc`) y `.sha256` | El archivo descargado | `GPG_PRIVATE_KEY`, `GPG_PASSPHRASE` | El build falla. Toda release va firmada. |
+| Attestation de procedencia del build | La ejecución del workflow y el commit que produjo el artefacto | ninguno (OIDC sin clave) | Siempre activa. |
+| Firma de código macOS en el `.app` | La identidad de la aplicación que miran el llavero y Gatekeeper | `MACOS_CERTIFICATE_P12`, `MACOS_CERTIFICATE_PASSWORD` | El bundle se firma ad-hoc con un warning. |
+
+Ni el ejecutable de Windows ni el instalador llevan firma Authenticode, así
+que SmartScreen avisa en la primera ejecución. Eso necesita un certificado de
+una CA y se sigue por separado.
+
+### Firma de código en macOS
+
+macOS ata un permiso del llavero a la firma de la aplicación que lo pidió.
+Una firma ad-hoc cambia con cada build, así que sin una identidad estable cada
+actualización obliga al usuario a introducir de nuevo su contraseña de login
+antes de que DBFlux pueda leer las contraseñas de base de datos guardadas.
+Firmar cada release con un mismo certificado hace que ese aviso aparezca una
+sola vez.
+
+Un certificado autofirmado basta para el llavero. **No** satisface a
+Gatekeeper: la app sigue siendo "no identificada" en el primer arranque hasta
+que el proyecto tenga un certificado Developer ID de pago y notarización, que
+los mismos dos secrets llevarían.
+
+Crea el certificado una vez, en cualquier máquina con OpenSSL:
+
+```bash
+scripts/macos-signing-cert.sh ~/secure/dbflux-signing
+```
+
+El script imprime los dos secrets del repositorio a configurar. Guarda el
+`.p12` y su contraseña en un lugar duradero: emitir un certificado nuevo más
+adelante hace que todos los usuarios vuelvan a autorizar el llavero una vez.
+El certificado es válido diez años.
+
+El bundle se firma en `build.yml` antes de crear el DMG. El job importa el
+certificado en un llavero temporal, lo marca como de confianza para firma de
+código en el runner, firma, verifica con `codesign --verify --deep --strict`
+y borra el llavero.
+
+### Identidad del ejecutable de Windows
+
+`crates/dbflux/build.rs` embebe el icono del channel y un bloque
+`VERSIONINFO` en `dbflux.exe` en tiempo de build, así que el Explorador, la
+barra de tareas y el diálogo Abrir con muestran el icono de DBFlux y
+Propiedades muestra el nombre del producto y la versión. Los iconos están
+commiteados bajo `packaging/icons/` (`dbflux.ico`, `dbflux-nightly.ico`), y
+los mismos archivos alimentan el zip portable y los accesos directos del
+instalador. Regenéralos desde `resources/branding/<channel>/` cuando cambie
+el arte:
+
+```bash
+magick -background none resources/branding/stable/mark.svg -resize 256x256 256.png
+# ... 128, 64 desde mark.svg; 48, 32, 16 desde mark-small.svg
+magick 16.png 32.png 48.png 64.png 128.png 256.png packaging/icons/dbflux.ico
+```
+
+Los archivos `.icns` de macOS que están al lado (`dbflux.icns`,
+`dbflux-nightly.icns`) se construyen del mismo modo con `png2icns` de
+`libicns`, añadiendo los tamaños 512 y 1024, y llegan al bundle como
+`AppIcon.icns`.
+
 ## Procedimiento de Corte: `main` → `release/vX.Y`
 
 1. Verifica que estás en `main`, árbol limpio, actualizado con `origin/main`.

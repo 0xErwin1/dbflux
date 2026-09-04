@@ -21,6 +21,13 @@ on:
         required: true
       GPG_PASSPHRASE:
         required: true
+      # Optional. Without them the macOS bundle is signed ad-hoc, which builds
+      # and runs but gives every release a new signature, so the keychain asks
+      # the user to re-authorise the saved passwords after each update.
+      MACOS_CERTIFICATE_P12:
+        required: false
+      MACOS_CERTIFICATE_PASSWORD:
+        required: false
 
 env:
   FEATURES: "sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,clickhouse,aws"
@@ -476,9 +483,73 @@ jobs:
 
           cp "$BRAND_DIR/mark.svg" "$APP_BUNDLE/Contents/Resources/dbflux.svg"
 
+          # Info.plist names the icon AppIcon, so the per-channel icns lands
+          # under that name. Without it the Dock and Finder show the generic
+          # application icon.
+          ICNS="packaging/icons/dbflux.icns"
+          [ "${{ inputs.channel }}" = "nightly" ] && ICNS="packaging/icons/dbflux-nightly.icns"
+          cp "$ICNS" "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
+
           sed -e "s/\${VERSION}/$VERSION/g" -e "s/\${APP_NAME}/$APP_NAME/g" -e "s/\${BUNDLE_ID}/$BUNDLE_ID/g" resources/macos/Info.plist > "$APP_BUNDLE/Contents/Info.plist"
 
           chmod +x "$APP_BUNDLE/Contents/MacOS/dbflux"
+
+      # macOS ties a keychain grant to the signature of the application that
+      # asked for it. Ad-hoc signatures differ per build, so without a stable
+      # identity every update makes the user re-authorise the saved passwords.
+      # A self-signed certificate is enough for that; it does not satisfy
+      # Gatekeeper, which needs a Developer ID and notarisation.
+      - name: Sign app bundle
+        env:
+          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          APP_BUNDLE="$APP_NAME.app"
+
+          if [ -z "$MACOS_CERTIFICATE_P12" ]; then
+            echo "::warning::MACOS_CERTIFICATE_P12 is not set; signing ad-hoc. Keychain grants will not survive the next update."
+            codesign --force --deep --sign - "$APP_BUNDLE"
+            codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
+            exit 0
+          fi
+
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 16)"
+          P12="$RUNNER_TEMP/signing.p12"
+          CERT="$RUNNER_TEMP/signing.pem"
+
+          printf '%s' "$MACOS_CERTIFICATE_P12" | base64 --decode > "$P12"
+          openssl pkcs12 -in "$P12" -nokeys -clcerts -passin env:MACOS_CERTIFICATE_PASSWORD -out "$CERT"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$P12" -k "$KEYCHAIN" -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" > /dev/null
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+
+          # A self-signed certificate is not trusted by default, and codesign
+          # refuses an untrusted identity. Trusting it for code signing only,
+          # in the runner's system keychain, makes it usable for this job.
+          sudo security add-trusted-cert -d -r trustRoot -p codeSign -k /Library/Keychains/System.keychain "$CERT"
+
+          IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN" | awk -F'"' 'NR==1 {print $2}')"
+          if [ -z "$IDENTITY" ]; then
+            echo "::error::No code-signing identity found in the imported certificate."
+            exit 1
+          fi
+          echo "Signing as: $IDENTITY"
+
+          codesign --force --deep --sign "$IDENTITY" --keychain "$KEYCHAIN" "$APP_BUNDLE"
+          codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
+
+          rm -f "$P12" "$CERT"
+
+      - name: Remove signing keychain
+        if: always()
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          [ -f "$KEYCHAIN" ] && security delete-keychain "$KEYCHAIN" || true
 
       - name: Install create-dmg
         run: brew install create-dmg
@@ -598,23 +669,13 @@ jobs:
         # step for the full rationale.
         run: cargo build --release --features "$env:FEATURES" --target x86_64-pc-windows-msvc
 
-      - name: Install ImageMagick
-        # Pinned: an unversioned choco install pulls whatever the feed serves into
-        # the icon-generation step.
-        run: choco install imagemagick --version=7.1.2.2500 -y
-
-      - name: Create ICO from SVG
+      # The same committed icon the build script embeds into dbflux.exe, so the
+      # executable, the portable zip and the installer shortcuts agree.
+      - name: Select channel icon
         run: |
-          $BrandDir = "resources/branding/${{ inputs.channel }}"
-          if (-Not (Test-Path $BrandDir)) { $BrandDir = "resources/branding/stable" }
-
-          magick convert -background none -resize 256x256 "$BrandDir/mark.svg" dbflux-256.png
-          magick convert -background none -resize 128x128 "$BrandDir/mark.svg" dbflux-128.png
-          magick convert -background none -resize 64x64 "$BrandDir/mark.svg" dbflux-64.png
-          magick convert -background none -resize 48x48 "$BrandDir/mark-small.svg" dbflux-48.png
-          magick convert -background none -resize 32x32 "$BrandDir/mark-small.svg" dbflux-32.png
-          magick convert -background none -resize 16x16 "$BrandDir/mark-small.svg" dbflux-16.png
-          magick convert dbflux-16.png dbflux-32.png dbflux-48.png dbflux-64.png dbflux-128.png dbflux-256.png dbflux.ico
+          $Ico = "packaging/icons/dbflux.ico"
+          if ("${{ inputs.channel }}" -eq "nightly") { $Ico = "packaging/icons/dbflux-nightly.ico" }
+          Copy-Item $Ico dbflux.ico
 
       - name: Create portable package
         run: |

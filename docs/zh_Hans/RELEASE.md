@@ -90,6 +90,60 @@ git push origin vX.Y.Z[-suffix.N]
 5. `main` 已经处于 `0.8.0-dev.0`——稳定版发布后无需再更新。
 6. 补丁（`v0.7.1`、`v0.7.2`……）通过从 `main` 拣选提交，来自同一条发布分支。
 
+## 制品身份与签名
+
+有三样彼此独立的东西承载"这是谁构建的"这一信号，它们互不重叠：
+
+| 层 | 覆盖内容 | Secret | 缺失时 |
+|----|----------|--------|--------|
+| GPG 分离签名（`.asc`）和 `.sha256` | 下载的文件本身 | `GPG_PRIVATE_KEY`、`GPG_PASSPHRASE` | 构建失败。每个 release 都必须签名。 |
+| 构建来源证明（provenance attestation） | 产出该制品的 workflow 运行和 commit | 无（无密钥 OIDC） | 始终开启。 |
+| `.app` 上的 macOS 代码签名 | 钥匙串和 Gatekeeper 所看到的应用身份 | `MACOS_CERTIFICATE_P12`、`MACOS_CERTIFICATE_PASSWORD` | bundle 以 ad-hoc 方式签名并给出警告。 |
+
+Windows 可执行文件和安装程序都没有 Authenticode 签名，因此首次运行时
+SmartScreen 会发出警告。这需要来自 CA 的证书，另行跟踪。
+
+### macOS 代码签名
+
+macOS 会把钥匙串授权绑定到发起请求的应用签名上。ad-hoc 签名每次构建都不同，
+所以没有稳定身份时，每次更新都会让用户在 DBFlux 能读取已保存的数据库密码之前
+重新输入登录密码。用同一个证书签署每个 release，这个提示只会出现一次。
+
+自签名证书对钥匙串来说已经足够。它**不能**满足 Gatekeeper：在项目拥有付费的
+Developer ID 证书并完成公证之前，应用首次启动时仍是"未识别"状态；届时同样的
+两个 secret 可以直接承载这些内容。
+
+在任何装有 OpenSSL 的机器上创建一次证书：
+
+```bash
+scripts/macos-signing-cert.sh ~/secure/dbflux-signing
+```
+
+脚本会打印需要设置的两个仓库 secret。把 `.p12` 及其密码妥善保存：以后换发新
+证书意味着所有用户都要再授权一次钥匙串。证书有效期十年。
+
+bundle 在 `build.yml` 中于创建 DMG 之前签名。该 job 把证书导入临时钥匙串，
+在 runner 上将其信任为代码签名证书，签名，用 `codesign --verify --deep --strict`
+校验，然后删除该钥匙串。
+
+### Windows 可执行文件身份
+
+`crates/dbflux/build.rs` 在构建时把渠道图标和一个 `VERSIONINFO` 块嵌入
+`dbflux.exe`，因此资源管理器、任务栏和"打开方式"对话框显示 DBFlux 图标，
+"属性"显示产品名称和版本。图标提交在 `packaging/icons/` 下（`dbflux.ico`、
+`dbflux-nightly.ico`），便携 zip 和安装程序快捷方式使用同一批文件。美术资源
+变更时，从 `resources/branding/<channel>/` 重新生成：
+
+```bash
+magick -background none resources/branding/stable/mark.svg -resize 256x256 256.png
+# ... 128、64 来自 mark.svg；48、32、16 来自 mark-small.svg
+magick 16.png 32.png 48.png 64.png 128.png 256.png packaging/icons/dbflux.ico
+```
+
+旁边的 macOS `.icns` 文件（`dbflux.icns`、`dbflux-nightly.icns`）用 `libicns`
+的 `png2icns` 以同样方式构建，额外加入 512 和 1024 尺寸，并以 `AppIcon.icns`
+的名字进入 bundle。
+
 ## 切出流程：`main` → `release/vX.Y`
 
 1. 确认你在 `main` 上、工作树干净、且与 `origin/main` 同步。

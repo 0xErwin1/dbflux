@@ -1251,7 +1251,12 @@ runtime necesita:
 `resources/branding/{stable,nightly}/` (`mark.svg`, `mark-256.png`,
 `mark-small.svg`, `wordmark.svg`) más el `resources/branding/glyph.svg`
 compartido. `crates/dbflux_ui/src/assets.rs` sirve la marca PNG pre-renderizada
-por channel para `img(...)`. La metadata de packaging (`packaging/*.yaml`,
+por channel para `img(...)`. Los archivos de icono por plataforma están
+commiteados bajo `packaging/icons/` (`dbflux.ico` / `dbflux-nightly.ico` para
+Windows, `dbflux.icns` / `dbflux-nightly.icns` para el bundle de macOS) y se
+regeneran desde los SVG cuando cambia el arte; `crates/dbflux/build.rs` embebe
+el icono de Windows y el `VERSIONINFO` en `dbflux.exe`, eligiendo el channel
+con la misma regla de versión que `ReleaseChannel`. La metadata de packaging (`packaging/*.yaml`,
 `resources/desktop/dbflux.desktop`, `resources/macos/Info.plist`,
 `resources/windows/installer.iss`) y el build de Nix (`nix/binary.nix`,
 `nix/nightly-info.nix`, `nix/release-info.nix`) sustituyen placeholders de
