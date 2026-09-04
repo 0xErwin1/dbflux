@@ -217,3 +217,5 @@ Para borrar los datos de DBFlux:
   secretos.
 - [Audit](AUDIT.md) — el schema completo de eventos de auditoría y los detalles
   de redacción.
+- [Política de privacidad](PRIVACY.md) — qué no recopilan la aplicación ni el
+  sitio web.

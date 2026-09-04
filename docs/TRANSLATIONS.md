@@ -55,7 +55,7 @@ adding one file in the right place. Each language has a directory under
 | `docs/USAGE.md` | `docs/<locale-dir>/USAGE.md` |
 | `docs/SETTINGS.md` | `docs/<locale-dir>/SETTINGS.md` |
 | Driver README (`crates/dbflux_driver_postgres/README.md`) | `docs/<locale-dir>/drivers/postgres.md` |
-| `ARCHITECTURE.md`, `CONTRIBUTING.md`, `SECURITY.md` (repository root) | `docs/<locale-dir>/ARCHITECTURE.md`, etc. |
+| `ARCHITECTURE.md`, `CONTRIBUTING.md`, `SECURITY.md`, `TRADEMARK.md`, `PRIVACY.md` (repository root) | `docs/<locale-dir>/ARCHITECTURE.md`, etc. |
 
 Rules that keep the site build happy:
 

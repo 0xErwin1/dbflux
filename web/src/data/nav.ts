@@ -27,7 +27,11 @@ export interface DocsSection {
 export const DOCS_SECTIONS: readonly DocsSection[] = [
   { id: 'start', title: 'Start here', entries: ['install', 'usage', 'connections'] },
   { id: 'using', title: 'Using DBFlux', entries: ['charts', 'dashboards', 'dashboards_and_audit'] },
-  { id: 'configure', title: 'Configuring', entries: ['settings', 'lua', 'data_and_privacy'] },
+  {
+    id: 'configure',
+    title: 'Configuring',
+    entries: ['settings', 'lua', 'data_and_privacy', 'privacy'],
+  },
   { id: 'integrate', title: 'Integrations', entries: ['mcp_ai_integration', 'audit'] },
   { id: 'reference', title: 'Reference', entries: ['drivers', 'concepts'] },
   {
@@ -56,6 +60,7 @@ export const DOCS_SECTIONS: readonly DocsSection[] = [
       'contributing',
       'translations',
       'security',
+      'trademark',
       'architecture',
       'driver_authoring',
       'custom_driver_example',
@@ -90,6 +95,8 @@ export const DOC_TITLES: Readonly<Record<string, string>> = {
   contributing: 'Contributing',
   translations: 'Translations',
   security: 'Security',
+  trademark: 'Trademark policy',
+  privacy: 'Privacy policy',
   'drivers/postgres': 'PostgreSQL',
   'drivers/mysql': 'MySQL / MariaDB',
   'drivers/mssql': 'SQL Server',
@@ -148,6 +155,8 @@ export function routeForRepoPath(
   if (path === 'ARCHITECTURE.md') return docsUrl('architecture', versionPrefix, locale);
   if (path === 'CONTRIBUTING.md') return docsUrl('contributing', versionPrefix, locale);
   if (path === 'SECURITY.md') return docsUrl('security', versionPrefix, locale);
+  if (path === 'TRADEMARK.md') return docsUrl('trademark', versionPrefix, locale);
+  if (path === 'PRIVACY.md') return docsUrl('privacy', versionPrefix, locale);
 
   return repoBlobUrl(path, versionId);
 }
@@ -184,6 +193,8 @@ export function titleForRepoPath(path: string): string | null {
   if (path === 'ARCHITECTURE.md') return DOC_TITLES.architecture ?? null;
   if (path === 'CONTRIBUTING.md') return DOC_TITLES.contributing ?? null;
   if (path === 'SECURITY.md') return DOC_TITLES.security ?? null;
+  if (path === 'TRADEMARK.md') return DOC_TITLES.trademark ?? null;
+  if (path === 'PRIVACY.md') return DOC_TITLES.privacy ?? null;
 
   return null;
 }

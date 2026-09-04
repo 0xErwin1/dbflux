@@ -35,7 +35,7 @@ DBFlux 的翻译分布在三处，各自的贡献方式不同：应用程序界�
 | `docs/USAGE.md` | `docs/<locale-dir>/USAGE.md` |
 | `docs/SETTINGS.md` | `docs/<locale-dir>/SETTINGS.md` |
 | 驱动程序 README（`crates/dbflux_driver_postgres/README.md`） | `docs/<locale-dir>/drivers/postgres.md` |
-| `ARCHITECTURE.md`、`CONTRIBUTING.md`、`SECURITY.md`（仓库根目录） | `docs/<locale-dir>/ARCHITECTURE.md` 等 |
+| `ARCHITECTURE.md`、`CONTRIBUTING.md`、`SECURITY.md`、`TRADEMARK.md`、`PRIVACY.md`（仓库根目录） | `docs/<locale-dir>/ARCHITECTURE.md` 等 |
 
 保证站点构建顺利的规则：
 

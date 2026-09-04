@@ -227,4 +227,5 @@ redactados (tokens, contraseñas, connection strings).
 ## Licencia
 
 Al contribuir aceptas que tus contribuciones se licencian bajo la licencia dual
-MIT / Apache-2.0 del proyecto.
+MIT / Apache-2.0 del proyecto. El nombre y el logo de DBFlux no forman parte de
+esa licencia; consulta [TRADEMARK.md](TRADEMARK.md).

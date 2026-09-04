@@ -24,6 +24,8 @@ export const es: Dictionary = {
     about: 'Acerca de',
     contributing: 'Cómo contribuir',
     source: 'Código fuente',
+    trademark: 'Política de marca',
+    privacy: 'Política de privacidad',
     tagline:
       'Un cliente de bases de datos keyboard-first y totalmente de código abierto, desarrollado en abierto.',
     license: 'MIT o Apache-2.0, a tu elección.',

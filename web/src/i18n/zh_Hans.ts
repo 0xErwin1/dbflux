@@ -24,6 +24,8 @@ export const zh_Hans: Dictionary = {
     about: '关于',
     contributing: '如何贡献',
     source: '源代码',
+    trademark: '商标政策',
+    privacy: '隐私政策',
     tagline: '完全开源、以键盘为核心的数据库客户端，在开放中构建。',
     license: 'MIT 或 Apache-2.0，任你选择。',
   },

@@ -187,4 +187,4 @@ Do not file security issues publicly. Email the maintainer or use a private chan
 
 ## License
 
-By contributing you agree your contributions are licensed under the project's dual MIT / Apache-2.0 license.
+By contributing you agree your contributions are licensed under the project's dual MIT / Apache-2.0 license. The DBFlux name and logo are not part of that license; see [TRADEMARK.md](TRADEMARK.md).

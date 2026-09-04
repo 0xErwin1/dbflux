@@ -24,6 +24,8 @@ export const en = {
     about: 'About',
     contributing: 'Contributing',
     source: 'Source',
+    trademark: 'Trademark policy',
+    privacy: 'Privacy policy',
     tagline: 'A fully open-source, keyboard-first database client, built in the open.',
     license: 'MIT or Apache-2.0, at your option.',
   },
