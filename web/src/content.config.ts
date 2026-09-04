@@ -26,6 +26,8 @@ const docs = defineCollection({
       '*/ARCHITECTURE.md',
       '*/CONTRIBUTING.md',
       '*/SECURITY.md',
+      '*/TRADEMARK.md',
+      '*/PRIVACY.md',
       '*/crates/dbflux_driver_*/README.md',
       '*/examples/custom_driver/README.md',
     ],

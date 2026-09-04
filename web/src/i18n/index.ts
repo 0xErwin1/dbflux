@@ -58,6 +58,8 @@ export interface Dictionary {
     about: string;
     contributing: string;
     source: string;
+    trademark: string;
+    privacy: string;
     tagline: string;
     license: string;
   };

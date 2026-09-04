@@ -26,7 +26,7 @@ export const VERSIONS_DIR = join(WEB, '.versions');
 
 /** Non-document paths every version contributes alongside registered locale docs. */
 const WANTED_REPOSITORY_PATH =
-  /^(ARCHITECTURE\.md|CONTRIBUTING\.md|SECURITY\.md|crates\/dbflux_driver_[^/]+\/README\.md|examples\/custom_driver\/README\.md)$/;
+  /^(ARCHITECTURE\.md|CONTRIBUTING\.md|SECURITY\.md|TRADEMARK\.md|PRIVACY\.md|crates\/dbflux_driver_[^/]+\/README\.md|examples\/custom_driver\/README\.md)$/;
 
 const wantedPath = (path: string) => isDocsRepoPath(path) || WANTED_REPOSITORY_PATH.test(path);
 
