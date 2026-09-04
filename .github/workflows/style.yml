@@ -102,7 +102,9 @@ jobs:
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16  # v2
         with:
-          shared-key: ci-clippy-${{ matrix.os }}
+          # Shared with the cross-platform check in tests.yml: both run the
+          # same feature set against the same target dir on the same runner.
+          shared-key: ci-check-${{ matrix.os }}
           cache-targets: true
           cache-on-failure: true
 

@@ -106,7 +106,10 @@ jobs:
 
   build:
     name: Build
-    needs: [tests, style, classify]
+    # Tests and style do not gate the build, only the publish step below: the
+    # platform builds are the longest jobs in this workflow and depend on
+    # nothing the checks produce. A red check still blocks the release.
+    needs: [classify]
     uses: ./.github/workflows/build.yml
     with:
       version: ${{ needs.classify.outputs.version }}
@@ -116,7 +119,7 @@ jobs:
 
   release:
     name: Create Release
-    needs: [classify, build]
+    needs: [tests, style, classify, build]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:

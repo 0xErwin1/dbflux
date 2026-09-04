@@ -47,11 +47,13 @@ jobs:
         with:
           version: 11
 
+      # No pnpm cache: it is saved once per branch, so every open PR adds a
+      # near-identical ~170 MB entry that pushes the repository past its 10 GB
+      # cache limit and evicts the Rust build caches. A frozen install from the
+      # registry takes seconds.
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-          cache: pnpm
-          cache-dependency-path: web/pnpm-lock.yaml
 
       - name: Install
         working-directory: web

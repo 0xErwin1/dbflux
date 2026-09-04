@@ -102,6 +102,12 @@ jobs:
           shared-key: linux-${{ matrix.arch }}
           cache-targets: true
           cache-on-failure: true
+          # A release runs on a tag ref, and a cache saved there is scoped to
+          # that tag: no later run can read it, yet it still counts toward the
+          # repository's 10 GB limit and evicts the caches main relies on.
+          # Only the nightly, which runs on main, writes; releases restore from
+          # main through the shared-key fallback.
+          save-if: ${{ inputs.channel == 'nightly' }}
 
       - name: Stamp workspace version
         env:
@@ -410,6 +416,12 @@ jobs:
           shared-key: macos-${{ matrix.arch }}
           cache-targets: true
           cache-on-failure: true
+          # A release runs on a tag ref, and a cache saved there is scoped to
+          # that tag: no later run can read it, yet it still counts toward the
+          # repository's 10 GB limit and evicts the caches main relies on.
+          # Only the nightly, which runs on main, writes; releases restore from
+          # main through the shared-key fallback.
+          save-if: ${{ inputs.channel == 'nightly' }}
 
       - name: Stamp workspace version
         env:
@@ -554,6 +566,12 @@ jobs:
           shared-key: windows-amd64
           cache-targets: true
           cache-on-failure: true
+          # A release runs on a tag ref, and a cache saved there is scoped to
+          # that tag: no later run can read it, yet it still counts toward the
+          # repository's 10 GB limit and evicts the caches main relies on.
+          # Only the nightly, which runs on main, writes; releases restore from
+          # main through the shared-key fallback.
+          save-if: ${{ inputs.channel == 'nightly' }}
 
       - name: Stamp workspace version
         shell: pwsh
