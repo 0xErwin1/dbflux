@@ -34,6 +34,12 @@ rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs"] 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+# The build script embeds the icon and VERSIONINFO into dbflux.exe. gpui already
+# builds with embed-resource on Windows, so this widens an existing dependency
+# rather than adding one.
+[target.'cfg(windows)'.build-dependencies]
+embed-resource = "3.0"
+
 # The binary registers drivers and runtime features through `dbflux_app`, not
 # directly. Optional dep declarations on driver crates would be dead weight
 # (no `use ...` in this crate), so they live on `dbflux_app` instead. The few
