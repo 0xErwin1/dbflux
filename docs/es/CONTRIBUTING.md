@@ -97,6 +97,14 @@ caracteres; explica el *por qué* en el body cuando no sea obvio.
    `size:exception`.
 6. CI debe pasar (`tests.yml`, `style.yml`). Vuelve a ejecutar localmente antes
    de hacer push si algo falla.
+7. Un cambio de documentación viaja con sus traducciones. Cuando edites una
+   página bajo `docs/`, un README de driver o un documento raíz que el sitio
+   renderiza (`ARCHITECTURE.md`, `CONTRIBUTING.md`, `SECURITY.md`,
+   `TRADEMARK.md`, `PRIVACY.md`), aplica el mismo cambio a cada contraparte
+   existente bajo `docs/es/` y `docs/zh_Hans/` en el mismo PR. Una página que
+   aún no tiene contraparte no necesita ninguna. Ver
+   [Traducciones](TRANSLATIONS.md).
+
 
 ### Los mensajes de commit importan
 

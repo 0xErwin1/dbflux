@@ -396,6 +396,13 @@ Drivers declare their capabilities via `DriverMetadata`:
 - `QueryLanguage`: SQL, MongoQuery, RedisCommands, Cypher, etc. (determines editor syntax highlighting and placeholder)
 - `DriverCapabilities`: bitflags for features (PAGINATION, TRANSACTIONS, NESTED_DOCUMENTS, etc.)
 
+### Documentation translations
+
+- `docs/es/` and `docs/zh_Hans/` mirror `docs/`, the driver READMEs, and the root documents the site renders (`ARCHITECTURE.md`, `CONTRIBUTING.md`, `SECURITY.md`, `TRADEMARK.md`, `PRIVACY.md`).
+- Any edit to one of those English pages must be applied to every counterpart that already exists under `docs/es/` and `docs/zh_Hans/`, in the same change. Do not leave a translation for a follow-up.
+- A page with no counterpart yet needs none; the site serves the English body with a notice.
+- Keep headings, relative links, and ```mermaid fences aligned with the English page, because the site pairs pages by structure. See `docs/TRANSLATIONS.md`.
+
 ### Driver README documentation
 
 - Every driver crate under `crates/dbflux_driver_*/` must include a `README.md`.
