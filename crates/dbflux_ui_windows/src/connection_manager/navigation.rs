@@ -1430,9 +1430,15 @@ impl ConnectionManagerWindow {
             &self.access.input_ssm_remote_port,
         ];
 
+        #[cfg(feature = "mcp")]
+        let mcp_filter_input = Some(&self.mcp_tab.conn_mcp_client_filter_input);
+        #[cfg(not(feature = "mcp"))]
+        let mcp_filter_input: Option<&Entity<dbflux_components::controls::InputState>> = None;
+
         static_inputs
             .into_iter()
             .chain(self.form.driver_inputs.values())
+            .chain(mcp_filter_input)
             .any(|input| input.read(cx).focus_handle(cx).is_focused(window))
     }
 
