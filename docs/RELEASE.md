@@ -90,6 +90,69 @@ The manifest version is `X.(Y+1).0-dev.0`, where `X.Y` is the minor currently be
 5. `main` is already on `0.8.0-dev.0` — no further bump needed after stable.
 6. Patches (`v0.7.1`, `v0.7.2`, …) come from the same release branch via cherry-picks from `main`.
 
+## Artifact Identity and Signing
+
+Three separate things carry the "who built this" signal, and they do not
+overlap:
+
+| Layer | What it covers | Secret | When missing |
+|-------|----------------|--------|--------------|
+| GPG detached signature (`.asc`) and `.sha256` | The downloaded file | `GPG_PRIVATE_KEY`, `GPG_PASSPHRASE` | Build fails. Every release is signed. |
+| Build provenance attestation | The workflow run and commit that produced the artifact | none (keyless OIDC) | Always on. |
+| macOS code signature on the `.app` | The application identity the keychain and Gatekeeper look at | `MACOS_CERTIFICATE_P12`, `MACOS_CERTIFICATE_PASSWORD` | Bundle is signed ad-hoc with a warning. |
+
+Neither the Windows executable nor the installer is Authenticode-signed, so
+SmartScreen warns on first run. That needs a certificate from a CA and is
+tracked separately.
+
+### macOS code signing
+
+macOS ties a keychain grant to the signature of the application that asked
+for it. An ad-hoc signature changes with every build, so without a stable
+identity each update makes the user re-enter their login password before
+DBFlux may read the saved database passwords again. Signing every release
+with one certificate makes that prompt appear once.
+
+A self-signed certificate is enough for the keychain. It does **not** satisfy
+Gatekeeper: the app stays "unidentified" on first launch until the project
+has a paid Developer ID certificate and notarisation, which the same two
+secrets would carry.
+
+Create the certificate once, on any machine with OpenSSL:
+
+```bash
+scripts/macos-signing-cert.sh ~/secure/dbflux-signing
+```
+
+The script prints the two repository secrets to set. Keep the `.p12` and its
+password somewhere durable: issuing a new certificate later means every user
+re-authorises the keychain once more. The certificate is valid for ten years.
+
+The bundle is signed in `build.yml` before the DMG is created. The job imports
+the certificate into a temporary keychain, trusts it for code signing on the
+runner, signs, verifies with `codesign --verify --deep --strict`, and deletes
+the keychain.
+
+### Windows executable identity
+
+`crates/dbflux/build.rs` embeds the channel icon and a `VERSIONINFO` block
+into `dbflux.exe` at build time, so Explorer, the taskbar, and the Open With
+dialog show the DBFlux icon and Properties shows the product name and version.
+The icons are committed under `packaging/icons/` (`dbflux.ico`,
+`dbflux-nightly.ico`), and the same files feed the portable zip and the
+installer shortcuts. Regenerate them from `resources/branding/<channel>/`
+when the artwork changes:
+
+```bash
+magick -background none resources/branding/stable/mark.svg -resize 256x256 256.png
+# ... 128, 64 from mark.svg; 48, 32, 16 from mark-small.svg
+magick 16.png 32.png 48.png 64.png 128.png 256.png packaging/icons/dbflux.ico
+```
+
+The macOS `.icns` files beside them (`dbflux.icns`, `dbflux-nightly.icns`)
+are built the same way with `png2icns` from `libicns`, adding 512 and 1024 px
+sizes, and land in the bundle as `AppIcon.icns`.
+
 ## Cut Procedure: `main` → `release/vX.Y`
 
 1. Verify you are on `main`, clean tree, up to date with `origin/main`.
