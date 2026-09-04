@@ -74,7 +74,6 @@ jobs:
     name: Driver Live Integration
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    needs: deterministic-tests
 
     steps:
       - name: Checkout repository
@@ -236,7 +235,8 @@ jobs:
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16  # v2
         with:
-          shared-key: ci-cross-check-${{ matrix.os }}
+          # Shared with clippy in style.yml (same features, same target dir).
+          shared-key: ci-check-${{ matrix.os }}
           cache-targets: true
           cache-on-failure: true
 

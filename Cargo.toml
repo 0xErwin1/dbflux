@@ -209,7 +209,9 @@ debug = false
 # `panic` is intentionally left at the default `unwind`: switching to `abort` is a
 # separate decision that loses `catch_unwind` and may break GPUI internals that
 # rely on unwinding, so it is not changed here.
+# `codegen-units` stays at cargo's release default (16): a single unit makes
+# the final binary crate a serial 4-8 minute step on every CI platform, and
+# thin LTO already recovers most of the cross-unit optimization.
 [profile.release]
 lto = "thin"
-codegen-units = 1
 strip = "symbols"
