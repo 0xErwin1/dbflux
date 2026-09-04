@@ -222,3 +222,4 @@ Para borrar los datos de DBFlux:
 - [Settings & Hooks](SETTINGS.md) — los controles de General/Audit/Storage referenciados aquí.
 - [Connecting → Advanced Setup](CONNECTIONS.md) — dónde se introducen los secretos.
 - [Audit](AUDIT.md) — el schema completo de eventos de auditoría y los detalles de redacción.
+- [Política de privacidad](PRIVACY.md) — qué no recopilan la aplicación ni el sitio web.
