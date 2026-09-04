@@ -33,6 +33,7 @@
     "@fontsource/ibm-plex-sans": "^5.3.0",
     "prettier": "^3.9.6",
     "prettier-plugin-astro": "^0.14.1",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "wrangler": "4.129.0"
   }
 }

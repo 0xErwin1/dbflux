@@ -2,3 +2,4 @@ packages:
   - '.'
 allowBuilds:
   esbuild: true
+  workerd: true
