@@ -1627,6 +1627,20 @@ fn resolve_db_children(
                 // Route through the time-series builder the same way document
                 // databases route through build_document_db_content.
                 Sidebar::build_time_series_db_content(profile_id, db_name, schema)
+            } else if !schema.schemas().is_empty() {
+                Sidebar::build_schema_children(
+                    profile_id,
+                    db_name,
+                    Some(db_name),
+                    schema,
+                    &connected.table_details,
+                    &connected.schema_types,
+                    &connected.schema_indexes,
+                    &connected.schema_foreign_keys,
+                    &connected.schema_routines,
+                    supports_routines,
+                    &connected.dependents_cache,
+                )
             } else {
                 Sidebar::build_db_schema_content(
                     profile_id,
