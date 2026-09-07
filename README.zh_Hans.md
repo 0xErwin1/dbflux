@@ -135,7 +135,7 @@ curl -fsSL https://raw.githubusercontent.com/0xErwin1/dbflux/main/scripts/instal
 - SOCKS5 / HTTP CONNECT 代理隧道，代理配置可复用
 - 托管访问提供程序（AWS SSM），无需暴露端口即可连接
 - 由提供程序驱动的认证配置文件（例如 AWS SSO / shared / static），支持从 `~/.aws/config` 导入
-- 在预连接（PreConnect）、后连接（PostConnect）、预断开（PreDisconnect）与后断开（PostDisconnect）阶段执行的连接 Hook，可作为命令、脚本或进程内 Lua 执行
+- 在连接前（PreConnect）、连接后（PostConnect）、断开前（PreDisconnect）与断开后（PostDisconnect）阶段执行的连接 Hook，可作为命令、脚本或进程内 Lua 执行
 
 ### AI 与 MCP 集成
 
