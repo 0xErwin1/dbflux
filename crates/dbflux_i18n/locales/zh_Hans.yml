@@ -2086,8 +2086,8 @@ form:
     refresh_interval_invalid: 已忽略刷新间隔覆盖项：值必须为正数
   error:
     build_profile_failed: 构建配置失败
-    test_cancelled_pre: 测试连接被预连接 Hook 取消
-    test_cancelled_post: 测试连接被后连接 Hook 取消
+    test_cancelled_pre: 测试连接被连接前 Hook 取消
+    test_cancelled_post: 测试连接被连接后 Hook 取消
     test_cleanup_failed: "测试连接清理失败：%{error}"
     test_cleanup_warning: "%{primary_error}（清理警告：%{cleanup_error}）"
     detached_hook_cleanup_failed: "未能释放配置 %{profile_name}（%{profile_id}）的分离式测试 Hook 任务；作用域任务 ID [%{task_ids}]：%{error}"
@@ -2119,14 +2119,14 @@ hooks:
     update: 更新
     create: 创建
   phase:
-    pre_connect_hook: 预连接 Hook
-    extra_pre_connect: 额外预连接
-    post_connect_hook: 后连接 Hook
-    extra_post_connect: 额外后连接
-    pre_disconnect_hook: 预断开 Hook
-    extra_pre_disconnect: 额外预断开
-    post_disconnect_hook: 后断开 Hook
-    extra_post_disconnect: 额外后断开
+    pre_connect_hook: 连接前 Hook
+    extra_pre_connect: "额外：连接前"
+    post_connect_hook: 连接后 Hook
+    extra_post_connect: "额外：连接后"
+    pre_disconnect_hook: 断开前 Hook
+    extra_pre_disconnect: "额外：断开前"
+    post_disconnect_hook: 断开后 Hook
+    extra_post_disconnect: "额外：断开后"
   tab:
     intro: 选择在 设置 -> Hook 中配置的可复用 Hook
     lua_process_run_note: 所选 Hook 会启用 Lua process.run，并可以您的用户权限执行外部程序
@@ -2683,7 +2683,7 @@ settings:
       execution_mode: 执行模式
       execution_mode_hint: 分离模式在后台运行，不会阻塞连接 / 断开
       ready_signal: 就绪信号
-      ready_signal_hint: DBFlux 会等待 Hook 输出中出现此文本后再继续。分离式预连接 Hook 必需。
+      ready_signal_hint: DBFlux 会等待 Hook 输出中出现此文本后再继续。分离式连接前 Hook 必需。
       cwd: 工作目录
       env: 环境变量
       env_hint: 逗号分隔的 KEY=value 对
@@ -3273,9 +3273,9 @@ sidebar:
     connecting: "正在连接 %{name}"
     disconnecting: "正在断开 %{name}"
     connection_hook_cancelled: 连接 Hook 已取消
-    post_connect_hook_cancelled: 后连接 Hook 已取消
+    post_connect_hook_cancelled: 连接后 Hook 已取消
     disconnect_hook_cancelled: 断开 Hook 已取消
-    post_disconnect_hook_cancelled: 后断开 Hook 已取消
+    post_disconnect_hook_cancelled: 断开后 Hook 已取消
     loading_event_streams: "正在加载事件流：%{name}"
     listing_buckets: "正在列出存储桶：%{name}"
     loading_database_schema: "正在加载 Schema：%{name}"
@@ -3308,9 +3308,9 @@ sidebar:
     operation_started_elsewhere: 操作已由其他线程启动
     background_task_limit: 后台任务运行过多，请稍候
     connection_cancelled_by_hook: 连接被 Hook 取消
-    connection_cancelled_by_post_connect_hook: 连接被后连接 Hook 取消
+    connection_cancelled_by_post_connect_hook: 连接被连接后 Hook 取消
     disconnect_cancelled_by_hook: 断开连接被 Hook 取消
-    disconnected_hook_cancelled: 已断开连接，但后断开 Hook 被取消
+    disconnected_hook_cancelled: 已断开连接，但断开后 Hook 被取消
     disconnected_hook_error: "已断开与 %{name} 的连接，但 %{error}"
     profile_not_found: 未找到配置文件
     schema_drop_cancelled: Schema 删除已取消
