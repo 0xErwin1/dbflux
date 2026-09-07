@@ -48,7 +48,7 @@ const {
   titlesByLocale = {},
   policy,
 } = Astro.props;
-const onThisPage = headings.filter((heading) => heading.depth === 2);
+const onThisPage = headings.filter((heading) => heading.depth === 2 || heading.depth === 3);
 const showsFallback = locale !== DEFAULT_LOCALE && !translated;
 const suffix = version.id === CURRENT.id ? '' : ` (${versionLabel(version)})`;
 const searchIndex = searchIndexPath(version.id, CURRENT.id, locale, DEFAULT_LOCALE);
@@ -114,15 +114,22 @@ const searchIndex = searchIndexPath(version.id, CURRENT.id, locale, DEFAULT_LOCA
         onThisPage.length > 0 && (
           <nav aria-label={t(locale, 'docs_tree.on_this_page')} data-toc>
             <p class="toc__title">{t(locale, 'docs_tree.on_this_page')}</p>
-            <ul>
-              {onThisPage.map((heading) => (
-                <li>
-                  <a href={`#${heading.slug}`} data-toc-link={heading.slug}>
-                    {heading.text}
-                  </a>
-                </li>
-              ))}
-            </ul>
+            <div class="toc__links" data-toc-links>
+              <svg class="toc__rail" aria-hidden="true" data-toc-rail>
+                <path class="toc__rail-muted" data-toc-rail-muted />
+                <path class="toc__rail-active" data-toc-rail-active />
+                <circle class="toc__rail-end" r="2" data-toc-rail-end />
+              </svg>
+              <ul>
+                {onThisPage.map((heading) => (
+                  <li data-toc-depth={heading.depth}>
+                    <a href={`#${heading.slug}`} data-toc-link={heading.slug}>
+                      {heading.text}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </div>
           </nav>
         )
       }
@@ -168,6 +175,8 @@ const searchIndex = searchIndexPath(version.id, CURRENT.id, locale, DEFAULT_LOCA
   .docs__toc {
     position: sticky;
     top: var(--nav-h);
+    max-height: calc(100vh - var(--nav-h));
+    overflow-y: auto;
     padding: var(--s-7) var(--s-5);
     border-left: var(--bw) solid var(--border);
     display: flex;
@@ -245,7 +254,13 @@ const searchIndex = searchIndexPath(version.id, CURRENT.id, locale, DEFAULT_LOCA
     color: var(--text-muted);
   }
 
+  .toc__links {
+    position: relative;
+  }
+
   .docs__toc ul {
+    position: relative;
+    z-index: 1;
     list-style: none;
     margin: 0;
     padding: 0;
@@ -254,27 +269,56 @@ const searchIndex = searchIndexPath(version.id, CURRENT.id, locale, DEFAULT_LOCA
     gap: var(--s-2);
   }
 
+  .docs__toc li[data-toc-depth='3'] {
+    padding-left: var(--s-3);
+  }
+
   .docs__toc li a {
     display: block;
-    font-family: var(--font-mono);
-    font-size: var(--fs-small);
-    color: var(--text-muted);
-    border-left: var(--bw) solid var(--border);
     padding-left: var(--s-4);
-    transition:
-      color 140ms linear,
-      border-color 140ms linear;
+    font-family: var(--font-sans);
+    font-size: var(--fs-small);
+    line-height: 1.4;
+    color: var(--text-muted);
+    transition: color 140ms linear;
   }
 
   .docs__toc li a:hover {
     color: var(--text);
-    border-left-color: var(--text-muted);
     text-decoration: none;
   }
 
-  .docs__toc li a[aria-current='location'] {
+  .docs__toc li a[data-toc-visible] {
     color: var(--accent);
-    border-left-color: var(--accent);
+  }
+
+  .docs__toc li a[aria-current='location'] {
+    color: var(--text-strong);
+  }
+
+  .toc__rail {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+    pointer-events: none;
+  }
+
+  .toc__rail path {
+    fill: none;
+    stroke-width: var(--bw);
+    vector-effect: non-scaling-stroke;
+  }
+
+  .toc__rail-muted {
+    stroke: var(--border);
+  }
+
+  .toc__rail-active,
+  .toc__rail-end {
+    stroke: var(--accent);
+    fill: var(--accent);
   }
 
   .toc__edit {
@@ -466,62 +510,261 @@ const searchIndex = searchIndexPath(version.id, CURRENT.id, locale, DEFAULT_LOCA
 </script>
 
 <script>
+  import { tocScrollDirection, visibleTocRange } from '../lib/toc-progress.ts';
+
   const links = Array.from(document.querySelectorAll<HTMLAnchorElement>('[data-toc-link]'));
 
-  if (links.length > 0) {
-    const sections = links
-      .map((link) => ({ link, heading: document.getElementById(link.dataset.tocLink ?? '') }))
-      .filter(
-        (entry): entry is { link: HTMLAnchorElement; heading: HTMLElement } => !!entry.heading,
+  function initializeToc() {
+    if (links.length === 0) return;
+    const tocLinks = document.querySelector<HTMLElement>('[data-toc-links]');
+    const tocRail = document.querySelector<SVGSVGElement>('[data-toc-rail]');
+    const mutedRail = document.querySelector<SVGPathElement>('[data-toc-rail-muted]');
+    const activeRail = document.querySelector<SVGPathElement>('[data-toc-rail-active]');
+    const railEnd = document.querySelector<SVGCircleElement>('[data-toc-rail-end]');
+
+    if (tocLinks && tocRail && mutedRail && activeRail && railEnd) {
+      const sections = links
+        .map((link) => ({ link, heading: document.getElementById(link.dataset.tocLink ?? '') }))
+        .filter(
+          (entry): entry is { link: HTMLAnchorElement; heading: HTMLElement } => !!entry.heading,
+        );
+      if (sections.length === 0) return;
+
+      const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+      let current: HTMLAnchorElement | null = null;
+      let intervals: Array<{ start: number; end: number }> = [];
+      let railLength = 0;
+      let renderedRange: { start: number; end: number } | null = null;
+      let targetRange: { start: number; end: number } | null = null;
+      let animationFrame = 0;
+      let geometryQueued = false;
+      let needsMeasurement = false;
+      let renderedDotDistance: number | null = null;
+      let targetDotDistance: number | null = null;
+      let lastScrollY = window.scrollY;
+      let scrollDirection: 'up' | 'down' = 'down';
+
+      const mark = (link: HTMLAnchorElement) => {
+        if (link === current) return;
+        current?.removeAttribute('aria-current');
+        link.setAttribute('aria-current', 'location');
+        current = link;
+      };
+
+      const railPath = (segments: readonly { x: number; top: number; bottom: number }[]) => {
+        const first = segments[0];
+        if (!first) return '';
+
+        let path = `M ${first.x} ${first.top}`;
+        for (const [index, segment] of segments.entries()) {
+          path += ` L ${segment.x} ${segment.bottom}`;
+          const next = segments[index + 1];
+          if (!next) continue;
+          if (segment.x === next.x) {
+            path += ` L ${next.x} ${next.top}`;
+            continue;
+          }
+
+          const curve = Math.min(8, Math.max(0, (next.top - segment.bottom) / 2));
+          path += ` C ${segment.x} ${segment.bottom + curve}, ${next.x} ${next.top - curve}, ${next.x} ${next.top}`;
+        }
+        return path;
+      };
+
+      const distanceAtY = (y: number) => {
+        let low = 0;
+        let high = railLength;
+        for (let iteration = 0; iteration < 18; iteration += 1) {
+          const middle = (low + high) / 2;
+          if (mutedRail.getPointAtLength(middle).y < y) low = middle;
+          else high = middle;
+        }
+        return (low + high) / 2;
+      };
+
+      const rangeDistances = (range: { start: number; end: number }) => {
+        const interpolate = (edge: 'start' | 'end', index: number) => {
+          const lower = Math.floor(index);
+          const value = intervals[lower]?.[edge];
+          const next = intervals[lower + 1]?.[edge] ?? value;
+          return value === undefined ? undefined : value + (next - value) * (index - lower);
+        };
+        const from = interpolate('start', range.start);
+        const to = interpolate('end', range.end);
+        return from === undefined || to === undefined ? null : { from, to };
+      };
+
+      const drawRailRange = (range: { start: number; end: number }, dotDistance?: number) => {
+        const distances = rangeDistances(range);
+        if (!distances || railLength === 0) return;
+
+        const intervalStart = Math.min(distances.from, distances.to);
+        const intervalLength = Math.max(Math.abs(distances.to - distances.from), 1);
+        const endpointDistance =
+          dotDistance ?? (scrollDirection === 'down' ? distances.to : distances.from);
+        const endpoint = mutedRail.getPointAtLength(endpointDistance);
+
+        activeRail.setAttribute('stroke-dasharray', `${intervalLength} ${railLength}`);
+        activeRail.setAttribute('stroke-dashoffset', String(-intervalStart));
+        railEnd.setAttribute('cx', String(endpoint.x));
+        railEnd.setAttribute('cy', String(endpoint.y));
+        railEnd.removeAttribute('display');
+        renderedRange = range;
+        renderedDotDistance = endpointDistance;
+      };
+
+      const clearRange = () => {
+        cancelAnimationFrame(animationFrame);
+        animationFrame = 0;
+        targetRange = null;
+        renderedRange = null;
+        renderedDotDistance = null;
+        targetDotDistance = null;
+        activeRail.setAttribute('stroke-dasharray', `0 ${railLength}`);
+        activeRail.setAttribute('stroke-dashoffset', '0');
+        railEnd.setAttribute('display', 'none');
+      };
+
+      const animateRange = (range: { start: number; end: number }) => {
+        const distances = rangeDistances(range);
+        if (!distances) return;
+        const dotDistance = scrollDirection === 'down' ? distances.to : distances.from;
+        if (
+          targetRange?.start === range.start &&
+          targetRange.end === range.end &&
+          targetDotDistance === dotDistance
+        )
+          return;
+
+        cancelAnimationFrame(animationFrame);
+        const from = renderedRange ?? range;
+        const fromDotDistance = renderedDotDistance ?? dotDistance;
+        targetRange = range;
+        targetDotDistance = dotDistance;
+        renderedRange = from;
+        if (reduceMotion.matches) {
+          drawRailRange(range, dotDistance);
+          return;
+        }
+
+        const startedAt = performance.now();
+        const frame = (now: number) => {
+          const progress = Math.min((now - startedAt) / 160, 1);
+          const eased = 1 - (1 - progress) ** 3;
+          drawRailRange(
+            {
+              start: from.start + (range.start - from.start) * eased,
+              end: from.end + (range.end - from.end) * eased,
+            },
+            fromDotDistance + (dotDistance - fromDotDistance) * eased,
+          );
+          if (progress < 1) animationFrame = requestAnimationFrame(frame);
+          else animationFrame = 0;
+        };
+        animationFrame = requestAnimationFrame(frame);
+      };
+
+      const measureRail = () => {
+        if (!needsMeasurement) return;
+        needsMeasurement = false;
+        const treeBounds = tocLinks.getBoundingClientRect();
+        const segments = sections.map(({ link }) => {
+          const bounds = link.getBoundingClientRect();
+          return {
+            x: bounds.left - treeBounds.left - 9,
+            top: bounds.top - treeBounds.top,
+            bottom: bounds.bottom - treeBounds.top,
+          };
+        });
+        tocRail.setAttribute('viewBox', `0 0 ${tocLinks.clientWidth} ${tocLinks.clientHeight}`);
+        const path = railPath(segments);
+        mutedRail.setAttribute('d', path);
+        activeRail.setAttribute('d', path);
+        railLength = mutedRail.getTotalLength();
+        intervals = segments.map((segment) => ({
+          start: distanceAtY(segment.top),
+          end: distanceAtY(segment.bottom),
+        }));
+        if (renderedRange) drawRailRange(renderedRange);
+      };
+
+      const sync = () => {
+        const headerOffset = parseFloat(
+          getComputedStyle(document.documentElement).getPropertyValue('--nav-h'),
+        );
+        const readingLine = headerOffset + 24;
+        const positions = sections.map(({ heading, link }) => {
+          const bounds = heading.getBoundingClientRect();
+          return {
+            top: bounds.top,
+            bottom: bounds.bottom,
+            depth: Number(link.closest('li')?.dataset.tocDepth) as 2 | 3,
+          };
+        });
+        const range = visibleTocRange(positions, {
+          top: headerOffset,
+          bottom: window.innerHeight,
+        });
+        const active = sections.reduce(
+          (latest, section) =>
+            section.heading.getBoundingClientRect().top <= readingLine ? section : latest,
+          sections[0],
+        );
+        mark(active.link);
+        for (const [index, { link }] of sections.entries()) {
+          link.toggleAttribute(
+            'data-toc-visible',
+            range !== null && index >= range.start && index <= range.end,
+          );
+        }
+        if (range) animateRange(range);
+        else clearRange();
+      };
+
+      const scheduleGeometry = () => {
+        if (geometryQueued) return;
+        geometryQueued = true;
+        needsMeasurement = true;
+        requestAnimationFrame(() => {
+          geometryQueued = false;
+          measureRail();
+          sync();
+        });
+      };
+
+      let queued = false;
+      const scheduleSync = () => {
+        if (queued) return;
+        queued = true;
+        requestAnimationFrame(() => {
+          queued = false;
+          measureRail();
+          sync();
+        });
+      };
+
+      window.addEventListener(
+        'scroll',
+        () => {
+          scrollDirection = tocScrollDirection(lastScrollY, window.scrollY, scrollDirection);
+          lastScrollY = window.scrollY;
+          scheduleSync();
+        },
+        { passive: true },
       );
-
-    let current: HTMLAnchorElement | null = null;
-
-    const mark = (link: HTMLAnchorElement | null) => {
-      if (link === current) return;
-
-      current?.removeAttribute('aria-current');
-      link?.setAttribute('aria-current', 'location');
-      current = link;
-    };
-
-    const sync = () => {
-      // The reading line sits just below the sticky header: a heading counts as
-      // current once it has passed under it, not when it first appears.
-      const line =
-        parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--nav-h')) + 24;
-
-      const atBottom =
-        window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2;
-
-      if (atBottom) {
-        mark(sections[sections.length - 1].link);
-        return;
-      }
-
-      let active = sections[0];
-
-      for (const section of sections) {
-        if (section.heading.getBoundingClientRect().top <= line) active = section;
-      }
-
-      mark(active.link);
-    };
-
-    let queued = false;
-
-    const onScroll = () => {
-      if (queued) return;
-
-      queued = true;
-      requestAnimationFrame(() => {
-        queued = false;
-        sync();
+      window.addEventListener('resize', scheduleGeometry, { passive: true });
+      reduceMotion.addEventListener('change', () => {
+        cancelAnimationFrame(animationFrame);
+        animationFrame = 0;
+        if (targetRange && targetDotDistance !== null)
+          drawRailRange(targetRange, targetDotDistance);
       });
-    };
-
-    window.addEventListener('scroll', onScroll, { passive: true });
-    window.addEventListener('resize', onScroll, { passive: true });
-    sync();
+      const observer = new ResizeObserver(scheduleGeometry);
+      observer.observe(tocLinks);
+      for (const { link } of sections) observer.observe(link);
+      scheduleGeometry();
+    }
   }
+
+  initializeToc();
 </script>
