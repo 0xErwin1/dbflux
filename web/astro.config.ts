@@ -193,7 +193,12 @@ export default defineConfig({
   markdown: {
     rehypePlugins: [rehypeRepoLinks, rehypeMermaid],
     shikiConfig: {
-      theme: 'ayu-dark',
+      themes: {
+        light: 'ayu-light',
+        dark: 'ayu-dark',
+        mirage: 'ayu-mirage',
+      },
+      defaultColor: false,
       wrap: false,
     },
   },

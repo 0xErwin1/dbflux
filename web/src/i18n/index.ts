@@ -44,6 +44,11 @@ export interface Dictionary {
     download: string;
     menu: string;
     language: string;
+    theme: string;
+    theme_system: string;
+    theme_light: string;
+    theme_dark: string;
+    theme_mirage: string;
   };
   footer: {
     product: string;

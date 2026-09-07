@@ -1,10 +1,9 @@
 ---
 import Icon from './Icon.astro';
 import BrandMark from './BrandMark.astro';
-import LanguagePicker from './LanguagePicker.astro';
 import { REPO } from '../data/nav';
 import { docsUrl, siteUrl } from '../data/site';
-import { LOCALES, LOCALE_NAMES, localeFromPathname, t, withLocale } from '../i18n';
+import { localeFromPathname, t } from '../i18n';
 import type { Locale } from '../i18n';
 
 interface Props {
@@ -20,20 +19,6 @@ const LINKS = [
   { href: docsUrl('', '', locale), label: t(locale, 'nav.docs'), key: 'docs' },
   { href: siteUrl('about/', locale), label: t(locale, 'nav.about'), key: 'about' },
 ] as const;
-
-/**
- * Home, docs and about all have a `/es/` and `/zh-Hans/` counterpart now — a
- * real translation where one exists, the English body with a fallback notice
- * otherwise for docs (never a 404).
- */
-const pathname = Astro.url.pathname;
-const showSwitcher = current === 'home' || current === 'docs' || current === 'about';
-
-const localeLinks = LOCALES.map((target) => ({
-  locale: target,
-  href: withLocale(pathname, target),
-  label: LOCALE_NAMES[target],
-}));
 ---
 
 <header class="nav" data-nav>
@@ -43,29 +28,38 @@ const localeLinks = LOCALES.map((target) => ({
       <span>DBFlux</span>
     </a>
 
-    <nav class="nav__links" aria-label="Main">
-      {
-        LINKS.map((link) => (
-          <a
-            href={link.href}
-            class="nav__link"
-            aria-current={current === link.key ? 'page' : undefined}
-          >
-            {link.label}
-          </a>
-        ))
-      }
+    <nav class="nav__panel" id="nav-sheet" aria-label="Main" hidden>
+      <div class="nav__links">
+        {
+          LINKS.map((link) => (
+            <a
+              href={link.href}
+              class="nav__link"
+              aria-current={current === link.key ? 'page' : undefined}
+            >
+              {link.label}
+            </a>
+          ))
+        }
+      </div>
     </nav>
 
-    <div class="nav__actions">
-      {showSwitcher && <LanguagePicker locale={locale} />}
-      <a class="nav__link nav__link--icon" href={REPO} rel="noopener">
-        <Icon name="github" size={16} />
-        <span>{t(locale, 'nav.github')}</span>
+    <div class="nav__utilities">
+      <a
+        class="nav__github"
+        href={REPO}
+        rel="noopener"
+        aria-label={t(locale, 'nav.github')}
+        data-tooltip={t(locale, 'nav.github')}
+      >
+        <Icon name="github" size={18} />
       </a>
       <a class="btn btn--primary nav__cta" href={`${siteUrl('', locale)}#install`}>
         {t(locale, 'nav.download')}
       </a>
+    </div>
+
+    <div class="nav__actions">
       <button
         class="nav__toggle"
         type="button"
@@ -76,31 +70,6 @@ const localeLinks = LOCALES.map((target) => ({
         <span class="visually-hidden">{t(locale, 'nav.menu')}</span>
         <Icon name="menu" size={20} />
       </button>
-    </div>
-  </div>
-
-  <div class="nav__sheet" id="nav-sheet" hidden>
-    {LINKS.map((link) => <a href={link.href}>{link.label}</a>)}
-    {
-      showSwitcher &&
-        localeLinks.map((option) => (
-          <a
-            href={option.href}
-            hreflang={option.locale}
-            lang={option.locale}
-            aria-current={option.locale === locale ? 'true' : undefined}
-          >
-            {option.label}
-          </a>
-        ))
-    }
-    <a href={REPO} rel="noopener">
-      {t(locale, 'nav.github')}
-    </a>
-    <div class="nav__sheet-cta">
-      <a class="btn btn--primary" href={`${siteUrl('', locale)}#install`}>
-        {t(locale, 'nav.download')}
-      </a>
     </div>
   </div>
 </header>
@@ -116,13 +85,13 @@ const localeLinks = LOCALES.map((target) => ({
   }
 
   .nav__inner {
-    max-width: var(--content-max);
-    margin-inline: auto;
-    padding-inline: var(--s-8);
-    height: var(--nav-h);
     display: flex;
     align-items: center;
     gap: var(--s-7);
+    max-width: var(--content-max);
+    min-height: var(--nav-h);
+    margin-inline: auto;
+    padding-inline: var(--s-8);
   }
 
   .nav__brand {
@@ -143,10 +112,25 @@ const localeLinks = LOCALES.map((target) => ({
     color: var(--accent);
   }
 
-  .nav__links {
+  .nav__panel {
     display: flex;
+    flex: 1;
+    align-items: center;
+  }
+
+  .nav__links,
+  .nav__utilities,
+  .nav__actions {
+    display: flex;
+    align-items: center;
+  }
+
+  .nav__links {
     gap: var(--s-6);
-    flex-grow: 1;
+  }
+
+  .nav__utilities {
+    gap: var(--s-4);
   }
 
   .nav__link {
@@ -159,12 +143,13 @@ const localeLinks = LOCALES.map((target) => ({
   }
 
   .nav__link::after {
-    content: '';
     position: absolute;
-    inset-inline: 0;
+    right: 0;
     bottom: -1px;
+    left: 0;
     height: 1px;
     background: var(--accent);
+    content: '';
     transform: scaleX(0);
     transform-origin: left;
     transition: transform var(--t-quick) var(--ease-std);
@@ -184,16 +169,45 @@ const localeLinks = LOCALES.map((target) => ({
     color: var(--text-strong);
   }
 
-  .nav__actions {
-    display: flex;
-    align-items: center;
-    gap: var(--s-5);
+  .nav__github {
+    position: relative;
+    display: grid;
+    width: 32px;
+    height: 32px;
+    place-items: center;
+    color: var(--text);
   }
 
-  .nav__link--icon {
-    display: flex;
-    align-items: center;
-    gap: var(--s-2);
+  .nav__github:hover {
+    color: var(--text-strong);
+    text-decoration: none;
+  }
+
+  .nav__github::after {
+    position: absolute;
+    z-index: var(--z-tooltip);
+    bottom: calc(100% + var(--s-2));
+    left: 50%;
+    width: max-content;
+    max-width: 12rem;
+    padding: var(--s-2) var(--s-3);
+    background: var(--text-strong);
+    color: var(--bg);
+    content: attr(data-tooltip);
+    font-family: var(--font-mono);
+    font-size: var(--fs-label);
+    opacity: 0;
+    pointer-events: none;
+    transform: translate(-50%, 2px);
+    transition:
+      opacity var(--t-instant) linear,
+      transform var(--t-instant) var(--ease-std);
+  }
+
+  .nav__github:hover::after,
+  .nav__github:focus-visible::after {
+    opacity: 1;
+    transform: translate(-50%, 0);
   }
 
   .nav__cta {
@@ -204,56 +218,13 @@ const localeLinks = LOCALES.map((target) => ({
     display: none;
     width: var(--tap-min);
     height: var(--tap-min);
-    margin-right: calc(var(--s-4) * -1);
     align-items: center;
     justify-content: center;
+    padding: 0;
     background: none;
     border: 0;
     color: var(--text);
     cursor: pointer;
-  }
-
-  .nav__sheet {
-    display: none;
-    flex-direction: column;
-    background: var(--panel);
-    border-top: var(--bw) solid var(--border);
-  }
-
-  .nav__sheet[data-open] {
-    display: flex;
-  }
-
-  /*
-   * Scoped styles carry the cid attribute, so a bare `a` rule here outranks
-   * `.btn--primary` from the global sheet. Without :not(.btn) the call to action
-   * inherits --text on an amber fill, which measures about 1.2:1.
-   */
-  .nav__sheet a:not(.btn) {
-    font-family: var(--font-mono);
-    font-size: var(--fs-body);
-    color: var(--text);
-    padding: var(--s-5) var(--s-6);
-    border-bottom: var(--bw) solid var(--border);
-    min-height: var(--tap-min);
-    display: flex;
-    align-items: center;
-  }
-
-  .nav__sheet a:not(.btn):hover {
-    color: var(--text-strong);
-    background: var(--raised);
-    text-decoration: none;
-  }
-
-  .nav__sheet-cta {
-    padding: var(--s-5) var(--s-6);
-  }
-
-  .nav__sheet-cta .btn {
-    width: 100%;
-    min-height: var(--tap-min);
-    color: var(--accent-on);
   }
 
   .visually-hidden {
@@ -265,56 +236,130 @@ const localeLinks = LOCALES.map((target) => ({
     white-space: nowrap;
   }
 
-  @media (max-width: 1024px) {
+  @media (max-width: 1050px) {
     .nav__inner {
+      flex-wrap: nowrap;
+      gap: 0;
       padding-inline: var(--s-7);
     }
-  }
 
-  @media (max-width: 900px) {
-    .nav__links,
-    .nav__link--icon {
+    .nav__panel {
       display: none;
+      position: absolute;
+      top: 100%;
+      inset-inline: 0;
+      max-height: calc(100dvh - var(--nav-h));
+      overflow-y: auto;
+      background: var(--panel);
+      border-top: var(--bw) solid var(--border);
+    }
+
+    .nav__panel[data-open] {
+      display: flex;
+    }
+
+    .nav__links {
+      flex: 1;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 0;
+    }
+
+    .nav__links .nav__link {
+      display: flex;
+      align-items: center;
+      min-height: var(--tap-min);
+      padding: var(--s-5) var(--s-6);
+      border-bottom: var(--bw) solid var(--border);
+      font-size: var(--fs-body);
+    }
+
+    .nav__links .nav__link::after {
+      display: none;
+    }
+
+    .nav__links .nav__link:hover {
+      background: var(--raised);
+    }
+
+    .nav__utilities {
+      margin-left: auto;
+    }
+
+    .nav__github {
+      width: var(--tap-min);
+      height: var(--tap-min);
+    }
+
+    .nav__cta {
+      min-height: var(--tap-min);
+      padding-inline: var(--s-4);
     }
 
     .nav__toggle {
       display: flex;
     }
+  }
 
-    .nav__actions {
-      flex-grow: 1;
-      justify-content: flex-end;
+  @media (min-width: 1051px) {
+    .nav__panel {
+      display: flex !important;
     }
   }
 
   @media (max-width: 640px) {
     .nav__inner {
-      padding-inline: var(--s-6);
+      padding-inline: var(--s-4);
     }
 
-    .nav__cta {
-      display: none;
+    .nav__github::after {
+      left: auto;
+      right: 0;
+      transform: translate(0, 2px);
+    }
+
+    .nav__github:hover::after,
+    .nav__github:focus-visible::after {
+      transform: translate(0, 0);
     }
   }
 </style>
 
 <script>
+  const breakpoint = window.matchMedia('(max-width: 1050px)');
   const toggle = document.querySelector<HTMLButtonElement>('[data-nav-toggle]');
-  const sheet = document.querySelector<HTMLElement>('#nav-sheet');
+  const panel = document.querySelector<HTMLElement>('#nav-sheet');
 
-  if (toggle && sheet) {
+  if (toggle && panel) {
+    const close = (returnFocus = false) => {
+      const panelHasFocus =
+        document.activeElement instanceof Node && panel.contains(document.activeElement);
+
+      panel.removeAttribute('data-open');
+      panel.hidden = breakpoint.matches;
+      toggle.setAttribute('aria-expanded', 'false');
+      if (returnFocus && panelHasFocus) toggle.focus();
+    };
+
+    const open = () => {
+      panel.hidden = false;
+      panel.setAttribute('data-open', '');
+      toggle.setAttribute('aria-expanded', 'true');
+    };
+
+    const resetForBreakpoint = () => {
+      close(true);
+      if (!breakpoint.matches) panel.hidden = false;
+    };
+
+    resetForBreakpoint();
     toggle.addEventListener('click', () => {
-      const open = sheet.hasAttribute('data-open');
-
-      if (open) {
-        sheet.removeAttribute('data-open');
-        sheet.hidden = true;
-      } else {
-        sheet.hidden = false;
-        sheet.setAttribute('data-open', '');
-      }
-
-      toggle.setAttribute('aria-expanded', String(!open));
+      if (panel.hasAttribute('data-open')) close();
+      else open();
     });
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && panel.hasAttribute('data-open')) close(true);
+    });
+    breakpoint.addEventListener('change', resetForBreakpoint);
   }
 </script>

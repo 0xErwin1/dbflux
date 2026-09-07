@@ -114,6 +114,59 @@ kbd {
   font-family: var(--font-mono);
 }
 
+/* Shiki emits all Ayu color sets as custom properties when defaultColor is false. */
+html:not([data-theme]) .astro-code,
+html[data-theme='dark'] .astro-code {
+  color: var(--shiki-dark) !important;
+  background-color: var(--shiki-dark-bg) !important;
+}
+
+html:not([data-theme]) .astro-code span,
+html[data-theme='dark'] .astro-code span {
+  color: var(--shiki-dark) !important;
+  font-style: var(--shiki-dark-font-style) !important;
+  font-weight: var(--shiki-dark-font-weight) !important;
+  text-decoration: var(--shiki-dark-text-decoration) !important;
+}
+
+html[data-theme='light'] .astro-code {
+  color: var(--shiki-light) !important;
+  background-color: var(--shiki-light-bg) !important;
+}
+
+html[data-theme='light'] .astro-code span {
+  color: var(--shiki-light) !important;
+  font-style: var(--shiki-light-font-style) !important;
+  font-weight: var(--shiki-light-font-weight) !important;
+  text-decoration: var(--shiki-light-text-decoration) !important;
+}
+
+html[data-theme='mirage'] .astro-code {
+  color: var(--shiki-mirage) !important;
+  background-color: var(--shiki-mirage-bg) !important;
+}
+
+html[data-theme='mirage'] .astro-code span {
+  color: var(--shiki-mirage) !important;
+  font-style: var(--shiki-mirage-font-style) !important;
+  font-weight: var(--shiki-mirage-font-weight) !important;
+  text-decoration: var(--shiki-mirage-text-decoration) !important;
+}
+
+@media (prefers-color-scheme: light) {
+  html:not([data-theme]) .astro-code {
+    color: var(--shiki-light) !important;
+    background-color: var(--shiki-light-bg) !important;
+  }
+
+  html:not([data-theme]) .astro-code span {
+    color: var(--shiki-light) !important;
+    font-style: var(--shiki-light-font-style) !important;
+    font-weight: var(--shiki-light-font-weight) !important;
+    text-decoration: var(--shiki-light-text-decoration) !important;
+  }
+}
+
 .skip-link {
   position: absolute;
   left: var(--s-5);

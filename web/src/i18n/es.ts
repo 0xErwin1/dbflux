@@ -10,6 +10,11 @@ export const es: Dictionary = {
     download: 'Descargar',
     menu: 'Menú',
     language: 'Idioma',
+    theme: 'Tema',
+    theme_system: 'Sistema',
+    theme_light: 'Claro',
+    theme_dark: 'Oscuro',
+    theme_mirage: 'Espejismo',
   },
   footer: {
     product: 'Producto',
@@ -82,9 +87,9 @@ export const es: Dictionary = {
     download_windows: 'Descargar para Windows',
     view_source: 'Ver código fuente',
     platforms_meta: 'Linux · macOS · Windows — MIT o Apache-2.0',
-    hero_caption: 'Servidor principal — SELECT * FROM public.transactions (1.5s)',
+    hero_caption: 'Main server — acta.documents',
     hero_alt:
-      'DBFlux con un árbol de conexión abierto, mostrando bases de datos, esquemas, rutinas y métricas de instancia de un servidor PostgreSQL.',
+      'DBFlux mostrando los resultados de la consulta acta.documents, con una barra lateral de conexiones y detalles de la fila seleccionada.',
     drivers_eyebrow: 'Drivers integrados',
     drivers_link: 'Matriz de capacidades →',
     drivers_note:

@@ -70,6 +70,33 @@ const xDefaultHref =
 <!doctype html>
 <html lang={locale}>
   <head>
+    <script is:inline>
+      (() => {
+        const key = 'dbflux-theme';
+        let preference = 'system';
+        try {
+          const stored = localStorage.getItem(key);
+          if (
+            stored === 'light' ||
+            stored === 'dark' ||
+            stored === 'mirage' ||
+            stored === 'system'
+          ) {
+            preference = stored;
+          }
+        } catch {
+          // Storage can be unavailable in privacy-restricted browsing contexts.
+        }
+        const theme =
+          preference === 'system'
+            ? matchMedia('(prefers-color-scheme: dark)').matches
+              ? 'dark'
+              : 'light'
+            : preference;
+        document.documentElement.dataset.themePreference = preference;
+        document.documentElement.dataset.theme = theme;
+      })();
+    </script>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{title}</title>

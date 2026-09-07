@@ -9,6 +9,7 @@
  * Names describe role, never appearance, so a value can change without a rename.
  */
 :root {
+  color-scheme: dark;
   --bg: #0a0e14;
   --panel: #0f1419;
   --raised: #151e2b;
@@ -108,4 +109,117 @@
   --z-scrim: 300;
   --z-modal: 310;
   --z-tooltip: 400;
+  --glow-success: color-mix(in srgb, var(--success) 55%, transparent);
+}
+
+/* Follow the operating system only until an explicit theme has been resolved. */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    color-scheme: light;
+    --bg: #f8f6f1;
+    --panel: #fffdf8;
+    --raised: #f0ece3;
+    --selection: #f6d7a8;
+    --scrim: rgba(35, 31, 24, 0.4);
+    --scrollbar-thumb: rgba(74, 64, 48, 0.24);
+    --scrollbar-thumb-hover: rgba(74, 64, 48, 0.38);
+    --text: #4a4030;
+    --text-strong: #231f18;
+    --text-muted: #685d4c;
+    --text-faint: #8a7d6a;
+    --border: #ded6c8;
+    --border-interactive: #8a7d6a;
+    --accent: #a85f00;
+    --accent-hover: #864c00;
+    --accent-active: #6d3d00;
+    --accent-on: #ffffff;
+    --link: #075f9f;
+    --link-hover: #034d83;
+    --success: #4d7910;
+    --warning: #9a5a00;
+    --danger: #ba343b;
+    --danger-on: #ffffff;
+    --series-1: #075f9f;
+    --series-2: #4d7910;
+    --series-3: #a85f00;
+    --series-4: #ba343b;
+    --series-5: #7652a8;
+    --series-6: #087b68;
+    --shadow-md: 0 4px 8px rgba(55, 45, 30, 0.12);
+    --shadow-lg: 0 8px 24px rgba(55, 45, 30, 0.18);
+  }
+}
+
+html[data-theme='dark'] {
+  color-scheme: dark;
+}
+
+html[data-theme='light'] {
+  color-scheme: light;
+  --bg: #f8f6f1;
+  --panel: #fffdf8;
+  --raised: #f0ece3;
+  --selection: #f6d7a8;
+  --scrim: rgba(35, 31, 24, 0.4);
+  --scrollbar-thumb: rgba(74, 64, 48, 0.24);
+  --scrollbar-thumb-hover: rgba(74, 64, 48, 0.38);
+  --text: #4a4030;
+  --text-strong: #231f18;
+  --text-muted: #685d4c;
+  --text-faint: #8a7d6a;
+  --border: #ded6c8;
+  --border-interactive: #8a7d6a;
+  --accent: #a85f00;
+  --accent-hover: #864c00;
+  --accent-active: #6d3d00;
+  --accent-on: #ffffff;
+  --link: #075f9f;
+  --link-hover: #034d83;
+  --success: #4d7910;
+  --warning: #9a5a00;
+  --danger: #ba343b;
+  --danger-on: #ffffff;
+  --series-1: #075f9f;
+  --series-2: #4d7910;
+  --series-3: #a85f00;
+  --series-4: #ba343b;
+  --series-5: #7652a8;
+  --series-6: #087b68;
+  --shadow-md: 0 4px 8px rgba(55, 45, 30, 0.12);
+  --shadow-lg: 0 8px 24px rgba(55, 45, 30, 0.18);
+}
+
+html[data-theme='mirage'] {
+  color-scheme: dark;
+  --bg: #1f2430;
+  --panel: #232834;
+  --raised: #242936;
+  --selection: #33415e;
+  --scrim: rgba(0, 0, 0, 0.45);
+  --scrollbar-thumb: rgba(203, 204, 198, 0.14);
+  --scrollbar-thumb-hover: rgba(203, 204, 198, 0.22);
+  --text: #cbccc6;
+  --text-strong: #ffffff;
+  --text-muted: #8f98aa;
+  --text-faint: #707a8c;
+  --border: #3a4052;
+  --border-interactive: #707a8c;
+  --accent: #ffcc66;
+  --accent-hover: #e6b85c;
+  --accent-active: #cca352;
+  --accent-on: #1f2430;
+  --link: #73d0ff;
+  --link-hover: #8bd8ff;
+  --success: #aad94c;
+  --warning: #ffcc66;
+  --danger: #f28779;
+  --danger-on: #ffffff;
+  --series-1: #73d0ff;
+  --series-2: #aad94c;
+  --series-3: #ffcc66;
+  --series-4: #f28779;
+  --series-5: #d4bfff;
+  --series-6: #95e6cb;
+  --shadow-md: 0 4px 8px rgba(0, 0, 0, 0.24);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.32);
 }

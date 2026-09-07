@@ -10,6 +10,11 @@ export const zh_Hans: Dictionary = {
     download: '下载',
     menu: '菜单',
     language: '语言',
+    theme: '主题',
+    theme_system: '跟随系统',
+    theme_light: '浅色',
+    theme_dark: '深色',
+    theme_mirage: '幻影',
   },
   footer: {
     product: '产品',
@@ -81,9 +86,8 @@ export const zh_Hans: Dictionary = {
     download_windows: '下载 Windows 版',
     view_source: '查看源代码',
     platforms_meta: 'Linux · macOS · Windows — MIT 或 Apache-2.0',
-    hero_caption: '主服务器 — SELECT * FROM public.transactions (1.5s)',
-    hero_alt:
-      'DBFlux 打开了一个连接树，展示一台 PostgreSQL 服务器的数据库、schema、例程和实例指标。',
+    hero_caption: 'Main server — acta.documents',
+    hero_alt: 'DBFlux 显示 acta.documents 查询结果，左侧为连接侧边栏，并展示所选行的详细信息。',
     drivers_eyebrow: '内置驱动',
     drivers_link: '能力矩阵 →',
     drivers_note:

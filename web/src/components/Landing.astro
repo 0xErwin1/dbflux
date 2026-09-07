@@ -111,7 +111,7 @@ const APPLICATION = {
   programmingLanguage: 'Rust',
   codeRepository: REPO,
   downloadUrl: `${REPO}/releases`,
-  screenshot: `${SITE_ORIGIN}/img/app-hero.jpg`,
+  screenshot: `${SITE_ORIGIN}/img/app-hero-light.png`,
   license: [`${REPO}/blob/main/LICENSE-MIT`, `${REPO}/blob/main/LICENSE-APACHE`],
   isAccessibleForFree: true,
   offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
@@ -142,7 +142,36 @@ const APPLICATION = {
       <span class="dot" aria-hidden="true"></span>
       {t(locale, 'landing.hero_caption')}
     </figcaption>
-    <img src="/img/app-hero.jpg" width="1400" height="751" alt={t(locale, 'landing.hero_alt')} />
+    <img data-hero-shot hidden width="1908" height="1023" alt={t(locale, 'landing.hero_alt')} />
+    <noscript>
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="/img/app-hero-dark.png" />
+        <img
+          src="/img/app-hero-light.png"
+          width="1908"
+          height="1023"
+          alt={t(locale, 'landing.hero_alt')}
+        />
+      </picture>
+    </noscript>
+    <script is:inline>
+      (() => {
+        const hero = document.querySelector('[data-hero-shot]');
+        if (!(hero instanceof HTMLImageElement)) return;
+        const assets = {
+          light: '/img/app-hero-light.png',
+          dark: '/img/app-hero-dark.png',
+          mirage: '/img/app-hero-mirage.png',
+        };
+        const update = () => {
+          const theme = document.documentElement.dataset.theme;
+          hero.src = assets[theme === 'dark' || theme === 'mirage' ? theme : 'light'];
+          hero.hidden = false;
+        };
+        update();
+        window.addEventListener('dbflux-theme-change', update);
+      })();
+    </script>
   </figure>
 </section>
 
@@ -240,7 +269,7 @@ const APPLICATION = {
 
   .hero {
     display: grid;
-    grid-template-columns: 5fr 7fr;
+    grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
     gap: var(--s-8);
     align-items: center;
     padding-block: var(--s-9);
@@ -277,6 +306,7 @@ const APPLICATION = {
 
   .hero__shot {
     margin: 0;
+    min-width: 0;
   }
 
   .hero__shot figcaption {
@@ -293,9 +323,15 @@ const APPLICATION = {
   }
 
   .hero__shot img {
+    width: 100%;
+    max-width: 100%;
     border: var(--bw) solid var(--border);
     height: auto;
     transition: border-color 240ms linear;
+  }
+
+  .hero__shot img[hidden] {
+    display: none;
   }
 
   .hero__shot img:hover {
@@ -304,10 +340,10 @@ const APPLICATION = {
 
   @keyframes pulse {
     0% {
-      box-shadow: 0 0 0 0 rgba(170, 217, 76, 0.55);
+      box-shadow: 0 0 0 0 var(--glow-success);
     }
     70% {
-      box-shadow: 0 0 0 7px rgba(170, 217, 76, 0);
+      box-shadow: 0 0 0 7px transparent;
     }
     100% {
       box-shadow: 0 0 0 0 rgba(170, 217, 76, 0);
