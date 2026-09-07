@@ -9,23 +9,26 @@ use dbflux_core::TransferColumn;
 use dbflux_transfer::manifest::ManifestTable;
 use dbflux_transfer::{ColumnMappingOverride, TableMappingMode};
 
-/// Ordered (label, mode) pairs for the mapping-mode picker. `Truncate` is
-/// filtered out by [`mapping_mode_options`] when the target lacks
+/// Ordered modes for the mapping-mode picker. `Truncate` is filtered out by
+/// [`mapping_mode_options`] when the target lacks
 /// `DriverCapabilities::TRUNCATE_TABLE` — unavailable, not a runtime error
 /// (mirrors the `DISABLE_FK_CHECKS` missing-capability pattern from R7).
-const MAPPING_MODE_OPTIONS: &[(&str, TableMappingMode)] = &[
-    ("Create", TableMappingMode::Create),
-    ("Existing (insert only)", TableMappingMode::Existing),
-    ("Recreate (drop + create)", TableMappingMode::Recreate),
-    ("Skip", TableMappingMode::Skip),
-    ("Truncate (empty + insert)", TableMappingMode::Truncate),
+const MAPPING_MODE_OPTIONS: &[TableMappingMode] = &[
+    TableMappingMode::Create,
+    TableMappingMode::Existing,
+    TableMappingMode::Recreate,
+    TableMappingMode::Skip,
+    TableMappingMode::Truncate,
 ];
 
-pub fn mapping_mode_options(supports_truncate: bool) -> Vec<(&'static str, TableMappingMode)> {
+/// Translated (label, mode) pairs for the mapping-mode dropdown, via
+/// `crate::labels::import_mapping_mode_label`.
+pub fn mapping_mode_options(supports_truncate: bool) -> Vec<(String, TableMappingMode)> {
     MAPPING_MODE_OPTIONS
         .iter()
         .copied()
-        .filter(|(_, mode)| supports_truncate || *mode != TableMappingMode::Truncate)
+        .filter(|mode| supports_truncate || *mode != TableMappingMode::Truncate)
+        .map(|mode| (crate::labels::import_mapping_mode_label(mode), mode))
         .collect()
 }
 
@@ -172,6 +175,19 @@ mod tests {
                 .iter()
                 .any(|(_, mode)| *mode == TableMappingMode::Truncate)
         );
+    }
+
+    /// PR 26a: `mapping_mode_options` is widened from `Vec<(&'static str,
+    /// TableMappingMode)>` to `Vec<(String, TableMappingMode)>`, with every
+    /// label routed through `crate::labels::import_mapping_mode_label` and
+    /// the translation catalog rather than a hardcoded English literal.
+    #[test]
+    fn mapping_mode_options_labels_are_owned_strings_from_the_translation_catalog() {
+        let options: Vec<(String, TableMappingMode)> = mapping_mode_options(true);
+
+        for (label, mode) in &options {
+            assert_eq!(*label, crate::labels::import_mapping_mode_label(*mode));
+        }
     }
 
     #[test]

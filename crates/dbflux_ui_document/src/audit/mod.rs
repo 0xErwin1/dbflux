@@ -62,31 +62,31 @@ struct AuditContextMenuState {
 }
 
 /// Flat list of context menu items.  Separators carry `action: None`.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct AuditMenuItem {
-    label: &'static str,
+    label: SharedString,
     action: Option<AuditContextMenuAction>,
     icon: Option<AppIcon>,
 }
 
 impl AuditMenuItem {
-    const fn item(label: &'static str, action: AuditContextMenuAction, icon: AppIcon) -> Self {
+    fn item(label: impl Into<SharedString>, action: AuditContextMenuAction, icon: AppIcon) -> Self {
         Self {
-            label,
+            label: label.into(),
             action: Some(action),
             icon: Some(icon),
         }
     }
 
-    const fn separator() -> Self {
+    fn separator() -> Self {
         Self {
-            label: "",
+            label: SharedString::default(),
             action: None,
             icon: None,
         }
     }
 
-    fn is_separator(self) -> bool {
+    fn is_separator(&self) -> bool {
         self.action.is_none()
     }
 }
@@ -287,7 +287,7 @@ impl AuditDocument {
 
         let dropdown_timestamp_mode = cx.new(|_cx| {
             Dropdown::new("audit-timestamp-mode")
-                .placeholder("Local")
+                .placeholder(dbflux_i18n::t!("document.audit.filter.placeholder.local"))
                 .items(Self::timestamp_mode_items())
                 .selected_index(Some(0))
                 .toolbar_style(true)
@@ -295,21 +295,24 @@ impl AuditDocument {
 
         let multi_select_level = cx.new(|cx| {
             let items: Vec<DropdownItem> = Self::level_items();
-            let mut ms = MultiSelect::new("audit-level").placeholder("Level");
+            let mut ms = MultiSelect::new("audit-level")
+                .placeholder(dbflux_i18n::t!("document.audit.detail.level"));
             ms.set_items(items, cx);
             ms
         });
 
         let multi_select_category = cx.new(|cx| {
             let items: Vec<DropdownItem> = Self::category_items();
-            let mut ms = MultiSelect::new("audit-category").placeholder("Category");
+            let mut ms = MultiSelect::new("audit-category")
+                .placeholder(dbflux_i18n::t!("document.audit.detail.category"));
             ms.set_items(items, cx);
             ms
         });
 
         let multi_select_outcome = cx.new(|cx| {
             let items: Vec<DropdownItem> = Self::outcome_items();
-            let mut ms = MultiSelect::new("audit-outcome").placeholder("Outcome");
+            let mut ms = MultiSelect::new("audit-outcome")
+                .placeholder(dbflux_i18n::t!("document.audit.detail.outcome"));
             ms.set_items(items, cx);
             ms
         });
@@ -838,35 +841,35 @@ impl AuditDocument {
         filters
     }
 
-    fn source_loading_label(&self) -> &'static str {
+    fn source_loading_label(&self) -> String {
         if self.is_external_event_stream() {
-            "Loading events..."
+            dbflux_i18n::t!("document.audit.source.loading.external")
         } else {
-            "Loading audit events..."
+            dbflux_i18n::t!("document.audit.source.loading.internal")
         }
     }
 
-    fn source_error_heading(&self) -> &'static str {
+    fn source_error_heading(&self) -> String {
         if self.is_external_event_stream() {
-            "Failed to load events"
+            dbflux_i18n::t!("document.audit.source.error_heading.external")
         } else {
-            "Failed to load audit events"
+            dbflux_i18n::t!("document.audit.source.error_heading.internal")
         }
     }
 
-    fn source_empty_label(&self) -> &'static str {
+    fn source_empty_label(&self) -> String {
         if self.is_external_event_stream() {
-            "No events match the current filters."
+            dbflux_i18n::t!("document.audit.source.empty.external")
         } else {
-            "No audit events match the current filters."
+            dbflux_i18n::t!("document.audit.source.empty.internal")
         }
     }
 
-    fn source_row_label(&self) -> &'static str {
+    fn source_row_label(&self) -> String {
         if self.is_external_event_stream() {
-            "events"
+            dbflux_i18n::t!("document.audit.row.unit.events")
         } else {
-            "rows"
+            dbflux_i18n::t!("document.audit.row.unit.rows")
         }
     }
 
@@ -1033,7 +1036,7 @@ impl AuditDocument {
         let request_id = self.load_request_id;
         self.is_loading = true;
         self.export_menu_open = false;
-        self.status_message = Some(self.source_loading_label().to_string());
+        self.status_message = Some(self.source_loading_label());
         cx.notify();
 
         let page_filter = self.active_filter(
@@ -1046,7 +1049,7 @@ impl AuditDocument {
                 Some(self.app_state.update(cx, |state, _| {
                     let (task_id, _) = state.start_task_for_profile(
                         dbflux_core::TaskKind::Query,
-                        format!("Loading event stream: {}", self.title),
+                        crate::labels::audit_loading_event_stream_task_label(&self.title),
                         Some(*profile_id),
                     );
                     task_id
@@ -1082,7 +1085,7 @@ impl AuditDocument {
                     self.expanded_event_ids.clear();
                     self.is_loading = false;
                     self.status_message =
-                        Some("Connection not found for this event source".to_string());
+                        Some(crate::labels::audit_event_source_connection_not_found());
                     cx.notify();
                     return;
                 };
@@ -1148,10 +1151,10 @@ impl AuditDocument {
                         doc.expanded_event_ids.clear();
                         doc.clear_external_inline_inputs();
                         doc.is_loading = false;
-                        doc.status_message = Some(format!("Error loading events: {}", error));
+                        doc.status_message = Some(crate::labels::audit_events_load_failed(&error));
 
                         if let Some(task_id) = task_id {
-                            let details = format!("Error loading events: {}", error);
+                            let details = crate::labels::audit_events_load_failed(&error);
                             doc.app_state.update(cx, |state, _| {
                                 state.fail_task_with_details(task_id, error.clone(), details);
                             });
@@ -1375,6 +1378,7 @@ impl AuditDocument {
             DropdownItem::with_value("System", "system"),
             DropdownItem::with_value("MCP", "mcp"),
             DropdownItem::with_value("Governance", "governance"),
+            DropdownItem::with_value("Object Storage", "object_storage"),
         ]
     }
 
@@ -1389,6 +1393,7 @@ impl AuditDocument {
             Some(EventCategory::System) => 6,
             Some(EventCategory::Mcp) => 7,
             Some(EventCategory::Governance) => 8,
+            Some(EventCategory::ObjectStorage) => 9,
             None => 0,
         }
     }
@@ -1404,6 +1409,7 @@ impl AuditDocument {
             6 => Some(EventCategory::System),
             7 => Some(EventCategory::Mcp),
             8 => Some(EventCategory::Governance),
+            9 => Some(EventCategory::ObjectStorage),
             _ => None,
         }
     }
@@ -1516,7 +1522,7 @@ impl AuditDocument {
     fn do_export(&mut self, format: String, cx: &mut Context<Self>) {
         let AuditDocumentSource::Internal { adapter } = &self.source else {
             self.pending_toast = Some(PendingToast {
-                message: "Export is only available for the built-in audit viewer".to_string(),
+                message: crate::labels::audit_export_unsupported_source_toast(),
                 is_error: true,
             });
             cx.notify();
@@ -1547,11 +1553,11 @@ impl AuditDocument {
 
                 let message = match write_export_file(std::path::Path::new(&path), &bytes) {
                     Ok(()) => PendingToast {
-                        message: format!("Exported {} events to {}", event_count, path),
+                        message: crate::labels::audit_export_exported_toast(event_count, &path),
                         is_error: false,
                     },
                     Err(error) => PendingToast {
-                        message: format!("Export failed to write file: {}", error),
+                        message: crate::labels::audit_export_write_failed_error(&error.to_string()),
                         is_error: true,
                     },
                 };
@@ -1567,7 +1573,7 @@ impl AuditDocument {
                 let _ = cx.update(|cx| {
                     this.update(cx, |doc, cx| {
                         doc.pending_toast = Some(PendingToast {
-                            message: format!("Export failed: {}", error),
+                            message: crate::labels::audit_export_failed_error(&error),
                             is_error: true,
                         });
                         cx.notify();
@@ -1773,5 +1779,51 @@ mod tests {
             0o600,
             "export file must be owner read/write only"
         );
+    }
+
+    const SOURCE_AND_ROW_KEYS: &[&str] = &[
+        "document.audit.row.unit.events",
+        "document.audit.row.unit.rows",
+        "document.audit.source.empty.external",
+        "document.audit.source.empty.internal",
+        "document.audit.source.error_heading.external",
+        "document.audit.source.error_heading.internal",
+        "document.audit.source.loading.external",
+        "document.audit.source.loading.internal",
+    ];
+
+    #[test]
+    fn audit_source_and_row_keys_resolve_in_both_locales() {
+        for key in SOURCE_AND_ROW_KEYS {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, *key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn audit_source_loading_internal_label_differs_between_locales() {
+        let en = dbflux_i18n::t!("document.audit.source.loading.internal", locale = "en");
+        let es = dbflux_i18n::t!("document.audit.source.loading.internal", locale = "es");
+
+        assert_eq!(en, "Loading audit events…");
+        assert_ne!(en, es);
+    }
+
+    #[test]
+    fn audit_row_unit_rows_label_differs_between_locales() {
+        let en = dbflux_i18n::t!("document.audit.row.unit.rows", locale = "en");
+        let es = dbflux_i18n::t!("document.audit.row.unit.rows", locale = "es");
+
+        assert_eq!(en, "rows");
+        assert_ne!(en, es);
     }
 }

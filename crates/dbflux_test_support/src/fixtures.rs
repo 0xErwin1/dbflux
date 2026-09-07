@@ -84,6 +84,7 @@ pub fn relational_schema_with_table(
         sample_fields: None,
         presentation: dbflux_core::CollectionPresentation::DataGrid,
         child_items: None,
+        storage_hints: None,
     };
 
     let schema = DbSchemaInfo {

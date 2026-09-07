@@ -130,7 +130,10 @@ impl DocumentTree {
             return input.clone();
         }
 
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Search..."));
+        let input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(dbflux_i18n::t!("document_tree.search_placeholder"))
+        });
 
         let state = self.state.clone();
         let subscription = cx.subscribe(&input, move |_this, input, event, cx| {
@@ -435,9 +438,9 @@ fn render_toolbar(
         .bg(theme.secondary.opacity(0.3))
         .child(
             Text::caption(if is_tree_mode {
-                "Tree View"
+                dbflux_i18n::t!("document_tree.view.tree")
             } else {
-                "Raw JSON"
+                dbflux_i18n::t!("document_tree.view.raw_json")
             })
             .font_size(FontSizes::XS),
         )
@@ -487,7 +490,7 @@ fn render_search_bar(
             match_count
         )
     } else {
-        "No matches".to_string()
+        dbflux_i18n::t!("document_tree.no_matches")
     };
 
     div()
@@ -788,5 +791,36 @@ fn render_value_preview_with_expand(
                     }
                 });
             })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn document_tree_keys_resolve_in_both_locales() {
+        let keys = [
+            "document_tree.search_placeholder",
+            "document_tree.view.tree",
+            "document_tree.view.raw_json",
+            "document_tree.no_matches",
+        ];
+
+        for key in keys {
+            let en = dbflux_i18n::t!(key, locale = "en");
+            let es = dbflux_i18n::t!(key, locale = "es");
+            assert!(!en.is_empty() && en != key, "en missing for {key}");
+            assert!(!es.is_empty() && es != key, "es missing for {key}");
+        }
+    }
+
+    #[test]
+    fn document_tree_raw_json_differs_between_locales() {
+        let en = dbflux_i18n::t!("document_tree.view.raw_json", locale = "en");
+        let es = dbflux_i18n::t!("document_tree.view.raw_json", locale = "es");
+        assert_ne!(en, es);
     }
 }

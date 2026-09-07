@@ -20,15 +20,19 @@ dbflux_app.workspace = true
 dbflux_audit.workspace = true
 dbflux_storage.workspace = true
 dbflux_export.workspace = true
+dbflux_i18n.workspace = true
 dbflux_transfer.workspace = true
 dbflux_schema_viz.workspace = true
 petgraph.workspace = true
 uuid.workspace = true
+chrono.workspace = true
 log.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 lsp-types = { workspace = true }
 anyhow = { workspace = true }
 rfd.workspace = true
+image.workspace = true
 dbflux_mcp = { workspace = true, optional = true }
 dbflux_policy = { workspace = true, optional = true }
 
@@ -45,3 +49,5 @@ aws = ["dbflux_app/aws", "dbflux_ui_base/aws"]
 gpui = { workspace = true, features = ["test-support"] }
 dbflux_driver_mssql = { workspace = true }
 dbflux_test_support = { workspace = true }
+flate2.workspace = true
+rmp-serde.workspace = true

@@ -58,6 +58,14 @@ pub struct ConnectionDriverConfigDto {
     // SQL Server-specific
     pub mssql_instance: Option<String>,
     pub mssql_trust_server_certificate: bool,
+    // S3-specific (region/profile/endpoint reuse the dynamo_* columns above,
+    // the same convention CloudWatchLogs already uses)
+    pub s3_access_key_id: Option<String>,
+    pub s3_path_style: bool,
+    // Redis topology fields
+    pub redis_topology: Option<String>,
+    pub redis_sentinel_master_name: Option<String>,
+    pub redis_additional_nodes: Option<String>,
 }
 
 impl ConnectionDriverConfigDto {
@@ -99,6 +107,11 @@ impl ConnectionDriverConfigDto {
             external_values_json: None,
             mssql_instance: None,
             mssql_trust_server_certificate: true,
+            s3_access_key_id: None,
+            s3_path_style: false,
+            redis_topology: None,
+            redis_sentinel_master_name: None,
+            redis_additional_nodes: None,
         }
     }
 
@@ -206,6 +219,9 @@ impl ConnectionDriverConfigDto {
                 ssl_client_cert_path,
                 ssl_client_key_path,
                 ssh_tunnel,
+                topology,
+                sentinel_master_name,
+                additional_nodes,
                 ..
             } => {
                 dto.use_uri = *use_uri;
@@ -222,6 +238,9 @@ impl ConnectionDriverConfigDto {
                 dto.ssl_ca = ssl_root_cert_path.clone();
                 dto.ssl_cert = ssl_client_cert_path.clone();
                 dto.ssl_key = ssl_client_key_path.clone();
+                dto.redis_topology = topology.clone();
+                dto.redis_sentinel_master_name = sentinel_master_name.clone();
+                dto.redis_additional_nodes = additional_nodes.clone();
                 if let Some(tunnel) = ssh_tunnel {
                     fill_ssh_tunnel_fields(&mut dto, tunnel);
                 }
@@ -303,6 +322,58 @@ impl ConnectionDriverConfigDto {
                 if let Some(tunnel) = ssh_tunnel {
                     fill_ssh_tunnel_fields(&mut dto, tunnel);
                 }
+            }
+            DbConfig::Redshift {
+                use_uri,
+                uri,
+                host,
+                port,
+                user,
+                database,
+                ssl_mode,
+                ssl_root_cert_path,
+                ssl_client_cert_path,
+                ssl_client_key_path,
+                ssh_tunnel,
+                ..
+            } => {
+                dto.use_uri = *use_uri;
+                dto.uri = uri.clone();
+                dto.host = Some(host.clone());
+                dto.port = Some(*port as i32);
+                dto.user = Some(user.clone());
+                dto.database_name = Some(database.clone());
+                dto.ssl_mode = ssl_mode_to_str(ssl_mode);
+                dto.ssl_ca = ssl_root_cert_path.clone();
+                dto.ssl_cert = ssl_client_cert_path.clone();
+                dto.ssl_key = ssl_client_key_path.clone();
+                if let Some(tunnel) = ssh_tunnel {
+                    fill_ssh_tunnel_fields(&mut dto, tunnel);
+                }
+            }
+            DbConfig::S3 {
+                region,
+                profile,
+                access_key_id,
+                endpoint,
+                path_style,
+            } => {
+                dto.dynamo_region = Some(region.clone());
+                dto.dynamo_profile = profile.clone();
+                dto.dynamo_endpoint = endpoint.clone();
+                dto.s3_access_key_id = access_key_id.clone();
+                dto.s3_path_style = *path_style;
+            }
+            DbConfig::ClickHouse {
+                url,
+                user,
+                database,
+                request_timeout_seconds,
+            } => {
+                dto.uri = Some(url.clone());
+                dto.user = Some(user.clone());
+                dto.database_name = Some(database.clone());
+                dto.connect_timeout_secs = persist_timeout_seconds(*request_timeout_seconds);
             }
             DbConfig::External { kind, values } => {
                 dto.external_kind = Some(db_kind_to_str(*kind));
@@ -405,6 +476,9 @@ impl ConnectionDriverConfigDto {
                     ssl_client_key_path: self.ssl_key.clone(),
                     ssh_tunnel,
                     ssh_tunnel_profile_id: None,
+                    topology: self.redis_topology.clone(),
+                    sentinel_master_name: self.redis_sentinel_master_name.clone(),
+                    additional_nodes: self.redis_additional_nodes.clone(),
                 })
             }
             DbKind::SQLite => Some(DbConfig::SQLite {
@@ -488,6 +562,45 @@ impl ConnectionDriverConfigDto {
                     ssh_tunnel_profile_id: None,
                 })
             }
+            DbKind::Redshift => {
+                let ssh_tunnel = build_ssh_tunnel(self);
+
+                Some(DbConfig::Redshift {
+                    use_uri: self.use_uri,
+                    uri: self.uri.clone(),
+                    host: self.host.clone().unwrap_or_default(),
+                    port: self.port.unwrap_or(5439) as u16,
+                    user: self.user.clone().unwrap_or_default(),
+                    database: self.database_name.clone().unwrap_or_default(),
+                    ssl_mode: str_to_ssl_mode_opt(&self.ssl_mode),
+                    ssl_root_cert_path: self.ssl_ca.clone(),
+                    ssl_client_cert_path: self.ssl_cert.clone(),
+                    ssl_client_key_path: self.ssl_key.clone(),
+                    ssh_tunnel,
+                    ssh_tunnel_profile_id: None,
+                })
+            }
+            DbKind::S3 => Some(DbConfig::S3 {
+                region: self.dynamo_region.clone().unwrap_or_default(),
+                profile: self.dynamo_profile.clone(),
+                access_key_id: self.s3_access_key_id.clone(),
+                endpoint: self.dynamo_endpoint.clone(),
+                path_style: self.s3_path_style,
+            }),
+            DbKind::ClickHouse => Some(DbConfig::ClickHouse {
+                url: self
+                    .uri
+                    .clone()
+                    .unwrap_or_else(|| "http://localhost:8123".to_string()),
+                user: self.user.clone().unwrap_or_else(|| "default".to_string()),
+                database: self
+                    .database_name
+                    .clone()
+                    .unwrap_or_else(|| "default".to_string()),
+                request_timeout_seconds: self
+                    .connect_timeout_secs
+                    .and_then(|timeout| u64::try_from(timeout).ok()),
+            }),
         }
     }
 }
@@ -508,6 +621,9 @@ fn db_kind_to_str(kind: DbKind) -> String {
         DbKind::CloudWatchLogs => "CloudWatchLogs",
         DbKind::InfluxDB => "InfluxDB",
         DbKind::SqlServer => "SqlServer",
+        DbKind::Redshift => "Redshift",
+        DbKind::S3 => "S3",
+        DbKind::ClickHouse => "ClickHouse",
     }
     .to_string()
 }
@@ -524,8 +640,17 @@ fn str_to_db_kind(s: &str) -> Option<DbKind> {
         "CloudWatchLogs" => Some(DbKind::CloudWatchLogs),
         "InfluxDB" => Some(DbKind::InfluxDB),
         "SqlServer" => Some(DbKind::SqlServer),
+        "Redshift" => Some(DbKind::Redshift),
+        "S3" => Some(DbKind::S3),
+        "ClickHouse" => Some(DbKind::ClickHouse),
         _ => None,
     }
+}
+
+/// The persistence column is a signed 32-bit integer; larger timeouts retain
+/// the maximum representable value instead of being silently stored as absent.
+fn persist_timeout_seconds(timeout: Option<u64>) -> Option<i32> {
+    timeout.map(|timeout| timeout.min(i32::MAX as u64) as i32)
 }
 
 /// Converts an `Option<String>` ssl_mode to the string stored in the DTO column.
@@ -643,7 +768,9 @@ impl ConnectionDriverConfigsRepository {
                     redis_tls, redis_database,
                     dynamo_region, dynamo_profile, dynamo_endpoint, dynamo_table,
                     external_kind, external_values_json,
-                    mssql_instance, mssql_trust_server_certificate
+                    mssql_instance, mssql_trust_server_certificate,
+                    s3_access_key_id, s3_path_style,
+                    redis_topology, redis_sentinel_master_name, redis_additional_nodes
                 FROM cfg_connection_driver_configs
                 WHERE profile_id = ?1
                 "#,
@@ -690,6 +817,11 @@ impl ConnectionDriverConfigsRepository {
                 external_values_json: row.get(32)?,
                 mssql_instance: row.get(33)?,
                 mssql_trust_server_certificate: row.get::<_, i32>(34)? != 0,
+                s3_access_key_id: row.get(35)?,
+                s3_path_style: row.get::<_, i32>(36)? != 0,
+                redis_topology: row.get(37)?,
+                redis_sentinel_master_name: row.get(38)?,
+                redis_additional_nodes: row.get(39)?,
             })
         });
 
@@ -719,7 +851,9 @@ impl ConnectionDriverConfigsRepository {
                     redis_tls, redis_database,
                     dynamo_region, dynamo_profile, dynamo_endpoint, dynamo_table,
                     external_kind, external_values_json,
-                    mssql_instance, mssql_trust_server_certificate
+                    mssql_instance, mssql_trust_server_certificate,
+                    s3_access_key_id, s3_path_style,
+                    redis_topology, redis_sentinel_master_name, redis_additional_nodes
                 ) VALUES (
                     ?1, ?2, ?3,
                     ?4, ?5, ?6, ?7, ?8, ?9,
@@ -731,7 +865,9 @@ impl ConnectionDriverConfigsRepository {
                     ?26, ?27,
                     ?28, ?29, ?30, ?31,
                     ?32, ?33,
-                    ?34, ?35
+                    ?34, ?35,
+                    ?36, ?37,
+                    ?38, ?39, ?40
                 )
                 "#,
                 params![
@@ -770,6 +906,11 @@ impl ConnectionDriverConfigsRepository {
                     config.external_values_json,
                     config.mssql_instance,
                     config.mssql_trust_server_certificate as i32,
+                    config.s3_access_key_id,
+                    config.s3_path_style as i32,
+                    config.redis_topology,
+                    config.redis_sentinel_master_name,
+                    config.redis_additional_nodes,
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
@@ -796,7 +937,9 @@ impl ConnectionDriverConfigsRepository {
                     redis_tls, redis_database,
                     dynamo_region, dynamo_profile, dynamo_endpoint, dynamo_table,
                     external_kind, external_values_json,
-                    mssql_instance, mssql_trust_server_certificate
+                    mssql_instance, mssql_trust_server_certificate,
+                    s3_access_key_id, s3_path_style,
+                    redis_topology, redis_sentinel_master_name, redis_additional_nodes
                 ) VALUES (
                     ?1, ?2, ?3,
                     ?4, ?5, ?6, ?7, ?8, ?9,
@@ -808,7 +951,9 @@ impl ConnectionDriverConfigsRepository {
                     ?26, ?27,
                     ?28, ?29, ?30, ?31,
                     ?32, ?33,
-                    ?34, ?35
+                    ?34, ?35,
+                    ?36, ?37,
+                    ?38, ?39, ?40
                 )
                 ON CONFLICT(profile_id) DO UPDATE SET
                     config_key = excluded.config_key,
@@ -843,7 +988,12 @@ impl ConnectionDriverConfigsRepository {
                     external_kind = excluded.external_kind,
                     external_values_json = excluded.external_values_json,
                     mssql_instance = excluded.mssql_instance,
-                    mssql_trust_server_certificate = excluded.mssql_trust_server_certificate
+                    mssql_trust_server_certificate = excluded.mssql_trust_server_certificate,
+                    s3_access_key_id = excluded.s3_access_key_id,
+                    s3_path_style = excluded.s3_path_style,
+                    redis_topology = excluded.redis_topology,
+                    redis_sentinel_master_name = excluded.redis_sentinel_master_name,
+                    redis_additional_nodes = excluded.redis_additional_nodes
                 "#,
                 params![
                     config.id,
@@ -881,6 +1031,11 @@ impl ConnectionDriverConfigsRepository {
                     config.external_values_json,
                     config.mssql_instance,
                     config.mssql_trust_server_certificate as i32,
+                    config.s3_access_key_id,
+                    config.s3_path_style as i32,
+                    config.redis_topology,
+                    config.redis_sentinel_master_name,
+                    config.redis_additional_nodes,
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
@@ -963,6 +1118,301 @@ mod tests {
                 assert_eq!(region, "us-east-1");
                 assert_eq!(profile.as_deref(), Some("dev"));
                 assert_eq!(endpoint.as_deref(), Some("http://localhost:4566"));
+            }
+            other => panic!("unexpected config: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn clickhouse_driver_config_roundtrips_through_repository() {
+        let (_temp_dir, repo) = temp_repo();
+        let profile_id = uuid::Uuid::new_v4().to_string();
+
+        repo.conn()
+            .execute(
+                r#"
+                INSERT INTO cfg_connection_profiles (
+                    id, name, driver_id, kind, created_at, updated_at
+                ) VALUES (?1, 'ClickHouse', 'clickhouse', 'ClickHouse', datetime('now'), datetime('now'))
+                "#,
+                params![profile_id],
+            )
+            .expect("insert profile");
+
+        let config = DbConfig::ClickHouse {
+            url: "https://clickhouse.example.com:8443".to_string(),
+            user: "analytics".to_string(),
+            database: "events".to_string(),
+            request_timeout_seconds: Some(45),
+        };
+
+        let dto = ConnectionDriverConfigDto::from_db_config(profile_id.clone(), &config);
+        repo.insert(&dto).expect("insert config");
+
+        let restored = repo
+            .get_for_profile(&profile_id)
+            .expect("load config")
+            .expect("stored config");
+
+        match restored.to_db_config().expect("db config") {
+            DbConfig::ClickHouse {
+                url,
+                user,
+                database,
+                request_timeout_seconds,
+            } => {
+                assert_eq!(url, "https://clickhouse.example.com:8443");
+                assert_eq!(user, "analytics");
+                assert_eq!(database, "events");
+                assert_eq!(request_timeout_seconds, Some(45));
+            }
+            other => panic!("unexpected config: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn clickhouse_timeout_clamps_to_persistence_limit() {
+        assert_eq!(
+            persist_timeout_seconds(Some(i32::MAX as u64)),
+            Some(i32::MAX)
+        );
+        assert_eq!(
+            persist_timeout_seconds(Some(i32::MAX as u64 + 1)),
+            Some(i32::MAX)
+        );
+
+        let config = DbConfig::ClickHouse {
+            url: "http://localhost:8123".to_string(),
+            user: "default".to_string(),
+            database: "default".to_string(),
+            request_timeout_seconds: Some(i32::MAX as u64 + 1),
+        };
+
+        let dto = ConnectionDriverConfigDto::from_db_config("profile".to_string(), &config);
+
+        assert_eq!(dto.connect_timeout_secs, Some(i32::MAX));
+        match dto.to_db_config().expect("db config") {
+            DbConfig::ClickHouse {
+                request_timeout_seconds,
+                ..
+            } => assert_eq!(request_timeout_seconds, Some(i32::MAX as u64)),
+            other => panic!("unexpected config: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn s3_driver_config_roundtrips_through_repository_with_profile_auth() {
+        let (_temp_dir, repo) = temp_repo();
+        let profile_id = uuid::Uuid::new_v4().to_string();
+
+        repo.conn()
+            .execute(
+                r#"
+                INSERT INTO cfg_connection_profiles (
+                    id, name, driver_id, kind, created_at, updated_at
+                ) VALUES (?1, 'S3', 's3', 's3', datetime('now'), datetime('now'))
+                "#,
+                params![profile_id],
+            )
+            .expect("insert profile");
+
+        let config = DbConfig::S3 {
+            region: "us-east-1".to_string(),
+            profile: Some("dev-sso".to_string()),
+            access_key_id: None,
+            endpoint: None,
+            path_style: false,
+        };
+
+        let dto = ConnectionDriverConfigDto::from_db_config(profile_id.clone(), &config);
+        repo.insert(&dto).expect("insert config");
+
+        let restored = repo
+            .get_for_profile(&profile_id)
+            .expect("load config")
+            .expect("stored config");
+
+        match restored.to_db_config().expect("db config") {
+            DbConfig::S3 {
+                region,
+                profile,
+                access_key_id,
+                endpoint,
+                path_style,
+            } => {
+                assert_eq!(region, "us-east-1");
+                assert_eq!(profile.as_deref(), Some("dev-sso"));
+                assert_eq!(access_key_id, None);
+                assert_eq!(endpoint, None);
+                assert!(!path_style);
+            }
+            other => panic!("unexpected config: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn s3_driver_config_roundtrips_through_repository_with_static_credentials() {
+        let (_temp_dir, repo) = temp_repo();
+        let profile_id = uuid::Uuid::new_v4().to_string();
+
+        repo.conn()
+            .execute(
+                r#"
+                INSERT INTO cfg_connection_profiles (
+                    id, name, driver_id, kind, created_at, updated_at
+                ) VALUES (?1, 'MinIO', 's3', 's3', datetime('now'), datetime('now'))
+                "#,
+                params![profile_id],
+            )
+            .expect("insert profile");
+
+        let config = DbConfig::S3 {
+            region: "us-east-1".to_string(),
+            profile: None,
+            access_key_id: Some("AKIAEXAMPLE".to_string()),
+            endpoint: Some("http://localhost:9000".to_string()),
+            path_style: true,
+        };
+
+        let dto = ConnectionDriverConfigDto::from_db_config(profile_id.clone(), &config);
+        repo.upsert(&dto).expect("upsert config");
+
+        let restored = repo
+            .get_for_profile(&profile_id)
+            .expect("load config")
+            .expect("stored config");
+
+        match restored.to_db_config().expect("db config") {
+            DbConfig::S3 {
+                region,
+                profile,
+                access_key_id,
+                endpoint,
+                path_style,
+            } => {
+                assert_eq!(region, "us-east-1");
+                assert_eq!(profile, None);
+                assert_eq!(access_key_id.as_deref(), Some("AKIAEXAMPLE"));
+                assert_eq!(endpoint.as_deref(), Some("http://localhost:9000"));
+                assert!(path_style);
+            }
+            other => panic!("unexpected config: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn redis_driver_config_roundtrips_topology_fields_through_repository() {
+        let (_temp_dir, repo) = temp_repo();
+        let profile_id = uuid::Uuid::new_v4().to_string();
+
+        repo.conn()
+            .execute(
+                r#"
+                INSERT INTO cfg_connection_profiles (
+                    id, name, driver_id, kind, created_at, updated_at
+                ) VALUES (?1, 'Redis Cluster', 'redis', 'redis', datetime('now'), datetime('now'))
+                "#,
+                params![profile_id],
+            )
+            .expect("insert profile");
+
+        let config = DbConfig::Redis {
+            use_uri: false,
+            uri: None,
+            host: "redis-1.example.com".to_string(),
+            port: 6379,
+            user: None,
+            database: None,
+            tls: false,
+            ssl_mode: Some("off".to_string()),
+            ssl_root_cert_path: None,
+            ssl_client_cert_path: None,
+            ssl_client_key_path: None,
+            ssh_tunnel: None,
+            ssh_tunnel_profile_id: None,
+            topology: Some("sentinel".to_string()),
+            sentinel_master_name: Some("mymaster".to_string()),
+            additional_nodes: Some(
+                "redis-2.example.com:26379,redis-3.example.com:26379".to_string(),
+            ),
+        };
+
+        let dto = ConnectionDriverConfigDto::from_db_config(profile_id.clone(), &config);
+        repo.insert(&dto).expect("insert config");
+
+        let restored = repo
+            .get_for_profile(&profile_id)
+            .expect("load config")
+            .expect("stored config");
+
+        match restored.to_db_config().expect("db config") {
+            DbConfig::Redis {
+                topology,
+                sentinel_master_name,
+                additional_nodes,
+                ..
+            } => {
+                assert_eq!(topology.as_deref(), Some("sentinel"));
+                assert_eq!(sentinel_master_name.as_deref(), Some("mymaster"));
+                assert_eq!(
+                    additional_nodes.as_deref(),
+                    Some("redis-2.example.com:26379,redis-3.example.com:26379")
+                );
+            }
+            other => panic!("unexpected config: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn redis_driver_config_legacy_row_loads_topology_fields_as_none() {
+        let (_temp_dir, repo) = temp_repo();
+        let profile_id = uuid::Uuid::new_v4().to_string();
+
+        repo.conn()
+            .execute(
+                r#"
+                INSERT INTO cfg_connection_profiles (
+                    id, name, driver_id, kind, created_at, updated_at
+                ) VALUES (?1, 'Legacy Redis', 'redis', 'redis', datetime('now'), datetime('now'))
+                "#,
+                params![profile_id],
+            )
+            .expect("insert profile");
+
+        // Simulate a row written before migration 028 added the topology columns:
+        // insert without them and let the column defaults (NULL) apply.
+        repo.conn()
+            .execute(
+                r#"
+                INSERT INTO cfg_connection_driver_configs (
+                    id, profile_id, config_key,
+                    use_uri, host, port, ssl_mode,
+                    redis_tls
+                ) VALUES (?1, ?2, 'Redis', 0, 'legacy-host', 6379, 'off', 0)
+                "#,
+                params![uuid::Uuid::new_v4().to_string(), profile_id],
+            )
+            .expect("insert legacy config row");
+
+        let restored = repo
+            .get_for_profile(&profile_id)
+            .expect("load config")
+            .expect("stored config");
+
+        assert_eq!(restored.redis_topology, None);
+        assert_eq!(restored.redis_sentinel_master_name, None);
+        assert_eq!(restored.redis_additional_nodes, None);
+
+        match restored.to_db_config().expect("db config") {
+            DbConfig::Redis {
+                topology,
+                sentinel_master_name,
+                additional_nodes,
+                ..
+            } => {
+                assert_eq!(topology, None);
+                assert_eq!(sentinel_master_name, None);
+                assert_eq!(additional_nodes, None);
             }
             other => panic!("unexpected config: {other:?}"),
         }

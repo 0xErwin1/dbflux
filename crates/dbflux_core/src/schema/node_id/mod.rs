@@ -205,6 +205,15 @@ pub enum SchemaNodeId {
         schema: String,
         table: String,
     },
+    /// Generic folder rendering driver-reported storage hints (e.g. Redshift
+    /// distribution/sort keys, informational-only constraints) via
+    /// `TableInfo.storage_hints`. Absent from the tree entirely when a
+    /// driver populates no hints for a table.
+    StorageHintsFolder {
+        profile_id: Uuid,
+        schema: String,
+        table: String,
+    },
 
     // Detail variants
     Column {
@@ -223,6 +232,14 @@ pub enum SchemaNodeId {
         name: String,
     },
     Constraint {
+        profile_id: Uuid,
+        table: String,
+        name: String,
+    },
+    /// One entry inside a `StorageHintsFolder`. `name` carries the hint's
+    /// `label` (e.g. "Distribution Key"), which is unique per table since a
+    /// driver reports at most one hint per label.
+    StorageHintItem {
         profile_id: Uuid,
         table: String,
         name: String,
@@ -340,6 +357,14 @@ pub enum SchemaNodeId {
     InstanceOverviewLeaf {
         profile_id: Uuid,
     },
+
+    /// Clickable leaf for a single container of an object-storage connection
+    /// (`DatabaseCategory::ObjectStorage`). Listed flat under the connection —
+    /// the prefix hierarchy stays inside the object browser document.
+    Bucket {
+        profile_id: Uuid,
+        name: String,
+    },
 }
 
 /// Simple kind enum for cheap matching without data.
@@ -381,10 +406,12 @@ pub enum SchemaNodeKind {
     IndexesFolder,
     ForeignKeysFolder,
     ConstraintsFolder,
+    StorageHintsFolder,
     Column,
     Index,
     ForeignKey,
     Constraint,
+    StorageHintItem,
     SchemaIndex,
     SchemaForeignKey,
     Routine,
@@ -405,6 +432,7 @@ pub enum SchemaNodeKind {
     InstanceInspectorsFolder,
     InstanceInspectorLeaf,
     InstanceOverviewLeaf,
+    Bucket,
 }
 
 impl SchemaNodeId {
@@ -448,10 +476,12 @@ impl SchemaNodeId {
             Self::IndexesFolder { .. } => SchemaNodeKind::IndexesFolder,
             Self::ForeignKeysFolder { .. } => SchemaNodeKind::ForeignKeysFolder,
             Self::ConstraintsFolder { .. } => SchemaNodeKind::ConstraintsFolder,
+            Self::StorageHintsFolder { .. } => SchemaNodeKind::StorageHintsFolder,
             Self::Column { .. } => SchemaNodeKind::Column,
             Self::Index { .. } => SchemaNodeKind::Index,
             Self::ForeignKey { .. } => SchemaNodeKind::ForeignKey,
             Self::Constraint { .. } => SchemaNodeKind::Constraint,
+            Self::StorageHintItem { .. } => SchemaNodeKind::StorageHintItem,
             Self::SchemaIndex { .. } => SchemaNodeKind::SchemaIndex,
             Self::SchemaForeignKey { .. } => SchemaNodeKind::SchemaForeignKey,
             Self::Routine { .. } => SchemaNodeKind::Routine,
@@ -472,6 +502,7 @@ impl SchemaNodeId {
             Self::InstanceInspectorsFolder { .. } => SchemaNodeKind::InstanceInspectorsFolder,
             Self::InstanceInspectorLeaf { .. } => SchemaNodeKind::InstanceInspectorLeaf,
             Self::InstanceOverviewLeaf { .. } => SchemaNodeKind::InstanceOverviewLeaf,
+            Self::Bucket { .. } => SchemaNodeKind::Bucket,
         }
     }
 
@@ -509,10 +540,12 @@ impl SchemaNodeId {
             | Self::IndexesFolder { profile_id, .. }
             | Self::ForeignKeysFolder { profile_id, .. }
             | Self::ConstraintsFolder { profile_id, .. }
+            | Self::StorageHintsFolder { profile_id, .. }
             | Self::Column { profile_id, .. }
             | Self::Index { profile_id, .. }
             | Self::ForeignKey { profile_id, .. }
             | Self::Constraint { profile_id, .. }
+            | Self::StorageHintItem { profile_id, .. }
             | Self::SchemaIndex { profile_id, .. }
             | Self::SchemaForeignKey { profile_id, .. }
             | Self::Routine { profile_id, .. }
@@ -536,7 +569,8 @@ impl SchemaNodeId {
             | Self::InstanceMetricLeaf { profile_id, .. }
             | Self::InstanceInspectorsFolder { profile_id, .. }
             | Self::InstanceInspectorLeaf { profile_id, .. }
-            | Self::InstanceOverviewLeaf { profile_id, .. } => Some(*profile_id),
+            | Self::InstanceOverviewLeaf { profile_id, .. }
+            | Self::Bucket { profile_id, .. } => Some(*profile_id),
         }
     }
 }
@@ -568,10 +602,12 @@ const P_COLUMNS_FOLDER: &str = "CLF";
 const P_INDEXES_FOLDER: &str = "IXF";
 const P_FK_FOLDER: &str = "FKF";
 const P_CONSTRAINTS_FOLDER: &str = "CSF";
+const P_STORAGE_HINTS_FOLDER: &str = "SHF";
 const P_COLUMN: &str = "CL";
 const P_INDEX: &str = "IX";
 const P_FK: &str = "FK";
 const P_CONSTRAINT: &str = "CS";
+const P_STORAGE_HINT_ITEM: &str = "SHI";
 const P_SCHEMA_INDEX: &str = "SX";
 const P_SCHEMA_FK: &str = "SK";
 const P_DB_IDX_FOLDER: &str = "DIF";
@@ -599,6 +635,8 @@ const P_INST_METRIC_LEAF: &str = "IML";
 const P_INST_INSPECTORS_FOLDER: &str = "IIF";
 const P_INST_INSPECTOR_LEAF: &str = "IIL";
 const P_INST_OVERVIEW_LEAF: &str = "IOL";
+// Object-storage bucket leaf.
+const P_BUCKET: &str = "BKT";
 // Dashboard and saved-chart sidebar node prefixes.
 // Note: P_SCRIPTS_FOLDER already uses "SCF", so we use distinct tags here.
 const P_DASHBOARDS_FOLDER: &str = "DBF";
@@ -761,6 +799,11 @@ mod tests {
             schema: "public".into(),
             table: "users".into(),
         });
+        roundtrip(SchemaNodeId::StorageHintsFolder {
+            profile_id: uuid,
+            schema: "public".into(),
+            table: "users".into(),
+        });
         roundtrip(SchemaNodeId::Column {
             profile_id: uuid,
             table: "users".into(),
@@ -780,6 +823,11 @@ mod tests {
             profile_id: uuid,
             table: "users".into(),
             name: "users_pkey".into(),
+        });
+        roundtrip(SchemaNodeId::StorageHintItem {
+            profile_id: uuid,
+            table: "orders".into(),
+            name: "Distribution Key".into(),
         });
         roundtrip(SchemaNodeId::SchemaIndex {
             profile_id: uuid,
@@ -1170,6 +1218,22 @@ mod tests {
             metric_id: "pg.activity".into(),
         });
         roundtrip(SchemaNodeId::InstanceOverviewLeaf { profile_id: uuid });
+    }
+
+    /// T21: bucket leaves round-trip so the sidebar can parse the node ID it
+    /// rendered, including names containing dots and hyphens.
+    #[test]
+    fn bucket_nodes_round_trip_via_display_and_from_str() {
+        let uuid = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
+
+        roundtrip(SchemaNodeId::Bucket {
+            profile_id: uuid,
+            name: "prod-logs".into(),
+        });
+        roundtrip(SchemaNodeId::Bucket {
+            profile_id: uuid,
+            name: "media.assets.example".into(),
+        });
     }
 
     #[test]

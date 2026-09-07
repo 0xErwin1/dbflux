@@ -9,23 +9,44 @@
 use dbflux_core::{TableRef, TransferColumn};
 use dbflux_transfer::{ColumnMappingOverride, TableMappingMode};
 
-/// Ordered (label, mode) pairs for the mapping-mode picker. `Truncate` is
-/// filtered out by [`mapping_mode_options`] when the target lacks
+/// Ordered mapping modes for the mapping-mode picker. `Truncate` is filtered
+/// out by [`mapping_mode_options`] when the target lacks
 /// `DriverCapabilities::TRUNCATE_TABLE` — unavailable, not a runtime error
 /// (mirrors the `DISABLE_FK_CHECKS` missing-capability pattern from R7).
-const MAPPING_MODE_OPTIONS: &[(&str, TableMappingMode)] = &[
-    ("Create", TableMappingMode::Create),
-    ("Existing (insert only)", TableMappingMode::Existing),
-    ("Recreate (drop + create)", TableMappingMode::Recreate),
-    ("Skip", TableMappingMode::Skip),
-    ("Truncate (empty + insert)", TableMappingMode::Truncate),
+const MAPPING_MODE_VALUES: &[TableMappingMode] = &[
+    TableMappingMode::Create,
+    TableMappingMode::Existing,
+    TableMappingMode::Recreate,
+    TableMappingMode::Skip,
+    TableMappingMode::Truncate,
 ];
 
-pub fn mapping_mode_options(supports_truncate: bool) -> Vec<(&'static str, TableMappingMode)> {
-    MAPPING_MODE_OPTIONS
+/// The mapping-mode picker's label for `mode`, resolved through the
+/// translation catalog. Exhaustive by construction so a new
+/// [`TableMappingMode`] variant fails this crate's build until its
+/// `document.migrate_wizard.mapping_mode.*` entry is added here.
+pub fn mapping_mode_option_label(mode: TableMappingMode) -> String {
+    match mode {
+        TableMappingMode::Create => dbflux_i18n::t!("document.migrate_wizard.mapping_mode.create"),
+        TableMappingMode::Existing => {
+            dbflux_i18n::t!("document.migrate_wizard.mapping_mode.existing")
+        }
+        TableMappingMode::Recreate => {
+            dbflux_i18n::t!("document.migrate_wizard.mapping_mode.recreate")
+        }
+        TableMappingMode::Skip => dbflux_i18n::t!("document.migrate_wizard.mapping_mode.skip"),
+        TableMappingMode::Truncate => {
+            dbflux_i18n::t!("document.migrate_wizard.mapping_mode.truncate")
+        }
+    }
+}
+
+pub fn mapping_mode_options(supports_truncate: bool) -> Vec<(String, TableMappingMode)> {
+    MAPPING_MODE_VALUES
         .iter()
         .copied()
-        .filter(|(_, mode)| supports_truncate || *mode != TableMappingMode::Truncate)
+        .filter(|mode| supports_truncate || *mode != TableMappingMode::Truncate)
+        .map(|mode| (mapping_mode_option_label(mode), mode))
         .collect()
 }
 
@@ -164,6 +185,52 @@ mod tests {
                 .iter()
                 .any(|(_, mode)| *mode == TableMappingMode::Truncate)
         );
+    }
+
+    /// `mapping_mode_option_label` covers every `TableMappingMode` variant
+    /// (exhaustive match, no wildcard arm — a new variant fails the build
+    /// until its `document.migrate_wizard.mapping_mode.*` entry is added
+    /// here), resolves non-empty in both locales, and diverges between them.
+    #[test]
+    fn mapping_mode_option_label_resolves_and_differs_in_both_locales() {
+        let modes = [
+            TableMappingMode::Create,
+            TableMappingMode::Existing,
+            TableMappingMode::Recreate,
+            TableMappingMode::Skip,
+            TableMappingMode::Truncate,
+        ];
+        for mode in modes {
+            let key = match mode {
+                TableMappingMode::Create => "document.migrate_wizard.mapping_mode.create",
+                TableMappingMode::Existing => "document.migrate_wizard.mapping_mode.existing",
+                TableMappingMode::Recreate => "document.migrate_wizard.mapping_mode.recreate",
+                TableMappingMode::Skip => "document.migrate_wizard.mapping_mode.skip",
+                TableMappingMode::Truncate => "document.migrate_wizard.mapping_mode.truncate",
+            };
+
+            let label = mapping_mode_option_label(mode);
+            assert!(
+                !label.is_empty(),
+                "mapping_mode_option_label({mode:?}) resolved empty"
+            );
+            assert_eq!(label, dbflux_i18n::t!(key));
+
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+
+            let en = dbflux_i18n::t!(key, locale = "en");
+            let es = dbflux_i18n::t!(key, locale = "es");
+            assert_ne!(en, es, "{key} must differ between en and es");
+        }
     }
 
     #[test]

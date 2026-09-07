@@ -54,6 +54,7 @@ Every audit event is an `EventRecord` (`dbflux_core/src/observability/types.rs`)
 | `Governance` | `governance` | Policy evaluation outcomes |
 | `Config` | `config` | Profile changes, settings modifications |
 | `System` | `system` | Application startup, panics, migrations |
+| `ObjectStorage` | `object_storage` | Object-storage CRUD/mutation events (upload, delete, presign, rename, create bucket/folder, save-back edit) |
 
 ### Actor Types
 
@@ -78,6 +79,7 @@ Validation is enforced by `AuditService::validate_event()` before storage:
 | `Script` | `object_type`, `object_id` |
 | `Mcp` | `actor_id`, `object_id` (tool name) |
 | `Config` | `object_type`, `object_id` |
+| `ObjectStorage` | `connection_id`, `object_type`, `object_id` |
 | `Governance`, `System` | No additional fields |
 
 ## Privacy and Redaction
@@ -280,19 +282,15 @@ The tracing bridge captures structured events emitted by `log::*!` and `tracing:
 
 ### Event Flow
 
-```
-log::warn!("…")  ──►  LogTracer (tracing-log)  ──►  tracing event
-tracing::info!("…")  ──────────────────────────────►  tracing event
-                                                          │
-                                                    AuditLayer::on_event
-                                                          │ level gate + recursion guard
-                                                          │
-                                                    bounded mpsc::sync_channel (512)
-                                                          │
-                                                    drain thread
-                                                          │ AuditService::record()
-                                                          ▼
-                                               aud_audit_events (SQLite)
+```mermaid
+flowchart TD
+    LOG["log::warn!(...)"] --> BRIDGE["LogTracer (tracing-log)"]
+    BRIDGE --> EVENT["tracing event"]
+    TRACING["tracing::info!(...)"] --> EVENT
+    EVENT --> LAYER["AuditLayer::on_event"]
+    LAYER -->|level gate + recursion guard| CHANNEL["bounded mpsc::sync_channel (512)"]
+    CHANNEL --> DRAIN["drain thread"]
+    DRAIN -->|AuditService::record| TABLE[("aud_audit_events (SQLite)")]
 ```
 
 ### Bridge-Allowed Category
@@ -355,14 +353,8 @@ The bridge recognizes these named fields on tracing events and maps them to `Eve
 |---------------|---------------------|
 | `message` | `summary` |
 | `category` | `category` (coerced to `System`) |
-| `actor_type` | `actor_type` |
-| `actor_id` | `actor_id` |
-| `connection_id` | `connection_id` |
-| `database_name` | `database_name` |
-| `driver_id` | `driver_id` |
-| `action` | `action` |
-| `outcome` | `outcome` |
-| `details_json` | `details_json` |
+
+The fields `actor_type`, `actor_id`, `connection_id`, `database_name`, `driver_id`, `action`, `outcome`, and `details_json` are recognized as well and map to the `EventRecord` field of the same name.
 
 Unknown fields accumulate in `details_json` as a JSON object. If the message exceeds 512 characters it is truncated with `…` and the full message is stored in `details_json["message"]`.
 

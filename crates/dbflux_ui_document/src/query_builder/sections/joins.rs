@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use gpui::{AnyElement, Context, Entity, IntoElement, SharedString, div};
 
+use crate::labels::bool_op_label;
 use crate::query_builder::panel::{FkLoadState, QueryBuilderPanel};
 use dbflux_components::controls::{Dropdown, InputState};
 
@@ -49,9 +50,9 @@ pub fn render_joins(
                         .flex_1()
                         .min_w(gpui::px(0.0))
                         .text_sm()
-                        .child(SharedString::from(
-                            "No foreign key metadata available. Enter conditions as raw expressions.",
-                        )),
+                        .child(SharedString::from(dbflux_i18n::t!(
+                            "document.query_builder.joins.no_fk_metadata"
+                        ))),
                 )
                 .child(
                     Button::new("qb-dismiss-fk-banner", "✕")
@@ -65,11 +66,9 @@ pub fn render_joins(
     }
 
     if fk_loading && !join_rows.is_empty() {
-        container = container.child(
-            div()
-                .text_sm()
-                .child(SharedString::from("Loading foreign keys…")),
-        );
+        container = container.child(div().text_sm().child(SharedString::from(dbflux_i18n::t!(
+            "document.query_builder.joins.loading_fk"
+        ))));
     }
 
     for (i, row) in join_rows.iter().enumerate() {
@@ -100,12 +99,9 @@ pub fn render_joins(
                 completion_input_keys_wrapper(to_table_state)
                     .flex_1()
                     .min_w(gpui::px(0.0))
-                    .child(
-                        Input::new(to_table_state)
-                            .small()
-                            .w_full()
-                            .placeholder("table"),
-                    ),
+                    .child(Input::new(to_table_state).small().w_full().placeholder(
+                        dbflux_i18n::t!("document.query_builder.joins.table_placeholder"),
+                    )),
             );
         } else {
             header = header.child(
@@ -186,12 +182,15 @@ pub fn render_joins(
     }
 
     container = container.child(
-        Button::new("qb-add-join", "+ Join")
-            .ghost()
-            .small()
-            .on_click(cx.listener(move |this, _event, _window, cx| {
-                this.add_join(&source_alias.clone(), cx);
-            })),
+        Button::new(
+            "qb-add-join",
+            dbflux_i18n::t!("document.query_builder.joins.add_join"),
+        )
+        .ghost()
+        .small()
+        .on_click(cx.listener(move |this, _event, _window, cx| {
+            this.add_join(&source_alias.clone(), cx);
+        })),
     );
 
     container
@@ -210,7 +209,7 @@ fn render_join_tree(
 ) -> AnyElement {
     use dbflux_components::controls::{Button, Input, completion_input_keys_wrapper};
     use dbflux_components::tokens::{Heights, Radii};
-    use dbflux_core::{BoolOp, JoinFilterNode};
+    use dbflux_core::JoinFilterNode;
     use gpui::prelude::*;
     use gpui_component::ActiveTheme;
 
@@ -279,10 +278,7 @@ fn render_join_tree(
         }
 
         JoinFilterNode::Group { op, children, .. } => {
-            let op_label = match op {
-                BoolOp::And => "AND",
-                BoolOp::Or => "OR",
-            };
+            let op_label = bool_op_label(*op);
 
             let path_for_toggle = path.clone();
             let path_for_add_pred = path.clone();
@@ -313,7 +309,7 @@ fn render_join_tree(
                 .child(
                     Button::new(
                         node_id_seed("qb-join-grp-add-cond", join_idx, &path_for_add_pred),
-                        "+ Condition",
+                        dbflux_i18n::t!("document.query_builder.joins.add_condition"),
                     )
                     .ghost()
                     .small()
@@ -324,7 +320,7 @@ fn render_join_tree(
                 .child(
                     Button::new(
                         node_id_seed("qb-join-grp-add-grp", join_idx, &path_for_add_grp),
-                        "+ Sub-group",
+                        dbflux_i18n::t!("document.query_builder.filters.add_subgroup"),
                     )
                     .ghost()
                     .small()

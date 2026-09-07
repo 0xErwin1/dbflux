@@ -76,7 +76,9 @@ impl CodeDocument {
             Dropdown::new("ctx-connection")
                 .items(items)
                 .selected_index(selected_index)
-                .placeholder("No connection")
+                .placeholder(dbflux_i18n::t!(
+                    "document.code.context_bar.placeholder.connection"
+                ))
                 .toolbar_style(true)
         });
 
@@ -146,12 +148,18 @@ impl CodeDocument {
                 self.source.exec_ctx.database.clone(),
                 self.editor.completion_query_generation.clone(),
             ));
+        let code_action_provider: Rc<dyn CodeActionProvider> = Rc::new(SqlCodeActionProvider::new(
+            self.app_state.clone(),
+            connection_id,
+            self.source.exec_ctx.database.clone(),
+        ));
 
         let editor_mode_changed = editor_mode != self.editor.current_editor_mode;
         self.editor.current_editor_mode = editor_mode.clone();
 
         self.editor.input_state.update(cx, |state, cx| {
             state.lsp.completion_provider = Some(completion_provider);
+            state.lsp.code_action_providers = vec![code_action_provider];
 
             // `set_highlighter` resets the cached SyntaxHighlighter to `None`
             // and gpui-component only rebuilds it on the next text edit, so
@@ -426,7 +434,7 @@ impl CodeDocument {
         let targets_placeholder = source_spec
             .as_ref()
             .map(|spec| spec.targets_placeholder.clone())
-            .unwrap_or_else(|| "Sources".to_string());
+            .unwrap_or_else(|| dbflux_i18n::t!("document.code.context_bar.fallback.sources"));
 
         self.source.source_targets.update(cx, |multi_select, cx| {
             multi_select.set_placeholder(targets_placeholder, cx);
@@ -662,7 +670,9 @@ impl CodeDocument {
             Dropdown::new("ctx-database")
                 .items(items)
                 .selected_index(selected_index)
-                .placeholder("Database")
+                .placeholder(dbflux_i18n::t!(
+                    "document.code.context_bar.placeholder.database"
+                ))
                 .toolbar_style(true)
         });
 
@@ -694,7 +704,9 @@ impl CodeDocument {
             Dropdown::new("ctx-schema")
                 .items(items)
                 .selected_index(selected_index)
-                .placeholder("Schema")
+                .placeholder(dbflux_i18n::t!(
+                    "document.code.context_bar.placeholder.schema"
+                ))
                 .toolbar_style(true)
         });
 
@@ -839,7 +851,10 @@ impl CodeDocument {
                 report_error(
                     UserFacingError::new(
                         ErrorKind::Network,
-                        format!("Cannot connect to database '{database}'"),
+                        dbflux_i18n::t!(
+                            "document.code.context_bar.connect_error",
+                            database = database
+                        ),
                     )
                     .with_cause(e),
                     cx,
@@ -884,9 +899,10 @@ impl CodeDocument {
                         let _ = this.update(cx, |doc, cx| {
                             doc.revert_database_selection(prev_database, prev_schema, cx);
 
-                            doc.pending.error = Some(format!(
-                                "Failed to connect to database '{}': {}",
-                                target_db, e
+                            doc.pending.error = Some(dbflux_i18n::t!(
+                                "document.code.context_bar.connect_failed",
+                                database = target_db,
+                                error = e
                             ));
                             cx.notify();
                         });
@@ -1315,7 +1331,9 @@ impl CodeDocument {
                     .items_center()
                     .gap_1()
                     .child(Icon::new(AppIcon::Database).size(px(12.0)).muted()) // guardrail-allow: 12px icon size, no ICON_XS token
-                    .child(Text::caption("Connection:")),
+                    .child(Text::caption(dbflux_i18n::t!(
+                        "document.code.context_bar.label.connection"
+                    ))),
             )
             .child(
                 div()
@@ -1343,7 +1361,11 @@ impl CodeDocument {
                                 div().flex_none().child(Text::caption(
                                     source_spec
                                         .and_then(|spec| spec.query_mode_label.clone())
-                                        .unwrap_or_else(|| "Syntax".to_string()),
+                                        .unwrap_or_else(|| {
+                                            dbflux_i18n::t!(
+                                                "document.code.context_bar.fallback.syntax"
+                                            )
+                                        }),
                                 )),
                             )
                             .child(
@@ -1367,7 +1389,9 @@ impl CodeDocument {
                     // across all drivers.  The driver-specific label (spec.targets_label)
                     // is intentionally not used here — the placeholder already carries
                     // driver-specific phrasing (e.g. "Select bucket...").
-                    .child(div().flex_none().child(Text::caption("Source:")))
+                    .child(div().flex_none().child(Text::caption(dbflux_i18n::t!(
+                        "document.code.context_bar.label.source"
+                    ))))
                     .child(div().flex_none().min_w(px(260.0)).child(focus_frame(
                         context_slot_is_keyboard_focused(
                             self.focus_mode,
@@ -1390,9 +1414,12 @@ impl CodeDocument {
                         .map(|p| {
                             let panel = p.read(cx);
                             let dropdown = panel.dropdown_time_range.clone();
-                            let label = source_spec
-                                .map(|s| s.start_label.clone())
-                                .unwrap_or_else(|| "Time".to_string());
+                            let label =
+                                source_spec
+                                    .map(|s| s.start_label.clone())
+                                    .unwrap_or_else(|| {
+                                        dbflux_i18n::t!("document.code.context_bar.fallback.time")
+                                    });
                             (dropdown, label)
                         }),
                     |el, (dropdown, label)| {
@@ -1416,7 +1443,9 @@ impl CodeDocument {
                             div().flex_none().child(Text::caption(
                                 source_spec
                                     .map(|spec| spec.start_label.clone())
-                                    .unwrap_or_else(|| "Start".to_string()),
+                                    .unwrap_or_else(|| {
+                                        dbflux_i18n::t!("document.code.context_bar.fallback.start")
+                                    }),
                             )),
                         )
                         .child(div().flex_none().min_w(px(180.0)).child(focus_frame(
@@ -1433,7 +1462,9 @@ impl CodeDocument {
                             div().flex_none().child(Text::caption(
                                 source_spec
                                     .map(|spec| spec.end_label.clone())
-                                    .unwrap_or_else(|| "End".to_string()),
+                                    .unwrap_or_else(|| {
+                                        dbflux_i18n::t!("document.code.context_bar.fallback.end")
+                                    }),
                             )),
                         )
                         .child(div().flex_none().min_w(px(180.0)).child(focus_frame(
@@ -1450,40 +1481,44 @@ impl CodeDocument {
                 )
             })
             .when(!show_source_controls && show_db, |el| {
-                el.child(div().flex_none().child(Text::caption("Database:")))
-                    .child(
-                        div()
-                            .flex_none()
-                            .min_w(context_dropdown_min_width(1))
-                            .child(focus_frame(
-                                context_slot_is_keyboard_focused(
-                                    self.focus_mode,
-                                    self.context_bar_slot,
-                                    ContextBarSlot::Database,
-                                ),
-                                Some(theme.ring),
-                                control_shell(self.source.database_dropdown.clone(), cx),
-                                cx,
-                            )),
-                    )
+                el.child(div().flex_none().child(Text::caption(dbflux_i18n::t!(
+                    "document.code.context_bar.label.database"
+                ))))
+                .child(
+                    div()
+                        .flex_none()
+                        .min_w(context_dropdown_min_width(1))
+                        .child(focus_frame(
+                            context_slot_is_keyboard_focused(
+                                self.focus_mode,
+                                self.context_bar_slot,
+                                ContextBarSlot::Database,
+                            ),
+                            Some(theme.ring),
+                            control_shell(self.source.database_dropdown.clone(), cx),
+                            cx,
+                        )),
+                )
             })
             .when(!show_source_controls && show_schema, |el| {
-                el.child(div().flex_none().child(Text::caption("Schema:")))
-                    .child(
-                        div()
-                            .flex_none()
-                            .min_w(context_dropdown_min_width(2))
-                            .child(focus_frame(
-                                context_slot_is_keyboard_focused(
-                                    self.focus_mode,
-                                    self.context_bar_slot,
-                                    ContextBarSlot::Schema,
-                                ),
-                                Some(theme.ring),
-                                control_shell(self.source.schema_dropdown.clone(), cx),
-                                cx,
-                            )),
-                    )
+                el.child(div().flex_none().child(Text::caption(dbflux_i18n::t!(
+                    "document.code.context_bar.label.schema"
+                ))))
+                .child(
+                    div()
+                        .flex_none()
+                        .min_w(context_dropdown_min_width(2))
+                        .child(focus_frame(
+                            context_slot_is_keyboard_focused(
+                                self.focus_mode,
+                                self.context_bar_slot,
+                                ContextBarSlot::Schema,
+                            ),
+                            Some(theme.ring),
+                            control_shell(self.source.schema_dropdown.clone(), cx),
+                            cx,
+                        )),
+                )
             })
             .child(div().flex_1())
             .when_some(self.editor.path.as_ref(), |el, path| {
@@ -1518,10 +1553,14 @@ impl CodeDocument {
                         .pt(Spacing::XS)
                         .child(panel.read(cx).render_custom_picker_row(px(320.0), cx))
                         .child(
-                            Button::new("ctx-time-range-apply", "Apply")
-                                .small()
-                                .disabled(!can_apply)
-                                .on_click(cx.listener(move |this, _, _, cx| {
+                            Button::new(
+                                "ctx-time-range-apply",
+                                dbflux_i18n::t!("document.code.context_bar.apply"),
+                            )
+                            .small()
+                            .disabled(!can_apply)
+                            .on_click(cx.listener(
+                                move |this, _, _, cx| {
                                     panel.update(cx, |p, cx| {
                                         // Ignore the returned bounds — the panel emits
                                         // TimeRangeChanged which is the authoritative signal.
@@ -1530,7 +1569,8 @@ impl CodeDocument {
                                     this.sync_source_exec_context(cx);
                                     cx.emit(DocumentEvent::MetaChanged);
                                     cx.notify();
-                                })),
+                                },
+                            )),
                         ),
                 )
             })
@@ -1689,5 +1729,64 @@ mod tests {
             }
             other => panic!("expected CollectionWindow source context, got: {other:?}"),
         }
+    }
+
+    #[test]
+    fn context_bar_keys_resolve_in_both_locales() {
+        let keys = [
+            "document.code.context_bar.placeholder.connection",
+            "document.code.context_bar.placeholder.database",
+            "document.code.context_bar.placeholder.schema",
+            "document.code.context_bar.label.connection",
+            "document.code.context_bar.label.source",
+            "document.code.context_bar.label.database",
+            "document.code.context_bar.label.schema",
+            "document.code.context_bar.fallback.syntax",
+            "document.code.context_bar.fallback.sources",
+            "document.code.context_bar.fallback.time",
+            "document.code.context_bar.fallback.start",
+            "document.code.context_bar.fallback.end",
+            "document.code.context_bar.apply",
+        ];
+
+        for key in keys {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn context_bar_connection_placeholder_exact_value_and_differs_between_locales() {
+        let en = dbflux_i18n::t!(
+            "document.code.context_bar.placeholder.connection",
+            locale = "en"
+        );
+        let es = dbflux_i18n::t!(
+            "document.code.context_bar.placeholder.connection",
+            locale = "es"
+        );
+
+        assert_eq!(en, "No connection");
+        assert_ne!(en, es);
+    }
+
+    #[test]
+    fn context_bar_connect_error_interpolates_database_name() {
+        let en = dbflux_i18n::t!(
+            "document.code.context_bar.connect_error",
+            locale = "en",
+            database = "logs"
+        );
+
+        assert_eq!(en, "Cannot connect to database 'logs'");
     }
 }

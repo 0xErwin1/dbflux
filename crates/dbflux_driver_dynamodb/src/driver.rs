@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
-use aws_config::{BehaviorVersion, Region};
+use aws_config::{AppName, BehaviorVersion, Region};
 use aws_sdk_dynamodb::config::{Builder as DynamoConfigBuilder, Credentials};
 use aws_sdk_dynamodb::error::ProvideErrorMetadata;
 use aws_sdk_dynamodb::operation::batch_write_item::BatchWriteItemError;
@@ -740,6 +740,7 @@ impl Connection for DynamoConnection {
                 sample_fields: None,
                 presentation: dbflux_core::CollectionPresentation::DataGrid,
                 child_items: None,
+                storage_hints: None,
             })
             .collect();
 
@@ -3716,6 +3717,11 @@ fn build_client(config: &DynamoProfileConfig) -> Result<Client, DbError> {
     let mut loader =
         aws_config::defaults(BehaviorVersion::latest()).region(Region::new(config.region.clone()));
 
+    match AppName::new(dbflux_core::client_identity_token()) {
+        Ok(app_name) => loader = loader.app_name(app_name),
+        Err(error) => log::warn!("failed to set AWS SDK app name: {error}"),
+    }
+
     if let Some(profile) = &config.profile {
         loader = loader.profile_name(profile);
     }
@@ -3825,6 +3831,7 @@ fn build_table_info_from_description(
         sample_fields,
         presentation: dbflux_core::CollectionPresentation::DataGrid,
         child_items: None,
+        storage_hints: None,
     }
 }
 
@@ -4660,6 +4667,24 @@ mod tests {
                 .capabilities
                 .contains(DriverCapabilities::ARRAYS)
         );
+    }
+
+    // DynamoDB's server-side metrics live in CloudWatch itself; an InstanceCatalog
+    // here would duplicate that surface per-driver instead of pointing at it. This
+    // pins the exclusion so the flags aren't added without revisiting that call.
+    #[test]
+    fn metadata_excludes_instance_catalog_capabilities() {
+        let excluded = [
+            DriverCapabilities::INSTANCE_METRICS,
+            DriverCapabilities::INSTANCE_INSPECTOR,
+        ];
+
+        for capability in excluded {
+            assert!(
+                !DYNAMODB_METADATA.capabilities.contains(capability),
+                "capability {capability:?} must be absent: DynamoDB's instance metrics belong to CloudWatch, not a per-driver InstanceCatalog"
+            );
+        }
     }
 
     #[test]

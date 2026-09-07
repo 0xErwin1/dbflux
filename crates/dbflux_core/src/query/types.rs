@@ -1,7 +1,57 @@
 use crate::{ExecutionContext, QueryLanguage, Value};
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeSet, HashMap};
 use std::time::Duration;
 use uuid::Uuid;
+
+pub const UNSUPPORTED_TYPES_METADATA_KEY: &str = "unsupported_types";
+
+pub(crate) fn encode_unsupported_types(
+    metadata: &mut Option<HashMap<String, serde_json::Value>>,
+    type_names: impl IntoIterator<Item = String>,
+) {
+    let type_names = type_names
+        .into_iter()
+        .filter(|type_name| !type_name.is_empty())
+        .collect::<BTreeSet<_>>();
+
+    if type_names.is_empty() {
+        return;
+    }
+
+    metadata.get_or_insert_with(HashMap::new).insert(
+        UNSUPPORTED_TYPES_METADATA_KEY.to_string(),
+        serde_json::Value::Array(
+            type_names
+                .into_iter()
+                .map(serde_json::Value::String)
+                .collect(),
+        ),
+    );
+}
+
+pub(crate) fn take_unsupported_types(
+    metadata: &mut Option<HashMap<String, serde_json::Value>>,
+) -> Vec<String> {
+    let value = metadata
+        .as_mut()
+        .and_then(|metadata| metadata.remove(UNSUPPORTED_TYPES_METADATA_KEY));
+
+    if metadata.as_ref().is_some_and(HashMap::is_empty) {
+        *metadata = None;
+    }
+
+    match value {
+        Some(serde_json::Value::Array(values)) => values
+            .into_iter()
+            .filter_map(|value| value.as_str().map(ToOwned::to_owned))
+            .filter(|type_name| !type_name.is_empty())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect(),
+        _ => Vec::new(),
+    }
+}
 
 // -- Query Result Shape --
 
@@ -298,6 +348,14 @@ impl QueryResult {
         }
     }
 
+    pub fn set_unsupported_types(&mut self, type_names: impl IntoIterator<Item = String>) {
+        encode_unsupported_types(&mut self.metadata_extra, type_names);
+    }
+
+    pub fn take_unsupported_types(&mut self) -> Vec<String> {
+        take_unsupported_types(&mut self.metadata_extra)
+    }
+
     pub fn row_count(&self) -> usize {
         self.rows.len()
     }
@@ -478,5 +536,39 @@ mod tests {
             .map(|r| r.columns[0].name.clone())
             .collect();
         assert_eq!(labels, vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn unsupported_types_are_sorted_and_deduplicated() {
+        let mut result = QueryResult::empty();
+        result.set_unsupported_types([
+            "varbit".to_string(),
+            "vector".to_string(),
+            "varbit".to_string(),
+            String::new(),
+        ]);
+
+        assert_eq!(result.take_unsupported_types(), vec!["varbit", "vector"]);
+    }
+
+    #[test]
+    fn unsupported_types_remove_malformed_metadata_without_reporting() {
+        let mut result = QueryResult::empty();
+        result.metadata_extra = Some(HashMap::from([(
+            UNSUPPORTED_TYPES_METADATA_KEY.to_string(),
+            serde_json::json!({ "type": "vector" }),
+        )]));
+
+        assert!(result.take_unsupported_types().is_empty());
+        assert!(result.metadata_extra.is_none());
+    }
+
+    #[test]
+    fn taking_unsupported_types_is_idempotent() {
+        let mut result = QueryResult::empty();
+        result.set_unsupported_types(["vector".to_string()]);
+
+        assert_eq!(result.take_unsupported_types(), vec!["vector"]);
+        assert!(result.take_unsupported_types().is_empty());
     }
 }

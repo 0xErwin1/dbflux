@@ -876,6 +876,7 @@ impl Connection for SqliteConnection {
             sample_fields: None,
             presentation: dbflux_core::CollectionPresentation::DataGrid,
             child_items: None,
+            storage_hints: None,
         })
     }
 
@@ -1450,6 +1451,7 @@ impl SqliteConnection {
                 sample_fields: None,
                 presentation: dbflux_core::CollectionPresentation::DataGrid,
                 child_items: None,
+                storage_hints: None,
             })
             .collect();
 
@@ -2397,6 +2399,7 @@ mod tests {
             sample_fields: None,
             presentation: dbflux_core::CollectionPresentation::DataGrid,
             child_items: None,
+            storage_hints: None,
         };
 
         let composite_pk = TableInfo {
@@ -2426,6 +2429,7 @@ mod tests {
             sample_fields: None,
             presentation: dbflux_core::CollectionPresentation::DataGrid,
             child_items: None,
+            storage_hints: None,
         };
 
         let single_sql = sqlite_generate_create_table(&single_pk);

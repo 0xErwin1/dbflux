@@ -126,7 +126,7 @@ impl SsoWizard {
         let role_name = self.input_role_name.read(cx).value().trim().to_string();
 
         if profile_name.is_empty() || start_url.is_empty() || region.is_empty() {
-            self.status = Some("Profile name, start URL, and region are required".to_string());
+            self.status = Some(dbflux_i18n::t!("sso_wizard.status.missing_required"));
             cx.notify();
             return;
         }
@@ -162,7 +162,7 @@ impl SsoWizard {
 
         cx.emit(SsoWizardEvent::ProfileCreated { profile_id });
 
-        self.status = Some("Created AWS SSO auth profile".to_string());
+        self.status = Some(dbflux_i18n::t!("sso_wizard.status.profile_created"));
         self.visible = false;
         cx.notify();
     }
@@ -178,14 +178,15 @@ impl SsoWizard {
         let region = self.input_region.read(cx).value().trim().to_string();
 
         if profile_name.is_empty() || start_url.is_empty() || region.is_empty() {
-            self.status =
-                Some("Fill profile name, start URL, and region before discovery".to_string());
+            self.status = Some(dbflux_i18n::t!(
+                "sso_wizard.status.fill_before_account_discovery"
+            ));
             cx.notify();
             return;
         }
 
         self.accounts_loading = true;
-        self.status = Some("Logging in and fetching SSO accounts...".to_string());
+        self.status = Some(dbflux_i18n::t!("sso_wizard.status.discovering_accounts"));
         cx.notify();
 
         let this = cx.entity().clone();
@@ -202,11 +203,15 @@ impl SsoWizard {
                     match result {
                         Ok(accounts) => {
                             this.discovered_accounts = accounts;
-                            this.status = Some("SSO account discovery completed".to_string());
+                            this.status =
+                                Some(dbflux_i18n::t!("sso_wizard.status.accounts_discovered"));
                         }
                         Err(error) => {
                             this.discovered_accounts.clear();
-                            this.status = Some(format!("Failed to discover accounts: {}", error));
+                            this.status = Some(dbflux_i18n::t!(
+                                "sso_wizard.status.accounts_failed",
+                                error = error
+                            ));
                         }
                     }
                     cx.notify();
@@ -232,14 +237,15 @@ impl SsoWizard {
             || region.is_empty()
             || account_id.is_empty()
         {
-            self.status =
-                Some("Fill profile/region/start URL and select an account first".to_string());
+            self.status = Some(dbflux_i18n::t!(
+                "sso_wizard.status.fill_before_role_discovery"
+            ));
             cx.notify();
             return;
         }
 
         self.roles_loading = true;
-        self.status = Some("Fetching SSO roles...".to_string());
+        self.status = Some(dbflux_i18n::t!("sso_wizard.status.discovering_roles"));
         cx.notify();
 
         let this = cx.entity().clone();
@@ -255,11 +261,15 @@ impl SsoWizard {
                     match result {
                         Ok(roles) => {
                             this.discovered_roles = roles;
-                            this.status = Some("SSO role discovery completed".to_string());
+                            this.status =
+                                Some(dbflux_i18n::t!("sso_wizard.status.roles_discovered"));
                         }
                         Err(error) => {
                             this.discovered_roles.clear();
-                            this.status = Some(format!("Failed to discover roles: {}", error));
+                            this.status = Some(dbflux_i18n::t!(
+                                "sso_wizard.status.roles_failed",
+                                error = error
+                            ));
                         }
                     }
                     cx.notify();
@@ -274,7 +284,8 @@ impl EventEmitter<SsoWizardEvent> for SsoWizard {}
 
 impl Render for SsoWizard {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let csd_title_bar = platform::render_csd_title_bar(_window, cx, "AWS SSO Wizard");
+        let title_text = dbflux_i18n::t!("sso_wizard.title");
+        let csd_title_bar = platform::render_csd_title_bar(_window, cx, &title_text);
 
         let content = if !self.visible {
             div().into_any_element()
@@ -298,15 +309,15 @@ impl SsoWizard {
         };
 
         let mut frame = ModalFrame::new("sso-wizard", &self.focus_handle, close)
-            .title("AWS SSO Wizard")
+            .title(dbflux_i18n::t!("sso_wizard.title"))
             .icon(AppIcon::Lock)
             .width(px(680.0));
 
         let step_title = match self.step {
-            WizardStep::Start => "Step 1: Start URL",
-            WizardStep::Account => "Step 2: Account",
-            WizardStep::Role => "Step 3: Role",
-            WizardStep::Confirm => "Step 4: Confirm",
+            WizardStep::Start => dbflux_i18n::t!("sso_wizard.step.start"),
+            WizardStep::Account => dbflux_i18n::t!("sso_wizard.step.account"),
+            WizardStep::Role => dbflux_i18n::t!("sso_wizard.step.role"),
+            WizardStep::Confirm => dbflux_i18n::t!("sso_wizard.step.confirm"),
         };
 
         let body = div()
@@ -331,9 +342,7 @@ impl SsoWizard {
                         .flex_col()
                         .gap(Spacing::SM)
                         .child(Input::new(&self.input_account_id))
-                        .child(Text::caption(
-                            "Use account ID from AWS SSO account discovery",
-                        ));
+                        .child(Text::caption(dbflux_i18n::t!("sso_wizard.account.hint")));
 
                     #[cfg(feature = "aws")]
                     {
@@ -354,9 +363,9 @@ impl SsoWizard {
                             .collect::<Vec<_>>();
 
                         let discover_label = if self.accounts_loading {
-                            "Discovering accounts..."
+                            dbflux_i18n::t!("sso_wizard.account.discovering")
                         } else {
-                            "Login + Discover Accounts"
+                            dbflux_i18n::t!("sso_wizard.account.discover_button")
                         };
 
                         account_step = account_step
@@ -373,9 +382,9 @@ impl SsoWizard {
                                     && !self.discovered_accounts.is_empty()
                                     && filtered_accounts.is_empty(),
                                 |d| {
-                                    d.child(Text::caption(
-                                        "No matching accounts for current filter",
-                                    ))
+                                    d.child(Text::caption(dbflux_i18n::t!(
+                                        "sso_wizard.account.no_matches"
+                                    )))
                                 },
                             )
                             .child(div().flex().flex_col().gap_1().children(
@@ -416,7 +425,7 @@ impl SsoWizard {
                         .flex_col()
                         .gap(Spacing::SM)
                         .child(Input::new(&self.input_role_name))
-                        .child(Text::caption("Use role name from AWS SSO role listing"));
+                        .child(Text::caption(dbflux_i18n::t!("sso_wizard.role.hint")));
 
                     #[cfg(feature = "aws")]
                     {
@@ -436,9 +445,9 @@ impl SsoWizard {
                             .collect::<Vec<_>>();
 
                         let discover_label = if self.roles_loading {
-                            "Discovering roles..."
+                            dbflux_i18n::t!("sso_wizard.role.discovering")
                         } else {
-                            "Discover Roles for Selected Account"
+                            dbflux_i18n::t!("sso_wizard.role.discover_button")
                         };
 
                         role_step = role_step
@@ -454,7 +463,11 @@ impl SsoWizard {
                                 !self.roles_loading
                                     && !self.discovered_roles.is_empty()
                                     && filtered_roles.is_empty(),
-                                |d| d.child(Text::caption("No matching roles for current filter")),
+                                |d| {
+                                    d.child(Text::caption(dbflux_i18n::t!(
+                                        "sso_wizard.role.no_matches"
+                                    )))
+                                },
                             )
                             .child(div().flex().flex_col().gap_1().children(
                                 filtered_roles.iter().map(|role| {
@@ -487,25 +500,25 @@ impl SsoWizard {
                     .flex()
                     .flex_col()
                     .gap(Spacing::XS)
-                    .child(Text::body(format!(
-                        "Profile: {}",
-                        self.input_profile_name.read(cx).value()
+                    .child(Text::body(dbflux_i18n::t!(
+                        "sso_wizard.confirm.profile",
+                        value = self.input_profile_name.read(cx).value()
                     )))
-                    .child(Text::body(format!(
-                        "Start URL: {}",
-                        self.input_start_url.read(cx).value()
+                    .child(Text::body(dbflux_i18n::t!(
+                        "sso_wizard.confirm.start_url",
+                        value = self.input_start_url.read(cx).value()
                     )))
-                    .child(Text::body(format!(
-                        "Region: {}",
-                        self.input_region.read(cx).value()
+                    .child(Text::body(dbflux_i18n::t!(
+                        "sso_wizard.confirm.region",
+                        value = self.input_region.read(cx).value()
                     )))
-                    .child(Text::body(format!(
-                        "Account: {}",
-                        self.input_account_id.read(cx).value()
+                    .child(Text::body(dbflux_i18n::t!(
+                        "sso_wizard.confirm.account",
+                        value = self.input_account_id.read(cx).value()
                     )))
-                    .child(Text::body(format!(
-                        "Role: {}",
-                        self.input_role_name.read(cx).value()
+                    .child(Text::body(dbflux_i18n::t!(
+                        "sso_wizard.confirm.role",
+                        value = self.input_role_name.read(cx).value()
                     )))
                     .into_any_element(),
             })
@@ -518,7 +531,7 @@ impl SsoWizard {
                     .justify_end()
                     .gap(Spacing::SM)
                     .child(
-                        Button::new("sso-wizard-back", "Back")
+                        Button::new("sso-wizard-back", dbflux_i18n::t!("sso_wizard.back"))
                             .ghost()
                             .disabled(matches!(self.step, WizardStep::Start))
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -527,9 +540,9 @@ impl SsoWizard {
                     )
                     .child({
                         let next_label = if matches!(self.step, WizardStep::Confirm) {
-                            "Save"
+                            dbflux_i18n::t!("sso_wizard.save")
                         } else {
-                            "Next"
+                            dbflux_i18n::t!("sso_wizard.next")
                         };
                         Button::new("sso-wizard-next", next_label)
                             .ghost()
@@ -545,5 +558,63 @@ impl SsoWizard {
 
         frame = frame.child(body);
         frame.render(cx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    const SSO_WIZARD_KEYS: &[&str] = &[
+        "sso_wizard.title",
+        "sso_wizard.step.start",
+        "sso_wizard.step.account",
+        "sso_wizard.step.role",
+        "sso_wizard.step.confirm",
+        "sso_wizard.account.hint",
+        "sso_wizard.account.discovering",
+        "sso_wizard.account.discover_button",
+        "sso_wizard.account.no_matches",
+        "sso_wizard.role.hint",
+        "sso_wizard.role.discovering",
+        "sso_wizard.role.discover_button",
+        "sso_wizard.role.no_matches",
+        "sso_wizard.confirm.profile",
+        "sso_wizard.confirm.start_url",
+        "sso_wizard.confirm.region",
+        "sso_wizard.confirm.account",
+        "sso_wizard.confirm.role",
+        "sso_wizard.back",
+        "sso_wizard.next",
+        "sso_wizard.save",
+        "sso_wizard.status.missing_required",
+        "sso_wizard.status.fill_before_account_discovery",
+        "sso_wizard.status.discovering_accounts",
+        "sso_wizard.status.accounts_discovered",
+        "sso_wizard.status.accounts_failed",
+        "sso_wizard.status.fill_before_role_discovery",
+        "sso_wizard.status.discovering_roles",
+        "sso_wizard.status.roles_discovered",
+        "sso_wizard.status.roles_failed",
+        "sso_wizard.status.profile_created",
+    ];
+
+    #[test]
+    fn sso_wizard_catalog_keys_resolve() {
+        for key in SSO_WIZARD_KEYS.iter().copied() {
+            let english = dbflux_i18n::t!(key);
+            let spanish = dbflux_i18n::t!(key, locale = "es");
+
+            assert!(!english.is_empty(), "empty English translation for {key}");
+            assert_ne!(english, key, "missing English translation for {key}");
+            assert!(!spanish.is_empty(), "empty Spanish translation for {key}");
+            assert_ne!(spanish, key, "missing Spanish translation for {key}");
+        }
+    }
+
+    #[test]
+    fn sso_wizard_step_title_differs_between_locales() {
+        let english = dbflux_i18n::t!("sso_wizard.step.start");
+        let spanish = dbflux_i18n::t!("sso_wizard.step.start", locale = "es");
+
+        assert_ne!(english, spanish);
     }
 }

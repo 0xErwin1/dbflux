@@ -213,7 +213,10 @@ pub(crate) fn render_relational_error(
                 .px(Spacing::XS)
                 .hover(move |d| d.bg(theme_hover.secondary))
                 .on_mouse_down(MouseButton::Left, on_open_builder)
-                .child(Text::caption("Open in builder").color(theme_ring))
+                .child(
+                    Text::caption(dbflux_i18n::t!("document.data.grid.filter.open_in_builder"))
+                        .color(theme_ring),
+                )
                 .child(Icon::new(AppIcon::ExternalLink).small().color(theme_ring)),
         );
 

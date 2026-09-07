@@ -103,7 +103,9 @@ impl ExportWizard {
             Dropdown::new("export-wizard-format")
                 .items(format_items())
                 .selected_index(Some(0))
-                .placeholder("Format")
+                .placeholder(dbflux_i18n::t!(
+                    "document.export_wizard.format_options.format_label"
+                ))
         });
         let format_dropdown_sub = cx.subscribe(
             &format_dropdown,
@@ -116,7 +118,9 @@ impl ExportWizard {
         let segment_size_input = cx.new(|cx| {
             InputState::new(window, cx)
                 .default_value(phases::DEFAULT_SEGMENT_SIZE.to_string())
-                .placeholder("Segment / chunk size")
+                .placeholder(dbflux_i18n::t!(
+                    "document.export_wizard.format_options.segment_size_placeholder"
+                ))
         });
         let segment_size_sub = cx.subscribe_in(
             &segment_size_input,
@@ -274,7 +278,7 @@ impl ExportWizard {
         cx.spawn(async move |this, cx| {
             let picked = if dialog_available {
                 rfd::AsyncFileDialog::new()
-                    .set_title("Choose Export Folder")
+                    .set_title(dbflux_i18n::t!("document.export_wizard.format_options.dialog_title"))
                     .pick_folder()
                     .await
                     .map(|handle| handle.path().to_path_buf())
@@ -284,9 +288,9 @@ impl ExportWizard {
                     Err(err) => {
                         this.update(cx, |this, cx| {
                             this.choosing_folder = false;
-                            this.folder_error = Some(format!(
-                                "No folder picker available and the fallback export \
-                                 directory could not be created: {err}"
+                            this.folder_error = Some(dbflux_i18n::t!(
+                                "document.export_wizard.format_options.error.no_dialog_fallback_failed",
+                                error = err
                             ));
                             cx.notify();
                         })
@@ -361,7 +365,7 @@ impl Render for ExportWizard {
         };
 
         let frame = ModalFrame::new("export-wizard", &self.focus_handle, close)
-            .title("Export Data")
+            .title(dbflux_i18n::t!("document.export_wizard.title"))
             .icon(AppIcon::ArrowUp)
             .width(px(720.0))
             .height_fraction(0.7)
@@ -429,9 +433,9 @@ impl ExportWizard {
             .flex_col()
             .gap(Spacing::MD)
             .size_full()
-            .child(Text::label(format!(
-                "{} table(s) selected for export",
-                self.tables.len()
+            .child(Text::label(dbflux_i18n::t!(
+                "document.export_wizard.tables.selected_count",
+                count = self.tables.len()
             )))
             .child(
                 div()
@@ -448,11 +452,10 @@ impl ExportWizard {
     }
 
     fn render_format_options(&self, cx: &mut Context<Self>) -> AnyElement {
-        let folder_label = self
-            .output_dir
-            .as_ref()
-            .map(|dir| dir.display().to_string())
-            .unwrap_or_else(|| "No folder chosen".to_string());
+        let folder_label = self.output_dir.as_ref().map_or_else(
+            || dbflux_i18n::t!("document.export_wizard.format_options.no_folder_chosen"),
+            |dir| dir.display().to_string(),
+        );
 
         div()
             .flex()
@@ -463,7 +466,9 @@ impl ExportWizard {
                     .flex()
                     .flex_col()
                     .gap(Spacing::XS)
-                    .child(Text::label("Format"))
+                    .child(Text::label(dbflux_i18n::t!(
+                        "document.export_wizard.format_options.format_label"
+                    )))
                     .child(self.format_dropdown.clone()),
             )
             .child(
@@ -471,15 +476,19 @@ impl ExportWizard {
                     .flex()
                     .flex_col()
                     .gap(Spacing::XS)
-                    .child(Text::label("Output folder"))
+                    .child(Text::label(dbflux_i18n::t!(
+                        "document.export_wizard.format_options.output_folder_label"
+                    )))
                     .child(Text::caption(folder_label))
                     .child(
                         Button::new(
                             "export-wizard-choose-folder",
                             if self.choosing_folder {
-                                "Choosing…"
+                                dbflux_i18n::t!("document.export_wizard.format_options.choosing")
                             } else {
-                                "Choose Folder…"
+                                dbflux_i18n::t!(
+                                    "document.export_wizard.format_options.choose_folder"
+                                )
                             },
                         )
                         .small()
@@ -495,7 +504,9 @@ impl ExportWizard {
                     .flex()
                     .flex_col()
                     .gap(Spacing::XS)
-                    .child(Text::label("Segment / chunk size (advanced)"))
+                    .child(Text::label(dbflux_i18n::t!(
+                        "document.export_wizard.format_options.segment_size_label"
+                    )))
                     .child(
                         div()
                             .w(SEGMENT_SIZE_INPUT_WIDTH)
@@ -503,9 +514,9 @@ impl ExportWizard {
                     )
                     .when(self.segment_size_invalid, |parent| {
                         parent.child(
-                            Text::caption(
-                                "Must be a whole number of 1 or more; kept the previous value.",
-                            )
+                            Text::caption(dbflux_i18n::t!(
+                                "document.export_wizard.format_options.segment_size_invalid"
+                            ))
                             .danger(),
                         )
                     }),
@@ -524,22 +535,28 @@ impl ExportWizard {
             .flex()
             .flex_col()
             .gap(Spacing::MD)
-            .child(Text::label("Review export plan"))
-            .child(Text::caption(format!(
-                "{} table(s) as {} to {folder_label}",
-                self.tables.len(),
-                self.selected_format().label(),
+            .child(Text::label(dbflux_i18n::t!(
+                "document.export_wizard.confirm.title"
             )))
-            .child(Text::caption(format!(
-                "Segment / chunk size: {}",
-                self.segment_size
+            .child(Text::caption(dbflux_i18n::t!(
+                "document.export_wizard.confirm.summary",
+                count = self.tables.len(),
+                format = self.selected_format().label(),
+                folder = folder_label
+            )))
+            .child(Text::caption(dbflux_i18n::t!(
+                "document.export_wizard.confirm.segment_size",
+                size = self.segment_size
             )))
             .child(
                 div().flex().justify_end().child(
-                    Button::new("export-wizard-start", "Start Export")
-                        .small()
-                        .primary()
-                        .on_click(cx.listener(|this, _event, _window, cx| this.start_export(cx))),
+                    Button::new(
+                        "export-wizard-start",
+                        dbflux_i18n::t!("document.export_wizard.confirm.start_export"),
+                    )
+                    .small()
+                    .primary()
+                    .on_click(cx.listener(|this, _event, _window, cx| this.start_export(cx))),
                 ),
             )
             .into_any_element()
@@ -560,29 +577,29 @@ impl ExportWizard {
         let current_index = progress.table_index.min(total_tables.saturating_sub(1));
         let current_table = names.get(current_index).cloned().unwrap_or_default();
 
-        let rows_label = match progress.estimated_total {
-            Some(total) if total > 0 => format!("{} / {} rows", progress.rows_done, total),
-            _ => format!("{} rows", progress.rows_done),
-        };
-        let position_label = if total_tables > 0 {
-            format!("Table {} of {}", current_index + 1, total_tables)
-        } else {
-            "Preparing".to_string()
-        };
+        let rows_label =
+            crate::labels::export_running_rows_label(progress.rows_done, progress.estimated_total);
+        let position_label =
+            crate::labels::export_running_position_label(current_index, total_tables);
 
         div()
             .flex()
             .flex_col()
             .gap(Spacing::MD)
-            .child(Text::label("Exporting…"))
+            .child(Text::label(dbflux_i18n::t!(
+                "document.export_wizard.running.title"
+            )))
             .child(Text::caption(format!("{position_label}: {current_table}")))
             .child(Text::caption(rows_label).muted_foreground())
             .child(
                 div().flex().justify_end().child(
-                    Button::new("export-wizard-cancel", "Cancel")
-                        .small()
-                        .ghost()
-                        .on_click(cx.listener(|this, _event, _window, cx| this.cancel_run(cx))),
+                    Button::new(
+                        "export-wizard-cancel",
+                        dbflux_i18n::t!("document.export_wizard.running.cancel"),
+                    )
+                    .small()
+                    .ghost()
+                    .on_click(cx.listener(|this, _event, _window, cx| this.cancel_run(cx))),
                 ),
             )
             .into_any_element()
@@ -620,27 +637,36 @@ impl ExportWizard {
             .gap(Spacing::SM)
             .when(shows_back, |parent| {
                 parent.child(
-                    Button::new("export-wizard-back", "Back")
-                        .small()
-                        .ghost()
-                        .on_click(cx.listener(|this, _event, _window, cx| this.go_back(cx))),
+                    Button::new(
+                        "export-wizard-back",
+                        dbflux_i18n::t!("document.export_wizard.footer.back"),
+                    )
+                    .small()
+                    .ghost()
+                    .on_click(cx.listener(|this, _event, _window, cx| this.go_back(cx))),
                 )
             })
             .when(shows_continue, |parent| {
                 parent.child(
-                    Button::new("export-wizard-continue", "Continue")
-                        .small()
-                        .primary()
-                        .disabled(!continue_enabled)
-                        .on_click(cx.listener(|this, _event, _window, cx| this.advance(cx))),
+                    Button::new(
+                        "export-wizard-continue",
+                        dbflux_i18n::t!("document.export_wizard.footer.continue"),
+                    )
+                    .small()
+                    .primary()
+                    .disabled(!continue_enabled)
+                    .on_click(cx.listener(|this, _event, _window, cx| this.advance(cx))),
                 )
             })
             .when(done, |parent| {
                 parent.child(
-                    Button::new("export-wizard-close", "Close")
-                        .small()
-                        .primary()
-                        .on_click(cx.listener(|this, _event, _window, cx| this.close(cx))),
+                    Button::new(
+                        "export-wizard-close",
+                        dbflux_i18n::t!("document.export_wizard.footer.close"),
+                    )
+                    .small()
+                    .primary()
+                    .on_click(cx.listener(|this, _event, _window, cx| this.close(cx))),
                 )
             });
 

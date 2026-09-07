@@ -62,9 +62,12 @@ pub const ALL_ICONS: &[AppIcon] = &[
     AppIcon::Unplug,
     AppIcon::Server,
     AppIcon::HardDrive,
+    AppIcon::File,
     AppIcon::FileCode,
+    AppIcon::Image,
     AppIcon::Folder,
     AppIcon::Box,
+    AppIcon::Boxes,
     AppIcon::Braces,
     AppIcon::SquareTerminal,
     AppIcon::Parentheses,
@@ -74,6 +77,7 @@ pub const ALL_ICONS: &[AppIcon] = &[
     AppIcon::ChartSpline,
     AppIcon::ChartArea,
     AppIcon::ChartColumnBig,
+    AppIcon::ChartNoAxesColumn,
     AppIcon::ChartBar,
     AppIcon::ChartPie,
     AppIcon::ChartNetwork,
@@ -85,6 +89,7 @@ pub const ALL_ICONS: &[AppIcon] = &[
     AppIcon::BrandSqlite,
     AppIcon::BrandMongodb,
     AppIcon::BrandRedis,
+    AppIcon::BrandClickhouse,
     AppIcon::BrandLua,
     AppIcon::BrandPython,
     AppIcon::BrandBash,
@@ -188,11 +193,14 @@ pub(crate) fn embedded_bytes(icon: AppIcon) -> &'static [u8] {
         AppIcon::Unplug => include_bytes!("../../../../../resources/icons/ui/unplug.svg"),
         AppIcon::Server => include_bytes!("../../../../../resources/icons/ui/server.svg"),
         AppIcon::HardDrive => include_bytes!("../../../../../resources/icons/ui/hard-drive.svg"),
+        AppIcon::File => include_bytes!("../../../../../resources/icons/ui/file.svg"),
         AppIcon::FileCode => {
             include_bytes!("../../../../../resources/icons/ui/file-code-corner.svg")
         }
+        AppIcon::Image => include_bytes!("../../../../../resources/icons/ui/image.svg"),
         AppIcon::Folder => include_bytes!("../../../../../resources/icons/ui/folder.svg"),
         AppIcon::Box => include_bytes!("../../../../../resources/icons/ui/box.svg"),
+        AppIcon::Boxes => include_bytes!("../../../../../resources/icons/ui/boxes.svg"),
         AppIcon::Braces => include_bytes!("../../../../../resources/icons/ui/braces.svg"),
         AppIcon::SquareTerminal => {
             include_bytes!("../../../../../resources/icons/ui/square-terminal.svg")
@@ -223,6 +231,9 @@ pub(crate) fn embedded_bytes(icon: AppIcon) -> &'static [u8] {
         AppIcon::ChartColumnBig => {
             include_bytes!("../../../../../resources/icons/ui/chart-column-big.svg")
         }
+        AppIcon::ChartNoAxesColumn => {
+            include_bytes!("../../../../../resources/icons/ui/chart-no-axes-column.svg")
+        }
         AppIcon::ChartBar => include_bytes!("../../../../../resources/icons/ui/chart-bar.svg"),
         AppIcon::ChartPie => include_bytes!("../../../../../resources/icons/ui/chart-pie.svg"),
         AppIcon::ChartNetwork => {
@@ -240,6 +251,9 @@ pub(crate) fn embedded_bytes(icon: AppIcon) -> &'static [u8] {
             include_bytes!("../../../../../resources/icons/brand/mongodb.svg")
         }
         AppIcon::BrandRedis => include_bytes!("../../../../../resources/icons/brand/redis.svg"),
+        AppIcon::BrandClickhouse => {
+            include_bytes!("../../../../../resources/icons/brand/clickhouse.svg")
+        }
         AppIcon::BrandLua => include_bytes!("../../../../../resources/icons/brand/lua.svg"),
         AppIcon::BrandPython => include_bytes!("../../../../../resources/icons/brand/python.svg"),
         AppIcon::BrandBash => include_bytes!("../../../../../resources/icons/brand/gnubash.svg"),
@@ -254,5 +268,22 @@ pub(crate) fn embedded_bytes(icon: AppIcon) -> &'static [u8] {
             include_bytes!("../../../../../resources/icons/ui/brain-circuit.svg")
         }
         AppIcon::Bot => include_bytes!("../../../../../resources/icons/ui/bot.svg"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ALL_ICONS, AppIcon, embedded_bytes};
+
+    #[test]
+    fn semantic_driver_fallback_assets_are_registered() {
+        for icon in [
+            AppIcon::ChartNoAxesColumn,
+            AppIcon::Boxes,
+            AppIcon::BrandClickhouse,
+        ] {
+            assert!(ALL_ICONS.contains(&icon));
+            assert!(embedded_bytes(icon).starts_with(b"<svg"));
+        }
     }
 }

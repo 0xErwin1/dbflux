@@ -23,6 +23,9 @@ pub enum DbKind {
     CloudWatchLogs,
     InfluxDB,
     SqlServer,
+    Redshift,
+    S3,
+    ClickHouse,
 }
 
 impl DbKind {
@@ -38,6 +41,9 @@ impl DbKind {
             DbKind::CloudWatchLogs => "CloudWatch Logs",
             DbKind::InfluxDB => "InfluxDB",
             DbKind::SqlServer => "SQL Server",
+            DbKind::Redshift => "Amazon Redshift",
+            DbKind::S3 => "Amazon S3",
+            DbKind::ClickHouse => "ClickHouse",
         }
     }
 }
@@ -426,6 +432,19 @@ pub enum DbConfig {
         ssh_tunnel: Option<SshTunnelConfig>,
         #[serde(default)]
         ssh_tunnel_profile_id: Option<Uuid>,
+        /// Explicit deployment topology: `"standalone"`, `"cluster"`, or `"sentinel"`.
+        /// Absent or empty means standalone-with-detection, the historical behavior
+        /// where the driver probes `ROLE` / `INFO cluster` at connect time.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        topology: Option<String>,
+        /// The Sentinel master/service name. Required when `topology` is `"sentinel"`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sentinel_master_name: Option<String>,
+        /// Comma-separated extra seed `host:port` pairs, beyond the primary
+        /// `host`/`port` above. Used as extra Cluster seed nodes when `topology` is
+        /// `"cluster"`, or as extra Sentinel nodes when `topology` is `"sentinel"`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        additional_nodes: Option<String>,
     },
     DynamoDB {
         region: String,
@@ -515,6 +534,73 @@ pub enum DbConfig {
         #[serde(default)]
         ssh_tunnel_profile_id: Option<Uuid>,
     },
+    /// Amazon Redshift, wire-compatible with PostgreSQL.
+    Redshift {
+        #[serde(default)]
+        use_uri: bool,
+        #[serde(default)]
+        uri: Option<String>,
+        host: String,
+        port: u16,
+        user: String,
+        database: String,
+        /// SSL mode using the Postgres native sslmode identifier (e.g. `"prefer"`, `"verify-ca"`).
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "deserialize_ssl_mode_option"
+        )]
+        ssl_mode: Option<String>,
+        /// Path to the root CA certificate file for `verify-ca` / `verify-full` modes.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ssl_root_cert_path: Option<String>,
+        /// Path to the client certificate file for mutual TLS.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ssl_client_cert_path: Option<String>,
+        /// Path to the client private key file for mutual TLS.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ssl_client_key_path: Option<String>,
+        ssh_tunnel: Option<SshTunnelConfig>,
+        #[serde(default)]
+        ssh_tunnel_profile_id: Option<Uuid>,
+    },
+    /// AWS S3 or an S3-compatible object-storage endpoint (Cloudflare R2, MinIO).
+    ///
+    /// Auth is either an AWS profile/SSO `AuthProfileRef` (`profile`) or static
+    /// credentials (`access_key_id` + the connection's existing keyring-backed
+    /// secret, resolved the same way a Postgres/MySQL password is — no new
+    /// secret-storage mechanism). When both are set, `profile` takes
+    /// precedence, mirroring the AWS SDK's own credential-provider ordering.
+    S3 {
+        /// AWS region, required by the SDK even against S3-compatible
+        /// endpoints that otherwise ignore it.
+        region: String,
+        /// Profile/SSO auth-profile reference (a profile UUID as a string),
+        /// bound to the `profile` `DRIVER_FORM` field declared as
+        /// `FormFieldKind::AuthProfileRef`.
+        #[serde(default)]
+        profile: Option<String>,
+        /// Static AWS access key id. Not sensitive on its own — stored in
+        /// cleartext like `user` on other drivers.
+        #[serde(default)]
+        access_key_id: Option<String>,
+        /// Custom endpoint URL for S3-compatible services. `None` uses the
+        /// AWS SDK's default S3 endpoint resolution.
+        #[serde(default)]
+        endpoint: Option<String>,
+        /// Force path-style addressing (`endpoint/bucket/key`) instead of
+        /// virtual-hosted-style (`bucket.endpoint/key`). Required by most
+        /// S3-compatible endpoints (MinIO) and some Cloudflare R2 setups.
+        #[serde(default)]
+        path_style: bool,
+    },
+    ClickHouse {
+        url: String,
+        user: String,
+        database: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        request_timeout_seconds: Option<u64>,
+    },
     /// Generic config for external RPC drivers.
     External {
         kind: DbKind,
@@ -539,6 +625,9 @@ impl DbConfig {
             DbConfig::CloudWatchLogs { .. } => DbKind::CloudWatchLogs,
             DbConfig::InfluxDB { .. } => DbKind::InfluxDB,
             DbConfig::SqlServer { .. } => DbKind::SqlServer,
+            DbConfig::Redshift { .. } => DbKind::Redshift,
+            DbConfig::S3 { .. } => DbKind::S3,
+            DbConfig::ClickHouse { .. } => DbKind::ClickHouse,
             DbConfig::External { kind, .. } => *kind,
         }
     }
@@ -617,6 +706,9 @@ impl DbConfig {
             ssl_client_key_path: None,
             ssh_tunnel: None,
             ssh_tunnel_profile_id: None,
+            topology: None,
+            sentinel_master_name: None,
+            additional_nodes: None,
         }
     }
 
@@ -666,17 +758,56 @@ impl DbConfig {
         }
     }
 
+    pub fn default_redshift() -> Self {
+        DbConfig::Redshift {
+            use_uri: false,
+            uri: None,
+            host: "localhost".to_string(),
+            port: 5439,
+            user: "awsuser".to_string(),
+            database: "dev".to_string(),
+            ssl_mode: Some("prefer".to_string()),
+            ssl_root_cert_path: None,
+            ssl_client_cert_path: None,
+            ssl_client_key_path: None,
+            ssh_tunnel: None,
+            ssh_tunnel_profile_id: None,
+        }
+    }
+
+    pub fn default_s3() -> Self {
+        DbConfig::S3 {
+            region: "us-east-1".to_string(),
+            profile: None,
+            access_key_id: None,
+            endpoint: None,
+            path_style: false,
+        }
+    }
+
+    pub fn default_clickhouse() -> Self {
+        DbConfig::ClickHouse {
+            url: "http://localhost:8123".to_string(),
+            user: "default".to_string(),
+            database: "default".to_string(),
+            request_timeout_seconds: None,
+        }
+    }
+
     pub fn ssh_tunnel(&self) -> Option<&SshTunnelConfig> {
         match self {
             DbConfig::Postgres { ssh_tunnel, .. }
             | DbConfig::MySQL { ssh_tunnel, .. }
             | DbConfig::MongoDB { ssh_tunnel, .. }
             | DbConfig::Redis { ssh_tunnel, .. }
-            | DbConfig::SqlServer { ssh_tunnel, .. } => ssh_tunnel.as_ref(),
+            | DbConfig::SqlServer { ssh_tunnel, .. }
+            | DbConfig::Redshift { ssh_tunnel, .. } => ssh_tunnel.as_ref(),
             DbConfig::SQLite { .. }
             | DbConfig::DynamoDB { .. }
             | DbConfig::CloudWatchLogs { .. }
             | DbConfig::InfluxDB { .. }
+            | DbConfig::S3 { .. }
+            | DbConfig::ClickHouse { .. }
             | DbConfig::External { .. } => None,
         }
     }
@@ -703,11 +834,17 @@ impl DbConfig {
             | DbConfig::SqlServer {
                 ssh_tunnel_profile_id,
                 ..
+            }
+            | DbConfig::Redshift {
+                ssh_tunnel_profile_id,
+                ..
             } => *ssh_tunnel_profile_id,
             DbConfig::SQLite { .. }
             | DbConfig::DynamoDB { .. }
             | DbConfig::CloudWatchLogs { .. }
             | DbConfig::InfluxDB { .. }
+            | DbConfig::S3 { .. }
+            | DbConfig::ClickHouse { .. }
             | DbConfig::External { .. } => None,
         }
     }
@@ -739,11 +876,18 @@ impl DbConfig {
                 ssh_tunnel,
                 ssh_tunnel_profile_id,
                 ..
+            }
+            | DbConfig::Redshift {
+                ssh_tunnel,
+                ssh_tunnel_profile_id,
+                ..
             } => ssh_tunnel.is_some() || ssh_tunnel_profile_id.is_some(),
             DbConfig::SQLite { .. }
             | DbConfig::DynamoDB { .. }
             | DbConfig::CloudWatchLogs { .. }
             | DbConfig::InfluxDB { .. }
+            | DbConfig::S3 { .. }
+            | DbConfig::ClickHouse { .. }
             | DbConfig::External { .. } => false,
         }
     }
@@ -755,11 +899,14 @@ impl DbConfig {
             | DbConfig::MySQL { host, port, .. }
             | DbConfig::MongoDB { host, port, .. }
             | DbConfig::Redis { host, port, .. }
-            | DbConfig::SqlServer { host, port, .. } => Some((host, *port)),
+            | DbConfig::SqlServer { host, port, .. }
+            | DbConfig::Redshift { host, port, .. } => Some((host, *port)),
             DbConfig::SQLite { .. }
             | DbConfig::DynamoDB { .. }
             | DbConfig::CloudWatchLogs { .. }
             | DbConfig::InfluxDB { .. }
+            | DbConfig::S3 { .. }
+            | DbConfig::ClickHouse { .. }
             | DbConfig::External { .. } => None,
         }
     }
@@ -796,6 +943,12 @@ impl DbConfig {
                 port,
                 use_uri,
                 ..
+            }
+            | DbConfig::Redshift {
+                host,
+                port,
+                use_uri,
+                ..
             } => {
                 *host = "127.0.0.1".to_string();
                 *port = tunnel_port;
@@ -805,6 +958,8 @@ impl DbConfig {
             | DbConfig::DynamoDB { .. }
             | DbConfig::CloudWatchLogs { .. }
             | DbConfig::InfluxDB { .. }
+            | DbConfig::S3 { .. }
+            | DbConfig::ClickHouse { .. }
             | DbConfig::External { .. } => {}
         }
     }
@@ -814,16 +969,30 @@ impl DbConfig {
     /// Returns the extracted password when one was present and updates the
     /// stored URI in-place to a sanitized form without the password.
     pub fn strip_uri_password(&mut self) -> Option<String> {
+        if let DbConfig::ClickHouse { url, user, .. } = self {
+            let (sanitized_uri, extracted_password) = strip_password_from_uri(url);
+            if extracted_password.is_some() {
+                if let Some(username) = uri_username(url) {
+                    *user = username;
+                }
+                *url = strip_uri_userinfo(&sanitized_uri);
+            }
+            return extracted_password;
+        }
+
         let (use_uri, uri) = match self {
             DbConfig::Postgres { use_uri, uri, .. }
             | DbConfig::MySQL { use_uri, uri, .. }
             | DbConfig::MongoDB { use_uri, uri, .. }
             | DbConfig::Redis { use_uri, uri, .. }
-            | DbConfig::SqlServer { use_uri, uri, .. } => (use_uri, uri),
+            | DbConfig::SqlServer { use_uri, uri, .. }
+            | DbConfig::Redshift { use_uri, uri, .. } => (use_uri, uri),
             DbConfig::SQLite { .. }
             | DbConfig::DynamoDB { .. }
             | DbConfig::CloudWatchLogs { .. }
             | DbConfig::InfluxDB { .. }
+            | DbConfig::S3 { .. }
+            | DbConfig::ClickHouse { .. }
             | DbConfig::External { .. } => {
                 return None;
             }
@@ -853,10 +1022,25 @@ impl DbConfig {
             DbConfig::MongoDB { database, .. } => database.clone(),
             DbConfig::Redis { database, .. } => database.map(|d| d.to_string()),
             DbConfig::SqlServer { database, .. } => database.clone(),
+            DbConfig::Redshift { database, .. } => Some(database.clone()),
             DbConfig::SQLite { .. } => Some("main".to_string()),
             DbConfig::DynamoDB { .. } | DbConfig::CloudWatchLogs { .. } => None,
             DbConfig::InfluxDB { default_bucket, .. } => default_bucket.clone(),
+            DbConfig::ClickHouse { database, .. } => Some(database.clone()),
+            DbConfig::S3 { .. } => None,
             DbConfig::External { .. } => None,
+        }
+    }
+
+    /// Returns the cloud region this connection is configured against, for the
+    /// configs that carry one. Generic UI code uses it to pre-fill
+    /// region-scoped forms without knowing which driver it is talking to.
+    pub fn region(&self) -> Option<&str> {
+        match self {
+            DbConfig::DynamoDB { region, .. }
+            | DbConfig::CloudWatchLogs { region, .. }
+            | DbConfig::S3 { region, .. } => Some(region.as_str()),
+            _ => None,
         }
     }
 
@@ -960,6 +1144,9 @@ impl DbConfig {
                 ssl_client_key_path,
                 ssh_tunnel,
                 ssh_tunnel_profile_id,
+                topology,
+                sentinel_master_name,
+                additional_nodes,
                 ..
             } => {
                 let db_index: u32 = database
@@ -979,6 +1166,9 @@ impl DbConfig {
                     ssl_client_key_path,
                     ssh_tunnel,
                     ssh_tunnel_profile_id,
+                    topology,
+                    sentinel_master_name,
+                    additional_nodes,
                 })
             }
             DbConfig::SqlServer {
@@ -1008,9 +1198,69 @@ impl DbConfig {
                 ssh_tunnel,
                 ssh_tunnel_profile_id,
             }),
+            DbConfig::Redshift {
+                use_uri,
+                uri,
+                host,
+                port,
+                user,
+                ssl_mode,
+                ssl_root_cert_path,
+                ssl_client_cert_path,
+                ssl_client_key_path,
+                ssh_tunnel,
+                ssh_tunnel_profile_id,
+                ..
+            } => Ok(DbConfig::Redshift {
+                use_uri,
+                uri,
+                host,
+                port,
+                user,
+                database: database.to_string(),
+                ssl_mode,
+                ssl_root_cert_path,
+                ssl_client_cert_path,
+                ssl_client_key_path,
+                ssh_tunnel,
+                ssh_tunnel_profile_id,
+            }),
+            DbConfig::ClickHouse {
+                url,
+                user,
+                request_timeout_seconds,
+                ..
+            } => Ok(DbConfig::ClickHouse {
+                url,
+                user,
+                database: database.to_string(),
+                request_timeout_seconds,
+            }),
             _ => Err("Changing database is not supported for this database type".to_string()),
         }
     }
+}
+
+fn uri_username(uri: &str) -> Option<String> {
+    let authority = uri.split_once("://")?.1.split(['/', '?', '#']).next()?;
+    let userinfo = authority.rsplit_once('@')?.0;
+    let username = userinfo.split_once(':')?.0;
+    urlencoding::decode(username)
+        .map(|username| username.into_owned())
+        .ok()
+}
+
+fn strip_uri_userinfo(uri: &str) -> String {
+    let Some((scheme, remainder)) = uri.split_once("://") else {
+        return uri.to_string();
+    };
+    let authority_end = remainder.find(['/', '?', '#']).unwrap_or(remainder.len());
+    let authority = &remainder[..authority_end];
+    let suffix = &remainder[authority_end..];
+    let host = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    format!("{scheme}://{host}{suffix}")
 }
 
 /// Removes an embedded password from a connection URI.
@@ -1305,6 +1555,9 @@ impl ConnectionProfile {
             DbKind::CloudWatchLogs => "cloudwatch",
             DbKind::InfluxDB => "influxdb",
             DbKind::SqlServer => "mssql",
+            DbKind::Redshift => "redshift",
+            DbKind::S3 => "s3",
+            DbKind::ClickHouse => "clickhouse",
         }
     }
 
@@ -1367,6 +1620,10 @@ impl ConnectionProfile {
                 ..
             }
             | DbConfig::SqlServer {
+                ssh_tunnel_profile_id: Some(id),
+                ..
+            }
+            | DbConfig::Redshift {
                 ssh_tunnel_profile_id: Some(id),
                 ..
             } => AccessKind::Ssh {
@@ -1447,6 +1704,50 @@ mod tests {
 
     fn sqlite_profile() -> ConnectionProfile {
         ConnectionProfile::new("test-sqlite", DbConfig::default_sqlite())
+    }
+
+    #[test]
+    fn default_redshift_uses_port_5439_and_redshift_kind() {
+        let config = DbConfig::default_redshift();
+
+        let DbConfig::Redshift { port, .. } = &config else {
+            panic!("expected DbConfig::Redshift");
+        };
+        assert_eq!(*port, 5439);
+        assert_eq!(config.kind(), DbKind::Redshift);
+        assert_eq!(DbKind::Redshift.display_name(), "Amazon Redshift");
+        assert_eq!(
+            ConnectionProfile::builtin_driver_id_for_kind(DbKind::Redshift),
+            "redshift"
+        );
+    }
+
+    #[test]
+    fn default_clickhouse_uses_http_defaults_without_ssh() {
+        let config = DbConfig::default_clickhouse();
+
+        let DbConfig::ClickHouse {
+            url,
+            user,
+            database,
+            request_timeout_seconds,
+        } = &config
+        else {
+            panic!("expected DbConfig::ClickHouse");
+        };
+
+        assert_eq!(url, "http://localhost:8123");
+        assert_eq!(user, "default");
+        assert_eq!(database, "default");
+        assert_eq!(*request_timeout_seconds, None);
+        assert_eq!(config.kind(), DbKind::ClickHouse);
+        assert!(!config.has_ssh_tunnel());
+        assert_eq!(config.host_port(), None);
+        assert_eq!(config.database().as_deref(), Some("default"));
+        assert_eq!(
+            ConnectionProfile::builtin_driver_id_for_kind(DbKind::ClickHouse),
+            "clickhouse"
+        );
     }
 
     #[test]
@@ -1819,6 +2120,9 @@ mod tests {
             ssl_client_key_path: None,
             ssh_tunnel: None,
             ssh_tunnel_profile_id: None,
+            topology: None,
+            sentinel_master_name: None,
+            additional_nodes: None,
         };
 
         let extracted = config.strip_uri_password();
@@ -1829,6 +2133,25 @@ mod tests {
             DbConfig::Redis {
                 uri: Some(ref uri), ..
             } if uri == "redis://localhost:6379/0"
+        ));
+    }
+
+    #[test]
+    fn strip_uri_password_moves_clickhouse_credentials_out_of_url() {
+        let mut config = DbConfig::ClickHouse {
+            url: "https://alice:p%40ss@clickhouse.example.com:8443".to_string(),
+            user: "default".to_string(),
+            database: "default".to_string(),
+            request_timeout_seconds: None,
+        };
+
+        let extracted = config.strip_uri_password();
+
+        assert_eq!(extracted.as_deref(), Some("p@ss"));
+        assert!(matches!(
+            config,
+            DbConfig::ClickHouse { ref url, ref user, .. }
+                if url == "https://clickhouse.example.com:8443" && user == "alice"
         ));
     }
 

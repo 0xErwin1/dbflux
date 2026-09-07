@@ -37,10 +37,10 @@ impl DataViewMode {
         }
     }
 
-    pub fn label(&self) -> &'static str {
+    pub fn label(&self) -> String {
         match self {
-            DataViewMode::Table => "Table",
-            DataViewMode::Document => "Document",
+            DataViewMode::Table => dbflux_i18n::t!("document.data.grid.mode.table"),
+            DataViewMode::Document => dbflux_i18n::t!("document.data.grid.mode.document"),
         }
     }
 }

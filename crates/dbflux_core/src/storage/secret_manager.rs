@@ -304,10 +304,17 @@ impl SecretManager {
                 ssh_tunnel_profile_id,
                 ..
             } => (ssh_tunnel.as_ref(), *ssh_tunnel_profile_id),
+            DbConfig::Redshift {
+                ssh_tunnel,
+                ssh_tunnel_profile_id,
+                ..
+            } => (ssh_tunnel.as_ref(), *ssh_tunnel_profile_id),
             DbConfig::SQLite { .. }
             | DbConfig::DynamoDB { .. }
             | DbConfig::CloudWatchLogs { .. }
             | DbConfig::InfluxDB { .. }
+            | DbConfig::S3 { .. }
+            | DbConfig::ClickHouse { .. }
             | DbConfig::External { .. } => {
                 return None;
             }

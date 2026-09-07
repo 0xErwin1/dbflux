@@ -1,0 +1,59 @@
+---
+import { localizedDocTitle, sectionsFor } from '../data/docs';
+import type { DocTitlesByLocale } from '../data/docs';
+import { docsHref } from '../data/versions';
+import { localeFromPathname, sectionTitle, t } from '../i18n';
+import type { Locale } from '../i18n';
+
+interface Props {
+  versionId: string;
+  available: readonly string[];
+  locale?: Locale;
+  /** Existing translated document H1s, indexed by canonical locale id. */
+  titlesByLocale?: DocTitlesByLocale;
+}
+
+const {
+  versionId,
+  available,
+  locale = localeFromPathname(Astro.url.pathname),
+  titlesByLocale = {},
+} = Astro.props;
+const { sections, unfiled } = sectionsFor(available);
+---
+
+<h1>{t(locale, 'docs_index.title')}</h1>
+<p set:html={t(locale, 'docs_index.intro')} />
+
+{
+  sections.map((section) => (
+    <section>
+      <h2 id={section.id}>{sectionTitle(locale, section.id)}</h2>
+      <ul>
+        {section.entries.map((path) => (
+          <li>
+            <a href={docsHref(`${versionId}/${path}`, locale)}>
+              {localizedDocTitle(path, locale, titlesByLocale)}
+            </a>
+          </li>
+        ))}
+      </ul>
+    </section>
+  ))
+}
+
+{
+  unfiled.length > 0 && (
+    <section>
+      <h2 id="unfiled">{t(locale, 'docs_index.unfiled_title')}</h2>
+      <p set:html={t(locale, 'docs_index.unfiled_body')} />
+      <ul>
+        {unfiled.map((path) => (
+          <li>
+            <a href={docsHref(`${versionId}/${path}`, locale)}>{path}</a>
+          </li>
+        ))}
+      </ul>
+    </section>
+  )
+}

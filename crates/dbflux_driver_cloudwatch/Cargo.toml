@@ -23,3 +23,6 @@ aws-sdk-cloudwatch = "1"
 tokio = { workspace = true, features = ["time"] }
 serde_json = { workspace = true }
 log = "0.4"
+
+[dev-dependencies]
+dbflux_test_support.workspace = true

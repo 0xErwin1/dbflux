@@ -1,0 +1,404 @@
+---
+/**
+ * Full-text search across every page the site renders.
+ *
+ * The index is built per version and fetched on first open, so a reader who
+ * never searches never downloads it, and a reader on an older version is never
+ * shown a page that only exists in a newer one.
+ */
+import { localeFromPathname, t } from '../i18n';
+import type { Locale } from '../i18n';
+
+interface Props {
+  indexUrl: string;
+  locale?: Locale;
+}
+
+const { indexUrl, locale = localeFromPathname(Astro.url.pathname) } = Astro.props;
+
+const placeholder = t(locale, 'search.placeholder');
+
+const messages = {
+  noResults: t(locale, 'search.no_results'),
+  unavailable: t(locale, 'search.unavailable'),
+  resultCountOne: t(locale, 'search.result_count_one'),
+  resultCountOther: t(locale, 'search.result_count_other'),
+};
+---
+
+<dialog class="search" data-search data-search-index={indexUrl}>
+  <form class="search__form" method="dialog">
+    <div class="search__field">
+      <svg
+        width="16"
+        height="16"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.8"
+        aria-hidden="true"
+      >
+        <circle cx="11" cy="11" r="7"></circle>
+        <path d="M20 20l-4.3-4.3"></path>
+      </svg>
+      <input
+        type="search"
+        placeholder={placeholder}
+        aria-label={placeholder}
+        autocomplete="off"
+        spellcheck="false"
+        data-search-input
+      />
+      <kbd>Esc</kbd>
+    </div>
+
+    <div class="search__results" role="listbox" aria-label="Results" data-search-results></div>
+
+    <div class="search__foot">
+      <span><kbd>&uarr;</kbd><kbd>&darr;</kbd> {t(locale, 'search.move')}</span>
+      <span><kbd>&crarr;</kbd> {t(locale, 'search.open')}</span>
+      <span><kbd>Esc</kbd> {t(locale, 'search.close')}</span>
+      <span class="search__count" data-search-count></span>
+    </div>
+  </form>
+</dialog>
+
+<script
+  type="application/json"
+  data-search-messages
+  is:inline
+  set:html={JSON.stringify(messages)}
+/>
+
+<style is:global>
+  /*
+   * Results are inserted at runtime, so they never carry the scope attribute
+   * Astro adds to component styles. Their rules have to be global or nothing
+   * matches and the browser defaults show through.
+   */
+  .search__hit {
+    display: block;
+    padding: var(--s-4) var(--s-5);
+    border-bottom: var(--bw) solid var(--border);
+    color: var(--text);
+    cursor: pointer;
+  }
+  .search__hit:hover,
+  .search__hit[data-active] {
+    background: var(--panel);
+    box-shadow: inset 2px 0 0 0 var(--accent);
+    text-decoration: none;
+  }
+  .search__hit-title {
+    font-family: var(--font-mono);
+    font-size: var(--fs-small);
+    color: var(--text-strong);
+  }
+  .search__hit-page {
+    color: var(--text-muted);
+  }
+  .search__hit-snippet {
+    margin: var(--s-2) 0 0;
+    font-size: var(--fs-small);
+    line-height: 1.6;
+    color: var(--text-muted);
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .search__hit mark {
+    background: none;
+    color: var(--accent);
+  }
+  .search__empty {
+    padding: var(--s-7) var(--s-5);
+    text-align: center;
+    font-size: var(--fs-small);
+    color: var(--text-muted);
+  }
+</style>
+
+<style>
+  .search {
+    width: min(680px, calc(100vw - var(--s-6) * 2));
+    margin-top: 12vh;
+    padding: 0;
+    background: var(--raised);
+    border: var(--bw) solid var(--border-interactive);
+    color: var(--text);
+    box-shadow: var(--shadow-lg);
+  }
+
+  .search::backdrop {
+    background: var(--scrim);
+  }
+
+  .search__form {
+    display: flex;
+    flex-direction: column;
+    max-height: min(70vh, 620px);
+  }
+
+  .search__field {
+    display: flex;
+    align-items: center;
+    gap: var(--s-4);
+    padding: var(--s-4) var(--s-5);
+    border-bottom: var(--bw) solid var(--border);
+  }
+
+  .search__field svg {
+    color: var(--accent);
+    flex-shrink: 0;
+  }
+
+  .search__field input {
+    flex-grow: 1;
+    min-width: 0;
+    background: none;
+    border: 0;
+    color: var(--text-strong);
+    font-family: var(--font-mono);
+    font-size: var(--fs-body);
+  }
+
+  .search__field input:focus {
+    outline: none;
+  }
+
+  .search__field input::-webkit-search-cancel-button {
+    display: none;
+  }
+
+  kbd {
+    font-family: var(--font-mono);
+    font-size: var(--fs-label);
+    color: var(--text-muted);
+    border: var(--bw) solid var(--border);
+    padding: 1px 5px;
+  }
+
+  .search__results {
+    overflow-y: auto;
+    flex-grow: 1;
+  }
+
+  .search__results:empty {
+    display: none;
+  }
+
+  .search__foot {
+    display: flex;
+    align-items: center;
+    gap: var(--s-5);
+    padding: var(--s-3) var(--s-5);
+    border-top: var(--bw) solid var(--border);
+    font-family: var(--font-mono);
+    font-size: var(--fs-label);
+    color: var(--text-muted);
+  }
+
+  .search__foot span {
+    display: flex;
+    align-items: center;
+    gap: var(--s-2);
+  }
+
+  .search__count {
+    margin-left: auto;
+  }
+
+  @media (max-width: 640px) {
+    .search {
+      margin-top: 0;
+      width: 100vw;
+      max-width: 100vw;
+      height: 100dvh;
+    }
+
+    .search__form {
+      max-height: none;
+      height: 100%;
+    }
+
+    .search__foot {
+      display: none;
+    }
+  }
+</style>
+
+<script>
+  interface Section {
+    p: string;
+    t: string;
+    h: string;
+    a: string;
+    s: string;
+  }
+
+  interface SearchMessages {
+    noResults: string;
+    unavailable: string;
+    resultCountOne: string;
+    resultCountOther: string;
+  }
+
+  const messagesEl = document.querySelector<HTMLScriptElement>('[data-search-messages]');
+  const messages: SearchMessages = JSON.parse(messagesEl?.textContent ?? '{}');
+
+  const dialog = document.querySelector<HTMLDialogElement>('[data-search]');
+  const input = document.querySelector<HTMLInputElement>('[data-search-input]');
+  const results = document.querySelector<HTMLElement>('[data-search-results]');
+  const count = document.querySelector<HTMLElement>('[data-search-count]');
+
+  if (dialog && input && results && count) {
+    let index: Section[] | null = null;
+    let hits: HTMLAnchorElement[] = [];
+    let cursor = 0;
+
+    const escapeHtml = (value: string) =>
+      value.replace(
+        /[&<>"]/g,
+        (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!,
+      );
+
+    const highlight = (value: string, terms: string[]) => {
+      let out = escapeHtml(value);
+
+      for (const term of terms) {
+        const pattern = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        out = out.replace(new RegExp(`(${pattern})`, 'gi'), '<mark>$1</mark>');
+      }
+
+      return out;
+    };
+
+    /** Heading matches outrank page-title matches, which outrank body matches. */
+    const score = (section: Section, terms: string[]) => {
+      let total = 0;
+
+      for (const term of terms) {
+        const inHeading = section.h.toLowerCase().includes(term);
+        const inTitle = section.t.toLowerCase().includes(term);
+        const inBody = section.s.toLowerCase().includes(term);
+
+        if (!inHeading && !inTitle && !inBody) return 0;
+
+        total += (inHeading ? 6 : 0) + (inTitle ? 3 : 0) + (inBody ? 1 : 0);
+      }
+
+      return total;
+    };
+
+    const setCursor = (next: number) => {
+      if (hits.length === 0) return;
+
+      cursor = (next + hits.length) % hits.length;
+
+      hits.forEach((hit, i) => hit.toggleAttribute('data-active', i === cursor));
+      hits[cursor].scrollIntoView({ block: 'nearest' });
+    };
+
+    const render = () => {
+      const query = input.value.trim().toLowerCase();
+      const terms = query.split(/\s+/).filter(Boolean);
+
+      if (terms.length === 0 || !index) {
+        results.innerHTML = '';
+        count.textContent = '';
+        hits = [];
+        return;
+      }
+
+      const matches = index
+        .map((section) => ({ section, weight: score(section, terms) }))
+        .filter((entry) => entry.weight > 0)
+        .sort((a, b) => b.weight - a.weight)
+        .slice(0, 24);
+
+      if (matches.length === 0) {
+        const emptyMessage = messages.noResults.replace('{query}', escapeHtml(input.value.trim()));
+
+        results.innerHTML = `<p class="search__empty">${emptyMessage}</p>`;
+        count.textContent = messages.resultCountOther.replace('{n}', '0');
+        hits = [];
+        return;
+      }
+
+      results.innerHTML = matches
+        .map(({ section }) => {
+          const href = section.a ? `${section.p}#${section.a}` : section.p;
+          const heading = section.h
+            ? `<span class="search__hit-page">${escapeHtml(section.t)} &rsaquo;</span> ${highlight(section.h, terms)}`
+            : highlight(section.t, terms);
+
+          return `<a class="search__hit" href="${href}" role="option">
+            <span class="search__hit-title">${heading}</span>
+            <p class="search__hit-snippet">${highlight(section.s, terms)}</p>
+          </a>`;
+        })
+        .join('');
+
+      const countMessage =
+        matches.length === 1 ? messages.resultCountOne : messages.resultCountOther;
+
+      count.textContent = countMessage.replace('{n}', String(matches.length));
+      hits = Array.from(results.querySelectorAll<HTMLAnchorElement>('.search__hit'));
+      setCursor(0);
+    };
+
+    const load = async () => {
+      if (index) return;
+
+      try {
+        const url = dialog.dataset.searchIndex ?? '/search-index.json';
+        index = (await fetch(url).then((r) => r.json())) as Section[];
+      } catch {
+        index = [];
+        results.innerHTML = `<p class="search__empty">${messages.unavailable}</p>`;
+      }
+    };
+
+    const open = async () => {
+      if (dialog.open) return;
+
+      dialog.showModal();
+      input.focus();
+      input.select();
+      await load();
+      render();
+    };
+
+    input.addEventListener('input', render);
+
+    dialog.addEventListener('keydown', (event) => {
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        setCursor(cursor + 1);
+      } else if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        setCursor(cursor - 1);
+      } else if (event.key === 'Enter') {
+        event.preventDefault();
+        hits[cursor]?.click();
+      }
+    });
+
+    // Clicking the backdrop, which is the dialog element itself outside the form.
+    dialog.addEventListener('click', (event) => {
+      if (event.target === dialog) dialog.close();
+    });
+
+    for (const trigger of document.querySelectorAll('[data-search-open]')) {
+      trigger.addEventListener('click', open);
+    }
+
+    document.addEventListener('keydown', (event) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        open();
+      }
+    });
+  }
+</script>

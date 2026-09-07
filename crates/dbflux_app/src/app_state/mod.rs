@@ -573,6 +573,7 @@ impl AppState {
         schema: Option<SchemaSnapshot>,
         proxy_tunnel: Option<Box<dyn std::any::Any + Send + Sync>>,
         is_mcp_actor: bool,
+        probe: dbflux_core::WritePrivilege,
     ) {
         self.facade.connections.apply_connect_profile(
             profile,
@@ -580,6 +581,7 @@ impl AppState {
             schema,
             proxy_tunnel,
             is_mcp_actor,
+            probe,
         );
     }
 
@@ -3342,6 +3344,21 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "clickhouse")]
+    fn clickhouse_registration_present_when_feature_enabled() {
+        let drivers = AppState::build_builtin_drivers();
+        assert!(
+            drivers.contains_key("clickhouse"),
+            "driver map must contain the 'clickhouse' key when the clickhouse feature is enabled"
+        );
+
+        let driver = drivers
+            .get("clickhouse")
+            .expect("clickhouse driver must be registered");
+        assert_eq!(driver.driver_key(), "builtin:clickhouse");
+    }
+
+    #[test]
     fn appstate_new_with_storage_runtime_returns_result_and_propagates_viz_failure() {
         // Uses a directory as the DB path. open_dbflux_db will succeed (migrations
         // ran during StorageRuntime construction on the real path), but viz_connection()
@@ -3398,6 +3415,7 @@ mod tests {
                         enabled_when_checked: None,
                         enabled_when_unchecked: None,
                         disabled_when_field_set: None,
+                        enabled_when_field_equals: None,
                         help: None,
                     }],
                 }],

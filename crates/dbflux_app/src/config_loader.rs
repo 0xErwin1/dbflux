@@ -88,6 +88,9 @@ pub fn save_general_settings(
             dbflux_core::AppStyle::Compact => "compact".to_string(),
         },
         schema_snapshot_retention: settings.schema_snapshot_retention as i64,
+        object_preview_size_limit_mib: settings.object_preview_size_limit_mib as i64,
+        language: settings.language.clone(),
+        key_value_size_limit_mib: settings.key_value_size_limit_mib as i64,
         updated_at: String::new(),
     };
     repo.upsert(&dto)?;
@@ -464,6 +467,9 @@ fn db_kind_to_str(kind: DbKind) -> String {
         DbKind::CloudWatchLogs => "CloudWatchLogs",
         DbKind::InfluxDB => "InfluxDB",
         DbKind::SqlServer => "SqlServer",
+        DbKind::Redshift => "Redshift",
+        DbKind::S3 => "S3",
+        DbKind::ClickHouse => "ClickHouse",
     }
     .to_string()
 }
@@ -480,6 +486,9 @@ fn str_to_db_kind(s: &str) -> Option<DbKind> {
         "CloudWatchLogs" => Some(DbKind::CloudWatchLogs),
         "InfluxDB" => Some(DbKind::InfluxDB),
         "SqlServer" => Some(DbKind::SqlServer),
+        "Redshift" => Some(DbKind::Redshift),
+        "S3" => Some(DbKind::S3),
+        "ClickHouse" => Some(DbKind::ClickHouse),
         _ => None,
     }
 }
@@ -495,6 +504,9 @@ fn default_db_config_for_kind(kind: DbKind) -> dbflux_core::DbConfig {
         DbKind::CloudWatchLogs => dbflux_core::DbConfig::default_cloudwatch_logs(),
         DbKind::InfluxDB => dbflux_core::DbConfig::default_influxdb(),
         DbKind::SqlServer => dbflux_core::DbConfig::default_sqlserver(),
+        DbKind::Redshift => dbflux_core::DbConfig::default_redshift(),
+        DbKind::S3 => dbflux_core::DbConfig::default_s3(),
+        DbKind::ClickHouse => dbflux_core::DbConfig::default_clickhouse(),
     }
 }
 
@@ -1052,6 +1064,9 @@ fn load_general_settings(
         dangerous_requires_preview: dto.dangerous_requires_preview != 0,
         workspace_inspector_width_px: None,
         schema_snapshot_retention: dto.schema_snapshot_retention as usize,
+        object_preview_size_limit_mib: dto.object_preview_size_limit_mib as u64,
+        language: language_setting_from_storage(&dto.language),
+        key_value_size_limit_mib: dto.key_value_size_limit_mib as u64,
     }
 }
 
@@ -1069,6 +1084,18 @@ fn theme_setting_from_storage(theme: &str) -> dbflux_core::ThemeSetting {
         "mirage" => dbflux_core::ThemeSetting::Mirage,
         _ => dbflux_core::ThemeSetting::Dark,
     }
+}
+
+/// Maps a storage `language` string to a `GeneralSettings::language` value.
+///
+/// The value passes through unvalidated on purpose: the supported set of
+/// languages is derived from the translation catalogs in `dbflux_i18n`, and
+/// this app/core layer must not duplicate it. `dbflux_i18n::resolve` treats
+/// any unrecognized value as "follow the system locale", so a stale or
+/// not-yet-shipped language code degrades safely instead of being erased
+/// here and losing the user's choice across an upgrade cycle.
+fn language_setting_from_storage(language: &str) -> String {
+    language.to_string()
 }
 
 /// Maps a storage `style` string to `AppStyle`.
@@ -1790,9 +1817,9 @@ fn load_ssh_tunnels(
 #[cfg(test)]
 mod tests {
     use super::{
-        HookDefinitionSave, default_db_config_for_kind, general_settings_theme_to_storage,
-        load_config, save_hook_definitions, save_profiles, save_services, save_ssh_tunnels,
-        theme_setting_from_storage,
+        HookDefinitionSave, db_kind_to_str, default_db_config_for_kind,
+        general_settings_theme_to_storage, load_config, save_hook_definitions, save_profiles,
+        save_services, save_ssh_tunnels, str_to_db_kind, theme_setting_from_storage,
     };
     use dbflux_core::{
         AccessKind, ConnectionHook, ConnectionHookBindings, ConnectionHooks, ConnectionProfile,
@@ -2324,6 +2351,21 @@ mod tests {
     }
 
     #[test]
+    fn clickhouse_kind_and_default_config_use_canonical_storage_name() {
+        assert_eq!(db_kind_to_str(DbKind::ClickHouse), "ClickHouse");
+        assert_eq!(str_to_db_kind("ClickHouse"), Some(DbKind::ClickHouse));
+        assert!(matches!(
+            default_db_config_for_kind(DbKind::ClickHouse),
+            DbConfig::ClickHouse {
+                ref url,
+                ref user,
+                ref database,
+                request_timeout_seconds: None,
+            } if url == "http://localhost:8123" && user == "default" && database == "default"
+        ));
+    }
+
+    #[test]
     fn theme_setting_storage_round_trip_supports_exactly_three_ayu_values() {
         assert_eq!(
             general_settings_theme_to_storage(ThemeSetting::Dark),
@@ -2363,6 +2405,9 @@ mod tests {
             dangerous_requires_preview: 1,
             style: "default".to_string(),
             schema_snapshot_retention: 10,
+            object_preview_size_limit_mib: 10,
+            language: String::new(),
+            key_value_size_limit_mib: 10,
             updated_at: String::new(),
         };
 
@@ -2394,6 +2439,107 @@ mod tests {
         assert!(!loaded.general_settings.confirm_dangerous_queries);
         assert!(!loaded.general_settings.dangerous_requires_where);
         assert!(loaded.general_settings.dangerous_requires_preview);
+    }
+
+    fn shipped_locale_ids() -> Vec<String> {
+        let locales_dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../dbflux_i18n/locales");
+        let entries = std::fs::read_dir(&locales_dir).unwrap_or_else(|error| {
+            panic!(
+                "failed to read shipped locales from {}: {error}",
+                locales_dir.display()
+            )
+        });
+        let mut locale_ids = Vec::new();
+        for entry in entries {
+            let path = entry
+                .expect("locale directory entry must be readable")
+                .path();
+            if path.extension().and_then(std::ffi::OsStr::to_str) == Some("yml") {
+                locale_ids.push(
+                    path.file_stem()
+                        .and_then(std::ffi::OsStr::to_str)
+                        .expect("locale filename must be valid UTF-8")
+                        .to_string(),
+                );
+            }
+        }
+        locale_ids.sort();
+        locale_ids
+    }
+
+    #[test]
+    fn unrecognized_language_storage_value_survives_load_and_save_unchanged() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+
+        let dto = GeneralSettingsDto {
+            id: 1,
+            theme: "dark".to_string(),
+            restore_session_on_startup: 1,
+            reopen_last_connections: 0,
+            default_focus_on_startup: "sidebar".to_string(),
+            max_history_entries: 1000,
+            auto_save_interval_ms: 2000,
+            default_refresh_policy: "manual".to_string(),
+            default_refresh_interval_secs: 5,
+            max_concurrent_background_tasks: 8,
+            auto_refresh_pause_on_error: 1,
+            auto_refresh_only_if_visible: 0,
+            confirm_dangerous_queries: 1,
+            dangerous_requires_where: 1,
+            dangerous_requires_preview: 0,
+            style: "default".to_string(),
+            schema_snapshot_retention: 10,
+            object_preview_size_limit_mib: 10,
+            language: "de".to_string(),
+            key_value_size_limit_mib: 10,
+            updated_at: String::new(),
+        };
+        runtime
+            .general_settings()
+            .upsert(&dto)
+            .expect("save general settings dto");
+
+        let loaded = load_config(&runtime).expect("load configuration");
+        assert_eq!(
+            loaded.general_settings.language, "de",
+            "an unrecognized language code must survive the load; dbflux_i18n::resolve \
+             degrades it to System without erasing the stored choice"
+        );
+
+        super::save_general_settings(&runtime, &loaded.general_settings)
+            .expect("save loaded general settings");
+        let saved = runtime
+            .general_settings()
+            .get()
+            .expect("load re-saved dto")
+            .expect("general settings row");
+        assert_eq!(saved.language, "de");
+    }
+
+    #[test]
+    fn every_shipped_language_round_trips_through_save_and_load() {
+        let locale_ids = shipped_locale_ids();
+        assert!(!locale_ids.is_empty(), "at least one locale must ship");
+
+        for locale_id in locale_ids {
+            let settings = GeneralSettings {
+                language: locale_id.clone(),
+                ..Default::default()
+            };
+            let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+            super::save_general_settings(&runtime, &settings).expect("save general settings");
+
+            let dto = runtime
+                .general_settings()
+                .get()
+                .expect("load saved dto")
+                .expect("general settings row");
+            assert_eq!(dto.language, locale_id);
+
+            let loaded = load_config(&runtime).expect("load configuration");
+            assert_eq!(loaded.general_settings.language, locale_id);
+        }
     }
 
     #[test]
@@ -2477,6 +2623,9 @@ mod tests {
             dangerous_requires_preview: 0,
             style: "ultracompact".to_string(), // unknown value
             schema_snapshot_retention: 10,
+            object_preview_size_limit_mib: 10,
+            language: String::new(),
+            key_value_size_limit_mib: 10,
             updated_at: String::new(),
         };
         runtime

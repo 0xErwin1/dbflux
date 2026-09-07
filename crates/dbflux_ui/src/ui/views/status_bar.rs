@@ -1,18 +1,22 @@
 use crate::app::{AppStateChanged, AppStateEntity};
+use crate::ui::document::{TabManager, TabManagerEvent};
 use dbflux_components::primitives::{Icon, StatusDot, StatusDotVariant};
 use dbflux_components::semantic::BannerColors as SemBannerColors;
 use dbflux_components::theme::ghost_border_color;
 use dbflux_components::tokens::{Anim, ChromeColors, FontSizes, Heights};
 use dbflux_components::typography::{MonoCaption, MonoMeta};
+use dbflux_ui_document::StatusSegment;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
+use gpui_component::tooltip::Tooltip;
 use std::time::Duration;
 
 pub struct ToggleTasksPanel;
 
 pub struct StatusBar {
     app_state: Entity<AppStateEntity>,
+    tab_manager: Entity<TabManager>,
     /// Periodic notify task that drives the 100 ms busy-pulse animation.
     /// Present only while there are running tasks. Dropping it stops the loop.
     _pulse_task: Option<Task<()>>,
@@ -27,11 +31,21 @@ impl EventEmitter<ToggleTasksPanel> for StatusBar {}
 impl StatusBar {
     pub fn new(
         app_state: Entity<AppStateEntity>,
+        tab_manager: Entity<TabManager>,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         cx.subscribe(&app_state, |this, _, _: &AppStateChanged, cx| {
             this.on_app_state_changed(cx);
+        })
+        .detach();
+
+        // The active tab's contributed status segments (DEC-23) can change on
+        // activation or on document-internal updates; re-render generically
+        // on any tab-manager event rather than tracking each document's
+        // segment-affecting state individually.
+        cx.subscribe(&tab_manager, |_this, _, _: &TabManagerEvent, cx| {
+            cx.notify();
         })
         .detach();
 
@@ -41,6 +55,7 @@ impl StatusBar {
 
         Self {
             app_state,
+            tab_manager,
             _pulse_task: None,
             pulse_visible: true,
             _timer: Some(timer),
@@ -169,6 +184,23 @@ impl StatusBar {
     fn status_text(text: impl Into<SharedString>) -> MonoCaption {
         MonoCaption::new(text).font_size(FontSizes::SM)
     }
+
+    /// Compact badge label and tooltip explaining why the active connection
+    /// is read-only, differentiated by `ReadOnlyReason`.
+    fn read_only_copy(reason: dbflux_core::ReadOnlyReason) -> (SharedString, SharedString) {
+        use dbflux_core::ReadOnlyReason;
+
+        match reason {
+            ReadOnlyReason::ProfileSetting => (
+                dbflux_i18n::t!("status_bar.read_only.profile.label").into(),
+                dbflux_i18n::t!("status_bar.read_only.profile.tooltip").into(),
+            ),
+            ReadOnlyReason::ServerEnforced => (
+                dbflux_i18n::t!("status_bar.read_only.server.label").into(),
+                dbflux_i18n::t!("status_bar.read_only.server.tooltip").into(),
+            ),
+        }
+    }
 }
 
 impl Render for StatusBar {
@@ -180,6 +212,10 @@ impl Render for StatusBar {
             .map(|c| c.profile.name.clone())
             .unwrap_or_default();
         let is_connected = connection.is_some();
+        let read_only_copy = connection
+            .filter(|c| c.mutation_policy == dbflux_core::MutationPolicy::ReadOnly)
+            .and_then(|c| c.read_only_reason)
+            .map(Self::read_only_copy);
 
         let running_tasks = app_state.tasks().running_tasks();
         let running_count = running_tasks.len();
@@ -210,6 +246,16 @@ impl Render for StatusBar {
         let divider_color = ChromeColors::ghost_border();
         let unread = app_state.unread_error_count;
 
+        // Segments contributed by the active document (DEC-23) — e.g. engine
+        // + region, bucket path, key count, last-operation timing. Empty for
+        // every document that does not populate `PaneHandle::status_segments`.
+        let status_segments: Vec<StatusSegment> = self
+            .tab_manager
+            .read(cx)
+            .active_tab()
+            .map(|tab| tab.status_segments(cx))
+            .unwrap_or_default();
+
         div()
             .flex()
             .items_center()
@@ -239,9 +285,28 @@ impl Render for StatusBar {
                                 this.child(Self::metadata_text(connection_name))
                             })
                             .when(!is_connected, |this| {
-                                this.child(Self::metadata_text("disconnected"))
+                                this.child(Self::metadata_text(dbflux_i18n::t!(
+                                    "status_bar.disconnected"
+                                )))
                             }),
                     )
+                    // Read-only indicator — shown only for the active connection,
+                    // differentiating whether the profile or the server enforced it.
+                    .when_some(read_only_copy, |this, (label, tooltip)| {
+                        this.child(Self::vertical_divider(divider_color)).child(
+                            div()
+                                .id("status-bar-read-only")
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .px(px(10.0))
+                                .h(px(22.0))
+                                .child(Self::metadata_text(label))
+                                .tooltip(move |window, cx| {
+                                    Tooltip::new(tooltip.clone()).build(window, cx)
+                                }),
+                        )
+                    })
                     // Running task info — shown with a divider when a task is active
                     .when_some(current_task.cloned(), |this, task| {
                         let description = Self::single_line(&task.description);
@@ -272,7 +337,32 @@ impl Render for StatusBar {
                                 .h(px(22.0))
                                 .child(Self::status_text(Self::format_completed_task(&task))),
                         )
-                    }),
+                    })
+                    // Segments contributed by the active document, generically —
+                    // StatusBar never branches on document or driver type.
+                    .children(status_segments.into_iter().enumerate().flat_map(
+                        |(index, segment)| {
+                            let mut el = div()
+                                .id(ElementId::Name(format!("status-segment-{index}").into()))
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .px(px(10.0))
+                                .h(px(22.0))
+                                .child(Self::metadata_text(segment.text));
+
+                            if let Some(tooltip) = segment.tooltip {
+                                el = el.tooltip(move |window, cx| {
+                                    Tooltip::new(tooltip.clone()).build(window, cx)
+                                });
+                            }
+
+                            [
+                                Self::vertical_divider(divider_color).into_any_element(),
+                                el.into_any_element(),
+                            ]
+                        },
+                    )),
             )
             // Right section: error badge (when present) + tasks toggle
             .child(
@@ -325,10 +415,14 @@ impl Render for StatusBar {
                                         .size(px(12.0))
                                         .primary(),
                                 )
-                                .child(Self::status_text(format!("{} running", running_count)))
+                                .child(Self::status_text(
+                                    crate::ui::labels::tasks_running_label(running_count),
+                                ))
                             })
                             .when(running_count == 0, |this| {
-                                this.child(Self::status_text("Tasks"))
+                                this.child(Self::status_text(dbflux_i18n::t!(
+                                    "status_bar.tasks_label"
+                                )))
                             }),
                     ),
             )
@@ -373,5 +467,66 @@ mod tests {
             assert!(inspection.uses_muted_foreground_override);
             assert!(!inspection.has_custom_color_override);
         }
+    }
+
+    #[test]
+    fn read_only_copy_selects_profile_label_for_profile_setting() {
+        let (label, tooltip) =
+            StatusBar::read_only_copy(dbflux_core::ReadOnlyReason::ProfileSetting);
+
+        assert_eq!(
+            label,
+            gpui::SharedString::from(dbflux_i18n::t!("status_bar.read_only.profile.label"))
+        );
+        assert_eq!(
+            tooltip,
+            gpui::SharedString::from(dbflux_i18n::t!("status_bar.read_only.profile.tooltip"))
+        );
+    }
+
+    #[test]
+    fn read_only_copy_selects_server_label_for_server_enforced() {
+        let (label, tooltip) =
+            StatusBar::read_only_copy(dbflux_core::ReadOnlyReason::ServerEnforced);
+
+        assert_eq!(
+            label,
+            gpui::SharedString::from(dbflux_i18n::t!("status_bar.read_only.server.label"))
+        );
+        assert_eq!(
+            tooltip,
+            gpui::SharedString::from(dbflux_i18n::t!("status_bar.read_only.server.tooltip"))
+        );
+    }
+
+    #[test]
+    fn read_only_copy_keys_resolve_and_differ_between_reasons_and_locales() {
+        let keys = [
+            "status_bar.read_only.profile.label",
+            "status_bar.read_only.profile.tooltip",
+            "status_bar.read_only.server.label",
+            "status_bar.read_only.server.tooltip",
+        ];
+
+        for key in keys {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, key, "{key} resolved to its own key");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+
+        let profile_label_en = dbflux_i18n::t!("status_bar.read_only.profile.label", locale = "en");
+        let server_label_en = dbflux_i18n::t!("status_bar.read_only.server.label", locale = "en");
+        assert_ne!(
+            profile_label_en, server_label_en,
+            "profile and server labels must be distinguishable"
+        );
     }
 }

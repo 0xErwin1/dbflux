@@ -41,7 +41,7 @@ pub(crate) use crate::refresh::REFRESH_POLICY_OPTIONS;
 pub(crate) fn refresh_policy_index(policy: SavedChartRefreshPolicy) -> usize {
     REFRESH_POLICY_OPTIONS
         .iter()
-        .position(|(p, _)| *p == policy)
+        .position(|p| *p == policy)
         .unwrap_or(0)
 }
 
@@ -50,7 +50,7 @@ pub(crate) fn refresh_policy_index(policy: SavedChartRefreshPolicy) -> usize {
 pub(crate) fn refresh_policy_from_index(index: usize) -> SavedChartRefreshPolicy {
     REFRESH_POLICY_OPTIONS
         .get(index)
-        .map(|(p, _)| *p)
+        .copied()
         .unwrap_or(SavedChartRefreshPolicy::Off)
 }
 
@@ -494,7 +494,9 @@ impl DashboardDocument {
         let refresh_dropdown = cx.new(|_cx| {
             let items: Vec<DropdownItem> = REFRESH_POLICY_OPTIONS
                 .iter()
-                .map(|(_, label)| DropdownItem::new(*label))
+                .map(|policy| {
+                    DropdownItem::new(crate::refresh::refresh_policy_option_label(*policy))
+                })
                 .collect();
             Dropdown::new("dashboard-refresh")
                 .items(items)
@@ -1700,7 +1702,7 @@ impl DashboardDocument {
         };
 
         if self.collides_with_other_panels(from, &proposed) {
-            Toast::info("Position overlaps another panel").push(cx);
+            Toast::info(dbflux_i18n::t!("document.dashboard.toast.position_overlap")).push(cx);
             cx.notify();
             return;
         }
@@ -1819,7 +1821,7 @@ impl DashboardDocument {
         };
 
         if self.collides_with_other_panels(idx, &proposed) {
-            Toast::info("Position overlaps another panel").push(cx);
+            Toast::info(dbflux_i18n::t!("document.dashboard.toast.position_overlap")).push(cx);
             cx.notify();
             return;
         }
@@ -1894,7 +1896,11 @@ impl DashboardDocument {
                         message.clone(),
                     );
                 });
-                Toast::error(format!("Failed to save panel position: {message}")).push(cx);
+                Toast::error(dbflux_i18n::t!(
+                    "document.dashboard.toast.save_position_failed",
+                    message = message
+                ))
+                .push(cx);
                 cx.notify();
             }
         }
@@ -2175,6 +2181,51 @@ mod tests {
             PANEL_REEXEC_CAP, 4,
             "PANEL_REEXEC_CAP must be 4 per design spec"
         );
+    }
+
+    /// PR 23: the drag/resize collision toast and the position-persist-failure
+    /// toast keys resolve in both locales, and the failure toast interpolates
+    /// the underlying storage error message.
+    #[test]
+    fn dashboard_toast_keys_resolve_in_both_locales() {
+        let keys = [
+            "document.dashboard.toast.position_overlap",
+            "document.dashboard.toast.save_position_failed",
+        ];
+        for key in keys {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+    }
+
+    /// PR 23: `document.dashboard.toast.save_position_failed` interpolates
+    /// `%{message}` with the underlying storage error.
+    #[test]
+    fn dashboard_toast_save_position_failed_interpolates_message() {
+        let toast = dbflux_i18n::t!(
+            "document.dashboard.toast.save_position_failed",
+            message = "disk full"
+        );
+        assert!(
+            toast.contains("disk full"),
+            "expected the storage error to be interpolated, got {toast:?}"
+        );
+    }
+
+    /// PR 23: at least one dashboard toast key diverges between locales.
+    #[test]
+    fn dashboard_toast_position_overlap_differs_between_locales() {
+        let en = dbflux_i18n::t!("document.dashboard.toast.position_overlap", locale = "en");
+        let es = dbflux_i18n::t!("document.dashboard.toast.position_overlap", locale = "es");
+        assert_ne!(en, es);
     }
 
     // ---- Semaphore state-machine tests (no GPUI runtime required) ----
@@ -3032,7 +3083,7 @@ mod tests {
     /// in `REFRESH_POLICY_OPTIONS`.
     #[test]
     fn refresh_policy_index_round_trip() {
-        for (i, (policy, _)) in REFRESH_POLICY_OPTIONS.iter().enumerate() {
+        for (i, policy) in REFRESH_POLICY_OPTIONS.iter().enumerate() {
             assert_eq!(refresh_policy_index(*policy), i);
             assert_eq!(refresh_policy_from_index(i), *policy);
         }

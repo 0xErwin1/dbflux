@@ -1,7 +1,7 @@
 use dbflux_audit::AuditService;
-use dbflux_core::QueryLanguage;
 use dbflux_core::observability::EventCategory;
 use dbflux_core::observability::actions::MCP_AUTHORIZE;
+use dbflux_core::{DangerousQueryKind, LanguageService, QueryLanguage, ValidationResult};
 use dbflux_mcp::handlers::query::{QueryExecutionRequest, QueryHandlerError, handle_query_tool};
 use dbflux_mcp::handlers::scripts::{ScriptHandler, ScriptHandlerError, ScriptLifecycleState};
 use dbflux_mcp::server::authorization::{AuthorizationRequest, authorize_request};
@@ -119,6 +119,7 @@ fn preview_mutation_never_executes() {
             query_language: QueryLanguage::Sql,
             query: "UPDATE users SET active = true".to_string(),
         },
+        None,
         &engine,
     )
     .expect("preview should be allowed");
@@ -139,10 +140,54 @@ fn denied_query_fails_policy_gate() {
             query_language: QueryLanguage::Sql,
             query: "DROP TABLE users".to_string(),
         },
+        None,
         &engine,
     );
 
     assert!(matches!(result, Err(QueryHandlerError::PolicyDenied)));
+}
+
+struct DestructiveOverrideLanguageService;
+
+impl LanguageService for DestructiveOverrideLanguageService {
+    fn validate(&self, _query: &str) -> ValidationResult {
+        ValidationResult::Valid
+    }
+
+    fn detect_dangerous(&self, _query: &str) -> Option<DangerousQueryKind> {
+        None
+    }
+
+    fn classify_execution(&self, _query: &str) -> Option<ExecutionClassification> {
+        Some(ExecutionClassification::Destructive)
+    }
+}
+
+#[test]
+fn driver_language_service_overrides_conservative_default_when_supplied() {
+    let engine = allow_engine("read_query", ExecutionClassification::Destructive);
+    let service = DestructiveOverrideLanguageService;
+
+    let request = QueryExecutionRequest {
+        actor_id: "agent-a".to_string(),
+        connection_id: "conn-a".to_string(),
+        tool_id: "read_query".to_string(),
+        query_language: QueryLanguage::InfluxQuery,
+        query: "DROP DATABASE mydb".to_string(),
+    };
+
+    let with_service = handle_query_tool(&request, Some(&service), &engine)
+        .expect("policy allows the driver-classified destructive query");
+    assert_eq!(
+        with_service.classification,
+        ExecutionClassification::Destructive
+    );
+
+    let without_service = handle_query_tool(&request, None, &engine);
+    assert!(matches!(
+        without_service,
+        Err(QueryHandlerError::PolicyDenied)
+    ));
 }
 
 #[test]

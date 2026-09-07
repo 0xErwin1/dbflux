@@ -75,6 +75,13 @@ fn collection_document_presentation_for_connection(
         dbflux_core::CollectionPresentation::EventStream => {
             CollectionDocumentPresentation::AuditLike
         }
+        // Object-storage buckets never populate `CollectionInfo.presentation` —
+        // they route to `BucketsTableDocument`/`ObjectBrowserDocument` through a
+        // separate connection-root/sidebar path, not through this per-collection
+        // decision. Fall back to `DataGrid` so the match stays exhaustive.
+        dbflux_core::CollectionPresentation::ObjectBrowser => {
+            CollectionDocumentPresentation::DataGrid
+        }
     }
 }
 
@@ -82,6 +89,7 @@ mod audit;
 mod charts_dashboards;
 mod connections;
 mod documents;
+mod dump_analysis;
 mod metrics;
 mod query;
 mod schema_diff;
@@ -95,6 +103,14 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Dynamically gated actions that are not part of the closed
+        // `Command` enum (their palette entry only appears when at least
+        // one registered driver supports it) are intercepted here.
+        if command_id == "analyze_dump_file" {
+            self.analyze_dump_file(window, cx);
+            return;
+        }
+
         let Some(command) = Command::from_palette_id(command_id) else {
             log::warn!("Unknown command: {}", command_id);
             return;
@@ -228,8 +244,8 @@ mod tests {
     fn sample_action() -> PaletteItem {
         PaletteItem::Action {
             id: "new_query_tab",
-            name: "New Query Tab",
-            category: "Editor",
+            name: "New Query Tab".into(),
+            category: "Editor".into(),
             shortcut: Some("Ctrl+N"),
         }
     }
@@ -457,6 +473,7 @@ mod tests {
                     sample_fields: None,
                     presentation: dbflux_core::CollectionPresentation::DataGrid,
                     child_items: None,
+                    storage_hints: None,
                 },
                 TableInfo {
                     name: "orders".to_string(),
@@ -468,6 +485,7 @@ mod tests {
                     sample_fields: None,
                     presentation: dbflux_core::CollectionPresentation::DataGrid,
                     child_items: None,
+                    storage_hints: None,
                 },
             ],
             views: vec![ViewInfo {
@@ -519,6 +537,7 @@ mod tests {
                     sample_fields: None,
                     presentation: dbflux_core::CollectionPresentation::DataGrid,
                     child_items: None,
+                    storage_hints: None,
                 }],
                 views: vec![],
                 custom_types: None,
@@ -782,8 +801,8 @@ mod tests {
     fn selection_routing_action_produces_command() {
         let item = PaletteItem::Action {
             id: "new_query_tab",
-            name: "New Query Tab",
-            category: "Editor",
+            name: "New Query Tab".into(),
+            category: "Editor".into(),
             shortcut: Some("Ctrl+N"),
         };
 
@@ -1097,8 +1116,8 @@ mod tests {
         for i in 0..100 {
             items.push(PaletteItem::Action {
                 id: Box::leak(format!("cmd_{}", i).into_boxed_str()),
-                name: Box::leak(format!("Command {}", i).into_boxed_str()),
-                category: "Editor",
+                name: format!("Command {}", i).into(),
+                category: "Editor".into(),
                 shortcut: None,
             });
         }

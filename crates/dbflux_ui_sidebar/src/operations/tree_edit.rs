@@ -30,7 +30,7 @@ impl Sidebar {
     /// Creates a new folder at the root level.
     pub fn create_root_folder(&mut self, cx: &mut Context<Self>) {
         let folder_id = self.app_state.update(cx, |state, cx| {
-            let id = state.create_folder("New Folder", None);
+            let id = state.create_folder(dbflux_i18n::t!("sidebar.tree.folder.new_default"), None);
             cx.emit(AppStateChanged);
             id
         });
@@ -53,7 +53,10 @@ impl Sidebar {
         }
 
         let folder_id = self.app_state.update(cx, |state, cx| {
-            let id = state.create_folder("New Folder", parent_id);
+            let id = state.create_folder(
+                dbflux_i18n::t!("sidebar.tree.folder.new_default"),
+                parent_id,
+            );
             cx.emit(AppStateChanged);
             id
         });

@@ -51,13 +51,17 @@ impl super::KeyValueDocument {
         self.cancel_member_edit(cx);
 
         let Some(connection) = self.get_connection(cx) else {
-            self.last_error = Some("Connection is no longer active".to_string());
+            self.last_error = Some(dbflux_i18n::t!(
+                "document.key_value.mutation.error.connection_inactive"
+            ));
             cx.notify();
             return;
         };
 
         if self.app_state.read(cx).is_background_task_limit_reached() {
-            self.last_error = Some("Too many background tasks running, please wait".to_string());
+            self.last_error = Some(dbflux_i18n::t!(
+                "document.key_value.pagination.error.background_task_limit"
+            ));
             cx.notify();
             return;
         }
@@ -165,7 +169,9 @@ impl super::KeyValueDocument {
         };
 
         let Some(connection) = self.get_connection(cx) else {
-            self.last_error = Some("Connection is no longer active".to_string());
+            self.last_error = Some(dbflux_i18n::t!(
+                "document.key_value.mutation.error.connection_inactive"
+            ));
             cx.notify();
             return;
         };
@@ -173,6 +179,15 @@ impl super::KeyValueDocument {
         let description = format!("GET {}", dbflux_core::truncate_string_safe(&key, 60));
         let (task_id, cancel_token) = self.runner.start_primary(TaskKind::KeyGet, description, cx);
         cx.notify();
+
+        // One-shot: consumed here so a later plain refresh of this same key
+        // goes back to the configured limit.
+        let load_anyway = std::mem::take(&mut self.kv_load_anyway);
+        let max_value_bytes = if load_anyway {
+            None
+        } else {
+            Some(self.kv_size_limit_bytes(cx))
+        };
 
         let keyspace = self.keyspace_index();
         let entity = cx.entity().clone();
@@ -190,6 +205,7 @@ impl super::KeyValueDocument {
                         include_type: true,
                         include_ttl: true,
                         include_size: true,
+                        max_value_bytes,
                     })
                 })
                 .await;
@@ -217,6 +233,7 @@ impl super::KeyValueDocument {
                             } else {
                                 super::KvValueViewMode::Table
                             };
+                            this.reset_kv_decode_state_for_new_value(cx);
                             this.rebuild_cached_members(cx);
                         }
                         Err(error) => {
@@ -224,6 +241,7 @@ impl super::KeyValueDocument {
                             this.clear_ttl_state();
                             this.selected_value = None;
                             this.last_error = Some(error.to_string());
+                            this.reset_kv_decode_state_for_new_value(cx);
                             this.rebuild_cached_members(cx);
                         }
                     }
@@ -233,5 +251,27 @@ impl super::KeyValueDocument {
             });
         })
         .detach();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn key_value_pagination_keys_resolve_in_both_locales() {
+        let keys = ["document.key_value.pagination.error.background_task_limit"];
+
+        for key in keys {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
     }
 }

@@ -95,6 +95,13 @@ pub struct KeyGetRequest {
     pub include_type: bool,
     pub include_ttl: bool,
     pub include_size: bool,
+    /// Upper bound on the number of value bytes the driver may transfer.
+    ///
+    /// `None` means unbounded — the driver fetches the value regardless of
+    /// its size. A peer that omits this field on the wire (older protocol
+    /// version) is treated as `None`.
+    #[serde(default)]
+    pub max_value_bytes: Option<u64>,
 }
 
 impl KeyGetRequest {
@@ -105,6 +112,7 @@ impl KeyGetRequest {
             include_type: true,
             include_ttl: true,
             include_size: true,
+            max_value_bytes: None,
         }
     }
 
@@ -112,6 +120,35 @@ impl KeyGetRequest {
         self.keyspace = Some(keyspace);
         self
     }
+
+    pub fn with_max_value_bytes(mut self, max_value_bytes: u64) -> Self {
+        self.max_value_bytes = Some(max_value_bytes);
+        self
+    }
+}
+
+/// Whether a key's value bytes were fully transferred, and why not when they
+/// were not.
+///
+/// Modeled after `PreviewGate` in
+/// `dbflux_ui_document::object_browser::metadata` — a size decision derived
+/// from metadata alone, without ever transferring bytes it decided not to
+/// transfer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum KeyLoadState {
+    /// The full value was fetched.
+    #[default]
+    Loaded,
+    /// Only part of the value was fetched (e.g. a driver-side item cap on a
+    /// collection type). `returned_bytes` describes what was actually
+    /// transferred; `total_bytes` is the full size when known.
+    Truncated {
+        returned_bytes: u64,
+        total_bytes: Option<u64>,
+    },
+    /// The value was not fetched at all because its size exceeds
+    /// `max_value_bytes`. `value` is empty in this case.
+    TooLarge { size_bytes: u64, limit_bytes: u64 },
 }
 
 /// Key value with metadata.
@@ -120,6 +157,10 @@ pub struct KeyGetResult {
     pub entry: KeyEntry,
     pub value: Vec<u8>,
     pub repr: ValueRepr,
+    /// Whether `value` is the complete payload. Absent on the wire (older
+    /// protocol peers) defaults to `Loaded`, matching pre-gate behavior.
+    #[serde(default)]
+    pub load_state: KeyLoadState,
 }
 
 /// Request for writing a key value.
@@ -475,4 +516,62 @@ pub struct StreamDeleteRequest {
     pub key: String,
     pub ids: Vec<String>,
     pub keyspace: Option<u32>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{KeyEntry, KeyGetRequest, KeyGetResult, KeyLoadState, ValueRepr};
+
+    #[test]
+    fn key_get_request_default_is_unbounded() {
+        let request = KeyGetRequest::new("some-key");
+
+        assert_eq!(request.max_value_bytes, None);
+    }
+
+    #[test]
+    fn key_get_request_with_max_value_bytes_sets_budget() {
+        let request = KeyGetRequest::new("some-key").with_max_value_bytes(1_024);
+
+        assert_eq!(request.max_value_bytes, Some(1_024));
+    }
+
+    #[test]
+    fn key_load_state_default_is_loaded() {
+        assert_eq!(KeyLoadState::default(), KeyLoadState::Loaded);
+    }
+
+    #[test]
+    fn key_get_result_missing_load_state_on_wire_deserializes_to_loaded() {
+        // Simulates an older peer's response that predates `load_state`.
+        let json = serde_json::json!({
+            "entry": KeyEntry::new("some-key"),
+            "value": [1, 2, 3],
+            "repr": "Binary",
+        });
+
+        let result: KeyGetResult = serde_json::from_value(json).expect("deserialize");
+
+        assert_eq!(result.load_state, KeyLoadState::Loaded);
+        assert_eq!(result.repr, ValueRepr::Binary);
+    }
+
+    #[test]
+    fn key_load_state_variants_round_trip_through_json() {
+        let truncated = KeyLoadState::Truncated {
+            returned_bytes: 50,
+            total_bytes: Some(200),
+        };
+        let json = serde_json::to_string(&truncated).expect("serialize");
+        let decoded: KeyLoadState = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(decoded, truncated);
+
+        let too_large = KeyLoadState::TooLarge {
+            size_bytes: 5_000,
+            limit_bytes: 1_000,
+        };
+        let json = serde_json::to_string(&too_large).expect("serialize");
+        let decoded: KeyLoadState = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(decoded, too_large);
+    }
 }

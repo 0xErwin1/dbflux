@@ -27,32 +27,37 @@ pub(super) fn key_type_icon(key_type: Option<KeyType>) -> (AppIcon, Hsla) {
     }
 }
 
-pub(super) fn key_type_label(key_type: KeyType) -> &'static str {
+pub(super) fn key_type_label(key_type: KeyType) -> String {
     match key_type {
-        KeyType::String => "String",
-        KeyType::Bytes => "Bytes",
-        KeyType::Hash => "Hash",
-        KeyType::List => "List",
-        KeyType::Set => "Set",
-        KeyType::SortedSet => "ZSet",
-        KeyType::Json => "JSON",
-        KeyType::Stream => "Stream",
-        KeyType::Unknown => "?",
+        KeyType::String => dbflux_i18n::t!("document.key_value.parsing.type.string"),
+        KeyType::Bytes => dbflux_i18n::t!("document.key_value.parsing.type.bytes"),
+        KeyType::Hash => dbflux_i18n::t!("document.key_value.parsing.type.hash"),
+        KeyType::List => dbflux_i18n::t!("document.key_value.parsing.type.list"),
+        KeyType::Set => dbflux_i18n::t!("document.key_value.parsing.type.set"),
+        KeyType::SortedSet => dbflux_i18n::t!("document.key_value.parsing.type.sorted_set"),
+        KeyType::Json => dbflux_i18n::t!("document.key_value.parsing.type.json"),
+        KeyType::Stream => dbflux_i18n::t!("document.key_value.parsing.type.stream"),
+        KeyType::Unknown => dbflux_i18n::t!("document.key_value.parsing.type.unknown"),
+    }
+}
+
+/// Truncates a text preview at a fixed character budget so a huge decoded or
+/// raw text value never renders unbounded into the value panel.
+pub(super) fn truncate_preview_text(text: &str) -> String {
+    let max_chars = 4000;
+
+    if text.chars().count() > max_chars {
+        let truncated: String = text.chars().take(max_chars).collect();
+        format!("{}\n... (truncated)", truncated)
+    } else {
+        text.to_string()
     }
 }
 
 pub(super) fn render_value_preview(value: &KeyGetResult) -> String {
     match value.repr {
         ValueRepr::Text | ValueRepr::Json | ValueRepr::Structured | ValueRepr::Stream => {
-            let text = String::from_utf8_lossy(&value.value);
-            let max_chars = 4000;
-
-            if text.chars().count() > max_chars {
-                let truncated: String = text.chars().take(max_chars).collect();
-                format!("{}\n... (truncated)", truncated)
-            } else {
-                text.to_string()
-            }
+            truncate_preview_text(&String::from_utf8_lossy(&value.value))
         }
         ValueRepr::Binary => format!("{} bytes (binary)", value.value.len()),
     }
@@ -228,13 +233,14 @@ mod tests {
         parse_members, parse_stream_entries, render_value_preview, serde_json_to_value,
     };
     use dbflux_components::icons::AppIcon;
-    use dbflux_core::{KeyEntry, KeyGetResult, KeyType, Value, ValueRepr};
+    use dbflux_core::{KeyEntry, KeyGetResult, KeyLoadState, KeyType, Value, ValueRepr};
 
     fn make_result(value: Vec<u8>, repr: ValueRepr) -> KeyGetResult {
         KeyGetResult {
             entry: KeyEntry::new("test-key"),
             value,
             repr,
+            load_state: KeyLoadState::Loaded,
         }
     }
 
@@ -276,6 +282,35 @@ mod tests {
         assert_eq!(key_type_label(KeyType::Stream), "Stream");
         assert_eq!(key_type_label(KeyType::Bytes), "Bytes");
         assert_eq!(key_type_label(KeyType::Unknown), "?");
+    }
+
+    #[test]
+    fn key_type_label_keys_resolve_in_both_locales() {
+        let keys = [
+            "document.key_value.parsing.type.string",
+            "document.key_value.parsing.type.bytes",
+            "document.key_value.parsing.type.hash",
+            "document.key_value.parsing.type.list",
+            "document.key_value.parsing.type.set",
+            "document.key_value.parsing.type.sorted_set",
+            "document.key_value.parsing.type.json",
+            "document.key_value.parsing.type.stream",
+            "document.key_value.parsing.type.unknown",
+        ];
+
+        for key in keys {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
     }
 
     // --- key_type_icon ---

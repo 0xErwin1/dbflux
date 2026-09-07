@@ -20,6 +20,7 @@ chrono = { workspace = true }
 bitflags = "2.10.0"
 tree-sitter = "0.26"
 tree-sitter-sequel = "0.3"
+sqlformat = { workspace = true }
 urlencoding = "2"
 tempfile = "3"
 secrecy = "0.10"
@@ -29,6 +30,11 @@ futures = "0.3"
 dbflux_policy.workspace = true
 sha2 = { workspace = true }
 hex = { workspace = true }
+flate2 = { workspace = true }
+zstd = { workspace = true }
+snap = { workspace = true }
+lz4_flex = { workspace = true }
+rmp-serde = { workspace = true }
 tracing = { workspace = true, optional = true }
 tracing-subscriber = { workspace = true, optional = true }
 tracing-log = { workspace = true, optional = true }

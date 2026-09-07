@@ -51,19 +51,17 @@ pub fn render_gutter(
 
     let mut lines: Vec<AnyElement> = Vec::new();
 
-    for (level, continues) in ancestors_continue.iter().enumerate() {
-        if *continues && level >= min_ancestor_level && level < connector_level {
-            lines.push(
-                div()
-                    .absolute()
-                    .left(px(level as f32 * indent_px + indent_px / 2.0))
-                    .top_0()
-                    .bottom_0()
-                    .w(px(LINE_WEIGHT))
-                    .bg(line_color)
-                    .into_any_element(),
-            );
-        }
+    for level in continuation_levels(depth, ancestors_continue, min_ancestor_level) {
+        lines.push(
+            div()
+                .absolute()
+                .left(px(level as f32 * indent_px + indent_px / 2.0))
+                .top_0()
+                .bottom_0()
+                .w(px(LINE_WEIGHT))
+                .bg(line_color)
+                .into_any_element(),
+        );
     }
 
     let connector_x = connector_level as f32 * indent_px + indent_px / 2.0;
@@ -110,4 +108,61 @@ pub fn render_gutter(
         .flex_shrink_0()
         .children(lines)
         .into_any_element()
+}
+
+/// Levels whose vertical continuation line must be drawn for a row at `depth`.
+///
+/// The line at level `k` sits under the chevron of the ancestor at depth `k`,
+/// so it is the spine of that ancestor's children. It continues past this row
+/// only when the ancestor at depth `k + 1` still has later siblings, which is
+/// `ancestors_continue[k + 1]`. The row's own connector occupies level
+/// `depth - 1` and is drawn separately.
+fn continuation_levels(
+    depth: usize,
+    ancestors_continue: &[bool],
+    min_level: usize,
+) -> impl Iterator<Item = usize> + '_ {
+    let connector_level = depth.saturating_sub(1);
+
+    (min_level..connector_level)
+        .filter(move |level| ancestors_continue.get(level + 1).copied().unwrap_or(false))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::continuation_levels;
+
+    fn levels(depth: usize, ancestors: &[bool], min_level: usize) -> Vec<usize> {
+        continuation_levels(depth, ancestors, min_level).collect()
+    }
+
+    #[test]
+    fn spine_under_last_parent_stops_at_grandchildren() {
+        // root(continues) > parent(last) > child: the column under root's
+        // chevron is the spine of root's children, which ends at parent.
+        assert_eq!(levels(2, &[true, false], 0), Vec::<usize>::new());
+    }
+
+    #[test]
+    fn spine_under_continuing_parent_passes_through_grandchildren() {
+        // root(last) > parent(continues) > child: root has no spine column,
+        // parent's siblings keep the column under root's chevron alive.
+        assert_eq!(levels(2, &[false, true], 0), vec![0]);
+    }
+
+    #[test]
+    fn deeper_rows_map_each_column_to_the_next_ancestor() {
+        // depth 4: columns 0..=2 follow ancestors at depth 1..=3.
+        assert_eq!(levels(4, &[true, true, false, true], 0), vec![0, 2]);
+    }
+
+    #[test]
+    fn own_connector_level_is_excluded() {
+        assert_eq!(levels(1, &[true], 0), Vec::<usize>::new());
+    }
+
+    #[test]
+    fn min_level_skips_column_zero() {
+        assert_eq!(levels(3, &[false, true, true], 1), vec![1]);
+    }
 }

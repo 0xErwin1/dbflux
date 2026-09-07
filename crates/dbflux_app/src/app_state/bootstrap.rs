@@ -55,6 +55,15 @@ use dbflux_driver_influxdb::InfluxDriver;
 #[cfg(feature = "mssql")]
 use dbflux_driver_mssql::MssqlDriver;
 
+#[cfg(feature = "redshift")]
+use dbflux_driver_redshift::RedshiftDriver;
+
+#[cfg(feature = "clickhouse")]
+use dbflux_driver_clickhouse::ClickHouseDriver;
+
+#[cfg(feature = "s3")]
+use dbflux_driver_s3::S3Driver;
+
 use crate::auth_provider_registry::AuthProviderRegistry;
 use crate::config_loader::{EditableGlobalHook, HookLoadDiagnostic, ProtectedHookRow};
 use crate::rpc_services::external_audit::{ExternalAuditSink, NoOpContextProvider};
@@ -1130,6 +1139,21 @@ impl AppState {
         #[cfg(feature = "mssql")]
         {
             drivers.insert("mssql".to_string(), Arc::new(MssqlDriver::new()));
+        }
+
+        #[cfg(feature = "redshift")]
+        {
+            drivers.insert("redshift".to_string(), Arc::new(RedshiftDriver::new()));
+        }
+
+        #[cfg(feature = "clickhouse")]
+        {
+            drivers.insert("clickhouse".to_string(), Arc::new(ClickHouseDriver::new()));
+        }
+
+        #[cfg(feature = "s3")]
+        {
+            drivers.insert("s3".to_string(), Arc::new(S3Driver::new()));
         }
 
         drivers

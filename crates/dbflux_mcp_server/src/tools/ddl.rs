@@ -2168,6 +2168,7 @@ mod diff_parity_tests {
             sample_fields: None,
             presentation: Default::default(),
             child_items: None,
+            storage_hints: None,
         }
     }
 

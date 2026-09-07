@@ -343,11 +343,16 @@ impl DbFluxServer {
                 )
                 .await
             }
+            // ObjectStorage has no `select_data` support yet (bucket/object
+            // listing goes through `ObjectStoreConnection`, not `select_data`).
+            // It falls into the table-shaped path rather than a separate MCP
+            // error case so a future object-storage MCP tool can extend it.
             DatabaseCategory::Relational
             | DatabaseCategory::KeyValue
             | DatabaseCategory::Graph
             | DatabaseCategory::TimeSeries
-            | DatabaseCategory::WideColumn => {
+            | DatabaseCategory::WideColumn
+            | DatabaseCategory::ObjectStorage => {
                 Self::select_data_table(
                     &connection,
                     table,
@@ -496,11 +501,15 @@ impl DbFluxServer {
                 .await
                 .map_err(|e| format!("Blocking task failed: {}", e))?
             }
+            // See select_data's ObjectStorage note above: no dedicated
+            // object-storage count path exists yet, so it shares the
+            // table-shaped branch.
             DatabaseCategory::Relational
             | DatabaseCategory::KeyValue
             | DatabaseCategory::Graph
             | DatabaseCategory::TimeSeries
-            | DatabaseCategory::WideColumn => {
+            | DatabaseCategory::WideColumn
+            | DatabaseCategory::ObjectStorage => {
                 let mut request =
                     TableCountRequest::new(Self::table_ref_for_connection(&connection, table));
 

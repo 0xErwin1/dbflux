@@ -1,5 +1,5 @@
 use crate::icon::IconSource;
-use dbflux_core::Icon;
+use dbflux_core::{DatabaseCategory, Icon};
 
 /// App-specific icons embedded from resources/icons/
 ///
@@ -85,9 +85,12 @@ pub enum AppIcon {
     HardDrive,
 
     // Files / Folders
+    File,
     FileCode,
+    Image,
     Folder,
     Box,
+    Boxes,
     Braces,
     SquareTerminal,
     Parentheses,
@@ -116,6 +119,7 @@ pub enum AppIcon {
     ChartSpline,
     ChartArea,
     ChartColumnBig,
+    ChartNoAxesColumn,
     ChartBar,
     ChartPie,
     ChartNetwork,
@@ -127,6 +131,7 @@ pub enum AppIcon {
     BrandSqlite,
     BrandMongodb,
     BrandRedis,
+    BrandClickhouse,
 
     // Language brands (for script file icons)
     BrandLua,
@@ -204,9 +209,12 @@ impl AppIcon {
             Self::Unplug => "icons/ui/unplug.svg",
             Self::Server => "icons/ui/server.svg",
             Self::HardDrive => "icons/ui/hard-drive.svg",
+            Self::File => "icons/ui/file.svg",
             Self::FileCode => "icons/ui/file-code-corner.svg",
+            Self::Image => "icons/ui/image.svg",
             Self::Folder => "icons/ui/folder.svg",
             Self::Box => "icons/ui/box.svg",
+            Self::Boxes => "icons/ui/boxes.svg",
             Self::Braces => "icons/ui/braces.svg",
             Self::SquareTerminal => "icons/ui/square-terminal.svg",
             Self::Parentheses => "icons/ui/parentheses.svg",
@@ -225,6 +233,7 @@ impl AppIcon {
             Self::ChartSpline => "icons/ui/chart-spline.svg",
             Self::ChartArea => "icons/ui/chart-area.svg",
             Self::ChartColumnBig => "icons/ui/chart-column-big.svg",
+            Self::ChartNoAxesColumn => "icons/ui/chart-no-axes-column.svg",
             Self::ChartBar => "icons/ui/chart-bar.svg",
             Self::ChartPie => "icons/ui/chart-pie.svg",
             Self::ChartNetwork => "icons/ui/chart-network.svg",
@@ -234,6 +243,7 @@ impl AppIcon {
             Self::BrandSqlite => "icons/brand/sqlite.svg",
             Self::BrandMongodb => "icons/brand/mongodb.svg",
             Self::BrandRedis => "icons/brand/redis.svg",
+            Self::BrandClickhouse => "icons/brand/clickhouse.svg",
             Self::BrandLua => "icons/brand/lua.svg",
             Self::BrandPython => "icons/brand/python.svg",
             Self::BrandBash => "icons/brand/gnubash.svg",
@@ -287,8 +297,8 @@ impl AppIcon {
         }
     }
 
-    /// Maps a core Icon to the corresponding AppIcon.
-    pub const fn from_icon(icon: Icon) -> Self {
+    /// Resolves a driver icon, using its database category for generic fallbacks.
+    pub const fn for_driver(icon: Icon, category: DatabaseCategory) -> Self {
         match icon {
             Icon::Postgres => Self::BrandPostgres,
             Icon::Mysql => Self::BrandMysql,
@@ -296,10 +306,22 @@ impl AppIcon {
             Icon::Sqlite => Self::BrandSqlite,
             Icon::Mongodb => Self::BrandMongodb,
             Icon::Redis => Self::BrandRedis,
-            Icon::Dynamodb => Self::Database,
+            Icon::Dynamodb => Self::Braces,
+            Icon::Redshift => Self::ChartNoAxesColumn,
+            Icon::S3 => Self::Boxes,
+            Icon::Clickhouse => Self::BrandClickhouse,
             Icon::Influxdb => Self::BrandInfluxDb,
             Icon::Logs => Self::Logs,
-            Icon::Database => Self::Database,
+            Icon::Database => match category {
+                DatabaseCategory::Document => Self::Braces,
+                DatabaseCategory::KeyValue => Self::KeyRound,
+                DatabaseCategory::ObjectStorage => Self::Boxes,
+                DatabaseCategory::Relational
+                | DatabaseCategory::Graph
+                | DatabaseCategory::TimeSeries
+                | DatabaseCategory::WideColumn
+                | DatabaseCategory::LogStream => Self::Database,
+            },
         }
     }
 }
@@ -319,13 +341,56 @@ impl From<AppIcon> for gpui_component::Icon {
 #[cfg(test)]
 mod tests {
     use super::AppIcon;
-    use dbflux_core::Icon;
+    use dbflux_core::{DatabaseCategory, Icon};
 
     #[test]
-    fn influxdb_icon_maps_to_brand_svg() {
+    fn explicit_driver_icons_preserve_brands_and_semantic_fallbacks() {
         assert_eq!(
-            AppIcon::from_icon(Icon::Influxdb).path(),
+            AppIcon::for_driver(Icon::Influxdb, DatabaseCategory::TimeSeries).path(),
             "icons/brand/influxdb.svg"
         );
+        assert_eq!(
+            AppIcon::for_driver(Icon::Redshift, DatabaseCategory::Relational),
+            AppIcon::ChartNoAxesColumn
+        );
+        assert_eq!(
+            AppIcon::for_driver(Icon::Dynamodb, DatabaseCategory::Document),
+            AppIcon::Braces
+        );
+        assert_eq!(
+            AppIcon::for_driver(Icon::S3, DatabaseCategory::ObjectStorage),
+            AppIcon::Boxes
+        );
+        assert_eq!(
+            AppIcon::for_driver(Icon::Clickhouse, DatabaseCategory::Relational),
+            AppIcon::BrandClickhouse
+        );
+    }
+
+    #[test]
+    fn generic_database_icon_uses_category_fallbacks() {
+        let cases = [
+            (DatabaseCategory::Relational, AppIcon::Database),
+            (DatabaseCategory::Document, AppIcon::Braces),
+            (DatabaseCategory::KeyValue, AppIcon::KeyRound),
+            (DatabaseCategory::ObjectStorage, AppIcon::Boxes),
+            (DatabaseCategory::Graph, AppIcon::Database),
+            (DatabaseCategory::TimeSeries, AppIcon::Database),
+            (DatabaseCategory::WideColumn, AppIcon::Database),
+            (DatabaseCategory::LogStream, AppIcon::Database),
+        ];
+
+        for (category, expected) in cases {
+            assert_eq!(AppIcon::for_driver(Icon::Database, category), expected);
+        }
+    }
+
+    #[test]
+    fn semantic_driver_icons_use_expected_asset_paths() {
+        assert_eq!(
+            AppIcon::ChartNoAxesColumn.path(),
+            "icons/ui/chart-no-axes-column.svg"
+        );
+        assert_eq!(AppIcon::Boxes.path(), "icons/ui/boxes.svg");
     }
 }

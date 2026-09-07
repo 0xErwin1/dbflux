@@ -6,7 +6,7 @@
 //! only renders when `ChartHost::source_for_point` returns `Some`.
 
 use gpui::prelude::*;
-use gpui::{AnyElement, div, px};
+use gpui::{AnyElement, SharedString, div, px};
 
 use crate::semantic::ChartColors;
 use crate::tokens::{ChartGeometry, FontSizes, Spacing, Widths};
@@ -92,7 +92,7 @@ pub fn point_inspector_element(
                         .text_size(FontSizes::XS)
                         .text_color(colors.label_fg)
                         .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .child("SERIES"),
+                        .child(dbflux_i18n::t!("chart.point_inspector.series")),
                 )
                 .child(
                     div()
@@ -105,20 +105,28 @@ pub fn point_inspector_element(
         )
         // Hovered point section
         .child(inspector_section(
-            "HOVERED POINT",
+            dbflux_i18n::t!("chart.point_inspector.hovered_point"),
             div()
                 .flex()
                 .flex_col()
                 .gap(Spacing::XS)
-                .child(kv_row("Time", hovered_x, colors))
-                .child(kv_row("Value", hovered_y, colors))
+                .child(kv_row(
+                    &dbflux_i18n::t!("chart.point_inspector.time"),
+                    hovered_x,
+                    colors,
+                ))
+                .child(kv_row(
+                    &dbflux_i18n::t!("chart.point_inspector.value"),
+                    hovered_y,
+                    colors,
+                ))
                 .when_some(delta_prev, |d, v| d.child(kv_row("Δ prev", v, colors)))
                 .when_some(delta_avg, |d, v| d.child(kv_row("Δ avg", v, colors))),
             colors,
         ))
         // Source doc section: pretty-print the row fields
         .child(inspector_section(
-            "SOURCE DOC",
+            dbflux_i18n::t!("chart.point_inspector.source_doc"),
             div()
                 .flex()
                 .flex_col()
@@ -164,7 +172,7 @@ pub fn point_inspector_element(
                         .text_size(FontSizes::XS)
                         .text_color(colors.muted_fg)
                         .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .child("QUICK ACTIONS"),
+                        .child(dbflux_i18n::t!("chart.point_inspector.quick_actions")),
                 )
                 .child(
                     div()
@@ -178,17 +186,21 @@ pub fn point_inspector_element(
                         // as a stable display-only element; the host wraps the inspector
                         // in its own on_click listener pattern.
                         .child(action_button(
-                            "Show in tree",
-                            false,
+                            dbflux_i18n::t!("chart.point_inspector.show_in_tree"),
+                            "show-in-tree",
                             show_in_tree_source.row_idx,
                             colors,
                         ))
                         // "Annotate" — stub, coming soon.
-                        .child(action_button_disabled("Annotate", "Coming soon", colors))
+                        .child(action_button_disabled(
+                            dbflux_i18n::t!("chart.point_inspector.annotate"),
+                            &dbflux_i18n::t!("chart.point_inspector.coming_soon"),
+                            colors,
+                        ))
                         // "Copy as query" — stub.
                         .child(action_button_disabled(
-                            "Copy as query",
-                            "Coming soon",
+                            dbflux_i18n::t!("chart.point_inspector.copy_as_query"),
+                            &dbflux_i18n::t!("chart.point_inspector.coming_soon"),
                             colors,
                         )),
                 ),
@@ -201,7 +213,7 @@ pub fn point_inspector_element(
 // ---------------------------------------------------------------------------
 
 fn inspector_section(
-    label: &'static str,
+    label: impl Into<SharedString>,
     content: impl IntoElement,
     colors: &ChartColors,
 ) -> impl IntoElement {
@@ -218,12 +230,12 @@ fn inspector_section(
                 .text_size(FontSizes::XS)
                 .text_color(colors.muted_fg)
                 .font_weight(gpui::FontWeight::SEMIBOLD)
-                .child(label),
+                .child(label.into()),
         )
         .child(content)
 }
 
-fn kv_row(key: &'static str, value: &str, colors: &ChartColors) -> impl IntoElement {
+fn kv_row(key: &str, value: &str, colors: &ChartColors) -> impl IntoElement {
     div()
         .flex()
         .items_center()
@@ -234,7 +246,7 @@ fn kv_row(key: &'static str, value: &str, colors: &ChartColors) -> impl IntoElem
                 .flex_shrink_0()
                 .text_size(FontSizes::XS)
                 .text_color(colors.muted_fg)
-                .child(key),
+                .child(key.to_string()),
         )
         .child(
             div()
@@ -246,24 +258,26 @@ fn kv_row(key: &'static str, value: &str, colors: &ChartColors) -> impl IntoElem
         )
 }
 
-/// Active action button (hover-enabled). The `_row_idx` parameter is the
-/// `SourceRowRef.row_idx` encoded in the element ID so the host can read it
-/// from the DOM event. The actual scroll is wired by the host — the inspector
-/// does not own the target entity.
+/// Element ID for an active inspector action button. The slug is
+/// locale-independent so the ID does not change with the active language,
+/// and the row index stays recoverable as the trailing `-row-N` segment.
+fn action_button_element_id(id_slug: &str, row_idx: usize) -> String {
+    format!("inspector-action-{}-row-{}", id_slug, row_idx)
+}
+
+/// Active action button (hover-enabled). `id_slug` is a stable, locale-independent
+/// suffix for the element ID (previously derived from the English label) so the
+/// host can still read the `SourceRowRef.row_idx` encoded in it. The actual
+/// scroll is wired by the host — the inspector does not own the target entity.
 fn action_button(
-    label: &'static str,
-    _disabled: bool,
+    label: String,
+    id_slug: &'static str,
     row_idx: usize,
     colors: &ChartColors,
 ) -> impl IntoElement {
     div()
         .id(gpui::ElementId::Name(
-            format!(
-                "inspector-action-{}-row-{}",
-                label.replace(' ', "-"),
-                row_idx
-            )
-            .into(),
+            action_button_element_id(id_slug, row_idx).into(),
         ))
         .px(Spacing::SM)
         .py(ChartGeometry::TICK_GAP)
@@ -279,11 +293,7 @@ fn action_button(
 }
 
 /// Disabled action button with a tooltip hint.
-fn action_button_disabled(
-    label: &'static str,
-    _tooltip: &'static str,
-    colors: &ChartColors,
-) -> impl IntoElement {
+fn action_button_disabled(label: String, _tooltip: &str, colors: &ChartColors) -> impl IntoElement {
     div()
         .px(Spacing::SM)
         .py(ChartGeometry::TICK_GAP)
@@ -355,5 +365,50 @@ mod tests {
         let source = SourceRowRef { row_idx: 3 };
         assert_eq!(source.row_idx, 3);
         assert_eq!(row_values.len(), 5);
+    }
+
+    #[test]
+    fn point_inspector_keys_resolve_in_both_locales() {
+        let keys = [
+            "chart.point_inspector.series",
+            "chart.point_inspector.hovered_point",
+            "chart.point_inspector.time",
+            "chart.point_inspector.value",
+            "chart.point_inspector.source_doc",
+            "chart.point_inspector.quick_actions",
+            "chart.point_inspector.show_in_tree",
+            "chart.point_inspector.annotate",
+            "chart.point_inspector.copy_as_query",
+            "chart.point_inspector.coming_soon",
+        ];
+
+        for key in keys {
+            let en = dbflux_i18n::t!(key, locale = "en");
+            let es = dbflux_i18n::t!(key, locale = "es");
+            assert!(!en.is_empty() && en != key, "en missing for {key}");
+            assert!(!es.is_empty() && es != key, "es missing for {key}");
+        }
+    }
+
+    #[test]
+    fn point_inspector_show_in_tree_differs_between_locales() {
+        let en = dbflux_i18n::t!("chart.point_inspector.show_in_tree", locale = "en");
+        let es = dbflux_i18n::t!("chart.point_inspector.show_in_tree", locale = "es");
+        assert_ne!(en, es);
+    }
+
+    #[test]
+    fn action_button_element_id_is_locale_independent_and_keeps_row_index() {
+        let id = super::action_button_element_id("show-in-tree", 7);
+
+        assert_eq!(id, "inspector-action-show-in-tree-row-7");
+        assert!(!id.contains(' '));
+
+        let row_idx: usize = id
+            .rsplit("-row-")
+            .next()
+            .and_then(|suffix| suffix.parse().ok())
+            .expect("row index suffix");
+        assert_eq!(row_idx, 7);
     }
 }

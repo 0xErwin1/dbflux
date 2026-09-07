@@ -633,6 +633,7 @@ fn required_text_field(id: &str, label: &str, placeholder: &str) -> FormFieldDef
         enabled_when_checked: None,
         enabled_when_unchecked: None,
         disabled_when_field_set: None,
+        enabled_when_field_equals: None,
         help: None,
     }
 }
@@ -658,6 +659,7 @@ fn build_aws_sso_form() -> AuthFormDef {
                         enabled_when_checked: None,
                         enabled_when_unchecked: None,
                         disabled_when_field_set: None,
+                        enabled_when_field_equals: None,
                         help: Some(
                             "Optional. When set, SSO Start URL and SSO Region come from the referenced session and the fields below can be left empty.".to_string(),
                         ),
@@ -672,6 +674,7 @@ fn build_aws_sso_form() -> AuthFormDef {
                         enabled_when_checked: None,
                         enabled_when_unchecked: None,
                         disabled_when_field_set: Some("sso_session_ref".to_string()),
+                        enabled_when_field_equals: None,
                         help: None,
                     },
                     required_text_field("region", "Region", "us-east-1"),
@@ -694,6 +697,7 @@ fn build_aws_sso_form() -> AuthFormDef {
                         enabled_when_checked: None,
                         enabled_when_unchecked: None,
                         disabled_when_field_set: None,
+                        enabled_when_field_equals: None,
                         help: None,
                     },
                     FormFieldDef {
@@ -711,6 +715,7 @@ fn build_aws_sso_form() -> AuthFormDef {
                         enabled_when_checked: None,
                         enabled_when_unchecked: None,
                         disabled_when_field_set: None,
+                        enabled_when_field_equals: None,
                         help: None,
                     },
                 ],
@@ -740,6 +745,7 @@ fn build_aws_shared_credentials_form() -> AuthFormDef {
                             enabled_when_checked: None,
                             enabled_when_unchecked: None,
                             disabled_when_field_set: None,
+                            enabled_when_field_equals: None,
                             help: Some(
                                 "Written to the [name] section in ~/.aws/credentials.".to_string(),
                             ),
@@ -759,6 +765,7 @@ fn build_aws_shared_credentials_form() -> AuthFormDef {
                             enabled_when_checked: None,
                             enabled_when_unchecked: None,
                             disabled_when_field_set: None,
+                            enabled_when_field_equals: None,
                             help: Some(
                                 "Write-only. Leave blank to preserve the existing value in \
                                  ~/.aws/credentials. Enter a value to overwrite it."
@@ -775,6 +782,7 @@ fn build_aws_shared_credentials_form() -> AuthFormDef {
                             enabled_when_checked: None,
                             enabled_when_unchecked: None,
                             disabled_when_field_set: None,
+                            enabled_when_field_equals: None,
                             help: Some(
                                 "Optional. Write-only. Leave blank to preserve the existing \
                                  value in ~/.aws/credentials."
@@ -812,6 +820,7 @@ fn build_aws_sso_session_form() -> AuthFormDef {
                         enabled_when_checked: None,
                         enabled_when_unchecked: None,
                         disabled_when_field_set: None,
+                        enabled_when_field_equals: None,
                         help: Some(
                             "Comma-separated OAuth scopes. Default works for most setups."
                                 .to_string(),

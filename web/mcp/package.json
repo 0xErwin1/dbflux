@@ -1,0 +1,20 @@
+{
+  "name": "@dbflux/mcp",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "agents": "^0.22.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260828.1",
+    "typescript": "^6.0.3",
+    "wrangler": "^4.127.0"
+  }
+}

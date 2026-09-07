@@ -23,7 +23,7 @@ pub use access::{AccessHandle, AccessKind, AccessManager};
 
 pub use document_id::DocumentId;
 
-pub use release_channel::ReleaseChannel;
+pub use release_channel::{ReleaseChannel, client_identity, client_identity_token};
 
 pub use auth::{
     AuthEditCapabilities, AuthEditSnapshot, AuthEditTarget, AuthFormDef, AuthProfile,
@@ -59,12 +59,13 @@ pub use connection::{
     ItemManager, LuaCapabilities, MetricQuerySeries, MutationPolicy, OutputEvent, OutputReceiver,
     OutputSender, OutputStreamKind, OwnedCacheEntry, PendingOperation, PrepareConnectError,
     ProcessExecutionError, ProcessExecutor, ProfileManager, ProfilePolicyResolver, ProxyAuth,
-    ProxyKind, ProxyManager, ProxyProfile, RedisKeyCache, RedisKeyCacheEntry, ResolvedProxy,
-    SchemaCacheKey, ScriptLanguage, ScriptSource, SshAuthMethod, SshTunnelConfig, SshTunnelManager,
-    SshTunnelProfile, SslInfo, SslMode, SwitchDatabaseParams, SwitchDatabaseResult,
-    TestConnectionResult, TreeLoadResult, TreeStore, detached_process_channel,
-    execute_streaming_process, host_matches_no_proxy, output_channel, ssl_mode_from_id,
-    ssl_mode_id_is_cert_active, ssl_mode_id_requires_root_cert, ssl_mode_requires_root_cert,
+    ProxyKind, ProxyManager, ProxyProfile, ReadOnlyReason, RedisKeyCache, RedisKeyCacheEntry,
+    ResolvedProxy, SchemaCacheKey, ScriptLanguage, ScriptSource, SshAuthMethod, SshTunnelConfig,
+    SshTunnelManager, SshTunnelProfile, SslInfo, SslMode, SwitchDatabaseParams,
+    SwitchDatabaseResult, TestConnectionResult, TreeLoadResult, TreeStore, WritePrivilege,
+    compose_mutation_policy, detached_process_channel, execute_streaming_process,
+    host_matches_no_proxy, output_channel, ssl_mode_from_id, ssl_mode_id_is_cert_active,
+    ssl_mode_id_requires_root_cert, ssl_mode_requires_root_cert,
 };
 
 pub use connection::{
@@ -78,67 +79,75 @@ pub use connection::dashboard_import::{
 
 pub use connection::dashboard_source::{DashboardRef, DashboardSource, RemoteDashboard};
 
+pub use connection::dump_analysis::{
+    DumpAnalysisError, DumpAnalysisReport, DumpAnalyzer, DumpKeyEntry, DumpPrefixEntry,
+};
+
 pub use connection::{
     DefaultDashboardPanel, DefaultInstanceDashboard, InspectorRowAction, InstanceCatalog,
     InstanceInspectorDef, InstanceMetricDef, InstanceMetricId, InstanceMetricUnit,
 };
 
 pub use core::{
-    CancelToken, CodeGenScope, CodeGeneratorInfo, Connection, ConnectionErrorFormatter,
-    ConnectionExt, ConnectionOverrides, DbDriver, DbError, DefaultErrorFormatter,
-    DocumentConnection, ErrorLocation, EventStreamTarget, FormattedError, KeyValueApi,
-    KeyValueConnection, LogErr, NoopCancelHandle, QueryCancelHandle, QueryErrorFormatter,
-    RelationalConnection, SchemaDropTarget, SchemaFeatures, SchemaLoadingStrategy,
-    SchemaObjectKind, ShutdownCoordinator, ShutdownPhase, SourceContextSpec, SourceQueryMode,
-    TaskId, TaskKind, TaskManager, TaskSlot, TaskSnapshot, TaskStatus, TaskTarget, Value,
-    sanitize_uri,
+    BucketCreateOptions, BucketCreateOutcome, BucketDetails, BucketEncryption, BucketInfo,
+    BucketSizeEstimate, CancelToken, CodeGenScope, CodeGeneratorInfo, Connection,
+    ConnectionErrorFormatter, ConnectionExt, ConnectionOverrides, DbDriver, DbError,
+    DefaultErrorFormatter, DeletePrefixOutcome, DocumentConnection, ErrorLocation,
+    EventStreamTarget, FormattedError, KeyValueApi, KeyValueConnection, LogErr, NoopCancelHandle,
+    ObjectListingPage, ObjectMetadata, ObjectStoreConnection, ObjectSummary, ObjectVersionSummary,
+    PresignMethod, QueryCancelHandle, QueryErrorFormatter, RelationalConnection, SchemaDropTarget,
+    SchemaFeatures, SchemaLoadingStrategy, SchemaObjectKind, ShutdownCoordinator, ShutdownPhase,
+    SourceContextSpec, SourceQueryMode, TaskId, TaskKind, TaskManager, TaskSlot, TaskSnapshot,
+    TaskStatus, TaskTarget, Value, VersioningStatus, sanitize_uri,
 };
 
 pub use data::{
-    ColumnAssignment, CrudResult, DataViewKind, DocumentDelete, DocumentFilter, DocumentInsert,
-    DocumentUpdate, HashDeleteRequest, HashSetRequest, KeyBulkGetRequest, KeyDeleteRequest,
-    KeyEntry, KeyExistsRequest, KeyExpireRequest, KeyGetRequest, KeyGetResult, KeyPersistRequest,
+    ColumnAssignment, CrudResult, DataViewKind, DecodeOutcome, DecodedPayload, DecodedValue,
+    DocumentDelete, DocumentFilter, DocumentInsert, DocumentUpdate, Encoding, HashDeleteRequest,
+    HashSetRequest, KeyBulkGetRequest, KeyDeleteRequest, KeyEntry, KeyExistsRequest,
+    KeyExpireRequest, KeyGetRequest, KeyGetResult, KeyLoadState, KeyPersistRequest,
     KeyRenameRequest, KeyScanPage, KeyScanRequest, KeySetRequest, KeyTtlRequest, KeyType,
     KeyTypeRequest, ListEnd, ListPushRequest, ListRemoveRequest, ListSetRequest, MutationRequest,
     RecordIdentity, RowDelete, RowIdentity, RowInsert, RowPatch, RowState, SetAddRequest,
     SetCondition, SetRemoveRequest, SqlDeleteRequest, SqlUpdateRequest, SqlUpsertRequest,
     StreamAddRequest, StreamDeleteRequest, StreamEntryId, StreamMaxLen, ValueRepr, ZSetAddRequest,
-    ZSetRemoveRequest,
+    ZSetRemoveRequest, decode, decode_as, detect, probe_message_pack,
 };
 
 pub use driver::{
     DatabaseCategory, DdlCapabilities, DeploymentClass, DriverCapabilities, DriverFormDef,
     DriverLimits, DriverMetadata, DriverMetadataBuilder, EditorLanguageProfile,
-    ExecutionClassification, ExportFieldHint, FieldExportTransform, FormFieldDef, FormFieldKind,
-    FormSection, FormTab, FormValues, Icon, IsolationLevel, MutationCapabilities,
+    ExecutionClassification, ExportFieldHint, FieldEquals, FieldExportTransform, FormFieldDef,
+    FormFieldKind, FormSection, FormTab, FormValues, Icon, IsolationLevel, MutationCapabilities,
     OperationClassifier, OrderByMode, PaginationStyle, QueryCapabilities, QueryLanguage,
     RefreshTrigger, SelectOption, SslCertFields, SslModeOption, SyntaxInfo,
     TransactionCapabilities, TransferFamily, WhereOperator, field, field_file_path, field_password,
-    field_required, field_use_uri, ssh_tab, transfer_compatible, when_checked, when_unchecked,
-    with_default, with_help,
+    field_required, field_use_uri, ssh_tab, transfer_compatible, when_checked, when_field_equals,
+    when_unchecked, with_default, with_help,
 };
 
 pub use facade::{DangerousQuerySuppressions, SessionFacade};
 
 pub use query::{
     AggFn, AggregateFunction, AggregateRequest, AggregateSpec, AliasOrigin, Assignment,
-    AssignmentValue, BoolOp, ClassifiedMutation, CollectionBrowseRequest, CollectionCountRequest,
-    CollectionRef, CollectionTemplateRequest, ColumnKind, ColumnMeta, ColumnOrigin, ColumnRef,
-    Comparator, CountSpec, CreateTableSpec, DangerousQueryKind, DescribeRequest, Diagnostic,
-    DiagnosticSeverity, EditableBinding, EditorDiagnostic, ExplainRequest, FilterNode,
-    GeneratedMutation, GeneratedQuery, GeneratorError, GroupByEntry, JoinFilterNode, JoinKind,
-    JoinOn, JoinPredicate, JoinStep, LanguageService, LiteralValue, MutationCategory, MutationKind,
-    MutationTemplateOperation, MutationTemplateRequest, OrderByColumn, Pagination, PlannedQuery,
-    Predicate, PredicateValue, ProjectedColumn, Projection, QueryGenError, QueryGenerator,
-    QueryHandle, QueryRequest, QueryResult, QueryResultShape, ReadTemplateOperation,
-    ReadTemplateRequest, ResolvedWindow, Row, ScalarLiteral, ScopeRelation, SelectQuery,
-    SemanticFieldRef, SemanticFilter, SemanticPlan, SemanticPlanKind, SemanticPlanner,
-    SemanticPredicate, SemanticRequest, SemanticRequestKind, SortDirection, SortEntry, SourceTable,
-    SpecError, SqlClause, SqlCompletionContext, SqlContextEngine, SqlCursorAnalysis,
-    SqlLanguageService, SqlMutationGenerator, StatementScope, TableBrowseRequest,
-    TableCountRequest, TableRef, TextPosition, TextPositionRange, TextRange, TransactionVocab,
-    TransferColumn, ValidationResult, VisualAggregateSpec, VisualMutationSpec, VisualQuerySpec,
-    VisualSortDirection, classify_query_for_governance, classify_query_for_language,
+    AssignmentValue, BoolOp, ClassifiedMutation, CodeAction, CodeActionEdit,
+    CollectionBrowseRequest, CollectionCountRequest, CollectionRef, CollectionTemplateRequest,
+    ColumnKind, ColumnMeta, ColumnOrigin, ColumnRef, Comparator, CountSpec, CreateTableSpec,
+    DangerousQueryKind, DescribeRequest, Diagnostic, DiagnosticSeverity, EditableBinding,
+    EditorDiagnostic, ExplainRequest, FilterNode, GeneratedMutation, GeneratedQuery,
+    GeneratorError, GroupByEntry, JoinFilterNode, JoinKind, JoinOn, JoinPredicate, JoinStep,
+    LanguageService, LiteralValue, MutationCategory, MutationKind, MutationTemplateOperation,
+    MutationTemplateRequest, OrderByColumn, Pagination, PlannedQuery, Predicate, PredicateValue,
+    ProjectedColumn, Projection, QueryGenError, QueryGenerator, QueryHandle, QueryRequest,
+    QueryResult, QueryResultShape, ReadTemplateOperation, ReadTemplateRequest, ResolvedWindow, Row,
+    ScalarLiteral, SchemaColumns, ScopeRelation, SelectQuery, SemanticFieldRef, SemanticFilter,
+    SemanticPlan, SemanticPlanKind, SemanticPlanner, SemanticPredicate, SemanticRequest,
+    SemanticRequestKind, SortDirection, SortEntry, SourceTable, SpecError, SqlClause,
+    SqlCompletionContext, SqlContextEngine, SqlCursorAnalysis, SqlLanguageService,
+    SqlMutationGenerator, StatementScope, TableBrowseRequest, TableCountRequest, TableRef,
+    TextPosition, TextPositionRange, TextRange, TransactionVocab, TransferColumn, ValidationResult,
+    VisualAggregateSpec, VisualMutationSpec, VisualQuerySpec, VisualSortDirection,
+    classify_query_for_governance, classify_query_for_language,
     classify_query_for_language_with_service, classify_sql_execution, classify_visual_mutation,
     contains_time_macros, detect_dangerous_query, detect_dangerous_sql, infer_column_kind,
     inline_params, is_safe_read_query, lower_keyset_predicate, parse_semantic_filter_json,
@@ -191,10 +200,11 @@ pub use schema::{
     SchemaForeignKeyBuilder, SchemaForeignKeyInfo, SchemaIndexBuilder, SchemaIndexInfo,
     SchemaNodeId, SchemaNodeKind, SchemaSnapshot, SchemaSnapshotRecord, SearchIndexInfo,
     SearchMappingInfo, SearchSchema, SnapshotDepth, TableChange, TableInfo, TableKey,
-    TimeSeriesFieldInfo, TimeSeriesSchema, VectorCollectionInfo, VectorMetadataField, VectorMetric,
-    VectorSchema, ViewInfo, WideColumnInfo, WideColumnKeyspaceInfo, WideColumnSchema,
-    check_drift_sync, check_schema_drift, classify_table_added, classify_table_removed,
-    diff_schema, diff_table_info, extract_referenced_tables, topological_order,
+    TableStorageHint, TimeSeriesFieldInfo, TimeSeriesSchema, VectorCollectionInfo,
+    VectorMetadataField, VectorMetric, VectorSchema, ViewInfo, WideColumnInfo,
+    WideColumnKeyspaceInfo, WideColumnSchema, check_drift_sync, check_schema_drift,
+    classify_table_added, classify_table_removed, diff_schema, diff_table_info,
+    extract_referenced_tables, topological_order,
 };
 
 pub use sql::{
@@ -258,4 +268,57 @@ pub fn truncate_string_safe(s: &str, max_len: usize) -> String {
         .unwrap_or(0);
 
     format!("{}...", &s[..safe_end])
+}
+
+#[cfg(test)]
+mod truncate_tests {
+    use super::truncate_string_safe;
+
+    #[test]
+    fn keeps_short_strings_verbatim() {
+        assert_eq!(truncate_string_safe("SELECT 1;", 80), "SELECT 1;");
+    }
+
+    #[test]
+    fn truncates_ascii_with_ellipsis() {
+        let long = "a".repeat(200);
+        let truncated = truncate_string_safe(&long, 80);
+        assert_eq!(truncated, format!("{}...", "a".repeat(77)));
+    }
+
+    #[test]
+    fn truncates_inside_multibyte_codepoint_without_panicking() {
+        let digits: String = "1234567890".chars().cycle().take(76).collect();
+        let sql = format!("-- {digits}中\nSELECT 1;");
+        assert!(!sql.is_char_boundary(80), "byte 80 must split 中");
+
+        assert_eq!(
+            truncate_string_safe(&sql, 80),
+            format!("-- {}...", &digits[..74])
+        );
+    }
+
+    #[test]
+    fn truncates_between_every_byte_of_a_multibyte_run() {
+        // 4-byte emoji, 3-byte CJK and 2-byte latin-1 mixed, so every possible
+        // cut index lands somewhere inside a codepoint for some `max_len`.
+        let text = "🚀中ä".repeat(40);
+        for max_len in 0..text.len() {
+            let truncated = truncate_string_safe(&text, max_len);
+            assert!(
+                text.starts_with(truncated.trim_end_matches('.')),
+                "max_len {max_len} produced a non-prefix truncation"
+            );
+        }
+    }
+
+    #[test]
+    fn never_splits_a_codepoint_at_the_exact_limit() {
+        // "中" occupies bytes 77..80, so max_len 80 cuts at byte 77.
+        let sql = format!("{}中tail", "x".repeat(77));
+        assert_eq!(
+            truncate_string_safe(&sql, 80),
+            format!("{}...", "x".repeat(77))
+        );
+    }
 }

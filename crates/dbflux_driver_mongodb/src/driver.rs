@@ -31,6 +31,7 @@ use dbflux_core::{
     field_use_uri, sanitize_uri, ssh_tab, when_checked, when_unchecked, with_default,
 };
 use dbflux_ssh::SshTunnel;
+use mongodb::options::ClientOptions;
 use mongodb::sync::{Client, Database};
 use uuid::Uuid;
 
@@ -279,6 +280,7 @@ impl DbDriver for MongoDriver {
                             enabled_when_checked: None,
                             enabled_when_unchecked: None,
                             disabled_when_field_set: None,
+                            enabled_when_field_equals: None,
                             help: None,
                         },
                         FormFieldDef {
@@ -291,6 +293,7 @@ impl DbDriver for MongoDriver {
                             enabled_when_checked: None,
                             enabled_when_unchecked: None,
                             disabled_when_field_set: None,
+                            enabled_when_field_equals: None,
                             help: None,
                         },
                     ],
@@ -634,8 +637,13 @@ impl MongoDriver {
 
         log::info!("Connecting to MongoDB with URI");
 
+        let mut options = ClientOptions::parse(&uri)
+            .run()
+            .map_err(|e| format_mongo_uri_error(&e, base_uri))?;
+        apply_default_app_name(&mut options);
+
         let client =
-            Client::with_uri_str(&uri).map_err(|e| format_mongo_uri_error(&e, base_uri))?;
+            Client::with_options(options).map_err(|e| format_mongo_uri_error(&e, base_uri))?;
 
         client
             .list_database_names()
@@ -673,7 +681,13 @@ impl MongoDriver {
 
         log::info!("Connecting to MongoDB at {}:{}", host, port);
 
-        let client = Client::with_uri_str(&uri).map_err(|e| format_mongo_error(&e, host, port))?;
+        let mut options = ClientOptions::parse(&uri)
+            .run()
+            .map_err(|e| format_mongo_error(&e, host, port))?;
+        apply_default_app_name(&mut options);
+
+        let client =
+            Client::with_options(options).map_err(|e| format_mongo_error(&e, host, port))?;
 
         client
             .list_database_names()
@@ -1168,6 +1182,14 @@ fn inject_credentials_into_uri(
         )
     } else {
         base_uri.to_string()
+    }
+}
+
+/// Fills in a default `appName` when the URI did not already set one via `appName=`,
+/// so a user-supplied value always wins over ours.
+fn apply_default_app_name(options: &mut ClientOptions) {
+    if options.app_name.is_none() {
+        options.app_name = Some(dbflux_core::client_identity().to_string());
     }
 }
 
@@ -1805,6 +1827,14 @@ impl Connection for MongoConnection {
         Ok(())
     }
 
+    fn probe_write_privilege(&self) -> dbflux_core::WritePrivilege {
+        let Ok(client_guard) = self.client.lock() else {
+            return dbflux_core::WritePrivilege::Unknown;
+        };
+
+        crate::instance_catalog::MongoInstanceCatalog::probe_write_privilege(&client_guard)
+    }
+
     fn instance_catalog(&self) -> Option<Box<dyn InstanceCatalog>> {
         let client_guard = self.client.lock().ok()?;
         let cluster_monitor =
@@ -1854,11 +1884,7 @@ impl Connection for MongoConnection {
 
         let start = Instant::now();
 
-        let sql_preview = if req.sql.len() > 80 {
-            format!("{}...", &req.sql[..80])
-        } else {
-            req.sql.clone()
-        };
+        let sql_preview = dbflux_core::truncate_string_safe(&req.sql, 80);
         log::debug!(
             "[QUERY] Executing (id={}): {}",
             query_id,
@@ -2030,6 +2056,7 @@ impl Connection for MongoConnection {
                     sample_fields: None,
                     presentation: dbflux_core::CollectionPresentation::DataGrid,
                     child_items: None,
+                    storage_hints: None,
                 }
             })
             .collect();
@@ -2159,6 +2186,7 @@ impl Connection for MongoConnection {
             sample_fields: Some(sample_fields),
             presentation: dbflux_core::CollectionPresentation::DataGrid,
             child_items: None,
+            storage_hints: None,
         })
     }
 
@@ -4223,6 +4251,31 @@ mod tests {
             Some("pw"),
         );
         assert_eq!(untouched, "mongodb://existing:creds@localhost:27017/admin");
+    }
+
+    #[test]
+    fn apply_default_app_name_keeps_user_supplied_app_name() {
+        let mut options = ClientOptions::parse("mongodb://localhost:27017/?appName=custom")
+            .run()
+            .expect("parsing a plain URI must not require a network round trip");
+
+        apply_default_app_name(&mut options);
+
+        assert_eq!(options.app_name.as_deref(), Some("custom"));
+    }
+
+    #[test]
+    fn apply_default_app_name_fills_missing_app_name() {
+        let mut options = ClientOptions::parse("mongodb://localhost:27017")
+            .run()
+            .expect("parsing a plain URI must not require a network round trip");
+
+        apply_default_app_name(&mut options);
+
+        assert_eq!(
+            options.app_name.as_deref(),
+            Some(dbflux_core::client_identity())
+        );
     }
 
     #[test]

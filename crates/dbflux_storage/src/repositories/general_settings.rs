@@ -37,7 +37,9 @@ impl GeneralSettingsRepository {
                        max_concurrent_background_tasks, auto_refresh_pause_on_error,
                        auto_refresh_only_if_visible, confirm_dangerous_queries,
                        dangerous_requires_where, dangerous_requires_preview,
-                       style, schema_snapshot_retention, updated_at
+                       style, schema_snapshot_retention,
+                       object_preview_size_limit_mib, language,
+                       key_value_size_limit_mib, updated_at
                 FROM cfg_general_settings WHERE id = 1
                 "#,
             )
@@ -65,7 +67,10 @@ impl GeneralSettingsRepository {
                 dangerous_requires_preview: row.get(14)?,
                 style: row.get(15)?,
                 schema_snapshot_retention: row.get(16)?,
-                updated_at: row.get(17)?,
+                object_preview_size_limit_mib: row.get(17)?,
+                language: row.get(18)?,
+                key_value_size_limit_mib: row.get(19)?,
+                updated_at: row.get(20)?,
             })
         });
 
@@ -91,8 +96,10 @@ impl GeneralSettingsRepository {
                     max_concurrent_background_tasks, auto_refresh_pause_on_error,
                     auto_refresh_only_if_visible, confirm_dangerous_queries,
                     dangerous_requires_where, dangerous_requires_preview,
-                    style, schema_snapshot_retention, updated_at
-                ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, datetime('now'))
+                    style, schema_snapshot_retention,
+                    object_preview_size_limit_mib, language,
+                    key_value_size_limit_mib, updated_at
+                ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, datetime('now'))
                 ON CONFLICT(id) DO UPDATE SET
                     theme = excluded.theme,
                     restore_session_on_startup = excluded.restore_session_on_startup,
@@ -110,6 +117,9 @@ impl GeneralSettingsRepository {
                     dangerous_requires_preview = excluded.dangerous_requires_preview,
                     style = excluded.style,
                     schema_snapshot_retention = excluded.schema_snapshot_retention,
+                    object_preview_size_limit_mib = excluded.object_preview_size_limit_mib,
+                    language = excluded.language,
+                    key_value_size_limit_mib = excluded.key_value_size_limit_mib,
                     updated_at = datetime('now')
                 "#,
                 params![
@@ -129,6 +139,9 @@ impl GeneralSettingsRepository {
                     settings.dangerous_requires_preview,
                     settings.style,
                     settings.schema_snapshot_retention,
+                    settings.object_preview_size_limit_mib,
+                    settings.language,
+                    settings.key_value_size_limit_mib,
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
@@ -165,6 +178,16 @@ pub struct GeneralSettingsDto {
     /// Maximum number of auto-captured schema snapshots retained per
     /// profile/database before older ones are pruned.
     pub schema_snapshot_retention: i64,
+    /// Largest object size (in MiB) whose bytes may be fetched for an in-app
+    /// object-storage preview.
+    pub object_preview_size_limit_mib: i64,
+    /// The user's language preference: a `dbflux_i18n::Language` storage
+    /// identifier (for example `"en"`, `"es"`), or an empty string to follow
+    /// the system locale.
+    pub language: String,
+    /// Largest key-value entry size (in MiB) whose bytes may be fetched for
+    /// an in-app key-value preview.
+    pub key_value_size_limit_mib: i64,
     pub updated_at: String,
 }
 
@@ -216,6 +239,9 @@ mod tests {
             dangerous_requires_preview: 1,
             style: "compact".to_string(),
             schema_snapshot_retention: 15,
+            object_preview_size_limit_mib: 25,
+            language: String::new(),
+            key_value_size_limit_mib: 10,
             updated_at: String::new(),
         };
 
@@ -227,6 +253,7 @@ mod tests {
         assert_eq!(fetched.max_history_entries, 500);
         assert_eq!(fetched.style, "compact");
         assert_eq!(fetched.schema_snapshot_retention, 15);
+        assert_eq!(fetched.object_preview_size_limit_mib, 25);
 
         let _ = std::fs::remove_file(&path);
     }
@@ -261,6 +288,9 @@ mod tests {
                 dangerous_requires_preview: 0,
                 style: style_str.to_string(),
                 schema_snapshot_retention: 10,
+                object_preview_size_limit_mib: 10,
+                language: String::new(),
+                key_value_size_limit_mib: 10,
                 updated_at: String::new(),
             };
 
@@ -274,6 +304,71 @@ mod tests {
 
             let _ = std::fs::remove_file(&path);
         }
+    }
+
+    #[test]
+    fn migrated_row_defaults_language_to_empty_string() {
+        // Simulate a pre-migration row where 'language' column is absent (DEFAULT kicks in).
+        // After migration 026 runs, existing rows get the column with '' value, meaning
+        // "follow the system locale" per LanguagePreference::System.
+        let path = temp_db("language_column_default");
+        let conn = open_database(&path).expect("should open");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
+
+        #[allow(clippy::arc_with_non_send_sync)]
+        let repo = GeneralSettingsRepository::new(Arc::new(conn));
+        let fetched = repo.get().expect("should get").expect("should exist");
+        assert_eq!(
+            fetched.language, "",
+            "language column default should be the empty string"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn language_round_trips_through_upsert() {
+        let path = temp_db("language_roundtrip");
+        let conn = open_database(&path).expect("should open");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
+
+        #[allow(clippy::arc_with_non_send_sync)]
+        let repo = GeneralSettingsRepository::new(Arc::new(conn));
+
+        let dto = GeneralSettingsDto {
+            id: 1,
+            theme: "dark".to_string(),
+            restore_session_on_startup: 1,
+            reopen_last_connections: 0,
+            default_focus_on_startup: "sidebar".to_string(),
+            max_history_entries: 1000,
+            auto_save_interval_ms: 2000,
+            default_refresh_policy: "manual".to_string(),
+            default_refresh_interval_secs: 5,
+            max_concurrent_background_tasks: 8,
+            auto_refresh_pause_on_error: 1,
+            auto_refresh_only_if_visible: 0,
+            confirm_dangerous_queries: 1,
+            dangerous_requires_where: 1,
+            dangerous_requires_preview: 0,
+            style: "default".to_string(),
+            schema_snapshot_retention: 10,
+            object_preview_size_limit_mib: 10,
+            language: "es".to_string(),
+            key_value_size_limit_mib: 10,
+            updated_at: String::new(),
+        };
+
+        repo.upsert(&dto).expect("should upsert");
+
+        let fetched = repo.get().expect("should get").expect("should exist");
+        assert_eq!(fetched.language, "es");
+
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
@@ -299,6 +394,57 @@ mod tests {
             fetched.schema_snapshot_retention, 10,
             "schema_snapshot_retention column default should be 10"
         );
+        assert_eq!(
+            fetched.object_preview_size_limit_mib, 10,
+            "object_preview_size_limit_mib column default should be 10"
+        );
+        assert_eq!(
+            fetched.key_value_size_limit_mib, 10,
+            "key_value_size_limit_mib column default should be 10"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn key_value_size_limit_round_trips_through_upsert() {
+        let path = temp_db("key_value_size_limit_roundtrip");
+        let conn = open_database(&path).expect("should open");
+        MigrationRegistry::new()
+            .run_all(&conn)
+            .expect("migration should run");
+
+        #[allow(clippy::arc_with_non_send_sync)]
+        let repo = GeneralSettingsRepository::new(Arc::new(conn));
+
+        let dto = GeneralSettingsDto {
+            id: 1,
+            theme: "dark".to_string(),
+            restore_session_on_startup: 1,
+            reopen_last_connections: 0,
+            default_focus_on_startup: "sidebar".to_string(),
+            max_history_entries: 1000,
+            auto_save_interval_ms: 2000,
+            default_refresh_policy: "manual".to_string(),
+            default_refresh_interval_secs: 5,
+            max_concurrent_background_tasks: 8,
+            auto_refresh_pause_on_error: 1,
+            auto_refresh_only_if_visible: 0,
+            confirm_dangerous_queries: 1,
+            dangerous_requires_where: 1,
+            dangerous_requires_preview: 0,
+            style: "default".to_string(),
+            schema_snapshot_retention: 10,
+            object_preview_size_limit_mib: 10,
+            language: String::new(),
+            key_value_size_limit_mib: 42,
+            updated_at: String::new(),
+        };
+
+        repo.upsert(&dto).expect("should upsert");
+
+        let fetched = repo.get().expect("should get").expect("should exist");
+        assert_eq!(fetched.key_value_size_limit_mib, 42);
 
         let _ = std::fs::remove_file(&path);
     }

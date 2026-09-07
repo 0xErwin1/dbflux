@@ -161,11 +161,7 @@ Three policies and three roles are shipped as immutable built-ins. They are alwa
 
 ### Built-in roles
 
-| ID | Assigned policy |
-|----|----------------|
-| `builtin/read-only` | `builtin/read-only` |
-| `builtin/write` | `builtin/write` |
-| `builtin/admin` | `builtin/admin` |
+There are three built-in roles, `builtin/read-only`, `builtin/write`, and `builtin/admin`. Each one is assigned the policy of the same ID.
 
 Built-ins are injected at startup in both the GUI app (`AppState`) and the MCP server (via the `builtin_policies()` / `builtin_roles()` loops in `dbflux_mcp_server::governance`). They are never written to disk. Any attempt to delete a built-in returns an error.
 

@@ -500,9 +500,9 @@ impl Render for SqlPreviewModal {
         // -- Title & badge --
 
         let title = if is_generic {
-            "Query Preview"
+            dbflux_i18n::t!("sql_preview.title.query")
         } else {
-            "SQL Preview"
+            dbflux_i18n::t!("sql_preview.title.sql")
         };
 
         let badge_text: SharedString = if let Some(label) = &self.badge_label {
@@ -554,7 +554,10 @@ impl Render for SqlPreviewModal {
                     .flex()
                     .items_center()
                     .gap(Spacing::LG)
-                    .child(Text::label_sm("Options").muted_foreground())
+                    .child(
+                        Text::label_sm(dbflux_i18n::t!("sql_preview.options.label"))
+                            .muted_foreground(),
+                    )
                     .child(
                         div()
                             .flex()
@@ -568,7 +571,9 @@ impl Render for SqlPreviewModal {
                                         this.toggle_fully_qualified(window, cx);
                                     })),
                             )
-                            .child(Text::body("Fully qualified names")),
+                            .child(Text::body(dbflux_i18n::t!(
+                                "sql_preview.options.fully_qualified"
+                            ))),
                     )
                     .child(
                         div()
@@ -583,7 +588,7 @@ impl Render for SqlPreviewModal {
                                         this.toggle_compact(window, cx);
                                     })),
                             )
-                            .child(Text::body("Compact SQL")),
+                            .child(Text::body(dbflux_i18n::t!("sql_preview.options.compact"))),
                     ),
             );
         }
@@ -621,7 +626,10 @@ impl Render for SqlPreviewModal {
                             .size(Heights::ICON_SM)
                             .muted(),
                     )
-                    .child(Text::body("Refresh").font_size(FontSizes::SM)),
+                    .child(
+                        Text::body(dbflux_i18n::t!("sql_preview.action.refresh"))
+                            .font_size(FontSizes::SM),
+                    ),
             );
         }
 
@@ -648,7 +656,10 @@ impl Render for SqlPreviewModal {
                             .size(Heights::ICON_SM)
                             .color(theme.primary_foreground),
                     )
-                    .child(Text::caption("Copy").color(theme.primary_foreground)),
+                    .child(
+                        Text::caption(dbflux_i18n::t!("sql_preview.action.copy"))
+                            .color(theme.primary_foreground),
+                    ),
             )
             .child(
                 div()
@@ -665,7 +676,10 @@ impl Render for SqlPreviewModal {
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.close(cx);
                     }))
-                    .child(Text::body("Close").font_size(FontSizes::SM)),
+                    .child(
+                        Text::body(dbflux_i18n::t!("sql_preview.action.close"))
+                            .font_size(FontSizes::SM),
+                    ),
             );
 
         frame = frame.child(footer);
@@ -675,3 +689,38 @@ impl Render for SqlPreviewModal {
 }
 
 impl EventEmitter<()> for SqlPreviewModal {}
+
+#[cfg(test)]
+mod tests {
+    const SQL_PREVIEW_KEYS: &[&str] = &[
+        "sql_preview.title.sql",
+        "sql_preview.title.query",
+        "sql_preview.options.label",
+        "sql_preview.options.fully_qualified",
+        "sql_preview.options.compact",
+        "sql_preview.action.refresh",
+        "sql_preview.action.copy",
+        "sql_preview.action.close",
+    ];
+
+    #[test]
+    fn sql_preview_catalog_keys_resolve() {
+        for key in SQL_PREVIEW_KEYS.iter().copied() {
+            let english = dbflux_i18n::t!(key);
+            let spanish = dbflux_i18n::t!(key, locale = "es");
+
+            assert!(!english.is_empty(), "empty English translation for {key}");
+            assert_ne!(english, key, "missing English translation for {key}");
+            assert!(!spanish.is_empty(), "empty Spanish translation for {key}");
+            assert_ne!(spanish, key, "missing Spanish translation for {key}");
+        }
+    }
+
+    #[test]
+    fn sql_preview_title_differs_between_locales() {
+        let english = dbflux_i18n::t!("sql_preview.title.sql");
+        let spanish = dbflux_i18n::t!("sql_preview.title.sql", locale = "es");
+
+        assert_ne!(english, spanish);
+    }
+}

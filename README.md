@@ -1,233 +1,90 @@
 # DBFlux
 
-A fast, keyboard-first database client built with Rust and GPUI.
+**English** · [Español](README.es.md) · [简体中文](README.zh_Hans.md)
+
+An extensible, keyboard-first data platform delivered as a Rust + GPUI desktop client.
+
+**[dbflux.dev](https://dbflux.dev)** &middot; [Documentation](https://docs.dbflux.dev/) &middot; [Install](https://docs.dbflux.dev/install/)
 
 ## Overview
 
-DBFlux is an open-source database client written in Rust, built with GPUI (Zed's UI framework). It focuses on performance, a clean UX, and keyboard-first workflows.
+DBFlux is an open-source desktop client with built-in drivers for relational and non-relational databases. Its core contracts are driver-neutral, and external drivers can integrate over RPC.
 
-The long-term goal is to provide a fully open-source alternative to DBeaver, supporting both relational and non-relational databases.
+The client focuses on performance, a clean UX, and keyboard-first workflows. The long-term goal is one fully open-source client for every database you work with.
 
 ![DBFlux](resources/dbflux.png)
 
 ## Documentation
 
-### User guides
+Everything below is published at **[docs.dbflux.dev](https://docs.dbflux.dev/)**, rendered from
+these same files, with search and a version selector. The links here point at the source; read them
+on the site if you prefer.
 
-- [Usage Guide](docs/USAGE.md) — getting started: connect, query, chart, export
-- [Connecting — Advanced Setup](docs/CONNECTIONS.md) — SSH tunnels, proxies, AWS SSO auth profiles, value sources
-- [Settings & Hooks](docs/SETTINGS.md) — every Settings section and connection hooks
-- [Data & Privacy](docs/DATA_AND_PRIVACY.md) — where your data and secrets live, backup and reset
-- [Dashboards & Audit — User Guide](docs/DASHBOARDS_AND_AUDIT.md) — charts, dashboards, instance metrics, audit viewer
-- [Drivers Overview](docs/DRIVERS.md) — supported databases, capabilities, limitations
+Choose the path that matches what you want to do.
+
+### Start here
+
+| Goal                                    | Guide                                                                                                                                                                                               |
+| --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Create a connection                     | Start with the [Usage Guide](docs/USAGE.md#1-first-launch-and-creating-a-connection). For SSH tunnels, proxies, AWS SSO, and value sources, use [Connecting — Advanced Setup](docs/CONNECTIONS.md). |
+| Run queries and follow common workflows | Follow the [Usage Guide](docs/USAGE.md) for querying, browsing results, charting, exporting, and keyboard navigation.                                                                               |
+| View audit events                       | Open the audit viewer with the [Dashboards & Audit User Guide](docs/DASHBOARDS_AND_AUDIT.md#audit-viewer).                                                                                          |
+| Use MCP                                 | Follow the [AI + MCP Integration Guide](docs/MCP_AI_INTEGRATION.md).                                                                                                                                |
+| Check driver support and limitations    | Use [Drivers Overview](docs/DRIVERS.md), the canonical capability and limitations overview.                                                                                                         |
+
+### More user guides
+
+- [Settings & Hooks](docs/SETTINGS.md) — settings, connection hooks, and access profiles
+- [Data & Privacy](docs/DATA_AND_PRIVACY.md) — data and secret storage, backup, and reset
 - [Lua Scripting](docs/LUA.md) — the embedded Lua runtime for hooks
 
-### Reference & internals
+### Contributors
 
-- [Architecture](ARCHITECTURE.md) — layered diagrams, query/connection flow, crate map
-- [Charts](docs/CHARTS.md) — chart types, column kinds, axis auto-detection
-- [Dashboards](docs/DASHBOARDS.md) — dashboards, saved charts, instance metrics and inspectors
+- [Contributing](CONTRIBUTING.md) — setup, checks, and contribution workflow
+- [Key Concepts](docs/CONCEPTS.md) — the short mental model for contracts and subsystem boundaries
+- [Driver Authoring](docs/DRIVER_AUTHORING.md) — choose and implement a built-in Rust or external RPC driver
+- [Architecture](ARCHITECTURE.md) — the canonical architecture and crate map, including crate boundaries and cross-crate flows
+
+### Translations
+
+DBFlux is translated on [Hosted Weblate](https://hosted.weblate.org/engage/dbflux/).
+The catalogs live in `crates/dbflux_i18n/locales/`, one YAML file per language, and
+translation updates arrive as pull requests from Weblate.
+[Contributing translations](docs/TRANSLATIONS.md) covers every translatable surface:
+the application UI, the documentation, and the website.
+
+<a href="https://hosted.weblate.org/engage/dbflux/"><img src="https://hosted.weblate.org/widget/dbflux/multi-auto.svg" alt="Translation status"></a>
+
+### Reference
+
+- [Charts](docs/CHARTS.md) — chart types, column kinds, and axis auto-detection
+- [Dashboards](docs/DASHBOARDS.md) — dashboards, saved charts, instance metrics, and inspectors
 - [Audit](docs/AUDIT.md) — audit event schema and redaction
-- [AI + MCP Integration Guide](docs/MCP_AI_INTEGRATION.md)
 - [Driver RPC Protocol](docs/DRIVER_RPC_PROTOCOL.md)
 - [RPC Services Config](docs/RPC_SERVICES_CONFIG.md)
 - [Release Process](docs/RELEASE.md)
-- [Contributing](CONTRIBUTING.md)
 - [Code Style](CODE_STYLE.md)
 - [Agent Instructions](AGENTS.md)
 - [Claude Instructions](CLAUDE.md)
 
 ## Installation
 
-### Linux
-
-#### Tarball (recommended)
-
 ```bash
-# Install to /usr/local (requires sudo)
+# Linux — install to /usr/local
 curl -fsSL https://raw.githubusercontent.com/0xErwin1/dbflux/main/scripts/install.sh | sudo bash
-
-# Install to ~/.local (no sudo required)
-curl -fsSL https://raw.githubusercontent.com/0xErwin1/dbflux/main/scripts/install.sh | bash -s -- --prefix ~/.local
 ```
 
-#### AppImage (portable)
+Packages for every platform — tarball, AUR, `.deb`, `.rpm`, AppImage, Nix, macOS
+DMG and the Windows installer — are on the [Releases](https://github.com/0xErwin1/dbflux/releases)
+page. The full guide, including the Gatekeeper and SmartScreen steps for the
+unsigned macOS and Windows builds, is in [Installing DBFlux](docs/INSTALL.md).
 
-```bash
-# Download from releases (replace amd64 with arm64 for ARM)
-wget https://github.com/0xErwin1/dbflux/releases/latest/download/dbflux-linux-amd64.AppImage
-chmod +x dbflux-linux-amd64.AppImage
-./dbflux-linux-amd64.AppImage
-```
-
-#### Arch Linux
-
-Available in the AUR:
-
-```bash
-# Using an AUR helper
-paru -S dbflux
-# or
-yay -S dbflux
-```
-
-#### Debian / Ubuntu
-
-Download the `.deb` package from [Releases](https://github.com/0xErwin1/dbflux/releases):
-
-```bash
-# Replace amd64 with arm64 for ARM
-wget https://github.com/0xErwin1/dbflux/releases/latest/download/dbflux-linux-amd64.deb
-sudo dpkg -i dbflux-linux-amd64.deb
-```
-
-#### Fedora / RHEL / CentOS
-
-Download the `.rpm` package from [Releases](https://github.com/0xErwin1/dbflux/releases):
-
-```bash
-# Replace amd64 with arm64 for ARM
-sudo dnf install https://github.com/0xErwin1/dbflux/releases/latest/download/dbflux-linux-amd64.rpm
-```
-
-#### Nix
-
-Using flakes (the default package is a **prebuilt binary** for Linux x86_64 / aarch64, no compilation):
-
-```bash
-# Run directly (prebuilt)
-nix run github:0xErwin1/dbflux
-
-# Install to profile (prebuilt)
-nix profile install github:0xErwin1/dbflux
-
-# Development shell
-nix develop github:0xErwin1/dbflux
-```
-
-Build from source instead of using the prebuilt binary:
-
-```bash
-nix run    github:0xErwin1/dbflux#dbflux-source
-nix build  github:0xErwin1/dbflux#dbflux-source
-```
-
-Nightly builds track `main` and install side by side with stable (distinct app id, icon, and `dbflux-nightly.db` database). Consume them from the `nightly` ref:
-
-```bash
-nix run github:0xErwin1/dbflux/nightly#dbflux-nightly
-nix profile install github:0xErwin1/dbflux/nightly#dbflux-nightly
-```
-
-See [docs/RELEASE.md](docs/RELEASE.md) for the channel model.
-
-NixOS / nix-darwin via overlay:
-
-```nix
-{
-  inputs.dbflux.url = "github:0xErwin1/dbflux";
-
-  outputs = { nixpkgs, dbflux, ... }: {
-    nixosConfigurations.myhost = nixpkgs.lib.nixosSystem {
-      modules = [
-        ({ pkgs, ... }: {
-          nixpkgs.overlays = [ dbflux.overlays.default ];
-          environment.systemPackages = [
-            pkgs.dbflux         # prebuilt binary, no local compile
-            # pkgs.dbflux-source  # alternative: build from source
-          ];
-        })
-      ];
-    };
-  };
-}
-```
-
-### macOS
-
-DBFlux for macOS is not signed with an Apple developer certificate. When opening for the first time, you'll see a warning about an "unidentified developer".
-
-#### Installation
-
-1. Download the DMG for your architecture from [Releases](https://github.com/0xErwin1/dbflux/releases):
-   - **Intel Macs**: `dbflux-macos-amd64.dmg`
-   - **Apple Silicon (M1/M2/M3/M4)**: `dbflux-macos-arm64.dmg`
-2. Open the DMG and drag DBFlux to Applications
-3. When you see the "unidentified developer" warning:
-   - Go to **System Settings → Privacy & Security**
-   - Click **Open Anyway** next to the security warning
-   - Confirm you want to open the application
-
-#### Bypass Gatekeeper from Terminal
-
-```bash
-# Remove quarantine attribute (allows opening without GUI confirmation)
-xattr -cr /Applications/DBFlux.app
-
-# Now you can open it normally
-open /Applications/DBFlux.app
-```
-
-#### Requirements
-
-- macOS 11.0 (Big Sur) or later
-
-### Windows
-
-#### Installer
-
-1. Download `dbflux-windows-amd64-setup.exe` from [Releases](https://github.com/0xErwin1/dbflux/releases)
-2. Run the installer and follow the wizard
-
-#### Portable
-
-1. Download `dbflux-windows-amd64.zip` from [Releases](https://github.com/0xErwin1/dbflux/releases)
-2. Extract to any folder
-3. Run `dbflux.exe`
-
-> **Note**: The executable is not signed with a Windows code signing certificate. Windows SmartScreen may show a warning. Click "More info" → "Run anyway" to proceed.
-
-#### Requirements
-
-- Windows 10 or later
-- x86_64 (ARM64 not yet supported)
-
-### Build from Source
-
-```bash
-# Via install script (Linux)
-curl -fsSL https://raw.githubusercontent.com/0xErwin1/dbflux/main/scripts/install.sh | bash -s -- --build
-
-# Or manually
-git clone https://github.com/0xErwin1/dbflux.git
-cd dbflux
-
-# Recommended: build with the full default feature set
-cargo build --release --features sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,lua,aws,mcp
-
-# Minimal build (relational drivers only, no AI/MCP, no Lua)
-cargo build --release --no-default-features --features sqlite,postgres,mysql
-
-./target/release/dbflux
-```
-
-### Uninstall (Linux)
-
-```bash
-# If installed with install.sh
-curl -fsSL https://raw.githubusercontent.com/0xErwin1/dbflux/main/scripts/uninstall.sh | sudo bash
-
-# From ~/.local
-curl -fsSL https://raw.githubusercontent.com/0xErwin1/dbflux/main/scripts/uninstall.sh | bash -s -- --prefix ~/.local
-
-# Remove user config and data too
-./scripts/uninstall.sh --remove-config
-```
 ## Features
 
 ### Database Support
 
 - **PostgreSQL** with SSL/TLS modes (Disable, Prefer, Require)
+- **Amazon Redshift** with read-only SQL over the PostgreSQL wire protocol, SSH tunneling, and TLS/client certificates
 - **MySQL** / MariaDB
 - **SQLite** for local database files
 - **Microsoft SQL Server** (TDS) with TLS, SQL Browser named-instance routing, and multi-schema introspection
@@ -235,7 +92,9 @@ curl -fsSL https://raw.githubusercontent.com/0xErwin1/dbflux/main/scripts/uninst
 - **Redis** with key browsing for all types (String, Hash, List, Set, Sorted Set, Stream)
 - **DynamoDB** with table browsing, item CRUD, and AWS authentication
 - **InfluxDB** v1 and v2 (InfluxQL on v1, InfluxQL + Flux on v2)
+- **ClickHouse** and ClickHouse Cloud over HTTP(S), with database/table discovery, visual SELECTs, and explicit raw SQL execution
 - **CloudWatch Logs** with log group/stream browsing and event streaming
+- **Amazon S3** with bucket browsing, object preview/editing, full CRUD, and presigned URLs, including S3-compatible endpoints (Cloudflare R2, MinIO)
 - **External drivers over RPC** (register out-of-process drivers via the [Driver RPC Protocol](docs/DRIVER_RPC_PROTOCOL.md))
 
 See [docs/DRIVERS.md](docs/DRIVERS.md) for a full capability matrix and per-driver limitations.
@@ -331,27 +190,32 @@ your package manager (included below). Windows and macOS use their default
 linker and are unaffected.
 
 **Ubuntu/Debian:**
+
 ```bash
 sudo apt install pkg-config libssl-dev libdbus-1-dev libxkbcommon-dev mold
 ```
 
 **Fedora:**
+
 ```bash
 sudo dnf install pkg-config openssl-devel dbus-devel libxkbcommon-devel mold
 ```
 
 **Arch:**
+
 ```bash
 sudo pacman -S pkg-config openssl dbus libxkbcommon mold
 ```
 
 **macOS:**
+
 ```bash
 # Xcode Command Line Tools (required)
 xcode-select --install
 ```
 
 **Windows:**
+
 ```powershell
 # Visual Studio Build Tools with C++ workload (required)
 # Download from: https://visualstudio.microsoft.com/visual-cpp-build-tools/
@@ -396,6 +260,28 @@ Live integration tests (normally `#[ignore]`d) use a different flag under nextes
 cargo nextest run -p dbflux_driver_sqlite --run-ignored all
 ```
 
+### Website
+
+The site under `web/` is an Astro static build. It reads `docs/`, the driver READMEs,
+`ARCHITECTURE.md` and `CONTRIBUTING.md` out of git, one set per published version, so editing a
+document is all that is needed to change what the site shows.
+
+```bash
+cd web
+pnpm install
+pnpm dev          # local server
+pnpm build        # static output in web/dist
+pnpm check        # types
+pnpm format       # prettier
+```
+
+Which versions are published is declared in `web/versions.json`. Each entry names a git ref; the
+product version shown for it is read from that ref's `Cargo.toml`.
+
+`DOCS_MODE` decides where the documentation is served: `embedded` (the default, everything on one
+origin under `/docs/`), or `site` and `docs` for a split deployment across two hosts. Local
+development uses the default, so one command still brings up the whole site.
+
 ### Nix Development Shell
 
 If you use Nix, you can enter a development shell with all dependencies:
@@ -410,4 +296,6 @@ nix-shell
 
 ## License
 
-MIT & Apache-2.0
+MIT & Apache-2.0. The DBFlux name and logo are covered by the [Trademark Policy](TRADEMARK.md), not by the code license.
+
+DBFlux collects no data. See the [Privacy Policy](PRIVACY.md).

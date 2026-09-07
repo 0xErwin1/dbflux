@@ -273,7 +273,7 @@ impl SshTunnelsSection {
             report_error(
                 UserFacingError::new(
                     ErrorKind::Storage,
-                    format!("Failed to save SSH tunnel profiles: {e}"),
+                    dbflux_i18n::t!("settings.ssh_tunnels.error.save_failed", error = e),
                 ),
                 cx,
             );
@@ -296,7 +296,9 @@ impl SshTunnelsSection {
 
         if host.is_empty() || user.is_empty() {
             self.ssh_test_status = SshTestStatus::Failed;
-            self.ssh_test_error = Some("Host and user are required".to_string());
+            self.ssh_test_error = Some(dbflux_i18n::t!(
+                "settings.ssh_tunnels.error.host_and_user_required"
+            ));
             cx.notify();
             return;
         }
@@ -403,7 +405,7 @@ impl SshTunnelsSection {
 
         let task = cx.background_executor().spawn(async move {
             let dialog = rfd::FileDialog::new()
-                .set_title("Select SSH Private Key")
+                .set_title(dbflux_i18n::t!("connection_manager.select_ssh_key_title"))
                 .set_directory(&start_dir);
 
             dialog.pick_file()
@@ -545,6 +547,12 @@ impl SshTunnelsSection {
                 }
                 ("i", modifiers) if modifiers == Modifiers::none() => {
                     self.request_import(cx);
+                }
+                ("n", modifiers) if modifiers == Modifiers::none() => {
+                    self.ssh_selected_idx = None;
+                    self.ssh_load_selected_profile(window, cx);
+                    self.ssh_enter_form(window, cx);
+                    cx.notify();
                 }
                 ("g", modifiers) if modifiers == Modifiers::none() => {
                     self.ssh_selected_idx = None;

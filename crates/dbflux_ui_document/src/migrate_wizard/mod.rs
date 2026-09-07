@@ -144,7 +144,7 @@ fn to_rail_items(current: WizardPhase) -> Vec<RailItem> {
 /// execute-time failure is returned as a real error so a transient fetch
 /// failure is never silently classified as "will be created".
 enum TableDetailsFetch {
-    Found(TableInfo),
+    Found(Box<TableInfo>),
     NotFound(String),
 }
 
@@ -185,7 +185,7 @@ async fn fetch_table_details_via_seam(
                     .cloned()
             });
             return Ok(match cached {
-                Some(info) => TableDetailsFetch::Found(info),
+                Some(info) => TableDetailsFetch::Found(Box::new(info)),
                 None => TableDetailsFetch::NotFound(
                     "Table details reported as cached but the cache was empty".to_string(),
                 ),
@@ -220,7 +220,7 @@ async fn fetch_table_details_via_seam(
                     );
                 });
             });
-            Ok(TableDetailsFetch::Found(details))
+            Ok(TableDetailsFetch::Found(Box::new(details)))
         }
         Err(error @ DbError::ObjectNotFound(_)) => {
             Ok(TableDetailsFetch::NotFound(error.to_string()))
@@ -828,7 +828,7 @@ impl MigrateWizard {
         let Some(source_connection) = self.resolve_source_connection(cx) else {
             self.report_advance_error(
                 ErrorKind::Storage,
-                "No active connection for the source profile",
+                dbflux_i18n::t!("document.migrate_wizard.error.no_source_connection"),
                 cx,
             );
             return;
@@ -838,7 +838,7 @@ impl MigrateWizard {
         else {
             self.report_advance_error(
                 ErrorKind::Storage,
-                "No active connection for the target profile",
+                dbflux_i18n::t!("document.migrate_wizard.error.no_target_connection"),
                 cx,
             );
             return;
@@ -949,7 +949,10 @@ impl MigrateWizard {
                     Err(e) => {
                         this.report_advance_error(
                             ErrorKind::Driver,
-                            format!("Could not read table schema: {e}"),
+                            dbflux_i18n::t!(
+                                "document.migrate_wizard.error.table_schema_read_failed",
+                                error = e
+                            ),
                             cx,
                         );
                     }
@@ -1054,7 +1057,7 @@ impl MigrateWizard {
         let Some(source_connection) = self.resolve_source_connection(cx) else {
             self.report_advance_error(
                 ErrorKind::Storage,
-                "No active connection for the source profile",
+                dbflux_i18n::t!("document.migrate_wizard.error.no_source_connection"),
                 cx,
             );
             return;
@@ -1064,7 +1067,7 @@ impl MigrateWizard {
         else {
             self.report_advance_error(
                 ErrorKind::Storage,
-                "No active connection for the target profile",
+                dbflux_i18n::t!("document.migrate_wizard.error.no_target_connection"),
                 cx,
             );
             return;
@@ -1173,7 +1176,10 @@ impl MigrateWizard {
                     Err(e) => {
                         this.report_advance_error(
                             ErrorKind::Driver,
-                            format!("Could not read foreign keys: {e}"),
+                            dbflux_i18n::t!(
+                                "document.migrate_wizard.error.foreign_keys_read_failed",
+                                error = e
+                            ),
                             cx,
                         );
                     }
@@ -1256,13 +1262,7 @@ impl MigrateWizard {
             })
             .sum();
 
-        if failed > 0 {
-            format!(
-                "Migrated {completed} table(s), {rows} row(s) total ({skipped} skipped, {failed} failed)"
-            )
-        } else {
-            format!("Migrated {completed} table(s), {rows} row(s) total ({skipped} skipped)")
-        }
+        crate::labels::migrate_summary_label(completed, rows, skipped, failed)
     }
 
     /// Renders one status line per planned table when the run left any table
@@ -1289,16 +1289,7 @@ impl MigrateWizard {
     }
 
     fn table_status_line(table: &MigratedTable) -> String {
-        match &table.status {
-            TableTransferStatus::Completed { rows } => {
-                format!("{}: completed ({rows} row(s))", table.source_table)
-            }
-            TableTransferStatus::Skipped => format!("{}: skipped", table.source_table),
-            TableTransferStatus::Failed { error } => {
-                format!("{}: FAILED — {error}", table.source_table)
-            }
-            TableTransferStatus::NotStarted => format!("{}: not attempted", table.source_table),
-        }
+        crate::labels::migrate_table_status_line(table)
     }
 }
 
@@ -1316,7 +1307,7 @@ impl Render for MigrateWizard {
         };
 
         let frame = ModalFrame::new("migrate-wizard", &self.focus_handle, close)
-            .title("Migrate Data")
+            .title(dbflux_i18n::t!("document.migrate_wizard.title"))
             .icon(AppIcon::ArrowUpDown)
             .width(px(1000.0))
             .height_fraction(0.8)
@@ -1409,9 +1400,9 @@ impl MigrateWizard {
         let shows_continue = next_phase(self.phase).is_some();
         let continue_enabled = !self.advancing && self.continue_enabled(cx);
         let continue_label = if self.advancing {
-            "Loading…"
+            dbflux_i18n::t!("document.migrate_wizard.footer.loading")
         } else {
-            "Continue"
+            dbflux_i18n::t!("document.migrate_wizard.footer.continue")
         };
 
         let actions = div()
@@ -1421,11 +1412,14 @@ impl MigrateWizard {
             .gap(Spacing::SM)
             .when(shows_back, |parent| {
                 parent.child(
-                    Button::new("migrate-wizard-back", "Back")
-                        .small()
-                        .ghost()
-                        .disabled(self.advancing)
-                        .on_click(cx.listener(|this, _event, _window, cx| this.go_back(cx))),
+                    Button::new(
+                        "migrate-wizard-back",
+                        dbflux_i18n::t!("document.migrate_wizard.footer.back"),
+                    )
+                    .small()
+                    .ghost()
+                    .disabled(self.advancing)
+                    .on_click(cx.listener(|this, _event, _window, cx| this.go_back(cx))),
                 )
             })
             .when(shows_continue, |parent| {
@@ -1439,18 +1433,24 @@ impl MigrateWizard {
             })
             .when(running, |parent| {
                 parent.child(
-                    Button::new("migrate-wizard-cancel", "Cancel")
-                        .small()
-                        .ghost()
-                        .on_click(cx.listener(|this, _event, _window, cx| this.cancel_run(cx))),
+                    Button::new(
+                        "migrate-wizard-cancel",
+                        dbflux_i18n::t!("document.migrate_wizard.footer.cancel"),
+                    )
+                    .small()
+                    .ghost()
+                    .on_click(cx.listener(|this, _event, _window, cx| this.cancel_run(cx))),
                 )
             })
             .when(done, |parent| {
                 parent.child(
-                    Button::new("migrate-wizard-close", "Close")
-                        .small()
-                        .primary()
-                        .on_click(cx.listener(|this, _event, _window, cx| this.request_close(cx))),
+                    Button::new(
+                        "migrate-wizard-close",
+                        dbflux_i18n::t!("document.migrate_wizard.footer.close"),
+                    )
+                    .small()
+                    .primary()
+                    .on_click(cx.listener(|this, _event, _window, cx| this.request_close(cx))),
                 )
             });
 

@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 
 use dbflux_app::portability::{
-    ConfirmSummary, ImportOutcome, ImportPersistence, OwnedDestSnapshot, confirm_summary,
-    mapto_candidates,
+    ConfirmSummary, ExternalPersistOutcome, ImportOutcome, ImportPersistence, OwnedDestSnapshot,
+    confirm_summary, default_candidate_includes, mapto_candidates, persist_external_candidate,
+    toggle_candidate_include,
 };
 use dbflux_components::controls::{Button, Checkbox, Input, InputEvent, InputState};
 use dbflux_components::icons::AppIcon;
@@ -13,9 +14,12 @@ use dbflux_components::primitives::{
 use dbflux_components::tokens::{FontSizes, Heights, Spacing};
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::{AuthProfile, ConnectionProfile, ProxyProfile, SshTunnelProfile};
+use dbflux_portability::external::{
+    ExternalImportCandidate, ExternalImportOutcome, ExternalImportSkip, ImportInput, ImportSource,
+    importers,
+};
 use dbflux_portability::{
-    ConflictChoice, ConflictKind, ImportPlan, ParsedBundle, RequiredResolutionKind,
-    ResolutionChoices,
+    ConflictChoice, ImportPlan, ParsedBundle, RequiredResolutionKind, ResolutionChoices,
 };
 use dbflux_ui_base::AppStateEntity;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
@@ -45,6 +49,19 @@ const AUTH_SKIP: &str = "skip";
 /// Prefix for "use destination auth profile <id>" segment ids.
 const AUTH_USE_PREFIX: &str = "use:";
 
+/// Segment id for the native DBflux bundle option in the source picker.
+/// External-client options use the importer's own `id()` as their segment id.
+const SOURCE_BUNDLE: &str = "bundle";
+
+/// Which source the SelectFile step is currently configured for: the native
+/// DBflux bundle format, or one of `dbflux_portability::external::importers()`
+/// (identified by that importer's `id()`).
+#[derive(Clone, PartialEq, Debug)]
+enum ImportSourceSelection {
+    Bundle,
+    External(String),
+}
+
 /// Steps of the import flow. Mirrors the previous wizard's state machine, minus
 /// the window chrome.
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -53,6 +70,10 @@ enum Step {
     Preview,
     Conflicts,
     RequiredReferences,
+    /// Review checklist for a parsed external-client import (DBeaver, Beekeeper
+    /// Studio, ...), shown instead of Preview/Conflicts/RequiredReferences since
+    /// those candidates carry no conflict-resolution or required-reference state.
+    ExternalReview,
     Outcome,
 }
 
@@ -146,6 +167,8 @@ impl ImportPersistence for AppStatePersistence<'_> {
 enum ImportRunResult {
     Outcome(ImportOutcome),
     Failed(String),
+    /// Outcome of persisting a confirmed selection from an external-client import.
+    External(ExternalPersistOutcome),
 }
 
 /// In-window connection import panel.
@@ -158,6 +181,26 @@ pub struct ImportConnectionsPanel {
     app_state: Entity<AppStateEntity>,
 
     step: Step,
+
+    // Step 1: source picker, shared by both the bundle and external flows.
+    source_selection: ImportSourceSelection,
+
+    // Step 1: external-client file(s). Plain path strings rather than
+    // `InputState` entities, since these fields are Browse-only (no manual
+    // path typing) and the round-trip only ever needs to store the last pick.
+    external_primary_path: Option<String>,
+    external_secondary_path: Option<String>,
+    pending_external_primary_path: Option<String>,
+    pending_external_secondary_path: Option<String>,
+    external_parse_error: Option<String>,
+    is_parsing_external: bool,
+
+    // External-review products: the parsed candidates/skips and one include
+    // flag per candidate, defaulting to included.
+    external_candidates: Vec<ExternalImportCandidate>,
+    external_skips: Vec<ExternalImportSkip>,
+    external_includes: Vec<bool>,
+    is_applying_external: bool,
 
     // Step 1: file + passphrase.
     file_input: Entity<InputState>,
@@ -207,7 +250,9 @@ impl ImportConnectionsPanel {
     ) -> Self {
         let passphrase_input = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("Bundle passphrase")
+                .placeholder(dbflux_i18n::t!(
+                    "connection_manager.import.placeholder.bundle_passphrase"
+                ))
                 .masked(true)
         });
 
@@ -218,8 +263,11 @@ impl ImportConnectionsPanel {
             }
         });
 
-        let file_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Path to TOML bundle\u{2026}"));
+        let file_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(dbflux_i18n::t!(
+                "connection_manager.import.placeholder.bundle_path"
+            ))
+        });
 
         let file_sub = cx.subscribe(&file_input, |this, _, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Change | InputEvent::Blur) {
@@ -234,6 +282,17 @@ impl ImportConnectionsPanel {
         Self {
             app_state,
             step: Step::SelectFile,
+            source_selection: ImportSourceSelection::Bundle,
+            external_primary_path: None,
+            external_secondary_path: None,
+            pending_external_primary_path: None,
+            pending_external_secondary_path: None,
+            external_parse_error: None,
+            is_parsing_external: false,
+            external_candidates: Vec::new(),
+            external_skips: Vec::new(),
+            external_includes: Vec::new(),
+            is_applying_external: false,
             file_input,
             pending_file_path: None,
             native_picker_unavailable: false,
@@ -262,6 +321,17 @@ impl ImportConnectionsPanel {
     /// manager when switching into the import view.
     pub fn reset(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.step = Step::SelectFile;
+        self.source_selection = ImportSourceSelection::Bundle;
+        self.external_primary_path = None;
+        self.external_secondary_path = None;
+        self.pending_external_primary_path = None;
+        self.pending_external_secondary_path = None;
+        self.external_parse_error = None;
+        self.is_parsing_external = false;
+        self.external_candidates.clear();
+        self.external_skips.clear();
+        self.external_includes.clear();
+        self.is_applying_external = false;
         self.pending_file_path = None;
         self.native_picker_unavailable = false;
         self.bundle_encrypted = false;
@@ -289,14 +359,254 @@ impl ImportConnectionsPanel {
         cx.notify();
     }
 
+    /// Switches the source picker to the first registered external-client
+    /// importer. Called by the connection manager's "Import from another
+    /// client" footer button, right after `reset`.
+    pub fn preselect_external_source(&mut self, cx: &mut Context<Self>) {
+        if let Some(importer) = importers().into_iter().next() {
+            self.source_selection = ImportSourceSelection::External(importer.id().to_string());
+            cx.notify();
+        }
+    }
+
+    /// Whether `importer_id`'s primary input must be read from a filesystem
+    /// path rather than in-memory bytes. Beekeeper Studio's format is a SQLite
+    /// database, so `rusqlite` needs to open it directly from disk (see
+    /// `dbflux_portability::external::beekeeper`).
+    ///
+    /// `ConnectionImporter` does not expose this as trait metadata: it is a
+    /// property of the format, not something a caller can discover generically,
+    /// so the UI's file-picking behavior branches on the (small, fixed) set of
+    /// known importer ids rather than on driver identity.
+    fn external_format_uses_path_primary(importer_id: &str) -> bool {
+        importer_id == "beekeeper"
+    }
+
+    /// Whether `importer_id` accepts an optional secondary file. DBeaver splits
+    /// saved credentials into a companion `credentials-config.json`.
+    fn external_format_has_secondary(importer_id: &str) -> bool {
+        importer_id == "dbeaver"
+    }
+
+    fn selected_external_importer_id(&self) -> Option<String> {
+        match &self.source_selection {
+            ImportSourceSelection::External(id) => Some(id.clone()),
+            ImportSourceSelection::Bundle => None,
+        }
+    }
+
+    fn browse_external_file(&mut self, is_secondary: bool, cx: &mut Context<Self>) {
+        if !dbflux_ui_base::file_dialog::is_native_file_dialog_available() {
+            self.native_picker_unavailable = true;
+            cx.notify();
+            return;
+        }
+
+        let this = cx.entity().clone();
+        let task = cx.background_executor().spawn(async move {
+            let filter_label = if is_secondary {
+                dbflux_i18n::t!("connection_manager.import.external.filter.secondary")
+            } else {
+                dbflux_i18n::t!("connection_manager.import.external.filter.primary")
+            };
+
+            rfd::FileDialog::new()
+                .set_title(dbflux_i18n::t!(
+                    "connection_manager.import.external.dialog.open_title"
+                ))
+                .add_filter(filter_label, &["*"])
+                .pick_file()
+        });
+
+        cx.spawn(async move |_this, cx| {
+            if let Some(path) = task.await {
+                cx.update(|cx| {
+                    this.update(cx, |this, cx| {
+                        let path = path.to_string_lossy().to_string();
+                        if is_secondary {
+                            this.pending_external_secondary_path = Some(path);
+                        } else {
+                            this.pending_external_primary_path = Some(path);
+                        }
+                        this.external_parse_error = None;
+                        cx.notify();
+                    })
+                });
+            }
+        })
+        .detach();
+    }
+
+    /// Parse the selected external-client file(s) on the background executor,
+    /// then advance to the review checklist.
+    fn do_parse_external(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(importer_id) = self.selected_external_importer_id() else {
+            return;
+        };
+        let Some(primary_path) = self.external_primary_path.clone() else {
+            self.external_parse_error = Some(dbflux_i18n::t!(
+                "connection_manager.import.external.error.choose_primary_file"
+            ));
+            cx.notify();
+            return;
+        };
+        let secondary_path = self.external_secondary_path.clone();
+
+        self.is_parsing_external = true;
+        self.external_parse_error = None;
+        self.run_result = None;
+        window.focus(&self.focus_handle, cx);
+        cx.notify();
+
+        let this = cx.entity().clone();
+
+        cx.spawn(async move |_this, cx| {
+            let result: Result<ExternalImportOutcome, String> = cx
+                .background_executor()
+                .spawn(async move {
+                    let primary_source = if Self::external_format_uses_path_primary(&importer_id) {
+                        ImportSource::Path(std::path::PathBuf::from(&primary_path))
+                    } else {
+                        match std::fs::read(&primary_path) {
+                            Ok(bytes) => ImportSource::Bytes(bytes),
+                            Err(e) => {
+                                return Err(crate::labels::import_error_cannot_read_file(
+                                    &e.to_string(),
+                                ));
+                            }
+                        }
+                    };
+
+                    let secondary_source = if Self::external_format_has_secondary(&importer_id) {
+                        match secondary_path.as_ref().map(std::fs::read).transpose() {
+                            Ok(bytes) => bytes.map(ImportSource::Bytes),
+                            Err(e) => {
+                                return Err(crate::labels::import_error_cannot_read_file(
+                                    &e.to_string(),
+                                ));
+                            }
+                        }
+                    } else {
+                        None
+                    };
+
+                    let input = match &secondary_source {
+                        Some(secondary) => ImportInput::with_secondary(&primary_source, secondary),
+                        None => ImportInput::new(&primary_source),
+                    };
+
+                    let Some(importer) = importers().into_iter().find(|i| i.id() == importer_id)
+                    else {
+                        return Err(crate::labels::import_error_parse_error(
+                            "unknown import source",
+                        ));
+                    };
+
+                    importer
+                        .parse(&input)
+                        .map_err(|e| crate::labels::import_error_parse_error(&e.to_string()))
+                })
+                .await;
+
+            cx.update(|cx| {
+                this.update(cx, |this, cx| {
+                    this.is_parsing_external = false;
+
+                    match result {
+                        Ok(outcome) => {
+                            this.external_includes =
+                                default_candidate_includes(outcome.candidates.len());
+                            this.external_candidates = outcome.candidates;
+                            this.external_skips = outcome.skips;
+                            this.step = Step::ExternalReview;
+                        }
+                        Err(e) => {
+                            this.external_parse_error = Some(e);
+                        }
+                    }
+                    cx.notify();
+                })
+            });
+        })
+        .detach();
+    }
+
+    /// Persist the user-confirmed selection of external-import candidates
+    /// through the same `AppStatePersistence` seam bundle import uses, then
+    /// move to the outcome step.
+    fn do_apply_external(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let includes = std::mem::take(&mut self.external_includes);
+        let selected: Vec<ExternalImportCandidate> = std::mem::take(&mut self.external_candidates)
+            .into_iter()
+            .zip(includes)
+            .filter_map(|(candidate, include)| include.then_some(candidate))
+            .collect();
+
+        let app_state_entity = self.app_state.clone();
+        let this = cx.entity().clone();
+
+        self.is_applying_external = true;
+        window.focus(&self.focus_handle, cx);
+        cx.notify();
+
+        cx.spawn(async move |_this, cx| {
+            cx.update(|cx| {
+                let outcome = app_state_entity.update(cx, |state, cx| {
+                    let mut deps = AppStatePersistence::new(state);
+                    let mut outcome = ExternalPersistOutcome::default();
+                    for candidate in selected {
+                        persist_external_candidate(candidate, &mut deps, &mut outcome);
+                    }
+                    cx.emit(dbflux_ui_base::AppStateChanged);
+                    cx.notify();
+                    outcome
+                });
+
+                if !outcome.secret_failures.is_empty() {
+                    let count = outcome.secret_failures.len();
+                    let msg = crate::labels::import_error_secret_failures_toast(count);
+                    report_error(UserFacingError::new(ErrorKind::Storage, msg), cx);
+                }
+
+                this.update(cx, |this, cx| {
+                    this.is_applying_external = false;
+                    let succeeded = outcome.succeeded.len();
+                    let has_failures = !outcome.secret_failures.is_empty()
+                        || !outcome.needs_driver.is_empty()
+                        || !outcome.config_failures.is_empty();
+
+                    if !has_failures && succeeded > 0 {
+                        dbflux_ui_base::toast::Toast::success(
+                            crate::labels::import_status_imported_toast(succeeded),
+                        )
+                        .push(cx);
+                    }
+
+                    this.run_result = Some(ImportRunResult::External(outcome));
+                    this.step = Step::Outcome;
+                    cx.notify();
+                })
+            });
+        })
+        .detach();
+    }
+
     fn browse_input_path(&mut self, cx: &mut Context<Self>) {
         if dbflux_ui_base::file_dialog::is_native_file_dialog_available() {
             let this = cx.entity().clone();
             let task = cx.background_executor().spawn(async move {
                 rfd::FileDialog::new()
-                    .set_title("Open Connection Bundle")
-                    .add_filter("TOML bundle", &["toml"])
-                    .add_filter("All files", &["*"])
+                    .set_title(dbflux_i18n::t!(
+                        "connection_manager.import.dialog.open_title"
+                    ))
+                    .add_filter(
+                        dbflux_i18n::t!("connection_manager.import.filter.toml"),
+                        &["toml"],
+                    )
+                    .add_filter(
+                        dbflux_i18n::t!("connection_manager.import.filter.all"),
+                        &["*"],
+                    )
                     .pick_file()
             });
 
@@ -338,7 +648,9 @@ impl ImportConnectionsPanel {
     fn do_parse_and_plan(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let path = self.file_input.read(cx).value().trim().to_string();
         if path.is_empty() {
-            self.parse_error = Some("Choose a bundle file to import.".to_string());
+            self.parse_error = Some(dbflux_i18n::t!(
+                "connection_manager.import.error.choose_file"
+            ));
             cx.notify();
             return;
         }
@@ -359,12 +671,22 @@ impl ImportConnectionsPanel {
                 .spawn(async move {
                     let bytes = match std::fs::read(&path) {
                         Ok(b) => b,
-                        Err(e) => return (false, Err(format!("Cannot read file: {e}"))),
+                        Err(e) => {
+                            return (
+                                false,
+                                Err(crate::labels::import_error_cannot_read_file(&e.to_string())),
+                            );
+                        }
                     };
 
                     let mut parsed = match dbflux_portability::import::parse(&bytes) {
                         Ok(p) => p,
-                        Err(e) => return (false, Err(format!("Parse error: {e}"))),
+                        Err(e) => {
+                            return (
+                                false,
+                                Err(crate::labels::import_error_parse_error(&e.to_string())),
+                            );
+                        }
                     };
 
                     use dbflux_portability::bundle::EncryptionMode;
@@ -375,23 +697,22 @@ impl ImportConnectionsPanel {
                     if is_encrypted && passphrase.expose_secret().is_empty() {
                         return (
                             true,
-                            Err(
-                                "This bundle is encrypted. Enter the passphrase and try again."
-                                    .to_string(),
-                            ),
+                            Err(dbflux_i18n::t!(
+                                "connection_manager.import.error.encrypted_needs_passphrase"
+                            )),
                         );
                     }
 
                     if let Err(e) = dbflux_portability::import::decrypt(&mut parsed, &passphrase) {
                         use dbflux_portability::PortabilityError;
                         let msg = if e.is_encryption_unavailable() {
-                            "This bundle is passphrase-encrypted but the encryption \
-                             feature is not available in this build of DBFlux."
-                                .to_string()
+                            dbflux_i18n::t!(
+                                "connection_manager.import.error.encryption_unavailable"
+                            )
                         } else if matches!(&e, PortabilityError::Decryption(_)) {
-                            "Passphrase incorrect or bundle corrupted.".to_string()
+                            dbflux_i18n::t!("connection_manager.import.error.wrong_passphrase")
                         } else {
-                            format!("Decryption error: {e}")
+                            crate::labels::import_error_decryption_error(&e.to_string())
                         };
                         return (is_encrypted, Err(msg));
                     }
@@ -458,7 +779,9 @@ impl ImportConnectionsPanel {
 
             let input = cx.new(|cx| {
                 InputState::new(window, cx)
-                    .placeholder("Enter secret value")
+                    .placeholder(dbflux_i18n::t!(
+                        "connection_manager.import.placeholder.secret_value"
+                    ))
                     .masked(true)
             });
 
@@ -572,8 +895,9 @@ impl ImportConnectionsPanel {
                 Err(e) => {
                     this.update(cx, |this, cx| {
                         this.is_applying = false;
-                        this.run_result =
-                            Some(ImportRunResult::Failed(format!("Import failed: {e}")));
+                        this.run_result = Some(ImportRunResult::Failed(
+                            crate::labels::import_error_import_failed(&e.to_string()),
+                        ));
                         this.step = Step::Outcome;
                         cx.notify();
                     });
@@ -592,10 +916,7 @@ impl ImportConnectionsPanel {
                     // Only the first catch site reports through the user-error seam.
                     if !outcome.secret_failures.is_empty() {
                         let count = outcome.secret_failures.len();
-                        let msg = format!(
-                            "{count} secret(s) could not be written to the keyring \
-                             during import. The keyring may be locked or unavailable."
-                        );
+                        let msg = crate::labels::import_error_secret_failures_toast(count);
                         report_error(UserFacingError::new(ErrorKind::Storage, msg), cx);
                     }
 
@@ -608,9 +929,9 @@ impl ImportConnectionsPanel {
                             || !outcome.unresolved_refs.is_empty();
 
                         if !has_failures {
-                            dbflux_ui_base::toast::Toast::success(format!(
-                                "Imported {succeeded} entity/entities."
-                            ))
+                            dbflux_ui_base::toast::Toast::success(
+                                crate::labels::import_status_imported_toast(succeeded),
+                            )
                             .push(cx);
                         }
 
@@ -636,6 +957,13 @@ impl Render for ImportConnectionsPanel {
                 .update(cx, |state, cx| state.set_value(path, window, cx));
         }
 
+        if let Some(path) = self.pending_external_primary_path.take() {
+            self.external_primary_path = Some(path);
+        }
+        if let Some(path) = self.pending_external_secondary_path.take() {
+            self.external_secondary_path = Some(path);
+        }
+
         if self.pending_provision_secrets {
             self.pending_provision_secrets = false;
             self.provision_secret_inputs(window, cx);
@@ -652,6 +980,7 @@ impl Render for ImportConnectionsPanel {
             Step::Preview => self.render_preview(cx),
             Step::Conflicts => self.render_conflicts(cx),
             Step::RequiredReferences => self.render_required_references(cx),
+            Step::ExternalReview => self.render_external_review(cx),
             Step::Outcome => self.render_outcome(cx),
         };
 
@@ -665,19 +994,81 @@ impl Render for ImportConnectionsPanel {
 
         let close_for_x = cx.entity().clone();
 
-        ModalShell::new("Import", body, self.render_footer(cx))
-            .width(px(640.0))
-            .on_close(move |_window, cx| {
-                close_for_x.update(cx, |_this, cx| {
-                    cx.emit(ImportConnectionsPanelEvent::Cancelled);
-                });
-            })
-            .into_any_element()
+        ModalShell::new(
+            dbflux_i18n::t!("connection_manager.import.modal_title"),
+            body,
+            self.render_footer(cx),
+        )
+        .width(px(640.0))
+        .on_close(move |_window, cx| {
+            close_for_x.update(cx, |_this, cx| {
+                cx.emit(ImportConnectionsPanelEvent::Cancelled);
+            });
+        })
+        .into_any_element()
     }
 }
 
 impl ImportConnectionsPanel {
+    /// Renders the source picker shared by the bundle and external-client
+    /// flows, followed by that source's own fields.
     fn render_select_file(&self, cx: &Context<Self>) -> AnyElement {
+        let theme = cx.theme().clone();
+
+        let mut source_items = vec![SegmentedItem::new(
+            SOURCE_BUNDLE,
+            dbflux_i18n::t!("connection_manager.import.source.bundle"),
+        )];
+        for importer in importers() {
+            source_items.push(SegmentedItem::new(
+                importer.id().to_string(),
+                importer.display_name().to_string(),
+            ));
+        }
+
+        let active_source = match &self.source_selection {
+            ImportSourceSelection::Bundle => SOURCE_BUNDLE.to_string(),
+            ImportSourceSelection::External(id) => id.clone(),
+        };
+
+        let entity = cx.entity().clone();
+        let source_control =
+            SegmentedControl::new(source_items, active_source, move |selected, _window, cx| {
+                let selection = if selected.as_ref() == SOURCE_BUNDLE {
+                    ImportSourceSelection::Bundle
+                } else {
+                    ImportSourceSelection::External(selected.to_string())
+                };
+                entity.update(cx, |this, cx| {
+                    this.source_selection = selection;
+                    this.parse_error = None;
+                    this.external_parse_error = None;
+                    this.native_picker_unavailable = false;
+                    cx.notify();
+                });
+            });
+
+        let col = div().flex().flex_col().gap(Spacing::MD).child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(Spacing::XS)
+                .child(
+                    Text::body(dbflux_i18n::t!("connection_manager.import.source.label"))
+                        .color(theme.muted_foreground),
+                )
+                .child(source_control),
+        );
+
+        let col = match &self.source_selection {
+            ImportSourceSelection::Bundle => col.child(self.render_bundle_fields(cx)),
+            ImportSourceSelection::External(id) => col.child(self.render_external_fields(id, cx)),
+        };
+
+        col.into_any_element()
+    }
+
+    fn render_bundle_fields(&self, cx: &Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
         let entity = cx.entity().clone();
 
@@ -698,14 +1089,19 @@ impl ImportConnectionsPanel {
             .flex()
             .flex_col()
             .gap(Spacing::XS)
-            .child(Text::body("Bundle file").color(theme.muted_foreground))
+            .child(
+                Text::body(dbflux_i18n::t!(
+                    "connection_manager.import.field.bundle_file"
+                ))
+                .color(theme.muted_foreground),
+            )
             .child(file_row);
 
         if self.native_picker_unavailable {
             file_block = file_block.child(
-                Text::muted(
-                    "No native file picker on this system — type or paste the bundle path above.",
-                )
+                Text::muted(dbflux_i18n::t!(
+                    "connection_manager.import.hint.no_native_picker"
+                ))
                 .font_size(FontSizes::XS),
             );
         }
@@ -718,7 +1114,9 @@ impl ImportConnectionsPanel {
             .child(
                 Checkbox::new("import-encrypted-toggle")
                     .checked(self.bundle_encrypted)
-                    .label("Bundle is encrypted")
+                    .label(dbflux_i18n::t!(
+                        "connection_manager.import.field.bundle_encrypted"
+                    ))
                     .on_click(cx.listener(|this, checked: &bool, _, cx| {
                         this.bundle_encrypted = *checked;
                         cx.notify();
@@ -747,7 +1145,12 @@ impl ImportConnectionsPanel {
                     .flex()
                     .flex_col()
                     .gap(Spacing::XS)
-                    .child(Text::body("Passphrase").color(theme.muted_foreground))
+                    .child(
+                        Text::body(dbflux_i18n::t!(
+                            "connection_manager.import.field.passphrase"
+                        ))
+                        .color(theme.muted_foreground),
+                    )
                     .child(
                         div()
                             .flex()
@@ -766,6 +1169,209 @@ impl ImportConnectionsPanel {
         col.into_any_element()
     }
 
+    fn render_external_fields(&self, importer_id: &str, cx: &Context<Self>) -> AnyElement {
+        let theme = cx.theme().clone();
+        let has_secondary = Self::external_format_has_secondary(importer_id);
+
+        let primary_label = self.external_primary_path.clone().unwrap_or_else(|| {
+            dbflux_i18n::t!("connection_manager.import.external.field.primary_file")
+        });
+
+        let entity = cx.entity().clone();
+        let primary_browse =
+            IconButton::new("import-external-primary-browse", AppIcon::Folder.into())
+                .icon_size(Heights::ICON_SM)
+                .on_click(move |_event, _window, cx| {
+                    entity.update(cx, |this, cx| this.browse_external_file(false, cx));
+                });
+
+        let mut col = div()
+            .flex()
+            .flex_col()
+            .gap(Spacing::XS)
+            .child(
+                Text::body(dbflux_i18n::t!(
+                    "connection_manager.import.external.field.primary_file"
+                ))
+                .color(theme.muted_foreground),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(Spacing::XS)
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_size(FontSizes::SM)
+                            .text_color(theme.foreground)
+                            .child(primary_label),
+                    )
+                    .child(primary_browse),
+            );
+
+        if has_secondary {
+            let secondary_label = self.external_secondary_path.clone().unwrap_or_else(|| {
+                dbflux_i18n::t!("connection_manager.import.external.field.secondary_file")
+            });
+
+            let entity = cx.entity().clone();
+            let secondary_browse =
+                IconButton::new("import-external-secondary-browse", AppIcon::Folder.into())
+                    .icon_size(Heights::ICON_SM)
+                    .on_click(move |_event, _window, cx| {
+                        entity.update(cx, |this, cx| this.browse_external_file(true, cx));
+                    });
+
+            col = col
+                .child(
+                    Text::body(dbflux_i18n::t!(
+                        "connection_manager.import.external.field.secondary_file"
+                    ))
+                    .color(theme.muted_foreground),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(Spacing::XS)
+                        .child(
+                            div()
+                                .flex_1()
+                                .text_size(FontSizes::SM)
+                                .text_color(theme.foreground)
+                                .child(secondary_label),
+                        )
+                        .child(secondary_browse),
+                )
+                .child(
+                    Text::muted(dbflux_i18n::t!(
+                        "connection_manager.import.external.hint.secondary_optional"
+                    ))
+                    .font_size(FontSizes::XS),
+                );
+        }
+
+        if self.native_picker_unavailable {
+            col = col.child(
+                Text::muted(dbflux_i18n::t!(
+                    "connection_manager.import.hint.no_native_picker"
+                ))
+                .font_size(FontSizes::XS),
+            );
+        }
+
+        if let Some(err) = self.external_parse_error.clone() {
+            col = col.child(BannerBlock::new(BannerVariant::Danger, err));
+        }
+
+        col.into_any_element()
+    }
+
+    fn render_external_review(&self, cx: &Context<Self>) -> AnyElement {
+        let theme = cx.theme().clone();
+
+        let mut col = div().flex().flex_col().gap(Spacing::SM).child(
+            Text::body(dbflux_i18n::t!(
+                "connection_manager.import.external.review.intro"
+            ))
+            .color(theme.muted_foreground),
+        );
+
+        if !self.external_skips.is_empty() {
+            let body = self
+                .external_skips
+                .iter()
+                .map(|skip| {
+                    if skip.name.is_empty() {
+                        skip.reason.clone()
+                    } else {
+                        format!("\"{}\": {}", skip.name, skip.reason)
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            col = col.child(
+                BannerBlock::new(
+                    BannerVariant::Warning,
+                    crate::labels::import_external_review_skips_intro(self.external_skips.len()),
+                )
+                .with_body(body),
+            );
+        }
+
+        for (index, candidate) in self.external_candidates.iter().enumerate() {
+            col = col.child(self.render_external_candidate_row(index, candidate, cx));
+        }
+
+        col.into_any_element()
+    }
+
+    fn render_external_candidate_row(
+        &self,
+        index: usize,
+        candidate: &ExternalImportCandidate,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let theme = cx.theme().clone();
+        let included = self.external_includes.get(index).copied().unwrap_or(false);
+
+        let host_summary = crate::labels::import_external_host_summary(&candidate.config);
+        let kind_label = candidate.kind.display_name();
+
+        let secret_status = if let Some(reason) = &candidate.secret_skip_reason {
+            reason.clone()
+        } else if candidate.secret.is_some() {
+            dbflux_i18n::t!("connection_manager.import.external.secret.will_store")
+        } else {
+            dbflux_i18n::t!("connection_manager.import.external.secret.none")
+        };
+
+        surface_raised(cx)
+            .w_full()
+            .px(Spacing::SM)
+            .py(Spacing::XS)
+            .flex()
+            .flex_col()
+            .gap(Spacing::XS)
+            .id(SharedString::from(format!(
+                "import-external-candidate-{index}"
+            )))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(Spacing::XS)
+                    .child(
+                        Checkbox::new(SharedString::from(format!(
+                            "import-external-candidate-toggle-{index}"
+                        )))
+                        .checked(included)
+                        .on_click(cx.listener(
+                            move |this, _checked: &bool, _, cx| {
+                                toggle_candidate_include(&mut this.external_includes, index);
+                                cx.notify();
+                            },
+                        )),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .child(
+                                div()
+                                    .text_size(FontSizes::SM)
+                                    .text_color(theme.foreground)
+                                    .child(format!("{} — {kind_label}", candidate.name)),
+                            )
+                            .child(Text::muted(host_summary).font_size(FontSizes::XS)),
+                    ),
+            )
+            .child(Text::muted(secret_status).font_size(FontSizes::XS))
+            .into_any_element()
+    }
+
     fn render_preview(&self, cx: &Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
         let Some(summary) = self.confirm_summary.as_ref() else {
@@ -781,10 +1387,10 @@ impl ImportConnectionsPanel {
             .gap(Spacing::XS);
 
         for line in [
-            format!("{} connection(s)", summary.connection_count),
-            format!("{} auth profile(s)", summary.auth_profile_count),
-            format!("{} SSH tunnel(s)", summary.ssh_tunnel_count),
-            format!("{} proxy profile(s)", summary.proxy_count),
+            crate::labels::import_preview_count_connections(summary.connection_count),
+            crate::labels::import_preview_count_auth_profiles(summary.auth_profile_count),
+            crate::labels::import_preview_count_ssh_tunnels(summary.ssh_tunnel_count),
+            crate::labels::import_preview_count_proxies(summary.proxy_count),
         ] {
             counts = counts.child(
                 div()
@@ -799,49 +1405,40 @@ impl ImportConnectionsPanel {
             .flex_col()
             .gap(Spacing::SM)
             .child(
-                Text::body("This bundle will import the following:").color(theme.muted_foreground),
+                Text::body(dbflux_i18n::t!("connection_manager.import.preview.intro"))
+                    .color(theme.muted_foreground),
             )
             .child(counts);
 
         if summary.conflict_count > 0 {
             col = col.child(BannerBlock::new(
                 BannerVariant::Warning,
-                format!(
-                    "{} profile(s) already exist at the destination — you will choose how to \
-                     resolve each.",
-                    summary.conflict_count
-                ),
+                crate::labels::import_preview_conflicts_banner(summary.conflict_count),
             ));
         }
 
         if summary.required_resolution_count > 0 {
             col = col.child(BannerBlock::new(
                 BannerVariant::Info,
-                format!(
-                    "{} value(s) may be required after import — secrets omitted from the bundle \
-                     can be entered or skipped.",
-                    summary.required_resolution_count
-                ),
+                crate::labels::import_preview_required_banner(summary.required_resolution_count),
             ));
         }
 
         if summary.has_driver_not_installed {
             col = col.child(BannerBlock::new(
                 BannerVariant::Warning,
-                "One or more connections reference a driver not installed on this machine and \
-                 will be skipped.",
+                dbflux_i18n::t!("connection_manager.import.preview.driver_not_installed_banner"),
             ));
         }
 
         col = col.child(
             BannerBlock::new(
                 BannerVariant::Info,
-                "External value references travel as-is",
+                dbflux_i18n::t!("connection_manager.import.hint.external_refs"),
             )
-            .with_body(
-                "SSM, Secrets Manager, and environment references are imported unchanged and \
-                     resolved against this machine at connect time.",
-            ),
+            .with_body(dbflux_i18n::t!(
+                "connection_manager.import.hint.external_refs_body"
+            )),
         );
 
         col.into_any_element()
@@ -856,10 +1453,8 @@ impl ImportConnectionsPanel {
         let dest = self.dest_snapshot(cx);
 
         let mut col = div().flex().flex_col().gap(Spacing::SM).child(
-            Text::body(
-                "Some profiles in this bundle already exist. Choose how to handle each conflict.",
-            )
-            .color(theme.muted_foreground),
+            Text::body(dbflux_i18n::t!("connection_manager.import.conflicts.intro"))
+                .color(theme.muted_foreground),
         );
 
         for conflict in &plan.conflicts {
@@ -877,12 +1472,7 @@ impl ImportConnectionsPanel {
     ) -> AnyElement {
         let theme = cx.theme().clone();
 
-        let kind_label = match conflict.kind {
-            ConflictKind::AuthProfile => "Auth profile",
-            ConflictKind::SshTunnel => "SSH tunnel",
-            ConflictKind::Proxy => "Proxy",
-            ConflictKind::Connection => "Connection",
-        };
+        let kind_label = crate::labels::import_conflict_kind_label(conflict.kind);
 
         let candidates = mapto_candidates(conflict.kind, dest);
         let current = self
@@ -891,13 +1481,19 @@ impl ImportConnectionsPanel {
             .cloned();
 
         let mut items = vec![
-            SegmentedItem::new(CHOICE_REUSE, "Reuse existing"),
-            SegmentedItem::new(CHOICE_CREATE, "Create new"),
+            SegmentedItem::new(
+                CHOICE_REUSE,
+                dbflux_i18n::t!("connection_manager.import.action.reuse_existing"),
+            ),
+            SegmentedItem::new(
+                CHOICE_CREATE,
+                dbflux_i18n::t!("connection_manager.import.action.create_new"),
+            ),
         ];
         for (candidate_id, candidate_name) in &candidates {
             items.push(SegmentedItem::new(
                 format!("{CHOICE_MAP_PREFIX}{candidate_id}"),
-                format!("Map to: {candidate_name}"),
+                crate::labels::import_action_map_to(candidate_name),
             ));
         }
 
@@ -936,9 +1532,10 @@ impl ImportConnectionsPanel {
                 div()
                     .text_size(FontSizes::SM)
                     .text_color(theme.foreground)
-                    .child(format!(
-                        "{kind_label}: \"{}\" conflicts with \"{}\"",
-                        conflict.bundle_name, conflict.existing_name
+                    .child(crate::labels::import_conflicts_row_label(
+                        &kind_label,
+                        &conflict.bundle_name,
+                        &conflict.existing_name,
                     )),
             )
             .child(control)
@@ -952,11 +1549,8 @@ impl ImportConnectionsPanel {
         };
 
         let mut col = div().flex().flex_col().gap(Spacing::SM).child(
-            Text::body(
-                "The following values may be required. Leave a secret empty to skip it — the \
-                 connection still imports without it.",
-            )
-            .color(theme.muted_foreground),
+            Text::body(dbflux_i18n::t!("connection_manager.import.required.intro"))
+                .color(theme.muted_foreground),
         );
 
         for resolution in &plan.required_resolutions {
@@ -993,12 +1587,17 @@ impl ImportConnectionsPanel {
                         div()
                             .text_size(FontSizes::SM)
                             .text_color(theme.foreground)
-                            .child(format!(
-                                "Secret for \"{}\": {}",
-                                resolution.owner_name, resolution.field
+                            .child(crate::labels::import_required_secret_label(
+                                &resolution.owner_name,
+                                &resolution.field,
                             )),
                     )
-                    .child(Text::muted("Leave empty to skip.").font_size(FontSizes::XS));
+                    .child(
+                        Text::muted(dbflux_i18n::t!(
+                            "connection_manager.import.hint.leave_empty_skip"
+                        ))
+                        .font_size(FontSizes::XS),
+                    );
 
                 if let Some(input) = self.secret_inputs.get(&key) {
                     row = row.child(Input::new(input));
@@ -1017,9 +1616,10 @@ impl ImportConnectionsPanel {
                     div()
                         .text_size(FontSizes::SM)
                         .text_color(theme.foreground)
-                        .child(format!(
-                            "AWS auth profile \"{name}\" ({provider_id}) for \"{}\"",
-                            resolution.owner_name
+                        .child(crate::labels::import_required_aws_reference_label(
+                            name,
+                            provider_id,
+                            &resolution.owner_name,
                         )),
                 );
 
@@ -1037,9 +1637,9 @@ impl ImportConnectionsPanel {
                     div()
                         .text_size(FontSizes::SM)
                         .text_color(theme.foreground)
-                        .child(format!(
-                            "Auth profile for \"{}\": {}",
-                            resolution.owner_name, resolution.field
+                        .child(crate::labels::import_required_auth_profile_ref_label(
+                            &resolution.owner_name,
+                            &resolution.field,
                         )),
                 );
 
@@ -1058,21 +1658,23 @@ impl ImportConnectionsPanel {
         cx: &Context<Self>,
     ) -> AnyElement {
         if candidates.is_empty() {
-            return Text::muted(
-                "No matching auth profile on this machine. The connection imports without one; \
-                 assign it later in Settings > Auth Profiles.",
-            )
+            return Text::muted(dbflux_i18n::t!(
+                "connection_manager.import.required.no_matching_auth_profile"
+            ))
             .font_size(FontSizes::XS)
             .into_any_element();
         }
 
         let current = self.auth_profile_choices.get(key).copied();
 
-        let mut items = vec![SegmentedItem::new(AUTH_SKIP, "Skip")];
+        let mut items = vec![SegmentedItem::new(
+            AUTH_SKIP,
+            dbflux_i18n::t!("connection_manager.import.action.skip"),
+        )];
         for (id, name) in candidates {
             items.push(SegmentedItem::new(
                 format!("{AUTH_USE_PREFIX}{id}"),
-                format!("Use: {name}"),
+                crate::labels::import_action_use_profile(name),
             ));
         }
 
@@ -1103,7 +1705,12 @@ impl ImportConnectionsPanel {
             .flex()
             .flex_col()
             .gap(Spacing::XS)
-            .child(Text::muted("Select a profile or skip:").font_size(FontSizes::XS))
+            .child(
+                Text::muted(dbflux_i18n::t!(
+                    "connection_manager.import.hint.select_profile_or_skip"
+                ))
+                .font_size(FontSizes::XS),
+            )
             .child(control)
             .into_any_element()
     }
@@ -1115,18 +1722,25 @@ impl ImportConnectionsPanel {
 
         match self.run_result.as_ref() {
             None => {
-                col = col.child(Text::body("Import complete.").color(theme.foreground));
+                col = col.child(
+                    Text::body(dbflux_i18n::t!("connection_manager.import.status.complete"))
+                        .color(theme.foreground),
+                );
             }
             Some(ImportRunResult::Failed(msg)) => {
                 col = col.child(
-                    BannerBlock::new(BannerVariant::Danger, "Import failed").with_body(msg.clone()),
+                    BannerBlock::new(
+                        BannerVariant::Danger,
+                        dbflux_i18n::t!("connection_manager.import.banner.failed"),
+                    )
+                    .with_body(msg.clone()),
                 );
             }
             Some(ImportRunResult::Outcome(outcome)) => {
                 if !outcome.succeeded.is_empty() {
                     col = col.child(BannerBlock::new(
                         BannerVariant::Success,
-                        format!("{} entity/entities imported.", outcome.succeeded.len()),
+                        crate::labels::import_outcome_succeeded(outcome.succeeded.len()),
                     ));
                 }
 
@@ -1140,10 +1754,7 @@ impl ImportConnectionsPanel {
                     col = col.child(
                         BannerBlock::new(
                             BannerVariant::Warning,
-                            format!(
-                                "{} connection(s) skipped — driver not installed.",
-                                outcome.needs_driver.len()
-                            ),
+                            crate::labels::import_outcome_needs_driver(outcome.needs_driver.len()),
                         )
                         .with_body(body),
                     );
@@ -1159,9 +1770,8 @@ impl ImportConnectionsPanel {
                     col = col.child(
                         BannerBlock::new(
                             BannerVariant::Warning,
-                            format!(
-                                "{} connection(s) could not be configured.",
-                                outcome.config_failures.len()
+                            crate::labels::import_outcome_config_failures(
+                                outcome.config_failures.len(),
                             ),
                         )
                         .with_body(body),
@@ -1178,9 +1788,8 @@ impl ImportConnectionsPanel {
                     col = col.child(
                         BannerBlock::new(
                             BannerVariant::Warning,
-                            format!(
-                                "{} connection(s) had unresolvable references and were not imported.",
-                                outcome.unresolved_refs.len()
+                            crate::labels::import_outcome_unresolved_refs(
+                                outcome.unresolved_refs.len(),
                             ),
                         )
                         .with_body(body),
@@ -1190,10 +1799,59 @@ impl ImportConnectionsPanel {
                 if !outcome.secret_failures.is_empty() {
                     col = col.child(BannerBlock::new(
                         BannerVariant::Warning,
-                        format!(
-                            "{} secret(s) could not be written to the keyring. \
-                             Enter them manually for each affected connection.",
-                            outcome.secret_failures.len()
+                        crate::labels::import_outcome_secret_failures(
+                            outcome.secret_failures.len(),
+                        ),
+                    ));
+                }
+            }
+            Some(ImportRunResult::External(outcome)) => {
+                if !outcome.succeeded.is_empty() {
+                    col = col.child(BannerBlock::new(
+                        BannerVariant::Success,
+                        crate::labels::import_outcome_succeeded(outcome.succeeded.len()),
+                    ));
+                }
+
+                if !outcome.needs_driver.is_empty() {
+                    let body = outcome
+                        .needs_driver
+                        .iter()
+                        .map(|(name, driver)| format!("\"{name}\" (driver: {driver})"))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    col = col.child(
+                        BannerBlock::new(
+                            BannerVariant::Warning,
+                            crate::labels::import_outcome_needs_driver(outcome.needs_driver.len()),
+                        )
+                        .with_body(body),
+                    );
+                }
+
+                if !outcome.config_failures.is_empty() {
+                    let body = outcome
+                        .config_failures
+                        .iter()
+                        .map(|(name, reason)| format!("\"{name}\": {reason}"))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    col = col.child(
+                        BannerBlock::new(
+                            BannerVariant::Warning,
+                            crate::labels::import_outcome_config_failures(
+                                outcome.config_failures.len(),
+                            ),
+                        )
+                        .with_body(body),
+                    );
+                }
+
+                if !outcome.secret_failures.is_empty() {
+                    col = col.child(BannerBlock::new(
+                        BannerVariant::Warning,
+                        crate::labels::import_outcome_secret_failures(
+                            outcome.secret_failures.len(),
                         ),
                     ));
                 }
@@ -1205,42 +1863,62 @@ impl ImportConnectionsPanel {
 
     fn render_footer(&self, cx: &Context<Self>) -> AnyElement {
         let left = match self.step {
-            Step::SelectFile => {
-                Button::new("import-cancel", "Cancel")
-                    .ghost()
-                    .on_click(cx.listener(|_this, _: &gpui::ClickEvent, _, cx| {
-                        cx.emit(ImportConnectionsPanelEvent::Cancelled);
-                    }))
-            }
-            Step::Preview => Button::new("import-back", "Back")
-                .ghost()
-                .on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
-                    this.step = Step::SelectFile;
-                    cx.notify();
-                })),
-            Step::Conflicts => Button::new("import-back", "Back")
-                .ghost()
-                .on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
-                    this.step = Step::Preview;
-                    cx.notify();
-                })),
-            Step::RequiredReferences => {
-                Button::new("import-back", "Back")
-                    .ghost()
-                    .on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
-                        this.step = if this.has_conflicts() {
-                            Step::Conflicts
-                        } else {
-                            Step::Preview
-                        };
-                        cx.notify();
-                    }))
-            }
-            Step::Outcome => Button::new("import-done", "Done")
-                .ghost()
-                .on_click(cx.listener(|_this, _: &gpui::ClickEvent, _, cx| {
-                    cx.emit(ImportConnectionsPanelEvent::Completed);
-                })),
+            Step::SelectFile => Button::new(
+                "import-cancel",
+                dbflux_i18n::t!("connection_manager.import.action.cancel"),
+            )
+            .ghost()
+            .on_click(cx.listener(|_this, _: &gpui::ClickEvent, _, cx| {
+                cx.emit(ImportConnectionsPanelEvent::Cancelled);
+            })),
+            Step::Preview => Button::new(
+                "import-back",
+                dbflux_i18n::t!("connection_manager.import.action.back"),
+            )
+            .ghost()
+            .on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
+                this.step = Step::SelectFile;
+                cx.notify();
+            })),
+            Step::Conflicts => Button::new(
+                "import-back",
+                dbflux_i18n::t!("connection_manager.import.action.back"),
+            )
+            .ghost()
+            .on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
+                this.step = Step::Preview;
+                cx.notify();
+            })),
+            Step::RequiredReferences => Button::new(
+                "import-back",
+                dbflux_i18n::t!("connection_manager.import.action.back"),
+            )
+            .ghost()
+            .on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
+                this.step = if this.has_conflicts() {
+                    Step::Conflicts
+                } else {
+                    Step::Preview
+                };
+                cx.notify();
+            })),
+            Step::ExternalReview => Button::new(
+                "import-back",
+                dbflux_i18n::t!("connection_manager.import.action.back"),
+            )
+            .ghost()
+            .on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
+                this.step = Step::SelectFile;
+                cx.notify();
+            })),
+            Step::Outcome => Button::new(
+                "import-done",
+                dbflux_i18n::t!("connection_manager.import.action.done"),
+            )
+            .ghost()
+            .on_click(cx.listener(|_this, _: &gpui::ClickEvent, _, cx| {
+                cx.emit(ImportConnectionsPanelEvent::Completed);
+            })),
         };
 
         let primary = self.render_primary_button(cx);
@@ -1258,50 +1936,69 @@ impl ImportConnectionsPanel {
     fn render_primary_button(&self, cx: &Context<Self>) -> Option<AnyElement> {
         match self.step {
             Step::SelectFile => {
-                let can_load =
-                    !self.file_input.read(cx).value().trim().is_empty() && !self.is_parsing;
-                let label = if self.is_parsing {
-                    "Loading\u{2026}"
+                let (can_load, is_busy) = match &self.source_selection {
+                    ImportSourceSelection::Bundle => (
+                        !self.file_input.read(cx).value().trim().is_empty() && !self.is_parsing,
+                        self.is_parsing,
+                    ),
+                    ImportSourceSelection::External(_) => (
+                        self.external_primary_path.is_some() && !self.is_parsing_external,
+                        self.is_parsing_external,
+                    ),
+                };
+                let label = if is_busy {
+                    dbflux_i18n::t!("connection_manager.import.status.loading")
                 } else {
-                    "Load"
+                    dbflux_i18n::t!("connection_manager.import.action.load")
                 };
                 Some(
                     Button::new("import-load", label)
                         .primary()
                         .disabled(!can_load)
                         .on_click(cx.listener(|this, _: &gpui::ClickEvent, window, cx| {
-                            this.do_parse_and_plan(window, cx);
-                        }))
-                        .into_any_element(),
-                )
-            }
-            Step::Preview => Some(
-                Button::new("import-preview-next", "Continue")
-                    .primary()
-                    .on_click(cx.listener(|this, _: &gpui::ClickEvent, window, cx| {
-                        this.advance_from_preview(window, cx);
-                    }))
-                    .into_any_element(),
-            ),
-            Step::Conflicts => {
-                let resolved = self.all_conflicts_resolved();
-                Some(
-                    Button::new("import-conflicts-next", "Continue")
-                        .primary()
-                        .disabled(!resolved)
-                        .on_click(cx.listener(|this, _: &gpui::ClickEvent, window, cx| {
-                            if this.all_conflicts_resolved() {
-                                this.advance_from_conflicts(window, cx);
+                            match this.source_selection.clone() {
+                                ImportSourceSelection::Bundle => this.do_parse_and_plan(window, cx),
+                                ImportSourceSelection::External(_) => {
+                                    this.do_parse_external(window, cx)
+                                }
                             }
                         }))
                         .into_any_element(),
                 )
             }
+            Step::Preview => Some(
+                Button::new(
+                    "import-preview-next",
+                    dbflux_i18n::t!("connection_manager.import.action.continue_"),
+                )
+                .primary()
+                .on_click(cx.listener(|this, _: &gpui::ClickEvent, window, cx| {
+                    this.advance_from_preview(window, cx);
+                }))
+                .into_any_element(),
+            ),
+            Step::Conflicts => {
+                let resolved = self.all_conflicts_resolved();
+                Some(
+                    Button::new(
+                        "import-conflicts-next",
+                        dbflux_i18n::t!("connection_manager.import.action.continue_"),
+                    )
+                    .primary()
+                    .disabled(!resolved)
+                    .on_click(cx.listener(|this, _: &gpui::ClickEvent, window, cx| {
+                        if this.all_conflicts_resolved() {
+                            this.advance_from_conflicts(window, cx);
+                        }
+                    }))
+                    .into_any_element(),
+                )
+            }
             Step::RequiredReferences => {
                 let label = if self.is_applying {
-                    "Importing\u{2026}"
+                    dbflux_i18n::t!("connection_manager.import.status.importing")
                 } else {
-                    "Import"
+                    dbflux_i18n::t!("connection_manager.import.action.import")
                 };
                 Some(
                     Button::new("import-required-apply", label)
@@ -1309,6 +2006,23 @@ impl ImportConnectionsPanel {
                         .disabled(self.is_applying)
                         .on_click(cx.listener(|this, _: &gpui::ClickEvent, window, cx| {
                             this.do_apply(window, cx);
+                        }))
+                        .into_any_element(),
+                )
+            }
+            Step::ExternalReview => {
+                let included_count = self.external_includes.iter().filter(|&&v| v).count();
+                let label = if self.is_applying_external {
+                    dbflux_i18n::t!("connection_manager.import.status.importing")
+                } else {
+                    crate::labels::import_external_action_import_selected(included_count)
+                };
+                Some(
+                    Button::new("import-external-apply", label)
+                        .primary()
+                        .disabled(self.is_applying_external || included_count == 0)
+                        .on_click(cx.listener(|this, _: &gpui::ClickEvent, window, cx| {
+                            this.do_apply_external(window, cx);
                         }))
                         .into_any_element(),
                 )
@@ -1338,4 +2052,164 @@ fn parse_conflict_choice(id: &str) -> Option<ConflictChoice> {
 fn parse_auth_choice(id: &str) -> Option<Uuid> {
     id.strip_prefix(AUTH_USE_PREFIX)
         .and_then(|uuid_str| Uuid::parse_str(uuid_str).ok())
+}
+
+#[cfg(test)]
+mod tests {
+    /// Every `connection_manager.import.*` key this panel resolves directly via
+    /// `dbflux_i18n::t!`, including the plural `.one`/`.many` variants. Keys backed
+    /// by `crate::labels` helpers are exercised separately by `labels.rs`'s own
+    /// test module, but every leaf key they resolve is still listed here so this
+    /// slice's key coverage is self-contained in one place.
+    const IMPORT_PANEL_KEYS: &[&str] = &[
+        "connection_manager.import.placeholder.bundle_passphrase",
+        "connection_manager.import.placeholder.bundle_path",
+        "connection_manager.import.placeholder.secret_value",
+        "connection_manager.import.dialog.open_title",
+        "connection_manager.import.filter.toml",
+        "connection_manager.import.filter.all",
+        "connection_manager.import.error.choose_file",
+        "connection_manager.import.error.cannot_read_file",
+        "connection_manager.import.error.parse_error",
+        "connection_manager.import.error.encrypted_needs_passphrase",
+        "connection_manager.import.error.encryption_unavailable",
+        "connection_manager.import.error.wrong_passphrase",
+        "connection_manager.import.error.decryption_error",
+        "connection_manager.import.error.import_failed",
+        "connection_manager.import.error.secret_failures_toast.one",
+        "connection_manager.import.error.secret_failures_toast.many",
+        "connection_manager.import.field.bundle_file",
+        "connection_manager.import.field.bundle_encrypted",
+        "connection_manager.import.field.passphrase",
+        "connection_manager.import.hint.no_native_picker",
+        "connection_manager.import.hint.external_refs",
+        "connection_manager.import.hint.external_refs_body",
+        "connection_manager.import.hint.leave_empty_skip",
+        "connection_manager.import.hint.select_profile_or_skip",
+        "connection_manager.import.modal_title",
+        "connection_manager.import.preview.intro",
+        "connection_manager.import.preview.count.connections.one",
+        "connection_manager.import.preview.count.connections.many",
+        "connection_manager.import.preview.count.auth_profiles.one",
+        "connection_manager.import.preview.count.auth_profiles.many",
+        "connection_manager.import.preview.count.ssh_tunnels.one",
+        "connection_manager.import.preview.count.ssh_tunnels.many",
+        "connection_manager.import.preview.count.proxies.one",
+        "connection_manager.import.preview.count.proxies.many",
+        "connection_manager.import.preview.conflicts_banner.one",
+        "connection_manager.import.preview.conflicts_banner.many",
+        "connection_manager.import.preview.required_banner.one",
+        "connection_manager.import.preview.required_banner.many",
+        "connection_manager.import.preview.driver_not_installed_banner",
+        "connection_manager.import.conflict_kind.auth_profile",
+        "connection_manager.import.conflict_kind.ssh_tunnel",
+        "connection_manager.import.conflict_kind.proxy",
+        "connection_manager.import.conflict_kind.connection",
+        "connection_manager.import.conflicts.intro",
+        "connection_manager.import.conflicts.row_label",
+        "connection_manager.import.required.intro",
+        "connection_manager.import.required.secret_label",
+        "connection_manager.import.required.aws_reference_label",
+        "connection_manager.import.required.auth_profile_ref_label",
+        "connection_manager.import.required.no_matching_auth_profile",
+        "connection_manager.import.status.complete",
+        "connection_manager.import.status.loading",
+        "connection_manager.import.status.importing",
+        "connection_manager.import.status.imported_toast.one",
+        "connection_manager.import.status.imported_toast.many",
+        "connection_manager.import.banner.failed",
+        "connection_manager.import.outcome.succeeded.one",
+        "connection_manager.import.outcome.succeeded.many",
+        "connection_manager.import.outcome.needs_driver.one",
+        "connection_manager.import.outcome.needs_driver.many",
+        "connection_manager.import.outcome.config_failures.one",
+        "connection_manager.import.outcome.config_failures.many",
+        "connection_manager.import.outcome.unresolved_refs.one",
+        "connection_manager.import.outcome.unresolved_refs.many",
+        "connection_manager.import.outcome.secret_failures.one",
+        "connection_manager.import.outcome.secret_failures.many",
+        "connection_manager.import.action.reuse_existing",
+        "connection_manager.import.action.create_new",
+        "connection_manager.import.action.map_to",
+        "connection_manager.import.action.skip",
+        "connection_manager.import.action.use_profile",
+        "connection_manager.import.action.cancel",
+        "connection_manager.import.action.back",
+        "connection_manager.import.action.done",
+        "connection_manager.import.action.load",
+        "connection_manager.import.action.continue_",
+        "connection_manager.import.action.import",
+        "connection_manager.import.source.label",
+        "connection_manager.import.source.bundle",
+        "connection_manager.import.external.dialog.open_title",
+        "connection_manager.import.external.filter.primary",
+        "connection_manager.import.external.filter.secondary",
+        "connection_manager.import.external.field.primary_file",
+        "connection_manager.import.external.field.secondary_file",
+        "connection_manager.import.external.hint.secondary_optional",
+        "connection_manager.import.external.error.choose_primary_file",
+        "connection_manager.import.external.review.intro",
+        "connection_manager.import.external.review.skips_intro.one",
+        "connection_manager.import.external.review.skips_intro.many",
+        "connection_manager.import.external.secret.will_store",
+        "connection_manager.import.external.secret.none",
+        "connection_manager.import.external.action.import_selected.one",
+        "connection_manager.import.external.action.import_selected.many",
+    ];
+
+    #[test]
+    fn import_panel_keys_resolve_in_both_locales() {
+        for locale in ["en", "es"] {
+            for key in IMPORT_PANEL_KEYS {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(
+                    !value.is_empty(),
+                    "key {key} resolved empty for locale {locale}"
+                );
+                assert_ne!(value, *key, "key {key} did not resolve for locale {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "key {key} fell back to the raw locale-qualified form for locale {locale}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn import_panel_keys_diverge_between_locales() {
+        // "Proxy" is a proper noun kept identical in both locales, matching the
+        // convention already used for other proxy-facing keys in this catalog.
+        const UNTRANSLATED: &[&str] = &["connection_manager.import.conflict_kind.proxy"];
+
+        for key in IMPORT_PANEL_KEYS {
+            if UNTRANSLATED.contains(key) {
+                continue;
+            }
+
+            let english = dbflux_i18n::t!(key, locale = "en");
+            let spanish = dbflux_i18n::t!(key, locale = "es");
+
+            assert_ne!(
+                english, spanish,
+                "key {key} did not diverge between locales"
+            );
+        }
+    }
+
+    #[test]
+    fn conflict_kind_labels_are_exhaustive_over_the_enum() {
+        use dbflux_portability::ConflictKind;
+
+        for kind in [
+            ConflictKind::AuthProfile,
+            ConflictKind::SshTunnel,
+            ConflictKind::Proxy,
+            ConflictKind::Connection,
+        ] {
+            let label = crate::labels::import_conflict_kind_label(kind);
+            assert!(!label.is_empty(), "{kind:?} resolved an empty label");
+        }
+    }
 }

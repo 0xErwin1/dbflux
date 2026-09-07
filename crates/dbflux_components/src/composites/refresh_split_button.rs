@@ -39,10 +39,10 @@ pub fn refresh_split_button(
     on_refresh: impl Fn(&mut Window, &mut App) + 'static,
     theme: &Theme,
 ) -> impl IntoElement {
-    let refresh_label = if refresh_policy.is_auto() {
-        refresh_policy.label()
+    let refresh_label: SharedString = if refresh_policy.is_auto() {
+        refresh_policy.label().into()
     } else {
-        "Refresh"
+        dbflux_i18n::t!("composites.refresh_split_button.label").into()
     };
 
     let refresh_icon = if refresh_policy.is_auto() {
@@ -96,4 +96,17 @@ pub fn refresh_split_button(
                 .when(ring_policy, |d| d.border_1().border_color(ring_color))
                 .child(refresh_dropdown),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn refresh_split_button_label_key_resolves() {
+        let en = dbflux_i18n::t!("composites.refresh_split_button.label", locale = "en");
+        let es = dbflux_i18n::t!("composites.refresh_split_button.label", locale = "es");
+
+        assert!(!en.is_empty() && en != "composites.refresh_split_button.label");
+        assert!(!es.is_empty() && es != "composites.refresh_split_button.label");
+        assert_ne!(en, es);
+    }
 }

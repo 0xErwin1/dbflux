@@ -935,9 +935,10 @@ impl DataGridPanel {
             && self.result.text_body.is_none()
             && self.result.raw_bytes.is_none()
         {
-            Toast::error("No results to export")
+            let message = dbflux_i18n::t!("document.data.context_menu.error.no_results_to_export");
+            Toast::error(message.clone())
                 .meta_right(now_hms())
-                .action(copy_action("No results to export"))
+                .action(copy_action(message))
                 .push(cx);
             return;
         }
@@ -970,7 +971,7 @@ impl DataGridPanel {
         cx.spawn(async move |_this, cx| {
             let target: Option<(std::path::PathBuf, bool)> = if dialog_available {
                 let file_handle = rfd::AsyncFileDialog::new()
-                    .set_title(format!("Export as {}", format_name))
+                    .set_title(crate::labels::context_menu_export_dialog_title(format_name))
                     .set_file_name(&suggested_name)
                     .add_filter(format_name, &[extension])
                     .save_file()
@@ -992,14 +993,16 @@ impl DataGridPanel {
                             false,
                             Some(&err),
                         );
-                        let message = format!(
-                            "Export failed — file dialog unavailable and fallback directory could not be created: {}",
-                            err
-                        );
+                        let message =
+                            crate::labels::context_menu_export_dialog_fallback_failed_error(
+                                &err.to_string(),
+                            );
                         cx.update(|cx| {
                             entity.update(cx, |panel, cx| {
-                                panel.pending.toast =
-                                    Some(PendingToast { message, is_error: true });
+                                panel.pending.toast = Some(PendingToast {
+                                    message,
+                                    is_error: true,
+                                });
                                 cx.notify();
                             });
                         });
@@ -1023,14 +1026,21 @@ impl DataGridPanel {
 
             let (message, is_error) = match &export_result {
                 Ok(()) if used_fallback => (
-                    format!(
-                        "Native file picker unavailable — exported to {} instead. Install xdg-desktop-portal, zenity, or kdialog for a save dialog.",
-                        target_path.display()
+                    crate::labels::context_menu_export_native_picker_fallback_toast(
+                        &target_path.display().to_string(),
                     ),
                     false,
                 ),
-                Ok(()) => (format!("Exported to {}", target_path.display()), false),
-                Err(e) => (format!("Export failed: {}", e), true),
+                Ok(()) => (
+                    crate::labels::context_menu_export_exported_toast(
+                        &target_path.display().to_string(),
+                    ),
+                    false,
+                ),
+                Err(e) => (
+                    crate::labels::context_menu_export_failed_error(&e.to_string()),
+                    true,
+                ),
             };
 
             record_export_audit(
@@ -1039,7 +1049,11 @@ impl DataGridPanel {
                 Some(&target_path),
                 is_error,
                 used_fallback,
-                export_result.as_ref().err().map(|e| e.to_string()).as_deref(),
+                export_result
+                    .as_ref()
+                    .err()
+                    .map(|e| e.to_string())
+                    .as_deref(),
             );
 
             cx.update(|cx| {
@@ -1062,9 +1076,9 @@ impl DataGridPanel {
 
         if matches!(format, ExportFormat::Binary) {
             self.pending.toast = Some(PendingToast {
-                message:
-                    "Raw binary cannot be copied to the clipboard — choose Hex or Base64 instead."
-                        .to_string(),
+                message: dbflux_i18n::t!(
+                    "document.data.context_menu.clipboard.error.binary_unsupported"
+                ),
                 is_error: true,
             });
             cx.notify();
@@ -1084,19 +1098,19 @@ impl DataGridPanel {
                     cx.write_to_clipboard(ClipboardItem::new_string(text));
                     record_clipboard_audit(&audit_service, format_name, Some(byte_len), None);
                     self.pending.toast = Some(PendingToast {
-                        message: format!(
-                            "Copied {} ({} bytes) to clipboard",
-                            format_name, byte_len
+                        message: crate::labels::context_menu_clipboard_copied_toast(
+                            format_name,
+                            byte_len,
                         ),
                         is_error: false,
                     });
                     cx.notify();
                 }
                 Err(e) => {
-                    let err_text = format!("Cannot copy non-UTF8 output: {}", e);
+                    let err_text = e.to_string();
                     record_clipboard_audit(&audit_service, format_name, None, Some(&err_text));
                     self.pending.toast = Some(PendingToast {
-                        message: err_text,
+                        message: crate::labels::context_menu_clipboard_non_utf8_error(&err_text),
                         is_error: true,
                     });
                     cx.notify();
@@ -1106,7 +1120,7 @@ impl DataGridPanel {
                 let err_text = e.to_string();
                 record_clipboard_audit(&audit_service, format_name, None, Some(&err_text));
                 self.pending.toast = Some(PendingToast {
-                    message: format!("Copy failed: {}", err_text),
+                    message: crate::labels::context_menu_clipboard_copy_failed_error(&err_text),
                     is_error: true,
                 });
                 cx.notify();
@@ -1172,20 +1186,7 @@ impl DataGridPanel {
             .map(|c| c.row_indices.len())
             .unwrap_or(1);
 
-        let (title, description) = if count == 1 {
-            (
-                "Delete row?".to_string(),
-                "This action cannot be undone.".to_string(),
-            )
-        } else {
-            (
-                format!("Delete {} rows?", count),
-                format!(
-                    "{} rows will be permanently deleted. This cannot be undone.",
-                    count
-                ),
-            )
-        };
+        let (title, description) = crate::labels::delete_confirm_copy(count);
 
         // Backdrop with centered modal
         div()
@@ -1243,7 +1244,9 @@ impl DataGridPanel {
                                     .child(
                                         Icon::new(AppIcon::X).small().color(theme.muted_foreground),
                                     )
-                                    .child(Text::caption("Cancel")),
+                                    .child(Text::caption(dbflux_i18n::t!(
+                                        "document.data.context_menu.delete_confirm.cancel"
+                                    ))),
                             )
                             .child(
                                 div()
@@ -1263,7 +1266,12 @@ impl DataGridPanel {
                                     .child(
                                         Icon::new(AppIcon::Delete).small().color(theme.background),
                                     )
-                                    .child(Text::caption("Delete").color(theme.background)),
+                                    .child(
+                                        Text::caption(dbflux_i18n::t!(
+                                            "document.data.context_menu.delete_confirm.delete"
+                                        ))
+                                        .color(theme.background),
+                                    ),
                             ),
                     ),
             )
@@ -1556,7 +1564,7 @@ impl DataGridPanel {
             })
             .collect();
 
-        let row_label = format!("Row {}", row + 1);
+        let row_label = crate::labels::row_inspector_title(row + 1);
         let snapshot = InspectorSnapshot {
             cells: cells.clone(),
             focused_col: col,
@@ -2095,10 +2103,14 @@ impl DataGridPanel {
             Ok(v) => v,
             Err(e) => {
                 let toast_body = e.to_string();
-                Toast::error("Invalid JSON")
+                let title = dbflux_i18n::t!("document.data.context_menu.error.invalid_json");
+                Toast::error(title.clone())
                     .meta_right(now_hms())
                     .body(toast_body.clone())
-                    .action(copy_action(format!("Invalid JSON: {}", toast_body)))
+                    .action(copy_action(crate::labels::error_with_detail_clipboard(
+                        &title,
+                        &toast_body,
+                    )))
                     .push(cx);
                 return;
             }
@@ -2124,9 +2136,10 @@ impl DataGridPanel {
             };
 
             let Some(conn) = conn else {
-                Toast::error("Connection not available")
+                let message = dbflux_i18n::t!("document.data.grid.error.connection_not_available");
+                Toast::error(message.clone())
                     .meta_right(now_hms())
-                    .action(copy_action("Connection not available"))
+                    .action(copy_action(message))
                     .push(cx);
                 return;
             };
@@ -2134,9 +2147,12 @@ impl DataGridPanel {
             let doc_map = match new_doc {
                 serde_json::Value::Object(m) => m,
                 _ => {
-                    Toast::error("Document must be a JSON object")
+                    let message = dbflux_i18n::t!(
+                        "document.data.context_menu.error.document_must_be_json_object"
+                    );
+                    Toast::error(message.clone())
                         .meta_right(now_hms())
-                        .action(copy_action("Document must be a JSON object"))
+                        .action(copy_action(message))
                         .push(cx);
                     return;
                 }
@@ -2157,16 +2173,25 @@ impl DataGridPanel {
                 cx.update(|cx| {
                     entity.update(cx, |panel, cx| {
                         match result {
-                            Ok(_) => {
+                            Ok(mut crud_result) => {
+                                crate::result_warnings::handoff_crud_returning_result(
+                                    &mut crud_result,
+                                    |warning| dbflux_ui_base::user_error::report_error(warning, cx),
+                                );
                                 panel.pending.toast = Some(PendingToast {
-                                    message: "Document inserted".to_string(),
+                                    message: dbflux_i18n::t!(
+                                        "document.data.context_menu.document.toast.inserted"
+                                    ),
                                     is_error: false,
                                 });
                                 panel.pending.refresh = true;
                             }
                             Err(e) => {
                                 panel.pending.toast = Some(PendingToast {
-                                    message: format!("Failed to insert document: {}", e),
+                                    message:
+                                        crate::labels::context_menu_document_insert_failed_error(
+                                            &e.to_string(),
+                                        ),
                                     is_error: true,
                                 });
                             }
@@ -2188,9 +2213,11 @@ impl DataGridPanel {
             match new_doc.get("_id") {
                 Some(id) => DocumentFilter::new(serde_json::json!({"_id": id})),
                 None => {
-                    Toast::error("Document must have an _id field")
+                    let message =
+                        dbflux_i18n::t!("document.data.context_menu.error.document_missing_id");
+                    Toast::error(message.clone())
                         .meta_right(now_hms())
-                        .action(copy_action("Document must have an _id field"))
+                        .action(copy_action(message))
                         .push(cx);
                     return;
                 }
@@ -2198,9 +2225,11 @@ impl DataGridPanel {
         } else {
             // Extract PK values from the current row
             let Some(table_state) = &self.grid_table.table_state else {
-                Toast::error("Table state not available")
+                let message =
+                    dbflux_i18n::t!("document.data.context_menu.error.table_state_not_available");
+                Toast::error(message.clone())
                     .meta_right(now_hms())
-                    .action(copy_action("Table state not available"))
+                    .action(copy_action(message))
                     .push(cx);
                 return;
             };
@@ -2216,9 +2245,11 @@ impl DataGridPanel {
             }
 
             if filter_obj.is_empty() {
-                Toast::error("Could not determine document primary key")
+                let message =
+                    dbflux_i18n::t!("document.data.context_menu.error.primary_key_not_determined");
+                Toast::error(message.clone())
                     .meta_right(now_hms())
-                    .action(copy_action("Could not determine document primary key"))
+                    .action(copy_action(message))
                     .push(cx);
                 return;
             }
@@ -2250,9 +2281,10 @@ impl DataGridPanel {
         };
 
         let Some(conn) = conn else {
-            Toast::error("Connection not available")
+            let message = dbflux_i18n::t!("document.data.grid.error.connection_not_available");
+            Toast::error(message.clone())
                 .meta_right(now_hms())
-                .action(copy_action("Connection not available"))
+                .action(copy_action(message))
                 .push(cx);
             return;
         };
@@ -2271,16 +2303,24 @@ impl DataGridPanel {
             cx.update(|cx| {
                 entity.update(cx, |panel, cx| {
                     match result {
-                        Ok(_) => {
+                        Ok(mut crud_result) => {
+                            crate::result_warnings::handoff_crud_returning_result(
+                                &mut crud_result,
+                                |warning| dbflux_ui_base::user_error::report_error(warning, cx),
+                            );
                             panel.pending.toast = Some(PendingToast {
-                                message: "Document updated".to_string(),
+                                message: dbflux_i18n::t!(
+                                    "document.data.context_menu.document.toast.updated"
+                                ),
                                 is_error: false,
                             });
                             panel.pending.refresh = true;
                         }
                         Err(e) => {
                             panel.pending.toast = Some(PendingToast {
-                                message: format!("Failed to update document: {}", e),
+                                message: crate::labels::context_menu_document_update_failed_error(
+                                    &e.to_string(),
+                                ),
                                 is_error: true,
                             });
                         }
@@ -3061,11 +3101,13 @@ impl DataGridPanel {
 
     // -- Copy as Query --
 
-    fn copy_query_submenu_label(&self, cx: &App) -> &'static str {
+    fn copy_query_submenu_label(&self, cx: &App) -> String {
         let profile_id = match &self.source {
             DataSource::Table { profile_id, .. } => profile_id,
             DataSource::Collection { profile_id, .. } => profile_id,
-            DataSource::QueryResult { .. } => return "Copy as Query",
+            DataSource::QueryResult { .. } => {
+                return crate::labels::copy_query_language_label(None);
+            }
         };
 
         let language = self
@@ -3075,12 +3117,7 @@ impl DataGridPanel {
             .get(profile_id)
             .map(|c| c.connection.metadata().query_language.clone());
 
-        match language {
-            Some(dbflux_core::QueryLanguage::Sql) => "Copy as SQL",
-            Some(dbflux_core::QueryLanguage::MongoQuery) => "Copy as Query",
-            Some(dbflux_core::QueryLanguage::RedisCommands) => "Copy as Command",
-            _ => "Copy as Query",
-        }
+        crate::labels::copy_query_language_label(language)
     }
 
     fn has_copy_query_support(&self) -> bool {
@@ -3599,12 +3636,16 @@ fn record_clipboard_audit(
 mod tests {
     use super::DataGridPanel;
 
-    fn labels(items: &[super::ContextMenuItem]) -> Vec<&'static str> {
+    fn labels(items: &[super::ContextMenuItem]) -> Vec<String> {
         items
             .iter()
             .filter(|item| !item.is_separator)
-            .map(|item| item.label)
+            .map(|item| item.label.to_string())
             .collect()
+    }
+
+    fn item_label(key: &str) -> String {
+        dbflux_i18n::t!(key)
     }
 
     #[test]
@@ -3612,18 +3653,21 @@ mod tests {
         let items = DataGridPanel::build_context_menu_items(true, false, false, false, true);
         let labels = labels(&items);
 
-        assert!(labels.contains(&"Add Row"));
-        assert!(!labels.contains(&"Edit"));
-        assert!(!labels.contains(&"Edit in Modal"));
-        assert!(!labels.contains(&"Duplicate Row"));
-        assert!(!labels.contains(&"Delete Row"));
+        assert!(labels.contains(&item_label("document.data.context_menu.item.add_row")));
+        assert!(!labels.contains(&item_label("document.data.context_menu.item.edit")));
+        assert!(!labels.contains(&item_label("document.data.context_menu.item.edit_in_modal")));
+        assert!(!labels.contains(&item_label("document.data.context_menu.item.duplicate_row")));
+        assert!(!labels.contains(&item_label("document.data.context_menu.item.delete_row")));
     }
 
     #[test]
     fn non_editable_table_menu_stays_unchanged_without_row_target() {
         let items = DataGridPanel::build_context_menu_items(false, false, false, false, true);
 
-        assert_eq!(labels(&items), vec!["Copy"]);
+        assert_eq!(
+            labels(&items),
+            vec![item_label("document.data.context_menu.item.copy")]
+        );
     }
 
     #[test]
@@ -3631,29 +3675,32 @@ mod tests {
         let items = DataGridPanel::build_context_menu_items(true, false, true, false, true);
         let labels = labels(&items);
 
-        assert!(labels.contains(&"Edit"));
-        assert!(labels.contains(&"Edit in Modal"));
-        assert!(labels.contains(&"Add Row"));
-        assert!(labels.contains(&"Duplicate Row"));
-        assert!(labels.contains(&"Delete Row"));
+        assert!(labels.contains(&item_label("document.data.context_menu.item.edit")));
+        assert!(labels.contains(&item_label("document.data.context_menu.item.edit_in_modal")));
+        assert!(labels.contains(&item_label("document.data.context_menu.item.add_row")));
+        assert!(labels.contains(&item_label("document.data.context_menu.item.duplicate_row")));
+        assert!(labels.contains(&item_label("document.data.context_menu.item.delete_row")));
     }
 
     #[test]
     fn chart_this_query_absent_when_can_chart_false() {
         // can_chart = false: item must NOT appear regardless of other flags.
         let table_items = DataGridPanel::build_context_menu_items(false, false, false, false, true);
-        assert!(!labels(&table_items).contains(&"Chart this query"));
+        let chart_label = item_label("document.data.context_menu.item.chart_this_query");
+        assert!(!labels(&table_items).contains(&chart_label));
 
         let editable_items =
             DataGridPanel::build_context_menu_items(true, false, true, false, true);
-        assert!(!labels(&editable_items).contains(&"Chart this query"));
+        assert!(!labels(&editable_items).contains(&chart_label));
     }
 
     #[test]
     fn chart_this_query_present_only_when_can_chart_true() {
         // can_chart = true: item must appear.
         let items = DataGridPanel::build_context_menu_items(false, false, false, true, true);
-        assert!(labels(&items).contains(&"Chart this query"));
+        assert!(labels(&items).contains(&item_label(
+            "document.data.context_menu.item.chart_this_query"
+        )));
     }
 
     #[test]
@@ -3661,7 +3708,9 @@ mod tests {
         // Document-view menu never shows Chart this query because the source is never
         // a QueryResult when is_document_view is true.
         let doc_items = DataGridPanel::build_context_menu_items(false, true, false, true, true);
-        assert!(!labels(&doc_items).contains(&"Chart this query"));
+        assert!(!labels(&doc_items).contains(&item_label(
+            "document.data.context_menu.item.chart_this_query"
+        )));
     }
 
     #[test]
@@ -3669,7 +3718,8 @@ mod tests {
         let items_with_target =
             DataGridPanel::build_context_menu_items(true, false, true, false, false);
         assert!(
-            !labels(&items_with_target).contains(&"Inspect Row"),
+            !labels(&items_with_target)
+                .contains(&item_label("document.data.context_menu.item.inspect_row")),
             "Inspect Row must not appear when inspect_row_enabled=false"
         );
     }
@@ -3678,7 +3728,7 @@ mod tests {
     fn inspect_row_present_when_enabled_and_has_target() {
         let items = DataGridPanel::build_context_menu_items(true, false, true, false, true);
         assert!(
-            labels(&items).contains(&"Inspect Row"),
+            labels(&items).contains(&item_label("document.data.context_menu.item.inspect_row")),
             "Inspect Row must appear when inspect_row_enabled=true and has_row_target=true"
         );
     }

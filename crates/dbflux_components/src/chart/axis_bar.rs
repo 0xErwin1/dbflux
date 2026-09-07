@@ -38,6 +38,17 @@ pub enum AxisPill {
     Agg,
 }
 
+/// Translated label shown on the "Agg" pill for a given aggregation kind.
+fn agg_label(kind: AggKind) -> String {
+    match kind {
+        AggKind::None => dbflux_i18n::t!("chart.axis_bar.aggregation.none"),
+        AggKind::Sum => dbflux_i18n::t!("chart.axis_bar.aggregation.sum"),
+        AggKind::Avg => dbflux_i18n::t!("chart.axis_bar.aggregation.avg"),
+        AggKind::Min => dbflux_i18n::t!("chart.axis_bar.aggregation.min"),
+        AggKind::Max => dbflux_i18n::t!("chart.axis_bar.aggregation.max"),
+    }
+}
+
 /// Render the AxisBar pill row.
 ///
 /// # Parameters
@@ -108,14 +119,7 @@ where
         .unwrap_or_else(|| "—".to_string())
         .into();
 
-    let agg_label: SharedString = match bindings.aggregation {
-        AggKind::None => "none",
-        AggKind::Sum => "sum",
-        AggKind::Avg => "avg",
-        AggKind::Min => "min",
-        AggKind::Max => "max",
-    }
-    .into();
+    let agg_label: SharedString = agg_label(bindings.aggregation).into();
 
     let x_open = open_pill == Some(AxisPill::X);
     let y_open = open_pill == Some(AxisPill::Y);
@@ -194,11 +198,12 @@ where
     };
 
     // Group pill
+    let group_role = dbflux_i18n::t!("chart.axis_bar.group");
     let group_pill = {
         let handler = on_pill_click.clone();
         pill_element(
             "axis-pill-group",
-            "Group",
+            &group_role,
             group_label,
             group_open,
             colors,
@@ -299,7 +304,7 @@ where
 /// When `active`, the pill border is highlighted.
 fn pill_element(
     id: impl Into<ElementId>,
-    role: &'static str,
+    role: &str,
     value: SharedString,
     active: bool,
     colors: &ChartColors,
@@ -344,7 +349,7 @@ fn pill_element(
                 .text_size(ChartGeometry::FONT_TINY)
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(colors.label_fg)
-                .child(SharedString::from(role)),
+                .child(SharedString::from(role.to_string())),
         )
         .child(
             div()
@@ -737,15 +742,48 @@ mod tests {
             (AggKind::Max, "max"),
         ];
         for (kind, expected) in pairs {
-            let label = match kind {
-                AggKind::None => "none",
-                AggKind::Sum => "sum",
-                AggKind::Avg => "avg",
-                AggKind::Min => "min",
-                AggKind::Max => "max",
-            };
-            assert_eq!(label, *expected, "mismatch for {:?}", kind);
+            assert_eq!(agg_label(*kind), *expected, "mismatch for {:?}", kind);
         }
+    }
+
+    #[test]
+    fn chart_axis_bar_aggregation_keys_resolve_in_both_locales() {
+        let keys = [
+            "chart.axis_bar.aggregation.none",
+            "chart.axis_bar.aggregation.sum",
+            "chart.axis_bar.aggregation.avg",
+            "chart.axis_bar.aggregation.min",
+            "chart.axis_bar.aggregation.max",
+        ];
+
+        for key in keys {
+            let en = dbflux_i18n::t!(key, locale = "en");
+            let es = dbflux_i18n::t!(key, locale = "es");
+            assert!(
+                !en.is_empty() && !en.starts_with("en."),
+                "en missing for {key}, got {en:?}"
+            );
+            assert!(
+                !es.is_empty() && !es.starts_with("es."),
+                "es missing for {key}, got {es:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn axis_role_labels_are_accepted_untranslated_single_tokens() {
+        for role in ["X", "Y", "Agg"] {
+            assert_eq!(role.split_whitespace().count(), 1);
+        }
+    }
+
+    #[test]
+    fn agg_label_sum_diverges_between_locales() {
+        let en = dbflux_i18n::t!("chart.axis_bar.aggregation.sum", locale = "en");
+        let es = dbflux_i18n::t!("chart.axis_bar.aggregation.sum", locale = "es");
+        assert_eq!(en, "sum");
+        assert_eq!(es, "suma");
+        assert_ne!(en, es);
     }
 
     #[test]
@@ -791,5 +829,14 @@ mod tests {
 
         // cpu (1) and count (3) qualify; ts and host do not.
         assert_eq!(candidates, vec![1, 3]);
+    }
+
+    #[test]
+    fn axis_bar_group_key_resolves() {
+        let en = dbflux_i18n::t!("chart.axis_bar.group", locale = "en");
+        let es = dbflux_i18n::t!("chart.axis_bar.group", locale = "es");
+        assert_eq!(en, "Group");
+        assert_eq!(es, "Grupo");
+        assert_ne!(en, es);
     }
 }

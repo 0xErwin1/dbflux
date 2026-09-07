@@ -1,4 +1,13 @@
-# dbflux_driver_mongodb
+# MongoDB
+
+Document database for modern applications.
+
+## At a glance
+
+- **Category** — Document
+- **Query language** — MongoDB query syntax
+- **Default port** — 27017
+- **URI scheme** — `mongodb`
 
 MongoDB document driver for DBFlux.
 
@@ -17,6 +26,8 @@ MongoDB document driver for DBFlux.
 - Mutations: insert, update (including upsert), and delete (`supports_upsert: true`). The `MongoShellGenerator` emits `insertOne`/`insertMany`, `updateOne`/`updateMany` (with `{ upsert: true }`), and `deleteOne`/`deleteMany` for previews and copy-as-query.
 - DDL: drop database, drop collection, create index, and drop index.
 - JSON export of results (`EXPORT_JSON`).
+- Reports client identity as `appName=dbflux/<version>` on connect (visible in server logs and `db.currentOp()`), unless the connection URI already sets an `appName`.
+- Write-privilege probe: after connecting, classifies the session as writable, read-only, or unknown by inspecting `connectionStatus` (`showPrivileges: true`) for write-granting privileges/roles, with `hello` overriding the verdict to read-only when connected directly to a non-writable node (e.g. a secondary).
 
 ### Instance Metrics
 

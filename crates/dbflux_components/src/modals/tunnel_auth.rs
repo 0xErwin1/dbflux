@@ -50,6 +50,23 @@ impl TunnelAuthRequest {
     }
 }
 
+/// "Host: host:port · User: user" pre-block text, with connection details
+/// interpolated into the translated template.
+fn connection_detail(host: &str, port: u16, user: &str) -> String {
+    dbflux_i18n::t!(
+        "modals.tunnel_auth.connection_detail",
+        host = host,
+        port = port,
+        user = user
+    )
+}
+
+/// Prompt text asking for the passphrase, with the tunnel name interpolated
+/// into the translated template.
+fn prompt(tunnel_name: &str) -> String {
+    dbflux_i18n::t!("modals.tunnel_auth.prompt", tunnel = tunnel_name)
+}
+
 /// Modal entity for SSH passphrase prompt.
 ///
 /// Uses `ModalShell::Default` (480 px). The parent opens it via
@@ -66,7 +83,7 @@ impl ModalTunnelAuth {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let passphrase_input = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("Enter passphrase")
+                .placeholder(dbflux_i18n::t!("modals.tunnel_auth.placeholder"))
                 .masked(true)
         });
         Self {
@@ -134,15 +151,18 @@ impl Render for ModalTunnelAuth {
         // Error banner shown when a previous attempt with the same modal was rejected.
         let error_banner = if last_attempt_failed {
             Some(
-                BannerBlock::new(BannerVariant::Danger, "Incorrect passphrase. Try again.")
-                    .into_any_element(),
+                BannerBlock::new(
+                    BannerVariant::Danger,
+                    dbflux_i18n::t!("modals.tunnel_auth.incorrect"),
+                )
+                .into_any_element(),
             )
         } else {
             None
         };
 
         // Connection details pre-block: "Host: host:port · User: user"
-        let connection_detail = format!("Host: {}:{} · User: {}", host, port, user);
+        let connection_detail_text = connection_detail(&host, port, &user);
 
         let body = div()
             .flex()
@@ -153,10 +173,7 @@ impl Render for ModalTunnelAuth {
                 div()
                     .text_size(FontSizes::SM)
                     .text_color(theme.muted_foreground)
-                    .child(format!(
-                        "Enter the passphrase for tunnel \"{}\"",
-                        tunnel_name
-                    )),
+                    .child(prompt(&tunnel_name)),
             )
             .child(
                 surface_raised(cx)
@@ -168,20 +185,20 @@ impl Render for ModalTunnelAuth {
                             .text_size(FontSizes::SM)
                             .font_family(AppFonts::MONO)
                             .text_color(theme.muted_foreground)
-                            .child(connection_detail),
+                            .child(connection_detail_text),
                     ),
             )
             .child(
                 div().w_full().child(
                     Input::new(&self.passphrase_input)
                         .w_full()
-                        .placeholder("Enter passphrase"),
+                        .placeholder(dbflux_i18n::t!("modals.tunnel_auth.placeholder")),
                 ),
             )
             .child(
                 Checkbox::new("tunnel-auth-remember")
                     .checked(remember)
-                    .label("Remember for this session")
+                    .label(dbflux_i18n::t!("modals.tunnel_auth.remember"))
                     .on_click(cx.listener(|this, checked: &bool, _, cx| {
                         this.remember = *checked;
                         cx.notify();
@@ -212,19 +229,19 @@ impl Render for ModalTunnelAuth {
             .gap(Spacing::SM)
             .child(
                 Button::new("tunnel-auth-cancel")
-                    .label("Cancel")
+                    .label(dbflux_i18n::t!("modals.tunnel_auth.cancel"))
                     .on_click(on_cancel),
             )
             .child(
                 Button::new("tunnel-auth-connect")
-                    .label("Connect")
+                    .label(dbflux_i18n::t!("modals.tunnel_auth.connect"))
                     .primary()
                     .disabled(!connect_enabled)
                     .on_click(on_connect),
             );
 
         ModalShell::new(
-            "SSH passphrase required",
+            dbflux_i18n::t!("modals.tunnel_auth.title"),
             body.into_any_element(),
             footer.into_any_element(),
         )
@@ -251,5 +268,61 @@ mod tests {
     fn non_empty_passphrase_passes_validation() {
         assert!(TunnelAuthRequest::validate_passphrase("hunter2").is_ok());
         assert!(TunnelAuthRequest::validate_passphrase(" ").is_ok());
+    }
+
+    #[test]
+    fn tunnel_auth_keys_resolve_in_both_locales() {
+        let keys = [
+            "modals.tunnel_auth.title",
+            "modals.tunnel_auth.prompt",
+            "modals.tunnel_auth.connection_detail",
+            "modals.tunnel_auth.placeholder",
+            "modals.tunnel_auth.incorrect",
+            "modals.tunnel_auth.empty_error",
+            "modals.tunnel_auth.remember",
+            "modals.tunnel_auth.cancel",
+            "modals.tunnel_auth.connect",
+        ];
+
+        for key in keys {
+            let en = dbflux_i18n::t!(key, locale = "en");
+            let es = dbflux_i18n::t!(key, locale = "es");
+            assert!(!en.is_empty() && en != key, "en missing for {key}");
+            assert!(!es.is_empty() && es != key, "es missing for {key}");
+        }
+    }
+
+    #[test]
+    fn tunnel_auth_connect_diverges_between_locales() {
+        let en = dbflux_i18n::t!("modals.tunnel_auth.connect", locale = "en");
+        let es = dbflux_i18n::t!("modals.tunnel_auth.connect", locale = "es");
+        assert_ne!(en, es);
+    }
+
+    #[test]
+    fn connection_detail_contains_host_port_and_user() {
+        let detail = connection_detail("db.internal", 2222, "deploy");
+        assert!(detail.contains("db.internal"));
+        assert!(detail.contains("2222"));
+        assert!(detail.contains("deploy"));
+        assert_eq!(
+            detail,
+            dbflux_i18n::t!(
+                "modals.tunnel_auth.connection_detail",
+                host = "db.internal",
+                port = 2222,
+                user = "deploy"
+            )
+        );
+    }
+
+    #[test]
+    fn prompt_contains_tunnel_name() {
+        let text = prompt("prod-tunnel");
+        assert!(text.contains("prod-tunnel"));
+        assert_eq!(
+            text,
+            dbflux_i18n::t!("modals.tunnel_auth.prompt", tunnel = "prod-tunnel")
+        );
     }
 }

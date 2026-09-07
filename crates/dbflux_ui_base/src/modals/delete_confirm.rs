@@ -9,6 +9,37 @@ use gpui::*;
 use gpui_component::ActiveTheme;
 use uuid::Uuid;
 
+/// Confirmation body text for deleting a dashboard, with the dashboard name
+/// interpolated into the translated template.
+pub fn delete_dashboard_body_text(name: &str) -> String {
+    dbflux_i18n::t!("modals.delete_confirm.dashboard.body", name = name)
+}
+
+/// Confirmation body text for deleting a saved chart, with the chart name
+/// interpolated into the translated template.
+pub fn delete_saved_chart_body_text(name: &str) -> String {
+    dbflux_i18n::t!("modals.delete_confirm.saved_chart.body", name = name)
+}
+
+/// Orphan-warning text shown when a saved chart is still referenced by
+/// dashboards. Uses the singular catalog bucket only for exactly one
+/// referencing dashboard; every other count, including zero, uses the
+/// plural bucket.
+pub fn orphan_warning_text(count: usize, names: &str) -> String {
+    if count == 1 {
+        dbflux_i18n::t!(
+            "modals.delete_confirm.saved_chart.orphan_warning.one",
+            names = names
+        )
+    } else {
+        dbflux_i18n::t!(
+            "modals.delete_confirm.saved_chart.orphan_warning.many",
+            count = count,
+            names = names
+        )
+    }
+}
+
 // --- Dashboard delete confirm ---
 
 /// Outcome emitted when the user resolves the dashboard delete modal.
@@ -88,14 +119,9 @@ impl Render for ModalDeleteDashboardConfirm {
                             .size(Heights::ICON_SM)
                             .color(theme.danger),
                     )
-                    .child(
-                        div().flex_1().min_w_0().child(
-                            Text::body(format!(
-                                "Delete dashboard \"{dashboard_name}\"? This cannot be undone."
-                            ))
-                            .into_any_element(),
-                        ),
-                    ),
+                    .child(div().flex_1().min_w_0().child(
+                        Text::body(delete_dashboard_body_text(&dashboard_name)).into_any_element(),
+                    )),
             )
             .child(
                 surface_raised(cx)
@@ -125,15 +151,24 @@ impl Render for ModalDeleteDashboardConfirm {
             .flex()
             .items_center()
             .gap(Spacing::SM)
-            .child(Button::new("delete-dashboard-cancel", "Cancel").on_click(on_cancel))
             .child(
-                Button::new("delete-dashboard-confirm", "Delete")
-                    .danger()
-                    .on_click(on_confirm),
+                Button::new(
+                    "delete-dashboard-cancel",
+                    dbflux_i18n::t!("modals.delete_confirm.cancel"),
+                )
+                .on_click(on_cancel),
+            )
+            .child(
+                Button::new(
+                    "delete-dashboard-confirm",
+                    dbflux_i18n::t!("modals.delete_confirm.confirm"),
+                )
+                .danger()
+                .on_click(on_confirm),
             );
 
         ModalShell::new(
-            "Delete dashboard",
+            dbflux_i18n::t!("modals.delete_confirm.dashboard.title"),
             body.into_any_element(),
             footer.into_any_element(),
         )
@@ -231,14 +266,9 @@ impl Render for ModalDeleteSavedChartConfirm {
                             .size(Heights::ICON_SM)
                             .color(theme.danger),
                     )
-                    .child(
-                        div().flex_1().min_w_0().child(
-                            Text::body(format!(
-                                "Delete saved chart \"{chart_name}\"? This cannot be undone."
-                            ))
-                            .into_any_element(),
-                        ),
-                    ),
+                    .child(div().flex_1().min_w_0().child(
+                        Text::body(delete_saved_chart_body_text(&chart_name)).into_any_element(),
+                    )),
             )
             // Orphan-warning block: shown only when the chart is referenced by dashboards.
             .when(has_refs, |el| {
@@ -246,14 +276,14 @@ impl Render for ModalDeleteSavedChartConfirm {
                     referencing.iter().map(|(_, name)| name.clone()).collect();
                 let names_list = dashboard_names.join(", ");
 
-                el.child(div().flex().flex_col().gap(Spacing::XS).child(
-                    div().text_sm().text_color(theme.warning).child(format!(
-                        "This chart is used in {count} dashboard{s}: {names_list}. \
-                                     Panels that reference it will show broken placeholders.",
-                        count = referencing.len(),
-                        s = if referencing.len() == 1 { "" } else { "s" },
-                    )),
-                ))
+                el.child(
+                    div().flex().flex_col().gap(Spacing::XS).child(
+                        div()
+                            .text_sm()
+                            .text_color(theme.warning)
+                            .child(orphan_warning_text(referencing.len(), &names_list)),
+                    ),
+                )
             });
 
         let on_cancel = cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
@@ -270,15 +300,24 @@ impl Render for ModalDeleteSavedChartConfirm {
             .flex()
             .items_center()
             .gap(Spacing::SM)
-            .child(Button::new("delete-chart-cancel", "Cancel").on_click(on_cancel))
             .child(
-                Button::new("delete-chart-confirm", "Delete")
-                    .danger()
-                    .on_click(on_confirm),
+                Button::new(
+                    "delete-chart-cancel",
+                    dbflux_i18n::t!("modals.delete_confirm.cancel"),
+                )
+                .on_click(on_cancel),
+            )
+            .child(
+                Button::new(
+                    "delete-chart-confirm",
+                    dbflux_i18n::t!("modals.delete_confirm.confirm"),
+                )
+                .danger()
+                .on_click(on_confirm),
             );
 
         ModalShell::new(
-            "Delete saved chart",
+            dbflux_i18n::t!("modals.delete_confirm.saved_chart.title"),
             body.into_any_element(),
             footer.into_any_element(),
         )
@@ -301,17 +340,17 @@ mod tests {
 
     #[test]
     fn modal_delete_dashboard_confirm_body_text_contains_name_and_cannot_be_undone() {
-        let req = DeleteDashboardRequest {
-            dashboard_id: test_uuid(),
-            dashboard_name: "My Dashboard".to_string(),
-        };
+        let body_text = super::delete_dashboard_body_text("My Dashboard");
 
-        let body_text = format!(
-            "Delete dashboard \"{}\"? This cannot be undone.",
-            req.dashboard_name
-        );
         assert!(body_text.contains("My Dashboard"));
         assert!(body_text.contains("This cannot be undone."));
+        assert_eq!(
+            body_text,
+            dbflux_i18n::t!(
+                "modals.delete_confirm.dashboard.body",
+                name = "My Dashboard"
+            )
+        );
     }
 
     #[test]
@@ -379,15 +418,86 @@ mod tests {
 
     #[test]
     fn orphan_warning_text_contains_broken_placeholders() {
-        let warning = format!(
-            "This chart is used in {count} dashboard{s}: {names}. \
-             Panels that reference it will show broken placeholders.",
-            count = 2,
-            s = "s",
-            names = "Dashboard A, Dashboard B",
-        );
+        let warning = super::orphan_warning_text(2, "Dashboard A, Dashboard B");
+
         assert!(warning.contains("broken placeholders"));
         assert!(warning.contains("Dashboard A"));
         assert!(warning.contains("Dashboard B"));
+    }
+
+    #[test]
+    fn orphan_warning_text_uses_singular_bucket_for_one() {
+        let warning = super::orphan_warning_text(1, "A");
+
+        assert_eq!(
+            warning,
+            dbflux_i18n::t!(
+                "modals.delete_confirm.saved_chart.orphan_warning.one",
+                names = "A"
+            )
+        );
+        assert_ne!(
+            warning,
+            dbflux_i18n::t!(
+                "modals.delete_confirm.saved_chart.orphan_warning.many",
+                count = 1,
+                names = "A"
+            )
+        );
+    }
+
+    #[test]
+    fn orphan_warning_text_uses_plural_bucket_for_many() {
+        let warning = super::orphan_warning_text(2, "A, B");
+
+        assert!(warning.contains('2'));
+        assert!(warning.contains('A'));
+        assert!(warning.contains('B'));
+        assert_eq!(
+            warning,
+            dbflux_i18n::t!(
+                "modals.delete_confirm.saved_chart.orphan_warning.many",
+                count = 2,
+                names = "A, B"
+            )
+        );
+    }
+
+    #[test]
+    fn orphan_warning_text_zero_uses_plural_bucket() {
+        let warning = super::orphan_warning_text(0, "A");
+
+        assert_eq!(
+            warning,
+            dbflux_i18n::t!(
+                "modals.delete_confirm.saved_chart.orphan_warning.many",
+                count = 0,
+                names = "A"
+            )
+        );
+    }
+
+    const DELETE_CONFIRM_KEYS: &[&str] = &[
+        "modals.delete_confirm.dashboard.title",
+        "modals.delete_confirm.dashboard.body",
+        "modals.delete_confirm.saved_chart.title",
+        "modals.delete_confirm.saved_chart.body",
+        "modals.delete_confirm.saved_chart.orphan_warning.one",
+        "modals.delete_confirm.saved_chart.orphan_warning.many",
+        "modals.delete_confirm.cancel",
+        "modals.delete_confirm.confirm",
+    ];
+
+    #[test]
+    fn delete_confirm_catalog_keys_resolve() {
+        for key in DELETE_CONFIRM_KEYS {
+            let english = dbflux_i18n::t!(key);
+            let spanish = dbflux_i18n::t!(key, locale = "es");
+
+            assert!(!english.is_empty(), "empty English translation for {key}");
+            assert_ne!(english, *key, "missing English translation for {key}");
+            assert!(!spanish.is_empty(), "empty Spanish translation for {key}");
+            assert_ne!(spanish, *key, "missing Spanish translation for {key}");
+        }
     }
 }

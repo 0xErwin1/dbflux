@@ -9,9 +9,10 @@ use std::time::Instant;
 
 use dbflux_core::{
     CollectionBrowseRequest, CollectionCountRequest, Connection, DatabaseInfo, DbError, DbKind,
-    DefaultSqlDialect, DriverMetadata, InfluxVersion, MeasurementInfo, QueryLanguage, QueryRequest,
-    QueryResult, ResolvedWindow, SchemaFeatures, SchemaLoadingStrategy, SchemaSnapshot,
-    SourceContextSpec, SourceQueryMode, TimeSeriesSchema, contains_time_macros,
+    DefaultSqlDialect, DriverMetadata, ExecutionSourceContext, InfluxVersion, InstanceCatalog,
+    LanguageService, MeasurementInfo, QueryLanguage, QueryRequest, QueryResult, ResolvedWindow,
+    SchemaFeatures, SchemaLoadingStrategy, SchemaSnapshot, SourceContextSpec, SourceQueryMode,
+    TimeSeriesSchema, contains_time_macros,
 };
 
 use crate::error_formatter::InfluxErrorFormatter;
@@ -20,6 +21,7 @@ use crate::injection::{
     ResolvedWindow as InjectionWindow, flux_has_range_call, influxql_has_time_predicate,
     inject_flux_window, inject_influxql_window,
 };
+use crate::language_service::InfluxLanguageService;
 use crate::metadata::InfluxQueryMetadata;
 use crate::parser::flux::parse_flux_csv;
 use crate::parser::influxql::parse_influxql_json;
@@ -144,12 +146,12 @@ impl InfluxConnection {
             .as_ref()
             .and_then(|ctx| ctx.source.as_ref())
             .and_then(|src| {
-                use dbflux_core::ExecutionSourceContext;
                 match src {
                     ExecutionSourceContext::CollectionWindow { targets, .. } => {
                         targets.first().cloned()
                     }
-                    // MetricQuery is never produced by InfluxDB; return neutral default.
+                    // InstanceMetricQuery/InstanceInspectorQuery are intercepted at the
+                    // top of execute(), so only CollectionWindow reaches this point.
                     _ => None,
                 }
             })
@@ -166,12 +168,12 @@ impl InfluxConnection {
             .as_ref()
             .and_then(|ctx| ctx.source.as_ref())
             .and_then(|src| {
-                use dbflux_core::ExecutionSourceContext;
                 match src {
                     ExecutionSourceContext::CollectionWindow { query_mode, .. } => {
                         query_mode.as_deref()
                     }
-                    // MetricQuery is never produced by InfluxDB; return neutral default.
+                    // InstanceMetricQuery/InstanceInspectorQuery are intercepted at the
+                    // top of execute(), so only CollectionWindow reaches this point.
                     _ => None,
                 }
             });
@@ -203,12 +205,12 @@ impl InfluxConnection {
             .as_ref()
             .and_then(|ctx| ctx.source.as_ref())
             .map(|src| {
-                use dbflux_core::ExecutionSourceContext;
                 match src {
                     ExecutionSourceContext::CollectionWindow {
                         start_ms, end_ms, ..
                     } => (Some(*start_ms), Some(*end_ms)),
-                    // MetricQuery is never produced by InfluxDB; return neutral default.
+                    // InstanceMetricQuery/InstanceInspectorQuery are intercepted at the
+                    // top of execute(), so only CollectionWindow reaches this point.
                     _ => (None, None),
                 }
             })
@@ -338,7 +340,53 @@ impl Connection for InfluxConnection {
         Ok(())
     }
 
+    fn instance_catalog(&self) -> Option<Box<dyn InstanceCatalog>> {
+        // v1 has no `/metrics` or `/health` telemetry surface this catalog
+        // can rely on, mirroring the probe_write_privilege v1 gate below.
+        if self.version != InfluxVersion::V2 {
+            return None;
+        }
+
+        Some(Box::new(
+            crate::instance_catalog::InfluxInstanceCatalog::new(self.http.clone()),
+        ))
+    }
+
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
+        if let Some(source) = req
+            .execution_context
+            .as_ref()
+            .and_then(|ctx| ctx.source.as_ref())
+        {
+            // Gated on v2 for the same reason `instance_catalog()` is. v1 does
+            // serve `/metrics`, so without this an instance query routed to a
+            // v1 connection would answer from a catalog that connection
+            // reports it does not have.
+            let is_instance_query = matches!(
+                source,
+                ExecutionSourceContext::InstanceMetricQuery { .. }
+                    | ExecutionSourceContext::InstanceInspectorQuery { .. }
+            );
+
+            if is_instance_query && self.version != InfluxVersion::V2 {
+                return Err(DbError::NotSupported(
+                    "InfluxDB instance metrics and inspectors require v2".to_string(),
+                ));
+            }
+
+            match source {
+                ExecutionSourceContext::InstanceMetricQuery { metric_id, .. } => {
+                    return crate::instance_catalog::dispatch_metric_series(&self.http, metric_id);
+                }
+                ExecutionSourceContext::InstanceInspectorQuery { metric_id } => {
+                    return crate::instance_catalog::dispatch_inspector_snapshot(
+                        &self.http, metric_id,
+                    );
+                }
+                _ => {}
+            }
+        }
+
         let started = Instant::now();
         let language = self.resolve_language(req)?;
 
@@ -524,6 +572,10 @@ impl Connection for InfluxConnection {
 
     fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
         &DefaultSqlDialect
+    }
+
+    fn language_service(&self) -> &dyn LanguageService {
+        &InfluxLanguageService
     }
 
     fn source_context_spec(&self) -> Option<SourceContextSpec> {
@@ -731,11 +783,96 @@ impl Connection for InfluxConnection {
     fn query_generator(&self) -> Option<&dyn dbflux_core::QueryGenerator> {
         Some(&self.query_gen)
     }
+
+    fn probe_write_privilege(&self) -> dbflux_core::WritePrivilege {
+        // v1 has no token-scoped authorization API to probe: its username
+        // grants are all-or-nothing per database and are not queryable
+        // through an HTTP endpoint, so this stays `Unknown` by design.
+        if self.version != InfluxVersion::V2 {
+            return dbflux_core::WritePrivilege::Unknown;
+        }
+
+        let response = match self.http.fetch_authorizations_v2(self.org.as_deref()) {
+            Ok(response) if response.status == 200 => response,
+            _ => return dbflux_core::WritePrivilege::Unknown,
+        };
+
+        let permissions = parse_influx_authorizations_permissions(&response.body);
+        classify_influx_permissions(&permissions)
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Private helpers
 // ---------------------------------------------------------------------------
+
+/// One permission entry from a v2 `/api/v2/authorizations` response.
+struct InfluxPermission {
+    action: String,
+    resource_type: String,
+}
+
+/// Parses the `authorizations[].permissions[]` entries out of a v2
+/// authorizations response body.
+///
+/// Tolerant of malformed or unexpected JSON: any parse failure, or an entry
+/// missing `action`/`resource.type`, is skipped rather than propagated. The
+/// caller treats an empty result the same as a probe failure.
+fn parse_influx_authorizations_permissions(body: &str) -> Vec<InfluxPermission> {
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(body) else {
+        return Vec::new();
+    };
+
+    let Some(authorizations) = json.get("authorizations").and_then(|v| v.as_array()) else {
+        return Vec::new();
+    };
+
+    authorizations
+        .iter()
+        .filter_map(|authorization| authorization.get("permissions")?.as_array())
+        .flatten()
+        .filter_map(|permission| {
+            let action = permission.get("action")?.as_str()?.to_string();
+            let resource_type = permission
+                .get("resource")?
+                .get("type")?
+                .as_str()?
+                .to_string();
+            Some(InfluxPermission {
+                action,
+                resource_type,
+            })
+        })
+        .collect()
+}
+
+/// Classifies the connecting token's permissions into a [`WritePrivilege`]
+/// verdict.
+///
+/// Any `write` permission scoped to `buckets` (all-buckets or a specific
+/// bucket) makes the result `Writable`. Otherwise, any `read` permission on
+/// `buckets` makes it `ReadOnly`. An empty or entirely unrecognized
+/// permission list is `Unknown`.
+fn classify_influx_permissions(permissions: &[InfluxPermission]) -> dbflux_core::WritePrivilege {
+    let mut saw_read_permission = false;
+
+    for permission in permissions {
+        if permission.resource_type != "buckets" {
+            continue;
+        }
+        match permission.action.as_str() {
+            "write" => return dbflux_core::WritePrivilege::Writable,
+            "read" => saw_read_permission = true,
+            _ => {}
+        }
+    }
+
+    if saw_read_permission {
+        dbflux_core::WritePrivilege::ReadOnly
+    } else {
+        dbflux_core::WritePrivilege::Unknown
+    }
+}
 
 impl InfluxConnection {
     fn fetch_measurements(&self) -> Result<Vec<MeasurementInfo>, DbError> {
@@ -988,6 +1125,7 @@ fn escape_influxql_ident(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dbflux_core::WritePrivilege;
 
     #[test]
     fn escape_flux_string_escapes_quotes_and_backslashes() {
@@ -1439,5 +1577,95 @@ mod tests {
             query.contains(&format!("|> tail(n: {limit})")),
             "must trim to requested page size"
         );
+    }
+
+    const AUTHORIZATIONS_FIXTURE_WRITE: &str = r#"{
+        "authorizations": [
+            {
+                "id": "0123456789abcdef",
+                "permissions": [
+                    {"action": "read", "resource": {"type": "buckets"}},
+                    {"action": "write", "resource": {"type": "buckets", "id": "abc123"}}
+                ]
+            }
+        ]
+    }"#;
+
+    const AUTHORIZATIONS_FIXTURE_READ_ONLY: &str = r#"{
+        "authorizations": [
+            {
+                "id": "0123456789abcdef",
+                "permissions": [
+                    {"action": "read", "resource": {"type": "buckets", "id": "abc123"}}
+                ]
+            }
+        ]
+    }"#;
+
+    const AUTHORIZATIONS_FIXTURE_NON_BUCKET_PERMISSIONS: &str = r#"{
+        "authorizations": [
+            {
+                "id": "0123456789abcdef",
+                "permissions": [
+                    {"action": "write", "resource": {"type": "orgs"}}
+                ]
+            }
+        ]
+    }"#;
+
+    #[test]
+    fn parse_influx_authorizations_permissions_reads_fixture_json() {
+        let permissions = parse_influx_authorizations_permissions(AUTHORIZATIONS_FIXTURE_WRITE);
+        assert_eq!(permissions.len(), 2);
+        assert!(
+            permissions
+                .iter()
+                .any(|p| p.action == "write" && p.resource_type == "buckets")
+        );
+    }
+
+    #[test]
+    fn parse_influx_authorizations_permissions_malformed_json_returns_empty() {
+        let permissions = parse_influx_authorizations_permissions("not json");
+        assert!(permissions.is_empty());
+    }
+
+    #[test]
+    fn parse_influx_authorizations_permissions_missing_authorizations_key_returns_empty() {
+        let permissions = parse_influx_authorizations_permissions(r#"{"foo": "bar"}"#);
+        assert!(permissions.is_empty());
+    }
+
+    #[test]
+    fn classify_influx_permissions_write_on_buckets_is_writable() {
+        let permissions = parse_influx_authorizations_permissions(AUTHORIZATIONS_FIXTURE_WRITE);
+        assert_eq!(
+            classify_influx_permissions(&permissions),
+            WritePrivilege::Writable
+        );
+    }
+
+    #[test]
+    fn classify_influx_permissions_read_only_on_buckets_is_read_only() {
+        let permissions = parse_influx_authorizations_permissions(AUTHORIZATIONS_FIXTURE_READ_ONLY);
+        assert_eq!(
+            classify_influx_permissions(&permissions),
+            WritePrivilege::ReadOnly
+        );
+    }
+
+    #[test]
+    fn classify_influx_permissions_non_bucket_permissions_is_unknown() {
+        let permissions =
+            parse_influx_authorizations_permissions(AUTHORIZATIONS_FIXTURE_NON_BUCKET_PERMISSIONS);
+        assert_eq!(
+            classify_influx_permissions(&permissions),
+            WritePrivilege::Unknown
+        );
+    }
+
+    #[test]
+    fn classify_influx_permissions_empty_is_unknown() {
+        assert_eq!(classify_influx_permissions(&[]), WritePrivilege::Unknown);
     }
 }

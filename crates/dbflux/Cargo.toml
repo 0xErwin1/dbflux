@@ -19,6 +19,7 @@ gpui-component.workspace = true
 dbflux_app.workspace = true
 dbflux_ui = { workspace = true }
 dbflux_core = { workspace = true, features = ["tracing-bridge"] }
+dbflux_i18n.workspace = true
 dbflux_ipc.workspace = true
 dbflux_driver_ipc.workspace = true
 dbflux_audit.workspace = true
@@ -34,6 +35,12 @@ rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs"] 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+# The build script embeds the icon and VERSIONINFO into dbflux.exe. gpui already
+# builds with embed-resource on Windows, so this widens an existing dependency
+# rather than adding one.
+[target.'cfg(windows)'.build-dependencies]
+embed-resource = "3.0"
+
 # The binary registers drivers and runtime features through `dbflux_app`, not
 # directly. Optional dep declarations on driver crates would be dead weight
 # (no `use ...` in this crate), so they live on `dbflux_app` instead. The few
@@ -45,7 +52,7 @@ workspace = true
 optional = true
 
 [features]
-default = ["sqlite", "postgres", "mysql", "mongodb", "redis", "dynamodb", "cloudwatch", "influxdb", "mssql", "lua", "aws", "mcp"]
+default = ["sqlite", "postgres", "mysql", "mongodb", "redis", "dynamodb", "cloudwatch", "influxdb", "mssql", "redshift", "clickhouse", "s3", "lua", "aws", "mcp"]
 # dbflux_ui is driver-agnostic, so driver features only drive dbflux_app (which
 # registers the drivers and relays to the MCP server). The binary does not need
 # to declare driver/runtime crates as direct optional deps — `dbflux_app/<feat>`
@@ -59,6 +66,9 @@ dynamodb = ["dbflux_app/dynamodb"]
 cloudwatch = ["dbflux_app/cloudwatch"]
 influxdb = ["dbflux_app/influxdb"]
 mssql = ["dbflux_app/mssql"]
+redshift = ["dbflux_app/redshift"]
+clickhouse = ["dbflux_app/clickhouse"]
+s3 = ["dbflux_app/s3"]
 lua = ["dbflux_app/lua", "dbflux_ui/lua"]
 aws = ["dbflux_app/aws", "dbflux_ui/aws"]
 mcp = ["dbflux_app/mcp", "dbflux_ui/mcp"]

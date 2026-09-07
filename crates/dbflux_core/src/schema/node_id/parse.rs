@@ -4,8 +4,8 @@ use uuid::Uuid;
 use super::ParseSchemaNodeIdError;
 use super::SchemaNodeId;
 use super::{
-    P_BASE_TYPE, P_COLL_FIELD, P_COLL_FIELDS_FOLDER, P_COLL_IDX_FOLDER, P_COLL_INDEX, P_COLLECTION,
-    P_COLLECTION_CHILD, P_COLLECTION_CHILDREN_MORE, P_COLLECTIONS_FOLDER, P_COLUMN,
+    P_BASE_TYPE, P_BUCKET, P_COLL_FIELD, P_COLL_FIELDS_FOLDER, P_COLL_IDX_FOLDER, P_COLL_INDEX,
+    P_COLLECTION, P_COLLECTION_CHILD, P_COLLECTION_CHILDREN_MORE, P_COLLECTIONS_FOLDER, P_COLUMN,
     P_COLUMNS_FOLDER, P_CONN_FOLDER, P_CONSTRAINT, P_CONSTRAINTS_FOLDER, P_CUSTOM_TYPE,
     P_DASHBOARD_ITEM, P_DASHBOARDS_FOLDER, P_DATABASE, P_DATABASES_FOLDER, P_DB_IDX_FOLDER,
     P_DEPENDENT_ITEM, P_DEPENDENTS_FOLDER, P_ENUM_VALUE, P_FK, P_FK_FOLDER, P_INDEX,
@@ -15,8 +15,8 @@ use super::{
     P_REMOTE_DASHBOARDS_FOLDER, P_ROUTINE, P_ROUTINES_FOLDER, P_ROUTINES_LOADING,
     P_SAVED_CHART_ITEM, P_SAVED_CHARTS_FOLDER, P_SCHEMA, P_SCHEMA_FK, P_SCHEMA_FK_FOLDER,
     P_SCHEMA_FK_LOADING, P_SCHEMA_IDX_FOLDER, P_SCHEMA_IDX_LOADING, P_SCHEMA_INDEX, P_SCRIPT_FILE,
-    P_SCRIPTS_FOLDER, P_TABLE, P_TABLES_FOLDER, P_TYPES_FOLDER, P_TYPES_LOADING, P_VIEW,
-    P_VIEWS_FOLDER,
+    P_SCRIPTS_FOLDER, P_STORAGE_HINT_ITEM, P_STORAGE_HINTS_FOLDER, P_TABLE, P_TABLES_FOLDER,
+    P_TYPES_FOLDER, P_TYPES_LOADING, P_VIEW, P_VIEWS_FOLDER,
 };
 
 impl FromStr for SchemaNodeId {
@@ -67,13 +67,14 @@ impl FromStr for SchemaNodeId {
             | P_COLLECTION_CHILDREN_MORE
             | P_CUSTOM_TYPE => parse_object_variants(prefix, &parts, err),
 
-            P_COLUMNS_FOLDER | P_INDEXES_FOLDER | P_FK_FOLDER | P_CONSTRAINTS_FOLDER => {
-                parse_table_detail_folders(prefix, &parts, err)
-            }
+            P_COLUMNS_FOLDER
+            | P_INDEXES_FOLDER
+            | P_FK_FOLDER
+            | P_CONSTRAINTS_FOLDER
+            | P_STORAGE_HINTS_FOLDER => parse_table_detail_folders(prefix, &parts, err),
 
-            P_COLUMN | P_INDEX | P_FK | P_CONSTRAINT | P_SCHEMA_INDEX | P_SCHEMA_FK => {
-                parse_detail_variants(prefix, &parts, err)
-            }
+            P_COLUMN | P_INDEX | P_FK | P_CONSTRAINT | P_STORAGE_HINT_ITEM | P_SCHEMA_INDEX
+            | P_SCHEMA_FK => parse_detail_variants(prefix, &parts, err),
 
             P_DB_IDX_FOLDER | P_COLL_FIELDS_FOLDER | P_COLL_FIELD | P_COLL_IDX_FOLDER
             | P_COLL_INDEX => parse_collection_detail_variants(prefix, &parts, err),
@@ -105,7 +106,8 @@ impl FromStr for SchemaNodeId {
             | P_INST_METRIC_LEAF
             | P_INST_INSPECTORS_FOLDER
             | P_INST_INSPECTOR_LEAF
-            | P_INST_OVERVIEW_LEAF => parse_instance_variants(prefix, &parts, err),
+            | P_INST_OVERVIEW_LEAF
+            | P_BUCKET => parse_instance_variants(prefix, &parts, err),
 
             _ => Err(err()),
         }
@@ -389,6 +391,17 @@ fn parse_table_detail_folders(
             })
         }
 
+        P_STORAGE_HINTS_FOLDER => {
+            let profile_id = Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
+            let schema = parts.get(2).ok_or_else(err)?.to_string();
+            let table = parts.get(3).ok_or_else(err)?.to_string();
+            Ok(SchemaNodeId::StorageHintsFolder {
+                profile_id,
+                schema,
+                table,
+            })
+        }
+
         _ => Err(err()),
     }
 }
@@ -437,6 +450,17 @@ fn parse_detail_variants(
             let table = parts.get(2).ok_or_else(err)?.to_string();
             let name = parts.get(3).ok_or_else(err)?.to_string();
             Ok(SchemaNodeId::Constraint {
+                profile_id,
+                table,
+                name,
+            })
+        }
+
+        P_STORAGE_HINT_ITEM => {
+            let profile_id = Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
+            let table = parts.get(2).ok_or_else(err)?.to_string();
+            let name = parts.get(3).ok_or_else(err)?.to_string();
+            Ok(SchemaNodeId::StorageHintItem {
                 profile_id,
                 table,
                 name,
@@ -798,6 +822,12 @@ fn parse_instance_variants(
         P_INST_OVERVIEW_LEAF => {
             let profile_id = Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
             Ok(SchemaNodeId::InstanceOverviewLeaf { profile_id })
+        }
+
+        P_BUCKET => {
+            let profile_id = Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
+            let name = parts.get(2).ok_or_else(err)?.to_string();
+            Ok(SchemaNodeId::Bucket { profile_id, name })
         }
 
         _ => Err(err()),

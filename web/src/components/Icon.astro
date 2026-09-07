@@ -1,0 +1,60 @@
+---
+/**
+ * Every icon is drawn on the same 24 grid at stroke 1.5 with butt caps, so the
+ * set stays visually even when sizes are mixed in one row.
+ */
+export type IconName =
+  | 'database'
+  | 'github'
+  | 'chevron'
+  | 'search'
+  | 'menu'
+  | 'close'
+  | 'copy'
+  | 'query'
+  | 'table'
+  | 'chart'
+  | 'hook'
+  | 'lock'
+  | 'shield';
+
+interface Props {
+  name: IconName;
+  size?: number;
+  class?: string;
+}
+
+const { name, size = 20, class: className } = Astro.props;
+
+const PATHS: Record<IconName, string> = {
+  database:
+    '<ellipse cx="12" cy="5.5" rx="7.5" ry="3"/><path d="M4.5 5.5v13c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3v-13"/><path d="M4.5 12c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3"/>',
+  github:
+    '<path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.9a3.4 3.4 0 0 0-.9-2.6c3-.3 6.2-1.5 6.2-6.7A5.2 5.2 0 0 0 19.9 5a4.9 4.9 0 0 0-.1-3.6s-1.1-.3-3.7 1.4a12.7 12.7 0 0 0-6.6 0C6.9 1.1 5.8 1.4 5.8 1.4A4.9 4.9 0 0 0 5.7 5a5.2 5.2 0 0 0-1.4 3.6c0 5.2 3.2 6.4 6.2 6.7a3.4 3.4 0 0 0-.9 2.6V22"/>',
+  chevron: '<path d="M9 5l7 7-7 7"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="M20 20l-4.3-4.3"/>',
+  menu: '<path d="M4 7h16M4 12h16M4 17h16"/>',
+  close: '<path d="M6 6l12 12M18 6L6 18"/>',
+  copy: '<rect x="9" y="9" width="12" height="12"/><path d="M5 15V3h12"/>',
+  query: '<path d="M4 6h16M4 12h10M4 18h13"/>',
+  table: '<rect x="3" y="4" width="18" height="16"/><path d="M3 9h18M9 9v11"/>',
+  chart: '<path d="M4 19V5M4 19h16"/><path d="M8 15l4-6 3 4 4-7"/>',
+  hook: '<path d="M12 3v4M12 17v4M3 12h4M17 12h4"/><circle cx="12" cy="12" r="4"/>',
+  lock: '<rect x="4" y="10" width="16" height="10"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>',
+  shield: '<path d="M12 3l8 4v5c0 5-3.4 8.3-8 9-4.6-.7-8-4-8-9V7z"/><path d="M9 12l2 2 4-4"/>',
+};
+---
+
+<svg
+  width={size}
+  height={size}
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="1.5"
+  stroke-linecap="square"
+  aria-hidden="true"
+  focusable="false"
+  class={className}
+  set:html={PATHS[name]}
+/>

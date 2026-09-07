@@ -19,6 +19,38 @@ use gpui::{AnyElement, App, Subscription, Window};
 /// Type-erased callback for document events, used by the `subscribe` closure.
 pub type BoxedDocEventCallback = Box<dyn Fn(&DocumentEvent, &mut App) + 'static>;
 
+/// A single document-contributed status-bar segment.
+///
+/// Modeled directly on `dbflux_components::result_panel::ToolbarSegment` —
+/// documents contribute chrome (here, status-bar text) without the host
+/// (`StatusBar`) branching on document type. `StatusBar` renders every
+/// segment returned by the active tab's `PaneHandle::status_segments()`
+/// generically, separated by dividers.
+#[derive(Clone, Debug)]
+pub struct StatusSegment {
+    pub text: gpui::SharedString,
+    pub tooltip: Option<gpui::SharedString>,
+}
+
+/// Callback a document supplies when it asks for an object editor tab, invoked
+/// with the object's key after every successful save.
+pub type ObjectSavedCallback = std::rc::Rc<dyn Fn(&str, &mut App)>;
+
+/// A request to open one object-store text object in its own editor tab.
+///
+/// Raised by a document that browses an object store and drained generically
+/// by the workspace, the same way `take_pending_open_bucket` is. The callback
+/// keeps the requesting document in sync without the workspace (or this shell)
+/// knowing which concrete document type asked.
+#[derive(Clone)]
+pub struct ObjectEditorRequest {
+    pub bucket: String,
+    pub key: String,
+    /// Invoked with the key after a successful save, so the requesting
+    /// document can refresh its own view of that object.
+    pub on_saved: ObjectSavedCallback,
+}
+
 /// A snapshot of a code document's session state, used to reconstruct tabs
 /// on next launch and to write the session manifest.
 ///
@@ -107,6 +139,25 @@ pub struct PaneHandle {
     /// user (× button or ESC). Documents that own inspector state clear it
     /// here so the rail stays closed on subsequent tab activations.
     pub mark_inspector_closed: Option<Box<dyn Fn(&mut App)>>,
+
+    /// Returns the document's contributed status-bar segments (e.g. engine +
+    /// region, bucket path, key count, last-operation timing). `None` means
+    /// the document does not contribute any — `StatusBar` renders nothing
+    /// extra for it, unchanged from today's behavior.
+    pub status_segments: Option<Box<dyn Fn(&App) -> Vec<StatusSegment>>>,
+
+    /// Drains a browse-this-bucket intent raised by row activation (Enter),
+    /// same `pending_*` + `take()` convention as the other optional helpers.
+    /// Only `BucketsTableDocument` populates this — the workspace polls the
+    /// active tab for it each render pass and opens `ObjectBrowserDocument`
+    /// on `Some`. `None` on the outer `Option` means the document never
+    /// raises this intent.
+    pub take_pending_open_bucket: Option<Box<dyn Fn(&mut App) -> Option<String>>>,
+
+    /// Drains an open-this-object-in-an-editor-tab intent, same convention as
+    /// `take_pending_open_bucket`. Only object-browsing documents populate it.
+    pub take_pending_open_object_editor:
+        Option<Box<dyn Fn(&mut App) -> Option<ObjectEditorRequest>>>,
 }
 
 impl PaneHandle {
@@ -159,6 +210,9 @@ impl PaneHandle {
             is_file_backed_empty: None,
             session_tab_snapshot: None,
             mark_inspector_closed: None,
+            status_segments: None,
+            take_pending_open_bucket: None,
+            take_pending_open_object_editor: None,
         }
     }
 
@@ -254,6 +308,18 @@ impl PaneHandle {
         F: Fn(&DocumentEvent, &mut App) + 'static,
     {
         (self.subscribe)(cx, Box::new(callback))
+    }
+
+    /// Returns the document's contributed status-bar segments.
+    ///
+    /// Returns an empty `Vec` for every document that does not populate
+    /// `status_segments` — the default, unchanged behavior for existing
+    /// documents.
+    pub fn status_segments(&self, cx: &App) -> Vec<StatusSegment> {
+        self.status_segments
+            .as_ref()
+            .map(|f| f(cx))
+            .unwrap_or_default()
     }
 }
 

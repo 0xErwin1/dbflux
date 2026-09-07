@@ -592,7 +592,9 @@ mod tests {
         QueryRequestDto,
     };
     use crate::ProtocolVersion;
-    use dbflux_core::{ExecutionContext, ExecutionSourceContext, QueryRequest};
+    use dbflux_core::{
+        ExecutionContext, ExecutionSourceContext, KeyGetRequest, KeyGetResult, QueryRequest,
+    };
     use std::time::Duration;
     use uuid::Uuid;
 
@@ -666,6 +668,111 @@ mod tests {
                 assert_eq!(query_mode.as_deref(), Some("cwli"));
             }
             other => panic!("unexpected execution context: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn kv_get_key_request_round_trips_max_value_bytes_through_json() {
+        let request = DriverRequestBody::KvGetKey {
+            request: KeyGetRequest::new("some-key").with_max_value_bytes(4_096),
+        };
+
+        let json = serde_json::to_string(&request).expect("serialize");
+        let restored: DriverRequestBody = serde_json::from_str(&json).expect("deserialize");
+
+        match restored {
+            DriverRequestBody::KvGetKey { request } => {
+                assert_eq!(request.max_value_bytes, Some(4_096));
+            }
+            other => panic!("unexpected request body: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn kv_get_key_request_missing_max_value_bytes_defaults_to_unbounded() {
+        // Simulates a request sent by a peer on an older protocol minor
+        // that predates the byte-budget field.
+        let json = serde_json::json!({
+            "KvGetKey": {
+                "request": {
+                    "key": "some-key",
+                    "keyspace": null,
+                    "include_type": true,
+                    "include_ttl": true,
+                    "include_size": true,
+                }
+            }
+        });
+
+        let restored: DriverRequestBody =
+            serde_json::from_value(json).expect("deserialize legacy request");
+
+        match restored {
+            DriverRequestBody::KvGetKey { request } => {
+                assert_eq!(request.max_value_bytes, None);
+            }
+            other => panic!("unexpected request body: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn kv_get_result_response_round_trips_load_state_through_json() {
+        let response = DriverResponseBody::KvGetResult {
+            result: KeyGetResult {
+                entry: dbflux_core::KeyEntry::new("some-key"),
+                value: Vec::new(),
+                repr: dbflux_core::ValueRepr::Binary,
+                load_state: dbflux_core::KeyLoadState::TooLarge {
+                    size_bytes: 5_000,
+                    limit_bytes: 1_000,
+                },
+            },
+        };
+
+        let json = serde_json::to_string(&response).expect("serialize");
+        let restored: DriverResponseBody = serde_json::from_str(&json).expect("deserialize");
+
+        match restored {
+            DriverResponseBody::KvGetResult { result } => {
+                assert_eq!(
+                    result.load_state,
+                    dbflux_core::KeyLoadState::TooLarge {
+                        size_bytes: 5_000,
+                        limit_bytes: 1_000,
+                    }
+                );
+            }
+            other => panic!("unexpected response body: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn kv_get_result_response_missing_load_state_defaults_to_loaded() {
+        // Simulates a response sent by a peer on an older protocol minor
+        // that predates the load-state field.
+        let json = serde_json::json!({
+            "KvGetResult": {
+                "result": {
+                    "entry": {
+                        "key": "some-key",
+                        "key_type": null,
+                        "ttl_seconds": null,
+                        "size_bytes": null,
+                    },
+                    "value": [],
+                    "repr": "Binary",
+                }
+            }
+        });
+
+        let restored: DriverResponseBody =
+            serde_json::from_value(json).expect("deserialize legacy response");
+
+        match restored {
+            DriverResponseBody::KvGetResult { result } => {
+                assert_eq!(result.load_state, dbflux_core::KeyLoadState::Loaded);
+            }
+            other => panic!("unexpected response body: {other:?}"),
         }
     }
 }

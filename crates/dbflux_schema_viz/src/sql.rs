@@ -203,6 +203,7 @@ mod tests {
             foreign_keys: Some(fks),
             constraints: None,
             sample_fields: None,
+            storage_hints: None,
             presentation: dbflux_core::CollectionPresentation::default(),
             child_items: None,
         }

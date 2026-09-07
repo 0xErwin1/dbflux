@@ -4,8 +4,129 @@ All notable changes to DBFlux will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+* **Language list derived from the translation catalogs (#360)** — the
+  Settings language dropdown now lists every language that ships a catalog in
+  `crates/dbflux_i18n/locales/`, with each language named in its own tongue
+  via the `language.native_name` key. Contributing a new language on Weblate
+  is enough for it to appear in the next build, with no code changes.
+
 ### Added
 
+* **Complete Spanish documentation and a language menu (#360)** — the
+  website's language switcher is now a dropdown listing every supported
+  language, ready to grow beyond two; the docs links in the navigation and
+  footer keep the reader's language across hosts. Every document the site
+  serves now ships in Spanish: the remaining fourteen guides, the
+  architecture and contributing pages, and all thirteen driver READMEs
+  (served from `docs/es/drivers/`).
+
+* **Spanish website and documentation (#360)** — dbflux.dev gains a Spanish
+  edition under `/es/`: the landing page, about page, navigation, search
+  dialog, install tabs and footer read from typed dictionaries with a
+  language switcher in the nav; every documentation page exists under
+  `/es/docs/…` per version, rendering the Spanish translation when a
+  `docs/es/<NAME>.md` sibling exists and the English page with a visible
+  "not yet translated" notice (and `noindex`) when it does not. The install,
+  usage and connections guides ship translated. Search engines get
+  reciprocal `hreflang` pairs, per-locale canonicals and localized sitemap
+  entries. Along the way two long-standing link bugs were fixed: relative
+  markdown links in the published docs resolved against the wrong root
+  (broken GitHub URLs), and links between version-exclusive pages crossed
+  into the wrong version.
+
+* **Spanish user interface (#360)** — Settings → General gains a Language
+  control with System, English, and Spanish. System follows the OS locale
+  and falls back to English when that locale is not supported; the choice
+  is persisted and applied on the next start, and the control shows a
+  permanent note saying so. The whole application is translated: shared
+  components and modals, the connections and scripts sidebar, the command
+  palette, every document type (data grid and its context menus, query
+  builder, code editor and scripts, key-value, audit viewer, schema diff,
+  charts and dashboards, object browser and editor, buckets table, the
+  import, export and migrate wizards), the workspace shell (status bar,
+  tasks panel, shutdown overlay, login modal, toasts), the settings window
+  (general, keybindings, hooks, auth profiles, drivers, MCP, audit, RPC
+  services, SSH tunnels, proxies) and the connection manager (all tabs,
+  import panel, export modal). Database and protocol vocabulary (query,
+  schema, WHERE, SQL, JSON, CSV, driver names, AWS terms, statistic
+  names, key chords) stays in English inside Spanish text; persisted
+  names and audit records are never translated. The catalogs live in
+  `crates/dbflux_i18n/locales/{en,es}.yml`, one file per locale, and are
+  managed through Weblate.
+
+### Fixed
+
+* **Several MCP clients per connection (#542)** — the Connection Manager MCP
+  tab is now a master-detail view: a filterable list of every trusted client
+  on the left, and on the right whether the selected client may use this
+  connection, its roles and policies, and a preview of the tools and
+  classifications those grant. Previously the tab could bind a single client,
+  and saving a connection silently dropped every other binding it held.
+
+* **Keyboard navigation in Settings lists and forms (#543)** — MCP Clients,
+  Roles and Policies can now be browsed, created and edited from the keyboard:
+  `l`/`enter` opens the form, `n` starts a new item, `j`/`k` and `tab` move
+  between fields with a visible focus ring, `enter` activates a field and
+  `h`/`escape` return to the list. Built-in roles and policies stay read-only
+  under the keyboard cursor. Hooks shows the focus ring on every form field,
+  so the cursor moved by `j`/`k` is no longer invisible. `n` creates a new
+  item in Proxies, SSH Tunnels and Services as well, and the Audit status
+  indicator is no longer a keyboard stop. The MCP sections render their list
+  through a new reusable master-detail composite.
+
+* **Editing a cell and clicking another one lost the typed value (#539)** —
+  the inline editor closed through the input's blur event, which discarded
+  the edit buffer. Selecting or shift-selecting another cell now commits the
+  edit in progress, as Enter does, and the value survives as a pending
+  change; blur remains a fallback for focus leaving the grid entirely.
+
+* **Save Row shortcuts stopped working after an inline edit** — closing an
+  inline editor unmounted the focused element and left the window with no
+  focus, so every shortcut bound to the results grid went inert until the
+  next click: Cmd/Ctrl+Enter for Save Row, Cmd/Ctrl+A, the arrow keys and
+  the vim aliases. Closing an editor now returns focus to the grid.
+
+## [0.7.0] - 2026-07-31
+
+### Added
+
+* **Amazon S3 driver (DBF-26)** — A first-party object-storage driver for AWS
+  S3 and S3-compatible endpoints. The connection root shows a buckets table
+  (name, region, object count, size, versioning, created); the sidebar lists
+  buckets flat, one level deep. The object browser follows AWS-console-style
+  per-level pagination by default, with an optional lazy tree mode for full
+  expansion. The preview pane renders images and SVGs natively, opens
+  text-like objects (txt, md, json, csv, log, ...) in an inline editor with
+  dirty tracking and Ctrl+S save-back, and falls back to metadata plus
+  download/open-externally for PDF and other binary objects; preview size is
+  capped at a configurable 10 MiB, and archived storage classes (GLACIER,
+  DEEP_ARCHIVE) never fetch a body. Full object CRUD covers upload, delete,
+  type-to-confirm recursive prefix/bucket delete batched in groups of 1000,
+  folder and bucket creation with per-endpoint option degradation, rename via
+  copy-then-delete, and presigned URLs. A full editor tab with an in-editor
+  find panel, a resizable object-details pane, and a row context menu round
+  out the browsing experience. Authentication supports AWS profiles/SSO or
+  static credentials, with custom endpoints for Cloudflare R2, MinIO, and
+  path-style addressing. Every mutation is audited under a new object-storage
+  event category, and a MinIO-backed live integration suite runs in CI.
+  Deferred: multipart upload with a transfers panel, and an embedded PDF
+  viewer.
+
+* **Amazon Redshift driver (read-only) (DBF-23)** — A first-party Redshift
+  connection for browsing and querying analytical warehouses. Connect over the
+  PostgreSQL wire protocol (host, port `5439`, database, user, password; TLS
+  with optional custom root CA and client-certificate mTLS; optional SSH
+  tunnel), browse schemas, tables, views, and columns, and run read-only
+  `SELECT` queries. Table details surface Redshift-specific distribution and
+  sort keys plus advisory (non-enforced) primary/foreign/unique constraints as
+  storage hints, shown through a generic sidebar seam that any driver can
+  populate. `NUMERIC`/`DECIMAL` values are decoded from the binary wire format.
+  This first release is read-only: `INSERT`/`UPDATE`/`DELETE`, inline editing,
+  and multi-statement input are rejected with a clear error; IAM/SSO auth,
+  `COPY`/`UNLOAD`, and query-plan visualization are not yet supported.
+  
 * **Context-aware SQL autocomplete in the query editor** — Completion in the
   SQL editor now follows where the cursor sits instead of listing every
   identifier the connection knows: tables and views after `FROM`/`JOIN`,
@@ -52,6 +173,47 @@ All notable changes to DBFlux will be documented in this file.
   material travels only inside the encrypted secrets section, passphrase
   encryption is on by default, and the bundle format is unchanged.
 
+* **Export / import connection profiles as a portable bundle (#212)** —
+  Connection profiles can be exported to a single passphrase-encrypted TOML
+  bundle and imported on another machine, with a wizard that resolves name
+  conflicts and required references. A driver seam (`ExportFieldHint`) decides
+  per field what travels: regular values are included, passwords and
+  write-only fields go into the encrypted secrets section, local file paths are
+  flagged as machine-local, and environment-local references (AWS named
+  profiles, auth-profile references) are marked required-on-import so the user
+  supplies them on the target machine.
+
+* **Schema diff & apply (DBF-24)** — A schema-drift comparison now works at the
+  table-set level, not just per table: added, removed, and modified tables are
+  detected by `(schema, name)` identity, and each individual change (column
+  added/removed/renamed, type or default changed, index added/removed,
+  constraint added/removed, primary-key changed) is annotated with its
+  governance risk through the same classifier the MCP layer uses, so risky
+  operations are labelled consistently everywhere. The drift modal renders the
+  new change kinds and the resulting migration can be applied from the UI.
+
+* **Cross-driver query tooling — PartiQL editor and Document-driver builder** —
+  The query editor and visual builder are no longer SQL-only. A new
+  `EditorLanguageProfile` seam on `DriverMetadata` drives highlighting,
+  placeholder, comment prefix, connection-context controls, and live
+  diagnostics from driver metadata instead of the query language enum, and the
+  builder now opens for any driver whose capabilities support it, sourcing its
+  sections and operators from `QueryCapabilities`. In practice this gives
+  DynamoDB a full PartiQL surface — SQL-style highlighting, context-aware
+  autocomplete over the table and its sampled attributes, `SELECT` reads and
+  governed writes through `ExecuteStatement`, and sort-key-only ordering — and
+  gives MongoDB read generation from the visual builder. No-`WHERE` PartiQL
+  `DELETE`/`UPDATE` is flagged as dangerous through the shared classifier.
+  Relational drivers are unchanged.
+
+* **Per-channel app icon and identity (#183)** — Nightly builds now ship their
+  own brand mark, application id (`dbflux-nightly`), window title, desktop and
+  MIME entries, and database file, so a nightly install coexists with a stable
+  one instead of sharing its taskbar entry and data. The channel is derived
+  once from the compiled version, and nightly can opt into sharing the stable
+  database from Settings. macOS and Windows move onto the same design-system
+  mark as Linux; stable packaging output is byte-identical to before.
+
 ### Fixed
 
 * **Standalone MCP server failed to start and listed no tools** — The
@@ -69,27 +231,56 @@ All notable changes to DBFlux will be documented in this file.
   `flex_shrink_0` and the text column `min_w_0`, so the icon always renders and
   the subtitle truncates instead.
 
-* **Chart auto-detection across four drivers (#204)** — Drivers now assign
-  `ColumnKind` honestly so the chart engine includes genuine numeric columns
-  and excludes non-plottable ones. CloudWatch CWL Insights `@timestamp` and
-  `@ingestionTime` values are normalised from CWLI format (`YYYY-MM-DD
-  HH:MM:SS.mmm`, UTC) to RFC3339 so the time axis can parse them; the kind
-  scanner now skips `Text` samples and keeps scanning for a numeric value,
-  so mixed-type columns resolve correctly. DynamoDB infers column kind from
-  `AttributeValue` (`N` → `Integer` when the string parses as `i64`, else
-  `Float`; `S` → `Text`; `Bool` → `Integer`; anything else → `Unknown`).
-  MongoDB document and query results infer column kinds from BSON value types
-  (Int32/Int64 → Integer, Double/Decimal128 → Float, Boolean → Integer,
-  String → Text, DateTime → Timestamp); BSON `Timestamp` (oplog logical
-  clock) stays `Unknown` because it carries no wall-clock meaning. InfluxDB
-  Flux and InfluxQL kind mappers classify `boolean` as `Integer`. Across all
-  drivers, `Value::Bool` now plots as 0/1, matching MSSQL BIT behaviour. The
-  chart engine now extracts `Value::DateTime` and `Value::Date` as
-  epoch-milliseconds on a time axis (Date as midnight UTC), so datetime/date
-  columns from any driver can drive a time axis. `Value::Time` has no absolute
-  epoch and remains unplottable, so SQL Server `TIME` columns are now
-  classified `Unknown` instead of `Timestamp` (they would otherwise be offered
-  as an empty time axis).
+* **Shutdown left connections and background work dangling** — `SIGINT` and
+  `SIGTERM` now run the same graceful shutdown path as closing the window, so
+  connections, hooks, and background tasks are torn down instead of being
+  killed mid-flight.
+
+* **Connection hooks were dropped when a profile was saved** — Editing a
+  profile could discard its hook bindings, and the hook "test" run did not
+  execute the configured phases. Both are fixed, and hook phases run as
+  configured.
+
+* **Duplicate Settings windows** — Closing and reopening Settings could leave a
+  second window behind; only one Settings window can now exist at a time.
+
+* **Sidebar context menus escaped the window and drifted** — Context menus and
+  their submenus are now anchored to the owning row instead of trailing the
+  cursor, and are repositioned to stay on-screen near window edges.
+
+* **Single-database connections lost their lazy nodes** — Sidebar refresh could
+  collapse a lazily loaded single-database node and drop its children.
+
+* **MySQL / MariaDB panicked when connecting over TLS (#291)** — SSL
+  connections aborted the process instead of returning an error.
+
+* **Main window did not come to the front on a second launch** — An IPC focus
+  request now activates and raises the existing window.
+
+* **Inline table editing discarded typed text** — Text typed into an inline
+  cell editor could be reset before commit.
+
+* **Audit CSV export was not RFC 4180-safe** — Text columns are now escaped
+  correctly, so exports containing quotes, commas, or newlines round-trip
+  losslessly.
+
+* **Settings number inputs collapsed on first layout** — General settings
+  number fields are laid out in a flex row with a definite width, so they no
+  longer render zero-width until the first resize.
+
+* **MCP governance, audit, and DDL integrity hardening (MCP-1..6)** — Fixes
+  across policy evaluation, audit persistence, and DDL classification in the
+  MCP governance stack.
+
+* **Security and reliability hardening (SEC2-3..5, MISC-1..15)** — MySQL hex
+  literal handling, storage file permissions, `process.run` PATH visibility,
+  atomic migration bootstrap, non-panicking `SystemTime` use, and bounded IPC
+  reads, plus assorted reliability fixes.
+
+* **Packaging and CI** — The nightly binary build resolves brand-mark
+  locations correctly, `dbflux-nightly` is exposed through the Nix overlay with
+  a stamped build version, nightly release notes are scoped to commits since
+  the previous nightly, and stale nightly assets are pruned.
 
 ## [0.6.0] - 2026-06-04
 
@@ -262,6 +453,7 @@ All notable changes to DBFlux will be documented in this file.
 - **NULL rendered as an empty field in CSV export** — CSV export emitted the PostgreSQL `\COPY` sentinel `\N` for NULL, which most CSV consumers (Excel, Sheets, generic parsers) read as the literal string. NULL now exports as an empty field, the de facto CSV convention.
 - **Inactive tab background no longer mismatches the tab bar.**
 - **Multiline UPDATE/DELETE no longer falsely flagged as missing a `WHERE`** — The dangerous-query check matched only the literal substring `" where "`, so a `WHERE` placed on its own line (preceded by a newline rather than a space) was never found and the statement was wrongly reported as affecting all rows. Detection now strips single-quoted string literals (honoring `''` escapes) and matches `where` as a whitespace/paren-delimited token, fixing the false positive for both UPDATE and DELETE while still catching `where` text that only appears inside a value.
+- **Chart auto-detection across four drivers (#204)** — Drivers now assign `ColumnKind` honestly so the chart engine includes genuine numeric columns and excludes non-plottable ones. CloudWatch CWL Insights `@timestamp` / `@ingestionTime` values are normalised from CWLI format to RFC3339, and the kind scanner skips `Text` samples so mixed-type columns resolve correctly. DynamoDB infers kind from `AttributeValue`, MongoDB from BSON value types (BSON `Timestamp` stays `Unknown` — it carries no wall-clock meaning), and InfluxDB Flux/InfluxQL classify `boolean` as `Integer`. `Value::Bool` plots as 0/1 across all drivers, and `Value::DateTime` / `Value::Date` are extracted as epoch-milliseconds on a time axis. `Value::Time` has no absolute epoch, so SQL Server `TIME` columns are classified `Unknown` instead of being offered as an empty time axis.
 
 ## [0.6.0-dev.10] - 2026-05-29
 

@@ -1,5 +1,7 @@
 # Architecture
 
+For the conceptual model and contract boundaries, begin with [Key Concepts](docs/CONCEPTS.md). This document remains canonical for crate boundaries and key files.
+
 ## Overview
 
 - DBFlux is a keyboard-first database client built with Rust and GPUI, focused on fast workflows and a clean desktop UI (README.md).
@@ -40,7 +42,7 @@ flowchart TB
     end
 
     subgraph Drivers["Driver implementations"]
-        drv["postgres · mysql · sqlite · mssql<br/>mongodb · redis · dynamodb<br/>influxdb · cloudwatch · ipc (RPC)"]
+        drv["postgres · mysql · sqlite · mssql · clickhouse<br/>mongodb · redis · dynamodb<br/>influxdb · cloudwatch · ipc (RPC)"]
     end
 
     subgraph Support["Supporting libraries"]
@@ -106,7 +108,7 @@ flowchart TB
 
 - Language: Rust 2024 edition (crates/dbflux/Cargo.toml).
 - UI: `gpui`, `gpui-component` (Cargo.toml).
-- Databases: `tokio-postgres` (PostgreSQL), `rusqlite` (SQLite), `mysql` (MySQL/MariaDB), `mongodb` (MongoDB), `redis` (Redis), `aws-sdk-dynamodb` (DynamoDB) (Cargo.toml).
+- Databases: `tokio-postgres` (PostgreSQL), `rusqlite` (SQLite), `mysql` (MySQL/MariaDB), `mongodb` (MongoDB), `redis` (Redis), `aws-sdk-dynamodb` (DynamoDB), and HTTP via `reqwest` (ClickHouse) (Cargo.toml).
 - AWS auth/integration: `aws-config`, `aws-sdk-sso`, `aws-sdk-ssooidc`, `aws-sdk-sts`, `aws-sdk-secretsmanager`, `aws-sdk-ssm` (`dbflux_aws`).
 - IPC/RPC: `interprocess` local sockets + `bincode` message framing (`dbflux_ipc`, `dbflux_driver_ipc`, `dbflux_driver_host`).
 - SSH: `ssh2` via `dbflux_ssh` (crates/dbflux_ssh/src/lib.rs).
@@ -456,8 +458,15 @@ crates/
   dbflux_driver_influxdb/   # InfluxDB driver (v1 + v2)
     src/driver.rs           # Connection, bucket/measurement discovery, query execution
     src/query_generator.rs  # InfluxQL (v1) and Flux (v2) query/template generation
+  dbflux_driver_clickhouse/ # ClickHouse HTTP(S) relational driver
+    src/driver.rs           # Metadata, connection form, and connection construction
+    src/connection.rs       # Query execution and system-catalog discovery
+    src/types.rs            # ClickHouse type parsing and value decoding
+    src/dialect.rs          # SQL generation dialect
   dbflux_driver_cloudwatch/ # AWS CloudWatch Logs driver (DatabaseCategory::LogStream)
     src/driver.rs           # Log group/stream discovery, EventStreamTarget, CollectionPresentation::EventStream
+  dbflux_driver_s3/         # AWS S3 object-storage driver (DatabaseCategory::ObjectStorage)
+    src/driver.rs           # Bucket/object discovery, ObjectStoreConnection impl, presign/copy/versions
   dbflux_aws/               # AWS auth providers + Secrets Manager/SSM value providers
     src/auth.rs             # AWS SSO/shared/static providers and SSO login flow
     src/config.rs           # ~/.aws/config parser/cache and profile write-back helpers
@@ -567,7 +576,7 @@ User-triggered failures route through a single seam in `crates/dbflux_ui_base/sr
 
 2. **`PaneHandle`** (`pane.rs`) — closure-erasing shell that replaces the old closed `DocumentHandle` enum. Each of the 22 operations (render, focus, dispatch_command, meta_snapshot, tab_title, can_close, connection_id, active_context, change_summary, refresh_policy, set_active_tab, set_refresh_policy, flush_auto_save, matches_dedup_key, subscribe, plus optional helpers) is a `Box<dyn Fn>` closure capturing the typed `Entity<T>`. `PaneHandle` is `!Clone`. Each document type provides `XxxDocument::into_pane(entity, cx) -> PaneHandle` in its own `pane.rs` file (all under `crates/dbflux_ui_document/src/`). Adding a new document type requires no changes to `workspace/mod.rs`, `tab_manager.rs`, `tab_bar.rs`, or `handle.rs`.
 
-3. **`DocumentKey`** (`dedup.rs`) — identity enum used for tab deduplication. Variants: `Table`, `Collection`, `File`, `KeyValueDb`, `Chart`, `Audit`, `EventStream`, `Routine`, `MetricChart`, `Dashboard`, `InstanceMetric`, `InstanceInspector`, `InstanceOverview`. Replaces the `is_*` methods on the old `DocumentHandle`. Call sites use `tab_manager.find_by_key(&DocumentKey::Table { ... }, cx)`.
+3. **`DocumentKey`** (`dedup.rs`) — identity enum used for tab deduplication. Variants: `Table`, `Collection`, `File`, `KeyValueDb`, `Chart`, `Audit`, `EventStream`, `Routine`, `MetricChart`, `Dashboard`, `InstanceMetric`, `InstanceInspector`, `InstanceOverview`, `ObjectStoreBucketsRoot`, `ObjectBrowser`, `ObjectEditor`. Replaces the `is_*` methods on the old `DocumentHandle`. Call sites use `tab_manager.find_by_key(&DocumentKey::Table { ... }, cx)`.
 
 4. **`DocumentEvent`** (`handle.rs`, ~30 LOC) — unified event enum replacing four per-document event enums that were deleted. Variants: `MetaChanged`, `ExecutionStarted`, `ExecutionFinished`, `RequestClose`, `RequestFocus`, `RequestSqlPreview`, `OpenInspector`, `ChartThisQuery`.
 
@@ -583,6 +592,9 @@ User-triggered failures route through a single seam in `crates/dbflux_ui_base/sr
 - `AuditDocument` (`crates/dbflux_ui_document/src/audit/`) — self-renders. `LogStreamView` is a file-level boundary struct. Body extracted to `audit/render.rs` and `audit/commands.rs` as sibling `impl AuditDocument` files.
 - `InstanceInspectorDocument` (`crates/dbflux_ui_document/src/instance_inspector/`) — tabular instance-inspector snapshot tab, keyed by `DocumentKey::InstanceInspector`.
 - `chart/` (`crates/dbflux_ui_document/src/chart/`) — the `ChartShell` host (`shell.rs`, `host.rs`) plus metric picker (`metric_picker*.rs`) and `toolbar.rs`, distinct from `chart_document/`; it backs metric/instance charts.
+- `BucketsTableDocument` (`crates/dbflux_ui_document/src/buckets_table/`) — connection-root object-storage view (name, region, object count, size, versioning, created), reusing `dbflux_components::data_table` rather than `DataGridPanel`; keyed by `DocumentKey::ObjectStoreBucketsRoot`.
+- `ObjectBrowserDocument` (`crates/dbflux_ui_document/src/object_browser/`) — split tree/preview object-storage browser with paginated and lazy-tree navigation, preview, metadata, upload, delete, rename, and presign; keyed by `DocumentKey::ObjectBrowser`.
+- `ObjectEditorDocument` (`crates/dbflux_ui_document/src/object_editor/`) — standalone "open in editor" tab for S3 text objects, sharing the `object_text` module (line-ending detection, language highlighting, save audit) with `ObjectBrowserDocument`'s inline editor; keyed by `DocumentKey::ObjectEditor`.
 
 **Adding a new document type** (no changes required outside the new module):
 1. Create `crates/dbflux_ui_document/src/<name>/mod.rs` with the entity.
@@ -657,7 +669,7 @@ See `docs/DASHBOARDS.md` for the full reference (including instance metrics and 
 ### Driver System
 
 - **Driver capabilities**: `crates/dbflux_core/src/driver/capabilities.rs` defines:
-  - `DatabaseCategory`: Relational, Document, KeyValue, Graph, TimeSeries, WideColumn, LogStream
+  - `DatabaseCategory`: Relational, Document, KeyValue, Graph, TimeSeries, WideColumn, LogStream, ObjectStorage
   - `QueryLanguage`: Sql, CloudWatchLogsInsightsQl, OpenSearchPpl, OpenSearchSql, MongoQuery, RedisCommands, Cypher, InfluxQuery, Flux, Cql, Lua, Python, Bash (each carries editor mode, placeholder, comment prefix)
   - `DriverCapabilities`: `u64` bitflags for features like PAGINATION, TRANSACTIONS, NESTED_DOCUMENTS, MULTI_STATEMENT, ROUTINES, STORED_PROCEDURES, DASHBOARD_IMPORT, DASHBOARD_SYNC, etc.
   - `DriverMetadata`: static driver info (id, name, category, query_language, capabilities, icon)
@@ -672,6 +684,7 @@ See `docs/DASHBOARDS.md` for the full reference (including instance metrics and 
   - `CollectionChildInfo` lets drivers publish child sources under a collection/container without UI heuristics.
   - `EventStreamTarget` gives workspace/audit a generic identifier for driver-backed event streams.
   - `SourceContextSpec` lets drivers declare extra query-context controls without hardcoding driver names in `dbflux_ui`.
+  - `ObjectStoreConnection` (`crates/dbflux_core/src/core/traits.rs`), reached via `Connection::object_store_api()`, is the object-storage seam (bucket/object listing, CRUD, presign, copy, versions); `CollectionPresentation::ObjectBrowser` and `PaneHandle::status_segments()` let the UI open and chrome object-storage documents without branching on driver ID.
   - If the UI needs new behavior, add a generic core abstraction first; do not add `if driver_id == ...` in `dbflux_ui` or app-facing workflow code.
 
 ### Auth & Access Pipeline
@@ -783,7 +796,7 @@ See `docs/DASHBOARDS.md` for the full reference (including instance metrics and 
 - `display_name()` — window title and bundle name (`DBFlux Nightly` vs `DBFlux`).
 - `db_file_name()` — `dbflux-nightly.db` vs `dbflux.db`, so a migration that breaks on a pre-release build cannot corrupt a stable database when both channels run side by side. A nightly build can opt into the stable database through the `set_nightly_shares_stable_db` marker (see § Storage & Configuration).
 
-**Branding assets**: full-color brand marks live under `resources/branding/{stable,nightly}/` (`mark.svg`, `mark-256.png`, `mark-small.svg`, `wordmark.svg`) plus the shared `resources/branding/glyph.svg`. `crates/dbflux_ui/src/assets.rs` serves the pre-rendered PNG mark per channel for `img(...)`. Packaging metadata (`packaging/*.yaml`, `resources/desktop/dbflux.desktop`, `resources/macos/Info.plist`, `resources/windows/installer.iss`) and the Nix build (`nix/binary.nix`, `nix/nightly-info.nix`, `nix/release-info.nix`) substitute channel placeholders so the desktop entry, MIME association, and launcher icon match the running channel.
+**Branding assets**: full-color brand marks live under `resources/branding/{stable,nightly}/` (`mark.svg`, `mark-256.png`, `mark-small.svg`, `wordmark.svg`) plus the shared `resources/branding/glyph.svg`. `crates/dbflux_ui/src/assets.rs` serves the pre-rendered PNG mark per channel for `img(...)`. The platform icon files are committed under `packaging/icons/` (`dbflux.ico` / `dbflux-nightly.ico` for Windows, `dbflux.icns` / `dbflux-nightly.icns` for the macOS bundle) and regenerated from the SVGs when the artwork changes; `crates/dbflux/build.rs` embeds the Windows icon and `VERSIONINFO` into `dbflux.exe`, choosing the channel by the same version rule as `ReleaseChannel`. Packaging metadata (`packaging/*.yaml`, `resources/desktop/dbflux.desktop`, `resources/macos/Info.plist`, `resources/windows/installer.iss`) and the Nix build (`nix/binary.nix`, `nix/nightly-info.nix`, `nix/release-info.nix`) substitute channel placeholders so the desktop entry, MIME association, and launcher icon match the running channel.
 
 The channel/branding model is a runtime seam: UI and app code read `ReleaseChannel` accessors; never branch on the raw version string or hardcode `dbflux`/`dbflux-nightly` identifiers. The release/nightly flow itself is documented in `docs/RELEASE.md`.
 
@@ -816,10 +829,20 @@ The channel/branding model is a runtime seam: UI and app code read `ReleaseChann
   - v1 speaks InfluxQL; v2 exposes Flux in addition to InfluxQL (`QueryGenerator` emits Flux only when `version == V2`)
   - Bucket/database and measurement discovery mapped to the schema model, with pagination and CSV/JSON export
   - Read-oriented: no transactions; mutation generation is limited compared with the relational drivers
+- **ClickHouse**: `crates/dbflux_driver_clickhouse/` — `DatabaseCategory::Relational` and `QueryLanguage::Sql` driver for self-hosted ClickHouse and ClickHouse Cloud:
+  - Uses ClickHouse's HTTP(S) interface and dynamic JSON result decoding for arbitrary schemas
+  - Discovers databases, tables, views, columns, and engine metadata without representing databases as schemas
+  - Supports read-oriented SQL and visual SELECT generation; structured mutations, DDL, transactions, SSH tunneling, and generic query parameters are not exposed
 - **CloudWatch Logs**: `crates/dbflux_driver_cloudwatch/` — `DatabaseCategory::LogStream` driver for AWS CloudWatch Logs:
   - Log group/stream discovery exposed as collections; log groups open as event streams via `CollectionPresentation::EventStream` and a generic `EventStreamTarget`, consumed by the `AuditDocument`/log-stream viewer without any driver-specific UI branch
   - Query modes (Logs Insights QL, OpenSearch PPL/SQL) are surfaced through `SourceContextSpec`; `DriverMetadata.query_language` defaults to `Sql` for editor behavior
   - Authentication through the AWS auth stack; no query cancellation yet
+- **Amazon S3**: `crates/dbflux_driver_s3/` — `aws-sdk-s3` driver (`DatabaseCategory::ObjectStorage`):
+  - Authentication via AWS profile/SSO (`AuthProfileRef`) or static access-key credentials, with endpoint override and path-style addressing for S3-compatible endpoints (Cloudflare R2, MinIO)
+  - Bucket discovery (`BucketsTableDocument` at the connection root) and per-level paginated object navigation (`ObjectBrowserDocument`), with an optional non-paginated tree mode
+  - `ObjectStoreConnection` implementation covers upload, delete, recursive prefix/bucket delete (batched `DeleteObjects`), copy, presign, bucket details/versioning, and object versions
+  - Full CRUD from the UI: upload, type-to-confirm recursive delete, folder/bucket creation with per-endpoint graceful degradation, rename (copy-then-delete), presigned URLs
+  - Every mutation audited under `EventCategory::ObjectStorage`; credentials and presigned URLs are never logged or persisted
 
 ### Driver README policy
 
@@ -923,6 +946,8 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 - MongoDB: `mongodb` async driver with BSON handling, query parser for `db.collection.method()` syntax, collection/index discovery, document CRUD, shell query generation, and collection description support for MCP/UI metadata workflows (crates/dbflux_driver_mongodb/src/driver.rs).
 - Redis: `redis` driver with key-value API for all Redis types, variadic commands, keyspace support, key scanning, and command generation (crates/dbflux_driver_redis/src/driver.rs).
 - DynamoDB: `aws-sdk-dynamodb` driver with AWS profile/region support for remote DynamoDB, plus optional endpoint override for local emulators and tests (crates/dbflux_driver_dynamodb/src/driver.rs).
+- ClickHouse: HTTP(S) driver using `reqwest` with dynamic JSON decoding, database/table discovery, and read-oriented SQL support for self-hosted ClickHouse and ClickHouse Cloud (crates/dbflux_driver_clickhouse/src/driver.rs).
+- Amazon S3: `aws-sdk-s3` driver with AWS profile/SSO or static credentials, endpoint override and path-style addressing for S3-compatible endpoints (Cloudflare R2, MinIO), bucket/object CRUD, presigned URLs, and copy/versions support (crates/dbflux_driver_s3/src/driver.rs).
 - AWS auth stack: `dbflux_aws` provides AWS SSO/shared/static auth providers, SSO login orchestration, account/role discovery, and `~/.aws/config` profile write-back for newly saved auth profiles.
 - Local IPC/RPC: `interprocess` sockets + versioned envelopes for app control and RPC service communication (`crates/dbflux_ipc/`, `crates/dbflux_driver_ipc/`, `crates/dbflux_driver_host/`). `dbflux_app::rpc_services` discovers persisted service descriptors, adapts `RpcServiceKind::Driver` into runtime `DbDriver`s, and wires `RpcServiceKind::AuthProvider` into `RpcAuthProvider` (which implements `DynAuthProvider`). Preserves `rpc:<socket_id>` compatibility. Auth-provider IPC protocol is at v1.2: adds `FetchDynamicOptions` / `DynamicOptions` variants and the `secret_dependency_opt_in` manifest flag. Auth tokens are managed by `dbflux_ipc/src/auth.rs`.
 - Proxy: SOCKS5/HTTP CONNECT tunnels via `dbflux_tunnel_core::Tunnel` (crates/dbflux_proxy/src/lib.rs).
@@ -933,7 +958,7 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 ## Configuration
 
 - Workspace settings: `Cargo.toml` defines workspace members and shared dependencies.
-- App features: `crates/dbflux/Cargo.toml` gates `sqlite`, `postgres`, `mysql`, `mongodb`, `redis`, `dynamodb`, `cloudwatch`, `influxdb`, `mssql`, `lua`, `aws`, and `mcp` (enabled by default in this branch).
+- App features: `crates/dbflux/Cargo.toml` gates `sqlite`, `postgres`, `mysql`, `mongodb`, `redis`, `dynamodb`, `cloudwatch`, `influxdb`, `mssql`, `redshift`, `clickhouse`, `s3`, `lua`, `aws`, and `mcp` (enabled by default in this branch).
 - Runtime data: All runtime configuration is stored in `~/.local/share/dbflux/dbflux.db` (single SQLite file).
   - `cfg_connection_profiles` + child tables (auth, proxy, SSH bindings)
   - `cfg_auth_profiles` (provider-agnostic auth profile storage)
@@ -961,8 +986,8 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 
 ## Build & Deploy
 
-- Build: `cargo build -p dbflux --features sqlite,postgres,mysql,mongodb,redis,dynamodb,aws` or `--release` (AGENTS.md).
-- Run: `cargo run -p dbflux --features sqlite,postgres,mysql,mongodb,redis,dynamodb,aws` (AGENTS.md).
+- Build: `cargo build -p dbflux --features sqlite,postgres,mysql,mongodb,redis,dynamodb,clickhouse,aws` or `--release` (AGENTS.md).
+- Run: `cargo run -p dbflux --features sqlite,postgres,mysql,mongodb,redis,dynamodb,clickhouse,aws` (AGENTS.md).
 - Test: `cargo test --workspace` (AGENTS.md).
 - Lint/format: `cargo clippy --workspace -- -D warnings`, `cargo fmt --all` (AGENTS.md).
 - Nix: `nix build` or `nix run` using flake.nix; `nix develop` for dev shell.

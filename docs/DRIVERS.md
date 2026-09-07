@@ -4,7 +4,8 @@ This document is a comparative overview of the database drivers shipped with
 DBFlux. For per-driver details, follow the link to each driver crate's
 `README.md`. For the internal driver architecture (traits, registration, the
 `DbDriver`/`Connection` seam), see the **Driver System** section of
-[`ARCHITECTURE.md`](../ARCHITECTURE.md).
+[`ARCHITECTURE.md`](../ARCHITECTURE.md). Contributors implementing a driver
+should start with the [Driver Authoring Guide](DRIVER_AUTHORING.md).
 
 ## How drivers are abstracted
 
@@ -32,6 +33,7 @@ The capability flags listed below are exactly the ones each driver's
 | Driver | Category | Query language | Key capabilities | Notes / limitations |
 | --- | --- | --- | --- | --- |
 | PostgreSQL | Relational | SQL | Relational base + schemas, SSH tunnel, SSL, auth, foreign keys, check/unique constraints, custom types, `RETURNING`, transactional DDL, routines, multi-statement | Full SQL driver; routine viewer is read-only; transactional DDL except `CREATE INDEX CONCURRENTLY`. |
+| Amazon Redshift | Relational | SQL | Multiple databases, schemas, views, SSH tunnel, SSL/client certificates, auth, query cancellation, prepared statements, pagination, sorting, filtering, CSV/JSON export | Read-only over the PostgreSQL wire protocol; single-statement; exposes Redshift storage hints; no writes/DDL, IAM/SSO, or indexes. |
 | MySQL | Relational | SQL | Relational base + SSH tunnel, SSL, auth, foreign keys, check/unique constraints, routines, multi-statement | DDL is non-transactional; multi-statement scripts split text-based and run sequentially; routine listing covers FUNCTION/PROCEDURE only. |
 | MariaDB | Relational | SQL | Same crate and capabilities as MySQL | Registered as a separate `mariadb` metadata sharing the MySQL implementation. |
 | SQLite | Relational | SQL | Views, indexes, foreign keys, check/unique constraints, prepared statements, insert/update/delete, pagination, sorting, filtering, CSV/JSON export, query cancellation, transactional DDL, multi-statement | Embedded file driver: no network, SSH tunnel, or TLS; no multi-schema namespace. |
@@ -41,6 +43,8 @@ The capability flags listed below are exactly the ones each driver's
 | DynamoDB | Document | Custom("DynamoDB") | Auth, pagination, filtering, insert/update/delete, nested documents, arrays | AWS-managed; native command envelope (`scan`/`query`/`put`/`update`/`delete`); no PartiQL/transactions; no query cancellation; `update many+upsert` unsupported. |
 | CloudWatch Logs | Log Stream | Sql (metadata default) | Auth | AWS-managed; executes Logs Insights QL, OpenSearch PPL, and OpenSearch SQL via editor-managed source context; no query cancellation yet. |
 | InfluxDB | Time Series | InfluxQuery | Auth, multiple databases, pagination, CSV/JSON export | v1 and v2 in one crate; InfluxQL on both, Flux on v2 only; read-only (no INSERT/UPDATE/DELETE); no transactions. |
+| ClickHouse | Relational | SQL | Multiple databases, views, auth, pagination, sorting, filtering, grouping, joins, CTEs, windows, CSV/JSON export | HTTP(S), including ClickHouse Cloud; read-oriented DBFlux integration with no structured mutations, DDL, transactions, SSH tunneling, or query parameters. |
+| Amazon S3 | Object Storage | Custom("S3") | Auth (profile/SSO or static credentials, custom endpoint), bucket browsing, paginated object navigation, preview, full CRUD, presigned URLs | S3-compatible (Cloudflare R2, MinIO); no multipart upload/transfers panel, no embedded PDF viewer, no lifecycle/ACL management or S3 Select. |
 
 ## Per-driver summary
 
@@ -51,6 +55,15 @@ SSH tunneling, query cancellation via cancel tokens, transactional DDL, and
 PostgreSQL-specific code generation. Multi-statement scripts run as a batch via
 the simple query protocol. See
 [`crates/dbflux_driver_postgres/README.md`](../crates/dbflux_driver_postgres/README.md).
+
+### Amazon Redshift
+
+Read-only relational SQL driver using the PostgreSQL wire protocol. It supports
+schema, table, view, and column introspection; SSH tunneling; TLS and client
+certificates; query cancellation; and Redshift distribution/sort-key storage
+hints. It does not support writes or DDL, IAM/SSO authentication,
+multi-statement queries, or indexes. See
+[`crates/dbflux_driver_redshift/README.md`](../crates/dbflux_driver_redshift/README.md).
 
 ### MySQL / MariaDB
 
@@ -114,6 +127,31 @@ on both versions; Flux runs on v2 only. The query API is read-only (no
 INSERT/UPDATE/DELETE, no transactions), with optional default bucket/database and
 per-query bucket routing. See
 [`crates/dbflux_driver_influxdb/README.md`](../crates/dbflux_driver_influxdb/README.md).
+
+### ClickHouse
+
+Relational SQL driver for self-hosted ClickHouse and ClickHouse Cloud over
+HTTP(S). It discovers databases, tables, views, columns, and engine metadata,
+and supports read-oriented SQL workflows with pagination and visual SELECT
+generation. Structured mutations, DDL, transactions, SSH tunneling, and generic
+query parameters are not supported in this initial scope. See
+[`crates/dbflux_driver_clickhouse/README.md`](../crates/dbflux_driver_clickhouse/README.md).
+
+### Amazon S3
+
+Object-storage driver for AWS S3 and S3-compatible endpoints (Cloudflare R2,
+MinIO), authenticating via AWS profile/SSO or static credentials with endpoint
+override and path-style addressing. The connection root opens a buckets table;
+bucket browsing paginates per level (AWS-console style) with an optional
+non-paginated tree mode. Object preview covers images natively, text-like
+objects in an inline editable buffer with save-back, and metadata plus
+download/open-externally for PDF and other binary objects; archived storage
+classes (GLACIER, DEEP_ARCHIVE) skip body preview entirely. Supports upload,
+delete, type-to-confirm recursive prefix/bucket delete, folder/bucket
+creation, rename (copy-then-delete), and presigned URLs. It does not support
+multipart upload, a transfers panel, an embedded PDF viewer, lifecycle/ACL
+management, or S3 Select. See
+[`crates/dbflux_driver_s3/README.md`](../crates/dbflux_driver_s3/README.md).
 
 ## External RPC drivers
 

@@ -49,10 +49,13 @@ impl ModalImportDashboard {
                 .code_editor("json")
                 .line_number(true)
                 .soft_wrap(true)
-                .placeholder("Paste dashboard JSON here…")
+                .placeholder(dbflux_i18n::t!("modals.import_dashboard.json_placeholder"))
         });
 
-        let name_input = cx.new(|cx| InputState::new(window, cx).placeholder("Dashboard name"));
+        let name_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(dbflux_i18n::t!("modals.import_dashboard.name_placeholder"))
+        });
 
         Self {
             visible: false,
@@ -128,7 +131,7 @@ impl ModalImportDashboard {
 
         let name = self.name_input.read(cx).value().trim().to_string();
         if name.is_empty() {
-            self.name_error = Some("Name cannot be empty".to_string());
+            self.name_error = Some(dbflux_i18n::t!("modals.import_dashboard.name_error"));
             cx.notify();
             return;
         }
@@ -144,7 +147,7 @@ impl ModalImportDashboard {
         };
 
         if final_name.trim().is_empty() {
-            self.name_error = Some("Name cannot be empty".to_string());
+            self.name_error = Some(dbflux_i18n::t!("modals.import_dashboard.name_error"));
             cx.notify();
             return;
         }
@@ -213,7 +216,9 @@ impl Render for ModalImportDashboard {
             .flex()
             .flex_col()
             .gap(Spacing::XS)
-            .child(Text::label("Dashboard name"))
+            .child(Text::label(dbflux_i18n::t!(
+                "modals.import_dashboard.name_label"
+            )))
             .child(Input::new(&self.name_input))
             .when_some(name_error, |el, err| {
                 el.child(
@@ -229,7 +234,9 @@ impl Render for ModalImportDashboard {
             .flex()
             .flex_col()
             .gap(Spacing::XS)
-            .child(Text::label("Dashboard JSON"))
+            .child(Text::label(dbflux_i18n::t!(
+                "modals.import_dashboard.json_label"
+            )))
             .child(
                 div()
                     .border_1()
@@ -301,14 +308,14 @@ impl Render for ModalImportDashboard {
                     .gap(Spacing::SM)
                     .child(
                         Button::new("import-dashboard-format")
-                            .label("Format")
+                            .label(dbflux_i18n::t!("modals.import_dashboard.format"))
                             .small()
                             .with_variant(ButtonVariant::Ghost)
                             .on_click(on_format),
                     )
                     .child(
                         Button::new("import-dashboard-compact")
-                            .label("Compact")
+                            .label(dbflux_i18n::t!("modals.import_dashboard.compact"))
                             .small()
                             .with_variant(ButtonVariant::Ghost)
                             .on_click(on_compact),
@@ -321,19 +328,19 @@ impl Render for ModalImportDashboard {
                     .gap(Spacing::SM)
                     .child(
                         Button::new("import-dashboard-cancel")
-                            .label("Cancel")
+                            .label(dbflux_i18n::t!("modals.import_dashboard.cancel"))
                             .on_click(on_cancel),
                     )
                     .child(
                         Button::new("import-dashboard-save")
-                            .label("Import")
+                            .label(dbflux_i18n::t!("modals.import_dashboard.confirm"))
                             .with_variant(ButtonVariant::Primary)
                             .on_click(on_save),
                     ),
             );
 
         ModalShell::new(
-            "Import Dashboard from JSON",
+            dbflux_i18n::t!("modals.import_dashboard.title"),
             body.into_any_element(),
             footer.into_any_element(),
         )
@@ -381,9 +388,34 @@ mod tests {
     }
 
     #[test]
-    fn modal_title_contains_no_cloudwatch_substring() {
-        let title = "Import Dashboard from JSON";
-        assert!(!title.contains("CloudWatch"));
-        assert!(title.contains("Import Dashboard from JSON"));
+    fn modal_title_matches_translated_catalog_and_diverges_by_locale() {
+        let en = dbflux_i18n::t!("modals.import_dashboard.title", locale = "en");
+        let es = dbflux_i18n::t!("modals.import_dashboard.title", locale = "es");
+        assert!(!en.contains("CloudWatch"));
+        assert_eq!(en, "Import Dashboard from JSON");
+        assert_ne!(en, es);
+    }
+
+    #[test]
+    fn import_dashboard_keys_resolve_in_both_locales() {
+        let keys = [
+            "modals.import_dashboard.title",
+            "modals.import_dashboard.name_label",
+            "modals.import_dashboard.name_placeholder",
+            "modals.import_dashboard.json_label",
+            "modals.import_dashboard.json_placeholder",
+            "modals.import_dashboard.name_error",
+            "modals.import_dashboard.format",
+            "modals.import_dashboard.compact",
+            "modals.import_dashboard.cancel",
+            "modals.import_dashboard.confirm",
+        ];
+
+        for key in keys {
+            let en = dbflux_i18n::t!(key, locale = "en");
+            let es = dbflux_i18n::t!(key, locale = "es");
+            assert!(!en.is_empty() && en != key, "en missing for {key}");
+            assert!(!es.is_empty() && es != key, "es missing for {key}");
+        }
     }
 }

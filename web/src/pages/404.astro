@@ -1,0 +1,88 @@
+---
+import Base from '../layouts/Base.astro';
+import { VERSIONS, versionHome, versionLabel } from '../data/versions';
+import { docsUrl, siteUrl } from '../data/site';
+import { localeFromPathname, t } from '../i18n';
+
+/**
+ * Versions come and go, so a link that worked against one release can land here
+ * against another. Offer the documentation of every published version rather
+ * than a dead end.
+ */
+const versions = VERSIONS;
+
+/**
+ * Astro serves one static `404.html`, so there is no `/es/404` or
+ * `/zh-Hans/404` route — this always renders in English. `locale` is still
+ * derived from the build-time URL rather than hardcoded, matching every other
+ * page's pattern.
+ */
+const locale = localeFromPathname(Astro.url.pathname);
+---
+
+<Base
+  title="Page not found — DBFlux"
+  description="That page does not exist."
+  noindex
+  locale={locale}
+>
+  <section class="miss">
+    <p class="eyebrow">404</p>
+    <h1>{t(locale, 'notfound.title')}</h1>
+    <p class="miss__lede">{t(locale, 'notfound.lede')}</p>
+
+    <div class="miss__actions">
+      <a class="btn btn--primary" href={docsUrl('', '', locale)}
+        >{t(locale, 'notfound.docs_button')}</a
+      >
+      <a class="btn btn--secondary" href={siteUrl('', locale)}
+        >{t(locale, 'notfound.home_button')}</a
+      >
+    </div>
+
+    <p class="miss__versions">
+      {t(locale, 'notfound.versions_label')}{' '}
+      {
+        versions.map((version, index) => (
+          <>
+            {index > 0 && <span aria-hidden="true"> &middot; </span>}
+            <a href={versionHome(version)}>{versionLabel(version)}</a>
+          </>
+        ))
+      }
+    </p>
+  </section>
+</Base>
+
+<style>
+  .miss {
+    max-width: 640px;
+    margin-inline: auto;
+    padding: var(--s-9) var(--s-8);
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-5);
+  }
+
+  h1 {
+    font-size: var(--fs-h1);
+  }
+
+  .miss__lede {
+    margin: 0;
+  }
+
+  .miss__actions {
+    display: flex;
+    gap: var(--s-4);
+    flex-wrap: wrap;
+    padding-block: var(--s-4);
+  }
+
+  .miss__versions {
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: var(--fs-small);
+    color: var(--text-muted);
+  }
+</style>

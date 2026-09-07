@@ -653,3 +653,40 @@ fn mssql_ssl_mode_on_trusts_self_signed() -> Result<(), DbError> {
 // `driver.rs::tests` cover instance-name plumbing through `parse_mssql_url`
 // and `build_uri` (round-trip + URI-vs-form precedence). A real live test
 // would need a custom image / sidecar SQL Browser.
+
+// ---------------------------------------------------------------------------
+// Write-privilege probe
+// ---------------------------------------------------------------------------
+//
+// The test container only provisions the `sa` login (sysadmin), so only the
+// writable path is exercised here. There is no low-privilege-user fixture
+// pattern in this suite to spin up a SELECT-only login and assert
+// `WritePrivilege::ReadOnly` against a real server; adding one would need a
+// second connection profile plus a dedicated login/db-user setup this file
+// does not otherwise have.
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mssql_probe_write_privilege_sa_is_writable() -> Result<(), DbError> {
+    containers::with_mssql_url(|uri| {
+        let (connection, _) = connect_mssql(uri)?;
+
+        // The probe resolves an empty database to Unknown by design (nothing
+        // to write to is not the same as forbidden), so a visible base table
+        // must exist before the writable verdict can be asserted.
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE probe_privilege_test (id INT PRIMARY KEY)",
+        ))?;
+
+        // `sa` is sysadmin, so `DATABASEPROPERTYEX(..., 'Updateability')`
+        // reports `READ_WRITE` and `HAS_PERMS_BY_NAME` grants INSERT/UPDATE/
+        // DELETE on every visible base table — this exercises both real
+        // wire queries end to end.
+        assert_eq!(
+            connection.probe_write_privilege(),
+            dbflux_core::WritePrivilege::Writable
+        );
+
+        Ok(())
+    })
+}

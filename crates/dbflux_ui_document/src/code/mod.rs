@@ -10,7 +10,8 @@ use dbflux_components::common::time_range::state::TimeRange;
 use dbflux_components::common::time_range::view::{TimeRangeChanged, TimeRangePanel};
 use dbflux_components::components::multi_select::{MultiSelect, MultiSelectChanged};
 use dbflux_components::controls::{
-    Button, CompletionProvider, GpuiInput as Input, InputEvent, InputPosition, InputState, Rope,
+    Button, CodeActionProvider, CompletionProvider, GpuiInput as Input, InputEvent, InputPosition,
+    InputState, Rope, RopeExt,
 };
 use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use dbflux_components::icons::AppIcon;
@@ -54,6 +55,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use uuid::Uuid;
 
+mod code_actions;
 mod completion;
 mod context_bar;
 mod diagnostics;
@@ -64,6 +66,7 @@ mod live_output;
 pub mod pane;
 mod render;
 
+use code_actions::SqlCodeActionProvider;
 use completion::QueryCompletionProvider;
 use live_output::LiveOutputState;
 
@@ -139,6 +142,8 @@ fn build_source_window_context(
     let requires_targets = query_mode.as_deref() != Some("sql");
 
     if requires_targets && targets.is_empty() {
+        // This is a stable token, not display text: `labels::source_window_error_message`
+        // maps it to the translated catalog entry at the toast display site.
         return Err("Select at least one source");
     }
 
@@ -732,9 +737,11 @@ impl CodeDocument {
                     this.refresh.refresh_dropdown.update(cx, |dd, cx| {
                         dd.set_selected_index(Some(RefreshPolicy::Manual.index()), cx);
                     });
-                    Toast::warning("Auto-refresh blocked: query modifies data")
-                        .meta_right(now_hms())
-                        .push(cx);
+                    Toast::warning(dbflux_i18n::t!(
+                        "document.code.execution.toast.auto_refresh_blocked"
+                    ))
+                    .meta_right(now_hms())
+                    .push(cx);
                     return;
                 }
 
@@ -786,9 +793,16 @@ impl CodeDocument {
                 completion_query_generation.clone(),
             ));
 
+        let code_action_provider: Rc<dyn CodeActionProvider> = Rc::new(SqlCodeActionProvider::new(
+            app_state.clone(),
+            connection_id,
+            exec_ctx.database.clone(),
+        ));
+
         input_state.update(cx, |state, _cx| {
             state.lsp.completion_provider =
                 supports_connection_context.then_some(completion_provider.clone());
+            state.lsp.code_action_providers = vec![code_action_provider.clone()];
         });
 
         let (connection_dropdown, conn_sub) =
@@ -799,7 +813,7 @@ impl CodeDocument {
             Self::create_schema_dropdown(&app_state, &exec_ctx, window, cx);
         let source_query_mode_dropdown = cx.new(|_cx| {
             Dropdown::new("ctx-source-query-mode")
-                .placeholder("Syntax")
+                .placeholder(dbflux_i18n::t!("document.code.context_bar.fallback.syntax"))
                 .toolbar_style(true)
         });
         // bare() suppresses the trigger's own border/background because the
@@ -807,7 +821,9 @@ impl CodeDocument {
         let source_targets = cx.new(|_cx| {
             MultiSelect::new("ctx-source-targets")
                 .bare()
-                .placeholder("Sources")
+                .placeholder(dbflux_i18n::t!(
+                    "document.code.context_bar.fallback.sources"
+                ))
         });
         let source_start_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("2026-04-24T00:00:00Z"));
@@ -979,9 +995,11 @@ impl CodeDocument {
     /// surfaces a toast instead of emitting so the user gets feedback.
     pub fn emit_chart_this_query(&mut self, cx: &mut Context<Self>) {
         let Some(query) = self.current_query_text(cx) else {
-            Toast::warning("Write a query first to open it in a chart")
-                .meta_right(now_hms())
-                .push(cx);
+            Toast::warning(dbflux_i18n::t!(
+                "document.code.execution.toast.write_query_first"
+            ))
+            .meta_right(now_hms())
+            .push(cx);
             return;
         };
 
@@ -1080,6 +1098,7 @@ impl CodeDocument {
         // blocks the actual text insertion).
         self.editor.input_state.update(cx, |state, _cx| {
             state.lsp.completion_provider = None;
+            state.lsp.code_action_providers = Vec::new();
         });
 
         self
@@ -1243,10 +1262,11 @@ impl CodeDocument {
 
     pub fn title(&self) -> String {
         if let Some(path) = &self.editor.path {
+            let untitled = dbflux_i18n::t!("document.code.title.untitled");
             let name = path
                 .file_name()
                 .and_then(|n| n.to_str())
-                .unwrap_or("Untitled");
+                .unwrap_or(untitled.as_str());
 
             if self.editor.is_dirty {
                 format!("{}*", name)
@@ -1911,5 +1931,29 @@ mod tests {
 
         assert_eq!(values.0, "2024-01-01T00:00:00Z");
         assert_eq!(values.1, "2024-01-01T01:00:00Z");
+    }
+
+    #[test]
+    fn code_title_untitled_key_resolves_in_both_locales() {
+        for locale in ["en", "es"] {
+            let key = "document.code.title.untitled";
+            let value = dbflux_i18n::t!(key, locale = locale);
+
+            assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+            assert_ne!(value, key, "{key} resolved to its own key in {locale}");
+            assert_ne!(
+                value,
+                format!("{locale}.{key}"),
+                "{key} missing from {locale} catalog"
+            );
+        }
+    }
+
+    #[test]
+    fn code_title_untitled_differs_between_locales() {
+        let en = dbflux_i18n::t!("document.code.title.untitled", locale = "en");
+        let es = dbflux_i18n::t!("document.code.title.untitled", locale = "es");
+
+        assert_ne!(en, es);
     }
 }

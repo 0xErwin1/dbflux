@@ -1,6 +1,7 @@
 pub(crate) mod context;
 pub mod dashboard_import;
 pub mod dashboard_source;
+pub mod dump_analysis;
 pub(crate) mod hook;
 pub mod instance_catalog;
 pub(crate) mod item_manager;
@@ -57,8 +58,8 @@ pub use manager::{
     FetchSchemaRoutinesParams, FetchSchemaRoutinesResult, FetchSchemaTypesParams,
     FetchSchemaTypesResult, FetchTableDetailsParams, FetchTableDetailsResult, HookExecutionContext,
     MutationPolicy, OwnedCacheEntry, PendingOperation, PrepareConnectError, ProfilePolicyResolver,
-    RedisKeyCache, RedisKeyCacheEntry, ResolvedProxy, SchemaCacheKey, SwitchDatabaseParams,
-    SwitchDatabaseResult,
+    ReadOnlyReason, RedisKeyCache, RedisKeyCacheEntry, ResolvedProxy, SchemaCacheKey,
+    SwitchDatabaseParams, SwitchDatabaseResult, WritePrivilege, compose_mutation_policy,
 };
 #[allow(deprecated)]
 pub use profile::{

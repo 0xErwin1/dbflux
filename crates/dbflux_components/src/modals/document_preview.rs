@@ -159,12 +159,34 @@ impl Render for DocumentPreviewModal {
             .key_context(ContextId::SqlPreviewModal.as_gpui_context())
             .close_icon(IconSource::Svg(AppIcon::X.path().into()))
             .header_leading(Icon::new(AppIcon::Braces).size(Heights::ICON_SM).primary())
-            .title("Document Preview")
+            .title(dbflux_i18n::t!("modals.document_preview.title"))
             .width(px(1000.0))
             .height(px(700.0))
             .top_offset(px(60.0))
             .block_scroll()
             .child(editor.render(cx))
             .render(cx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn document_preview_keys_resolve_in_both_locales() {
+        let keys = ["modals.document_preview.title"];
+
+        for key in keys {
+            let en = dbflux_i18n::t!(key, locale = "en");
+            let es = dbflux_i18n::t!(key, locale = "es");
+            assert!(!en.is_empty() && en != key, "en missing for {key}");
+            assert!(!es.is_empty() && es != key, "es missing for {key}");
+        }
+    }
+
+    #[test]
+    fn document_preview_title_diverges_between_locales() {
+        let en = dbflux_i18n::t!("modals.document_preview.title", locale = "en");
+        let es = dbflux_i18n::t!("modals.document_preview.title", locale = "es");
+        assert_ne!(en, es);
     }
 }

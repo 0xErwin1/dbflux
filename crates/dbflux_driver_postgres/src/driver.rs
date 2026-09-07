@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::net::IpAddr;
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -33,6 +33,7 @@ use dbflux_core::{
     when_unchecked, with_default, with_help,
 };
 use dbflux_ssh::SshTunnel;
+use half::f16;
 use native_tls::TlsConnector;
 use postgres::types::{FromSql, Kind, Type};
 use postgres::{CancelToken as PgCancelToken, Client, NoTls, SimpleQueryMessage};
@@ -1015,10 +1016,10 @@ struct PostgresConnectParams<'a> {
 /// - `"require"` — TLS required, self-signed certs accepted
 /// - `"verify-ca"` / `"verify-full"` — TLS required with certificate validation
 fn connect_postgres(params: &PostgresConnectParams) -> Result<Client, DbError> {
-    let conn_string = format!(
+    let conn_string = with_client_identity(&format!(
         "host={} port={} user={} password={} dbname={} connect_timeout=30",
         params.host, params.port, params.user, params.password, params.database
-    );
+    ));
 
     match params.ssl_mode {
         "disable" => Client::connect(&conn_string, NoTls)
@@ -1097,6 +1098,7 @@ impl PostgresDriver {
         password: Option<&str>,
     ) -> Result<Box<dyn Connection>, DbError> {
         let uri = inject_password_into_pg_uri(base_uri, password);
+        let uri = with_client_identity(&uri);
 
         let ssl_mode = parse_pg_uri_sslmode(&uri);
 
@@ -1574,6 +1576,14 @@ impl Connection for PostgresConnection {
         Ok(())
     }
 
+    fn probe_write_privilege(&self) -> dbflux_core::WritePrivilege {
+        self.client
+            .lock()
+            .ok()
+            .map(|mut c| crate::instance_catalog::probe_postgres_write_privilege(&mut c))
+            .unwrap_or(dbflux_core::WritePrivilege::Unknown)
+    }
+
     fn instance_catalog(&self) -> Option<Box<dyn InstanceCatalog>> {
         let pg_signal_backend = self
             .client
@@ -1624,11 +1634,7 @@ impl Connection for PostgresConnection {
         let query_id = Uuid::new_v4();
         let _active_query_guard = ActiveQueryGuard::activate(&self.active_query, query_id)?;
 
-        let sql_preview = if req.sql.len() > 80 {
-            format!("{}...", &req.sql[..80])
-        } else {
-            req.sql.clone()
-        };
+        let sql_preview = dbflux_core::truncate_string_safe(&req.sql, 80);
         log::debug!(
             "[QUERY] Executing (id={}): {}",
             query_id,
@@ -1712,7 +1718,10 @@ impl Connection for PostgresConnection {
             columns.len()
         );
 
-        Ok(QueryResult::table(columns, result_rows, None, total_time))
+        let mut result = QueryResult::table(columns, result_rows, None, total_time);
+        result.set_unsupported_types(unsupported_type_names(&result.rows));
+
+        Ok(result)
     }
 
     fn cancel(&self, handle: &QueryHandle) -> Result<(), DbError> {
@@ -1914,6 +1923,7 @@ impl Connection for PostgresConnection {
             sample_fields: None,
             presentation: dbflux_core::CollectionPresentation::DataGrid,
             child_items: None,
+            storage_hints: None,
         })
     }
 
@@ -2185,7 +2195,7 @@ impl Connection for PostgresConnection {
             .map(|i| postgres_value_to_value(row, i))
             .collect();
 
-        Ok(CrudResult::success(returning_row))
+        Ok(crud_result_with_unsupported_types(returning_row))
     }
 
     fn insert_row(&self, insert: &RowInsert) -> Result<CrudResult, DbError> {
@@ -2222,7 +2232,7 @@ impl Connection for PostgresConnection {
             .map(|i| postgres_value_to_value(row, i))
             .collect();
 
-        Ok(CrudResult::success(returning_row))
+        Ok(crud_result_with_unsupported_types(returning_row))
     }
 
     fn delete_row(&self, delete: &RowDelete) -> Result<CrudResult, DbError> {
@@ -2261,7 +2271,7 @@ impl Connection for PostgresConnection {
             .map(|i| postgres_value_to_value(row, i))
             .collect();
 
-        Ok(CrudResult::success(returning_row))
+        Ok(crud_result_with_unsupported_types(returning_row))
     }
 
     fn explain(&self, request: &ExplainRequest) -> Result<QueryResult, DbError> {
@@ -2710,6 +2720,7 @@ fn get_tables_for_schema(client: &mut Client, schema: &str) -> Result<Vec<TableI
                 sample_fields: None,
                 presentation: dbflux_core::CollectionPresentation::DataGrid,
                 child_items: None,
+                storage_hints: None,
             }
         })
         .collect();
@@ -3344,7 +3355,7 @@ struct PgText(String);
 
 fn is_textual_pg_type(ty: &Type) -> bool {
     match ty.name() {
-        "text" | "varchar" | "bpchar" | "name" | "citext" | "tsvector" | "tsquery" => true,
+        "text" | "varchar" | "bpchar" | "name" | "citext" => true,
         _ => match ty.kind() {
             Kind::Enum(_) => true,
             Kind::Domain(inner) => is_textual_pg_type(inner),
@@ -3364,6 +3375,745 @@ impl<'a> FromSql<'a> for PgText {
     fn accepts(ty: &Type) -> bool {
         is_textual_pg_type(ty)
     }
+}
+
+struct PgVectorText(String);
+
+fn pgvector_decode_error(message: &'static str) -> Box<dyn std::error::Error + Sync + Send> {
+    Box::new(std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        message,
+    ))
+}
+
+fn read_pgvector_u16(
+    raw: &[u8],
+    offset: usize,
+) -> Result<u16, Box<dyn std::error::Error + Sync + Send>> {
+    let bytes = raw
+        .get(offset..offset + 2)
+        .ok_or_else(|| pgvector_decode_error("pgvector payload ended unexpectedly"))?
+        .try_into()
+        .map_err(|_| pgvector_decode_error("invalid pgvector u16 payload"))?;
+
+    Ok(u16::from_be_bytes(bytes))
+}
+
+fn read_pgvector_i32(
+    raw: &[u8],
+    offset: usize,
+) -> Result<i32, Box<dyn std::error::Error + Sync + Send>> {
+    let bytes = raw
+        .get(offset..offset + 4)
+        .ok_or_else(|| pgvector_decode_error("pgvector payload ended unexpectedly"))?
+        .try_into()
+        .map_err(|_| pgvector_decode_error("invalid pgvector i32 payload"))?;
+
+    Ok(i32::from_be_bytes(bytes))
+}
+
+fn read_pgvector_f32(
+    raw: &[u8],
+    offset: usize,
+) -> Result<f32, Box<dyn std::error::Error + Sync + Send>> {
+    let bytes = raw
+        .get(offset..offset + 4)
+        .ok_or_else(|| pgvector_decode_error("pgvector payload ended unexpectedly"))?
+        .try_into()
+        .map_err(|_| pgvector_decode_error("invalid pgvector float payload"))?;
+    let value = f32::from_be_bytes(bytes);
+
+    if !value.is_finite() {
+        return Err(pgvector_decode_error("pgvector values must be finite"));
+    }
+
+    Ok(value)
+}
+
+fn decode_pgvector_dense(
+    raw: &[u8],
+    element_size: usize,
+    decode_element: impl Fn(&[u8], usize) -> Result<f32, Box<dyn std::error::Error + Sync + Send>>,
+) -> Result<PgVectorText, Box<dyn std::error::Error + Sync + Send>> {
+    let dimension = usize::from(read_pgvector_u16(raw, 0)?);
+    let reserved = read_pgvector_u16(raw, 2)?;
+
+    if dimension == 0 || reserved != 0 {
+        return Err(pgvector_decode_error("invalid pgvector dense header"));
+    }
+
+    let payload_size = dimension
+        .checked_mul(element_size)
+        .ok_or_else(|| pgvector_decode_error("pgvector dimension is too large"))?;
+    let expected_length = 4usize
+        .checked_add(payload_size)
+        .ok_or_else(|| pgvector_decode_error("pgvector payload is too large"))?;
+
+    if raw.len() != expected_length {
+        return Err(pgvector_decode_error(
+            "invalid pgvector dense payload length",
+        ));
+    }
+
+    let values = (0..dimension)
+        .map(|index| decode_element(raw, 4 + index * element_size))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(PgVectorText(format_pgvector_dense(&values)))
+}
+
+fn decode_pgvector_vector(
+    raw: &[u8],
+) -> Result<PgVectorText, Box<dyn std::error::Error + Sync + Send>> {
+    decode_pgvector_dense(raw, 4, read_pgvector_f32)
+}
+
+fn decode_pgvector_halfvec(
+    raw: &[u8],
+) -> Result<PgVectorText, Box<dyn std::error::Error + Sync + Send>> {
+    decode_pgvector_dense(raw, 2, |raw, offset| {
+        let bits = read_pgvector_u16(raw, offset)?;
+        let value = f16::from_bits(bits).to_f32();
+
+        if !value.is_finite() {
+            return Err(pgvector_decode_error("pgvector values must be finite"));
+        }
+
+        Ok(value)
+    })
+}
+
+fn decode_pgvector_sparsevec(
+    raw: &[u8],
+) -> Result<PgVectorText, Box<dyn std::error::Error + Sync + Send>> {
+    let dimension = read_pgvector_i32(raw, 0)?;
+    let non_zero_count = read_pgvector_i32(raw, 4)?;
+    let reserved = read_pgvector_i32(raw, 8)?;
+
+    if dimension <= 0 || non_zero_count < 0 || non_zero_count > dimension || reserved != 0 {
+        return Err(pgvector_decode_error("invalid pgvector sparse header"));
+    }
+
+    let non_zero_count = usize::try_from(non_zero_count)
+        .map_err(|_| pgvector_decode_error("invalid pgvector sparse count"))?;
+    let values_size = non_zero_count
+        .checked_mul(8)
+        .ok_or_else(|| pgvector_decode_error("pgvector payload is too large"))?;
+    let expected_length = 12usize
+        .checked_add(values_size)
+        .ok_or_else(|| pgvector_decode_error("pgvector payload is too large"))?;
+
+    if raw.len() != expected_length {
+        return Err(pgvector_decode_error(
+            "invalid pgvector sparse payload length",
+        ));
+    }
+
+    let dimension = usize::try_from(dimension)
+        .map_err(|_| pgvector_decode_error("invalid pgvector sparse dimension"))?;
+    let values_offset = 12 + non_zero_count * 4;
+    let mut previous_index = None;
+    let mut entries = Vec::with_capacity(non_zero_count);
+
+    for position in 0..non_zero_count {
+        let index = read_pgvector_i32(raw, 12 + position * 4)?;
+        let index = usize::try_from(index)
+            .map_err(|_| pgvector_decode_error("invalid pgvector sparse index"))?;
+
+        if index >= dimension {
+            return Err(pgvector_decode_error("invalid pgvector sparse index"));
+        }
+
+        if previous_index.is_some_and(|previous_index| index <= previous_index) {
+            return Err(pgvector_decode_error(
+                "invalid pgvector sparse index ordering",
+            ));
+        }
+
+        let value = read_pgvector_f32(raw, values_offset + position * 4)?;
+        if value == 0.0 {
+            return Err(pgvector_decode_error(
+                "pgvector sparse values must be non-zero",
+            ));
+        }
+
+        entries.push((index + 1, value));
+        previous_index = Some(index);
+    }
+
+    Ok(PgVectorText(format_pgvector_sparse(&entries, dimension)))
+}
+
+fn decode_pgvector(
+    type_name: &str,
+    raw: &[u8],
+) -> Result<PgVectorText, Box<dyn std::error::Error + Sync + Send>> {
+    match type_name {
+        "vector" => decode_pgvector_vector(raw),
+        "halfvec" => decode_pgvector_halfvec(raw),
+        "sparsevec" => decode_pgvector_sparsevec(raw),
+        _ => Err(pgvector_decode_error("unsupported pgvector type")),
+    }
+}
+
+fn format_pgvector_float4(value: f32) -> String {
+    let mut buffer = ryu::Buffer::new();
+    let shortest = buffer.format_finite(value);
+
+    let (sign, number) = shortest
+        .strip_prefix('-')
+        .map_or_else(|| ("", shortest), |number| ("-", number));
+    let (coefficient, exponent) =
+        number
+            .split_once('e')
+            .map_or((number, 0), |(coefficient, exponent)| {
+                (
+                    coefficient,
+                    parse_pgvector_exponent(exponent).unwrap_or_default(),
+                )
+            });
+    let integer_digits = coefficient.find('.').unwrap_or(coefficient.len());
+    let digits: String = coefficient.chars().filter(char::is_ascii_digit).collect();
+    let Some(first_digit) = digits.find(|digit| digit != '0') else {
+        return format!("{sign}0");
+    };
+
+    let exponent = exponent + integer_digits as i32 - first_digit as i32 - 1;
+    let digits = digits[first_digit..].trim_end_matches('0');
+
+    if (-4..6).contains(&exponent) {
+        format_pgvector_fixed(sign, digits, exponent)
+    } else {
+        format_pgvector_scientific(sign, digits, exponent)
+    }
+}
+
+fn parse_pgvector_exponent(exponent: &str) -> Option<i32> {
+    let (sign, digits) = exponent.strip_prefix('-').map_or_else(
+        || (1, exponent.strip_prefix('+').unwrap_or(exponent)),
+        |digits| (-1, digits),
+    );
+
+    if digits.is_empty() {
+        return None;
+    }
+
+    let value = digits.chars().try_fold(0_i32, |value, digit| {
+        let digit = i32::try_from(digit.to_digit(10)?).ok()?;
+        value.checked_mul(10)?.checked_add(digit)
+    })?;
+
+    value.checked_mul(sign)
+}
+
+fn format_pgvector_fixed(sign: &str, digits: &str, exponent: i32) -> String {
+    let integer_digits = usize::try_from(exponent + 1).unwrap_or_default();
+
+    if integer_digits >= digits.len() {
+        format!(
+            "{sign}{digits}{}",
+            "0".repeat(integer_digits - digits.len())
+        )
+    } else if integer_digits == 0 {
+        format!("{sign}0.{}{digits}", "0".repeat((-exponent - 1) as usize))
+    } else {
+        format!(
+            "{sign}{}.{}",
+            &digits[..integer_digits],
+            &digits[integer_digits..]
+        )
+    }
+}
+
+fn format_pgvector_scientific(sign: &str, digits: &str, exponent: i32) -> String {
+    let digits = digits.trim_end_matches('0');
+    let mantissa = if digits.len() == 1 {
+        digits.to_string()
+    } else {
+        format!("{}.{}", &digits[..1], &digits[1..])
+    };
+    let exponent_sign = if exponent < 0 { '-' } else { '+' };
+    let exponent = exponent.unsigned_abs();
+
+    format!("{sign}{mantissa}e{exponent_sign}{exponent:02}")
+}
+
+fn format_pgvector_dense(values: &[f32]) -> String {
+    format!(
+        "[{}]",
+        values
+            .iter()
+            .map(|value| format_pgvector_float4(*value))
+            .collect::<Vec<_>>()
+            .join(",")
+    )
+}
+
+fn format_pgvector_sparse(entries: &[(usize, f32)], dimension: usize) -> String {
+    let entries = entries
+        .iter()
+        .map(|(index, value)| format!("{index}:{}", format_pgvector_float4(*value)))
+        .collect::<Vec<_>>()
+        .join(",");
+
+    format!("{{{entries}}}/{dimension}")
+}
+
+impl<'a> FromSql<'a> for PgVectorText {
+    fn from_sql(
+        ty: &Type,
+        raw: &'a [u8],
+    ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        decode_pgvector(ty.name(), raw)
+    }
+
+    fn accepts(ty: &Type) -> bool {
+        matches!(ty.name(), "vector" | "halfvec" | "sparsevec")
+    }
+}
+
+/// Wrapper that renders full-text search values in their canonical text form.
+///
+/// `tsvector` and `tsquery` travel in a binary wire format that is not valid
+/// UTF-8, so reading the raw bytes as text fails and the value silently
+/// degrades to NULL. This decoder reproduces the server-side output of
+/// `tsvectorout` / `tsqueryout`.
+struct PgTextSearchText(String);
+
+fn text_search_decode_error(message: &'static str) -> Box<dyn std::error::Error + Sync + Send> {
+    Box::new(std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        message,
+    ))
+}
+
+fn read_text_search_u16(
+    raw: &[u8],
+    offset: usize,
+) -> Result<u16, Box<dyn std::error::Error + Sync + Send>> {
+    let bytes: [u8; 2] = raw
+        .get(offset..offset + 2)
+        .ok_or_else(|| text_search_decode_error("text search payload ended unexpectedly"))?
+        .try_into()
+        .map_err(|_| text_search_decode_error("invalid text search u16 payload"))?;
+
+    Ok(u16::from_be_bytes(bytes))
+}
+
+fn read_text_search_i32(
+    raw: &[u8],
+    offset: usize,
+) -> Result<i32, Box<dyn std::error::Error + Sync + Send>> {
+    let bytes: [u8; 4] = raw
+        .get(offset..offset + 4)
+        .ok_or_else(|| text_search_decode_error("text search payload ended unexpectedly"))?
+        .try_into()
+        .map_err(|_| text_search_decode_error("invalid text search i32 payload"))?;
+
+    Ok(i32::from_be_bytes(bytes))
+}
+
+fn read_text_search_byte(
+    raw: &[u8],
+    offset: usize,
+) -> Result<u8, Box<dyn std::error::Error + Sync + Send>> {
+    raw.get(offset)
+        .copied()
+        .ok_or_else(|| text_search_decode_error("text search payload ended unexpectedly"))
+}
+
+/// Read a NUL-terminated UTF-8 string, advancing `offset` past the terminator.
+fn read_text_search_cstring<'a>(
+    raw: &'a [u8],
+    offset: &mut usize,
+) -> Result<&'a str, Box<dyn std::error::Error + Sync + Send>> {
+    let remaining = raw
+        .get(*offset..)
+        .ok_or_else(|| text_search_decode_error("text search payload ended unexpectedly"))?;
+    let terminator = remaining
+        .iter()
+        .position(|byte| *byte == 0)
+        .ok_or_else(|| text_search_decode_error("unterminated text search lexeme"))?;
+
+    let lexeme = remaining
+        .get(..terminator)
+        .ok_or_else(|| text_search_decode_error("text search payload ended unexpectedly"))?;
+
+    let text = std::str::from_utf8(lexeme)?;
+    *offset += terminator + 1;
+
+    Ok(text)
+}
+
+/// Append a lexeme quoted the way PostgreSQL renders it: wrapped in single
+/// quotes, with embedded quotes and backslashes doubled.
+fn push_text_search_lexeme(output: &mut String, lexeme: &str) {
+    output.push('\'');
+
+    for character in lexeme.chars() {
+        if character == '\'' || character == '\\' {
+            output.push(character);
+        }
+
+        output.push(character);
+    }
+
+    output.push('\'');
+}
+
+fn decode_tsvector(
+    raw: &[u8],
+) -> Result<PgTextSearchText, Box<dyn std::error::Error + Sync + Send>> {
+    let lexeme_count = read_text_search_i32(raw, 0)?;
+    if lexeme_count < 0 {
+        return Err(text_search_decode_error("invalid tsvector lexeme count"));
+    }
+
+    let mut offset = 4;
+    let mut output = String::new();
+
+    for index in 0..lexeme_count {
+        let lexeme = read_text_search_cstring(raw, &mut offset)?;
+
+        if index > 0 {
+            output.push(' ');
+        }
+        push_text_search_lexeme(&mut output, lexeme);
+
+        let position_count = read_text_search_u16(raw, offset)?;
+        offset += 2;
+
+        if position_count == 0 {
+            continue;
+        }
+
+        output.push(':');
+
+        for position_index in 0..position_count {
+            let entry = read_text_search_u16(raw, offset)?;
+            offset += 2;
+
+            if position_index > 0 {
+                output.push(',');
+            }
+
+            output.push_str(&(entry & 0x3fff).to_string());
+
+            match entry >> 14 {
+                3 => output.push('A'),
+                2 => output.push('B'),
+                1 => output.push('C'),
+                _ => {}
+            }
+        }
+    }
+
+    if offset != raw.len() {
+        return Err(text_search_decode_error("trailing tsvector payload"));
+    }
+
+    Ok(PgTextSearchText(output))
+}
+
+const TSQUERY_OP_NOT: u8 = 1;
+const TSQUERY_OP_AND: u8 = 2;
+const TSQUERY_OP_OR: u8 = 3;
+const TSQUERY_OP_PHRASE: u8 = 4;
+
+enum TsQueryNode {
+    Operand {
+        lexeme: String,
+        weight: u8,
+        prefix: bool,
+    },
+    Not(Box<TsQueryNode>),
+    Binary {
+        operator: u8,
+        distance: u16,
+        left: Box<TsQueryNode>,
+        right: Box<TsQueryNode>,
+    },
+}
+
+fn tsquery_operator_priority(operator: u8) -> u8 {
+    match operator {
+        TSQUERY_OP_NOT => 4,
+        TSQUERY_OP_PHRASE => 3,
+        TSQUERY_OP_AND => 2,
+        _ => 1,
+    }
+}
+
+/// Parse one node of the prefix-ordered item stream.
+///
+/// PostgreSQL serializes a tsquery in polish notation and stores the *right*
+/// operand of a binary operator before the left one, so the recursion order
+/// here is not the display order.
+fn parse_tsquery_node(
+    raw: &[u8],
+    offset: &mut usize,
+    remaining_items: &mut i32,
+) -> Result<TsQueryNode, Box<dyn std::error::Error + Sync + Send>> {
+    if *remaining_items <= 0 {
+        return Err(text_search_decode_error(
+            "malformed tsquery: operand not found",
+        ));
+    }
+    *remaining_items -= 1;
+
+    let item_type = read_text_search_byte(raw, *offset)?;
+    *offset += 1;
+
+    match item_type {
+        1 => {
+            let weight = read_text_search_byte(raw, *offset)?;
+            let prefix = read_text_search_byte(raw, *offset + 1)?;
+            *offset += 2;
+
+            if weight > 0xF {
+                return Err(text_search_decode_error("invalid tsquery weight bitmap"));
+            }
+
+            let lexeme = read_text_search_cstring(raw, offset)?.to_string();
+
+            Ok(TsQueryNode::Operand {
+                lexeme,
+                weight,
+                prefix: prefix != 0,
+            })
+        }
+
+        2 => {
+            let operator = read_text_search_byte(raw, *offset)?;
+            *offset += 1;
+
+            if operator == TSQUERY_OP_NOT {
+                let operand = parse_tsquery_node(raw, offset, remaining_items)?;
+                return Ok(TsQueryNode::Not(Box::new(operand)));
+            }
+
+            if !matches!(operator, TSQUERY_OP_AND | TSQUERY_OP_OR | TSQUERY_OP_PHRASE) {
+                return Err(text_search_decode_error("unrecognized tsquery operator"));
+            }
+
+            let distance = if operator == TSQUERY_OP_PHRASE {
+                let distance = read_text_search_u16(raw, *offset)?;
+                *offset += 2;
+                distance
+            } else {
+                0
+            };
+
+            let right = parse_tsquery_node(raw, offset, remaining_items)?;
+            let left = parse_tsquery_node(raw, offset, remaining_items)?;
+
+            Ok(TsQueryNode::Binary {
+                operator,
+                distance,
+                left: Box::new(left),
+                right: Box::new(right),
+            })
+        }
+
+        _ => Err(text_search_decode_error("unrecognized tsquery node type")),
+    }
+}
+
+/// Render a parsed node as infix text, mirroring PostgreSQL's `infix()`:
+/// parentheses appear only when the child binds looser than its parent, or
+/// when a phrase operator sits on the right-hand side of another phrase.
+fn render_tsquery_node(
+    node: &TsQueryNode,
+    parent_priority: u8,
+    right_phrase_operand: bool,
+    output: &mut String,
+) {
+    match node {
+        TsQueryNode::Operand {
+            lexeme,
+            weight,
+            prefix,
+        } => {
+            push_text_search_lexeme(output, lexeme);
+
+            if *weight != 0 || *prefix {
+                output.push(':');
+
+                if *prefix {
+                    output.push('*');
+                }
+                for (mask, label) in [(1 << 3, 'A'), (1 << 2, 'B'), (1 << 1, 'C'), (1, 'D')] {
+                    if weight & mask != 0 {
+                        output.push(label);
+                    }
+                }
+            }
+        }
+
+        TsQueryNode::Not(operand) => {
+            let priority = tsquery_operator_priority(TSQUERY_OP_NOT);
+            let needs_parenthesis = priority < parent_priority;
+
+            if needs_parenthesis {
+                output.push_str("( ");
+            }
+
+            output.push('!');
+            render_tsquery_node(operand, priority, false, output);
+
+            if needs_parenthesis {
+                output.push_str(" )");
+            }
+        }
+
+        TsQueryNode::Binary {
+            operator,
+            distance,
+            left,
+            right,
+        } => {
+            let priority = tsquery_operator_priority(*operator);
+            let needs_parenthesis = priority < parent_priority
+                || (*operator == TSQUERY_OP_PHRASE && right_phrase_operand);
+
+            if needs_parenthesis {
+                output.push_str("( ");
+            }
+
+            render_tsquery_node(left, priority, false, output);
+
+            match *operator {
+                TSQUERY_OP_OR => output.push_str(" | "),
+                TSQUERY_OP_AND => output.push_str(" & "),
+                _ if *distance == 1 => output.push_str(" <-> "),
+                _ => output.push_str(&format!(" <{distance}> ")),
+            }
+
+            render_tsquery_node(right, priority, *operator == TSQUERY_OP_PHRASE, output);
+
+            if needs_parenthesis {
+                output.push_str(" )");
+            }
+        }
+    }
+}
+
+fn decode_tsquery(
+    raw: &[u8],
+) -> Result<PgTextSearchText, Box<dyn std::error::Error + Sync + Send>> {
+    let item_count = read_text_search_i32(raw, 0)?;
+    if item_count < 0 {
+        return Err(text_search_decode_error("invalid tsquery item count"));
+    }
+
+    if item_count == 0 {
+        return Ok(PgTextSearchText(String::new()));
+    }
+
+    let mut offset = 4;
+    let mut remaining_items = item_count;
+    let root = parse_tsquery_node(raw, &mut offset, &mut remaining_items)?;
+
+    if remaining_items != 0 {
+        return Err(text_search_decode_error("malformed tsquery: extra nodes"));
+    }
+    if offset != raw.len() {
+        return Err(text_search_decode_error("trailing tsquery payload"));
+    }
+
+    let mut output = String::new();
+    render_tsquery_node(&root, 0, false, &mut output);
+
+    Ok(PgTextSearchText(output))
+}
+
+impl<'a> FromSql<'a> for PgTextSearchText {
+    fn from_sql(
+        ty: &Type,
+        raw: &'a [u8],
+    ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        match ty.name() {
+            "tsvector" => decode_tsvector(raw),
+            "tsquery" => decode_tsquery(raw),
+            _ => Err(text_search_decode_error("unsupported text search type")),
+        }
+    }
+
+    fn accepts(ty: &Type) -> bool {
+        matches!(ty.name(), "tsvector" | "tsquery")
+    }
+}
+
+fn text_search_array_values_to_value(values: Option<Vec<Option<PgTextSearchText>>>) -> Value {
+    match values {
+        Some(values) => Value::Array(
+            values
+                .into_iter()
+                .map(|value| {
+                    value
+                        .map(|PgTextSearchText(text)| Value::Text(text))
+                        .unwrap_or(Value::Null)
+                })
+                .collect(),
+        ),
+        None => Value::Null,
+    }
+}
+
+fn postgres_text_search_array_to_value(
+    row: &postgres::Row,
+    idx: usize,
+    type_name: &str,
+) -> Option<Value> {
+    if !matches!(type_name, "_tsvector" | "_tsquery") {
+        return None;
+    }
+
+    Some(
+        row.try_get::<_, Option<Vec<Option<PgTextSearchText>>>>(idx)
+            .map(text_search_array_values_to_value)
+            .unwrap_or_else(|_| Value::Unsupported(type_name.to_string())),
+    )
+}
+
+fn pgvector_array_values_to_value(values: Option<Vec<Option<PgVectorText>>>) -> Value {
+    match values {
+        Some(values) => Value::Array(
+            values
+                .into_iter()
+                .map(|value| {
+                    value
+                        .map(|PgVectorText(text)| Value::Text(text))
+                        .unwrap_or(Value::Null)
+                })
+                .collect(),
+        ),
+        None => Value::Null,
+    }
+}
+
+fn pgvector_array_decode_to_value<E>(
+    type_name: &str,
+    decoded: Result<Option<Vec<Option<PgVectorText>>>, E>,
+) -> Value {
+    decoded
+        .map(pgvector_array_values_to_value)
+        .unwrap_or_else(|_| Value::Unsupported(type_name.to_string()))
+}
+
+fn postgres_pgvector_array_to_value(
+    row: &postgres::Row,
+    idx: usize,
+    type_name: &str,
+) -> Option<Value> {
+    if !matches!(type_name, "_vector" | "_halfvec" | "_sparsevec") {
+        return None;
+    }
+
+    Some(pgvector_array_decode_to_value(
+        type_name,
+        row.try_get::<_, Option<Vec<Option<PgVectorText>>>>(idx),
+    ))
 }
 
 fn postgres_array_to_value(row: &postgres::Row, idx: usize, type_name: &str) -> Option<Value> {
@@ -3490,6 +4240,14 @@ fn postgres_value_to_value(row: &postgres::Row, idx: usize) -> Value {
         return array_value;
     }
 
+    if let Some(array_value) = postgres_pgvector_array_to_value(row, idx, type_name) {
+        return array_value;
+    }
+
+    if let Some(array_value) = postgres_text_search_array_to_value(row, idx, type_name) {
+        return array_value;
+    }
+
     match type_name {
         "bool" => row
             .try_get::<_, Option<bool>>(idx)
@@ -3531,13 +4289,22 @@ fn postgres_value_to_value(row: &postgres::Row, idx: usize) -> Value {
             .unwrap_or(Value::Null),
 
         "tsvector" | "tsquery" => row
-            .try_get::<_, Option<PgText>>(idx)
+            .try_get::<_, Option<PgTextSearchText>>(idx)
             .map(|value| {
                 value
-                    .map(|PgText(text)| Value::Text(text))
+                    .map(|PgTextSearchText(text)| Value::Text(text))
                     .unwrap_or(Value::Null)
             })
-            .unwrap_or(Value::Null),
+            .unwrap_or_else(|_| Value::Unsupported(type_name.to_string())),
+
+        "vector" | "halfvec" | "sparsevec" => row
+            .try_get::<_, Option<PgVectorText>>(idx)
+            .map(|value| {
+                value
+                    .map(|PgVectorText(text)| Value::Text(text))
+                    .unwrap_or(Value::Null)
+            })
+            .unwrap_or_else(|_| Value::Unsupported(type_name.to_string())),
 
         "uuid" => row
             .try_get::<_, Option<Uuid>>(idx)
@@ -3601,34 +4368,14 @@ fn postgres_value_to_value(row: &postgres::Row, idx: usize) -> Value {
             Kind::Enum(_) => match row.try_get::<_, Option<PgText>>(idx) {
                 Ok(Some(PgText(s))) => Value::Text(s),
                 Ok(None) => Value::Null,
-                Err(e) => {
-                    let col_name = row.columns()[idx].name();
-                    log::info!(
-                        "Unsupported PostgreSQL type '{}' (kind: {:?}) for column '{}': {}",
-                        type_name,
-                        col_type.kind(),
-                        col_name,
-                        e
-                    );
-                    Value::Unsupported(type_name.to_string())
-                }
+                Err(_) => Value::Unsupported(type_name.to_string()),
             },
 
             Kind::Domain(inner) if is_textual_pg_type(inner) => {
                 match row.try_get::<_, Option<PgText>>(idx) {
                     Ok(Some(PgText(s))) => Value::Text(s),
                     Ok(None) => Value::Null,
-                    Err(e) => {
-                        let col_name = row.columns()[idx].name();
-                        log::info!(
-                            "Unsupported PostgreSQL type '{}' (kind: {:?}) for column '{}': {}",
-                            type_name,
-                            col_type.kind(),
-                            col_name,
-                            e
-                        );
-                        Value::Unsupported(type_name.to_string())
-                    }
+                    Err(_) => Value::Unsupported(type_name.to_string()),
                 }
             }
 
@@ -3638,31 +4385,31 @@ fn postgres_value_to_value(row: &postgres::Row, idx: usize) -> Value {
                         Value::Array(arr.into_iter().map(|PgText(s)| Value::Text(s)).collect())
                     }
                     Ok(None) => Value::Null,
-                    Err(e) => {
-                        let col_name = row.columns()[idx].name();
-                        log::info!(
-                            "Unsupported PostgreSQL array type '{}' for column '{}': {}",
-                            type_name,
-                            col_name,
-                            e
-                        );
-                        Value::Unsupported(type_name.to_string())
-                    }
+                    Err(_) => Value::Unsupported(type_name.to_string()),
                 }
             }
 
-            _ => {
-                let col_name = row.columns()[idx].name();
-                log::info!(
-                    "Unsupported PostgreSQL type '{}' (kind: {:?}) for column '{}': fallback decode disabled",
-                    type_name,
-                    col_type.kind(),
-                    col_name
-                );
-                Value::Unsupported(type_name.to_string())
-            }
+            _ => Value::Unsupported(type_name.to_string()),
         },
     }
+}
+
+fn unsupported_type_names(rows: &[Row]) -> BTreeSet<String> {
+    rows.iter()
+        .flatten()
+        .filter_map(|value| match value {
+            Value::Unsupported(type_name) => Some(type_name.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn crud_result_with_unsupported_types(returning_row: Row) -> CrudResult {
+    let mut result = CrudResult::success(returning_row);
+    let type_names = unsupported_type_names(result.returning_row.as_slice());
+    result.set_unsupported_types(type_names);
+
+    result
 }
 
 pub struct PostgresErrorFormatter;
@@ -4025,6 +4772,32 @@ fn inject_password_into_pg_uri(base_uri: &str, password: Option<&str>) -> String
     }
 
     base_uri.to_string()
+}
+
+/// Appends dbflux's client identity as `application_name` unless the connection string
+/// already declares one, so a user-supplied `application_name` always wins.
+fn with_client_identity(conn_str: &str) -> String {
+    if has_application_name(conn_str) {
+        return conn_str.to_string();
+    }
+
+    let identity = dbflux_core::client_identity();
+    let is_uri = conn_str.starts_with("postgres://") || conn_str.starts_with("postgresql://");
+
+    if is_uri {
+        let separator = if conn_str.contains('?') { '&' } else { '?' };
+        format!("{}{}application_name={}", conn_str, separator, identity)
+    } else {
+        format!("{} application_name={}", conn_str, identity)
+    }
+}
+
+/// Detects an `application_name` key in both the libpq keyword syntax (space-separated
+/// `key=value` pairs) and the URI query syntax (`?application_name=` / `&application_name=`).
+fn has_application_name(conn_str: &str) -> bool {
+    conn_str.match_indices("application_name=").any(|(idx, _)| {
+        idx == 0 || matches!(conn_str.as_bytes().get(idx - 1), Some(b' ' | b'?' | b'&'))
+    })
 }
 
 fn pg_quote_ident(ident: &str) -> String {
@@ -4463,9 +5236,14 @@ fn get_schema_routines(
 #[cfg(test)]
 mod tests {
     use super::{
-        POSTGRES_DIALECT, PgUriSslMode, PostgresCodeGenerator, PostgresDialect, PostgresDriver,
-        inject_password_into_pg_uri, parse_pg_uri_sslmode, plan_postgres_semantic_request,
-        prokind_to_routine_kind,
+        POSTGRES_DIALECT, PgTextSearchText, PgUriSslMode, PgVectorText, PostgresCodeGenerator,
+        PostgresDialect, PostgresDriver, TSQUERY_OP_AND, TSQUERY_OP_NOT, TSQUERY_OP_OR,
+        TSQUERY_OP_PHRASE, decode_pgvector_halfvec, decode_pgvector_sparsevec,
+        decode_pgvector_vector, decode_tsquery, decode_tsvector, format_pgvector_dense,
+        format_pgvector_float4, format_pgvector_sparse, inject_password_into_pg_uri,
+        parse_pg_uri_sslmode, pgvector_array_decode_to_value, pgvector_array_values_to_value,
+        plan_postgres_semantic_request, prokind_to_routine_kind, text_search_array_values_to_value,
+        unsupported_type_names, with_client_identity,
     };
     use dbflux_core::{
         AddColumnRequest, AlterColumnRequest, CodeGenerator, ColumnAssignment, CreateTableSpec,
@@ -4474,6 +5252,343 @@ mod tests {
         SemanticRequest, SqlDialect, SqlMutationGenerator, SqlQueryBuilder, TableBrowseRequest,
         TableRef, TransferFamily, TypeAttributeDefinition, TypeDefinition, Value, WhereOperator,
     };
+    use postgres::types::{FromSql, Kind, Type};
+
+    fn sparsevec_payload(dimension: i32, indices: &[i32], values: &[f32]) -> Vec<u8> {
+        assert_eq!(indices.len(), values.len());
+
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&dimension.to_be_bytes());
+        payload.extend_from_slice(&(indices.len() as i32).to_be_bytes());
+        payload.extend_from_slice(&0i32.to_be_bytes());
+
+        for index in indices {
+            payload.extend_from_slice(&index.to_be_bytes());
+        }
+
+        for value in values {
+            payload.extend_from_slice(&value.to_be_bytes());
+        }
+
+        payload
+    }
+
+    #[test]
+    fn pgvector_scalar_decoders_render_canonical_text() {
+        let mut vector = Vec::new();
+        vector.extend_from_slice(&2u16.to_be_bytes());
+        vector.extend_from_slice(&0u16.to_be_bytes());
+        vector.extend_from_slice(&1.5f32.to_be_bytes());
+        vector.extend_from_slice(&(-2.25f32).to_be_bytes());
+
+        let mut halfvec = Vec::new();
+        halfvec.extend_from_slice(&2u16.to_be_bytes());
+        halfvec.extend_from_slice(&0u16.to_be_bytes());
+        halfvec.extend_from_slice(&half::f16::from_f32(1.5).to_bits().to_be_bytes());
+        halfvec.extend_from_slice(&half::f16::from_f32(-2.25).to_bits().to_be_bytes());
+
+        let sparsevec = sparsevec_payload(4, &[0, 3], &[1.5, -2.25]);
+
+        assert_eq!(
+            decode_pgvector_vector(&vector).expect("valid vector").0,
+            "[1.5,-2.25]"
+        );
+        assert_eq!(
+            decode_pgvector_halfvec(&halfvec).expect("valid halfvec").0,
+            "[1.5,-2.25]"
+        );
+        assert_eq!(
+            decode_pgvector_sparsevec(&sparsevec)
+                .expect("valid sparsevec")
+                .0,
+            "{1:1.5,4:-2.25}/4"
+        );
+    }
+
+    #[test]
+    fn pgvector_float4_formatter_matches_postgres_shortest_decimal_boundaries() {
+        let cases = [
+            (1e-6_f32, "1e-06"),
+            (1e-5_f32, "1e-05"),
+            (1e-4_f32, "0.0001"),
+            (999_999_f32, "999999"),
+            (1e6_f32, "1e+06"),
+            (1e20_f32, "1e+20"),
+            (-1e-6_f32, "-1e-06"),
+            (-1e5_f32, "-100000"),
+            (-1e20_f32, "-1e+20"),
+            (f32::MIN_POSITIVE, "1.1754944e-38"),
+            (f32::MAX, "3.4028235e+38"),
+            (0.0_f32, "0"),
+            (-0.0_f32, "-0"),
+        ];
+
+        for (value, expected) in cases {
+            assert_eq!(format_pgvector_float4(value), expected, "value: {value:?}");
+        }
+    }
+
+    #[test]
+    fn pgvector_dense_and_sparse_formatters_share_float4_formatting() {
+        assert_eq!(
+            format_pgvector_dense(&[1e-6, 1e20, -0.0]),
+            "[1e-06,1e+20,-0]"
+        );
+        assert_eq!(
+            format_pgvector_sparse(&[(1, 1e-6), (4, -1e20)], 4),
+            "{1:1e-06,4:-1e+20}/4"
+        );
+    }
+
+    #[test]
+    fn pgvector_decoders_reject_malformed_and_non_finite_payloads() {
+        let malformed = [0, 1, 0, 0];
+        assert!(decode_pgvector_vector(&malformed).is_err());
+
+        let mut non_finite = Vec::new();
+        non_finite.extend_from_slice(&1u16.to_be_bytes());
+        non_finite.extend_from_slice(&0u16.to_be_bytes());
+        non_finite.extend_from_slice(&f32::NAN.to_be_bytes());
+        assert!(decode_pgvector_vector(&non_finite).is_err());
+    }
+
+    #[test]
+    fn pgvector_sparsevec_rejects_invalid_indices_and_zero_values() {
+        assert!(decode_pgvector_sparsevec(&sparsevec_payload(4, &[4], &[1.5])).is_err());
+        assert!(decode_pgvector_sparsevec(&sparsevec_payload(4, &[1, 1], &[1.5, -2.25])).is_err());
+        assert!(decode_pgvector_sparsevec(&sparsevec_payload(4, &[2, 1], &[1.5, -2.25])).is_err());
+        assert!(decode_pgvector_sparsevec(&sparsevec_payload(4, &[0], &[0.0])).is_err());
+        assert!(decode_pgvector_sparsevec(&sparsevec_payload(4, &[3], &[-0.0])).is_err());
+    }
+
+    #[test]
+    fn pgvector_array_values_preserve_element_nulls() {
+        let sparsevec = decode_pgvector_sparsevec(&sparsevec_payload(4, &[0, 3], &[1.5, -2.25]))
+            .expect("valid sparsevec");
+        let value = pgvector_array_values_to_value(Some(vec![
+            Some(sparsevec),
+            None,
+            Some(PgVectorText("[3,4]".to_string())),
+        ]));
+
+        assert_eq!(
+            value,
+            Value::Array(vec![
+                Value::Text("{1:1.5,4:-2.25}/4".to_string()),
+                Value::Null,
+                Value::Text("[3,4]".to_string()),
+            ])
+        );
+        assert_eq!(pgvector_array_values_to_value(None), Value::Null);
+    }
+
+    fn tsvector_lexeme(lexeme: &str, positions: &[u16]) -> Vec<u8> {
+        let mut payload = lexeme.as_bytes().to_vec();
+        payload.push(0);
+        payload.extend_from_slice(&(positions.len() as u16).to_be_bytes());
+
+        for position in positions {
+            payload.extend_from_slice(&position.to_be_bytes());
+        }
+
+        payload
+    }
+
+    fn tsvector_payload(lexemes: &[Vec<u8>]) -> Vec<u8> {
+        let mut payload = (lexemes.len() as i32).to_be_bytes().to_vec();
+
+        for lexeme in lexemes {
+            payload.extend_from_slice(lexeme);
+        }
+
+        payload
+    }
+
+    fn wep(position: u16, weight: u16) -> u16 {
+        (weight << 14) | position
+    }
+
+    #[test]
+    fn tsvector_binary_payload_renders_postgres_text_output() {
+        let payload = tsvector_payload(&[
+            tsvector_lexeme("fat", &[wep(2, 0), wep(4, 3)]),
+            tsvector_lexeme("rat", &[]),
+            tsvector_lexeme("it's", &[wep(1, 1)]),
+        ]);
+
+        let PgTextSearchText(text) = decode_tsvector(&payload).expect("valid tsvector payload");
+
+        assert_eq!(text, "'fat':2,4A 'rat' 'it''s':1C");
+    }
+
+    #[test]
+    fn empty_tsvector_renders_as_empty_text() {
+        let PgTextSearchText(text) =
+            decode_tsvector(&tsvector_payload(&[])).expect("empty payload");
+
+        assert_eq!(text, "");
+    }
+
+    #[test]
+    fn truncated_tsvector_payload_is_rejected() {
+        let mut payload = tsvector_payload(&[tsvector_lexeme("fat", &[wep(2, 0)])]);
+        payload.pop();
+
+        assert!(decode_tsvector(&payload).is_err());
+    }
+
+    fn tsquery_operand(lexeme: &str, weight: u8, prefix: bool) -> Vec<u8> {
+        let mut payload = vec![1, weight, u8::from(prefix)];
+        payload.extend_from_slice(lexeme.as_bytes());
+        payload.push(0);
+
+        payload
+    }
+
+    fn tsquery_operator(operator: u8, distance: Option<u16>) -> Vec<u8> {
+        let mut payload = vec![2, operator];
+
+        if let Some(distance) = distance {
+            payload.extend_from_slice(&distance.to_be_bytes());
+        }
+
+        payload
+    }
+
+    fn tsquery_payload(items: &[Vec<u8>]) -> Vec<u8> {
+        let mut payload = (items.len() as i32).to_be_bytes().to_vec();
+
+        for item in items {
+            payload.extend_from_slice(item);
+        }
+
+        payload
+    }
+
+    #[test]
+    fn tsquery_binary_payload_preserves_operand_order() {
+        let payload = tsquery_payload(&[
+            tsquery_operator(TSQUERY_OP_AND, None),
+            tsquery_operand("rat", 0, false),
+            tsquery_operand("fat", 0, false),
+        ]);
+
+        let PgTextSearchText(text) = decode_tsquery(&payload).expect("valid tsquery payload");
+
+        assert_eq!(text, "'fat' & 'rat'");
+    }
+
+    #[test]
+    fn tsquery_lower_priority_operand_is_parenthesized() {
+        let payload = tsquery_payload(&[
+            tsquery_operator(TSQUERY_OP_AND, None),
+            tsquery_operator(TSQUERY_OP_OR, None),
+            tsquery_operand("rat", 0, false),
+            tsquery_operand("cat", 0, false),
+            tsquery_operand("fat", 0, false),
+        ]);
+
+        let PgTextSearchText(text) = decode_tsquery(&payload).expect("valid tsquery payload");
+
+        assert_eq!(text, "'fat' & ( 'cat' | 'rat' )");
+    }
+
+    #[test]
+    fn tsquery_renders_negation_weights_prefix_and_phrase_distance() {
+        let payload = tsquery_payload(&[
+            tsquery_operator(TSQUERY_OP_PHRASE, Some(3)),
+            tsquery_operator(TSQUERY_OP_NOT, None),
+            tsquery_operand("rat", 0, false),
+            tsquery_operand("fat", 0b1010, true),
+        ]);
+
+        let PgTextSearchText(text) = decode_tsquery(&payload).expect("valid tsquery payload");
+
+        assert_eq!(text, "'fat':*AC <3> !'rat'");
+    }
+
+    #[test]
+    fn tsquery_with_extra_nodes_is_rejected() {
+        let payload = tsquery_payload(&[
+            tsquery_operand("fat", 0, false),
+            tsquery_operand("rat", 0, false),
+        ]);
+
+        assert!(decode_tsquery(&payload).is_err());
+    }
+
+    #[test]
+    fn malformed_tsvector_column_is_unsupported_and_warning_eligible() {
+        let value = Value::Unsupported("tsvector".to_string());
+
+        assert_eq!(
+            unsupported_type_names(&[vec![value]]),
+            ["tsvector".to_string()].into()
+        );
+    }
+
+    #[test]
+    fn text_search_array_values_map_nulls_to_null_cells() {
+        assert_eq!(
+            text_search_array_values_to_value(Some(vec![
+                Some(PgTextSearchText("'fat':1".to_string())),
+                None,
+            ])),
+            Value::Array(vec![Value::Text("'fat':1".to_string()), Value::Null])
+        );
+        assert_eq!(text_search_array_values_to_value(None), Value::Null);
+    }
+
+    #[test]
+    fn malformed_pgvector_array_element_is_unsupported_and_warning_eligible() {
+        let vector_type = Type::new("vector".to_string(), 0, Kind::Simple, "public".to_string());
+        let vector_array_type = Type::new(
+            "_vector".to_string(),
+            0,
+            Kind::Array(vector_type),
+            "public".to_string(),
+        );
+        let malformed_element = [0, 1, 0, 0];
+        let mut array = Vec::new();
+        array.extend_from_slice(&1i32.to_be_bytes());
+        array.extend_from_slice(&0i32.to_be_bytes());
+        array.extend_from_slice(&0i32.to_be_bytes());
+        array.extend_from_slice(&1i32.to_be_bytes());
+        array.extend_from_slice(&1i32.to_be_bytes());
+        array.extend_from_slice(&(malformed_element.len() as i32).to_be_bytes());
+        array.extend_from_slice(&malformed_element);
+
+        let decoded = Vec::<Option<PgVectorText>>::from_sql(&vector_array_type, &array).map(Some);
+
+        let value = pgvector_array_decode_to_value("_vector", decoded);
+
+        assert_eq!(value, Value::Unsupported("_vector".to_string()));
+        assert_eq!(
+            unsupported_type_names(&[vec![value]]),
+            ["_vector".to_string()].into()
+        );
+    }
+
+    #[test]
+    fn unsupported_type_aggregation_is_deduplicated() {
+        let rows = vec![
+            vec![
+                Value::Unsupported("vector".to_string()),
+                Value::Unsupported("bit".to_string()),
+            ],
+            vec![
+                Value::Unsupported("vector".to_string()),
+                Value::Unsupported("varbit".to_string()),
+            ],
+        ];
+
+        assert_eq!(
+            unsupported_type_names(&rows)
+                .into_iter()
+                .collect::<Vec<_>>(),
+            vec!["bit", "varbit", "vector"]
+        );
+    }
 
     #[test]
     fn build_uri_encodes_user_and_password() {
@@ -4599,6 +5714,74 @@ mod tests {
         let uri =
             inject_password_into_pg_uri("postgresql://user@localhost:5432/app", Some("new pass"));
         assert_eq!(uri, "postgresql://user:new%20pass@localhost:5432/app");
+    }
+
+    #[test]
+    fn with_client_identity_appends_to_keyword_string_when_absent() {
+        let identity = dbflux_core::client_identity();
+        let conn_str = "host=localhost port=5432 user=app password=secret dbname=app";
+
+        let result = with_client_identity(conn_str);
+
+        assert_eq!(
+            result,
+            format!("{} application_name={}", conn_str, identity)
+        );
+    }
+
+    #[test]
+    fn with_client_identity_keeps_user_supplied_value_in_keyword_string() {
+        let conn_str =
+            "host=localhost port=5432 user=app password=secret dbname=app application_name=myapp";
+
+        let result = with_client_identity(conn_str);
+
+        assert_eq!(result, conn_str);
+    }
+
+    #[test]
+    fn with_client_identity_appends_query_param_to_uri_without_existing_query() {
+        let identity = dbflux_core::client_identity();
+        let conn_str = "postgresql://user:pass@localhost:5432/app";
+
+        let result = with_client_identity(conn_str);
+
+        assert_eq!(
+            result,
+            format!("{}?application_name={}", conn_str, identity)
+        );
+    }
+
+    #[test]
+    fn with_client_identity_appends_query_param_to_uri_with_existing_query() {
+        let identity = dbflux_core::client_identity();
+        let conn_str = "postgresql://user:pass@localhost:5432/app?sslmode=require";
+
+        let result = with_client_identity(conn_str);
+
+        assert_eq!(
+            result,
+            format!("{}&application_name={}", conn_str, identity)
+        );
+    }
+
+    #[test]
+    fn with_client_identity_keeps_user_supplied_value_in_uri_query() {
+        let conn_str = "postgresql://user:pass@localhost:5432/app?application_name=myapp";
+
+        let result = with_client_identity(conn_str);
+
+        assert_eq!(result, conn_str);
+    }
+
+    #[test]
+    fn with_client_identity_keeps_user_supplied_value_as_first_query_param() {
+        let conn_str =
+            "postgres://user:pass@localhost:5432/app?application_name=myapp&sslmode=require";
+
+        let result = with_client_identity(conn_str);
+
+        assert_eq!(result, conn_str);
     }
 
     #[test]

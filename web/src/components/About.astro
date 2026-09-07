@@ -1,0 +1,278 @@
+---
+import { docsUrl } from '../data/site';
+import { DEFAULT_LOCALE, t } from '../i18n';
+import type { Locale } from '../i18n';
+
+interface Props {
+  locale?: Locale;
+}
+
+const { locale = DEFAULT_LOCALE } = Astro.props;
+
+const PRINCIPLES = [
+  {
+    n: '01',
+    title: t(locale, 'about.principle.p01.title'),
+    body: t(locale, 'about.principle.p01.body'),
+  },
+  {
+    n: '02',
+    title: t(locale, 'about.principle.p02.title'),
+    body: t(locale, 'about.principle.p02.body'),
+  },
+  {
+    n: '03',
+    title: t(locale, 'about.principle.p03.title'),
+    body: t(locale, 'about.principle.p03.body'),
+  },
+  {
+    n: '04',
+    title: t(locale, 'about.principle.p04.title'),
+    body: t(locale, 'about.principle.p04.body'),
+  },
+] as const;
+
+const LAYERS = [
+  { name: 'UI crates', detail: t(locale, 'about.layer.ui.detail'), key: false },
+  { name: 'App layer', detail: t(locale, 'about.layer.app.detail'), key: false },
+  { name: 'Core contracts', detail: t(locale, 'about.layer.core.detail'), key: true },
+  { name: 'Drivers', detail: t(locale, 'about.layer.drivers.detail'), key: false },
+] as const;
+---
+
+<div class="col">
+  <section class="intro">
+    <p class="eyebrow">About</p>
+    <h1>{t(locale, 'about.h1')}</h1>
+    <p>{t(locale, 'about.intro_p1')}</p>
+    <p>{t(locale, 'about.intro_p2')}</p>
+    <p>{t(locale, 'about.intro_p3')}</p>
+  </section>
+
+  <section class="reveal">
+    <p class="eyebrow">{t(locale, 'about.principles_eyebrow')}</p>
+    <ol class="principles">
+      {
+        PRINCIPLES.map((principle) => (
+          <li>
+            <span class="principles__n">{principle.n}</span>
+            <div>
+              <h2>{principle.title}</h2>
+              <p>{principle.body}</p>
+            </div>
+          </li>
+        ))
+      }
+    </ol>
+  </section>
+
+  <section class="reveal">
+    <p class="eyebrow">{t(locale, 'about.layers_eyebrow')}</p>
+    <div class="layers">
+      {
+        LAYERS.map((layer) => (
+          <div class="layers__row">
+            <span class="layers__name">{layer.name}</span>
+            <span class="layers__box" data-key={layer.key ? '' : undefined}>
+              {layer.detail}
+            </span>
+          </div>
+        ))
+      }
+    </div>
+    <p class="muted">
+      {t(locale, 'about.muted_links.prefix')}<a href={docsUrl('architecture', '', locale)}
+        >{t(locale, 'about.muted_links.architecture')}</a
+      >{t(locale, 'about.muted_links.middle')}<a href={docsUrl('driver_authoring', '', locale)}
+        >{t(locale, 'about.muted_links.driver_authoring')}</a
+      >{t(locale, 'about.muted_links.suffix')}
+    </p>
+  </section>
+
+  <section class="reveal cards">
+    <article>
+      <p class="cards__title">{t(locale, 'about.maintainer_title')}</p>
+      <p class="muted">{t(locale, 'about.maintainer_body')}</p>
+      <a href="https://github.com/0xErwin1" rel="noopener">@0xErwin1 on GitHub &rarr;</a>
+    </article>
+    <article>
+      <p class="cards__title">{t(locale, 'about.contribute_title')}</p>
+      <p class="muted">{t(locale, 'about.contribute_body')}</p>
+      <a href={docsUrl('contributing', '', locale)}>{t(locale, 'about.contribute_link')}</a>
+    </article>
+  </section>
+</div>
+
+<style>
+  .col {
+    max-width: 780px;
+    margin-inline: auto;
+    padding: var(--s-9) var(--s-8) 0;
+  }
+
+  section {
+    margin-block-end: var(--s-8);
+  }
+
+  .intro {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-5);
+  }
+
+  h1 {
+    font-size: var(--fs-h1);
+  }
+
+  .intro p {
+    margin: 0;
+    line-height: 1.85;
+  }
+
+  .eyebrow {
+    margin-block-end: var(--s-5);
+  }
+
+  .principles {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    border: var(--bw) solid var(--border);
+  }
+
+  .principles li {
+    display: flex;
+    gap: var(--s-6);
+    padding: var(--s-6);
+    border-bottom: var(--bw) solid var(--border);
+    transition: background 180ms linear;
+  }
+
+  .principles li:last-child {
+    border-bottom: 0;
+  }
+
+  .principles li:hover {
+    background: var(--panel);
+  }
+
+  .principles__n {
+    font-family: var(--font-mono);
+    font-size: var(--fs-small);
+    color: var(--text-muted);
+    transition: color 180ms linear;
+  }
+
+  .principles li:hover .principles__n {
+    color: var(--accent);
+  }
+
+  .principles h2 {
+    font-size: 1rem;
+    margin-block-end: var(--s-3);
+  }
+
+  .principles p {
+    margin: 0;
+    font-size: var(--fs-small);
+    line-height: 1.7;
+  }
+
+  .layers {
+    background: var(--panel);
+    border: var(--bw) solid var(--border);
+    padding: var(--s-7);
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-4);
+  }
+
+  .layers__row {
+    display: flex;
+    align-items: center;
+    gap: var(--s-5);
+  }
+
+  .layers__name {
+    width: 140px;
+    flex-shrink: 0;
+    font-family: var(--font-mono);
+    font-size: var(--fs-small);
+    color: var(--text-muted);
+  }
+
+  .layers__box {
+    flex-grow: 1;
+    background: var(--bg);
+    border: var(--bw) solid var(--border);
+    padding: var(--s-4) var(--s-5);
+    font-family: var(--font-mono);
+    font-size: var(--fs-small);
+    transition: transform 200ms var(--ease-out);
+  }
+
+  .layers__box[data-key] {
+    border-color: var(--accent);
+  }
+
+  .layers__row:hover .layers__box {
+    transform: translateX(4px);
+  }
+
+  .muted {
+    font-size: var(--fs-small);
+    color: var(--text-muted);
+  }
+
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--s-5);
+  }
+
+  .cards article {
+    border: var(--bw) solid var(--border);
+    padding: var(--s-6);
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-4);
+  }
+
+  .cards__title {
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: var(--fs-label);
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+
+  .cards p {
+    margin: 0;
+  }
+
+  .cards a {
+    font-family: var(--font-mono);
+    font-size: var(--fs-small);
+  }
+
+  @media (max-width: 900px) {
+    .col {
+      padding: var(--s-7) var(--s-6) 0;
+    }
+
+    .layers__row {
+      flex-direction: column;
+      align-items: stretch;
+      gap: var(--s-2);
+    }
+
+    .layers__name {
+      width: auto;
+    }
+
+    .cards {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>

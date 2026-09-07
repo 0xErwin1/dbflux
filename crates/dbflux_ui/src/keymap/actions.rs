@@ -114,6 +114,10 @@ pub fn workspace_keybindings() -> Vec<KeyBinding> {
 /// `ctrl-enter` elsewhere) rather than the abstract `secondary-` form so the
 /// macOS Ctrl+Enter stays free for editor interrupt semantics and matches the
 /// Cmd convention used by `results_layer` for ResultsCopyCell.
+///
+/// On Linux/Windows this also adds Ctrl+Shift+Z as redo: `gpui-component`
+/// only binds Ctrl+Y there (macOS already has Cmd+Shift+Z), and Ctrl+Shift+Z
+/// is the redo chord most editors pair with Ctrl+Z.
 pub fn input_context_keybindings() -> Vec<KeyBinding> {
     let ctx = Some("Input");
     #[cfg(target_os = "macos")]
@@ -128,6 +132,7 @@ pub fn input_context_keybindings() -> Vec<KeyBinding> {
         vec![
             KeyBinding::new("ctrl-enter", RunQuery, ctx),
             KeyBinding::new("ctrl-shift-enter", RunQueryInNewTab, ctx),
+            KeyBinding::new("ctrl-shift-z", gpui_component::input::Redo, ctx),
         ]
     }
 }
@@ -145,7 +150,6 @@ mod tests {
     #[test]
     fn input_context_keybindings_shape() {
         let bindings = input_context_keybindings();
-        assert_eq!(bindings.len(), 2);
 
         #[cfg(target_os = "macos")]
         let (run, run_new) = (
@@ -166,6 +170,23 @@ mod tests {
             bindings[1].match_keystrokes(&[run_new]) == Some(false)
                 && bindings[1].action().partial_eq(&RunQueryInNewTab),
         );
+
+        // Linux/Windows additionally rebind Ctrl+Shift+Z as redo, which macOS
+        // already gets from `gpui-component`'s own Cmd+Shift+Z default.
+        #[cfg(target_os = "macos")]
+        assert_eq!(bindings.len(), 2);
+        #[cfg(not(target_os = "macos"))]
+        {
+            assert_eq!(bindings.len(), 3);
+
+            let redo = Keystroke::parse("ctrl-shift-z").unwrap();
+            assert!(
+                bindings[2].match_keystrokes(&[redo]) == Some(false)
+                    && bindings[2]
+                        .action()
+                        .partial_eq(&gpui_component::input::Redo),
+            );
+        }
     }
 
     // Regression test for the GPUI shift-digit normalization bug (GitHub #65):

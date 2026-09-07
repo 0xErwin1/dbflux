@@ -294,7 +294,7 @@ impl SettingsCoordinator {
                 report_error(
                     UserFacingError::new(
                         ErrorKind::Config,
-                        format!("Failed to persist MCP governance: {e}"),
+                        dbflux_i18n::t!("settings.mcp_governance.persist_error", error = e),
                     ),
                     cx,
                 );

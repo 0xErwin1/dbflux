@@ -868,6 +868,9 @@ pub struct CrudResult {
     /// The updated row data (from RETURNING clause or re-query).
     /// None if the operation doesn't return row data.
     pub returning_row: Option<Row>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata_extra: Option<std::collections::HashMap<String, serde_json::Value>>,
 }
 
 impl CrudResult {
@@ -875,6 +878,7 @@ impl CrudResult {
         Self {
             affected_rows,
             returning_row,
+            metadata_extra: None,
         }
     }
 
@@ -882,6 +886,7 @@ impl CrudResult {
         Self {
             affected_rows: 1,
             returning_row: Some(returning_row),
+            metadata_extra: None,
         }
     }
 
@@ -889,7 +894,30 @@ impl CrudResult {
         Self {
             affected_rows: 0,
             returning_row: None,
+            metadata_extra: None,
         }
+    }
+
+    pub fn set_unsupported_types(&mut self, type_names: impl IntoIterator<Item = String>) {
+        crate::query::types::encode_unsupported_types(&mut self.metadata_extra, type_names);
+    }
+
+    pub fn take_unsupported_types(&mut self) -> Vec<String> {
+        crate::query::types::take_unsupported_types(&mut self.metadata_extra)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CrudResult;
+
+    #[test]
+    fn crud_result_unsupported_types_round_trip() {
+        let mut result = CrudResult::empty();
+        result.set_unsupported_types(["bit".to_string(), "halfvec".to_string(), "bit".to_string()]);
+
+        assert_eq!(result.take_unsupported_types(), vec!["bit", "halfvec"]);
+        assert!(result.take_unsupported_types().is_empty());
     }
 }
 

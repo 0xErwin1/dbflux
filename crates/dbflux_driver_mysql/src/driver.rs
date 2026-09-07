@@ -1200,7 +1200,11 @@ fn build_mysql_opts(
         .tcp_port(port)
         .prefer_socket(false)
         .user(Some(user))
-        .pass(password);
+        .pass(password)
+        .connect_attrs(Some(HashMap::from([(
+            "program_name".to_string(),
+            dbflux_core::client_identity().to_string(),
+        )])));
 
     if let Some(db) = database {
         builder = builder.db_name(Some(db));
@@ -1279,6 +1283,14 @@ impl MysqlDriver {
         let uri = inject_password_into_mysql_uri(base_uri, password);
 
         let opts = Opts::from_url(&uri).map_err(|e| format_mysql_uri_error(&e, base_uri))?;
+        // MySQL connection URIs have no program_name/application_name query key,
+        // so the identity attr must be applied unconditionally after parsing.
+        let opts: Opts = OptsBuilder::from_opts(opts)
+            .connect_attrs(Some(HashMap::from([(
+                "program_name".to_string(),
+                dbflux_core::client_identity().to_string(),
+            )])))
+            .into();
 
         let catalog_conn =
             Conn::new(opts.clone()).map_err(|e| format_mysql_uri_error(&e, base_uri))?;
@@ -1984,6 +1996,32 @@ impl Connection for MysqlConnection {
             .map_err(|e| format_mysql_query_error(&e))
     }
 
+    fn probe_write_privilege(&self) -> dbflux_core::WritePrivilege {
+        let mut conn = match self.catalog_conn.lock() {
+            Ok(conn) => conn,
+            Err(_) => return dbflux_core::WritePrivilege::Unknown,
+        };
+
+        // `read_only` is a global-only variable readable through the session
+        // scope on both MySQL and MariaDB. `super_read_only` only exists on
+        // MySQL, so it is queried separately: a MariaDB server errors on an
+        // unknown system variable, and that error must not sink the whole
+        // probe into `Unknown` when `read_only` was read successfully.
+        let read_only = match conn.query_first::<i64, _>("SELECT @@read_only") {
+            Ok(Some(value)) => value != 0,
+            _ => return dbflux_core::WritePrivilege::Unknown,
+        };
+
+        let super_read_only = match conn.query_first::<i64, _>("SELECT @@super_read_only") {
+            Ok(Some(value)) => Some(value != 0),
+            _ => None,
+        };
+
+        let grants: Vec<String> = conn.query("SHOW GRANTS").unwrap_or_default();
+
+        resolve_write_privilege(read_only, super_read_only, &grants)
+    }
+
     fn close(&mut self) -> Result<(), DbError> {
         Ok(())
     }
@@ -2056,11 +2094,7 @@ impl Connection for MysqlConnection {
 
         let start = Instant::now();
 
-        let sql_preview = if req.sql.len() > 80 {
-            format!("{}...", &req.sql[..80])
-        } else {
-            req.sql.clone()
-        };
+        let sql_preview = dbflux_core::truncate_string_safe(&req.sql, 80);
         log::debug!("[QUERY] Executing: {}", sql_preview.replace('\n', " "));
 
         let mut state = match self.query_conn.lock() {
@@ -2210,6 +2244,7 @@ impl Connection for MysqlConnection {
             sample_fields: None,
             presentation: dbflux_core::CollectionPresentation::DataGrid,
             child_items: None,
+            storage_hints: None,
         })
     }
 
@@ -3362,6 +3397,7 @@ fn fetch_tables_shallow(conn: &mut Conn, database: &str) -> Result<Vec<TableInfo
             sample_fields: None,
             presentation: dbflux_core::CollectionPresentation::DataGrid,
             child_items: None,
+            storage_hints: None,
         })
         .collect())
 }
@@ -3916,19 +3952,179 @@ pub fn fetch_dependents(
     Ok(deps)
 }
 
+/// Verdict for a single `SHOW GRANTS` line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GrantLineVerdict {
+    /// The line grants at least one write-capable privilege
+    /// (`INSERT`, `UPDATE`, `DELETE`, or `ALL PRIVILEGES`/`ALL`).
+    Write,
+    /// The line grants only privileges without write capability
+    /// (e.g. `SELECT`, `SHOW VIEW`, `PROCESS`, `USAGE`).
+    ReadOnly,
+    /// The line grants a role rather than a direct privilege
+    /// (e.g. `` GRANT `app_role`@`%` TO `user`@`%` ``). Roles are not
+    /// resolved here, since doing so would require walking the role's own
+    /// grants (and its own nested roles) on the server.
+    Role,
+    /// The line did not match the recognized `GRANT ... ON ... TO ...` or
+    /// `GRANT <role> TO ...` shapes.
+    Unparseable,
+}
+
+const MYSQL_WRITE_PRIVILEGES: [&str; 5] = ["ALL PRIVILEGES", "ALL", "INSERT", "UPDATE", "DELETE"];
+
+/// Parses the privilege list out of a `GRANT <privileges> ON <scope> TO ...`
+/// line, returning the individual privileges trimmed and upper-cased.
+///
+/// Returns `None` when the line has no `ON` clause, which is the shape used
+/// by role grants (`GRANT <role> TO <user>`) rather than direct privilege
+/// grants.
+fn parse_mysql_grant_privileges(line: &str) -> Option<Vec<String>> {
+    let trimmed = line.trim();
+    let after_grant = trimmed.strip_prefix("GRANT ")?;
+    let on_pos = after_grant.find(" ON ")?;
+    let privilege_list = &after_grant[..on_pos];
+
+    Some(
+        privilege_list
+            .split(',')
+            .map(|privilege| privilege.trim().to_uppercase())
+            .filter(|privilege| !privilege.is_empty())
+            .collect(),
+    )
+}
+
+/// Classifies a single `SHOW GRANTS` output line.
+fn classify_mysql_grant_line(line: &str) -> GrantLineVerdict {
+    let trimmed = line.trim();
+
+    if !trimmed.to_uppercase().starts_with("GRANT ") {
+        return GrantLineVerdict::Unparseable;
+    }
+
+    match parse_mysql_grant_privileges(trimmed) {
+        Some(privileges) if privileges.is_empty() => GrantLineVerdict::Unparseable,
+        Some(privileges) => {
+            if privileges
+                .iter()
+                .any(|privilege| MYSQL_WRITE_PRIVILEGES.contains(&privilege.as_str()))
+            {
+                GrantLineVerdict::Write
+            } else {
+                GrantLineVerdict::ReadOnly
+            }
+        }
+        None if trimmed.to_uppercase().contains(" TO ") => GrantLineVerdict::Role,
+        None => GrantLineVerdict::Unparseable,
+    }
+}
+
+/// Overall verdict from a full `SHOW GRANTS` output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MysqlGrantsVerdict {
+    Writable,
+    ReadOnly,
+    Unknown,
+}
+
+/// Classifies the full set of `SHOW GRANTS` lines for the connected user.
+///
+/// Any line granting a write-capable privilege makes the whole result
+/// `Writable`. Otherwise, any directly-granted (non-role) privilege makes it
+/// `ReadOnly`. When only role grants are present — or no grants parse at all
+/// — the result is `Unknown`, because resolving a role's effective
+/// privileges would require walking that role's own (and its nested roles')
+/// grants on the server, which this probe does not do.
+fn classify_mysql_grants(grants: &[String]) -> MysqlGrantsVerdict {
+    let mut saw_direct_privilege = false;
+
+    for line in grants {
+        match classify_mysql_grant_line(line) {
+            GrantLineVerdict::Write => return MysqlGrantsVerdict::Writable,
+            GrantLineVerdict::ReadOnly => saw_direct_privilege = true,
+            GrantLineVerdict::Role | GrantLineVerdict::Unparseable => {}
+        }
+    }
+
+    if saw_direct_privilege {
+        MysqlGrantsVerdict::ReadOnly
+    } else {
+        MysqlGrantsVerdict::Unknown
+    }
+}
+
+/// Returns whether any directly-granted line in `grants` includes `privilege`
+/// (or a superseding `ALL PRIVILEGES`/`ALL`).
+fn mysql_grants_include_privilege(grants: &[String], privilege: &str) -> bool {
+    grants.iter().any(|line| {
+        parse_mysql_grant_privileges(line.trim()).is_some_and(|privileges| {
+            privileges.iter().any(|granted| {
+                granted == privilege || granted == "ALL PRIVILEGES" || granted == "ALL"
+            })
+        })
+    })
+}
+
+/// Resolves `WritePrivilege` from the `read_only`/`super_read_only` server
+/// variables and the connected user's `SHOW GRANTS` output.
+///
+/// Decision table:
+///
+/// | `super_read_only` | `read_only` | `SUPER`/`CONNECTION_ADMIN` grant | grants verdict | result     |
+/// |--------------------|-------------|----------------------------------|-----------------|------------|
+/// | `Some(true)`       | any         | any                              | any             | `ReadOnly` |
+/// | `Some(false)`/`None` | `true`    | absent                           | any             | `ReadOnly` |
+/// | `Some(false)`/`None` | `true`    | present                          | `Writable`      | `Writable` |
+/// | `Some(false)`/`None` | `true`    | present                          | `ReadOnly`      | `ReadOnly` |
+/// | `Some(false)`/`None` | `true`    | present                          | `Unknown`       | `Unknown`  |
+/// | `Some(false)`/`None` | `false`   | n/a                              | `Writable`      | `Writable` |
+/// | `Some(false)`/`None` | `false`   | n/a                              | `ReadOnly`      | `ReadOnly` |
+/// | `Some(false)`/`None` | `false`   | n/a                              | `Unknown`       | `Unknown`  |
+///
+/// `super_read_only` is `None` on MariaDB, which has no such variable; it is
+/// treated the same as `Some(false)`.
+fn resolve_write_privilege(
+    read_only: bool,
+    super_read_only: Option<bool>,
+    grants: &[String],
+) -> dbflux_core::WritePrivilege {
+    use dbflux_core::WritePrivilege;
+
+    if super_read_only == Some(true) {
+        return WritePrivilege::ReadOnly;
+    }
+
+    if read_only {
+        let has_super_bypass = mysql_grants_include_privilege(grants, "SUPER")
+            || mysql_grants_include_privilege(grants, "CONNECTION_ADMIN");
+
+        if !has_super_bypass {
+            return WritePrivilege::ReadOnly;
+        }
+    }
+
+    match classify_mysql_grants(grants) {
+        MysqlGrantsVerdict::Writable => WritePrivilege::Writable,
+        MysqlGrantsVerdict::ReadOnly => WritePrivilege::ReadOnly,
+        MysqlGrantsVerdict::Unknown => WritePrivilege::Unknown,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        MysqlCodeGenerator, MysqlDialect, MysqlDriver, inject_password_into_mysql_uri,
-        mysql_routine_type_to_kind, mysql_text_literal, normalize_mysql_tcp_host,
-        plan_mysql_semantic_request,
+        GrantLineVerdict, MysqlCodeGenerator, MysqlDialect, MysqlDriver, MysqlGrantsVerdict,
+        MysqlSslPaths, build_mysql_opts, classify_mysql_grant_line, classify_mysql_grants,
+        inject_password_into_mysql_uri, mysql_routine_type_to_kind, mysql_text_literal,
+        normalize_mysql_tcp_host, plan_mysql_semantic_request, resolve_write_privilege,
     };
     use dbflux_core::{
         AddColumnRequest, AlterColumnRequest, CodeGenerator, DatabaseCategory, DbConfig, DbDriver,
         DbError, DbKind, DdlRejection, DefaultSpec, DropColumnRequest, FormValues, MutationRequest,
         OrderByColumn, QueryLanguage, RoutineKind, RowInsert, SemanticRequest, SqlDialect,
-        SqlMutationGenerator, TableBrowseRequest, TableRef, TransferFamily, Value,
+        SqlMutationGenerator, TableBrowseRequest, TableRef, TransferFamily, Value, WritePrivilege,
     };
+    use mysql::{Opts, OptsBuilder};
 
     #[test]
     fn build_and_parse_uri_roundtrip_basics() {
@@ -4053,6 +4249,47 @@ mod tests {
                 .parse_uri("postgres://postgres@localhost:5432/app")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn build_mysql_opts_sends_client_identity_program_name() {
+        let opts = build_mysql_opts(
+            "localhost",
+            3306,
+            "root",
+            None,
+            None,
+            "DISABLED",
+            &MysqlSslPaths {
+                root_cert: None,
+                client_cert: None,
+                client_key: None,
+            },
+        );
+
+        let program_name = opts
+            .get_connect_attrs()
+            .and_then(|attrs| attrs.get("program_name"))
+            .map(String::as_str);
+        assert_eq!(program_name, Some(dbflux_core::client_identity()));
+    }
+
+    #[test]
+    fn uri_opts_send_client_identity_program_name() {
+        let opts = Opts::from_url("mysql://root@localhost:3306/app")
+            .expect("uri should parse into mysql Opts");
+        let opts: Opts = OptsBuilder::from_opts(opts)
+            .connect_attrs(Some(std::collections::HashMap::from([(
+                "program_name".to_string(),
+                dbflux_core::client_identity().to_string(),
+            )])))
+            .into();
+
+        let program_name = opts
+            .get_connect_attrs()
+            .and_then(|attrs| attrs.get("program_name"))
+            .map(String::as_str);
+        assert_eq!(program_name, Some(dbflux_core::client_identity()));
     }
 
     #[test]
@@ -4507,5 +4744,152 @@ mod tests {
                 followup: None,
             })
         );
+    }
+
+    // Write-privilege probe: grant-line classification.
+
+    #[test]
+    fn grant_line_all_privileges_on_star_is_write() {
+        let verdict = classify_mysql_grant_line("GRANT ALL PRIVILEGES ON *.* TO 'app'@'%'");
+        assert_eq!(verdict, GrantLineVerdict::Write);
+    }
+
+    #[test]
+    fn grant_line_single_select_is_read_only() {
+        let verdict = classify_mysql_grant_line("GRANT SELECT ON `db`.* TO 'reporter'@'%'");
+        assert_eq!(verdict, GrantLineVerdict::ReadOnly);
+    }
+
+    #[test]
+    fn grant_line_select_and_insert_is_write() {
+        let verdict = classify_mysql_grant_line("GRANT SELECT, INSERT ON `db`.`t` TO 'app'@'%'");
+        assert_eq!(verdict, GrantLineVerdict::Write);
+    }
+
+    #[test]
+    fn grant_line_usage_only_is_read_only() {
+        let verdict = classify_mysql_grant_line("GRANT USAGE ON *.* TO 'app'@'%'");
+        assert_eq!(verdict, GrantLineVerdict::ReadOnly);
+    }
+
+    #[test]
+    fn grant_line_show_view_and_process_is_read_only() {
+        let verdict = classify_mysql_grant_line("GRANT SHOW VIEW, PROCESS ON *.* TO 'app'@'%'");
+        assert_eq!(verdict, GrantLineVerdict::ReadOnly);
+    }
+
+    #[test]
+    fn grant_line_role_grant_is_unresolved() {
+        let verdict = classify_mysql_grant_line("GRANT `app_role`@`%` TO `app`@`%`");
+        assert_eq!(verdict, GrantLineVerdict::Role);
+    }
+
+    #[test]
+    fn grant_line_without_grant_prefix_is_unparseable() {
+        let verdict = classify_mysql_grant_line("REVOKE ALL PRIVILEGES ON *.* FROM 'app'@'%'");
+        assert_eq!(verdict, GrantLineVerdict::Unparseable);
+    }
+
+    #[test]
+    fn grant_line_delete_only_is_write() {
+        let verdict = classify_mysql_grant_line("GRANT DELETE ON `db`.`t` TO 'app'@'%'");
+        assert_eq!(verdict, GrantLineVerdict::Write);
+    }
+
+    // Write-privilege probe: full grants classification.
+
+    #[test]
+    fn grants_writable_when_any_line_grants_write() {
+        let grants = vec![
+            "GRANT USAGE ON *.* TO 'app'@'%'".to_string(),
+            "GRANT SELECT, INSERT ON `db`.* TO 'app'@'%'".to_string(),
+        ];
+        assert_eq!(classify_mysql_grants(&grants), MysqlGrantsVerdict::Writable);
+    }
+
+    #[test]
+    fn grants_read_only_when_only_read_privileges_present() {
+        let grants = vec![
+            "GRANT USAGE ON *.* TO 'reporter'@'%'".to_string(),
+            "GRANT SELECT ON `db`.* TO 'reporter'@'%'".to_string(),
+        ];
+        assert_eq!(classify_mysql_grants(&grants), MysqlGrantsVerdict::ReadOnly);
+    }
+
+    #[test]
+    fn grants_unknown_when_only_role_grants_present() {
+        let grants = vec!["GRANT `app_role`@`%` TO `app`@`%`".to_string()];
+        assert_eq!(classify_mysql_grants(&grants), MysqlGrantsVerdict::Unknown);
+    }
+
+    #[test]
+    fn grants_unknown_when_empty() {
+        let grants: Vec<String> = Vec::new();
+        assert_eq!(classify_mysql_grants(&grants), MysqlGrantsVerdict::Unknown);
+    }
+
+    // Write-privilege probe: (read_only, super_read_only, grants) decision table.
+
+    #[test]
+    fn resolve_super_read_only_forces_read_only_even_with_write_grant() {
+        let grants = vec!["GRANT ALL PRIVILEGES ON *.* TO 'app'@'%'".to_string()];
+        let result = resolve_write_privilege(false, Some(true), &grants);
+        assert_eq!(result, WritePrivilege::ReadOnly);
+    }
+
+    #[test]
+    fn resolve_read_only_without_super_bypass_is_read_only() {
+        let grants = vec!["GRANT INSERT, UPDATE, DELETE ON `db`.* TO 'app'@'%'".to_string()];
+        let result = resolve_write_privilege(true, Some(false), &grants);
+        assert_eq!(result, WritePrivilege::ReadOnly);
+    }
+
+    #[test]
+    fn resolve_read_only_with_super_bypass_defers_to_grants() {
+        let grants = vec![
+            "GRANT SUPER ON *.* TO 'admin'@'%'".to_string(),
+            "GRANT ALL PRIVILEGES ON *.* TO 'admin'@'%'".to_string(),
+        ];
+        let result = resolve_write_privilege(true, Some(false), &grants);
+        assert_eq!(result, WritePrivilege::Writable);
+    }
+
+    #[test]
+    fn resolve_read_only_with_connection_admin_bypass_defers_to_grants() {
+        let grants = vec![
+            "GRANT CONNECTION_ADMIN ON *.* TO 'admin'@'%'".to_string(),
+            "GRANT SELECT ON *.* TO 'admin'@'%'".to_string(),
+        ];
+        let result = resolve_write_privilege(true, Some(false), &grants);
+        assert_eq!(result, WritePrivilege::ReadOnly);
+    }
+
+    #[test]
+    fn resolve_mariadb_missing_super_read_only_falls_back_to_read_only() {
+        // MariaDB has no @@super_read_only; the probe passes `None` for it.
+        let grants = vec!["GRANT INSERT, UPDATE, DELETE ON `db`.* TO 'app'@'%'".to_string()];
+        let result = resolve_write_privilege(true, None, &grants);
+        assert_eq!(result, WritePrivilege::ReadOnly);
+    }
+
+    #[test]
+    fn resolve_not_read_only_writable_grants_is_writable() {
+        let grants = vec!["GRANT INSERT, UPDATE, DELETE ON `db`.* TO 'app'@'%'".to_string()];
+        let result = resolve_write_privilege(false, Some(false), &grants);
+        assert_eq!(result, WritePrivilege::Writable);
+    }
+
+    #[test]
+    fn resolve_not_read_only_read_only_grants_is_read_only() {
+        let grants = vec!["GRANT SELECT ON `db`.* TO 'reporter'@'%'".to_string()];
+        let result = resolve_write_privilege(false, Some(false), &grants);
+        assert_eq!(result, WritePrivilege::ReadOnly);
+    }
+
+    #[test]
+    fn resolve_not_read_only_role_only_grants_is_unknown() {
+        let grants = vec!["GRANT `app_role`@`%` TO `app`@`%`".to_string()];
+        let result = resolve_write_privilege(false, Some(false), &grants);
+        assert_eq!(result, WritePrivilege::Unknown);
     }
 }

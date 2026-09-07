@@ -2,6 +2,7 @@ pub mod bundle;
 pub mod conflict;
 pub mod error;
 pub mod export;
+pub mod external;
 pub mod import;
 
 #[cfg(feature = "encryption")]

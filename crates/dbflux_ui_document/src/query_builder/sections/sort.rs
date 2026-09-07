@@ -1,5 +1,6 @@
 use gpui::{Context, IntoElement, div};
 
+use crate::labels::sort_direction_label;
 use crate::query_builder::panel::QueryBuilderPanel;
 
 /// Renders the Sort section of the Query Builder.
@@ -26,10 +27,7 @@ pub fn render_sort(
     let mut container = div().flex().flex_col().gap_1();
 
     for (i, row) in sort_rows.iter().enumerate() {
-        let dir_label = match row.direction {
-            VisualSortDirection::Asc => "ASC",
-            VisualSortDirection::Desc => "DESC",
-        };
+        let dir_label = sort_direction_label(row.direction);
 
         let label = format!("{}.{}", row.source_alias, row.column);
         let can_move_up = i > 0;
@@ -97,7 +95,7 @@ pub fn render_sort(
                     ),
                 )
                 .child(
-                    Button::new("qb-add-sort", "Add")
+                    Button::new("qb-add-sort", dbflux_i18n::t!("document.shared.add"))
                         .small()
                         .on_click(cx.listener(|this, _event, _window, cx| {
                             if let Some(state) = this.add_sort_input_state.clone() {
@@ -136,16 +134,13 @@ fn render_sort_key_only(
     use gpui_component::ActiveTheme;
 
     let direction = panel.sort_key_direction();
-    let dir_label = match direction {
-        VisualSortDirection::Asc => "ASC",
-        VisualSortDirection::Desc => "DESC",
-    };
+    let dir_label = sort_direction_label(direction);
 
     let sort_key_label = panel
         .sort_key_column()
         .filter(|name| !name.is_empty())
-        .map(|name| format!("Sort key order ({name})"))
-        .unwrap_or_else(|| "Sort key order".to_string());
+        .map(|name| dbflux_i18n::t!("document.query_builder.sort.key_order_named", name = name))
+        .unwrap_or_else(|| dbflux_i18n::t!("document.query_builder.sort.key_order"));
 
     div()
         .flex()
@@ -180,6 +175,8 @@ fn render_sort_key_only(
             div()
                 .text_xs()
                 .text_color(cx.theme().muted_foreground)
-                .child("Ordering is limited to the sort key for this driver."),
+                .child(dbflux_i18n::t!(
+                    "document.query_builder.sort.key_limited_hint"
+                )),
         )
 }

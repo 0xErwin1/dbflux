@@ -105,12 +105,15 @@ impl Render for DashboardDocument {
                         div()
                             .id("dashboard-empty-hint")
                             .text_sm()
-                            .child("Add a saved chart to get started"),
+                            .child(dbflux_i18n::t!("document.dashboard.status.empty_hint")),
                     )
                     .child(
-                        Button::new("dashboard-add-panel-cta", "+ Add Panel")
-                            .primary()
-                            .on_click(on_add),
+                        Button::new(
+                            "dashboard-add-panel-cta",
+                            dbflux_i18n::t!("document.dashboard.toolbar.add_panel"),
+                        )
+                        .primary()
+                        .on_click(on_add),
                     )
                     .into_any_element(),
             );
@@ -175,7 +178,9 @@ impl Render for DashboardDocument {
                         .filter(|s| !s.trim().is_empty())
                         .cloned()
                         .unwrap_or_else(|| entity.read(cx).metric_id().to_string()),
-                    DashboardPanelSlot::Orphan { .. } => "Chart not found".to_string(),
+                    DashboardPanelSlot::Orphan { .. } => {
+                        dbflux_i18n::t!("document.dashboard.panel.chart_not_found.title")
+                    }
                     DashboardPanelSlot::Divider { .. } => String::new(),
                 };
 
@@ -275,7 +280,9 @@ impl Render for DashboardDocument {
                                     .id(("dashboard-orphan-panel", panel_index))
                                     .flex_1()
                                     .text_sm()
-                                    .child("Chart not found — saved chart was deleted"),
+                                    .child(dbflux_i18n::t!(
+                                        "document.dashboard.panel.chart_not_found.body"
+                                    )),
                             )
                             .when_some(resize_right, |el, r| el.child(r))
                             .when_some(resize_bottom, |el, r| el.child(r))
@@ -841,6 +848,37 @@ mod tests {
         const TOOLBAR_BTN_ID: &str = "dash-add-panel-toolbar";
         assert_eq!(CTA_ID, "dashboard-add-panel-cta");
         assert_eq!(TOOLBAR_BTN_ID, "dash-add-panel-toolbar");
+    }
+
+    /// The empty-state hint and Orphan panel's "chart not found" keys
+    /// resolve in both locales.
+    #[test]
+    fn dashboard_status_and_chart_not_found_keys_resolve_in_both_locales() {
+        let keys = [
+            "document.dashboard.status.empty_hint",
+            "document.dashboard.panel.chart_not_found.title",
+            "document.dashboard.panel.chart_not_found.body",
+        ];
+        for key in keys {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+    }
+
+    /// The empty-state hint diverges between locales.
+    #[test]
+    fn dashboard_status_empty_hint_differs_between_locales() {
+        let en = dbflux_i18n::t!("document.dashboard.status.empty_hint", locale = "en");
+        let es = dbflux_i18n::t!("document.dashboard.status.empty_hint", locale = "es");
+        assert_ne!(en, es);
     }
 
     /// Toolbar refresh `Dropdown` ID is stable.

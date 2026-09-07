@@ -117,12 +117,12 @@ impl AuditDocument {
     pub(super) fn context_menu_items(has_correlation: bool) -> Vec<AuditMenuItem> {
         let mut items = vec![
             AuditMenuItem::item(
-                "Copy Row as CSV",
+                dbflux_i18n::t!("document.audit.menu.copy_row_as_csv"),
                 AuditContextMenuAction::CopyRowAsCsv,
                 AppIcon::Layers,
             ),
             AuditMenuItem::item(
-                "Copy Summary",
+                dbflux_i18n::t!("document.audit.menu.copy_summary"),
                 AuditContextMenuAction::CopySummary,
                 AppIcon::Layers,
             ),
@@ -131,7 +131,7 @@ impl AuditDocument {
         if has_correlation {
             items.push(AuditMenuItem::separator());
             items.push(AuditMenuItem::item(
-                "Filter by Correlation",
+                dbflux_i18n::t!("document.audit.menu.filter_by_correlation"),
                 AuditContextMenuAction::FilterByCorrelation,
                 AppIcon::ListFilter,
             ));
@@ -562,3 +562,77 @@ impl AuditDocument {
 // Suppress unused import warnings from items used only in commands.rs's
 // `use super::` that come from mod.rs private items.
 use super::ToolbarSlot;
+
+#[cfg(test)]
+mod tests {
+    use super::{AuditContextMenuAction, AuditDocument, AuditMenuItem};
+
+    const MENU_KEYS: &[&str] = &[
+        "document.audit.menu.copy_row_as_csv",
+        "document.audit.menu.copy_summary",
+        "document.audit.menu.export",
+        "document.audit.menu.export_format.csv",
+        "document.audit.menu.export_format.json",
+        "document.audit.menu.filter_by_correlation",
+    ];
+
+    #[test]
+    fn audit_context_menu_keys_resolve_in_both_locales() {
+        for key in MENU_KEYS {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, *key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn audit_context_menu_copy_row_as_csv_label_differs_between_locales() {
+        let en = dbflux_i18n::t!("document.audit.menu.copy_row_as_csv", locale = "en");
+        let es = dbflux_i18n::t!("document.audit.menu.copy_row_as_csv", locale = "es");
+
+        assert_eq!(en, "Copy Row as CSV");
+        assert_ne!(en, es);
+    }
+
+    #[test]
+    fn audit_context_menu_label_round_trips_translated_value() {
+        let item = AuditMenuItem::item(
+            dbflux_i18n::t!("document.audit.menu.copy_row_as_csv"),
+            AuditContextMenuAction::CopyRowAsCsv,
+            dbflux_components::icons::AppIcon::Layers,
+        );
+
+        assert_eq!(
+            item.label.to_string(),
+            dbflux_i18n::t!("document.audit.menu.copy_row_as_csv")
+        );
+    }
+
+    #[test]
+    fn context_menu_items_includes_correlation_entry_only_when_present() {
+        let without_correlation = AuditDocument::context_menu_items(false);
+        let with_correlation = AuditDocument::context_menu_items(true);
+
+        assert_eq!(without_correlation.len(), 2);
+        assert!(
+            !without_correlation
+                .iter()
+                .any(|item| item.action == Some(AuditContextMenuAction::FilterByCorrelation))
+        );
+
+        assert_eq!(with_correlation.len(), 4);
+        assert!(
+            with_correlation
+                .iter()
+                .any(|item| item.action == Some(AuditContextMenuAction::FilterByCorrelation))
+        );
+    }
+}

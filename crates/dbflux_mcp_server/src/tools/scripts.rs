@@ -10,7 +10,7 @@ use crate::{
     helper::{IntoErrorData, to_json_content},
     state::ServerState,
 };
-use dbflux_core::{QueryLanguage, QueryRequest};
+use dbflux_core::{LanguageService, QueryLanguage, QueryRequest};
 use rmcp::{
     ErrorData,
     handler::server::wrapper::Parameters,
@@ -285,8 +285,38 @@ impl DbFluxServer {
             .await
             .map_err(|e| e.into_error_data())?;
 
-        // Detect classification based on content
-        let classification = Self::detect_execution_classification(&content, &language);
+        // Non-query script languages (Lua/Python/Bash) are always classified
+        // as Admin without needing a connection; only resolve one for
+        // languages that actually run a query.
+        let connection_for_classification = if matches!(
+            language,
+            QueryLanguage::Lua | QueryLanguage::Python | QueryLanguage::Bash
+        ) {
+            None
+        } else {
+            match Self::get_or_connect(state.clone(), &params.connection_id).await {
+                Ok(connection) => Some(connection),
+                Err(error) => {
+                    log::debug!(
+                        "Failed to resolve connection '{}' for script classification, \
+                         falling back to language-only classification: {}",
+                        params.connection_id,
+                        error
+                    );
+                    None
+                }
+            }
+        };
+
+        // Detect classification based on content, consulting the connection's
+        // driver-owned language service when one was resolved.
+        let classification = Self::detect_execution_classification(
+            &content,
+            &language,
+            connection_for_classification
+                .as_deref()
+                .map(|connection| connection.language_service()),
+        );
 
         let connection_id = params.connection_id.clone();
         let state_clone = state.clone();
@@ -557,10 +587,10 @@ impl DbFluxServer {
         Ok((content, language))
     }
 
-    #[allow(dead_code)]
     fn detect_execution_classification(
         content: &str,
         language: &QueryLanguage,
+        service: Option<&dyn LanguageService>,
     ) -> dbflux_policy::ExecutionClassification {
         use dbflux_core::classify_query_for_governance;
         use dbflux_policy::ExecutionClassification;
@@ -573,8 +603,9 @@ impl DbFluxServer {
             _ => {}
         }
 
-        // For query languages, use the safety module to classify
-        classify_query_for_governance(language, content)
+        // For query languages, use the safety module to classify, consulting
+        // the driver's language service when one is available.
+        classify_query_for_governance(language, content, service)
     }
 
     #[allow(dead_code)]

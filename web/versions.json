@@ -1,0 +1,5 @@
+[
+  { "id": "nightly", "ref": "main", "noindex": true },
+  { "id": "v0.7", "ref": "release/v0.7", "current": true },
+  { "id": "v0.6", "ref": "release/v0.6" }
+]

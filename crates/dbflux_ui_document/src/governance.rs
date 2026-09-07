@@ -63,9 +63,10 @@ impl McpApprovalsView {
             }
             Err(error) => {
                 self.selected_detail = None;
-                self.status_message = Some(format!(
-                    "Failed to load pending execution {}: {}",
-                    pending_id, error
+                self.status_message = Some(dbflux_i18n::t!(
+                    "document.governance.load_failed",
+                    id = pending_id,
+                    error = error
                 ));
             }
         }
@@ -178,12 +179,15 @@ impl Render for McpApprovalsView {
                     .flex_col()
                     .gap_2()
                     .child(
-                        Button::new("mcp-approvals-refresh", "Refresh Pending")
-                            .small()
-                            .ghost()
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.refresh(cx);
-                            })),
+                        Button::new(
+                            "mcp-approvals-refresh",
+                            dbflux_i18n::t!("document.governance.refresh"),
+                        )
+                        .small()
+                        .ghost()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.refresh(cx);
+                        })),
                     )
                     .child(
                         div()
@@ -193,7 +197,9 @@ impl Render for McpApprovalsView {
                             .flex_col()
                             .gap_1()
                             .when(self.pending.is_empty(), |root| {
-                                root.child(Text::muted("No pending executions"))
+                                root.child(Text::muted(dbflux_i18n::t!(
+                                    "document.governance.no_pending"
+                                )))
                             })
                             .children(self.pending.iter().map(|entry| {
                                 let entry_id = entry.id.clone();
@@ -241,41 +247,60 @@ impl Render for McpApprovalsView {
                     .flex_col()
                     .gap_3()
                     .when_some(self.selected_detail.clone(), |root, detail| {
-                        root.child(Text::heading(format!("Pending {}", detail.summary.id)))
-                            .child(
-                                div()
-                                    .child(Text::caption("Approval context"))
-                                    .child(Text::body(Self::semantics_preview(&detail))),
-                            )
-                            .child(
-                                div()
-                                    .child(Text::caption("Execution plan"))
-                                    .child(Text::body(detail.plan.to_string())),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .gap_2()
-                                    .child(
-                                        Button::new("mcp-approval-approve", "Approve")
-                                            .small()
-                                            .primary()
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.approve_selected(cx);
-                                            })),
+                        root.child(Text::heading(dbflux_i18n::t!(
+                            "document.governance.pending_title",
+                            id = detail.summary.id
+                        )))
+                        .child(
+                            div()
+                                .child(Text::caption(dbflux_i18n::t!(
+                                    "document.governance.approval_context"
+                                )))
+                                .child(Text::body(Self::semantics_preview(&detail))),
+                        )
+                        .child(
+                            div()
+                                .child(Text::caption(dbflux_i18n::t!(
+                                    "document.governance.execution_plan"
+                                )))
+                                .child(Text::body(detail.plan.to_string())),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .gap_2()
+                                .child(
+                                    Button::new(
+                                        "mcp-approval-approve",
+                                        dbflux_i18n::t!("document.governance.approve"),
                                     )
-                                    .child(
-                                        Button::new("mcp-approval-reject", "Reject")
-                                            .small()
-                                            .danger()
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.reject_selected(cx);
-                                            })),
-                                    ),
-                            )
+                                    .small()
+                                    .primary()
+                                    .on_click(cx.listener(
+                                        |this, _, _, cx| {
+                                            this.approve_selected(cx);
+                                        },
+                                    )),
+                                )
+                                .child(
+                                    Button::new(
+                                        "mcp-approval-reject",
+                                        dbflux_i18n::t!("document.governance.reject"),
+                                    )
+                                    .small()
+                                    .danger()
+                                    .on_click(cx.listener(
+                                        |this, _, _, cx| {
+                                            this.reject_selected(cx);
+                                        },
+                                    )),
+                                ),
+                        )
                     })
                     .when(self.selected_detail.is_none(), |root| {
-                        root.child(Text::muted("Select a pending request to review details."))
+                        root.child(Text::muted(dbflux_i18n::t!(
+                            "document.governance.select_prompt"
+                        )))
                     })
                     .when_some(self.status_message.clone(), |root, message| {
                         root.child(Text::body(message).danger())

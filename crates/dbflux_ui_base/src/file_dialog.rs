@@ -36,7 +36,25 @@ pub fn is_native_file_dialog_available() -> bool {
         binary_on_path("xdg-desktop-portal")
             || binary_on_path("zenity")
             || binary_on_path("kdialog")
+            || portal_process_running()
     }
+}
+
+/// On distros like NixOS the portal runs as a service without its binary on
+/// PATH, so the PATH probe alone reports a false negative. A live
+/// `xdg-desktop-portal` process means rfd's portal backend can serve dialogs.
+#[cfg(target_os = "linux")]
+fn portal_process_running() -> bool {
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return false;
+    };
+
+    entries.filter_map(Result::ok).any(|entry| {
+        let comm_path = entry.path().join("comm");
+        std::fs::read_to_string(comm_path)
+            .map(|comm| comm.trim() == "xdg-desktop-portal")
+            .unwrap_or(false)
+    })
 }
 
 #[cfg(target_os = "linux")]

@@ -104,7 +104,9 @@ pub(super) fn render_delete_confirm_modal(
                                     cx.notify();
                                 }))
                                 .child(Icon::new(AppIcon::X).size(Heights::ICON_SM).muted())
-                                .child(Text::caption("Cancel")),
+                                .child(Text::caption(dbflux_i18n::t!(
+                                    "document.key_value.render.delete_confirm.cancel"
+                                ))),
                         )
                         .child(
                             div()
@@ -130,7 +132,12 @@ pub(super) fn render_delete_confirm_modal(
                                         .size(Heights::ICON_SM)
                                         .color(theme.background),
                                 )
-                                .child(Text::caption("Delete").color(theme.background)),
+                                .child(
+                                    Text::caption(dbflux_i18n::t!(
+                                        "document.key_value.render.delete_confirm.delete"
+                                    ))
+                                    .color(theme.background),
+                                ),
                         ),
                 ),
         )
@@ -160,7 +167,7 @@ pub(super) fn render_kv_context_menu(
         .map(|(idx, item)| {
             let is_selected = idx == selected_index;
             let is_danger = item.is_danger;
-            let label = item.label;
+            let label = item.label.clone();
             let icon = item.icon;
             let action = item.action;
 
@@ -173,7 +180,7 @@ pub(super) fn render_kv_context_menu(
             };
 
             div()
-                .id(SharedString::from(label))
+                .id(label.clone())
                 .flex()
                 .items_center()
                 .gap(Spacing::SM)

@@ -443,7 +443,7 @@ impl DataGridPanel {
                                 .color(st.theme.muted_foreground),
                         )
                         .child(
-                            Text::caption("Aggregated results cannot be edited")
+                            Text::caption(dbflux_i18n::t!("document.data.grid.editing.aggregated"))
                                 .color(st.theme.muted_foreground),
                         ),
                 )
@@ -461,8 +461,10 @@ impl DataGridPanel {
                         .border_color(st.theme.warning.opacity(0.3))
                         .child(Icon::new(AppIcon::TriangleAlert).small().warning())
                         .child(
-                            Text::caption("This table has no primary key - editing is disabled")
-                                .warning(),
+                            Text::caption(dbflux_i18n::t!(
+                                "document.data.grid.editing.no_primary_key"
+                            ))
+                            .warning(),
                         ),
                 )
             })
@@ -483,9 +485,9 @@ impl DataGridPanel {
                                 .color(st.theme.muted_foreground),
                         )
                         .child(
-                            Text::caption(
-                                "Editing disabled: result is not bound to a single table.",
-                            )
+                            Text::caption(dbflux_i18n::t!(
+                                "document.data.grid.editing.not_single_table"
+                            ))
                             .color(st.theme.muted_foreground),
                         ),
                 )
@@ -597,10 +599,13 @@ impl DataGridPanel {
                                             .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
                                             .color(theme.muted_foreground),
                                     )
-                                    .child(Text::muted("Loading…"))
+                                    .child(Text::muted(dbflux_i18n::t!(
+                                        "document.data.grid.loading"
+                                    )))
                                     .into_any_element()
                             } else {
-                                Text::muted("No data").into_any_element()
+                                Text::muted(dbflux_i18n::t!("document.data.grid.empty"))
+                                    .into_any_element()
                             })
                     },
                 );
@@ -679,9 +684,9 @@ pub(super) fn render_filter_bar_as_segment(
     let theme = cx.theme().clone();
 
     let refresh_label = if refresh_policy.is_auto() {
-        refresh_policy.label()
+        crate::labels::refresh_policy_label(refresh_policy)
     } else {
-        "Refresh"
+        dbflux_i18n::t!("document.data.grid.toolbar.refresh")
     };
 
     let can_open_builder = g.can_open_builder(cx);
@@ -912,7 +917,9 @@ pub(super) fn render_filter_bar_as_segment(
                             });
                         })
                         .child(Icon::new(AppIcon::ListFilter).small().color(icon_color))
-                        .child(Text::muted("Builder")),
+                        .child(Text::muted(dbflux_i18n::t!(
+                            "document.data.grid.toolbar.builder"
+                        ))),
                 )
             }
         })
@@ -989,9 +996,9 @@ impl DataGridPanel {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let refresh_label = if self.refresh.refresh_policy.is_auto() {
-            self.refresh.refresh_policy.label()
+            crate::labels::refresh_policy_label(self.refresh.refresh_policy)
         } else {
-            "Refresh"
+            dbflux_i18n::t!("document.data.grid.toolbar.refresh")
         };
 
         let toolbar_has_filter_error =
@@ -1147,8 +1154,12 @@ impl DataGridPanel {
                     DataViewMode::Document => AppIcon::Braces,
                 };
                 let _tooltip = match mode {
-                    DataViewMode::Table => "Switch to Document View",
-                    DataViewMode::Document => "Switch to Table View",
+                    DataViewMode::Table => {
+                        dbflux_i18n::t!("document.data.grid.toolbar.switch_to_document")
+                    }
+                    DataViewMode::Document => {
+                        dbflux_i18n::t!("document.data.grid.toolbar.switch_to_table")
+                    }
                 };
 
                 d.child(
@@ -1191,7 +1202,9 @@ impl DataGridPanel {
                                 .small()
                                 .color(theme.muted_foreground),
                         )
-                        .child(Text::muted("Builder")),
+                        .child(Text::muted(dbflux_i18n::t!(
+                            "document.data.grid.toolbar.builder"
+                        ))),
                 )
             })
             .child(
@@ -1272,20 +1285,13 @@ impl DataGridPanel {
             .border_color(theme.border)
             // Left: status text
             .child(
-                Text::caption(if has_changes {
-                    format!(
-                        "{} unsaved change{}",
-                        dirty_count,
-                        if dirty_count == 1 { "" } else { "s" }
-                    )
-                } else {
-                    "No unsaved changes".to_string()
-                })
-                .color(if has_changes {
-                    theme.warning
-                } else {
-                    theme.muted_foreground
-                }),
+                Text::caption(crate::labels::unsaved_changes_label(dirty_count)).color(
+                    if has_changes {
+                        theme.warning
+                    } else {
+                        theme.muted_foreground
+                    },
+                ),
             )
             // Right: buttons
             .child(
@@ -1408,11 +1414,14 @@ impl DataGridPanel {
                                     }))
                             })
                             .when(!has_changes, |d| d.border_color(theme.border))
-                            .child(Text::caption("Save").color(if has_changes {
-                                theme.primary_foreground
-                            } else {
-                                theme.muted_foreground
-                            }))
+                            .child(
+                                Text::caption(dbflux_i18n::t!("document.data.grid.edit_bar.save"))
+                                    .color(if has_changes {
+                                        theme.primary_foreground
+                                    } else {
+                                        theme.muted_foreground
+                                    }),
+                            )
                             .child(Text::caption(SAVE_ROW_SHORTCUT_HINT).color(if has_changes {
                                 theme.primary_foreground.opacity(0.7)
                             } else {
@@ -1443,11 +1452,16 @@ impl DataGridPanel {
                                         window.focus(&this.focus_handle, cx);
                                     }))
                             })
-                            .child(Text::caption("Revert").color(if has_changes {
-                                theme.foreground
-                            } else {
-                                theme.muted_foreground
-                            })),
+                            .child(
+                                Text::caption(dbflux_i18n::t!(
+                                    "document.data.grid.edit_bar.revert"
+                                ))
+                                .color(if has_changes {
+                                    theme.foreground
+                                } else {
+                                    theme.muted_foreground
+                                }),
+                            ),
                     ),
             )
     }
@@ -1711,9 +1725,9 @@ impl DataGridPanel {
                 if let Some(panel) = weak_panel.upgrade() {
                     panel.update(cx, |this, _cx| {
                         this.pending.toast = Some(dbflux_ui_base::toast::PendingToast {
-                            message: format!(
-                                "PNG export coming in v0.7 — {}",
-                                dbflux_ui_base::toast::now_hms()
+                            message: dbflux_i18n::t!(
+                                "document.data.grid.export.png_coming_soon",
+                                detail = dbflux_ui_base::toast::now_hms()
                             ),
                             is_error: false,
                         });
@@ -1770,17 +1784,20 @@ impl DataGridPanel {
                     .bg(theme.tab_bar)
                     .child(picker_row)
                     .child(
-                        Button::new("data-grid-chart-time-range-apply", "Apply")
-                            .small()
-                            .disabled(!can_apply)
-                            .on_click(move |_, _, cx| {
-                                panel_clone.update(cx, |p, cx| {
-                                    // The returned bounds are intentionally discarded:
-                                    // the parent CodeDocument's TimeRangeChanged
-                                    // subscription drives re-execution.
-                                    let _ = p.apply_custom_range(cx);
-                                });
-                            }),
+                        Button::new(
+                            "data-grid-chart-time-range-apply",
+                            dbflux_i18n::t!("document.data.chart_dock.toolbar.apply"),
+                        )
+                        .small()
+                        .disabled(!can_apply)
+                        .on_click(move |_, _, cx| {
+                            panel_clone.update(cx, |p, cx| {
+                                // The returned bounds are intentionally discarded:
+                                // the parent CodeDocument's TimeRangeChanged
+                                // subscription drives re-execution.
+                                let _ = p.apply_custom_range(cx);
+                            });
+                        }),
                     );
 
                 Some(row.into_any_element())
@@ -2220,8 +2237,12 @@ impl DataGridPanel {
                     .flex()
                     .flex_col()
                     .gap(Spacing::SM)
-                    .child(Text::label("Save chart"))
-                    .child(Input::new(&name_input).placeholder("Chart name"))
+                    .child(Text::label(dbflux_i18n::t!(
+                        "document.data.chart_dock.save.title"
+                    )))
+                    .child(Input::new(&name_input).placeholder(dbflux_i18n::t!(
+                        "document.data.chart_dock.save.name_placeholder"
+                    )))
                     .child(
                         div()
                             .flex()
@@ -2230,7 +2251,7 @@ impl DataGridPanel {
                             .justify_end()
                             .child(
                                 Button::new("cancel-collection-chart-save")
-                                    .label("Cancel")
+                                    .label(dbflux_i18n::t!("document.data.chart_dock.save.cancel"))
                                     .small()
                                     .on_click(cx.listener(|this, _, _window, cx| {
                                         this.cancel_collection_chart_save(cx);
@@ -2238,7 +2259,7 @@ impl DataGridPanel {
                             )
                             .child(
                                 Button::new("confirm-collection-chart-save")
-                                    .label("Save")
+                                    .label(dbflux_i18n::t!("document.data.chart_dock.save.save"))
                                     .small()
                                     .with_variant(ButtonVariant::Primary)
                                     .on_click(cx.listener(|this, _, _window, cx| {
@@ -2271,34 +2292,17 @@ impl DataGridPanel {
             })
             .unwrap_or((None, false));
 
-        let (title, body, can_pick) = match &detection {
-            Some(ChartDetection::NoTimeColumn) | None => (
-                "No time column detected",
-                "This result has no Timestamp column. Pick a column to use as the time axis.",
-                true,
-            ),
-            Some(ChartDetection::NoNumericSeries) => (
-                "No numeric series",
-                "This result has no Float or Integer columns to plot as series.",
-                true,
-            ),
-            Some(ChartDetection::EmptyResult) => (
-                "No data yet",
-                "Run the query to populate the chart view.",
-                false,
-            ),
-            Some(ChartDetection::Ok { .. }) => (
-                "Chart build failed",
-                "The query result has chartable columns but the chart could not be built.",
-                false,
-            ),
-        };
+        let (title, body) = crate::labels::chart_degraded_copy(&detection);
+        let can_pick = matches!(
+            &detection,
+            Some(ChartDetection::NoTimeColumn) | Some(ChartDetection::NoNumericSeries) | None
+        );
 
         // Column shape preview chips.
         let row_count = self.result.row_count();
         let col_count = self.result.columns.len();
         let shape_label: SharedString =
-            format!("{} rows × {} columns", row_count, col_count).into();
+            crate::labels::chart_dock_shape_label(row_count, col_count).into();
 
         let col_chips: Vec<AnyElement> = self
             .result
@@ -2410,14 +2414,16 @@ impl DataGridPanel {
                                     this.set_result_view_mode(ResultViewMode::Table, cx);
                                 }),
                             )
-                            .child("Open Table tab"),
+                            .child(dbflux_i18n::t!(
+                                "document.data.chart_dock.degraded.open_table_tab"
+                            )),
                     )
                     // "Pick time column…" primary button (only when picker makes sense)
                     .when(can_pick, |d| {
                         let label = if picker_open {
-                            "Hide picker"
+                            dbflux_i18n::t!("document.data.chart_dock.degraded.hide_picker")
                         } else {
-                            "Pick time column…"
+                            dbflux_i18n::t!("document.data.chart_dock.degraded.pick_time_column")
                         };
                         let primary = cx.theme().primary;
                         d.child(
@@ -2538,7 +2544,9 @@ impl DataGridPanel {
                     .child(
                         div()
                             .text_size(FontSizes::SM)
-                            .child(Text::body("X axis (time / label column)")),
+                            .child(Text::body(dbflux_i18n::t!(
+                                "document.data.chart_dock.picker.x_axis_label"
+                            ))),
                     )
                     .child(div().flex().flex_wrap().gap(Spacing::XS).children(
                         x_candidates.iter().enumerate().map(
@@ -2584,7 +2592,9 @@ impl DataGridPanel {
                 .child(
                     div()
                         .text_size(FontSizes::SM)
-                        .child(Text::body("Y axis (numeric columns)")),
+                        .child(Text::body(dbflux_i18n::t!(
+                            "document.data.chart_dock.picker.y_axis_label"
+                        ))),
                 )
                 .child(
                     div().flex().flex_col().gap(Spacing::XS).children(
@@ -2675,7 +2685,7 @@ impl DataGridPanel {
                     ..chart_colors.muted_fg
                 })
             })
-            .child("Apply");
+            .child(dbflux_i18n::t!("document.data.chart_dock.picker.apply"));
 
         picker.child(apply_btn)
     }
@@ -2829,14 +2839,7 @@ impl DataGridPanel {
         let any_y_checked = y_checked.iter().any(|&c| c);
         let reset_enabled = detection_ok || has_manual;
 
-        let why_text = format!(
-            "The result has {} numeric column{} and {} timestamp-like column{}. \
-             Pick which one is the time axis and which series to plot.",
-            num_numeric,
-            if num_numeric == 1 { "" } else { "s" },
-            num_ts,
-            if num_ts == 1 { "" } else { "s" },
-        );
+        let why_text = crate::labels::chart_rail_why_text(num_numeric, num_ts);
 
         div()
             .id("rail-configure-scroll")
@@ -2850,7 +2853,10 @@ impl DataGridPanel {
                     .flex()
                     .flex_col()
                     .gap(Spacing::XS)
-                    .child(Self::dock_header("Why this panel", &chart_colors))
+                    .child(Self::dock_header(
+                        &dbflux_i18n::t!("document.data.chart_dock.configure.why.title"),
+                        &chart_colors,
+                    ))
                     .child(
                         div()
                             .text_size(px(11.0))
@@ -2865,7 +2871,10 @@ impl DataGridPanel {
                     .flex()
                     .flex_col()
                     .gap(Spacing::XS)
-                    .child(Self::dock_header("Time column", &chart_colors))
+                    .child(Self::dock_header(
+                        &dbflux_i18n::t!("document.data.chart_dock.configure.time_column.title"),
+                        &chart_colors,
+                    ))
                     .children(x_candidates.iter().enumerate().map(
                         |(cand_idx, (col_idx, col_name))| {
                             let col_idx = *col_idx;
@@ -2911,7 +2920,10 @@ impl DataGridPanel {
                     .flex()
                     .flex_col()
                     .gap(Spacing::XXS)
-                    .child(Self::dock_header("Series", &chart_colors))
+                    .child(Self::dock_header(
+                        &dbflux_i18n::t!("document.data.chart_dock.configure.series.title"),
+                        &chart_colors,
+                    ))
                     .children(y_candidates.iter().enumerate().map(
                         |(cand_idx, (col_idx, col_name))| {
                             let col_idx = *col_idx;
@@ -2974,29 +2986,38 @@ impl DataGridPanel {
                     .flex()
                     .flex_col()
                     .gap(px(2.0))
-                    .child(Self::dock_header("Axis & Stacking", &chart_colors))
-                    .child(Self::dock_kv_row(
-                        "y-axis",
-                        div()
-                            .text_size(px(11.0))
-                            .text_color(theme.foreground)
-                            .child("linear · 0 → auto"),
+                    .child(Self::dock_header(
+                        &dbflux_i18n::t!("document.data.chart_dock.configure.axis_stacking.title"),
                         &chart_colors,
                     ))
                     .child(Self::dock_kv_row(
-                        "stack",
+                        &dbflux_i18n::t!("document.data.chart_dock.configure.axis_stacking.y_axis"),
+                        div().text_size(px(11.0)).text_color(theme.foreground).child(
+                            dbflux_i18n::t!(
+                                "document.data.chart_dock.configure.axis_stacking.y_axis_value"
+                            ),
+                        ),
+                        &chart_colors,
+                    ))
+                    .child(Self::dock_kv_row(
+                        &dbflux_i18n::t!("document.data.chart_dock.configure.axis_stacking.stack"),
                         div()
                             .text_size(px(11.0))
                             .text_color(theme.muted_foreground)
-                            .child("off (v0.6.0)"),
+                            .child(dbflux_i18n::t!(
+                                "document.data.chart_dock.configure.axis_stacking.stack_value"
+                            )),
                         &chart_colors,
                     ))
                     .child(Self::dock_kv_row(
-                        "interpolation",
-                        div()
-                            .text_size(px(11.0))
-                            .text_color(theme.foreground)
-                            .child("linear"),
+                        &dbflux_i18n::t!(
+                            "document.data.chart_dock.configure.axis_stacking.interpolation"
+                        ),
+                        div().text_size(px(11.0)).text_color(theme.foreground).child(
+                            dbflux_i18n::t!(
+                                "document.data.chart_dock.configure.axis_stacking.interpolation_value"
+                            ),
+                        ),
                         &chart_colors,
                     )),
                 theme,
@@ -3031,7 +3052,7 @@ impl DataGridPanel {
                             .when(!reset_enabled, |d| {
                                 d.text_color(theme.muted_foreground).opacity(0.4)
                             })
-                            .child("Reset"),
+                            .child(dbflux_i18n::t!("document.data.chart_dock.configure.reset")),
                     )
                     // Apply button
                     .child(
@@ -3064,7 +3085,7 @@ impl DataGridPanel {
                                     ..chart_colors.muted_fg
                                 })
                             })
-                            .child("Apply"),
+                            .child(dbflux_i18n::t!("document.data.chart_dock.toolbar.apply")),
                     ),
             )
     }
@@ -3113,7 +3134,7 @@ impl DataGridPanel {
                 .p_2()
                 .text_size(FontSizes::XS)
                 .text_color(theme.muted_foreground)
-                .child("Rebuilding chart…")
+                .child(dbflux_i18n::t!("document.data.chart_dock.stats.rebuilding"))
                 .into_any_element();
         };
 
@@ -3122,7 +3143,7 @@ impl DataGridPanel {
                 .p_2()
                 .text_size(FontSizes::XS)
                 .text_color(theme.muted_foreground)
-                .child("No stats available for this series.")
+                .child(dbflux_i18n::t!("document.data.chart_dock.stats.no_stats"))
                 .into_any_element();
         };
 
@@ -3171,7 +3192,9 @@ impl DataGridPanel {
                 .text_size(px(11.0))
                 .text_color(theme.muted_foreground)
                 .italic()
-                .child("unavailable")
+                .child(dbflux_i18n::t!(
+                    "document.data.chart_dock.stats.unavailable"
+                ))
                 .into_any_element()
         };
 
@@ -3204,7 +3227,10 @@ impl DataGridPanel {
                     .flex()
                     .flex_col()
                     .gap(px(2.0))
-                    .child(Self::dock_header("Stats", &chart_colors))
+                    .child(Self::dock_header(
+                        &dbflux_i18n::t!("document.data.chart_dock.stats.title"),
+                        &chart_colors,
+                    ))
                     .child(Self::dock_kv_row("min", cyan_val(stats.min), &chart_colors))
                     .child(Self::dock_kv_row("max", cyan_val(stats.max), &chart_colors))
                     .child(Self::dock_kv_row("avg", cyan_val(stats.avg), &chart_colors))
@@ -3224,20 +3250,27 @@ impl DataGridPanel {
                     .flex()
                     .flex_col()
                     .gap(px(2.0))
-                    .child(Self::dock_header("Window", &chart_colors))
+                    .child(Self::dock_header(
+                        &dbflux_i18n::t!("document.data.chart_dock.stats.window.title"),
+                        &chart_colors,
+                    ))
                     .child(Self::dock_kv_row(
-                        "start",
+                        &dbflux_i18n::t!("document.data.chart_dock.stats.window.start"),
                         str_val(start_label),
                         &chart_colors,
                     ))
-                    .child(Self::dock_kv_row("end", str_val(end_label), &chart_colors))
                     .child(Self::dock_kv_row(
-                        "span",
+                        &dbflux_i18n::t!("document.data.chart_dock.stats.window.end"),
+                        str_val(end_label),
+                        &chart_colors,
+                    ))
+                    .child(Self::dock_kv_row(
+                        &dbflux_i18n::t!("document.data.chart_dock.stats.window.span"),
                         str_val(span_label),
                         &chart_colors,
                     ))
                     .child(Self::dock_kv_row(
-                        "points",
+                        &dbflux_i18n::t!("document.data.chart_dock.stats.window.points"),
                         str_val(format!("{}", points_count)),
                         &chart_colors,
                     )),
@@ -3250,15 +3283,30 @@ impl DataGridPanel {
                     .flex()
                     .flex_col()
                     .gap(px(2.0))
-                    .child(Self::dock_header("Source", &chart_colors))
+                    .child(Self::dock_header(
+                        &dbflux_i18n::t!("document.data.chart_dock.stats.source.title"),
+                        &chart_colors,
+                    ))
                     .child(Self::dock_kv_row(
-                        "measurement",
+                        &dbflux_i18n::t!("document.data.chart_dock.stats.source.measurement"),
                         unavail_val(),
                         &chart_colors,
                     ))
-                    .child(Self::dock_kv_row("field", unavail_val(), &chart_colors))
-                    .child(Self::dock_kv_row("host", unavail_val(), &chart_colors))
-                    .child(Self::dock_kv_row("region", unavail_val(), &chart_colors)),
+                    .child(Self::dock_kv_row(
+                        &dbflux_i18n::t!("document.data.chart_dock.stats.source.field"),
+                        unavail_val(),
+                        &chart_colors,
+                    ))
+                    .child(Self::dock_kv_row(
+                        &dbflux_i18n::t!("document.data.chart_dock.stats.source.host"),
+                        unavail_val(),
+                        &chart_colors,
+                    ))
+                    .child(Self::dock_kv_row(
+                        &dbflux_i18n::t!("document.data.chart_dock.stats.source.region"),
+                        unavail_val(),
+                        &chart_colors,
+                    )),
                 theme,
             ))
             .into_any_element()
@@ -3311,7 +3359,10 @@ impl DataGridPanel {
             .bg(theme.background)
             .child(div().whitespace_nowrap().child(Text::code(display_text)))
             .when(truncated, |d| {
-                d.child(Text::caption(format!("(truncated at {} lines)", MAX_LINES)))
+                d.child(Text::caption(dbflux_i18n::t!(
+                    "document.data.grid.views.truncated",
+                    max_lines = MAX_LINES
+                )))
             })
     }
 
@@ -3327,7 +3378,7 @@ impl DataGridPanel {
         } else if let Some(text) = text_body {
             text.to_string()
         } else {
-            "(empty)".to_string()
+            dbflux_i18n::t!("document.data.grid.views.empty")
         };
 
         div()
@@ -3398,10 +3449,8 @@ impl DataGridPanel {
                     // Pending-change count — visible only when there are unsaved edits
                     .when(pending_change_count > 0, |d| {
                         d.child(
-                            Text::caption(format!(
-                                "{} pending change{}",
+                            Text::caption(crate::labels::pending_change_count_label(
                                 pending_change_count,
-                                if pending_change_count == 1 { "" } else { "s" }
                             ))
                             .color(theme.warning),
                         )
@@ -3437,7 +3486,10 @@ impl DataGridPanel {
                                                 .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
                                                 .color(icon_color),
                                         )
-                                        .child(Self::result_mode_label(mode.label(), is_active))
+                                        .child(Self::result_mode_label(
+                                            crate::labels::result_view_mode_label(mode),
+                                            is_active,
+                                        ))
                                 }),
                             ))
                         },
@@ -3462,7 +3514,7 @@ impl DataGridPanel {
                                     .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
                                     .color(theme.muted_foreground),
                             )
-                            .child(Text::caption(format!("{} rows", row_count))),
+                            .child(Text::caption(crate::labels::row_count_label(row_count))),
                     )
                     .when_some(sort_info, |d, (col_name, direction, is_server)| {
                         let arrow_icon = match direction {
@@ -3576,7 +3628,7 @@ impl DataGridPanel {
         }
     }
 
-    fn result_mode_label(label: &'static str, is_active: bool) -> Text {
+    fn result_mode_label(label: impl Into<SharedString>, is_active: bool) -> Text {
         if is_active {
             Text::label_sm(label).font_size(FontSizes::XS)
         } else {
@@ -3611,7 +3663,10 @@ impl DataGridPanel {
                     .small()
                     .color(theme.muted_foreground),
             )
-            .child(Text::caption("Export").muted_foreground())
+            .child(
+                Text::caption(dbflux_i18n::t!("document.data.grid.export.trigger"))
+                    .muted_foreground(),
+            )
             .child(
                 Icon::new(AppIcon::ChevronDown)
                     .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
@@ -3628,7 +3683,7 @@ impl DataGridPanel {
         theme: &gpui_component::theme::Theme,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let section_header = |label: &'static str| -> AnyElement {
+        let section_header = |label: SharedString| -> AnyElement {
             div()
                 .px(Spacing::SM)
                 .mx(Spacing::XS)
@@ -3644,7 +3699,9 @@ impl DataGridPanel {
 
         let mut items: Vec<AnyElement> = Vec::with_capacity(formats.len() * 2 + 3);
 
-        items.push(section_header("Save as file"));
+        items.push(section_header(
+            dbflux_i18n::t!("document.data.grid.export.save_as_file").into(),
+        ));
 
         for (idx, &format) in formats.iter().enumerate() {
             items.push(
@@ -3668,7 +3725,7 @@ impl DataGridPanel {
                             .small()
                             .color(theme.muted_foreground),
                     )
-                    .child(Text::body(format.name()))
+                    .child(Text::body(crate::labels::export_format_label(format)))
                     .into_any_element(),
             );
         }
@@ -3682,7 +3739,9 @@ impl DataGridPanel {
                 .into_any_element(),
         );
 
-        items.push(section_header("Copy to clipboard"));
+        items.push(section_header(
+            dbflux_i18n::t!("document.data.grid.export.copy_to_clipboard").into(),
+        ));
 
         for (idx, &format) in formats.iter().enumerate() {
             let copyable = !matches!(format, dbflux_export::ExportFormat::Binary);
@@ -3709,7 +3768,7 @@ impl DataGridPanel {
                         .small()
                         .color(theme.muted_foreground),
                 )
-                .child(Text::body(format.name()))
+                .child(Text::body(crate::labels::export_format_label(format)))
                 .into_any_element();
             items.push(row);
         }
@@ -3784,7 +3843,7 @@ fn format_hex_dump(data: &[u8]) -> String {
     }
 
     if lines.is_empty() {
-        "(empty)".to_string()
+        dbflux_i18n::t!("document.data.grid.views.empty")
     } else {
         lines.join("\n")
     }
@@ -3814,5 +3873,121 @@ mod tests {
         let mode = super::content_mode_for_result(false, DataViewMode::Document, true, false);
 
         assert_eq!(mode, DataGridContentMode::EmptyFallback);
+    }
+
+    const DATA_GRID_TOOLBAR_KEYS: &[&str] = &[
+        "document.data.grid.toolbar.refresh",
+        "document.data.grid.toolbar.builder",
+        "document.data.grid.toolbar.switch_to_document",
+        "document.data.grid.toolbar.switch_to_table",
+        "document.data.grid.edit_bar.save",
+        "document.data.grid.edit_bar.revert",
+        "document.shared.refresh.off",
+        "document.shared.refresh.custom",
+    ];
+
+    #[test]
+    fn data_grid_toolbar_keys_resolve_in_both_locales() {
+        for key in DATA_GRID_TOOLBAR_KEYS {
+            let english = dbflux_i18n::t!(*key, locale = "en");
+            let spanish = dbflux_i18n::t!(*key, locale = "es");
+
+            assert!(!english.is_empty(), "empty English translation for {key}");
+            assert!(!spanish.is_empty(), "empty Spanish translation for {key}");
+            assert_ne!(english, *key, "English translation missing for {key}");
+            assert_ne!(spanish, *key, "Spanish translation missing for {key}");
+            assert_ne!(
+                english,
+                format!("en.{key}"),
+                "English translation missing for {key}"
+            );
+            assert_ne!(
+                spanish,
+                format!("es.{key}"),
+                "Spanish translation missing for {key}"
+            );
+        }
+    }
+
+    #[test]
+    fn data_grid_toolbar_refresh_differs_between_locales() {
+        let english = dbflux_i18n::t!("document.data.grid.toolbar.refresh", locale = "en");
+        let spanish = dbflux_i18n::t!("document.data.grid.toolbar.refresh", locale = "es");
+
+        assert_eq!(english, "Refresh");
+        assert_eq!(spanish, "Actualizar");
+        assert_ne!(english, spanish);
+    }
+
+    const DATA_GRID_STATUS_EXPORT_KEYS: &[&str] = &[
+        "document.data.grid.editing.aggregated",
+        "document.data.grid.editing.no_primary_key",
+        "document.data.grid.editing.not_single_table",
+        "document.data.grid.loading",
+        "document.data.grid.empty",
+        "document.data.grid.views.table",
+        "document.data.grid.views.chart",
+        "document.data.grid.views.json",
+        "document.data.grid.views.text",
+        "document.data.grid.views.raw",
+        "document.data.grid.views.truncated",
+        "document.data.grid.views.empty",
+        "document.data.grid.status.rows.one",
+        "document.data.grid.status.rows.many",
+        "document.data.grid.status.pending_changes.one",
+        "document.data.grid.status.pending_changes.many",
+        "document.data.grid.export.trigger",
+        "document.data.grid.export.save_as_file",
+        "document.data.grid.export.copy_to_clipboard",
+        "document.data.grid.export.png_coming_soon",
+        "document.data.grid.export.format.csv",
+        "document.data.grid.export.format.json_pretty",
+        "document.data.grid.export.format.json_compact",
+        "document.data.grid.export.format.text",
+        "document.data.grid.export.format.binary",
+        "document.data.grid.export.format.hex",
+        "document.data.grid.export.format.base64",
+        "document.data.grid.pending.inserted.one",
+        "document.data.grid.pending.inserted.many",
+        "document.data.grid.pending.updated.one",
+        "document.data.grid.pending.updated.many",
+        "document.data.grid.pending.deleted.one",
+        "document.data.grid.pending.deleted.many",
+    ];
+
+    #[test]
+    fn data_grid_status_export_keys_resolve_in_both_locales() {
+        for key in DATA_GRID_STATUS_EXPORT_KEYS {
+            let english = dbflux_i18n::t!(*key, locale = "en");
+            let spanish = dbflux_i18n::t!(*key, locale = "es");
+
+            assert!(!english.is_empty(), "empty English translation for {key}");
+            assert!(!spanish.is_empty(), "empty Spanish translation for {key}");
+            assert_ne!(english, *key, "English translation missing for {key}");
+            assert_ne!(spanish, *key, "Spanish translation missing for {key}");
+            assert_ne!(
+                english,
+                format!("en.{key}"),
+                "English translation missing for {key}"
+            );
+            assert_ne!(
+                spanish,
+                format!("es.{key}"),
+                "Spanish translation missing for {key}"
+            );
+        }
+    }
+
+    #[test]
+    fn data_grid_export_menu_differs_between_locales() {
+        let save_en = dbflux_i18n::t!("document.data.grid.export.save_as_file", locale = "en");
+        let save_es = dbflux_i18n::t!("document.data.grid.export.save_as_file", locale = "es");
+        let copy_en = dbflux_i18n::t!("document.data.grid.export.copy_to_clipboard", locale = "en");
+        let copy_es = dbflux_i18n::t!("document.data.grid.export.copy_to_clipboard", locale = "es");
+
+        assert_eq!(save_en, "Save as file");
+        assert_ne!(save_en, save_es);
+        assert_eq!(copy_en, "Copy to clipboard");
+        assert_ne!(copy_en, copy_es);
     }
 }

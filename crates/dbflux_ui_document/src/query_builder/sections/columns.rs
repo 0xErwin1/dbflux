@@ -29,7 +29,9 @@ pub fn render_columns(
     let mut container = div().flex().flex_col().gap_1().child(
         Checkbox::new("qb-all-columns")
             .checked(all_active)
-            .label("All columns (*)")
+            .label(dbflux_i18n::t!(
+                "document.query_builder.columns.all_columns"
+            ))
             .on_click(cx.listener(|this, checked, _window, cx| {
                 this.set_all_columns(*checked, cx);
             })),
@@ -107,7 +109,7 @@ pub fn render_columns(
                     ),
                 )
                 .child(
-                    Button::new("qb-add-col", "Add")
+                    Button::new("qb-add-col", dbflux_i18n::t!("document.shared.add"))
                         .small()
                         .on_click(cx.listener(|this, _event, _window, cx| {
                             if let Some(state) = this.add_column_input_state.clone() {

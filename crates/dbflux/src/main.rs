@@ -33,6 +33,7 @@ use interprocess::local_socket::{
 use log::info;
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
+#[cfg(unix)]
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -391,6 +392,12 @@ fn run_gui() {
             let general_settings = app_state.read(cx).general_settings().clone();
             let theme_setting = general_settings.theme;
             let style_setting = general_settings.style;
+
+            let language = dbflux_i18n::resolve(
+                Some(general_settings.language.as_str()),
+                dbflux_i18n::detect_system_locale().as_deref(),
+            );
+            dbflux_i18n::set_locale(language);
 
             // Set up the density global and apply the persisted theme+style so
             // radius tokens are correct from the very first frame.

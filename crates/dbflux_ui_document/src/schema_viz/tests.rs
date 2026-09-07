@@ -31,6 +31,7 @@ fn make_table(name: &str, n_cols: usize) -> TableInfo {
         sample_fields: None,
         presentation: dbflux_core::CollectionPresentation::default(),
         child_items: None,
+        storage_hints: None,
     }
 }
 
@@ -70,6 +71,7 @@ fn make_fk_table(name: &str, ref_table: &str) -> TableInfo {
         sample_fields: None,
         presentation: dbflux_core::CollectionPresentation::default(),
         child_items: None,
+        storage_hints: None,
     }
 }
 

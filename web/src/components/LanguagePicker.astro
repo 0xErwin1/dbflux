@@ -1,0 +1,191 @@
+---
+import { LOCALES, LOCALE_NAMES, localeFromPathname, t, withLocale } from '../i18n';
+import type { Locale } from '../i18n';
+
+interface Props {
+  locale?: Locale;
+}
+
+const { locale = localeFromPathname(Astro.url.pathname) } = Astro.props;
+
+const pathname = Astro.url.pathname;
+
+const options = LOCALES.map((target) => ({
+  locale: target,
+  href: withLocale(pathname, target),
+  label: LOCALE_NAMES[target],
+}));
+---
+
+<div class="lang" data-lang-picker>
+  <button
+    type="button"
+    class="lang__button nav__link"
+    aria-expanded="false"
+    aria-controls="lang-menu"
+    aria-label={t(locale, 'nav.language')}
+    data-lang-toggle
+  >
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="1.8"
+      stroke-linecap="round"
+      aria-hidden="true"
+    >
+      <circle cx="12" cy="12" r="9"></circle>
+      <path d="M3 12h18"></path>
+      <path d="M12 3a14 14 0 0 1 0 18 14 14 0 0 1 0-18z"></path>
+    </svg>
+    <span>{LOCALE_NAMES[locale]}</span>
+  </button>
+
+  <ul class="lang__menu" id="lang-menu" hidden>
+    {
+      options.map((option) => (
+        <li>
+          <a
+            href={option.href}
+            hreflang={option.locale}
+            lang={option.locale}
+            aria-current={option.locale === locale ? 'true' : undefined}
+          >
+            {option.label}
+          </a>
+        </li>
+      ))
+    }
+  </ul>
+</div>
+
+<style>
+  .lang {
+    position: relative;
+  }
+
+  /*
+   * `nav__link` on the button only matches SiteNav's scoped styles when the
+   * markup lives there; from this component the class is inert, so the same
+   * typography and colors are restated here.
+   */
+  .lang__button {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: var(--s-2);
+    background: none;
+    border: 0;
+    padding-bottom: 3px;
+    font-family: var(--font-mono);
+    font-size: var(--fs-small);
+    color: var(--text);
+    cursor: pointer;
+    transition: color var(--t-instant) linear;
+  }
+
+  .lang__button::after {
+    content: '';
+    position: absolute;
+    inset-inline: 0;
+    bottom: -1px;
+    height: 1px;
+    background: var(--accent);
+    transform: scaleX(0);
+    transform-origin: left;
+    transition: transform var(--t-quick) var(--ease-std);
+  }
+
+  .lang__button:hover,
+  .lang__button[aria-expanded='true'] {
+    color: var(--text-strong);
+  }
+
+  .lang__button:hover::after,
+  .lang__button[aria-expanded='true']::after {
+    transform: scaleX(1);
+  }
+
+  .lang__button svg {
+    color: var(--text-muted);
+    transition: color var(--t-instant) linear;
+  }
+
+  .lang__button:hover svg,
+  .lang__button[aria-expanded='true'] svg {
+    color: currentColor;
+  }
+
+  .lang__menu {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    z-index: var(--z-dropdown);
+    min-width: 140px;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    background: var(--raised);
+    border: var(--bw) solid var(--border-interactive);
+    box-shadow: var(--shadow-lg);
+  }
+
+  .lang__menu[hidden] {
+    display: none;
+  }
+
+  .lang__menu a {
+    display: block;
+    padding: var(--s-3) var(--s-4);
+    font-family: var(--font-mono);
+    font-size: var(--fs-small);
+    color: var(--text);
+    transition:
+      background 120ms linear,
+      color 120ms linear;
+  }
+
+  .lang__menu a:hover {
+    background: var(--panel);
+    color: var(--text-strong);
+    text-decoration: none;
+  }
+
+  .lang__menu a[aria-current='true'] {
+    color: var(--text-strong);
+    box-shadow: inset 2px 0 0 0 var(--accent);
+  }
+</style>
+
+<script>
+  const pickers = document.querySelectorAll<HTMLElement>('[data-lang-picker]');
+
+  pickers.forEach((picker) => {
+    const toggle = picker.querySelector<HTMLButtonElement>('[data-lang-toggle]');
+    const menu = picker.querySelector<HTMLElement>('.lang__menu');
+
+    if (!toggle || !menu) return;
+
+    const close = () => {
+      menu.hidden = true;
+      toggle.setAttribute('aria-expanded', 'false');
+    };
+
+    toggle.addEventListener('click', () => {
+      const open = !menu.hidden;
+
+      menu.hidden = open;
+      toggle.setAttribute('aria-expanded', String(!open));
+    });
+
+    document.addEventListener('click', (event) => {
+      if (event.target instanceof Node && !picker.contains(event.target)) close();
+    });
+
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') close();
+    });
+  });
+</script>

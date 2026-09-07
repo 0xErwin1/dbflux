@@ -1,0 +1,124 @@
+---
+import SiteNav from '../components/SiteNav.astro';
+import SiteFooter from '../components/SiteFooter.astro';
+import BackToTop from '../components/BackToTop.astro';
+import Mermaid from '../components/Mermaid.astro';
+import SearchDialog from '../components/SearchDialog.astro';
+import { ORIGIN } from '../data/site';
+import { DEFAULT_LOCALE, LOCALES, localeFromPathname, t, withLocale } from '../i18n';
+import type { Locale } from '../i18n';
+import '../styles/global.css';
+
+interface Props {
+  title: string;
+  description?: string;
+  current?: 'home' | 'docs' | 'about';
+  wide?: boolean;
+  /** Keep this page out of search results — used for unreleased documentation. */
+  noindex?: boolean;
+  /** Point search engines at another path, for older and unreleased versions. */
+  canonicalPath?: string | null;
+  /** Which search index this page's dialog should load. */
+  searchIndex?: string;
+  /** Active locale. Derived from the URL when the caller does not know it yet. */
+  locale?: Locale;
+  /** Whether this page exists in every shipped locale (landing/about compatibility). */
+  translated?: boolean;
+  /** Locales with real content for this exact page; fallback routes are excluded. */
+  alternateLocales?: readonly Locale[];
+}
+
+const {
+  title,
+  description,
+  current,
+  wide = false,
+  noindex = false,
+  canonicalPath,
+  searchIndex = '/search-index.json',
+  locale = localeFromPathname(Astro.url.pathname),
+  translated = false,
+  alternateLocales = translated ? LOCALES : [],
+} = Astro.props;
+// Astro.site is unset when the config fails to load, and a crashed canonical tag
+// should not take the whole page down with it.
+const canonical =
+  canonicalPath === null
+    ? undefined
+    : canonicalPath?.startsWith('http')
+      ? canonicalPath
+      : Astro.site
+        ? new URL(canonicalPath ?? Astro.url.pathname, Astro.site).href
+        : undefined;
+
+// Open Graph rejects a relative image: the crawler resolves it against nothing
+// and the preview falls back to a blank card.
+const socialImage = new URL('/brand/og-card.jpg', ORIGIN).href;
+
+const alternateLinks = Astro.site
+  ? alternateLocales.map((target) => ({
+      hreflang: target,
+      href: new URL(withLocale(Astro.url.pathname, target), Astro.site).href,
+    }))
+  : [];
+const xDefaultHref =
+  Astro.site && alternateLocales.includes(DEFAULT_LOCALE)
+    ? new URL(withLocale(Astro.url.pathname, DEFAULT_LOCALE), Astro.site).href
+    : undefined;
+---
+
+<!doctype html>
+<html lang={locale}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    {description && <meta name="description" content={description} />}
+    {canonical && <link rel="canonical" href={canonical} />}
+    {alternateLinks.map((alt) => <link rel="alternate" hreflang={alt.hreflang} href={alt.href} />)}
+    {xDefaultHref && <link rel="alternate" hreflang="x-default" href={xDefaultHref} />}
+    {noindex && <meta name="robots" content="noindex, follow" />}
+    <meta property="og:title" content={title} />
+    {description && <meta property="og:description" content={description} />}
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="DBFlux" />
+    {canonical && <meta property="og:url" content={canonical} />}
+    <meta property="og:image" content={socialImage} />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta
+      property="og:image:alt"
+      content="DBFlux: every database you run, in one keyboard-driven window."
+    />
+    {/* Twitter falls back to the og:* tags for everything but the card shape. */}
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="icon" href="/brand/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/brand/mark-256.png" />
+    <link rel="sitemap" href="/sitemap-index.xml" />
+    <link rel="ai-catalog" href="/.well-known/ai-catalog.json" />
+    <link
+      rel="preload"
+      href="/fonts/jetbrains-mono-latin-wght-normal.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
+    <link
+      rel="preload"
+      href="/fonts/ibm-plex-sans-latin-400-normal.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
+  </head>
+  <body data-wide={wide ? '' : undefined}>
+    <a class="skip-link" href="#main">{t(locale, 'banner.skip_link')}</a>
+    <SiteNav current={current} locale={locale} />
+    <main id="main"><slot /></main>
+    <SiteFooter locale={locale} />
+    <BackToTop />
+    <Mermaid />
+    <SearchDialog indexUrl={searchIndex} locale={locale} />
+    <script is:inline src="/webmcp.js" defer></script>
+  </body>
+</html>

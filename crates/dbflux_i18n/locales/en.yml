@@ -1,0 +1,3630 @@
+access:
+  tab_label: Access
+  method_label: Access Method
+  direct_hint: Direct connections use the database fields from the Main tab.
+  auth_profile_optional: Auth Profile (optional)
+  manage: Manage
+  login: Login
+  refresh: Refresh
+  auth_profile_hint: Used for resolving Secret/Parameter/Auth value sources in Direct mode.
+  session_valid: Auth profile session is valid
+  ssm_title: SSM Port Forwarding
+  ssm_instance_id: Instance ID
+  ssm_region: Region
+  ssm_remote_port: Remote Port
+  ssm_port_hint: DBFlux and the OS auto-assign the local tunnel port. Only Remote Port is configurable here.
+  auth_profile: Auth Profile
+  proxy_no_profiles: No proxy profiles configured
+  proxy_no_profiles_hint: Add proxies in Settings > Proxies
+  proxy_disabled_label: "%{name} (disabled)"
+  select_proxy: Select Proxy
+  clear: Clear
+  proxy_details: Proxy Details
+  proxy_type: Type
+  proxy_host: Host
+  proxy_auth: Auth
+  proxy_enabled: Enabled
+  proxy_no_proxy: No Proxy
+  value_yes: "Yes"
+  value_no: "No"
+  no_proxy_placeholder: (none)
+  edit_in_settings: Edit in Settings
+  use_ssh_tunnel: Use SSH Tunnel
+  ssh_tunnel_label: SSH Tunnel
+  ssh_server_saved: SSH Server (saved tunnel)
+  test_ssh: Test SSH
+  testing_ssh: Testing SSH connection...
+  ssh_success: SSH connection successful
+  ssh_failed: SSH connection failed
+  save_as_tunnel: Save as tunnel
+  ssh_disabled_hint: Enable SSH tunnel to configure connection through a bastion host
+audit:
+  toast:
+    focus_existing_viewer: Focusing existing audit viewer
+    opened_viewer: Opened audit viewer
+    opened_mcp_approvals: Opened MCP approvals
+    mcp_governance_persisted: MCP governance state persisted
+  error:
+    open_viewer_failed: "Cannot open audit viewer: %{error}"
+    persist_mcp_governance_failed: "Failed to persist MCP governance: %{error}"
+chart:
+  axis_bar:
+    group: Group
+    aggregation:
+      none: none
+      sum: sum
+      avg: avg
+      min: min
+      max: max
+  engine:
+    no_data: No data
+  point_inspector:
+    series: SERIES
+    hovered_point: HOVERED POINT
+    time: Time
+    value: Value
+    source_doc: SOURCE DOC
+    quick_actions: QUICK ACTIONS
+    show_in_tree: Show in tree
+    annotate: Annotate
+    copy_as_query: Copy as query
+    coming_soon: Coming soon
+common:
+  time_range:
+    error:
+      invalid_selection: Time selection is invalid
+      ambiguous_local: Local time is ambiguous or invalid
+      invalid_start: "Invalid start time: %{error}"
+      invalid_end: "Invalid end time: %{error}"
+      start_after_end: Start time must be before end time
+      no_date_range: No date range selected
+      incomplete_time_selection: Incomplete time selection
+charts:
+  default_import_name: Imported Dashboard
+  orphaned_profile_label: (orphaned)
+  status:
+    loading_namespaces: Loading metric namespaces
+    loading_metrics: "Loading metrics for %{namespace}"
+  toast:
+    chart_not_found: Saved chart not found
+    dashboard_not_found: Dashboard not found
+    connection_not_found: Connection not found for this dashboard.
+    add_profile_first: Add a connection profile before creating a dashboard.
+    import_success: "Imported %{count} panels into a new dashboard."
+    panel_already_exists: "A panel for %{namespace}/%{metric} is already in this dashboard"
+  error:
+    cannot_open_chart: "Cannot open chart: %{error}"
+    rescale_failed: Failed to rescale panel to 12-column grid
+    no_active_connection_import: "No active connection — connect to a profile before importing."
+    import_unsupported: The active connection does not support dashboard import.
+    import_failed: "Dashboard import failed: %{error}"
+    persist_import_chart_failed: "Failed to persist imported chart '%{name}'"
+    persist_import_dashboard_failed: "Failed to persist imported dashboard '%{name}'"
+    persist_import_panels_failed: Failed to persist imported dashboard panels
+    save_dashboard_failed: "Failed to save dashboard '%{name}': %{message}"
+    browsing_unsupported: The connection does not support dashboard browsing.
+    parse_unsupported: The connection cannot parse dashboards.
+    remote_parse_failed: "Dashboard parse failed: %{error}"
+    create_dashboard_failed: "Failed to create dashboard: %{error}"
+    delete_dashboard_failed: "Failed to delete dashboard: %{error}"
+    duplicate_dashboard_failed: "Failed to duplicate dashboard: %{error}"
+    rename_failed: "Failed to rename: %{error}"
+    delete_chart_failed: "Failed to delete saved chart: %{error}"
+    duplicate_chart_failed: "Failed to duplicate saved chart: %{error}"
+    load_namespaces_failed: "Failed to load metric namespaces: %{error}"
+    load_metrics_failed: "Failed to load metrics: %{error}"
+    persist_chart_for_panel_failed: "Failed to persist chart '%{name}' for new panel"
+    add_panel_failed: "Failed to add panel: %{error}"
+    persist_metric_chart_for_panel_failed: "Failed to persist metric chart '%{name}' for new panel"
+    add_panels_failed: "Failed to add panels: %{error}"
+  instance_overview:
+    editable_name: "%{name} (editable)"
+    toast:
+      no_dashboard_defined: This driver does not define an Instance Overview dashboard.
+      created_editable: Created editable dashboard with all overview panels.
+    error:
+      create_editable_failed: "Failed to create editable dashboard: %{error}"
+components:
+  json_editor:
+    empty_error: Document cannot be empty
+    format: Format
+    compact: Compact
+    cancel: Cancel
+    save: Save
+  value_source:
+    literal: Literal
+    env: Environment Variable
+    secret: Secret Manager
+    parameter: Parameter Store
+    auth: Auth Session Field
+    json_key_placeholder: JSON key (optional)
+  file_picker:
+    browse: "Browse…"
+composites:
+  refresh_split_button:
+    label: Refresh
+controls:
+  dropdown:
+    placeholder: Select
+  multi_select:
+    placeholder: "Select…"
+    clear_all: Clear all
+    more:
+      one: "+%{count} more"
+      many: "+%{count} more"
+connection_manager:
+  placeholder:
+    seconds: seconds
+    connection_name: Connection name
+    password: Password
+    key_passphrase_optional: Key passphrase (optional)
+    ssh_password: SSH password
+    ca_cert_path: Path to CA certificate
+    client_cert_path: Path to client certificate
+    client_key_path: Path to client key
+    select_ssh_tunnel: Select SSH Tunnel
+    select_proxy: Select Proxy
+    none: None
+    use_driver_default: Use Driver Default
+    no_hook: No hook
+    select_trusted_client: Select trusted client
+    filter_trusted_clients: "Filter by name or id…"
+    no_role: No role
+    no_policy: No policy
+    extra_hook_ids: extra hook IDs (comma-separated)
+    use_connection_auth_profile: Use Connection Auth Profile
+    select_additional_roles: "Select additional roles…"
+    select_additional_policies: "Select additional policies…"
+  access_method:
+    direct: Direct
+    ssh_tunnel: SSH Tunnel
+    proxy: Proxy
+    ssm: SSM Port Forwarding
+  overrides:
+    refresh_policy: "Refresh policy"
+    refresh_interval: "Refresh interval (s)"
+    confirm_dangerous: "Confirm dangerous queries"
+    requires_where: "Requires WHERE clause"
+    requires_preview: "Requires preview"
+    default_caption: "Default: %{value}"
+    default_seconds_caption: "Default: %{value}s"
+    on: "On"
+    off: "Off"
+  form_title:
+    edit: "Edit %{driver} Connection"
+    new: "New %{driver} Connection"
+  connection_overrides_title: Connection Overrides
+  connection_hooks_title: Connection Hooks
+  new_auth_profile: "New Auth Profile..."
+  aws_sso_wizard_title: AWS SSO Wizard
+  aws_sso_open_failed: Failed to open AWS SSO wizard window
+  select_ssh_key_title: Select SSH Private Key
+  select_ca_cert: Select CA certificate
+  select_client_cert: Select client certificate
+  select_client_key: Select client key
+  filter_certificates: Certificates / keys
+  filter_all_files: All files
+  select_database_file: Select Database File
+  auth:
+    profile_created_sso: Selected profile created by AWS SSO wizard.
+    profile_created_wizard: Selected profile created by wizard.
+    refreshing_sessions: Refreshing auth profile sessions...
+    select_before_login: Select an auth profile before logging in.
+    provider_unavailable: "Auth provider '%{provider_id}' is not available."
+    interactive_login_unavailable: Interactive login is not available for this auth profile.
+    login_starting: "Starting auth-provider login for '%{name}'..."
+    login_completed: Auth-provider login completed.
+    login_failed: "Auth-provider login failed: %{error}"
+    session_status_valid_expires: "Session status: valid (expires at %{expires_at})"
+    session_status_valid: "Session status: valid"
+    session_status_expired: "Session status: expired"
+    session_status_login_required: "Session status: login required"
+    ssh_config_incomplete: SSH configuration incomplete
+  driver_settings_title: Driver Settings
+  driver_no_custom_settings: This driver has no custom settings.
+  mcp_disabled: MCP disabled for this connection
+  mcp_not_compiled: This build was compiled without MCP support.
+  mcp_governance_title: MCP Governance
+  enable_mcp: Enable MCP for this connection
+  mcp_badge_granted: granted
+  mcp_badge_no_access: no access
+  mcp_empty_clients: No trusted clients configured. Add one in Settings → MCP.
+  mcp_allow_client: Allow this client on this connection
+  mcp_client_denied: This client is denied on this connection.
+  mcp_select_client: Select a trusted client to configure its access.
+  role_label: Role
+  mcp_role_hint: Configure roles in Settings → MCP → Roles
+  additional_roles_optional: Additional roles (optional)
+  policy_label: Policy
+  mcp_policy_hint: Configure policies in Settings → MCP → Policies
+  additional_policies_optional: Additional policies (optional)
+  mcp_effective_tools: "Tools: %{tools}"
+  mcp_effective_classes: "Classes: %{classes}"
+  mcp_effective_none: none
+  mcp_orphan_bindings:
+    one: 1 binding references a client that no longer exists.
+    many: "%{count} bindings reference clients that no longer exist."
+  mcp_governance_error:
+    save_policy: "Failed to save MCP connection policy assignment: %{error}"
+    clear_policy: "Failed to clear MCP connection policy assignment: %{error}"
+  tab:
+    main: Main
+    settings: Settings
+    mcp: MCP
+  field:
+    name: Name
+    ssl_mode: SSL mode
+    ca_certificate: CA certificate
+    client_cert: Client cert
+    client_key: Client key
+  section:
+    transport: TRANSPORT
+  banner:
+    correct_following: Please correct the following
+    testing_connection: "Testing connection…"
+    connection_successful: Connection successful
+    connection_successful_warnings: Connection successful with warnings
+    connection_failed: Connection failed
+  action:
+    copy: Copy
+    back: Back
+    test_connection: Test Connection
+    save: Save
+    browse: Browse
+  window_title: Connection Manager
+  driver_select:
+    search_placeholder: "Filter by name, driver, port…"
+    title: New Connection
+    subtitle: choose a database type
+    empty_state: No drivers match your filter
+    import_from_file: "Import from file…"
+    import_from_client: "Import from another client…"
+    cancel: Cancel
+    configure: Configure
+    configure_named: "Configure %{name}"
+  export:
+    target:
+      connection: connection
+      auth_profile: auth profile
+      ssh_tunnel: SSH tunnel
+      proxy: proxy
+      bundle: bundle
+    title: Export
+    title_with_kind: "Export %{kind}"
+    placeholder:
+      output_path: "Path to output file…"
+    field:
+      credentials: Credentials
+      include_connection_password: Include connection password
+      include_proxy_credentials: Include proxy credentials
+      include_ssh_password: Include SSH password
+      embed_ssh_keys: Embed SSH private keys (requires encryption)
+      auth_export_mode: Auth profile export mode
+      reference_aws_profile: Reference (AWS profile)
+      disable_encryption: Disable encryption (force plaintext)
+      confirm_passphrase: Confirm passphrase
+      encryption: Encryption
+      output_file: Output file
+    auth_mode:
+      include: Include values
+      reference: Reference
+      required_on_import: Required on import
+      exclude: Exclude
+    hint:
+      connection_scope: This connection and its profiles will be exported.
+      profile_scope: This profile will be exported.
+      plaintext_warning: "Secrets will be written in cleartext. Only use this if the output file is stored securely."
+    error:
+      choose_output_path: Choose an output file path.
+      passphrase_or_plaintext: Enter a passphrase or enable force-plaintext mode.
+      passphrase_mismatch: Passphrase and confirmation do not match.
+      target_removed: This profile can no longer be exported; it may have been removed.
+      cannot_determine_output_path: "Cannot determine output path: %{error}"
+      failed: "Export failed: %{error}"
+      write_failed: "Failed to write export file: %{error}"
+    summary:
+      auth_profile_line: "Auth profile: %{name}"
+      auth_profile_line_reference: "Auth profile: %{name} (reference)"
+      proxy_line: "Proxy: %{name}"
+      ssh_line: "SSH tunnel: %{name}"
+    action:
+      export: Export
+    status:
+      exporting: "Exporting…"
+    banner:
+      failed: Export failed
+    result:
+      omitted_fields:
+        one: "%{count} field omitted — recipient must supply it on import."
+        many: "%{count} fields omitted — recipient must supply them on import."
+      warning: "Warning: %{message}"
+      success_title: "Exported to %{path}"
+    toast:
+      success: "Exported %{kind} to %{path}"
+  import:
+    placeholder:
+      bundle_passphrase: Bundle passphrase
+      bundle_path: "Path to TOML bundle…"
+      secret_value: Enter secret value
+    dialog:
+      open_title: Open Connection Bundle
+    filter:
+      toml: TOML bundle
+      all: All files
+    error:
+      choose_file: Choose a bundle file to import.
+      cannot_read_file: "Cannot read file: %{error}"
+      parse_error: "Parse error: %{error}"
+      encrypted_needs_passphrase: This bundle is encrypted. Enter the passphrase and try again.
+      encryption_unavailable: This bundle is passphrase-encrypted but the encryption feature is not available in this build of DBFlux.
+      wrong_passphrase: Passphrase incorrect or bundle corrupted.
+      decryption_error: "Decryption error: %{error}"
+      import_failed: "Import failed: %{error}"
+      secret_failures_toast:
+        one: "%{count} secret could not be written to the keyring during import. The keyring may be locked or unavailable."
+        many: "%{count} secrets could not be written to the keyring during import. The keyring may be locked or unavailable."
+    field:
+      bundle_file: Bundle file
+      bundle_encrypted: Bundle is encrypted
+      passphrase: Passphrase
+    hint:
+      no_native_picker: No native file picker on this system — type or paste the bundle path above.
+      external_refs: External value references travel as-is
+      external_refs_body: SSM, Secrets Manager, and environment references are imported unchanged and resolved against this machine at connect time.
+      leave_empty_skip: Leave empty to skip.
+      select_profile_or_skip: "Select a profile or skip:"
+    modal_title: Import
+    preview:
+      intro: "This bundle will import the following:"
+      count:
+        connections:
+          one: "%{count} connection"
+          many: "%{count} connections"
+        auth_profiles:
+          one: "%{count} auth profile"
+          many: "%{count} auth profiles"
+        ssh_tunnels:
+          one: "%{count} SSH tunnel"
+          many: "%{count} SSH tunnels"
+        proxies:
+          one: "%{count} proxy profile"
+          many: "%{count} proxy profiles"
+      conflicts_banner:
+        one: "%{count} profile already exists at the destination — you will choose how to resolve it."
+        many: "%{count} profiles already exist at the destination — you will choose how to resolve each."
+      required_banner:
+        one: "%{count} value may be required after import — secrets omitted from the bundle can be entered or skipped."
+        many: "%{count} values may be required after import — secrets omitted from the bundle can be entered or skipped."
+      driver_not_installed_banner: One or more connections reference a driver not installed on this machine and will be skipped.
+    conflict_kind:
+      auth_profile: Auth profile
+      ssh_tunnel: SSH tunnel
+      proxy: Proxy
+      connection: Connection
+    conflicts:
+      intro: Some profiles in this bundle already exist. Choose how to handle each conflict.
+      row_label: "%{kind}: \"%{bundle_name}\" conflicts with \"%{existing_name}\""
+    required:
+      intro: The following values may be required. Leave a secret empty to skip it — the connection still imports without it.
+      secret_label: "Secret for \"%{owner}\": %{field}"
+      aws_reference_label: "AWS auth profile \"%{name}\" (%{provider_id}) for \"%{owner}\""
+      auth_profile_ref_label: "Auth profile for \"%{owner}\": %{field}"
+      no_matching_auth_profile: No matching auth profile on this machine. The connection imports without one; assign it later in Settings > Auth Profiles.
+    status:
+      complete: Import complete.
+      loading: "Loading…"
+      importing: "Importing…"
+      imported_toast:
+        one: "Imported %{count} entity."
+        many: "Imported %{count} entities."
+    banner:
+      failed: Import failed
+    outcome:
+      succeeded:
+        one: "%{count} entity imported."
+        many: "%{count} entities imported."
+      needs_driver:
+        one: "%{count} connection skipped — driver not installed."
+        many: "%{count} connections skipped — driver not installed."
+      config_failures:
+        one: "%{count} connection could not be configured."
+        many: "%{count} connections could not be configured."
+      unresolved_refs:
+        one: "%{count} connection had unresolvable references and was not imported."
+        many: "%{count} connections had unresolvable references and were not imported."
+      secret_failures:
+        one: "%{count} secret could not be written to the keyring. Enter it manually for the affected connection."
+        many: "%{count} secrets could not be written to the keyring. Enter them manually for each affected connection."
+    action:
+      reuse_existing: Reuse existing
+      create_new: Create new
+      map_to: "Map to: %{name}"
+      skip: Skip
+      use_profile: "Use: %{name}"
+      cancel: Cancel
+      back: Back
+      done: Done
+      load: Load
+      continue_: Continue
+      import: Import
+    source:
+      label: "Import from"
+      bundle: DBflux bundle
+    external:
+      dialog:
+        open_title: Open File
+      filter:
+        primary: Connection file
+        secondary: Credentials file
+      field:
+        primary_file: Connection file
+        secondary_file: "Credentials file (optional)"
+      hint:
+        secondary_optional: Skip this to import connections without their saved passwords.
+      error:
+        choose_primary_file: Choose a file to import.
+      review:
+        intro: "Review the connections found in this file. Uncheck any you do not want to import."
+        skips_intro:
+          one: "%{count} entry could not be imported:"
+          many: "%{count} entries could not be imported:"
+      secret:
+        will_store: Password will be stored in the system keyring.
+        none: No password found in the source file.
+      action:
+        import_selected:
+          one: "Import %{count} connection"
+          many: "Import %{count} connections"
+connections:
+  window:
+    manager_title: Connection Manager
+    edit_title: Edit Connection
+  toast:
+    disconnecting: "Disconnecting from %{name}..."
+    no_active_connection: No active connection
+    refreshing_schema: Refreshing schema...
+  error:
+    refresh_schema_failed: "Failed to refresh schema: %{error}"
+document:
+  audit:
+    actor:
+      app: App
+      external_auth_provider: External Auth Provider
+      external_driver: External Driver
+      hook: Hook
+      mcp_client: MCP Client
+      script: Script
+      system: System
+      user: User
+    category:
+      config: Config
+      connection: Connection
+      governance: Governance
+      hook: Hook
+      mcp: MCP
+      object_storage: Object Storage
+      query: Query
+      script: Script
+      system: System
+    export:
+      unsupported_source: Export is only available for the built-in audit viewer
+      exported:
+        one: "Exported %{count} event to %{path}"
+        many: "Exported %{count} events to %{path}"
+      write_failed: "Export failed to write file: %{error}"
+      failed: "Export failed: %{error}"
+    task:
+      loading_event_stream: "Loading event stream: %{title}"
+    detail:
+      action: Action
+      actor: Actor
+      category: Category
+      connection_driver: "Connection/Driver"
+      correlation_id: Correlation ID
+      details: Details
+      duration: Duration
+      error: Error
+      event_id: Event ID
+      level: Level
+      message: Message
+      outcome: Outcome
+      partition: Partition
+      secondary_time: Secondary Time
+      source: Source
+      summary: Summary
+      time: Time
+    filter:
+      apply: Apply
+      clear: Clear
+      group_label: "Group:"
+      loading: "Loading…"
+      placeholder:
+        local: Local
+      retry: Retry
+      view_mode:
+        chart: Chart
+        table: Table
+      y_scale:
+        linear: "Y: Linear"
+        log: "Y: Log"
+    level:
+      debug: Debug
+      error: Error
+      fatal: Fatal
+      info: Info
+      trace: Trace
+      warn: Warning
+    menu:
+      copy_row_as_csv: Copy Row as CSV
+      copy_summary: Copy Summary
+      export: Export
+      export_format:
+        csv: CSV
+        json: JSON
+      filter_by_correlation: Filter by Correlation
+    outcome:
+      cancelled: Cancelled
+      failure: Failure
+      pending: Pending
+      success: Success
+    row:
+      unit:
+        events: events
+        rows: rows
+    source:
+      connection_not_found: Connection not found for this event source
+      load_failed: "Error loading events: %{error}"
+      empty:
+        external: "No events match the current filters."
+        internal: "No audit events match the current filters."
+      error_heading:
+        external: "Failed to load events"
+        internal: "Failed to load audit events"
+      loading:
+        external: "Loading events…"
+        internal: "Loading audit events…"
+  buckets_table:
+    title: "Buckets — %{connection}"
+    search_placeholder: "Find buckets by name…"
+    toolbar:
+      refresh: Refresh
+      new_bucket: New bucket
+    columns:
+      name: Name
+      region: Region
+      objects: Objects
+      size: Size
+      versioning: Versioning
+      created: Created
+    versioning:
+      on: "On"
+      suspended: Suspended
+      off: "Off"
+    details:
+      calculate_size: Calculate size
+      calculating: "Calculating…"
+    footer:
+      buckets:
+        one: "%{count} bucket"
+        many: "%{count} buckets"
+      regions:
+        one: "%{count} region"
+        many: "%{count} regions"
+      hint:
+        open: Enter browse
+        properties: Space properties
+        delete: x delete (empty only)
+    empty:
+      loading: "Loading buckets…"
+      error: Failed to list buckets
+      error_detail: "Failed to list buckets: %{error}"
+      no_match: "No buckets match \"%{query}\""
+      no_buckets: This connection has no buckets
+      hint_refresh: r refresh
+    delete_confirm:
+      title: Delete bucket?
+      body: "\"%{bucket}\" is empty and will be removed. This cannot be undone."
+      cancel: Cancel
+      confirm: Delete
+    error:
+      bucket_not_empty: "Bucket \"%{bucket}\" is not empty. Delete its objects with a recursive prefix delete before removing the bucket."
+    status:
+      duration_tooltip: Client-side duration of the last object-store call
+    new_bucket:
+      title: New Bucket
+      field:
+        name: Name
+        name_hint: "3-63 characters · lowercase letters, digits, dots and hyphens"
+        region: Region
+        encryption: Default encryption
+      section:
+        options: Options
+      option:
+        versioning: Enable versioning
+        block_public_access: Block all public access
+        object_lock: Object lock
+        object_lock_warning: "Object lock cannot be disabled after the bucket is created."
+      encryption:
+        none: None
+      applied_immediately: applied immediately
+      cancel: Cancel
+      create: Create
+      creating: "Creating…"
+      error:
+        length: "Bucket names must be 3-63 characters long."
+        charset: "Bucket names may only contain lowercase letters, digits, dots and hyphens."
+      toast:
+        created: "Created bucket \"%{name}\""
+        created_with_limitations: "Created bucket \"%{name}\" with limitations"
+  chart:
+    toolbar:
+      type_label: TYPE
+      stats: Stats
+      save_chart: Save chart
+      points:
+        one: "%{count} pt"
+        many: "%{count} pts"
+    shell:
+      run: Run
+      running: "Running…"
+      save: Save
+      cancel: Cancel
+      name_placeholder: Chart name
+      degraded:
+        loading_metric: "Loading metric data…"
+        no_data_points: "No data points for the selected window."
+        run_query: "Run the query to populate the chart."
+        no_time_column: "No time column detected in result."
+        no_numeric_series: "No numeric series detected in result."
+        build_failed: "Chart build failed."
+      custom_range:
+        apply: Apply
+      stats_rail:
+        rebuilding: "Rebuilding chart…"
+        no_stats: "No stats available for this series."
+        unavailable: unavailable
+        window_title: Window
+        window:
+          start: Start
+          end: End
+          span: Span
+          points: Points
+        source_title: Source
+    status:
+      task_label: Chart query
+    toast:
+      chart_saved: Chart saved
+      save_failed: "Failed to save chart: %{error}"
+      png_export_coming: "PNG export coming in v0.7"
+    error:
+      source: "Chart source error: %{error}"
+      no_connection_selected: No connection selected
+      connection_not_found: Connection not found
+      connection_error: "Connection error: %{error}"
+      collection_source_unsupported: "Collection source not supported in ChartDocument; open via DataDocument"
+    metric_picker:
+      apply: Apply
+      dropdown:
+        custom: "Custom…"
+      period:
+        placeholder: Period (seconds)
+        error: "Period: %{message}"
+        validation:
+          not_a_number: "period must be a number, got %{value}"
+          too_low: period must be at least 1 second
+          too_high: period must not exceed 86400 seconds (24 hours)
+      statistic:
+        placeholder: "Statistic (e.g. p99)"
+        error: "Statistic: %{message}"
+        validation:
+          empty: statistic must not be empty
+      dimensions:
+        title: DIMENSIONS
+        loading: "Loading dimensions…"
+        error: "Error: %{message}"
+        retry: Retry
+        aggregate_all: Aggregate all
+        empty: No dimension combinations
+        connection_not_found: Connection not found or not active
+        catalog_unsupported: Connection does not support metric catalog
+  code:
+    toolbar:
+      refresh: Refresh
+      cancel: Cancel
+      checking: "Checking…"
+      run: Run
+      shortcut_hint_with_selection: "%{shortcut} (selection/full)"
+      new_tab: New tab
+      selection: Selection
+      read_only: Read-only
+      saved: Saved
+      save: Save
+      formatter_unavailable: Formatter unavailable
+      query_history: Query history
+      explain_query: Explain query
+      open_in_chart: Open current query in a chart document
+    output:
+      running: "Running..."
+      stopped: Stopped
+      output: Output
+      lines:
+        one: "%{count} line"
+        many: "%{count} lines"
+      truncated: "(truncated at %{limit} lines)"
+    result:
+      count:
+        one: "%{count} result"
+        many: "%{count} results"
+      loading:
+        title: "Running…"
+        body: Query in progress
+      error:
+        title: Query Error
+      empty: Run a query to see results
+      awaiting_connection: Connect to this database to view the routine definition.
+    script_confirm:
+      title: Run entire script
+      message:
+        one: "No text is selected, so the entire script will run as %{count} statement in order. Continue?"
+        many: "No text is selected, so the entire script will run as %{count} statements in order. Continue?"
+      cancel: Cancel
+      run: Run Script
+    dangerous_query:
+      fallback:
+        title: Warning
+        body: This query may be dangerous.
+      dont_ask_again: "Don't ask again"
+      cancel: Cancel
+      run_anyway: Run Anyway
+      kind:
+        delete_no_where:
+          title: DELETE without WHERE
+          body: DELETE without WHERE may affect all rows
+        update_no_where:
+          title: UPDATE without WHERE
+          body: UPDATE without WHERE may affect all rows
+        truncate:
+          title: TRUNCATE
+          body: TRUNCATE will delete all rows
+        drop:
+          title: DROP
+          body: DROP will permanently remove the object
+        alter:
+          title: ALTER
+          body: ALTER will modify the structure
+        script:
+          title: Dangerous Script
+          body: This script contains potentially destructive statements
+        mongo_delete_many:
+          title: deleteMany with empty filter
+          body: deleteMany with empty filter will delete all documents
+        mongo_update_many:
+          title: updateMany with empty filter
+          body: updateMany with empty filter will update all documents
+        mongo_drop_collection:
+          title: drop() collection
+          body: drop() will permanently remove the collection
+        mongo_drop_database:
+          title: dropDatabase()
+          body: dropDatabase() will permanently remove the entire database
+        redis_flush_all:
+          title: FLUSHALL
+          body: FLUSHALL will delete all keys in all databases
+        redis_flush_db:
+          title: FLUSHDB
+          body: FLUSHDB will delete all keys in the current database
+        redis_multi_delete:
+          title: DEL (multiple keys)
+          body: DEL with multiple keys will delete them all
+        redis_keys_pattern:
+          title: KEYS pattern
+          body: KEYS with a pattern is a performance hazard on large databases
+        raw_expression_in_set:
+          title: Raw SQL expression in SET
+          body: SET clause contains a raw SQL expression — bypasses parameter binding
+    context_bar:
+      placeholder:
+        connection: No connection
+        database: Database
+        schema: Schema
+      label:
+        connection: "Connection:"
+        source: "Source:"
+        database: "Database:"
+        schema: "Schema:"
+      fallback:
+        syntax: Syntax
+        sources: Sources
+        time: Time
+        start: Start
+        end: End
+      apply: Apply
+      connect_error: "Cannot connect to database '%{database}'"
+      connect_failed: "Failed to connect to database '%{database}': %{error}"
+    execution:
+      toast:
+        select_query: Select query text to run
+        enter_query: Enter a query to run
+        no_active_connection: No active connection
+        connection_not_found: Connection not found
+        auto_refresh_blocked: "Auto-refresh blocked: query modifies data"
+        explain_unavailable: Explain is not available for scripts
+        enter_query_to_explain: Enter a query to explain
+        enter_script_content: Enter script content to run
+        write_query_first: Write a query first to open it in a chart
+        connecting: "Connecting to database '%{database}', please wait..."
+        redis_flush_disabled: FLUSHALL / FLUSHDB is disabled in settings
+      result_title:
+        query_failed: Query failed
+        script_failed: Script failed
+      task:
+        run_script: "Run %{name} script"
+      copy_error: Copy error
+      result_tab_title: "Result %{index}"
+      error:
+        select_source: Select at least one source
+        start_time_required: Start time is required
+        end_time_required: End time is required
+        start_before_end: Start time must be earlier than end time
+      hint_prefix: "%{message}\nHint: %{hint}"
+    file_ops:
+      save_as:
+        title: Save Script As
+        all_files: All Files
+      error:
+        save_failed: "Failed to save file: %{error}"
+        dialog_unavailable: "Save failed — file dialog unavailable and fallback directory could not be created: %{error}"
+        save_script_failed: "Failed to save script: %{error}"
+        auto_save_failed: "Auto-save failed for %{path}"
+      native_picker_fallback: "Native file picker unavailable — script saved to %{path} instead. Install xdg-desktop-portal, zenity, or kdialog for a save dialog."
+    title:
+      untitled: Untitled
+  dashboard:
+    builder:
+      preset:
+        last_15_min: Last 15 min
+        last_24_hours: Last 24 hours
+        last_6_hours: Last 6 hours
+        last_7_days: Last 7 days
+        last_hour: Last 1 hour
+    configure:
+      action:
+        export_png: Export PNG
+        stats: Stats
+      apply: Apply
+      bindings_hint: Run the chart at least once to configure bindings.
+      cancel: Cancel
+      chart_kind:
+        area: Area
+        bar: Bar
+        line: Line
+        number: Number
+        pie: Pie
+        scatter: Scatter
+        stacked: Stacked
+      section:
+        actions: Actions
+        axis_bindings: Axis bindings
+        chart_type: Chart type
+      title: "Configure panel: %{name}"
+    panel:
+      chart_not_found:
+        body: Chart not found — saved chart was deleted
+        title: Chart not found
+      menu:
+        configure: Configure…
+        edit_title: Edit title…
+        remove: Remove panel
+    status:
+      empty_hint: Add a saved chart to get started
+    toast:
+      position_overlap: Position overlaps another panel
+      save_position_failed: "Failed to save panel position: %{message}"
+    toolbar:
+      add_panel: + Add Panel
+      apply: Apply
+      edit_mode_tooltip: Edit dashboard
+      exit_edit_mode_tooltip: Exit edit mode
+      save_as_editable: Save as editable
+      save_as_editable_tooltip: Clone this overview into a new editable dashboard
+  data:
+    chart_dock:
+      toolbar:
+        apply: Apply
+      save:
+        title: Save chart
+        name_placeholder: Chart name
+        cancel: Cancel
+        save: Save
+      degraded:
+        no_time_column:
+          title: No time column detected
+          body: This result has no Timestamp column. Pick a column to use as the time axis.
+        no_numeric_series:
+          title: No numeric series
+          body: This result has no Float or Integer columns to plot as series.
+        no_data:
+          title: No data yet
+          body: Run the query to populate the chart view.
+        build_failed:
+          title: Chart build failed
+          body: The query result has chartable columns but the chart could not be built.
+        open_table_tab: Open Table tab
+        pick_time_column: "Pick time column…"
+        hide_picker: Hide picker
+      picker:
+        x_axis_label: X axis (time / label column)
+        y_axis_label: Y axis (numeric columns)
+        apply: Apply
+      rail:
+        shape:
+          rows:
+            one: "%{count} row"
+            many: "%{count} rows"
+          columns:
+            one: "%{count} column"
+            many: "%{count} columns"
+          template: "%{rows} × %{columns}"
+      configure:
+        why:
+          numeric:
+            one: "%{count} numeric column"
+            many: "%{count} numeric columns"
+          timestamp:
+            one: "%{count} timestamp-like column"
+            many: "%{count} timestamp-like columns"
+          template: "The result has %{numeric} and %{timestamp}. Pick which one is the time axis and which series to plot."
+          title: Why this panel
+        time_column:
+          title: Time column
+        series:
+          title: Series
+        axis_stacking:
+          title: Axis & Stacking
+          y_axis: y-axis
+          y_axis_value: linear · 0 → auto
+          stack: stack
+          stack_value: off (v0.6.0)
+          interpolation: interpolation
+          interpolation_value: linear
+        reset: Reset
+      stats:
+        rebuilding: "Rebuilding chart…"
+        no_stats: No stats available for this series.
+        unavailable: unavailable
+        title: Stats
+        window:
+          title: Window
+          start: start
+          end: end
+          span: span
+          points: points
+        source:
+          title: Source
+          measurement: measurement
+          field: field
+          host: host
+          region: region
+    context_menu:
+      item:
+        copy: Copy
+        view_document: View Document
+        add_document: Add Document
+        duplicate_document: Duplicate Document
+        delete_document: Delete Document
+        paste: Paste
+        edit: Edit
+        edit_in_modal: Edit in Modal
+        set_default: Set to Default
+        set_null: Set to NULL
+        add_row: Add Row
+        inspect_row: Inspect Row
+        duplicate_row: Duplicate Row
+        delete_row: Delete Row
+        chart_this_query: Chart this query
+      submenu:
+        copy_query:
+          sql: Copy as SQL
+          query: Copy as Query
+          command: Copy as Command
+      delete_confirm:
+        title:
+          one: Delete row?
+          many: "Delete %{count} rows?"
+        description:
+          one: This action cannot be undone.
+          many: "%{count} rows will be permanently deleted. This cannot be undone."
+        cancel: Cancel
+        delete: Delete
+      filter:
+        title: Filter
+        cell_value: Cell value
+      order:
+        title: Order
+        remove: Remove ordering
+      generate_sql:
+        title: Generate SQL
+      error:
+        no_results_to_export: No results to export
+        invalid_json: Invalid JSON
+        document_must_be_json_object: Document must be a JSON object
+        document_missing_id: Document must have an _id field
+        table_state_not_available: Table state not available
+        primary_key_not_determined: Could not determine document primary key
+      export:
+        dialog_title: "Export as %{format}"
+        error:
+          dialog_unavailable_fallback_failed: "Export failed — file dialog unavailable and fallback directory could not be created: %{error}"
+          failed: "Export failed: %{error}"
+        toast:
+          native_picker_fallback: "Native file picker unavailable — exported to %{path} instead. Install xdg-desktop-portal, zenity, or kdialog for a save dialog."
+          exported: "Exported to %{path}"
+      clipboard:
+        error:
+          binary_unsupported: Raw binary cannot be copied to the clipboard — choose Hex or Base64 instead.
+          non_utf8: "Cannot copy non-UTF8 output: %{error}"
+          failed: "Copy failed: %{error}"
+        toast:
+          copied: "Copied %{format} (%{bytes} bytes) to clipboard"
+      document:
+        toast:
+          inserted: Document inserted
+          updated: Document updated
+        error:
+          insert_failed: "Failed to insert document: %{error}"
+          update_failed: "Failed to update document: %{error}"
+    grid:
+      edit_bar:
+        clean: No unsaved changes
+        dirty:
+          one: "%{count} unsaved change"
+          many: "%{count} unsaved changes"
+        save: Save
+        revert: Revert
+      toolbar:
+        refresh: Refresh
+        builder: Builder
+        switch_to_document: Switch to Document View
+        switch_to_table: Switch to Table View
+      mode:
+        table: Table
+        document: Document
+      editing:
+        aggregated: Aggregated results cannot be edited
+        no_primary_key: This table has no primary key - editing is disabled
+        not_single_table: "Editing disabled: result is not bound to a single table."
+      loading: Loading…
+      empty: No data
+      views:
+        table: Data
+        chart: Chart
+        json: JSON
+        text: Text
+        raw: Raw
+        truncated: "(truncated at %{max_lines} lines)"
+        empty: "(empty)"
+      status:
+        rows:
+          one: "%{count} row"
+          many: "%{count} rows"
+        pending_changes:
+          one: "%{count} pending change"
+          many: "%{count} pending changes"
+      export:
+        trigger: Export
+        save_as_file: Save as file
+        copy_to_clipboard: Copy to clipboard
+        png_coming_soon: "PNG export coming in v0.7 — %{detail}"
+        format:
+          csv: CSV
+          json_pretty: "JSON (pretty)"
+          json_compact: "JSON (compact)"
+          text: Text
+          binary: Binary
+          hex: Hex
+          base64: Base64
+      pending:
+        inserted:
+          one: "%{count} insert"
+          many: "%{count} inserts"
+        updated:
+          one: "%{count} update"
+          many: "%{count} updates"
+        deleted:
+          one: "%{count} delete"
+          many: "%{count} deletes"
+      error:
+        limit_must_be_positive: Limit must be greater than 0
+        invalid_limit: Invalid limit value
+        connection_not_found: Connection not found
+        connection_not_available: Connection not available
+        invalid_json_filter: Invalid JSON filter
+        chart_save_failed: 'Failed to save chart "%{name}": %{error}'
+        pk_details_fetch_failed: "Failed to fetch table details for PK: %{error}"
+        query_failed: "Query failed: %{error}"
+        chart_save_no_profile_binding: "Cannot save chart: query has no profile binding"
+      placeholder:
+        chart_name: Chart name
+      filter:
+        open_in_builder: Open in builder
+      toast:
+        query_imported: Query imported successfully
+        mutation_queued: Mutation queued for approval.
+        chart_saved: 'Chart "%{name}" saved'
+        auto_refresh_unavailable: Auto-refresh not available for query results
+    saved_query:
+      toast:
+        saved_as: 'Saved as "%{name}"'
+      error:
+        already_exists: 'A saved query named "%{name}" already exists'
+        target_connection_unavailable: Target connection not available
+        import_failed: "Import failed: source table not found on target connection"
+    mutation:
+      confirm:
+        delete:
+          summary:
+            one: 'Delete %{count} row from "%{table}"'
+            many: 'Delete %{count} rows from "%{table}"'
+            unknown: 'Delete rows from "%{table}"'
+        update:
+          summary:
+            one: 'Update %{count} column in "%{table}"'
+            many: 'Update %{count} columns in "%{table}"'
+      task:
+        delete_rows:
+          one: "Delete %{count} row"
+          many: "Delete %{count} rows"
+        delete_documents:
+          one: "Delete %{count} document"
+          many: "Delete %{count} documents"
+        update_document_field: Update document field
+        save_row: Save row
+        save_document: Save document
+        insert_document: Insert document
+        insert_row: Insert row
+        delete_document: Delete document
+        delete_row: Delete row
+        visual_mutation_chunked: "Visual mutation (chunked)"
+        visual_mutation_direct: "Visual mutation (direct)"
+        visual_mutation_single_transaction: "Visual mutation (single transaction)"
+      error:
+        update_document_unsupported_id: "Cannot update document field: the document has an unsupported _id value"
+        update_document_failed: "Failed to update document: %{error}"
+        save_row_unsupported_pk: "Cannot save row: primary key uses an unsupported value type"
+        save_row_identity_failed: "Cannot save row: failed to build row identity from primary key columns"
+        save_row_unsupported_values: "Cannot save row: unsupported values are read-only"
+        save_failed: "Save failed: %{error}"
+        save_document_unsupported_id: "Cannot save document: it has an unsupported _id value"
+        insert_failed: "Insert failed: %{error}"
+        insert_no_values: "Cannot insert: no values provided"
+        delete_document_unsupported_id: "Cannot delete document: it has an unsupported _id value"
+        delete_failed: "Delete failed: %{error}"
+        delete_no_primary_key: "Cannot delete: no primary key defined for this table"
+        delete_identity_failed: "Cannot delete: failed to identify row"
+        bulk_delete_no_rows_identified: "Cannot delete: failed to identify any rows"
+        bulk_delete_no_documents_identified: "Cannot delete: failed to identify any documents"
+        read_only_connection: This connection is read-only. Mutations are not allowed.
+        read_only_connection_profile: This connection's profile is set to read-only. Mutations are not allowed.
+        read_only_connection_server: The server rejected mutations for this connection. Mutations are not allowed.
+        approval_queue_failed: "Failed to queue mutation for approval: %{error}"
+        approval_requires_mcp: Mutations require approval for this connection. Enable the MCP feature to activate the approval workflow.
+        connection_not_found: "Connection not found — cannot execute mutation."
+        chunked_requires_primary_key: "Chunked mode requires a primary key — none found for this table."
+        chunked_execution_failed: "Chunked mutation on '%{table}' failed: %{error}"
+        execution_failed: "Mutation on '%{table}' failed: %{error}"
+      toast:
+        document_updated: Document updated
+        saved: Saved
+        document_inserted: Document inserted
+        row_inserted: Row inserted
+        document_deleted: Document deleted
+        row_deleted: Row deleted
+        rows_deleted: "%{count} row(s) deleted"
+        documents_deleted: "%{count} document(s) deleted"
+        partial_delete:
+          row: "Deleted %{done} of %{total} row(s), then failed: %{error}"
+          document: "Deleted %{done} of %{total} document(s), then failed: %{error}"
+        chunk_size_reduced: "Chunk size reduced from %{original} to %{effective} — driver parameter limit forced the chunk floor below %{floor}. Processing will be slower than expected."
+        chunk_size_adjusted: "Chunk size adjusted from %{original} to %{effective} to stay within driver parameter limits."
+        execution_completed:
+          one: "Mutation completed: %{count} row affected"
+          many: "Mutation completed: %{count} rows affected"
+        execution_cancelled:
+          one: "Mutation cancelled after %{count} row processed"
+          many: "Mutation cancelled after %{count} rows processed"
+    row_inspector:
+      badge:
+        primary_key: PK
+        foreign_key: FK
+      meta:
+        name: Name
+        type: Type
+        nullable: Nullable
+        primary_key: Primary Key
+        foreign_key: Foreign Key
+        yes: "yes"
+        no: "no"
+      references:
+        empty: No references
+        loading: "Loading schema…"
+        not_found: "— not found"
+        resolving: "Resolving…"
+      section:
+        column: COLUMN
+        references: REFERENCES
+        row: ROW
+      title: "Row %{row}"
+  dump_analysis:
+    title: "%{analyzer} — %{file}"
+    task: "Analyzing %{file} (%{analyzer})"
+    multiple_analyzers_note: "Multiple registered drivers can read this extension; analyzed with %{analyzer}."
+    parsing:
+      title: "Parsing dump…"
+      cancel: Cancel
+      progress:
+        of_total: "%{read} of %{total} read"
+        only: "%{read} read"
+    cancelled:
+      title: Analysis cancelled
+    error:
+      io: "I/O error reading dump: %{message}"
+      format: "Malformed dump at offset %{offset}: %{message}"
+      cancelled: Dump analysis was cancelled.
+    done:
+      summary: "%{keys} keys · %{bytes} serialized"
+      size_caveat_heading: "Why this differs from live memory usage"
+      largest_keys:
+        title: Largest keys
+        column:
+          key: Key
+          type: Type
+          size: Serialized size
+          expiry: Expiry
+        no_expiry: No expiry
+      by_prefix:
+        title: By prefix
+        column:
+          prefix: Prefix
+          count: Count
+          size: Serialized size
+  export_wizard:
+    title: Export Data
+    task:
+      one: "Export %{count} table from %{profile}"
+      many: "Export %{count} tables from %{profile}"
+    rail:
+      tables: Tables
+      format_options: Format & Options
+      confirm: Confirm
+      run: Run
+    tables:
+      selected_count: "%{count} table(s) selected for export"
+    format_options:
+      format_label: Format
+      output_folder_label: Output folder
+      no_folder_chosen: No folder chosen
+      choose_folder: "Choose Folder..."
+      choosing: "Choosing..."
+      dialog_title: Choose Export Folder
+      segment_size_label: Segment / chunk size (advanced)
+      segment_size_placeholder: Segment / chunk size
+      segment_size_invalid: "Must be a whole number of 1 or more; kept the previous value."
+      error:
+        no_dialog_fallback_failed: "No folder picker available and the fallback export directory could not be created: %{error}"
+    confirm:
+      title: Review export plan
+      summary: "%{count} table(s) as %{format} to %{folder}"
+      segment_size: "Segment / chunk size: %{size}"
+      start_export: Start Export
+    running:
+      title: "Exporting..."
+      position:
+        of_total: "Table %{index} of %{total}"
+        preparing: Preparing
+      progress:
+        of_total: "%{done} / %{total} rows"
+        only: "%{done} rows"
+      cancel: Cancel
+    error:
+      no_connection: No active connection for this export
+    toast:
+      cancelled: Export cancelled
+      success: "%{summary}. Saved to %{folder}"
+      schema_fetch_failed: "Export failed while reading table schema: %{error}"
+      table_failed: "Export failed on table '%{table}': %{error}"
+      failed: "Export failed: %{error}"
+    summary:
+      with_failures: "Exported %{completed} table(s), %{rows} row(s) total (%{skipped} skipped, %{failed} failed)"
+      ok: "Exported %{completed} table(s), %{rows} row(s) total (%{skipped} skipped)"
+    status_line:
+      completed: "%{table}: completed (%{rows} row(s))"
+      skipped: "%{table}: skipped"
+      failed: "%{table}: FAILED — %{error}"
+      not_attempted: "%{table}: not attempted"
+    footer:
+      back: Back
+      continue: Continue
+      close: Close
+  governance:
+    refresh: Refresh Pending
+    no_pending: No pending executions
+    pending_title: "Pending %{id}"
+    approval_context: Approval context
+    execution_plan: Execution plan
+    approve: Approve
+    reject: Reject
+    select_prompt: Select a pending request to review details.
+    load_failed: "Failed to load pending execution %{id}: %{error}"
+  import_wizard:
+    title: Import Data
+    task:
+      one: "Import %{count} table"
+      many: "Import %{count} tables"
+    rail:
+      pick_folder: Pick Folder
+      configure: Configure
+      confirm: Confirm
+      run: Run
+    pick_folder:
+      description: "Choose the folder that contains manifest.json and the exported table files."
+      choose_folder: "Choose Folder..."
+      reading_manifest: "Reading manifest..."
+      dialog_title: Choose Import Folder
+      error:
+        no_connection: No active connection for this profile
+        no_dialog: No folder picker available on this platform
+        invalid_bundle: "Invalid import bundle: %{error}"
+    configure:
+      mode_placeholder: Mode
+      target_placeholder: Target column
+      source_placeholder: Source column
+      source_unset: "(unset)"
+      apply_mapping: Apply Mapping
+      continue: Continue
+      unmatched_source: "Unmatched source column(s), will be skipped unless remapped: %{names}"
+    mapping_mode:
+      create: Create
+      existing: Existing (insert only)
+      recreate: Recreate (drop + create)
+      skip: Skip
+      truncate: Truncate (empty + insert)
+    confirm:
+      body: "This will drop-and-recreate or truncate the following table(s) before loading data: %{tables}"
+      warning: This cannot be undone. Confirm to proceed.
+      back: Back
+      proceed: "Yes, proceed"
+    running:
+      title: "Importing..."
+      progress:
+        of_total: "%{done} / %{total} rows"
+        only: "%{done} rows"
+    done:
+      close: Close
+    error:
+      no_connection: No active connection for this import
+    toast:
+      cancelled: Import cancelled
+      completed: Import completed
+      table_failed: "Import failed on table '%{table}': %{error}"
+      failed: "Import failed: %{error}"
+    summary:
+      with_failures: "Imported %{completed} table(s), %{rows} row(s) total (%{skipped} skipped, %{failed} failed)"
+      ok: "Imported %{completed} table(s), %{rows} row(s) total (%{skipped} skipped)"
+    status_line:
+      completed: "%{table}: completed (%{rows} row(s))"
+      skipped: "%{table}: skipped"
+      failed: "%{table}: FAILED — %{error}"
+      not_attempted: "%{table}: not attempted"
+  instance_inspector:
+    task_label: "Inspector: %{metric_id}"
+    connection_not_found: Connection not found
+    connection_error: "Connection error: %{detail}"
+    action_unavailable: "Action cancelled — connection is no longer available. Reconnect and try again."
+    kill_default_label: Kill
+    kill_confirm_body: This action will terminate the selected operation. It cannot be undone.
+    cancel: Cancel
+    confirm: Confirm
+    error_prefix: "Error: %{error}"
+    loading: "Loading…"
+    empty: No data. Connect and click Refresh.
+    kill_failed_cause: "Action '%{action_label}' on inspector '%{metric_id}' failed"
+  key_value:
+    add_member_modal:
+      cancel: Cancel
+      error:
+        at_least_one_entry: At least one entry is required
+        prefix: "Error: %{error}"
+      section:
+        fields: Fields
+        members: Members
+      submit: Add
+      title:
+        default: Add Member
+        hash: Add Hash Fields
+        list: Add List Members
+        set: Add Set Members
+        sorted_set: Add Sorted Set Members
+        stream: Add Stream Entry
+    context_menu:
+      add_entry: Add Entry
+      add_member: Add Member
+      copy_as_command: Copy as Command
+      copy_entry: Copy Entry
+      copy_key: Copy Key
+      copy_member: Copy Member
+      copy_value: Copy Value
+      delete_entry: Delete Entry
+      delete_key: Delete Key
+      delete_member: Delete Member
+      edit_member: Edit Member
+      edit_value: Edit Value
+      new_key: New Key
+      rename: Rename
+    history_modal:
+      empty:
+        recent: No history yet
+        saved: No saved queries
+      footer:
+        items:
+          one: "%{count} item"
+          many: "%{count} items"
+      save:
+        name_placeholder: Query name
+        name_required: Enter a name for the query
+        success_toast: Saved query
+        title: Save Query
+      search_placeholder: "Search..."
+      tabs:
+        recent: Recent
+        saved: Saved
+    mutation:
+      error:
+        connection_inactive: Connection is no longer active
+        member_target_unavailable: "Cannot delete member: connection or key unavailable"
+        key_not_deleted: Key was not deleted
+      task:
+        delete_member: "Delete member from %{key}"
+        edit_member: "Edit member in %{key}"
+        add_member: "Add member to %{key}"
+        create_key: "Create key %{key}"
+    new_key:
+      title: New Key
+      key_type:
+        label: Key Type*
+        placeholder: "Select type"
+      ttl:
+        label: TTL
+        placeholder: No limit
+      key_name:
+        label: Key Name*
+        placeholder: Enter Key Name
+      value:
+        label: Value
+        placeholder: Enter Value
+      field_placeholder: Enter Field
+      member_placeholder: Enter Member
+      score_placeholder: Enter Score
+      error:
+        key_name_required: Key name is required
+        ttl_invalid: TTL must be a positive integer
+        stream_requires_field: Stream requires at least one field/value pair
+        prefix: "Error: %{error}"
+      cancel: Cancel
+      create: Create
+      type:
+        string: String
+        hash: Hash
+        list: List
+        set: Set
+        sorted_set: Sorted Set
+        json: JSON
+        stream: Stream
+    pagination:
+      error:
+        background_task_limit: Too many background tasks running, please wait
+    parsing:
+      type:
+        string: String
+        bytes: Bytes
+        hash: Hash
+        list: List
+        set: Set
+        sorted_set: ZSet
+        json: JSON
+        stream: Stream
+        unknown: "?"
+    render:
+      delete_key:
+        title: Delete key?
+        message: 'Delete "%{key}"? This action cannot be undone.'
+      delete_member:
+        title: Delete member?
+        message: 'Delete "%{member}"? This action cannot be undone.'
+      delete_confirm:
+        cancel: Cancel
+        delete: Delete
+      unknown_type: Unknown
+      value_header: Value
+      id_header: ID
+      fields_header: Fields
+      field_score_header: Field/Score
+      click_to_edit: Click or press Enter to edit
+      select_key_prompt: Select a key to inspect
+      prev: Prev
+      next: Next
+      page: "Page %{page}"
+      keys_count:
+        one: "%{count} key"
+        many: "%{count} keys"
+      filter:
+        keys_placeholder: "Filter keys..."
+        members_placeholder: "Filter members..."
+      ttl:
+        no_limit: No limit
+        missing: Missing
+        expired: Expired
+      gate:
+        too_large: "Value is %{size}, over the %{limit} preview limit"
+        load_anyway: Load anyway
+        truncated: "Partial value — showing %{returned} of %{total}"
+        truncated_unknown_total: "Partial value — showing %{returned}"
+      decode:
+        failed: failed to decode
+        too_large: decoded output too large
+        edit_locked: Switch to Raw to edit
+        kind:
+          text: text
+          bytes: bytes
+          image: image
+  migrate_wizard:
+    title: Migrate Data
+    task:
+      one: "Migrate %{count} table"
+      many: "Migrate %{count} tables"
+    rail:
+      source_target: Source & Target
+      tables_mapping: Tables Mapping
+      options: Options
+      confirm: Confirm
+      run: Run
+    mapping_mode:
+      create: Create
+      existing: "Existing (insert only)"
+      recreate: "Recreate (drop + create)"
+      skip: Skip
+      truncate: "Truncate (empty + insert)"
+    options:
+      segment_size_label: Segment / commit size
+      segment_size_placeholder: Segment / commit size
+      segment_size_invalid: "Must be a whole number of 1 or more; kept the previous value."
+      disable_referential_integrity: Disable referential integrity during migration
+    confirm:
+      review_plan: Review migration plan
+      destructive_ack: "I understand this plan will drop or empty existing data in the target."
+      destructive_tag: destructive
+      start_migration: Start Migration
+      mode_label:
+        create: Create
+        existing: Existing
+        recreate: Recreate
+        skip: Skip
+        truncate: Truncate
+      reorder:
+        warning: "These tables reference each other in a cycle and cannot be ordered automatically. Choose the load order before starting:"
+        up: Up
+        down: Down
+        accept: Use this order
+    running:
+      title: "Migrating…"
+      position:
+        of_total: "Table %{index} of %{total}"
+        preparing: Preparing
+      progress:
+        of_total: "%{done} / %{total} rows"
+        only: "%{done} rows"
+    done:
+      completed_in: "Completed in %{elapsed}"
+    toast:
+      success: Migration completed
+    status:
+      cancelled: Migration cancelled
+    error:
+      no_source_connection: No active connection for the source profile
+      no_target_connection: No active connection for the target profile
+      table_schema_read_failed: "Could not read table schema: %{error}"
+      foreign_keys_read_failed: "Could not read foreign keys: %{error}"
+      table_failed: "Migration failed on table '%{table}': %{error}"
+      cyclic_order: "Migration failed: FK order became cyclic mid-run"
+      failed: "Migration failed: %{error}"
+    summary:
+      with_failures: "Migrated %{completed} table(s), %{rows} row(s) total (%{skipped} skipped, %{failed} failed)"
+      ok: "Migrated %{completed} table(s), %{rows} row(s) total (%{skipped} skipped)"
+    status_line:
+      completed: "%{table}: completed (%{rows} row(s))"
+      skipped: "%{table}: skipped"
+      failed: "%{table}: FAILED — %{error}"
+      not_attempted: "%{table}: not attempted"
+    mapping:
+      target_placeholder: Target table
+      mode_placeholder: Mode
+      unset_option: "(unset)"
+      set_all_label: "Set all:"
+      columns_button: "Columns…"
+      unmapped_count:
+        one: "%{count} unmapped"
+        many: "%{count} unmapped"
+      column_mapping_title: "Column mapping — %{table}"
+      target_column_header: Target column
+      source_column_header: Source column
+      unmapped_columns: "Unmapped source columns: %{columns}"
+      header_source: Source
+      header_target: Target
+      header_mapping_mode: Mapping mode
+      header_transform: Transform
+      error:
+        target_schema_read_failed: "Could not read target table schema: %{error}"
+    source_target:
+      source_title: Source
+      target_title: Target
+      checked_count:
+        one: "%{count} checked"
+        many: "%{count} checked"
+      no_target_selected: No target selected
+      retry: "Retry — %{error}"
+      source_connection_gone: Source connection is gone
+      target_connection_gone: Target connection is gone
+      cross_database_error: "A migration has a single source database. Only tables in '%{source}' can be selected — tables in '%{other}' can't be mixed in."
+    footer:
+      back: Back
+      continue: Continue
+      loading: "Loading…"
+      cancel: Cancel
+      close: Close
+  object_browser:
+    columns:
+      class: Class
+      key: Key
+      last_modified: Last modified
+      size: Size
+    toast:
+      copied: "Copied %{uri}"
+    context_menu:
+      item:
+        preview: Preview
+        open_in_editor: Open in editor
+        download: Download
+        rename: Rename
+        presign: Presign
+        copy_uri: Copy S3 URI
+        delete: Delete
+        collapse: Collapse
+        expand: Expand
+        open: Open
+        new_folder_inside: New folder inside
+        delete_folder: Delete folder
+    create_folder:
+      cancel: Cancel
+      confirm: Create
+      confirm_in_progress: "Creating…"
+      created_toast: "Created folder %{uri}"
+      hint: 'Created as a zero-byte key ending in "/"'
+      location: "in %{uri}"
+      name_placeholder: folder-name
+      title: New folder
+      error:
+        consecutive_slashes: Folder name cannot contain consecutive slashes.
+        empty: Folder name cannot be empty.
+        leading_trailing_slash: Folder name cannot start or end with a slash.
+    delete:
+      body: '"%{key}" (%{size}) will be removed. This cannot be undone.'
+      cancel: Cancel
+      confirm: Delete
+      deleted_toast: "Deleted %{uri}"
+      title: Delete object?
+      unknown_size: unknown size
+    delete_prefix:
+      versioning_note: "This bucket has versioning enabled — deleted objects become delete markers, not permanently removed."
+      deleted_toast:
+        one: "Deleted %{count} object under %{uri}"
+        many: "Deleted %{count} objects under %{uri}"
+    delete_prefix_modal:
+      title: Delete folder — recursive
+      body_intro: Everything under this path will be deleted.
+      counting: "Counting objects…"
+      counting_progress: "Counting… %{totals} so far (%{pages} pages)"
+      cancelled: "%{totals} counted before cancelling"
+      capped: "at least %{totals} (stopped at %{pages} pages)"
+      error: "Could not count objects: %{error}"
+      cancel_probe: Stop counting
+      first_keys_label: First keys affected
+      remaining_keys: "… %{count} more"
+      confirm_hint: 'Type "%{phrase}" to confirm'
+      batched_caption: "DeleteObjects · batched ×1000"
+      cancel: Cancel
+      delete_button:
+        default: Delete objects
+        one: "Delete %{count} object"
+        many: "Delete %{count} objects"
+    editor:
+      nav:
+        open: "open %{key}"
+        leave_bucket_root: leave for the bucket root
+        leave_for: "leave for %{prefix}"
+        close_preview: close this preview
+        delete: "delete %{key}"
+        reinterpret: change how this object is interpreted
+        rename: "rename %{key}"
+      unsaved_summary: "Unsaved edits to %{key}"
+      toast:
+        saved: "Saved %{uri}"
+      footer:
+        saving: "Saving…"
+        save: Save
+        discard: Discard
+        find: Find
+      dirty_badge: modified
+      unsaved_confirm:
+        title: Unsaved edits
+        body: '"%{key}" has unsaved edits. Save them before you %{action}?'
+        cancel: Cancel
+    empty:
+      bucket: This bucket is empty
+      filtered: No keys match this filter
+      loading: "Loading objects…"
+      prefix: This prefix is empty
+    error:
+      api_unavailable: Object-store API unavailable
+      connection_unavailable: Connection is no longer active
+    gate:
+      archived: "This object is archived and cannot be previewed. Restore it in your S3 console to access its contents."
+      too_large: "This object is %{size} and exceeds the %{limit} preview limit. Download it to inspect its contents."
+    metadata:
+      content_type: Content-Type
+      encryption: Encryption
+      etag: ETag
+      key: Key
+      last_modified: Last modified
+      section: Object
+      size: Size
+      storage_class: Storage class
+      versions: Versions
+    presign:
+      title: Presigned URL
+      method_field_label: Method
+      expiry_field_label: Expires in
+      signing: "Signing URL…"
+      close: Close
+      copy_url: Copy URL
+      copied_toast: Copied presigned URL to clipboard
+      signing_identity_fallback: this connection
+      method:
+        get: GET download
+        put: PUT upload
+      expiry:
+        fifteen_minutes: 15 min
+        one_hour: 1 hour
+        twelve_hours: 12 hours
+        seven_days: 7 days
+      warning:
+        capability:
+          get: download this object
+          put: overwrite this object
+        until_instant: "until %{instant}"
+        until_it_expires: until it expires
+        body: 'Anyone holding this URL can %{capability} %{expiry}. It is signed with the credentials of "%{signed_by}" and carries their permissions.'
+    preview:
+      action:
+        copy_uri: Copy URI
+        delete: Delete
+        download: Download
+        open: Open
+        presign: Presign
+      body:
+        decode_failed: "Detected as %{encoding} but could not be decoded: %{reason}"
+        decode_too_large: "Detected as %{encoding}, but decoding it exceeds the %{limit} preview limit."
+        decoded_not_utf8: "The decoded bytes are not valid UTF-8 text."
+        decoded_read_only: "Read-only — switch to Raw to edit"
+        encoding_auto: Auto
+        encoding_raw: Raw
+        fit_to_width: Fit to width
+        image_decode_error: "Could not decode the image: %{error}"
+        image_header_error: "Could not read the image header: %{error}"
+        interpret_as: "Interpret as:"
+        load_anyway: Load anyway
+        loading: "Loading preview…"
+        loading_metadata: "Loading metadata…"
+        svg_invalid_utf8: "This object is not valid UTF-8, so it cannot be an SVG."
+        svg_missing_root: "This object does not contain an <svg> root element."
+        unpreviewable:
+          generic: "This file type has no in-app preview. Download this object or open it in your system viewer."
+          pdf: "PDFs are not rendered in-app. Download this object or open it in your system viewer."
+      header:
+        open_in_editor: Open in editor
+        open_in_system_viewer: Open in system viewer
+      versions:
+        count:
+          one: "%{count} version"
+          many: "%{count} versions"
+        loading: "Loading…"
+        view: View versions
+    rename:
+      cancel: Cancel
+      confirm: Rename
+      confirm_in_progress: "Renaming…"
+      name_placeholder: object-name
+      renamed_toast: "Renamed to %{uri}"
+      title: Rename object
+      error:
+        contains_slash: "Name cannot contain a slash — rename stays in the same folder."
+        empty: Name cannot be empty.
+        unchanged: New name must differ from the current name.
+    status:
+      folders:
+        one: "%{count} folder"
+        many: "%{count} folders"
+      key_hint:
+        delete: x delete
+        filter: / filter
+        open: Enter open
+        preview: Space preview
+        rename: r rename
+        up: "← up a level"
+      load_more: Load more
+      loading_more: "Loading more…"
+      objects:
+        one: "%{count} object"
+        many: "%{count} objects"
+      retry: Retry
+      tree_mode: tree mode
+    toolbar:
+      new_folder: New folder
+      refresh: Refresh
+      tree: Tree
+      upload: Upload
+      filter_prefix_placeholder: "Filter this prefix…"
+    transfer:
+      dialog_title: Save Object As
+      dialog_filter_all_files: All Files
+      error:
+        fallback_dir_failed: "File dialog unavailable and the fallback directory could not be created: %{error}"
+      toast:
+        saved: "Saved %{name} (%{size}) to %{path}"
+        opened: "Opened %{name} in the system viewer"
+        no_handler: "No system handler could be started for %{name}; it was saved to %{path}"
+    upload:
+      dialog_title: Upload Objects
+      error:
+        no_file_picker: No file picker is available on this platform
+      toast:
+        uploaded:
+          one: "Uploaded %{count} object to %{uri}"
+          many: "Uploaded %{count} objects to %{uri}"
+        failed_suffix:
+          one: " (%{count} failed upload)"
+          many: " (%{count} failed uploads)"
+  object_editor:
+    error:
+      decode_too_large: "Decoding this object exceeds the %{limit} preview limit."
+      not_text: This object is not text and cannot be edited in-app.
+    status:
+      bucket_tooltip: Bucket
+      key_tooltip: Object key
+      loading: "Loading object…"
+      preparing: "Preparing editor…"
+      size_tooltip: Size of the object as last loaded or saved
+  query_builder:
+    aggregate:
+      fn:
+        count_star: "COUNT(*)"
+        count: COUNT
+        count_distinct: COUNT DISTINCT
+        sum: SUM
+        avg: AVG
+        min: MIN
+        max: MAX
+    assignments:
+      add_button: "+ Add assignment"
+      column_placeholder: column
+      value_placeholder: value
+      raw_sql_warning: "Raw SQL — expression is interpolated verbatim. Verify before running."
+      kind:
+        literal: Literal
+        raw_sql: Raw SQL
+        "null": "NULL"
+        default: DEFAULT
+    chrome:
+      save: Save
+      reset: Reset
+      untitled_query: Untitled query
+    columns:
+      all_columns: "All columns (*)"
+    comparator:
+      eq: "="
+      neq: "≠"
+      gt: ">"
+      lt: "<"
+      gte: "≥"
+      lte: "≤"
+      like: LIKE
+      ilike: ILIKE
+      in: IN
+      is_null: IS NULL
+      is_not_null: IS NOT NULL
+    execution:
+      mode_label: "Mode:"
+      chunk_size_label: "Chunk size:"
+      lock_timeout_label: "Lock timeout (ms):"
+      lock_timeout_none: none
+      counting: "Counting rows…"
+      rows_estimated: "%{count} rows estimated"
+      timed_out: "Row count timed out — chunked mode recommended"
+      failed: "Row count failed: %{message}"
+      mode:
+        single_tx: Single TX
+        chunked_tx: Chunked TX
+        direct: Direct
+    filters:
+      no_filters: No filters
+      add_filter: "+ Filter"
+      add_subgroup: "+ Sub-group"
+      max_depth: "Maximum filter nesting depth reached (%{depth} levels)"
+      bool_op:
+        and: AND
+        or: OR
+    group_by:
+      heading: Group by columns
+      add_column: "+ Group-by column"
+      aggregates_heading: Aggregates
+      add_aggregate: "+ %{function}"
+      alias_placeholder: alias
+    join:
+      kind:
+        inner: INNER
+        left: LEFT
+        right: RIGHT
+        full: FULL
+    joins:
+      no_fk_metadata: "No foreign key metadata available. Enter conditions as raw expressions."
+      loading_fk: "Loading foreign keys…"
+      add_join: "+ Join"
+      add_condition: "+ Condition"
+      table_placeholder: table
+    mode:
+      select: SELECT
+      update: UPDATE
+      delete: DELETE
+    mutation:
+      preview_placeholder: "-- %{kind}: configure assignments / filter to preview SQL"
+    section:
+      columns: COLUMNS
+      execution: EXECUTION
+      filters: FILTERS
+      filters_where: FILTERS (WHERE)
+      sort: SORT
+      sql_preview: SQL PREVIEW
+    sort:
+      direction:
+        asc: ASC
+        desc: DESC
+      key_order: Sort key order
+      key_order_named: "Sort key order (%{name})"
+      key_limited_hint: Ordering is limited to the sort key for this driver.
+      invalid_column: "\"%{column}\" is not in the GROUP BY columns or aggregate aliases"
+    status:
+      limit: Limit
+      offset: Offset
+      valid_lines:
+        one: "valid · %{count} line"
+        many: "valid · %{count} lines"
+      run: Run
+      apply_update: Apply Update
+      open_in_editor: Open in Editor
+      incomplete_aggregate_rows:
+        one: "%{count} aggregate row is incomplete and will be excluded from the query"
+        many: "%{count} aggregate rows are incomplete and will be excluded from the query"
+  schema_diff:
+    action:
+      apply: "Apply…"
+      compute_diff: Compute Diff
+      preview_ddl: Preview DDL
+    apply:
+      read_only: This connection is read-only. Schema changes are not allowed.
+      read_only_profile: This connection's profile is set to read-only. Schema changes are not allowed.
+      read_only_server: The server rejected mutations for this connection. Schema changes are not allowed.
+    change:
+      column_added: "Add column %{name} %{type_name}"
+      column_removed: "Drop column %{name}"
+      default_dropped: "Drop default on %{column}"
+      default_set: "Set default on %{column} to %{value}"
+      foreign_key_changed: Change foreign keys
+      index_added: "Add index %{name}"
+      index_removed: "Drop index %{name}"
+      not_null: "Make %{column} NOT NULL"
+      nullable: "Make %{column} nullable"
+      primary_key_changed: Change primary key
+      type_changed: "Change %{column} type %{before} → %{after}"
+    source:
+      risk:
+        destructive: Destructive
+        safe: Safe
+        warning: Warning
+      schema_not_loaded: "The schema for \"%{database}\" is not loaded yet. Expand that database in the sidebar first, then run Compute Diff again."
+    status:
+      computing: "Computing diff…"
+      empty: No differences found between the two schemas.
+      idle: Pick a source and run Compute Diff to see schema changes.
+      unsupported: Unsupported
+    summary:
+      apply: "Apply %{count} schema change(s) to %{target}"
+      this_connection: this connection
+    table_action:
+      create: "Create table %{table}"
+      drop: "Drop table %{table}"
+    toast:
+      applied: "Applied %{statements} DDL statement(s) across %{tables} table(s)."
+      apply_partial_failure: "Applied %{applied} of %{total} table(s) (%{statements} DDL statement(s)) before failing on %{table}: %{error}. %{remaining} table(s) were not attempted."
+      approval_queue_failed: "Failed to queue for approval: %{error}"
+      approval_queued: Schema changes queued for approval.
+      approval_unavailable: This connection requires approval, which is unavailable in this build.
+      connection_unavailable: Target connection is no longer available.
+      ddl_build_failed: "Cannot build DDL: %{error}"
+      read_only: This connection is read-only. Schema changes are not allowed.
+      read_only_profile: This connection's profile is set to read-only. Schema changes are not allowed.
+      read_only_server: The server rejected mutations for this connection. Schema changes are not allowed.
+      reference_connection_disconnected: The chosen reference connection is not connected.
+      reference_not_picked: Pick a reference database or connection to compare against.
+      select_at_least_one: Select at least one change first.
+      select_at_least_one_to_apply: Select at least one change to apply.
+      snapshot_load_failed: "Failed to load snapshot: %{error}"
+      snapshot_missing: Selected snapshot no longer exists.
+      snapshot_not_picked: Pick a snapshot to compare against.
+    view:
+      compare_against: Compare against
+      mode:
+        live: "Live ↔ Live"
+        snapshot: "Snapshot ↔ Live"
+      source:
+        connection_section: Other connections
+        database_section: Other databases on this connection
+        empty: Connect a second database or connection to compare against.
+        no_snapshots: No snapshots captured for this connection yet.
+      title: "Schema Diff — %{database}"
+      title_default: Schema Diff
+      unsupported_action:
+        create: Create table
+        drop: Drop table
+  shared:
+    add: Add
+    error_prefix: "Error: %{message}"
+    error_with_detail_clipboard: "%{title}: %{detail}"
+    hint:
+      enter_save_esc_cancel: "Enter to save, Esc to cancel"
+    refresh:
+      off: Off
+      custom: Custom
+      on_open: On open
+    result_warnings:
+      context:
+        query: query result
+        table_browse: table browse result
+        visual_query: visual query result
+        collection_browse: collection browse result
+        crud_returning: mutation RETURNING result
+        mutation_preview: mutation preview result
+      summary: "Unsupported database type '%{type_name}' in %{context}"
+      cause: "The %{context} contains values of unsupported type '%{type_name}'."
+  tabs:
+    menu:
+      close: Close
+      close_all: Close All
+      close_left: Close to the Left
+      close_others: Close Others
+      close_right: Close to the Right
+    unsaved_changes: Unsaved changes
+document_tree:
+  search_placeholder: Search...
+  view:
+    tree: Tree View
+    raw_json: Raw JSON
+  no_matches: No matches
+  document_label: "Document %{index}"
+documents:
+  default_title: Untitled
+  new_query_name: Query
+  toast:
+    schema_diff_opened: Opened schema diff
+    no_active_connection_for:
+      table: No active connection for this table
+      collection: No active connection for this collection
+      event_source: No active connection for this event source
+      key_value_db: No active connection for this key-value database
+      object_storage_account: No active connection for this object-storage account
+      bucket: No active connection for this bucket
+      object: No active connection for this object
+  error:
+    write_initial_script_failed: "Failed to write initial script content: %{error}"
+    save_session_failed: Failed to save session manifest
+dump_analysis:
+  dialog:
+    title: "Analyze database dump…"
+    filter:
+      dumps: Dump files
+      all_files: All Files
+  error:
+    no_dialog: File picker is unavailable in this environment.
+    unsupported_extension: "No registered driver can analyze a “.%{extension}” file."
+errors:
+  action:
+    view_in_audit: View in Audit
+  correlation:
+    detail: "Correlation: %{id}"
+    clipboard: "%{summary}\nCorrelation: %{id}"
+form:
+  validation:
+    connection_name_required: Connection name is required
+    no_driver_selected: No driver selected
+    field_required: "%{field} is required"
+    field_invalid_number: "%{field} must be a valid number"
+    ssh_host_required: SSH Host is required when SSH is enabled
+    ssh_user_required: SSH User is required when SSH is enabled
+    ssh_port_invalid: SSH Port must be a valid number
+    ssm_instance_id_required: SSM Instance ID is required
+    ssm_instance_id_format: SSM Instance ID must start with 'i-' or 'mi-'
+    ssm_region_required: SSM Region is required
+    ssm_remote_port_positive: SSM Remote Port must be greater than 0
+    ssm_remote_port_invalid: SSM Remote Port must be a valid number
+    auth_profile_not_found: "AWS profile '%{id}' not found in ~/.aws/config — please restore or recreate the profile in ~/.aws/config before connecting."
+    auth_profile_dangling_keyring_only: "Auth profile '%{name}' is only in the DBFlux keyring and no longer has a corresponding entry in ~/.aws/config or ~/.aws/credentials. Add the credentials to ~/.aws/credentials to connect with this profile."
+    auth_profile_dangling: "Auth profile '%{name}' could not be found in ~/.aws/config. Please recreate the profile or update the connection binding."
+    dynamic_auth_profile_required: Dynamic value sources require an Auth Profile. Select one in Access tab.
+    auth_profile_no_provider: "Selected Auth Profile '%{name}' has no registered provider for dynamic value sources."
+    unknown_hook: "Unknown %{label} hook '%{token}'. Configure it in Settings > Hooks"
+  action:
+    updating: Updating
+    saving: Saving
+  warning:
+    refresh_interval_invalid: "Refresh interval override ignored: value must be a positive number"
+  error:
+    build_profile_failed: Failed to build profile
+    test_cancelled_pre: Test connection cancelled by pre-connect hook
+    test_cancelled_post: Test connection cancelled by post-connect hook
+    test_cleanup_failed: "Test connection cleanup failed: %{error}"
+    test_cleanup_warning: "%{primary_error} (cleanup warning: %{cleanup_error})"
+    detached_hook_cleanup_failed: "Failed to release detached test hook tasks for profile '%{profile_name}' (%{profile_id}); scoped task IDs [%{task_ids}]: %{error}"
+    aws_credentials_missing: "AWS credentials for profile '%{name}' could not be resolved. Add the credentials to ~/.aws/credentials (or use environment variables / IAM role) and retry. DBFlux does not store AWS access keys — credentials are read directly by the AWS SDK."
+    pipeline_stage_failed: "Pipeline stage '%{stage}': %{source}"
+hooks:
+  kind:
+    command: Command
+    script: Script
+  source:
+    file: File
+  script:
+    placeholder: "Enter script content..."
+  execution:
+    blocking: Blocking
+    detached: Detached
+  failure:
+    disconnect: Disconnect
+    warn: Warn
+    ignore: Ignore
+  delete:
+    title: Delete Hook
+    message: 'Are you sure you want to delete hook "%{name}"?'
+  delete_unreadable:
+    title: Delete Unreadable Hook Row
+    message: 'Permanently delete the unreadable hook row "%{name}"? Its stored data cannot be recovered, but its name becomes reusable afterwards.'
+  action:
+    delete: Delete
+    update: Update
+    create: Create
+  phase:
+    pre_connect_hook: Pre-connect hook
+    extra_pre_connect: Extra pre-connect
+    post_connect_hook: Post-connect hook
+    extra_post_connect: Extra post-connect
+    pre_disconnect_hook: Pre-disconnect hook
+    extra_pre_disconnect: Extra pre-disconnect
+    post_disconnect_hook: Post-disconnect hook
+    extra_post_disconnect: Extra post-disconnect
+  tab:
+    intro: Select reusable hooks configured in Settings -> Hooks
+    lua_process_run_note: Selected hook enables Lua process.run and can execute external programs with your user permissions
+language:
+  native_name: English
+login:
+  window_title: Connection Flow
+  field:
+    start_url: Start URL
+  action:
+    open_browser: Open Browser
+    copy_url: Copy URL
+    cancel: Cancel
+    close: Close
+    open_auth_profiles: Open Auth Profiles
+  banner:
+    connection_failed: Connection failed
+    completed: Login completed
+    closing: Authentication succeeded. Closing this dialog...
+  body:
+    sign_in_prompt: 'Sign in with %{provider} to continue connecting "%{profile}".'
+    instructions: Open the login URL in your browser and finish authentication. DBFlux will continue automatically once the login completes.
+    elapsed: "Login can take up to 5 minutes. Elapsed: %{seconds}s"
+    browser_open_failed: "Could not open browser automatically. Open the URL manually. (%{error}; fallback failed: %{fallback_error})"
+  error:
+    timed_out: Login timed out after 5 minutes
+    no_url: No login URL is available for this provider.
+    no_url_provided: Login URL not provided by provider
+modals:
+  active_query:
+    title: Active query running
+    prompt: A query is still running on this connection. What would you like to do?
+    elapsed: "Running for %{seconds}s"
+    disconnect_anyway: Disconnect anyway
+    quit_anyway: Quit anyway
+    keep_waiting: Keep waiting
+    cancel_query: Cancel query
+  add_panel_picker:
+    title: Add panels
+    submit:
+      zero: Add panels
+      one: Add 1 panel
+      many: "Add %{count} panels"
+      create: Create panel
+    saved:
+      empty: 'No saved charts on this connection. Use "From query" or "From metric" to create one directly.'
+      search_label: Search
+      search_placeholder: Search charts...
+    tab:
+      saved: Saved charts
+      query: From query
+      metric: From metric
+    name_placeholder: Panel name
+    name_label: Name
+    query:
+      placeholder: Type a query…
+      label: Query
+    chart_kind:
+      label: Chart kind
+      line: Line
+      bar: Bar
+      area: Area
+      scatter: Scatter
+    metric:
+      namespace_filter_placeholder: Filter namespaces…
+      metric_filter_placeholder: Filter metrics…
+      namespace_label: Namespace
+      metric_label: Metric
+      period_label: Period (seconds)
+      statistic_label: Statistic
+      loading_namespaces: Loading namespaces…
+      select_namespace_hint: Select a namespace to load metrics.
+      loading: Loading…
+      no_metrics: No metrics in this namespace.
+      no_metrics_filtered: No metrics match the filter.
+    cancel: Cancel
+  cell_editor:
+    title_json: Edit JSON
+    title_text: Edit Text
+  create_dashboard:
+    name_label: Dashboard name
+    title: New dashboard
+    validation:
+      empty_name: Name cannot be empty
+    cancel: Cancel
+    confirm: Create
+  delete_confirm:
+    dashboard:
+      title: Delete dashboard
+      body: 'Delete dashboard "%{name}"? This cannot be undone.'
+    saved_chart:
+      title: Delete saved chart
+      body: 'Delete saved chart "%{name}"? This cannot be undone.'
+      orphan_warning:
+        one: "This chart is used in 1 dashboard: %{names}. Panels that reference it will show broken placeholders."
+        many: "This chart is used in %{count} dashboards: %{names}. Panels that reference it will show broken placeholders."
+    cancel: Cancel
+    confirm: Delete
+  delete_connection:
+    title: Delete connection
+    warning: "You're about to delete the following connection. This can't be undone."
+    documents_closed: Any open documents using this connection will be closed.
+    cancel: Cancel
+    confirm: Delete
+  document_preview:
+    title: Document Preview
+  drop_table:
+    title: Drop table
+    confirm: Drop table
+    cancel: Cancel
+    confirm_placeholder: Type table name to confirm
+    confirm_prompt: 'Type "%{table}" to confirm'
+    cascade_warning: "Dependent objects will also be dropped (CASCADE):"
+    delete_warning: This will permanently delete the table and any dependent objects.
+    relation_kind:
+      view: View
+      materialized_view: MatView
+      foreign_key: FK
+      trigger: Trigger
+  import_dashboard:
+    title: Import Dashboard from JSON
+    name_label: Dashboard name
+    name_placeholder: Dashboard name
+    json_label: Dashboard JSON
+    json_placeholder: "Paste dashboard JSON here…"
+    name_error: Name cannot be empty
+    format: Format
+    compact: Compact
+    cancel: Cancel
+    confirm: Import
+  mutation_confirm:
+    title: Confirm mutation
+    sample_unavailable: Sample preview unavailable
+    type_to_confirm_label: "Type the table name to confirm:"
+    type_to_confirm_placeholder: Type table name to confirm
+    opt_in_label: I understand this operation will modify data
+    cancel: Cancel
+    confirm: Confirm
+  rename:
+    placeholder: Enter a name
+    title:
+      dashboard: Rename dashboard
+      saved_chart: Rename saved chart
+    validation:
+      empty_name: Name cannot be empty
+    cancel: Cancel
+    confirm: Rename
+  schema_drift:
+    title: Schema has changed since this query was opened
+    column_header: column
+    local_header: local cache
+    remote_header: remote
+    change:
+      new_column: new column
+      removed: removed
+      type_changed: type changed
+      nullability_changed: nullability changed
+      pk_changed: PK changed
+      fk_changed: FK changed
+      default_changed: default changed
+      index_added: index added
+      index_removed: index removed
+      cached: cached
+      changed: changed
+      primary_key: (primary key)
+      foreign_keys: (foreign keys)
+      nullable: nullable
+    continue_stale: Continue with stale schema
+    cancel: Cancel
+    refreshing: Refreshing…
+    refresh: Refresh and re-run
+  tunnel_auth:
+    title: SSH passphrase required
+    prompt: 'Enter the passphrase for tunnel "%{tunnel}"'
+    connection_detail: "Host: %{host}:%{port} · User: %{user}"
+    placeholder: Enter passphrase
+    incorrect: Incorrect passphrase. Try again.
+    empty_error: Passphrase cannot be empty
+    remember: Remember for this session
+    cancel: Cancel
+    connect: Connect
+  unsaved_changes:
+    title: Unsaved changes
+    prompt: You have unsaved changes in the following documents. What would you like to do?
+    save_selected:
+      one: "Save selected (%{count})"
+      many: "Save selected (%{count})"
+    dont_save: Don't save
+    cancel: Cancel
+palette:
+  search:
+    placeholder: Search commands, connections, tables, scripts...
+  empty: No matching items
+  section:
+    connections: Connections
+    commands: Commands
+    charts: Charts
+    tables: Tables
+    scripts: Scripts
+  kind:
+    connection: Connection
+    chart: Chart
+    table: Table
+    collection: Collection
+    view: View
+    keyspace: Keyspace
+    script: Script
+  chart:
+    browse_suffix: "[browse]"
+  import_dashboard:
+    name: Import Dashboard from JSON...
+  command:
+    new_query_tab:
+      name: New Query Tab
+    run_query:
+      name: Run Query
+    run_query_in_new_tab:
+      name: Run Query in New Tab
+    save_query:
+      name: Save Query
+    save_file_as:
+      name: Save File As
+    open_script_file:
+      name: Open Script File
+    open_history:
+      name: Open Query History
+    cancel_query:
+      name: Cancel Running Query
+    close_tab:
+      name: Close Current Tab
+    next_tab:
+      name: Next Tab
+    prev_tab:
+      name: Previous Tab
+    export_results:
+      name: Export Results
+    open_connection_manager:
+      name: Open Connection Manager
+    disconnect:
+      name: Disconnect Current
+    refresh_schema:
+      name: Refresh Schema
+    focus_sidebar:
+      name: Focus Sidebar
+    focus_editor:
+      name: Focus Editor
+    focus_results:
+      name: Focus Results
+    focus_tasks:
+      name: Focus Tasks Panel
+    toggle_sidebar:
+      name: Toggle Sidebar
+    toggle_editor:
+      name: Toggle Editor Panel
+    toggle_results:
+      name: Toggle Results Panel
+    toggle_tasks:
+      name: Toggle Tasks Panel
+    open_settings:
+      name: Open Settings
+    open_login_modal:
+      name: Open Auth Profile Login
+    open_sso_wizard:
+      name: Open AWS SSO Wizard
+    open_mcp_approvals:
+      name: Open MCP Approvals
+    refresh_mcp_governance:
+      name: Refresh MCP Governance
+    open_audit_viewer:
+      name: Open Audit Viewer
+    open_saved_chart:
+      name: "Open Chart..."
+    new_dashboard:
+      name: "New Dashboard..."
+    analyze_dump_file:
+      name: "Analyze database dump…"
+  category:
+    editor: Editor
+    tabs: Tabs
+    results: Results
+    connections: Connections
+    focus: Focus
+    view: View
+    charts: Charts
+    dashboards: Dashboards
+    tools: Tools
+scripts:
+  dialog:
+    title: Open Script
+    filter:
+      sql: SQL Files
+      javascript_mongodb: JavaScript (MongoDB)
+      redis: Redis
+      all_files: All Files
+  error:
+    read_file_failed: "Failed to read file %{path}: %{error}"
+settings:
+  action:
+    default_connection_name: connection
+    close: Close
+  discard:
+    title: Discard Unsaved Changes
+    body: "You have unsaved changes. Discard them and switch to %{section}?"
+  editor_panel:
+    title:
+      edit: "Edit %{noun}"
+      new: "New %{noun}"
+  mcp_governance:
+    persist_error: "Failed to persist MCP governance: %{error}"
+  general:
+    header:
+      title: General
+      subtitle: Configure startup, session, refresh, and safety behavior
+    appearance:
+      group: Appearance
+    startup:
+      group: Startup & Session
+    refresh:
+      group: Refresh & Background
+    safety:
+      group: Execution Safety
+    object_storage:
+      group: Object Storage
+    storage:
+      group: Storage
+    theme:
+      label: Theme
+    style:
+      label: Style
+    language:
+      label: Language
+      option:
+        system: System
+      notice: Language changes apply after restarting DBFlux.
+    restore_session:
+      label: Restore session on startup
+    reopen_connections:
+      label: Reopen last connections
+    default_focus:
+      label: Default focus
+      option:
+        sidebar: Sidebar
+        last_tab: Last Tab
+    max_history:
+      label: Max history entries
+      error: Max history entries must be a number >= 10
+    auto_save_interval:
+      label: Auto-save interval (ms)
+      error: Auto-save interval must be >= 500 ms
+    refresh_policy:
+      label: Default refresh policy
+      option:
+        manual: Manual
+        interval: Interval
+    refresh_interval:
+      label: Default refresh interval (seconds)
+      error: Refresh interval must be >= 1 second
+    max_background_tasks:
+      label: Max concurrent background tasks
+      error: Max background tasks must be >= 1
+    pause_refresh_on_error:
+      label: Pause auto-refresh on error
+    refresh_only_if_visible:
+      label: Auto-refresh only if tab is visible
+    confirm_dangerous:
+      label: Confirm dangerous queries
+    requires_where:
+      label: Require WHERE for DELETE/UPDATE
+    requires_preview:
+      label: Always require preview (ignore suppressions)
+    object_preview_limit:
+      label: Object preview size limit (MiB)
+      error: Object preview size limit must be >= 1 MiB
+    object_preview_hint:
+      label: "Objects larger than this are never downloaded for preview; the browser shows their metadata only."
+    key_value:
+      group: Key-Value Preview
+    key_value_size_limit:
+      label: Key-value preview size limit (MiB)
+      error: Key-value preview size limit must be >= 1 MiB
+    key_value_size_limit_hint:
+      label: "Values larger than this are not downloaded automatically; use \"Load anyway\" to fetch the full value."
+    share_stable_db:
+      label: Use the stable database
+      error: Failed to update the shared-database setting
+      hint: "Applied on next launch. Shares the stable database (dbflux.db) instead of this nightly build's dbflux-nightly.db."
+    override_value_header: Override Value
+    placeholder:
+      refresh_policy: Refresh policy
+    save:
+      button: Save
+      error: "Failed to save general settings: %{error}"
+      success: Settings saved. Some changes apply on next startup.
+  about:
+    title: About
+    subtitle: Project information
+    report_bug: Report a bug
+    or: or
+    view_source: view the source code
+    on_github: on GitHub.
+    copyright: "Copyright © 2026 %{author} and contributors."
+    license: "Licensed under the %{license} licenses."
+    third_party_licenses: Third-Party Licenses
+    lucide: UI icons from Lucide (ISC License)
+    simple_icons: Brand icons from Simple Icons (CC0 1.0)
+  keybindings:
+    title: Keyboard Shortcuts
+    subtitle: View all keyboard shortcuts by context
+    filter_placeholder: Filter keybindings...
+    binding_count:
+      one: (1 binding)
+      many: "(%{count} bindings)"
+    inherits_from: "inherits from %{parent}"
+    inherited: inherited
+    conflict:
+      title: "Conflict: %{chord} also bound to %{others}"
+      body: Two or more commands share this chord in this context.
+      unknown_other: another binding
+    command:
+      toggle_command_palette: Toggle Command Palette
+      new_query_tab: New Query Tab
+      close_tab: Close Current Tab
+      next_tab: Next Tab
+      prev_tab: Previous Tab
+      switch_to_tab: Switch to Tab
+      open_tab_menu: Open Tab Menu
+      focus_sidebar: Focus Sidebar
+      focus_editor: Focus Editor
+      focus_results: Focus Results
+      focus_tasks: Focus Background Tasks
+      cycle_focus_forward: Cycle Focus Forward
+      cycle_focus_backward: Cycle Focus Backward
+      focus_left: Focus Left
+      focus_right: Focus Right
+      focus_up: Focus Up
+      focus_down: Focus Down
+      select_next: Select Next
+      select_prev: Select Previous
+      select_first: Select First
+      select_last: Select Last
+      page_down: Page Down
+      page_up: Page Up
+      extend_select_next: Extend Selection Down
+      extend_select_prev: Extend Selection Up
+      toggle_selection: Toggle Selection
+      move_selected_up: Move Selected Up
+      move_selected_down: Move Selected Down
+      column_left: Column Left
+      column_right: Column Right
+      execute: Execute
+      cancel: Cancel
+      expand_collapse: Expand/Collapse
+      delete: Delete
+      rename: Rename
+      focus_search: Focus Search
+      toggle_favorite: Toggle Favorite
+      run_query: Run Query
+      run_query_in_new_tab: Run Query in New Tab
+      cancel_query: Cancel Query
+      open_history: Toggle History Dropdown
+      open_saved_queries: Open Saved Queries
+      save_query: Save
+      save_file_as: Save File As
+      open_script_file: Open Script File
+      export_results: Export Results
+      results_next_page: Results Next Page
+      results_prev_page: Results Previous Page
+      focus_toolbar: Focus Toolbar
+      toggle_panel: Toggle Panel
+      results_delete_row: Delete Row
+      results_add_row: Add Row
+      results_duplicate_row: Duplicate Row
+      results_copy_row: Copy Row
+      results_copy_cell: Copy Cell
+      results_set_null: Set Cell to NULL
+      open_context_menu: Open Context Menu
+      menu_up: Menu Up
+      menu_down: Menu Down
+      menu_select: Menu Select
+      menu_back: Menu Back
+      sidebar_next_tab: Sidebar Next Tab
+      refresh_schema: Refresh Schema
+      open_connection_manager: Open Connection Manager
+      export_connections: "Export Connections…"
+      disconnect: Disconnect
+      open_item_menu: Open Item Menu
+      create_folder: Create Folder
+      toggle_editor: Toggle Editor Panel
+      toggle_results: Toggle Results Panel
+      toggle_tasks: Toggle Tasks Panel
+      toggle_sidebar: Toggle Sidebar
+      open_settings: Open Settings
+      open_login_modal: Open Auth Profile Login
+      open_sso_wizard: Open AWS SSO Wizard
+      open_audit_viewer: Open Audit Viewer
+      open_mcp_approvals: Open MCP Approvals
+      refresh_mcp_governance: Refresh MCP Governance
+      open_saved_chart: "Open Chart..."
+      import_dashboard: "Import Dashboard from JSON..."
+      new_dashboard: "New Dashboard..."
+    context:
+      global: Global
+      sidebar: Sidebar
+      editor: Editor
+      results: Results
+      background_tasks: Background Tasks
+      command_palette: Command Palette
+      connection_manager: Connection Manager
+      history_modal: History
+      text_input: Text Input
+      dropdown: Dropdown
+      sql_preview_modal: SQL Preview
+      context_menu: Context Menu
+      confirm_modal: Confirm
+      form_navigation: Form Navigation
+      context_bar: Context Bar
+      audit: Audit Viewer
+      event_streams_picker: Event Streams Picker
+    category:
+      global: Global
+      focus: Focus
+      navigation: Navigation
+      results: Results
+      actions: Actions
+      editor: Editor
+      sidebar: Sidebar
+      view: View
+      dashboards: Dashboards
+  hooks:
+    header:
+      title: Hooks
+      subtitle: Create reusable hooks and associate them from connection settings
+    list:
+      new: New Hook
+      empty: No hooks defined
+      unreadable:
+        title: Unreadable hook rows
+        hint: Unreadable — cannot be edited
+    form:
+      title:
+        edit: Edit Hook
+        new: New Hook
+      id: Hook ID
+      kind: Type
+      command: Command
+      args: Arguments
+      args_hint: Arguments separated by spaces
+      language: Language
+      file_path: File Path
+      file_path_hint: Scripts are edited in the app editor and stored under hooks/ by default
+      open_in_app: Open in App
+      open_in_editor: Open in Editor
+      interpreter: Interpreter
+      interpreter_hint: "Leave empty for %{default_interpreter}"
+      interpreter_auto: "auto (%{value})"
+      interpreter_unsupported: Unsupported on this platform
+      capabilities: Capabilities
+      capability:
+        logging: Logging
+        env_read: Environment read
+        connection_metadata: Connection metadata
+        process_run: Controlled process run
+        process_run_hint: "Enables `dbflux.process.run(...)` without exposing the Lua `os` library"
+      execution_mode: Execution Mode
+      execution_mode_hint: Detached runs in background and does not block connect/disconnect
+      ready_signal: Ready Signal
+      ready_signal_hint: DBFlux waits for this text in hook output before continuing. Required for detached pre-connect hooks.
+      cwd: Working Directory
+      env: Environment
+      env_hint: Comma-separated KEY=value pairs
+      env_denylist: Env Denylist
+      env_denylist_hint: Comma-separated variable names to strip from inherited env
+      timeout: Timeout (ms)
+      resolved_command: Resolved Command
+      enabled: Enabled
+      inherit_env: Inherit parent environment
+      on_failure: On Failure
+      preview_placeholder: "<enter a command>"
+    status:
+      unsupported_platform: Unsupported on this platform
+      script_missing: Script file does not exist yet
+      interpreter_missing: "Interpreter '%{interpreter}' was not found in PATH"
+      language_unsupported: Selected language is unsupported on this platform
+      lua_process_run_warning: "Lua process.run is enabled: this hook can execute external programs with your user permissions. The program allowlist is a convenience filter, not a security isolation boundary — a program earlier on $PATH can be substituted under the same name."
+    error:
+      open_script: "Failed to open script: %{error}"
+      command_not_editable: Commands do not open in the script editor
+      write_script: "Failed to write script file: %{error}"
+      no_scripts_dir: Scripts directory is not available in this session
+      create_dir: "Failed to create hooks directory: %{error}"
+      save: Failed to save hooks
+      delete_unreadable: Failed to delete unreadable hook row
+    validation:
+      id_required: Hook ID is required
+      timeout: Timeout must be a valid number (milliseconds)
+      command_required: Command is required
+      script_path_required: Script file path is required
+      lua_path_required: Lua script file path is required
+      duplicate_id: "A hook with ID '%{id}' already exists"
+      env_pair: "Invalid env pair '%{pair}'. Expected KEY=value format"
+      env_key_empty: Environment variable key cannot be empty
+    toast:
+      saved: Hook saved
+      deleted: Hook deleted
+      unreadable_deleted: Unreadable hook row deleted
+  auth_profiles:
+    profiles_label: Profiles
+    new_profile: New Auth Profile
+    import: "Import…"
+    source_label: Source
+    leave_blank_hint: Leave blank to keep the current value.
+    auth_profile_label: Auth Profile
+    editor_subtitle: Reusable authentication profile for access and value resolution
+    changed_on_disk: Profile Changed on Disk
+    reload: Reload
+    name_label: Name
+    provider_label: Provider
+    placeholder_name: Profile name
+    select_provider_ellipsis: "Select provider…"
+    select_ellipsis: "Select..."
+    select_none: "— None —"
+    enabled: Enabled
+    export: Export
+    delete: Delete
+    save_to_file: Save to File
+    cancel: Cancel
+    mirror_label_fallback: Read-only — managed externally
+    conflict_message: "This profile was modified on disk (%{label}) since you opened it. Reload to see the current values before saving."
+    partial_saved_message: "%{written_label} was saved successfully, but %{conflicted_label} was modified on disk since you opened the form. Reload to refresh and re-apply your changes."
+    login_required_hint: "Login required — click Login to load dropdown options."
+    session_expired_hint: Session expired — log in again to reload options
+    session_expired_click_hint: "Session expired — click Login to refresh dropdown options."
+    select_before_login: Select an auth provider before login.
+    interactive_login_unavailable: Interactive login is not available for this provider.
+    fields_required_before_login: Provide a profile name and provider fields before login.
+    starting_login: "Starting auth-provider login for profile '%{name}'..."
+    login_completed: "Auth-provider login completed for profile '%{name}'."
+    login_failed: "Auth-provider login failed for profile '%{name}': %{error}"
+    login_cancelled: Login cancelled by user.
+    login_url_panel_description: Open this URL in your browser to finish the login. DBFlux will continue automatically once you complete authentication.
+    open_browser: Open Browser
+    copy_url: Copy URL
+    login_action: Login
+    logging_in: "Logging in..."
+    runs_interactive_login_hint: Runs interactive login for this auth profile
+    update: Update
+    create: Create
+    section_title: Auth Profiles
+    section_description: Manage reusable authentication profiles for connection access
+    delete_dialog_title: Delete Auth Profile
+    delete_dialog:
+      body_none: 'Are you sure you want to delete "%{name}"?'
+      body_one: 'Are you sure you want to delete "%{name}"? 1 connection using this auth profile will be updated.'
+      body_many: 'Are you sure you want to delete "%{name}"? %{count} connections using this auth profile will be updated.'
+    saved_fallback: Profile saved.
+    reference_invalid_title: Profile reference invalid
+    reference_invalid_body: This profile cannot be loaded.
+    login_hint: Log in to load options
+    inherited_from: "Inherited from %{trigger}."
+    inherited_from_named: "Inherited from %{trigger} '%{name}'."
+    error:
+      secret_store_failed: "The profile's secret could not be stored (the OS keyring may be locked or unavailable) and will not persist after restart."
+      write_config_failed: "Failed to write profile to config: %{error}"
+  mcp:
+    tool:
+      list_connections:
+        name: List Connections
+        description: Enumerate all configured database connections
+      get_connection:
+        name: Get Connection
+        description: Retrieve full details of a specific connection
+      get_connection_metadata:
+        name: Connection Metadata
+        description: Fetch driver capabilities and metadata for a connection
+      list_databases:
+        name: List Databases
+        description: List all databases accessible on a connection
+      list_schemas:
+        name: List Schemas
+        description: List schemas within a database
+      list_tables:
+        name: List Tables
+        description: List tables and collections within a schema
+      list_collections:
+        name: List Collections
+        description: List MongoDB collections or similar document stores
+      describe_object:
+        name: Describe Object
+        description: Get column/field definitions and indexes for a table or collection
+      read_query:
+        name: Read Query
+        description: Execute a SELECT or equivalent read-only query
+      explain_query:
+        name: Explain Query
+        description: Show the query execution plan without running it
+      preview_mutation:
+        name: Preview Mutation
+        description: Dry-run a write/delete query and report affected rows
+      list_scripts:
+        name: List Scripts
+        description: List saved scripts in the scripts directory
+      get_script:
+        name: Get Script
+        description: Retrieve the source of a specific saved script
+      create_script:
+        name: Create Script
+        description: Save a new script to the scripts directory
+      update_script:
+        name: Update Script
+        description: Overwrite an existing saved script
+      delete_script:
+        name: Delete Script
+        description: Permanently remove a script from the scripts directory
+      run_script:
+        name: Run Script
+        description: Execute a saved Lua/SQL/shell script against a connection
+      request_execution:
+        name: Request Execution
+        description: Submit a mutation for human approval before it runs
+      list_pending_executions:
+        name: List Pending
+        description: View all executions awaiting approval
+      get_pending_execution:
+        name: Get Pending
+        description: Retrieve details of a specific pending execution
+      approve_execution:
+        name: Approve Execution
+        description: Approve and trigger a pending mutation
+      reject_execution:
+        name: Reject Execution
+        description: Reject and discard a pending mutation
+      query_audit_logs:
+        name: Query Audit Logs
+        description: Search and filter the audit trail
+      get_audit_entry:
+        name: Get Audit Entry
+        description: Retrieve a single audit log entry by ID
+      export_audit_logs:
+        name: Export Audit Logs
+        description: Download audit log entries as a file
+    class:
+      metadata:
+        label: Metadata
+        description: Schema inspection — listing databases, tables, and describing objects
+      read:
+        label: Read
+        description: Running read-only queries and fetching data
+      write:
+        label: Write
+        description: Inserting, updating, or running scripts that modify data
+      destructive:
+        label: Destructive
+        description: "DELETE, DROP, TRUNCATE and other irreversible operations"
+      admin:
+        label: Admin
+        description: Approving executions, exporting audit logs, and privileged actions
+    group:
+      discovery: Discovery
+      schema: Schema
+      query: Query
+      scripts: Scripts
+      approval: Approval
+      audit: Audit
+    trusted_clients_title: Trusted Clients
+    trusted_clients_description: Manage AI agent identities allowed to connect via MCP
+    trusted_clients_form_description: AI agent identities allowed to connect via MCP
+    roles_title: Roles
+    roles_description: Manage named role bundles for MCP governance
+    roles_form_description: Group policies into named roles assigned to actors per connection
+    policies_title: Policies
+    policies_description: Manage tool and execution-class policy rules for MCP governance
+    policies_form_description: Define which tools and execution classes are allowed
+    new_client: New Trusted Client
+    new_role: New Role
+    new_policy: New Policy
+    empty:
+      clients: No trusted clients configured.
+      roles: No roles configured.
+      policies: No policies configured.
+    field:
+      client_id: Client ID
+      name: Name
+      issuer_optional: Issuer (optional)
+      active: Active
+      role_id: Role ID
+      policies: Policies
+      policy_id: Policy ID
+      allowed_execution_classes: Allowed Execution Classes
+      allowed_tools: Allowed Tools
+      policy_count:
+        one: 1 policy
+        many: "%{count} policies"
+      tools_classes_summary: "%{tools} tools · %{classes} classes"
+      builtin_badge: built-in
+    placeholder:
+      client_name: Agent / integration name
+      no_policies_selected: No policies selected
+    hint:
+      select_policies: Select policies defined in the Policies tab
+    error:
+      client_id_name_required: Client ID and name are required
+      role_id_required: Role ID is required
+      builtin_role_readonly: Built-in roles cannot be modified
+      policy_id_required: Policy ID is required
+      builtin_policy_readonly: Built-in policies cannot be modified
+    toast:
+      client_saved: Trusted client saved
+      select_client_first: Select a trusted client first
+      client_deleted: Trusted client deleted
+      client_activated: Trusted client activated
+      client_deactivated: Trusted client deactivated
+      role_saved: Role saved
+      select_role_first: Select a role first
+      role_deleted: Role deleted
+      policy_saved: Policy saved
+      select_policy_first: Select a policy first
+      policy_deleted: Policy deleted
+    status:
+      unsaved: Unsaved form changes
+      saved: All changes applied
+    action:
+      update_client: Update Client
+      create_client: Create Client
+      activate: Activate
+      deactivate: Deactivate
+      delete: Delete
+      update_role: Update Role
+      create_role: Create Role
+      update_policy: Update Policy
+      create_policy: Create Policy
+  drivers:
+    section_title: Drivers
+    section_description: Configure per-driver overrides and driver-defined settings
+    empty: No registered drivers
+    select_hint: Select a driver to configure settings
+    action:
+      save: Save
+    field:
+      capabilities: Capabilities
+      global_overrides: Global Overrides
+      driver_settings: Driver Settings
+    global_overrides_hint: Enable override to replace the global default for this driver.
+    no_custom_settings: No custom settings for this driver.
+    use_global: Use Global
+    error:
+      refresh_interval_empty: Refresh interval override must not be empty
+      refresh_interval_invalid: Refresh interval override must be a number greater than 0
+      save_failed: "Failed to save driver settings: %{error}"
+    toast:
+      saved: Driver settings saved.
+      saved_warnings: Driver settings saved with warnings
+    capability:
+      multiple_databases: Multiple Databases
+      schemas: Schemas
+      ssh_tunnel: SSH Tunnel
+      ssl_tls: SSL/TLS
+      authentication: Authentication
+      query_cancellation: Query Cancellation
+      query_timeout: Query Timeout
+      transactions: Transactions
+      prepared_statements: Prepared Statements
+      views: Views
+      foreign_keys: Foreign Keys
+      indexes: Indexes
+      custom_types: Custom Types
+      insert: Insert
+      update: Update
+      delete: Delete
+      pagination: Pagination
+      sorting: Sorting
+      filtering: Filtering
+      export_csv: Export CSV
+      export_json: Export JSON
+      nested_documents: Nested Documents
+      arrays: Arrays
+      aggregation: Aggregation
+      kv_scan: KV Scan
+      kv_get: KV Get
+      kv_set: KV Set
+      kv_delete: KV Delete
+      kv_exists: KV Exists
+      kv_ttl: KV TTL
+      kv_key_types: KV Key Types
+      kv_value_size: KV Value Size
+      kv_rename: KV Rename
+      kv_bulk_get: KV Bulk Get
+      kv_stream_range: KV Stream Range
+      kv_stream_add: KV Stream Add
+      kv_stream_delete: KV Stream Delete
+      pub_sub: Pub/Sub
+      graph_traversal: Graph Traversal
+      edge_properties: Edge Properties
+  rpc_services:
+    section_title: RPC Services
+    section_description: Manage configured RPC services. Changes require restart.
+    empty: No RPC services configured
+    edit_title: Edit RPC Service
+    new_title: New RPC Service
+    delete_dialog_title: Delete Service
+    delete_dialog:
+      body: 'Are you sure you want to delete "%{name}"?'
+    error:
+      socket_id_required: Socket ID is required
+      timeout_invalid: Timeout must be a valid number (milliseconds)
+      duplicate_socket_id: "A service with socket ID '%{id}' already exists"
+      save_failed: "Failed to save RPC service config: %{error}"
+    toast:
+      saved: RPC service saved. Restart required to apply changes.
+      deleted: RPC service deleted. Restart required to apply changes.
+    field:
+      disabled: Disabled
+      socket_id: Socket ID
+      command: Command
+      startup_timeout: Startup Timeout (ms)
+      enable: Enable this service
+      service_type: Service Type
+      arguments: Arguments
+      env_vars: Environment Variables
+      default_command: (default)
+    kind:
+      driver: Driver
+      auth_provider: Auth Provider
+    action:
+      delete: Delete
+      update: Update
+      create: Create
+  ssh_tunnels:
+    placeholder_name: SSH tunnel
+    placeholder_password: password
+    placeholder_passphrase: passphrase
+    section_title: SSH Tunnels
+    section_description: Manage reusable SSH tunnels for bastion and jump-host access
+    empty: No saved SSH tunnels
+    new: New Tunnel
+    field:
+      name: Name
+    delete_dialog_title: Delete SSH Tunnel
+    delete_dialog:
+      body: 'Are you sure you want to delete "%{name}"?'
+    action:
+      import: "Import…"
+      export: Export
+      delete: Delete
+    error:
+      host_and_user_required: Host and user are required
+      save_failed: "Failed to save SSH tunnel profiles: %{error}"
+  proxies:
+    placeholder_name: Proxy name
+    placeholder_username: username
+    placeholder_password: password
+    section_title: Proxy Profiles
+    section_description: Manage proxy configurations for database connections
+    empty: No saved proxies
+    new: New Proxy
+    panel_title: Proxy
+    kind:
+      http: HTTP
+      https: HTTPS
+      socks5: SOCKS5
+    field:
+      name: Name
+      protocol: Protocol
+      authentication: Authentication
+      username: Username
+      password: Password
+      host: Host
+      port: Port
+      no_proxy: No Proxy
+      enabled: Enabled
+    hint:
+      no_proxy_list: Comma-separated hosts/CIDRs to bypass the proxy
+    auth:
+      none: None
+      basic: Basic
+    status:
+      disabled_caption: "off"
+    error:
+      save_failed: "Failed to save proxy profiles: %{error}"
+    action:
+      save: Save
+      import: "Import…"
+      export: Export
+      delete: Delete
+      update: Update
+      create: Create
+    delete_dialog_title: Delete Proxy
+    delete_dialog:
+      body_none: 'Are you sure you want to delete "%{name}"?'
+      body_one: 'Are you sure you want to delete "%{name}"? 1 connection using this proxy will be updated.'
+      body_many: 'Are you sure you want to delete "%{name}"? %{count} connections using this proxy will be updated.'
+    discard_dialog_title: Discard Proxy Changes
+    discard_dialog:
+      body: You have unsaved proxy changes. Discard them?
+  audit:
+    placeholder_level: Level
+    section_title: Audit
+    section_description: Configure global audit event capture and retention
+    group:
+      status: Status
+      enable_disable: Enable/Disable
+      capture_settings: Capture Settings
+      privacy: Privacy
+      retention: Retention
+      purge: Purge
+      log_capture: Log Capture
+    field:
+      enable_global: Enable global audit
+      capture_user_actions: Capture user actions
+      capture_system_events: Capture system events
+      capture_full_query_text: Capture full query text (disable for fingerprints only)
+      capture_hook_output: Capture hook/script output metadata
+      redact_sensitive: "Redact sensitive values (passwords, tokens, keys)"
+      retention_days: Retention days
+      max_detail_bytes: Max detail bytes
+      purge_on_startup: Purge old events on startup
+      purge_interval_minutes: Background purge interval (minutes)
+      min_log_level: Minimum log level captured to audit
+      not_wired: (not yet wired)
+    action:
+      save: Save
+    status:
+      degraded: Audit is degraded (restart required)
+      enabled: Audit is enabled
+      disabled: Audit is disabled
+    error:
+      retention_days_invalid: Retention days must be a number >= 1
+      max_detail_bytes_invalid: Max detail bytes must be >= 1024
+      purge_interval_invalid: Background purge interval must be a number
+      cannot_enable: Audit cannot be enabled
+      cannot_enable_body: "Audit cannot be enabled: the audit database could not be opened. Please restart the application. If the problem persists, check disk space and file permissions for the dbflux data directory."
+      cannot_enable_copy: "Audit cannot be enabled: Audit cannot be enabled: the audit database could not be opened. Please restart the application. If the problem persists, check disk space and file permissions for the dbflux data directory."
+      save_failed: Failed to save
+      save_failed_copy: "Failed to save: %{error}"
+    toast:
+      saved: Audit settings saved.
+  nav:
+    general_group: General
+    general: General
+    keybindings: Keybindings
+    audit: Audit
+    about: About
+    network: Network
+    ssh_tunnels: SSH Tunnels
+    proxies: Proxy
+    auth_profiles: Access Providers
+    connection: Connection
+    hooks: Hooks
+    drivers: Drivers
+    services: RPC Services
+    mcp_governance: MCP Governance
+    mcp_clients: Clients
+    mcp_roles: Roles
+    mcp_policies: Policies
+
+shutdown:
+  signal_sent: Shutting down...
+  cancelling_tasks: Cancelling tasks...
+  closing_connections: Closing connections...
+  flushing_logs: Flushing logs...
+  complete: Shutdown complete
+  failed: Shutdown failed
+
+sidebar:
+  confirm:
+    delete_hint: Press x to confirm delete, ESC to cancel
+    items:
+      one: 1 item
+      many: "%{count} items"
+  dialog:
+    import_script_title: Import Script
+    script_files_filter: Script files
+  empty:
+    connections_title: No connections yet
+    connections_hint: Use + to add a new connection
+    scripts_title: No scripts yet
+    scripts_hint: Use + to create a new script or import an existing file
+  error:
+    cannot_load_schema_types: Cannot load schema types
+    cannot_load_schema_indexes: Cannot load schema indexes
+    cannot_load_schema_foreign_keys: Cannot load schema foreign keys
+    cannot_load_schema_routines: Cannot load schema routines
+  filter:
+    connections_placeholder: Filter connections and schema...
+    scripts_placeholder: Filter scripts...
+    stream_placeholder: Filter stream names...
+  menu:
+    open: Open
+    browse_event_streams: Browse Event Streams
+    view_schema: View Schema
+    refresh: Refresh
+    generate_sql: Generate SQL
+    export_table: Export Table…
+    export_tables_many: "Export %{count} Tables…"
+    migrate_table: Migrate Table…
+    migrate_tables_many: "Migrate %{count} Tables…"
+    drop_view: Drop View
+    drop_table: Drop Table
+    query_measurement: Query Measurement
+    generate_query: Generate Query
+    drop_collection: Drop Collection
+    connect: Connect
+    disconnect: Disconnect
+    edit: Edit
+    duplicate: Duplicate
+    rename: Rename
+    export_ellipsis: Export…
+    import_ellipsis: Import…
+    compare_schema: Compare Schema…
+    move_to: Move to...
+    delete: Delete
+    delete_count: "Delete %{count} items"
+    close: Close
+    new_query: New Query
+    drop_database: Drop Database
+    new_connection: New Connection
+    new_folder: New Folder
+    root: Root
+    new_script_file: New File
+    new_script_folder: New Folder
+    reveal_file_manager: Reveal in File Manager
+    copy_path: Copy Path
+    schema_diff_unsupported: Schema diff is only available for relational connections.
+    new_dashboard: New Dashboard...
+    import_dashboard: Import Dashboard from JSON...
+    new_saved_chart: New Saved Chart...
+    rename_ellipsis: Rename...
+    delete_ellipsis: Delete...
+    copy_metric_id: Copy Metric ID
+    copy_inspector_id: Copy Inspector ID
+  overlay:
+    add_folder: New Folder
+    add_connection: New Connection
+    add_script_file: New File
+    add_script_folder: New Folder
+    import_file: Import File
+    child_picker:
+      title: "Event streams: %{name}"
+      column_name: Stream name
+      column_last_event: Last event
+      empty: No event streams found
+      prev: Prev
+      next: Next
+      page_label: "Page %{current}/%{total} (%{start}-%{end})"
+      page_label_empty: Page 0/0
+      unsupported: Event streams are not available for this collection
+    skipped_tables:
+      one: 1 table outside the active profile/database was skipped
+      many: "%{count} tables outside the active profile/database were skipped"
+  status:
+    connection_summary: "%{connected} connected · %{idle} idle"
+    profile_fallback_name: connection
+  tabs:
+    connections: CONNECTIONS
+    scripts: SCRIPTS
+  task:
+    connecting: "Connecting to %{name}"
+    disconnecting: "Disconnecting %{name}"
+    connection_hook_cancelled: Connection hook cancelled
+    post_connect_hook_cancelled: Post-connect hook cancelled
+    disconnect_hook_cancelled: Disconnect hook cancelled
+    post_disconnect_hook_cancelled: Post-disconnect hook cancelled
+    loading_event_streams: "Loading event streams: %{name}"
+    listing_buckets: "Listing buckets: %{name}"
+    loading_database_schema: "Loading schema: %{name}"
+    connecting_to_database: "Connecting to database: %{name}"
+    refreshing_database: "Refreshing database: %{name}"
+    refreshing_schema_object: "Refreshing schema object: %{name}"
+    dropping:
+      table: "Dropping table %{name}"
+      view: "Dropping view %{name}"
+      collection: "Dropping collection %{name}"
+      database: "Dropping database %{name}"
+    pipeline:
+      connecting: "Connecting to %{name} (pipeline)"
+      cancelled: Pipeline cancelled
+      failed: "Pipeline failed: %{error}"
+      completed: Pipeline completed
+      stage:
+        authenticating: "Pipeline: Authenticating (%{provider})"
+        waiting_for_login: "Pipeline: Waiting for %{provider} login"
+        resolving_values: "Pipeline: Resolving values (%{resolved}/%{total})"
+        opening_access: "Pipeline: Opening access (%{method})"
+        connecting: "Pipeline: Connecting driver (%{driver})"
+        fetching_schema: "Pipeline: Fetching schema"
+  toast:
+    edit_reconnect_updated: "'%{name}' updated"
+    edit_reconnect_body: Reconnect to apply the changes to the live session.
+    edit_reconnect_now: Reconnect now
+    edit_reconnect_later: Later
+    connection_already_pending: Connection already pending
+    operation_started_elsewhere: Operation started by another thread
+    background_task_limit: Too many background tasks running, please wait
+    connection_cancelled_by_hook: Connection cancelled by hook
+    connection_cancelled_by_post_connect_hook: Connection cancelled by post-connect hook
+    disconnect_cancelled_by_hook: Disconnect cancelled by hook
+    disconnected_hook_cancelled: Disconnected, but post-disconnect hook was cancelled
+    disconnected_hook_error: "Disconnected from %{name}, but %{error}"
+    profile_not_found: Profile not found
+    schema_drop_cancelled: Schema drop cancelled
+    drop_failed: "Failed to drop: %{error}"
+    reveal_failed: "Failed to reveal in file manager: %{error}"
+    schema_snapshot_failed: "Failed to capture schema snapshot: %{error}"
+    load_failed:
+      table: "Failed to load %{name} schema: %{error}"
+      collection: "Failed to load event streams for %{name}: %{error}"
+      data_types: "Failed to load data types: %{error}"
+      indexes: "Failed to load indexes: %{error}"
+      foreign_keys: "Failed to load foreign keys: %{error}"
+      routines: "Failed to load routines: %{error}"
+    list_buckets_failed: "Failed to list buckets: %{error}"
+    code_generation_failed: "Code generation failed: %{error}"
+    loading_event_streams: Loading event streams...
+    load_schema_failed: "Failed to load schema: %{error}"
+    connect_database_failed: "Failed to connect to database: %{error}"
+    refresh_database_failed: "Failed to refresh database: %{error}"
+    database_refresh_pending: Database refresh already pending
+    prepare_schema_object_refresh_failed: Failed to prepare schema object refresh
+    refresh_schema_object_failed: "Failed to refresh schema object: %{error}"
+    connected:
+      plain: "Connected to %{name}"
+      one: "Connected to %{name} (with 1 hook warning)"
+      many: "Connected to %{name} (with %{count} hook warnings)"
+    disconnected:
+      plain: "Disconnected from %{name}"
+      one: "Disconnected from %{name} (with 1 hook warning)"
+      many: "Disconnected from %{name} (with %{count} hook warnings)"
+    external_driver_unavailable:
+      config: "External driver '%{driver_id}' is unavailable because service '%{socket_id}' has an invalid configuration: %{summary}"
+      launch: "External driver '%{driver_id}' is unavailable because service '%{socket_id}' did not start: %{summary}"
+      probe: "External driver '%{driver_id}' is unavailable because service '%{socket_id}' failed during driver probe: %{summary}"
+  tree:
+    container:
+      relational: Tables (%{count})
+      document: Collections (%{count})
+      key_value: Keys (%{count})
+      graph: Nodes (%{count})
+      time_series: Measurements (%{count})
+      wide_column: Tables (%{count})
+      log_stream: Log Groups (%{count})
+      object_storage: Buckets (%{count})
+    folder:
+      databases: Databases
+      new_default: New Folder
+      fields: "Fields (%{count})"
+      indexes: "Indexes (%{count})"
+      indexes_plain: Indexes
+      foreign_keys: "Foreign Keys (%{count})"
+      foreign_keys_plain: Foreign Keys
+      routines: "Routines (%{count})"
+      routines_plain: Routines
+      columns: "Columns (%{count})"
+      constraints: "Constraints (%{count})"
+      data_types: "Data Types (%{count})"
+      data_types_plain: Data Types
+      views: "Views (%{count})"
+      storage: "Storage (%{count})"
+      dashboards: Dashboards
+      saved_charts: Saved Charts
+      instance_metrics: Instance Metrics
+      instance_inspectors: Instance Inspectors
+      metrics: Metrics
+    node:
+      instance_overview: Instance Overview
+      untitled_chart: Untitled chart
+    status:
+      loading: Loading…
+      profile_connecting: "Connecting to %{name}…"
+      database_loading: "%{name} (loading…)"
+      error_retry: "Error: %{error} — click to retry"
+      remote_listing_count: "%{label} (%{count})"
+      remote_dashboards_error_retry: "Error: %{error} — collapse and expand to retry"
+      used_by_objects:
+        one: Used by 1 object
+        many: "Used by %{count} objects"
+      dependent_kind:
+        view: View
+        materialized_view: Materialized View
+        foreign_key_child: FK Child
+        trigger: Trigger
+    empty:
+      buckets: No buckets
+      dashboards: No dashboards yet — right-click to create
+      dashboards_with_import: No dashboards yet — right-click to create or import
+      saved_charts: No saved charts yet — save a chart from a query result
+      metrics: No metrics available
+      inspectors: No inspectors available
+      remote_dashboards: No dashboards in this account/region
+sql_preview:
+  title:
+    sql: SQL Preview
+    query: Query Preview
+  options:
+    label: Options
+    fully_qualified: Fully qualified names
+    compact: Compact SQL
+  action:
+    refresh: Refresh
+    copy: Copy
+    close: Close
+ssh:
+  agent_default: SSH Agent / default
+  authentication: Authentication
+  private_key: Private Key
+  password: Password
+  private_key_path: Private Key Path
+  browse: Browse
+  key_passphrase: Key Passphrase
+  save: Save
+  passphrase_hint: Leave empty if key has no passphrase
+  ssh_password: SSH Password
+  ssh_server: SSH Server
+  host: Host
+  port: Port
+  username: Username
+  private_key_short: Private key
+  update: Update
+  create: Create
+  test: Test
+  private_key_with_path: "Private Key (%{path})"
+  private_key_hint: "Leave empty to use SSH agent or default keys (~/.ssh/id_rsa)"
+  auth_label: Auth
+sso_wizard:
+  title: AWS SSO Wizard
+  step:
+    start: "Step 1: Start URL"
+    account: "Step 2: Account"
+    role: "Step 3: Role"
+    confirm: "Step 4: Confirm"
+  account:
+    hint: Use account ID from AWS SSO account discovery
+    discovering: Discovering accounts...
+    discover_button: Login + Discover Accounts
+    no_matches: No matching accounts for current filter
+  role:
+    hint: Use role name from AWS SSO role listing
+    discovering: Discovering roles...
+    discover_button: Discover Roles for Selected Account
+    no_matches: No matching roles for current filter
+  confirm:
+    profile: "Profile: %{value}"
+    start_url: "Start URL: %{value}"
+    region: "Region: %{value}"
+    account: "Account: %{value}"
+    role: "Role: %{value}"
+  back: Back
+  next: Next
+  save: Save
+  status:
+    missing_required: Profile name, start URL, and region are required
+    fill_before_account_discovery: Fill profile name, start URL, and region before discovery
+    discovering_accounts: Logging in and fetching SSO accounts...
+    accounts_discovered: SSO account discovery completed
+    accounts_failed: "Failed to discover accounts: %{error}"
+    fill_before_role_discovery: Fill profile/region/start URL and select an account first
+    discovering_roles: Fetching SSO roles...
+    roles_discovered: SSO role discovery completed
+    roles_failed: "Failed to discover roles: %{error}"
+    profile_created: Created AWS SSO auth profile
+status_bar:
+  disconnected: disconnected
+  read_only:
+    profile:
+      label: Read-only (profile)
+      tooltip: This connection's profile is configured as read-only.
+    server:
+      label: Read-only (server)
+      tooltip: The server rejected mutations for this connection.
+  tasks_label: Tasks
+  tasks_running:
+    one: "1 running"
+    many: "%{count} running"
+tasks_panel:
+  empty: No background tasks
+  output_truncated: ... output truncated in panel
+toast:
+  action:
+    copy: Copy
+    show_details: Show details
+    hide_details: Hide details
+workspace:
+  background_tasks: Background Tasks
+  empty_documents: No documents open
+  hint:
+    new_query: new query
+    command_palette: command palette
+    open: open script from disk
+    new_connection: new connection
+  mcp_approvals: MCP Approvals
+  event_streams: Event Streams
+  action:
+    delete: Delete
+    drop: Drop
+    delete_folder: Delete folder
+    delete_connection: Delete connection
+    cancel: Cancel
+  confirm:
+    delete_selected: "Delete %{count} selected items?"
+    drop_object: 'Drop %{object_type} "%{name}"?'
+    delete_folder: 'Delete folder "%{name}"?'
+    delete_connection: 'Delete connection "%{name}"?'
+  default_object_type: Object

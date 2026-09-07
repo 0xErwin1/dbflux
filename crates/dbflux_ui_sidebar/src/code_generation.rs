@@ -187,6 +187,7 @@ impl Sidebar {
             sample_fields: None,
             presentation: dbflux_core::CollectionPresentation::DataGrid,
             child_items: None,
+            storage_hints: None,
         };
 
         if let Some(gen_type) = SqlGenerationType::from_generator_id(generator_id) {
@@ -203,7 +204,7 @@ impl Sidebar {
             Err(e) => {
                 log::error!("Code generation for view failed: {}", e);
                 self.pending_toast = Some(PendingToast {
-                    message: format!("Code generation failed: {}", e),
+                    message: crate::labels::code_generation_failed_label(&e.to_string()),
                     is_error: true,
                 });
                 cx.notify();
@@ -289,7 +290,7 @@ impl Sidebar {
                 Err(e) => {
                     log::error!("Code generation failed: {}", e);
                     self.pending_toast = Some(PendingToast {
-                        message: format!("Code generation failed: {}", e),
+                        message: crate::labels::code_generation_failed_label(&e.to_string()),
                         is_error: true,
                     });
                     cx.notify();

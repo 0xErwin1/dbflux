@@ -174,10 +174,39 @@ impl Render for CellEditorModal {
             .key_context(ContextId::SqlPreviewModal.as_gpui_context())
             .close_icon(IconSource::Svg(AppIcon::X.path().into()))
             .header_leading(Icon::new(AppIcon::Pencil).size(Heights::ICON_SM).primary())
-            .title(if is_json { "Edit JSON" } else { "Edit Text" })
+            .title(if is_json {
+                dbflux_i18n::t!("modals.cell_editor.title_json")
+            } else {
+                dbflux_i18n::t!("modals.cell_editor.title_text")
+            })
             .width(px(900.0))
             .height(px(600.0))
             .child(editor.render(cx))
             .render(cx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn cell_editor_keys_resolve_in_both_locales() {
+        let keys = [
+            "modals.cell_editor.title_json",
+            "modals.cell_editor.title_text",
+        ];
+
+        for key in keys {
+            let en = dbflux_i18n::t!(key, locale = "en");
+            let es = dbflux_i18n::t!(key, locale = "es");
+            assert!(!en.is_empty() && en != key, "en missing for {key}");
+            assert!(!es.is_empty() && es != key, "es missing for {key}");
+        }
+    }
+
+    #[test]
+    fn cell_editor_title_json_diverges_between_locales() {
+        let en = dbflux_i18n::t!("modals.cell_editor.title_json", locale = "en");
+        let es = dbflux_i18n::t!("modals.cell_editor.title_json", locale = "es");
+        assert_ne!(en, es);
     }
 }

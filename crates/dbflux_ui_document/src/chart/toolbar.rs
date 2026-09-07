@@ -15,6 +15,7 @@
 //! assembled separately in each caller.
 
 use super::shell::{ChartRailTab, ChartShell};
+use crate::labels::configure_chart_kind_label;
 use dbflux_components::chart::{ChartKind, format_resolution, format_x_value};
 use dbflux_components::composites::refresh_split_button;
 use dbflux_components::controls::Dropdown;
@@ -156,7 +157,7 @@ pub fn render_chart_toolbar(
     );
 
     // --- Toolbar action button helper ---
-    let toolbar_btn = |id: &'static str, icon: AppIcon, label: &'static str, is_active: bool| {
+    let toolbar_btn = |id: &'static str, icon: AppIcon, label: SharedString, is_active: bool| {
         let primary = theme.primary;
         let primary_fg = theme.primary_foreground;
 
@@ -184,13 +185,19 @@ pub fn render_chart_toolbar(
 
     // --- Chart kind chips (Line | Bar) ---
     let on_select_kind = handlers.on_select_chart_kind.clone();
-    let kind_options: [(ChartKind, &'static str); 6] = [
-        (ChartKind::Line, "Line"),
-        (ChartKind::Bar, "Bar"),
-        (ChartKind::Scatter, "Scatter"),
-        (ChartKind::Area, "Area"),
-        (ChartKind::StackedBar, "Stacked"),
-        (ChartKind::Pie, "Pie"),
+    let kind_options: [(ChartKind, String); 6] = [
+        (ChartKind::Line, configure_chart_kind_label(ChartKind::Line)),
+        (ChartKind::Bar, configure_chart_kind_label(ChartKind::Bar)),
+        (
+            ChartKind::Scatter,
+            configure_chart_kind_label(ChartKind::Scatter),
+        ),
+        (ChartKind::Area, configure_chart_kind_label(ChartKind::Area)),
+        (
+            ChartKind::StackedBar,
+            configure_chart_kind_label(ChartKind::StackedBar),
+        ),
+        (ChartKind::Pie, configure_chart_kind_label(ChartKind::Pie)),
     ];
     let num_kinds = kind_options.len();
 
@@ -210,8 +217,10 @@ pub fn render_chart_toolbar(
                     let is_last = i == num_kinds - 1;
                     let handler = on_select_kind.clone();
 
+                    // The element ID is keyed by position, not by the (translated)
+                    // label text, so it stays stable regardless of active locale.
                     let mut chip = div()
-                        .id(ElementId::Name(format!("chart-kind-{label}").into()))
+                        .id(ElementId::Name(format!("chart-kind-{i}").into()))
                         .px(px(8.0))
                         .py(px(3.0))
                         .text_size(px(11.0))
@@ -249,24 +258,28 @@ pub fn render_chart_toolbar(
     let stats_btn = toolbar_btn(
         "chart-toolbar-stats",
         AppIcon::ChartBar,
-        "Stats",
+        dbflux_i18n::t!("document.chart.toolbar.stats").into(),
         is_stats_active,
     )
     .on_mouse_down(MouseButton::Left, move |_, window, cx| {
         on_stats(window, cx);
     });
 
-    let png_btn = toolbar_btn("chart-toolbar-png", AppIcon::Download, "PNG", false).on_mouse_down(
-        MouseButton::Left,
-        move |_, window, cx| {
-            on_png(window, cx);
-        },
-    );
-
-    let save_btn = toolbar_btn("chart-toolbar-save", AppIcon::Save, "Save chart", false)
+    // "PNG" is a file-format acronym, not translated prose.
+    let png_btn = toolbar_btn("chart-toolbar-png", AppIcon::Download, "PNG".into(), false)
         .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-            on_save(window, cx);
+            on_png(window, cx);
         });
+
+    let save_btn = toolbar_btn(
+        "chart-toolbar-save",
+        AppIcon::Save,
+        dbflux_i18n::t!("document.chart.toolbar.save_chart").into(),
+        false,
+    )
+    .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+        on_save(window, cx);
+    });
 
     // Responsive layout: a single `flex_wrap` row that wraps onto multiple
     // lines when the viewport gets narrower. Per the project pattern
@@ -315,7 +328,9 @@ pub fn render_chart_toolbar(
                 .text_size(px(11.0))
                 .text_color(muted)
                 .font(font("JetBrains Mono"))
-                .child(SharedString::from(format!("{row_count} pts")))
+                .child(SharedString::from(
+                    crate::labels::chart_toolbar_points_label(row_count),
+                ))
                 .child("\u{00b7}")
                 .child(resolution_label),
         )
@@ -331,7 +346,7 @@ pub fn render_chart_toolbar(
                         .text_size(px(10.0))
                         .text_color(muted)
                         .font_weight(FontWeight::BOLD)
-                        .child("TYPE"),
+                        .child(dbflux_i18n::t!("document.chart.toolbar.type_label")),
                 )
                 .child(kind_chips),
         )
@@ -383,5 +398,30 @@ mod tests {
             !source_supports_save,
             "save button must be gated by source_supports_save"
         );
+    }
+
+    /// PR 24: the toolbar's chart-kind chip labels route through the same
+    /// translated `configure_chart_kind_label` helper the dashboard's
+    /// Configure popover uses (PR 23), instead of a duplicate literal set.
+    #[test]
+    fn kind_chip_labels_route_through_configure_chart_kind_label() {
+        use dbflux_components::chart::ChartKind;
+
+        let kinds = [
+            ChartKind::Line,
+            ChartKind::Bar,
+            ChartKind::Scatter,
+            ChartKind::Area,
+            ChartKind::StackedBar,
+            ChartKind::Pie,
+        ];
+
+        for kind in kinds {
+            let label = crate::labels::configure_chart_kind_label(kind);
+            assert!(
+                !label.is_empty(),
+                "configure_chart_kind_label({kind:?}) resolved empty"
+            );
+        }
     }
 }

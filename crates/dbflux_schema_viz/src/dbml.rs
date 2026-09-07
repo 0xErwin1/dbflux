@@ -270,6 +270,7 @@ mod tests {
             foreign_keys: if fks.is_empty() { None } else { Some(fks) },
             constraints: None,
             sample_fields: None,
+            storage_hints: None,
             presentation: dbflux_core::CollectionPresentation::default(),
             child_items: None,
         }
@@ -585,6 +586,7 @@ mod tests {
             foreign_keys: None,
             constraints: None,
             sample_fields: None,
+            storage_hints: None,
             presentation: dbflux_core::CollectionPresentation::default(),
             child_items: None,
         };

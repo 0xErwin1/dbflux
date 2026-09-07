@@ -199,7 +199,9 @@ impl ConnectionManagerWindow {
                                             cx.notify();
                                         })),
                                 )
-                                .child(Body::new("Save")),
+                                .child(Body::new(dbflux_i18n::t!(
+                                    "connection_manager.action.save"
+                                ))),
                         )
                     }),
             )
@@ -263,9 +265,9 @@ impl ConnectionManagerWindow {
             .filter(|s| !s.is_empty());
         let is_editing = self.editing_profile_id.is_some();
         let title = if is_editing {
-            format!("Edit {} Connection", driver_name)
+            crate::labels::connection_manager_window_title_edit(&driver_name)
         } else {
-            format!("New {} Connection", driver_name)
+            crate::labels::connection_manager_window_title_new(&driver_name)
         };
 
         let show_focus = self.edit_state == EditState::Navigating;
@@ -310,11 +312,10 @@ impl ConnectionManagerWindow {
                         )
                     })
                     .child({
-                        let brand_icon = self
-                            .form
-                            .selected_driver
-                            .as_ref()
-                            .map(|driver| AppIcon::from_icon(driver.metadata().icon));
+                        let brand_icon = self.form.selected_driver.as_ref().map(|driver| {
+                            let metadata = driver.metadata();
+                            AppIcon::for_driver(metadata.icon, metadata.category)
+                        });
 
                         div()
                             .flex()
@@ -331,7 +332,7 @@ impl ConnectionManagerWindow {
                     })
                     .child(div().flex_1())
                     .child(self.form_field_input_inline(
-                        "Name",
+                        &dbflux_i18n::t!("connection_manager.field.name"),
                         &self.form.input_name,
                         show_focus && focus == FormFocus::Name,
                         ring_color,
@@ -355,8 +356,11 @@ impl ConnectionManagerWindow {
                     .when(!validation_errors.is_empty(), |d| {
                         let combined = validation_errors.join("\n");
                         d.child(
-                            BannerBlock::new(BannerVariant::Danger, "Please correct the following")
-                                .with_body(combined),
+                            BannerBlock::new(
+                                BannerVariant::Danger,
+                                dbflux_i18n::t!("connection_manager.banner.correct_following"),
+                            )
+                            .with_body(combined),
                         )
                     })
                     .children(tab_content),
@@ -372,18 +376,21 @@ impl ConnectionManagerWindow {
                     .when(test_status != TestStatus::None, |d| {
                         let banners = SemBannerColors::for_current(cx);
                         let banner = match test_status {
-                            TestStatus::Testing => {
-                                BannerBlock::new(BannerVariant::Info, "Testing connection\u{2026}")
-                                    .with_icon(
-                                        AppIconElement::new(AppIcon::Loader)
-                                            .size(Heights::ICON_SM)
-                                            .color(banners.info_fg),
-                                    )
-                            }
+                            TestStatus::Testing => BannerBlock::new(
+                                BannerVariant::Info,
+                                dbflux_i18n::t!("connection_manager.banner.testing_connection"),
+                            )
+                            .with_icon(
+                                AppIconElement::new(AppIcon::Loader)
+                                    .size(Heights::ICON_SM)
+                                    .color(banners.info_fg),
+                            ),
                             TestStatus::Success => {
                                 let mut banner = BannerBlock::new(
                                     BannerVariant::Success,
-                                    "Connection successful",
+                                    dbflux_i18n::t!(
+                                        "connection_manager.banner.connection_successful"
+                                    ),
                                 )
                                 .with_icon(
                                     AppIconElement::new(AppIcon::CircleCheck)
@@ -398,7 +405,9 @@ impl ConnectionManagerWindow {
                             TestStatus::SuccessWithWarning => {
                                 let mut banner = BannerBlock::new(
                                     BannerVariant::Warning,
-                                    "Connection successful with warnings",
+                                    dbflux_i18n::t!(
+                                        "connection_manager.banner.connection_successful_warnings"
+                                    ),
                                 )
                                 .with_icon(
                                     AppIconElement::new(AppIcon::Info)
@@ -411,15 +420,37 @@ impl ConnectionManagerWindow {
                                 banner
                             }
                             TestStatus::Failed => {
-                                let message =
-                                    test_error.unwrap_or_else(|| "Connection failed".to_string());
-                                BannerBlock::new(BannerVariant::Danger, "Connection failed")
-                                    .with_body(message)
-                                    .with_icon(
-                                        AppIconElement::new(AppIcon::Info)
-                                            .size(Heights::ICON_SM)
-                                            .color(banners.error_fg),
+                                let message = test_error.unwrap_or_else(|| {
+                                    dbflux_i18n::t!("connection_manager.banner.connection_failed")
+                                });
+                                let message_to_copy = message.clone();
+                                BannerBlock::new(
+                                    BannerVariant::Danger,
+                                    dbflux_i18n::t!("connection_manager.banner.connection_failed"),
+                                )
+                                .with_body(message)
+                                .with_icon(
+                                    AppIconElement::new(AppIcon::Info)
+                                        .size(Heights::ICON_SM)
+                                        .color(banners.error_fg),
+                                )
+                                .with_actions(
+                                    Button::new(
+                                        "copy-test-connection-error",
+                                        dbflux_i18n::t!("connection_manager.action.copy"),
                                     )
+                                    .ghost()
+                                    .small()
+                                    .text_color(gpui::white())
+                                    .icon(Icon::new(AppIcon::Copy))
+                                    .on_click(
+                                        move |_, _, cx| {
+                                            cx.write_to_clipboard(ClipboardItem::new_string(
+                                                message_to_copy.clone(),
+                                            ));
+                                        },
+                                    ),
+                                )
                             }
                             TestStatus::None => unreachable!("guarded by when condition"),
                         };
@@ -433,13 +464,18 @@ impl ConnectionManagerWindow {
                             .gap_2()
                             .when(!is_editing, |d| {
                                 d.child(
-                                    Button::new("footer-back", "Back")
-                                        .ghost()
-                                        .icon(Icon::new(AppIcon::ChevronLeft))
-                                        .small()
-                                        .on_click(cx.listener(|this, _, window, cx| {
+                                    Button::new(
+                                        "footer-back",
+                                        dbflux_i18n::t!("connection_manager.action.back"),
+                                    )
+                                    .ghost()
+                                    .icon(Icon::new(AppIcon::ChevronLeft))
+                                    .small()
+                                    .on_click(cx.listener(
+                                        |this, _, window, cx| {
                                             this.back_to_driver_select(window, cx);
-                                        })),
+                                        },
+                                    )),
                                 )
                             })
                             .child(div().flex_1())
@@ -452,14 +488,21 @@ impl ConnectionManagerWindow {
                                         d.border_color(gpui::transparent_black())
                                     })
                                     .child(
-                                        Button::new("test-connection", "Test Connection")
-                                            .ghost()
-                                            .icon(Icon::new(AppIcon::ExternalLink))
-                                            .small()
-                                            .disabled(test_status == TestStatus::Testing)
-                                            .on_click(cx.listener(|this, _, window, cx| {
+                                        Button::new(
+                                            "test-connection",
+                                            dbflux_i18n::t!(
+                                                "connection_manager.action.test_connection"
+                                            ),
+                                        )
+                                        .ghost()
+                                        .icon(Icon::new(AppIcon::ExternalLink))
+                                        .small()
+                                        .disabled(test_status == TestStatus::Testing)
+                                        .on_click(
+                                            cx.listener(|this, _, window, cx| {
                                                 this.test_connection(window, cx);
-                                            })),
+                                            }),
+                                        ),
                                     ),
                             )
                             .child(
@@ -471,13 +514,18 @@ impl ConnectionManagerWindow {
                                         d.border_color(gpui::transparent_black())
                                     })
                                     .child(
-                                        Button::new("save-connection", "Save")
-                                            .primary()
-                                            .icon(Icon::new(AppIcon::Check))
-                                            .small()
-                                            .on_click(cx.listener(|this, _, window, cx| {
+                                        Button::new(
+                                            "save-connection",
+                                            dbflux_i18n::t!("connection_manager.action.save"),
+                                        )
+                                        .primary()
+                                        .icon(Icon::new(AppIcon::Check))
+                                        .small()
+                                        .on_click(
+                                            cx.listener(|this, _, window, cx| {
                                                 this.save_profile(window, cx);
-                                            })),
+                                            }),
+                                        ),
                                     ),
                             ),
                     ),
@@ -670,12 +718,17 @@ impl ConnectionManagerWindow {
                                 d.border_color(gpui::transparent_black())
                             })
                             .child(
-                                Button::new("browse-file-path", "Browse")
-                                    .small()
-                                    .ghost()
-                                    .on_click(cx.listener(|this, _, window, cx| {
+                                Button::new(
+                                    "browse-file-path",
+                                    dbflux_i18n::t!("connection_manager.action.browse"),
+                                )
+                                .small()
+                                .ghost()
+                                .on_click(cx.listener(
+                                    |this, _, window, cx| {
                                         this.browse_file_path(window, cx);
-                                    })),
+                                    },
+                                )),
                             ),
                     );
 
@@ -787,7 +840,76 @@ impl ConnectionManagerWindow {
                     Self::field_row_cm(field_def.label.clone(), false, control, None::<&str>, cx)
                         .into_any_element()
                 } else {
-                    div().into_any_element()
+                    let field_id = field_def.id.clone();
+                    let field_enabled = self.is_field_enabled(field_def);
+                    let selected_value = self
+                        .form
+                        .select_values
+                        .get(&field_id)
+                        .cloned()
+                        .unwrap_or_else(|| field_def.default_value.clone());
+
+                    let control = div()
+                        .flex()
+                        .gap_2()
+                        .when(!field_enabled, |d| d.opacity(0.5))
+                        .children(options.iter().map(|opt| {
+                            let is_selected = opt.value == selected_value;
+                            let field_id = field_id.clone();
+                            let opt_value = opt.value.clone();
+
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .when(field_enabled, |d| d.cursor_pointer())
+                                .when(field_enabled, |d| {
+                                    d.on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |this, _, window, cx| {
+                                            this.form
+                                                .select_values
+                                                .insert(field_id.clone(), opt_value.clone());
+                                            window.focus(&this.focus_handle, cx);
+                                            cx.notify();
+                                        }),
+                                    )
+                                })
+                                .child(
+                                    div()
+                                        .w(Heights::ICON_SM)
+                                        .h(Heights::ICON_SM)
+                                        .rounded(px(3.0))
+                                        .border_2()
+                                        .border_color(cx.theme().muted_foreground)
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .when(is_selected, |d| {
+                                            d.bg(cx.theme().ring).border_color(cx.theme().ring)
+                                        })
+                                        .when(is_selected, |d| {
+                                            d.child(
+                                                div()
+                                                    .w(Spacing::SM)
+                                                    .h(Spacing::SM)
+                                                    .rounded(px(1.0))
+                                                    .bg(cx.theme().primary_foreground),
+                                            )
+                                        }),
+                                )
+                                .child(div().text_sm().child(opt.label.clone()))
+                                .into_any_element()
+                        }));
+
+                    Self::field_row_cm(
+                        field_def.label.clone(),
+                        field_def.required && field_enabled,
+                        control,
+                        field_def.help.clone(),
+                        cx,
+                    )
+                    .into_any_element()
                 }
             }
 
@@ -1217,7 +1339,11 @@ impl Render for ConnectionManagerWindow {
             state.set_masked(!show_ssh_password, window, cx);
         });
 
-        let csd_title_bar = platform::render_csd_title_bar(window, cx, "Connection Manager");
+        let csd_title_bar = platform::render_csd_title_bar(
+            window,
+            cx,
+            &dbflux_i18n::t!("connection_manager.window_title"),
+        );
 
         let theme = cx.theme();
 

@@ -1,0 +1,102 @@
+---
+/** Appears once the reader is far enough down that the nav has scrolled away. */
+---
+
+<button class="totop" type="button" data-back-to-top hidden>
+  <svg
+    width="16"
+    height="16"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="1.8"
+    stroke-linecap="square"
+    aria-hidden="true"
+  >
+    <path d="M12 20V5"></path>
+    <path d="M5 12l7-7 7 7"></path>
+  </svg>
+  <span>Top</span>
+</button>
+
+<style>
+  .totop {
+    position: fixed;
+    right: var(--s-6);
+    bottom: var(--s-6);
+    z-index: var(--z-dropdown);
+    display: flex;
+    align-items: center;
+    gap: var(--s-3);
+    min-height: var(--tap-min);
+    padding: var(--s-3) var(--s-5);
+    background: var(--raised);
+    border: var(--bw) solid var(--border-interactive);
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: var(--fs-small);
+    box-shadow: var(--shadow-md);
+    cursor: pointer;
+    transition:
+      opacity var(--t-quick) var(--ease-std),
+      transform var(--t-quick) var(--ease-out),
+      border-color var(--t-instant) linear,
+      color var(--t-instant) linear;
+  }
+
+  .totop[hidden] {
+    display: none;
+  }
+
+  .totop[data-entering] {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+
+  .totop:hover {
+    border-color: var(--accent);
+    color: var(--text-strong);
+  }
+
+  @media (max-width: 640px) {
+    .totop span {
+      display: none;
+    }
+
+    .totop {
+      padding: var(--s-3);
+      min-width: var(--tap-min);
+      justify-content: center;
+    }
+  }
+</style>
+
+<script>
+  const button = document.querySelector<HTMLButtonElement>('[data-back-to-top]');
+
+  if (button) {
+    const SHOW_AFTER = 600;
+
+    const sync = () => {
+      const show = window.scrollY > SHOW_AFTER;
+
+      if (show === !button.hidden) return;
+
+      if (show) {
+        button.hidden = false;
+        button.setAttribute('data-entering', '');
+        requestAnimationFrame(() => button.removeAttribute('data-entering'));
+      } else {
+        button.hidden = true;
+      }
+    };
+
+    button.addEventListener('click', () => {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      document.querySelector<HTMLElement>('#main')?.focus?.();
+    });
+
+    window.addEventListener('scroll', sync, { passive: true });
+    sync();
+  }
+</script>

@@ -586,6 +586,9 @@ fn str_to_db_kind(value: &str) -> Option<dbflux_core::DbKind> {
         "CloudWatchLogs" => Some(dbflux_core::DbKind::CloudWatchLogs),
         "InfluxDB" => Some(dbflux_core::DbKind::InfluxDB),
         "SqlServer" => Some(dbflux_core::DbKind::SqlServer),
+        "Redshift" => Some(dbflux_core::DbKind::Redshift),
+        "ClickHouse" => Some(dbflux_core::DbKind::ClickHouse),
+        "S3" => Some(dbflux_core::DbKind::S3),
         _ => None,
     }
 }
@@ -602,6 +605,9 @@ fn default_db_config_for_kind(kind: dbflux_core::DbKind) -> dbflux_core::DbConfi
         dbflux_core::DbKind::CloudWatchLogs => dbflux_core::DbConfig::default_cloudwatch_logs(),
         dbflux_core::DbKind::InfluxDB => dbflux_core::DbConfig::default_influxdb(),
         dbflux_core::DbKind::SqlServer => dbflux_core::DbConfig::default_sqlserver(),
+        dbflux_core::DbKind::Redshift => dbflux_core::DbConfig::default_redshift(),
+        dbflux_core::DbKind::ClickHouse => dbflux_core::DbConfig::default_clickhouse(),
+        dbflux_core::DbKind::S3 => dbflux_core::DbConfig::default_s3(),
     }
 }
 
@@ -850,6 +856,22 @@ fn build_driver_registry() -> HashMap<String, Arc<dyn DbDriver>> {
         );
     }
 
+    #[cfg(feature = "redshift")]
+    {
+        registry.insert(
+            "redshift".to_string(),
+            Arc::new(dbflux_driver_redshift::RedshiftDriver::new()),
+        );
+    }
+
+    #[cfg(feature = "clickhouse")]
+    {
+        registry.insert(
+            "clickhouse".to_string(),
+            Arc::new(dbflux_driver_clickhouse::ClickHouseDriver::new()),
+        );
+    }
+
     registry
 }
 
@@ -974,6 +996,21 @@ mod tests {
     use dbflux_test_support::{
         FakeAuthProviderRpcConfig, FakeAuthProviderRpcServer, FakeAuthRpcResult,
     };
+
+    #[test]
+    #[cfg(feature = "clickhouse")]
+    fn clickhouse_is_available_to_mcp_when_feature_enabled() {
+        assert_eq!(
+            str_to_db_kind("ClickHouse"),
+            Some(dbflux_core::DbKind::ClickHouse)
+        );
+
+        let registry = build_driver_registry();
+        let driver = registry
+            .get("clickhouse")
+            .expect("clickhouse driver must be registered");
+        assert_eq!(driver.driver_key(), "builtin:clickhouse");
+    }
 
     fn temp_runtime() -> (tempfile::TempDir, StorageRuntime) {
         let temp_dir = tempfile::tempdir().expect("tempdir");

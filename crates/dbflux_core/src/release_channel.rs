@@ -67,9 +67,58 @@ impl ReleaseChannel {
     }
 }
 
+/// Client identity string reported to database servers on connect
+/// (PostgreSQL `application_name`, MySQL `program_name`, SQL Server
+/// `Application Name`, MongoDB `appName`, Redis `CLIENT SETNAME`).
+///
+/// The version is the shared workspace version, which CI stamps before
+/// building, so every driver reports the app's version rather than the
+/// version of the crate that happens to compile the call.
+pub fn client_identity() -> &'static str {
+    concat!("dbflux/", env!("CARGO_PKG_VERSION"))
+}
+
+/// Client identity in the charset the AWS SDK's `AppName` accepts.
+///
+/// `AppName` allows only ASCII alphanumerics and `!#$%&'*+-.^_`|~`
+/// (`aws-types::app_name::AppName::new`); every character `client_identity()`
+/// produces already falls in that set except the `/` separator, so replacing
+/// it with `-` is the only transform needed. Returned as an owned `String`
+/// because `AppName::new` takes `Cow<'static, str>` and this is computed at
+/// call time rather than baked in via `concat!`.
+pub fn client_identity_token() -> String {
+    client_identity().replace('/', "-")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn client_identity_carries_app_prefix_and_version() {
+        let identity = client_identity();
+        assert!(identity.starts_with("dbflux/"));
+        assert_eq!(&identity["dbflux/".len()..], env!("CARGO_PKG_VERSION"));
+    }
+
+    #[test]
+    fn client_identity_token_matches_app_name_charset() {
+        fn is_app_name_char(c: char) -> bool {
+            c.is_ascii_alphanumeric() || "!#$%&'*+-.^_`|~".contains(c)
+        }
+
+        let token = client_identity_token();
+        assert!(!token.is_empty());
+        assert!(token.chars().all(is_app_name_char));
+    }
+
+    #[test]
+    fn client_identity_token_replaces_slash_with_dash() {
+        assert_eq!(
+            client_identity_token(),
+            format!("dbflux-{}", env!("CARGO_PKG_VERSION"))
+        );
+    }
 
     #[test]
     fn classifies_versions() {

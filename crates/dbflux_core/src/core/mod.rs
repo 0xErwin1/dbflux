@@ -17,9 +17,12 @@ pub use task::{
     CancelToken, TaskId, TaskKind, TaskManager, TaskSlot, TaskSnapshot, TaskStatus, TaskTarget,
 };
 pub use traits::{
-    CodeGenScope, CodeGeneratorInfo, Connection, ConnectionExt, ConnectionOverrides, DbDriver,
-    DocumentConnection, EventStreamTarget, KeyValueApi, KeyValueConnection, NoopCancelHandle,
-    QueryCancelHandle, RelationalConnection, SchemaDropTarget, SchemaFeatures,
-    SchemaLoadingStrategy, SchemaObjectKind, SourceContextSpec, SourceQueryMode,
+    BucketCreateOptions, BucketCreateOutcome, BucketDetails, BucketEncryption, BucketInfo,
+    BucketSizeEstimate, CodeGenScope, CodeGeneratorInfo, Connection, ConnectionExt,
+    ConnectionOverrides, DbDriver, DeletePrefixOutcome, DocumentConnection, EventStreamTarget,
+    KeyValueApi, KeyValueConnection, NoopCancelHandle, ObjectListingPage, ObjectMetadata,
+    ObjectStoreConnection, ObjectSummary, ObjectVersionSummary, PresignMethod, QueryCancelHandle,
+    RelationalConnection, SchemaDropTarget, SchemaFeatures, SchemaLoadingStrategy,
+    SchemaObjectKind, SourceContextSpec, SourceQueryMode, VersioningStatus,
 };
 pub use value::Value;

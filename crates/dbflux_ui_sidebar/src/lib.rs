@@ -3,6 +3,7 @@ mod context_menu;
 mod deletion;
 mod drag_drop;
 mod expansion;
+mod labels;
 pub mod operations;
 mod render;
 mod render_footer;
@@ -66,6 +67,18 @@ pub enum SidebarEvent {
     OpenKeyValueDatabase {
         profile_id: Uuid,
         database: String,
+    },
+    /// Connection root activated (double-click/Enter) for an object-storage
+    /// driver — opens the searchable buckets table for the connection.
+    OpenObjectStoreBuckets {
+        profile_id: Uuid,
+    },
+    /// A bucket row was activated (double-click/Enter) under an object-storage
+    /// connection. The workspace focuses the connection's buckets table on that
+    /// bucket until the object browser document exists.
+    OpenObjectStoreBucket {
+        profile_id: Uuid,
+        bucket: String,
     },
     /// Request to show SQL preview modal
     RequestSqlPreview {
@@ -957,6 +970,12 @@ pub struct Sidebar {
     /// A single fetch populates both `instance_metrics_cache` and
     /// `instance_inspectors_cache` because the catalog returns both in one round-trip.
     pending_instance_catalog_fetches: HashMap<Uuid, Task<()>>,
+    /// Session-scoped cache of the buckets listed for an object-storage
+    /// connection, keyed by profile_id. Populated on first expansion of the
+    /// connection node; buckets are listed flat, with no prefix recursion.
+    bucket_cache: HashMap<Uuid, Vec<dbflux_core::BucketInfo>>,
+    /// In-flight `list_buckets` fetches, keyed by profile_id.
+    pending_bucket_fetches: HashMap<Uuid, Task<()>>,
 }
 
 use dbflux_ui_base::toast::PendingToast;
@@ -1003,14 +1022,18 @@ impl Sidebar {
         let visible_entry_count = Self::count_visible_entries(&items);
         let gutter_metadata = compute_gutter_map(&items);
         let tree_state = cx.new(|cx| TreeState::new(cx).items(items));
-        let connections_search_input = cx
-            .new(|cx| InputState::new(window, cx).placeholder("Filter connections and schema..."));
+        let connections_search_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(dbflux_i18n::t!("sidebar.filter.connections_placeholder"))
+        });
 
         let scripts_items = Self::build_initial_scripts_tree(app_state.read(cx));
         let scripts_gutter_metadata = compute_gutter_map(&scripts_items);
         let scripts_tree_state = cx.new(|cx| TreeState::new(cx).items(scripts_items));
-        let scripts_search_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Filter scripts..."));
+        let scripts_search_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(dbflux_i18n::t!("sidebar.filter.scripts_placeholder"))
+        });
 
         let rename_input = cx.new(|cx| InputState::new(window, cx));
 
@@ -1179,6 +1202,8 @@ impl Sidebar {
             instance_metrics_cache: HashMap::new(),
             instance_inspectors_cache: HashMap::new(),
             pending_instance_catalog_fetches: HashMap::new(),
+            bucket_cache: HashMap::new(),
+            pending_bucket_fetches: HashMap::new(),
         }
     }
 
@@ -1276,23 +1301,28 @@ impl Sidebar {
             .iter()
             .find(|profile| profile.id == profile_id)
             .map(|profile| profile.name.clone())
-            .unwrap_or_else(|| "connection".to_string());
+            .unwrap_or_else(|| dbflux_i18n::t!("sidebar.status.profile_fallback_name"));
 
         let app_state_for_action = app_state.clone();
-        let reconnect_action =
-            dbflux_ui_base::toast::ToastAction::new("edit-reconnect-now", "Reconnect now")
-                .primary()
-                .on_click(move |cx| {
-                    app_state_for_action.update(cx, |state, cx| {
-                        state.pending_reconnect_request = Some(profile_id);
-                        cx.emit(AppStateChanged);
-                    });
-                });
+        let reconnect_action = dbflux_ui_base::toast::ToastAction::new(
+            "edit-reconnect-now",
+            dbflux_i18n::t!("sidebar.toast.edit_reconnect_now"),
+        )
+        .primary()
+        .on_click(move |cx| {
+            app_state_for_action.update(cx, |state, cx| {
+                state.pending_reconnect_request = Some(profile_id);
+                cx.emit(AppStateChanged);
+            });
+        });
 
-        let later_action = dbflux_ui_base::toast::ToastAction::new("edit-reconnect-later", "Later");
+        let later_action = dbflux_ui_base::toast::ToastAction::new(
+            "edit-reconnect-later",
+            dbflux_i18n::t!("sidebar.toast.edit_reconnect_later"),
+        );
 
-        dbflux_ui_base::toast::Toast::info(format!("'{}' updated", profile_name))
-            .body("Reconnect to apply the changes to the live session.")
+        dbflux_ui_base::toast::Toast::info(labels::profile_updated_label(&profile_name))
+            .body(dbflux_i18n::t!("sidebar.toast.edit_reconnect_body"))
             .meta_right(dbflux_ui_base::toast::now_hms())
             .action(reconnect_action)
             .action(later_action)
@@ -1388,9 +1418,21 @@ impl Sidebar {
                         cx.emit(AppStateChanged);
                         cx.notify();
                     });
+
+                    if self.profile_category(profile_id, cx)
+                        == Some(DatabaseCategory::ObjectStorage)
+                    {
+                        cx.emit(SidebarEvent::OpenObjectStoreBuckets { profile_id });
+                    }
                 } else {
                     self.connect_to_profile(profile_id, cx);
                 }
+            }
+            SchemaNodeId::Bucket { profile_id, name } => {
+                cx.emit(SidebarEvent::OpenObjectStoreBucket {
+                    profile_id,
+                    bucket: name,
+                });
             }
             SchemaNodeId::ScriptFile { path } => {
                 cx.emit(SidebarEvent::OpenScript {
@@ -1566,7 +1608,13 @@ impl Sidebar {
                     if self.profile_category(profile_id, cx) == Some(DatabaseCategory::KeyValue)
             );
 
-            if is_key_value_db {
+            let is_object_storage_root = matches!(
+                parse_node_id(item_id),
+                Some(SchemaNodeId::Profile { profile_id })
+                    if self.profile_category(profile_id, cx) == Some(DatabaseCategory::ObjectStorage)
+            );
+
+            if is_key_value_db || is_object_storage_root {
                 self.toggle_item_expansion(item_id, cx);
                 self.execute_item(item_id, cx);
             } else if node_kind.is_expandable_folder() {
@@ -2021,9 +2069,14 @@ mod tests {
         };
 
         let message = format_connect_prepare_error(&error, Some(&diagnostic));
+        let expected_prefix = crate::labels::external_driver_unavailable_label(
+            &ExternalDriverStage::Probe,
+            "rpc:missing.sock",
+            "missing.sock",
+            "Probe failed",
+        );
 
-        assert!(message.contains("rpc:missing.sock"));
-        assert!(message.contains("Probe failed"));
+        assert!(message.starts_with(&expected_prefix));
         assert!(message.contains("host exited before ready"));
     }
 
@@ -2052,15 +2105,19 @@ mod tests {
         };
 
         let toast = connect_prepare_error_toast(&error, Some(&diagnostic));
+        let expected_prefix = crate::labels::external_driver_unavailable_label(
+            &ExternalDriverStage::Launch,
+            "rpc:missing.sock",
+            "missing.sock",
+            "Driver host exited before socket was ready",
+        );
 
         assert!(toast.is_error);
-        assert!(toast.message.contains("rpc:missing.sock"));
-        assert!(toast.message.contains("missing.sock"));
-        assert!(toast.message.contains("did not start"));
+        assert!(toast.message.starts_with(&expected_prefix));
         assert!(
             toast
                 .message
-                .contains("Driver host exited before socket was ready")
+                .contains("stdout:\nbooting\n\nstderr:\nmissing binary")
         );
     }
 
@@ -2377,6 +2434,10 @@ mod tests {
 
     /// Parse a `build_context_menu_items` result for a given item_id using the
     /// node_kind derived from the ID, returning the labels of selectable items.
+    ///
+    /// Labels are sourced from the translation catalog (default "en" locale)
+    /// rather than hardcoded, so this stays in sync with the real menu arms
+    /// without duplicating their English strings.
     fn menu_labels_for(item_id: &str) -> Vec<String> {
         let kind = parse_node_kind(item_id);
         // We cannot call an impl Sidebar method without a full GPUI context, but
@@ -2386,38 +2447,24 @@ mod tests {
         //
         // This is the same approach used throughout this test module: verify the
         // domain behaviour (which items are produced) rather than the widget.
-        //
-        // For the node kinds added in Phase N we can enumerate the produced actions
-        // directly because the build arms are self-contained.
         match kind {
-            SchemaNodeKind::DashboardsFolder => vec!["New Dashboard...".to_string()],
-            SchemaNodeKind::SavedChartsFolder => vec!["New Saved Chart...".to_string()],
-            SchemaNodeKind::DashboardItem => vec![
-                "Open".to_string(),
-                "Rename...".to_string(),
-                "Duplicate".to_string(),
-                "Delete...".to_string(),
-            ],
-            SchemaNodeKind::SavedChartItem => vec![
-                "Open".to_string(),
-                "Rename...".to_string(),
-                "Duplicate".to_string(),
-                "Delete...".to_string(),
+            SchemaNodeKind::DashboardsFolder => {
+                vec![dbflux_i18n::t!("sidebar.menu.new_dashboard")]
+            }
+            SchemaNodeKind::SavedChartsFolder => {
+                vec![dbflux_i18n::t!("sidebar.menu.new_saved_chart")]
+            }
+            SchemaNodeKind::DashboardItem | SchemaNodeKind::SavedChartItem => vec![
+                dbflux_i18n::t!("sidebar.menu.open"),
+                dbflux_i18n::t!("sidebar.menu.rename_ellipsis"),
+                dbflux_i18n::t!("sidebar.menu.duplicate"),
+                dbflux_i18n::t!("sidebar.menu.delete_ellipsis"),
             ],
             _ => vec![],
         }
     }
 
     // N.2 — Folder context menus
-
-    #[test]
-    fn context_menu_dashboards_folder_has_new_dashboard_action() {
-        let labels = menu_labels_for(&dashboards_folder_id(test_uuid()));
-        assert!(
-            labels.contains(&"New Dashboard...".to_string()),
-            "Expected 'New Dashboard...' in dashboards folder menu, got: {labels:?}"
-        );
-    }
 
     #[test]
     fn context_menu_dashboards_folder_new_dashboard_action_maps_to_correct_variant() {
@@ -2429,15 +2476,6 @@ mod tests {
         // Verify the ContextMenuAction round-trips correctly (compile-time check).
         let action = ContextMenuAction::NewDashboard;
         assert!(matches!(action, ContextMenuAction::NewDashboard));
-    }
-
-    #[test]
-    fn context_menu_saved_charts_folder_has_new_saved_chart_action() {
-        let labels = menu_labels_for(&saved_charts_folder_id(test_uuid()));
-        assert!(
-            labels.contains(&"New Saved Chart...".to_string()),
-            "Expected 'New Saved Chart...' in saved charts folder menu, got: {labels:?}"
-        );
     }
 
     #[test]
@@ -2456,10 +2494,15 @@ mod tests {
     #[test]
     fn context_menu_dashboard_item_has_open_rename_duplicate_delete() {
         let labels = menu_labels_for(&dashboard_item_id(test_uuid(), test_uuid()));
-        let expected = ["Open", "Rename...", "Duplicate", "Delete..."];
+        let expected = [
+            dbflux_i18n::t!("sidebar.menu.open"),
+            dbflux_i18n::t!("sidebar.menu.rename_ellipsis"),
+            dbflux_i18n::t!("sidebar.menu.duplicate"),
+            dbflux_i18n::t!("sidebar.menu.delete_ellipsis"),
+        ];
         for e in &expected {
             assert!(
-                labels.contains(&e.to_string()),
+                labels.contains(e),
                 "Expected '{e}' in dashboard item menu, got: {labels:?}"
             );
         }
@@ -2468,10 +2511,15 @@ mod tests {
     #[test]
     fn context_menu_saved_chart_item_has_open_rename_duplicate_delete() {
         let labels = menu_labels_for(&saved_chart_item_id(test_uuid(), test_uuid()));
-        let expected = ["Open", "Rename...", "Duplicate", "Delete..."];
+        let expected = [
+            dbflux_i18n::t!("sidebar.menu.open"),
+            dbflux_i18n::t!("sidebar.menu.rename_ellipsis"),
+            dbflux_i18n::t!("sidebar.menu.duplicate"),
+            dbflux_i18n::t!("sidebar.menu.delete_ellipsis"),
+        ];
         for e in &expected {
             assert!(
-                labels.contains(&e.to_string()),
+                labels.contains(e),
                 "Expected '{e}' in saved chart item menu, got: {labels:?}"
             );
         }

@@ -86,13 +86,35 @@ pub enum AddPanelTab {
 pub fn submit_label_for(tab: AddPanelTab, saved_selection_count: usize) -> String {
     match tab {
         AddPanelTab::Saved => match saved_selection_count {
-            0 => "Add panels".to_string(),
-            1 => "Add 1 panel".to_string(),
-            n => format!("Add {n} panels"),
+            0 => dbflux_i18n::t!("modals.add_panel_picker.submit.zero"),
+            1 => dbflux_i18n::t!("modals.add_panel_picker.submit.one"),
+            n => dbflux_i18n::t!("modals.add_panel_picker.submit.many", count = n),
         },
-        AddPanelTab::Query | AddPanelTab::Metric => "Create panel".to_string(),
+        AddPanelTab::Query | AddPanelTab::Metric => {
+            dbflux_i18n::t!("modals.add_panel_picker.submit.create")
+        }
     }
 }
+
+/// Pure helper: catalog key for a chart kind's translated label.
+fn chart_kind_label_key(kind: ChartKind) -> &'static str {
+    match kind {
+        ChartKind::Line => "modals.add_panel_picker.chart_kind.line",
+        ChartKind::Bar => "modals.add_panel_picker.chart_kind.bar",
+        ChartKind::Area => "modals.add_panel_picker.chart_kind.area",
+        ChartKind::Scatter => "modals.add_panel_picker.chart_kind.scatter",
+        _ => "modals.add_panel_picker.chart_kind.line",
+    }
+}
+
+/// Translated label for a chart kind, using the active process-wide locale.
+fn chart_kind_label(kind: ChartKind) -> String {
+    dbflux_i18n::t!(chart_kind_label_key(kind))
+}
+
+/// CloudWatch statistic identifiers. These are API values, not user-facing
+/// prose, so they stay untranslated.
+const METRIC_STATISTICS: [&str; 5] = ["Average", "Sum", "Minimum", "Maximum", "SampleCount"];
 
 /// Pure helper: which tabs are visible given the metric-catalog capability.
 pub fn visible_tabs_for(has_metric_catalog: bool) -> Vec<AddPanelTab> {
@@ -163,22 +185,40 @@ pub struct ModalAddPanelPicker {
 
 impl ModalAddPanelPicker {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("Search charts..."));
-        let query_name_input = cx.new(|cx| InputState::new(window, cx).placeholder("Panel name"));
+        let search_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(dbflux_i18n::t!(
+                "modals.add_panel_picker.saved.search_placeholder"
+            ))
+        });
+        let query_name_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(dbflux_i18n::t!("modals.add_panel_picker.name_placeholder"))
+        });
         let query_input = cx.new(|cx| {
             InputState::new(window, cx)
                 .code_editor("sql")
                 .line_number(true)
                 .soft_wrap(true)
-                .placeholder("Type a query…")
+                .placeholder(dbflux_i18n::t!("modals.add_panel_picker.query.placeholder"))
         });
-        let metric_name_input = cx.new(|cx| InputState::new(window, cx).placeholder("Panel name"));
-        let metric_namespace_filter_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Filter namespaces…"));
-        let metric_metric_filter_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Filter metrics…"));
+        let metric_name_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(dbflux_i18n::t!("modals.add_panel_picker.name_placeholder"))
+        });
+        let metric_namespace_filter_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(dbflux_i18n::t!(
+                "modals.add_panel_picker.metric.namespace_filter_placeholder"
+            ))
+        });
+        let metric_metric_filter_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(dbflux_i18n::t!(
+                "modals.add_panel_picker.metric.metric_filter_placeholder"
+            ))
+        });
         let metric_period_input = cx.new(|cx| {
-            let mut s = InputState::new(window, cx).placeholder("Period (seconds)");
+            let mut s = InputState::new(window, cx).placeholder(dbflux_i18n::t!(
+                "modals.add_panel_picker.metric.period_label"
+            ));
             s.set_value("60", window, cx);
             s
         });
@@ -531,9 +571,9 @@ impl ModalAddPanelPicker {
             .into_iter()
             .map(|tab| {
                 let label = match tab {
-                    AddPanelTab::Saved => "Saved charts",
-                    AddPanelTab::Query => "From query",
-                    AddPanelTab::Metric => "From metric",
+                    AddPanelTab::Saved => dbflux_i18n::t!("modals.add_panel_picker.tab.saved"),
+                    AddPanelTab::Query => dbflux_i18n::t!("modals.add_panel_picker.tab.query"),
+                    AddPanelTab::Metric => dbflux_i18n::t!("modals.add_panel_picker.tab.metric"),
                 };
                 let id = match tab {
                     AddPanelTab::Saved => "add-panel-tab-saved",
@@ -567,11 +607,8 @@ impl ModalAddPanelPicker {
 
     fn render_saved_tab(&self, candidates: &[SavedChart], cx: &mut Context<Self>) -> AnyElement {
         if candidates.is_empty() {
-            return Text::body(
-                "No saved charts on this connection. \
-                 Use \"From query\" or \"From metric\" to create one directly.",
-            )
-            .into_any_element();
+            return Text::body(dbflux_i18n::t!("modals.add_panel_picker.saved.empty"))
+                .into_any_element();
         }
 
         let query = self.search_input.read(cx).value().to_string();
@@ -582,7 +619,12 @@ impl ModalAddPanelPicker {
             .flex()
             .flex_col()
             .gap(Spacing::XS)
-            .child(Text::subsection_label("Search").into_any_element())
+            .child(
+                Text::subsection_label(dbflux_i18n::t!(
+                    "modals.add_panel_picker.saved.search_label"
+                ))
+                .into_any_element(),
+            )
             .child(Input::new(&self.search_input))
             .into_any_element();
 
@@ -612,16 +654,17 @@ impl ModalAddPanelPicker {
 
     fn render_chart_kind_picker(&self, cx: &mut Context<Self>) -> AnyElement {
         let kinds = [
-            (ChartKind::Line, "Line", "add-panel-kind-line"),
-            (ChartKind::Bar, "Bar", "add-panel-kind-bar"),
-            (ChartKind::Area, "Area", "add-panel-kind-area"),
-            (ChartKind::Scatter, "Scatter", "add-panel-kind-scatter"),
+            (ChartKind::Line, "add-panel-kind-line"),
+            (ChartKind::Bar, "add-panel-kind-bar"),
+            (ChartKind::Area, "add-panel-kind-area"),
+            (ChartKind::Scatter, "add-panel-kind-scatter"),
         ];
         let current = self.query_chart_kind;
 
         let buttons: Vec<AnyElement> = kinds
             .into_iter()
-            .map(|(kind, label, id)| {
+            .map(|(kind, id)| {
+                let label = chart_kind_label(kind);
                 let is_active = kind == current;
                 let mut btn =
                     Button::new(id, label).on_click(cx.listener(move |this, _, _, cx| {
@@ -650,7 +693,10 @@ impl ModalAddPanelPicker {
             .flex()
             .flex_col()
             .gap(Spacing::XS)
-            .child(Text::subsection_label("Name").into_any_element())
+            .child(
+                Text::subsection_label(dbflux_i18n::t!("modals.add_panel_picker.name_label"))
+                    .into_any_element(),
+            )
             .child(Input::new(&self.query_name_input))
             .into_any_element();
 
@@ -659,7 +705,10 @@ impl ModalAddPanelPicker {
             .flex()
             .flex_col()
             .gap(Spacing::XS)
-            .child(Text::subsection_label("Query").into_any_element())
+            .child(
+                Text::subsection_label(dbflux_i18n::t!("modals.add_panel_picker.query.label"))
+                    .into_any_element(),
+            )
             .child(
                 div()
                     .border_1()
@@ -678,7 +727,10 @@ impl ModalAddPanelPicker {
             .flex()
             .flex_col()
             .gap(Spacing::XS)
-            .child(Text::subsection_label("Chart kind").into_any_element())
+            .child(
+                Text::subsection_label(dbflux_i18n::t!("modals.add_panel_picker.chart_kind.label"))
+                    .into_any_element(),
+            )
             .child(self.render_chart_kind_picker(cx))
             .into_any_element();
 
@@ -711,7 +763,9 @@ impl ModalAddPanelPicker {
                 .flex()
                 .items_center()
                 .justify_center()
-                .child(Text::caption("Loading namespaces…"))
+                .child(Text::caption(dbflux_i18n::t!(
+                    "modals.add_panel_picker.metric.loading_namespaces"
+                )))
                 .into_any_element();
         }
 
@@ -767,7 +821,10 @@ impl ModalAddPanelPicker {
 
     fn render_metric_list(&self, cx: &mut Context<Self>) -> AnyElement {
         let Some(namespace) = self.metric_namespace_selected.clone() else {
-            return Text::body("Select a namespace to load metrics.").into_any_element();
+            return Text::body(dbflux_i18n::t!(
+                "modals.add_panel_picker.metric.select_namespace_hint"
+            ))
+            .into_any_element();
         };
 
         let theme = cx.theme();
@@ -778,7 +835,10 @@ impl ModalAddPanelPicker {
                 .rounded(Radii::SM)
                 .h(px(260.0))
                 .p(Spacing::SM)
-                .child(Text::body("Loading…").into_any_element())
+                .child(
+                    Text::body(dbflux_i18n::t!("modals.add_panel_picker.metric.loading"))
+                        .into_any_element(),
+                )
                 .into_any_element();
         };
 
@@ -789,7 +849,10 @@ impl ModalAddPanelPicker {
                 .rounded(Radii::SM)
                 .h(px(260.0))
                 .p(Spacing::SM)
-                .child(Text::body("No metrics in this namespace.").into_any_element())
+                .child(
+                    Text::body(dbflux_i18n::t!("modals.add_panel_picker.metric.no_metrics"))
+                        .into_any_element(),
+                )
                 .into_any_element();
         }
 
@@ -827,7 +890,12 @@ impl ModalAddPanelPicker {
                 .rounded(Radii::SM)
                 .h(px(260.0))
                 .p(Spacing::SM)
-                .child(Text::body("No metrics match the filter.").into_any_element())
+                .child(
+                    Text::body(dbflux_i18n::t!(
+                        "modals.add_panel_picker.metric.no_metrics_filtered"
+                    ))
+                    .into_any_element(),
+                )
                 .into_any_element();
         }
 
@@ -887,7 +955,10 @@ impl ModalAddPanelPicker {
             .flex()
             .flex_col()
             .gap(Spacing::XS)
-            .child(Text::subsection_label("Name").into_any_element())
+            .child(
+                Text::subsection_label(dbflux_i18n::t!("modals.add_panel_picker.name_label"))
+                    .into_any_element(),
+            )
             .child(Input::new(&self.metric_name_input))
             .into_any_element();
 
@@ -898,7 +969,12 @@ impl ModalAddPanelPicker {
             .min_w_0()
             .flex_col()
             .gap(Spacing::XS)
-            .child(Text::subsection_label("Namespace").into_any_element())
+            .child(
+                Text::subsection_label(dbflux_i18n::t!(
+                    "modals.add_panel_picker.metric.namespace_label"
+                ))
+                .into_any_element(),
+            )
             .child(Input::new(&self.metric_namespace_filter_input))
             .child(self.render_namespace_list(cx))
             .into_any_element();
@@ -909,7 +985,12 @@ impl ModalAddPanelPicker {
             .min_w_0()
             .flex_col()
             .gap(Spacing::XS)
-            .child(Text::subsection_label("Metric").into_any_element())
+            .child(
+                Text::subsection_label(dbflux_i18n::t!(
+                    "modals.add_panel_picker.metric.metric_label"
+                ))
+                .into_any_element(),
+            )
             .child(Input::new(&self.metric_metric_filter_input))
             .child(self.render_metric_list(cx))
             .into_any_element();
@@ -927,13 +1008,17 @@ impl ModalAddPanelPicker {
             .flex_col()
             .gap(Spacing::XS)
             .w(px(180.0))
-            .child(Text::subsection_label("Period (seconds)").into_any_element())
+            .child(
+                Text::subsection_label(dbflux_i18n::t!(
+                    "modals.add_panel_picker.metric.period_label"
+                ))
+                .into_any_element(),
+            )
             .child(Input::new(&self.metric_period_input))
             .into_any_element();
 
-        let statistics = ["Average", "Sum", "Minimum", "Maximum", "SampleCount"];
         let current_stat = self.metric_statistic.clone();
-        let stat_buttons: Vec<AnyElement> = statistics
+        let stat_buttons: Vec<AnyElement> = METRIC_STATISTICS
             .iter()
             .map(|s| {
                 let s_owned = s.to_string();
@@ -958,7 +1043,12 @@ impl ModalAddPanelPicker {
             .flex_1()
             .flex_col()
             .gap(Spacing::XS)
-            .child(Text::subsection_label("Statistic").into_any_element())
+            .child(
+                Text::subsection_label(dbflux_i18n::t!(
+                    "modals.add_panel_picker.metric.statistic_label"
+                ))
+                .into_any_element(),
+            )
             .child(
                 div()
                     .flex()
@@ -1033,7 +1123,13 @@ impl Render for ModalAddPanelPicker {
             .flex()
             .items_center()
             .gap(Spacing::SM)
-            .child(Button::new("add-panel-cancel", "Cancel").on_click(on_cancel))
+            .child(
+                Button::new(
+                    "add-panel-cancel",
+                    dbflux_i18n::t!("modals.add_panel_picker.cancel"),
+                )
+                .on_click(on_cancel),
+            )
             .child(
                 Button::new("add-panel-confirm", submit_label)
                     .primary()
@@ -1041,9 +1137,13 @@ impl Render for ModalAddPanelPicker {
                     .on_click(on_confirm),
             );
 
-        ModalShell::new("Add panels", body, footer.into_any_element())
-            .width(gpui::px(900.0))
-            .into_any_element()
+        ModalShell::new(
+            dbflux_i18n::t!("modals.add_panel_picker.title"),
+            body,
+            footer.into_any_element(),
+        )
+        .width(gpui::px(900.0))
+        .into_any_element()
     }
 }
 
@@ -1087,17 +1187,18 @@ mod tests {
         let ids_1 = vec![Uuid::new_v4()];
         let ids_3 = vec![Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4()];
 
-        let label = |ids: &[Uuid]| -> String {
-            match ids.len() {
-                0 => "Add panels".to_string(),
-                1 => "Add 1 panel".to_string(),
-                n => format!("Add {n} panels"),
-            }
-        };
-
-        assert_eq!(label(&ids_0), "Add panels");
-        assert_eq!(label(&ids_1), "Add 1 panel");
-        assert_eq!(label(&ids_3), "Add 3 panels");
+        assert_eq!(
+            submit_label_for(AddPanelTab::Saved, ids_0.len()),
+            dbflux_i18n::t!("modals.add_panel_picker.submit.zero")
+        );
+        assert_eq!(
+            submit_label_for(AddPanelTab::Saved, ids_1.len()),
+            dbflux_i18n::t!("modals.add_panel_picker.submit.one")
+        );
+        assert_eq!(
+            submit_label_for(AddPanelTab::Saved, ids_3.len()),
+            dbflux_i18n::t!("modals.add_panel_picker.submit.many", count = ids_3.len())
+        );
     }
 
     #[test]
@@ -1119,12 +1220,17 @@ mod tests {
 
     #[test]
     fn submit_label_per_tab_pure() {
-        assert_eq!(submit_label_for(AddPanelTab::Saved, 0), "Add panels");
-        assert_eq!(submit_label_for(AddPanelTab::Saved, 1), "Add 1 panel");
-        assert_eq!(submit_label_for(AddPanelTab::Saved, 5), "Add 5 panels");
-        assert_eq!(submit_label_for(AddPanelTab::Query, 0), "Create panel");
-        assert_eq!(submit_label_for(AddPanelTab::Query, 99), "Create panel");
-        assert_eq!(submit_label_for(AddPanelTab::Metric, 0), "Create panel");
+        let zero = dbflux_i18n::t!("modals.add_panel_picker.submit.zero");
+        let one = dbflux_i18n::t!("modals.add_panel_picker.submit.one");
+        let many_5 = dbflux_i18n::t!("modals.add_panel_picker.submit.many", count = 5);
+        let create = dbflux_i18n::t!("modals.add_panel_picker.submit.create");
+
+        assert_eq!(submit_label_for(AddPanelTab::Saved, 0), zero);
+        assert_eq!(submit_label_for(AddPanelTab::Saved, 1), one);
+        assert_eq!(submit_label_for(AddPanelTab::Saved, 5), many_5);
+        assert_eq!(submit_label_for(AddPanelTab::Query, 0), create);
+        assert_eq!(submit_label_for(AddPanelTab::Query, 99), create);
+        assert_eq!(submit_label_for(AddPanelTab::Metric, 0), create);
     }
 
     #[test]
@@ -1301,5 +1407,113 @@ mod tests {
         };
         assert_eq!(ev.profile_id, profile_id);
         assert_eq!(ev.namespace, "AWS/EC2");
+    }
+
+    // ----- i18n catalog coverage -----
+
+    const ADD_PANEL_PICKER_KEYS: &[&str] = &[
+        "modals.add_panel_picker.title",
+        "modals.add_panel_picker.submit.zero",
+        "modals.add_panel_picker.submit.one",
+        "modals.add_panel_picker.submit.many",
+        "modals.add_panel_picker.submit.create",
+        "modals.add_panel_picker.saved.empty",
+        "modals.add_panel_picker.saved.search_label",
+        "modals.add_panel_picker.saved.search_placeholder",
+        "modals.add_panel_picker.tab.saved",
+        "modals.add_panel_picker.tab.query",
+        "modals.add_panel_picker.tab.metric",
+        "modals.add_panel_picker.name_placeholder",
+        "modals.add_panel_picker.name_label",
+        "modals.add_panel_picker.query.placeholder",
+        "modals.add_panel_picker.query.label",
+        "modals.add_panel_picker.chart_kind.label",
+        "modals.add_panel_picker.chart_kind.line",
+        "modals.add_panel_picker.chart_kind.bar",
+        "modals.add_panel_picker.chart_kind.area",
+        "modals.add_panel_picker.chart_kind.scatter",
+        "modals.add_panel_picker.metric.namespace_filter_placeholder",
+        "modals.add_panel_picker.metric.metric_filter_placeholder",
+        "modals.add_panel_picker.metric.namespace_label",
+        "modals.add_panel_picker.metric.metric_label",
+        "modals.add_panel_picker.metric.period_label",
+        "modals.add_panel_picker.metric.statistic_label",
+        "modals.add_panel_picker.metric.loading_namespaces",
+        "modals.add_panel_picker.metric.select_namespace_hint",
+        "modals.add_panel_picker.metric.loading",
+        "modals.add_panel_picker.metric.no_metrics",
+        "modals.add_panel_picker.metric.no_metrics_filtered",
+        "modals.add_panel_picker.cancel",
+    ];
+
+    #[test]
+    fn add_panel_picker_catalog_keys_resolve() {
+        for key in ADD_PANEL_PICKER_KEYS {
+            let en = dbflux_i18n::t!(key);
+            assert!(!en.is_empty(), "empty English translation for {key}");
+            assert_ne!(en, *key, "missing English translation for {key}");
+
+            let es = dbflux_i18n::t!(key, locale = "es");
+            assert!(!es.is_empty(), "empty Spanish translation for {key}");
+            assert_ne!(es, *key, "missing Spanish translation for {key}");
+        }
+    }
+
+    #[test]
+    fn chart_kind_labels_resolve() {
+        for kind in [
+            ChartKind::Line,
+            ChartKind::Bar,
+            ChartKind::Area,
+            ChartKind::Scatter,
+        ] {
+            let key = chart_kind_label_key(kind);
+            let en = dbflux_i18n::t!(key);
+            let es = dbflux_i18n::t!(key, locale = "es");
+            assert!(!en.is_empty());
+            assert!(!es.is_empty());
+            assert_ne!(en, es, "{kind:?} label should differ between locales");
+        }
+    }
+
+    #[test]
+    fn add_panel_picker_title_differs_between_locales() {
+        let en = dbflux_i18n::t!("modals.add_panel_picker.title");
+        let es = dbflux_i18n::t!("modals.add_panel_picker.title", locale = "es");
+        assert_ne!(en, es);
+    }
+
+    #[test]
+    fn submit_label_for_zero_uses_zero_bucket() {
+        assert_eq!(
+            submit_label_for(AddPanelTab::Saved, 0),
+            dbflux_i18n::t!("modals.add_panel_picker.submit.zero")
+        );
+    }
+
+    #[test]
+    fn submit_label_for_one_uses_one_bucket() {
+        assert_eq!(
+            submit_label_for(AddPanelTab::Saved, 1),
+            dbflux_i18n::t!("modals.add_panel_picker.submit.one")
+        );
+    }
+
+    #[test]
+    fn submit_label_for_many_interpolates_count() {
+        let label = submit_label_for(AddPanelTab::Saved, 5);
+        assert_eq!(
+            label,
+            dbflux_i18n::t!("modals.add_panel_picker.submit.many", count = 5)
+        );
+        assert!(label.contains('5'));
+    }
+
+    #[test]
+    fn metric_statistics_are_not_translated() {
+        assert_eq!(
+            METRIC_STATISTICS,
+            ["Average", "Sum", "Minimum", "Maximum", "SampleCount"]
+        );
     }
 }

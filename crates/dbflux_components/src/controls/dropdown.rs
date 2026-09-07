@@ -171,7 +171,7 @@ impl Dropdown {
             selected_index: None,
             highlighted_index: None,
             disabled: false,
-            placeholder: "Select".into(),
+            placeholder: dbflux_i18n::t!("controls.dropdown.placeholder").into(),
             focus_ring_color: None,
             focus_ring_visible: false,
             compact_trigger: false,
@@ -189,6 +189,11 @@ impl Dropdown {
     pub fn placeholder(mut self, placeholder: impl Into<SharedString>) -> Self {
         self.placeholder = placeholder.into();
         self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn placeholder_text(&self) -> &SharedString {
+        &self.placeholder
     }
 
     pub fn selected_index(mut self, index: Option<usize>) -> Self {
@@ -813,5 +818,15 @@ mod tests {
 
         assert_eq!(chrome.edge, ChromeEdgeRole::Popover);
         assert_eq!(chrome.radius, Radii::MD);
+    }
+
+    #[test]
+    fn dropdown_placeholder_key_resolves() {
+        let en = dbflux_i18n::t!("controls.dropdown.placeholder", locale = "en");
+        let es = dbflux_i18n::t!("controls.dropdown.placeholder", locale = "es");
+
+        assert!(!en.is_empty() && en != "controls.dropdown.placeholder");
+        assert!(!es.is_empty() && es != "controls.dropdown.placeholder");
+        assert_ne!(en, es);
     }
 }

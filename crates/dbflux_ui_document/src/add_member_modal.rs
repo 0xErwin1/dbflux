@@ -133,12 +133,8 @@ impl AddMemberModal {
     // -- Row management -----------------------------------------------------
 
     fn add_value_row(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (field_placeholder, value_placeholder) = match self.key_type {
-            KeyType::Hash | KeyType::Stream => ("Enter Field", "Enter Value"),
-            KeyType::SortedSet => ("Enter Member", "Enter Score"),
-            KeyType::List | KeyType::Set => ("Enter Member", ""),
-            _ => ("Enter Field", "Enter Value"),
-        };
+        let (field_placeholder, value_placeholder) =
+            crate::labels::add_member_modal_placeholders(self.key_type);
 
         let field_input = cx.new(|cx| InputState::new(window, cx).placeholder(field_placeholder));
         let value_input = cx.new(|cx| InputState::new(window, cx).placeholder(value_placeholder));
@@ -212,7 +208,9 @@ impl AddMemberModal {
             .collect();
 
         if fields.is_empty() {
-            self.error_message = Some("At least one entry is required".to_string());
+            self.error_message = Some(dbflux_i18n::t!(
+                "document.key_value.add_member_modal.error.at_least_one_entry"
+            ));
             cx.notify();
             return;
         }
@@ -238,24 +236,12 @@ impl AddMemberModal {
         )
     }
 
-    fn title(&self) -> &'static str {
-        match self.key_type {
-            KeyType::Hash => "Add Hash Fields",
-            KeyType::Stream => "Add Stream Entry",
-            KeyType::List => "Add List Members",
-            KeyType::Set => "Add Set Members",
-            KeyType::SortedSet => "Add Sorted Set Members",
-            _ => "Add Member",
-        }
+    fn title(&self) -> String {
+        crate::labels::add_member_modal_title(self.key_type)
     }
 
-    fn section_label(&self) -> &'static str {
-        match self.key_type {
-            KeyType::Hash | KeyType::Stream => "Fields",
-            KeyType::SortedSet => "Members",
-            KeyType::List | KeyType::Set => "Members",
-            _ => "Fields",
-        }
+    fn section_label(&self) -> String {
+        crate::labels::add_member_modal_section_label(self.key_type)
     }
 }
 
@@ -565,7 +551,10 @@ impl Render for AddMemberModal {
         // -- Error message --------------------------------------------------
 
         if let Some(error) = &self.error_message {
-            body = body.child(Text::caption(format!("Error: {}", error)));
+            body = body.child(Text::caption(dbflux_i18n::t!(
+                "document.key_value.add_member_modal.error.prefix",
+                error = error
+            )));
         }
 
         // -- Footer buttons -------------------------------------------------
@@ -582,7 +571,9 @@ impl Render for AddMemberModal {
                     focus_ring(cancel_focused, ring_color).child(
                         Button::new("add-member-cancel")
                             .small()
-                            .label("Cancel")
+                            .label(dbflux_i18n::t!(
+                                "document.key_value.add_member_modal.cancel"
+                            ))
                             .with_variant(ButtonVariant::Ghost)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.close(cx);
@@ -593,7 +584,9 @@ impl Render for AddMemberModal {
                     focus_ring(submit_focused, ring_color).child(
                         Button::new("add-member-submit")
                             .small()
-                            .label("Add")
+                            .label(dbflux_i18n::t!(
+                                "document.key_value.add_member_modal.submit"
+                            ))
                             .with_variant(ButtonVariant::Primary)
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.submit(window, cx);

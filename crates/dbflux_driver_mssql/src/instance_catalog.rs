@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use dbflux_core::{
     ColumnKind, ColumnMeta, DbError, DefaultDashboardPanel, DefaultInstanceDashboard,
     DriverCapabilities, InstanceCatalog, InstanceInspectorDef, InstanceMetricDef,
-    InstanceMetricUnit, QueryResult, QueryResultShape, Row, Value,
+    InstanceMetricUnit, QueryResult, QueryResultShape, Row, Value, WritePrivilege,
 };
 
 use crate::driver::MssqlConnectionInner;
@@ -229,6 +229,113 @@ impl MssqlInstanceCatalog {
             Some(1)
         )
     }
+}
+
+/// Detects a database placed in read-only mode (e.g. an Always On readable
+/// secondary replica, or a database explicitly set `READ_ONLY`).
+///
+/// `DATABASEPROPERTYEX` is queried instead of `sys.databases.is_read_only`
+/// so the check stays scoped to the database this connection is actually
+/// bound to, matching the per-database semantics of `DB_NAME()`.
+const DATABASE_READ_ONLY_QUERY: &str =
+    "SELECT CAST(DATABASEPROPERTYEX(DB_NAME(), 'Updateability') AS NVARCHAR(60))";
+
+/// Single-scan probe over every non-system base table visible to the
+/// connected login.
+///
+/// Column 0 reports whether the database has at least one user table
+/// (`is_ms_shipped = 0`); column 1 reports whether the login holds `INSERT`,
+/// `UPDATE`, or `DELETE` on at least one of them via `HAS_PERMS_BY_NAME`.
+/// Column 1 is only meaningful when column 0 is `1` — an empty database has
+/// no tables to grant permissions on, so it must not be read as evidence of
+/// a read-only login.
+const TABLE_WRITE_PRIVILEGE_QUERY: &str = "\
+    SELECT \
+        CASE WHEN EXISTS (SELECT 1 FROM sys.tables t WHERE t.is_ms_shipped = 0) THEN 1 ELSE 0 END, \
+        CASE WHEN EXISTS ( \
+            SELECT 1 \
+            FROM sys.tables t \
+            JOIN sys.schemas s ON t.schema_id = s.schema_id \
+            WHERE t.is_ms_shipped = 0 \
+              AND ( \
+                HAS_PERMS_BY_NAME(QUOTENAME(s.name) + '.' + QUOTENAME(t.name), 'OBJECT', 'INSERT') = 1 \
+                OR HAS_PERMS_BY_NAME(QUOTENAME(s.name) + '.' + QUOTENAME(t.name), 'OBJECT', 'UPDATE') = 1 \
+                OR HAS_PERMS_BY_NAME(QUOTENAME(s.name) + '.' + QUOTENAME(t.name), 'OBJECT', 'DELETE') = 1 \
+              ) \
+        ) THEN 1 ELSE 0 END";
+
+/// Runs [`DATABASE_READ_ONLY_QUERY`], collapsing a query error to `None` so
+/// the caller can fall back to the table-permission probe.
+fn probe_database_read_only(inner: &mut MssqlConnectionInner) -> Option<bool> {
+    inner.runtime.block_on(async {
+        let client = inner.client.as_mut()?;
+        let result = client.simple_query(DATABASE_READ_ONLY_QUERY).await.ok()?;
+        let row = result.into_row().await.ok().flatten()?;
+        let updateability: Option<&str> = row.get(0);
+        updateability.map(|v| v.eq_ignore_ascii_case("READ_ONLY"))
+    })
+}
+
+/// Runs [`TABLE_WRITE_PRIVILEGE_QUERY`] and reports whether the visible base
+/// tables grant write access to the connected login.
+///
+/// Returns `None` when the query fails or the database has no user-visible
+/// base tables — an empty schema is inconclusive, not evidence of a
+/// read-only login, so it must not be conflated with an explicit permission
+/// denial.
+fn probe_has_writable_table(inner: &mut MssqlConnectionInner) -> Option<bool> {
+    inner.runtime.block_on(async {
+        let client = inner.client.as_mut()?;
+        let result = client
+            .simple_query(TABLE_WRITE_PRIVILEGE_QUERY)
+            .await
+            .ok()?;
+        let row = result.into_row().await.ok().flatten()?;
+        let has_any_table: Option<i32> = row.get(0);
+        if has_any_table != Some(1) {
+            return None;
+        }
+        let has_writable: Option<i32> = row.get(1);
+        has_writable.map(|v| v == 1)
+    })
+}
+
+/// Maps the two independent probe signals to a [`WritePrivilege`] verdict.
+///
+/// `database_read_only` takes precedence: a readable secondary or a database
+/// set `READ_ONLY` overrides table grants entirely. `has_writable_table` is
+/// `None` for both a probe failure and an empty database, since neither is
+/// evidence that writes are forbidden.
+pub(crate) fn decide_mssql_write_privilege(
+    database_read_only: Option<bool>,
+    has_writable_table: Option<bool>,
+) -> WritePrivilege {
+    if database_read_only == Some(true) {
+        return WritePrivilege::ReadOnly;
+    }
+
+    match has_writable_table {
+        None => WritePrivilege::Unknown,
+        Some(true) => WritePrivilege::Writable,
+        Some(false) => WritePrivilege::ReadOnly,
+    }
+}
+
+/// Best-effort write-privilege probe backing
+/// `Connection::probe_write_privilege` for SQL Server.
+///
+/// Runs at most two read-only round trips (database updateability, then
+/// table-permission check) and never propagates an error: any failure
+/// resolves to [`WritePrivilege::Unknown`], which leaves the resolved
+/// `MutationPolicy` unchanged.
+pub(crate) fn probe_mssql_write_privilege(inner: &mut MssqlConnectionInner) -> WritePrivilege {
+    let database_read_only = probe_database_read_only(inner);
+    if database_read_only == Some(true) {
+        return WritePrivilege::ReadOnly;
+    }
+
+    let has_writable_table = probe_has_writable_table(inner);
+    decide_mssql_write_privilege(database_read_only, has_writable_table)
 }
 
 fn now_epoch_ms() -> i64 {
@@ -811,6 +918,66 @@ mod tests {
         assert!(
             actions.is_empty(),
             "unknown inspector must return no row actions"
+        );
+    }
+
+    #[test]
+    fn decide_mssql_write_privilege_database_read_only_wins_over_writable_table() {
+        assert_eq!(
+            decide_mssql_write_privilege(Some(true), Some(true)),
+            WritePrivilege::ReadOnly
+        );
+    }
+
+    #[test]
+    fn decide_mssql_write_privilege_database_read_only_wins_over_missing_table_probe() {
+        assert_eq!(
+            decide_mssql_write_privilege(Some(true), None),
+            WritePrivilege::ReadOnly
+        );
+    }
+
+    #[test]
+    fn decide_mssql_write_privilege_writable_login_with_grants() {
+        assert_eq!(
+            decide_mssql_write_privilege(Some(false), Some(true)),
+            WritePrivilege::Writable
+        );
+    }
+
+    #[test]
+    fn decide_mssql_write_privilege_no_grants_is_read_only() {
+        assert_eq!(
+            decide_mssql_write_privilege(Some(false), Some(false)),
+            WritePrivilege::ReadOnly
+        );
+    }
+
+    #[test]
+    fn decide_mssql_write_privilege_empty_database_is_unknown_not_read_only() {
+        assert_eq!(
+            decide_mssql_write_privilege(Some(false), None),
+            WritePrivilege::Unknown
+        );
+    }
+
+    #[test]
+    fn decide_mssql_write_privilege_falls_back_to_table_probe_when_read_only_signal_unavailable() {
+        assert_eq!(
+            decide_mssql_write_privilege(None, Some(true)),
+            WritePrivilege::Writable
+        );
+        assert_eq!(
+            decide_mssql_write_privilege(None, Some(false)),
+            WritePrivilege::ReadOnly
+        );
+    }
+
+    #[test]
+    fn decide_mssql_write_privilege_both_probes_failing_is_unknown() {
+        assert_eq!(
+            decide_mssql_write_privilege(None, None),
+            WritePrivilege::Unknown
         );
     }
 

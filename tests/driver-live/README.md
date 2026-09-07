@@ -1,9 +1,9 @@
 # Driver live integration tests
 
 Driver integration tests use `testcontainers` for PostgreSQL, MySQL, MongoDB,
-Redis, DynamoDB Local, and SQL Server. Each test starts an isolated container
-with a dynamic host port and tears it down automatically. SQLite integration
-uses a temporary local file.
+Redis, DynamoDB Local, SQL Server, and ClickHouse. Each test starts an isolated
+container with a dynamic host port and tears it down automatically. SQLite
+integration uses a temporary local file.
 
 ## Run live driver tests
 
@@ -14,11 +14,19 @@ cargo test -p dbflux_driver_mongodb  --test live_integration -- --ignored
 cargo test -p dbflux_driver_redis    --test live_integration -- --ignored
 cargo test -p dbflux_driver_dynamodb --test live_integration -- --ignored
 cargo test -p dbflux_driver_mssql    --test live_integration -- --ignored
+cargo test -p dbflux_driver_clickhouse --test live_integration -- --ignored
 cargo test -p dbflux_driver_sqlite   --test live_integration
 ```
 
 The ignored tests require a working Docker daemon because `testcontainers`
 talks to Docker directly.
+
+## ClickHouse specifics
+
+The ClickHouse suite pulls `clickhouse/clickhouse-server:25.8.30.16` (25.8
+LTS). Every ignored test launches its own container through `testcontainers`,
+maps HTTP port 8123 to a dynamic host port, and initializes database
+`dbflux_test` with user/password `dbflux`/`dbflux`.
 
 ## SQL Server specifics
 

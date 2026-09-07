@@ -279,7 +279,7 @@ impl ProxiesSection {
             report_error(
                 UserFacingError::new(
                     ErrorKind::Storage,
-                    format!("Failed to save proxy profiles: {e}"),
+                    dbflux_i18n::t!("settings.proxies.error.save_failed", error = e),
                 ),
                 cx,
             );
@@ -482,6 +482,12 @@ impl ProxiesSection {
                 }
                 ("i", modifiers) if modifiers == Modifiers::none() => {
                     self.request_import(cx);
+                }
+                ("n", modifiers) if modifiers == Modifiers::none() => {
+                    self.proxy_selected_idx = None;
+                    self.proxy_load_selected_profile(window, cx);
+                    self.proxy_enter_form(window, cx);
+                    cx.notify();
                 }
                 ("g", modifiers) if modifiers == Modifiers::none() => {
                     self.proxy_selected_idx = None;

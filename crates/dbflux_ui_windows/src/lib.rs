@@ -4,10 +4,11 @@
 //! the Connection Manager window, the Settings window, and shared SSH
 //! authentication UI helpers.
 
-#![recursion_limit = "1024"]
+#![recursion_limit = "2048"]
 
 pub mod connection_manager;
 pub mod settings;
 pub mod ssh_shared;
 
+mod labels;
 mod style_guardrails;

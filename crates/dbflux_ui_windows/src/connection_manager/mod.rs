@@ -3,6 +3,7 @@ pub mod export_modal;
 mod form;
 mod hooks_tab;
 pub mod import_panel;
+mod mcp_bindings;
 mod navigation;
 mod render;
 mod render_driver_select;
@@ -14,16 +15,16 @@ pub use import_panel::{ImportConnectionsPanel, ImportConnectionsPanelEvent};
 use crate::ssh_shared::SshAuthSelection;
 use dbflux_app::keymap::KeymapStack;
 use dbflux_components::components::form_renderer::{self, FormRendererState};
-use dbflux_components::components::multi_select::MultiSelect;
+use dbflux_components::components::multi_select::{MultiSelect, MultiSelectChanged};
 use dbflux_components::components::value_source_selector::ValueSourceSelector;
 use dbflux_components::controls::{Dropdown, DropdownSelectionChanged};
 use dbflux_components::controls::{InputEvent, InputState};
 use dbflux_core::access::AccessKind;
 use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
-    AuthProfile, AuthSessionState, ConnectionHookBindings, DbConfig, DbDriver, DbKind,
-    DriverFormDef, FormFieldDef, FormFieldKind, GlobalOverrides, SshAuthMethod, SshTunnelProfile,
-    ValueRef,
+    AuthProfile, AuthSessionState, ConnectionHookBindings, ConnectionMcpPolicyBinding, DbConfig,
+    DbDriver, DbKind, DriverFormDef, FormFieldDef, FormFieldKind, GlobalOverrides, SshAuthMethod,
+    SshTunnelProfile, ValueRef,
 };
 use dbflux_ui_base::platform;
 use dbflux_ui_base::sso_wizard::SsoWizard;
@@ -243,6 +244,10 @@ struct FormState {
     password_value_source_selector: Entity<ValueSourceSelector>,
     /// Checkbox states keyed by field ID (e.g., "use_uri" -> true).
     checkbox_states: HashMap<String, bool>,
+    /// Selected value of each driver-defined `Select` field, keyed by field
+    /// ID (e.g., "topology" -> "sentinel"). Falls back to the field's
+    /// declared `default_value` when absent.
+    select_values: HashMap<String, String>,
     /// Active SSL mode id for the TRANSPORT section segmented control.
     selected_ssl_mode: String,
     /// SSL certificate path inputs — shown conditionally based on selected_ssl_mode and driver metadata.
@@ -320,13 +325,26 @@ struct SettingsTabState {
 }
 
 /// MCP governance tab widgets.
+///
+/// `bindings` holds every `ConnectionMcpPolicyBinding` for the connection
+/// being edited, independent of which trusted client is currently selected
+/// in the master-detail list. Widget changes write into the binding for
+/// `selected_actor_id` immediately (see `handle_mcp_binding_field_change`),
+/// so switching the selected client never loses edits.
 struct McpTabState {
     conn_mcp_enabled: bool,
-    conn_mcp_actor_dropdown: Entity<Dropdown>,
     conn_mcp_role_dropdown: Entity<Dropdown>,
     conn_mcp_role_multi_select: Entity<MultiSelect>,
     conn_mcp_policy_dropdown: Entity<Dropdown>,
     conn_mcp_policy_multi_select: Entity<MultiSelect>,
+    #[cfg(feature = "mcp")]
+    conn_mcp_client_filter_input: Entity<InputState>,
+    #[cfg(feature = "mcp")]
+    conn_mcp_client_list_scroll_handle: ScrollHandle,
+    #[cfg(feature = "mcp")]
+    conn_mcp_detail_scroll_handle: ScrollHandle,
+    bindings: Vec<ConnectionMcpPolicyBinding>,
+    selected_actor_id: Option<String>,
 }
 
 /// Deferred actions written by background tasks or event handlers and drained on the next render.
@@ -411,12 +429,19 @@ impl ConnectionManagerWindow {
             })
             .collect();
 
-        let input_name = cx.new(|cx| InputState::new(window, cx).placeholder("Connection name"));
-        let driver_filter_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Filter by name, driver, port…"));
+        let input_name = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(dbflux_i18n::t!(
+                "connection_manager.placeholder.connection_name"
+            ))
+        });
+        let driver_filter_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(dbflux_i18n::t!(
+                "connection_manager.driver_select.search_placeholder"
+            ))
+        });
         let input_password = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("Password")
+                .placeholder(dbflux_i18n::t!("connection_manager.placeholder.password"))
                 .masked(true)
         });
         let host_value_source_selector =
@@ -440,31 +465,54 @@ impl ConnectionManagerWindow {
             cx.new(|cx| InputState::new(window, cx).placeholder("~/.ssh/id_rsa"));
         let input_ssh_key_passphrase = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("Key passphrase (optional)")
+                .placeholder(dbflux_i18n::t!(
+                    "connection_manager.placeholder.key_passphrase_optional"
+                ))
                 .masked(true)
         });
         let input_ssh_password = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("SSH password")
+                .placeholder(dbflux_i18n::t!(
+                    "connection_manager.placeholder.ssh_password"
+                ))
                 .masked(true)
         });
 
-        let ssl_ca_cert_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Path to CA certificate"));
-        let ssl_client_cert_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Path to client certificate"));
-        let ssl_client_key_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Path to client key"));
+        let ssl_ca_cert_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(dbflux_i18n::t!(
+                "connection_manager.placeholder.ca_cert_path"
+            ))
+        });
+        let ssl_client_cert_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(dbflux_i18n::t!(
+                "connection_manager.placeholder.client_cert_path"
+            ))
+        });
+        let ssl_client_key_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(dbflux_i18n::t!(
+                "connection_manager.placeholder.client_key_path"
+            ))
+        });
 
-        let ssh_tunnel_dropdown =
-            cx.new(|_cx| Dropdown::new("ssh-tunnel-dropdown").placeholder("Select SSH Tunnel"));
-        let proxy_dropdown =
-            cx.new(|_cx| Dropdown::new("proxy-dropdown").placeholder("Select Proxy"));
+        let ssh_tunnel_dropdown = cx.new(|_cx| {
+            Dropdown::new("ssh-tunnel-dropdown").placeholder(dbflux_i18n::t!(
+                "connection_manager.placeholder.select_ssh_tunnel"
+            ))
+        });
+        let proxy_dropdown = cx.new(|_cx| {
+            Dropdown::new("proxy-dropdown").placeholder(dbflux_i18n::t!(
+                "connection_manager.placeholder.select_proxy"
+            ))
+        });
 
-        let auth_profile_dropdown =
-            cx.new(|_cx| Dropdown::new("auth-profile-dropdown").placeholder("None"));
-        let access_method_dropdown =
-            cx.new(|_cx| Dropdown::new("access-method-dropdown").placeholder("Direct"));
+        let auth_profile_dropdown = cx.new(|_cx| {
+            Dropdown::new("auth-profile-dropdown")
+                .placeholder(dbflux_i18n::t!("connection_manager.placeholder.none"))
+        });
+        let access_method_dropdown = cx.new(|_cx| {
+            Dropdown::new("access-method-dropdown")
+                .placeholder(dbflux_i18n::t!("connection_manager.access_method.direct"))
+        });
 
         let input_ssm_instance_id =
             cx.new(|cx| InputState::new(window, cx).placeholder("i-0123456789abcdef0"));
@@ -481,49 +529,95 @@ impl ConnectionManagerWindow {
         let ssm_remote_port_value_source_selector =
             cx.new(|cx| ValueSourceSelector::new("cm-ssm-remote-port", window, cx));
         let ssm_auth_profile_dropdown = cx.new(|_cx| {
-            Dropdown::new("ssm-auth-profile-dropdown").placeholder("Use Connection Auth Profile")
+            Dropdown::new("ssm-auth-profile-dropdown").placeholder(dbflux_i18n::t!(
+                "connection_manager.placeholder.use_connection_auth_profile"
+            ))
         });
 
-        let conn_refresh_policy_dropdown =
-            cx.new(|_cx| Dropdown::new("conn-refresh-policy").placeholder("Use Driver Default"));
+        let conn_refresh_policy_dropdown = cx.new(|_cx| {
+            Dropdown::new("conn-refresh-policy").placeholder(dbflux_i18n::t!(
+                "connection_manager.placeholder.use_driver_default"
+            ))
+        });
         let conn_refresh_interval_input = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("seconds")
+                .placeholder(dbflux_i18n::t!("connection_manager.placeholder.seconds"))
                 .default_value("5")
         });
-        let conn_confirm_dangerous_dropdown =
-            cx.new(|_cx| Dropdown::new("conn-confirm-dangerous").placeholder("Use Driver Default"));
-        let conn_requires_where_dropdown =
-            cx.new(|_cx| Dropdown::new("conn-requires-where").placeholder("Use Driver Default"));
-        let conn_requires_preview_dropdown =
-            cx.new(|_cx| Dropdown::new("conn-requires-preview").placeholder("Use Driver Default"));
-        let conn_pre_hook_dropdown =
-            cx.new(|_cx| Dropdown::new("conn-pre-hook").placeholder("No hook"));
-        let conn_post_hook_dropdown =
-            cx.new(|_cx| Dropdown::new("conn-post-hook").placeholder("No hook"));
-        let conn_pre_disconnect_hook_dropdown =
-            cx.new(|_cx| Dropdown::new("conn-pre-disconnect-hook").placeholder("No hook"));
-        let conn_post_disconnect_hook_dropdown =
-            cx.new(|_cx| Dropdown::new("conn-post-disconnect-hook").placeholder("No hook"));
-        let conn_pre_hook_extra_input = cx
-            .new(|cx| InputState::new(window, cx).placeholder("extra hook IDs (comma-separated)"));
-        let conn_post_hook_extra_input = cx
-            .new(|cx| InputState::new(window, cx).placeholder("extra hook IDs (comma-separated)"));
-        let conn_pre_disconnect_hook_extra_input = cx
-            .new(|cx| InputState::new(window, cx).placeholder("extra hook IDs (comma-separated)"));
-        let conn_post_disconnect_hook_extra_input = cx
-            .new(|cx| InputState::new(window, cx).placeholder("extra hook IDs (comma-separated)"));
-        let conn_mcp_actor_dropdown =
-            cx.new(|_cx| Dropdown::new("conn-mcp-actor").placeholder("Select trusted client"));
-        let conn_mcp_role_dropdown =
-            cx.new(|_cx| Dropdown::new("conn-mcp-role").placeholder("No role"));
-        let conn_mcp_role_multi_select = cx.new(|_cx| {
-            MultiSelect::new("conn-mcp-extra-roles").placeholder("Select additional roles…")
+        let conn_confirm_dangerous_dropdown = cx.new(|_cx| {
+            Dropdown::new("conn-confirm-dangerous").placeholder(dbflux_i18n::t!(
+                "connection_manager.placeholder.use_driver_default"
+            ))
         });
-        let conn_mcp_policy_dropdown =
-            cx.new(|_cx| Dropdown::new("conn-mcp-policy").placeholder("No policy"));
+        let conn_requires_where_dropdown = cx.new(|_cx| {
+            Dropdown::new("conn-requires-where").placeholder(dbflux_i18n::t!(
+                "connection_manager.placeholder.use_driver_default"
+            ))
+        });
+        let conn_requires_preview_dropdown = cx.new(|_cx| {
+            Dropdown::new("conn-requires-preview").placeholder(dbflux_i18n::t!(
+                "connection_manager.placeholder.use_driver_default"
+            ))
+        });
+        let conn_pre_hook_dropdown = cx.new(|_cx| {
+            Dropdown::new("conn-pre-hook")
+                .placeholder(dbflux_i18n::t!("connection_manager.placeholder.no_hook"))
+        });
+        let conn_post_hook_dropdown = cx.new(|_cx| {
+            Dropdown::new("conn-post-hook")
+                .placeholder(dbflux_i18n::t!("connection_manager.placeholder.no_hook"))
+        });
+        let conn_pre_disconnect_hook_dropdown = cx.new(|_cx| {
+            Dropdown::new("conn-pre-disconnect-hook")
+                .placeholder(dbflux_i18n::t!("connection_manager.placeholder.no_hook"))
+        });
+        let conn_post_disconnect_hook_dropdown = cx.new(|_cx| {
+            Dropdown::new("conn-post-disconnect-hook")
+                .placeholder(dbflux_i18n::t!("connection_manager.placeholder.no_hook"))
+        });
+        let conn_pre_hook_extra_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(dbflux_i18n::t!(
+                "connection_manager.placeholder.extra_hook_ids"
+            ))
+        });
+        let conn_post_hook_extra_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(dbflux_i18n::t!(
+                "connection_manager.placeholder.extra_hook_ids"
+            ))
+        });
+        let conn_pre_disconnect_hook_extra_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(dbflux_i18n::t!(
+                "connection_manager.placeholder.extra_hook_ids"
+            ))
+        });
+        let conn_post_disconnect_hook_extra_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(dbflux_i18n::t!(
+                "connection_manager.placeholder.extra_hook_ids"
+            ))
+        });
+        #[cfg(feature = "mcp")]
+        let conn_mcp_client_filter_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(dbflux_i18n::t!(
+                "connection_manager.placeholder.filter_trusted_clients"
+            ))
+        });
+        let conn_mcp_role_dropdown = cx.new(|_cx| {
+            Dropdown::new("conn-mcp-role")
+                .placeholder(dbflux_i18n::t!("connection_manager.placeholder.no_role"))
+        });
+        let conn_mcp_role_multi_select = cx.new(|_cx| {
+            MultiSelect::new("conn-mcp-extra-roles").placeholder(dbflux_i18n::t!(
+                "connection_manager.placeholder.select_additional_roles"
+            ))
+        });
+        let conn_mcp_policy_dropdown = cx.new(|_cx| {
+            Dropdown::new("conn-mcp-policy")
+                .placeholder(dbflux_i18n::t!("connection_manager.placeholder.no_policy"))
+        });
         let conn_mcp_policy_multi_select = cx.new(|_cx| {
-            MultiSelect::new("conn-mcp-extra-policies").placeholder("Select additional policies…")
+            MultiSelect::new("conn-mcp-extra-policies").placeholder(dbflux_i18n::t!(
+                "connection_manager.placeholder.select_additional_policies"
+            ))
         });
 
         let dropdown_subscription = cx.subscribe(
@@ -561,6 +655,45 @@ impl ConnectionManagerWindow {
             },
         );
 
+        let mcp_role_dropdown_sub = cx.subscribe(
+            &conn_mcp_role_dropdown,
+            |this, _dropdown, _event: &DropdownSelectionChanged, cx| {
+                this.handle_mcp_binding_field_change(cx);
+            },
+        );
+
+        let mcp_policy_dropdown_sub = cx.subscribe(
+            &conn_mcp_policy_dropdown,
+            |this, _dropdown, _event: &DropdownSelectionChanged, cx| {
+                this.handle_mcp_binding_field_change(cx);
+            },
+        );
+
+        let mcp_role_multi_select_sub = cx.subscribe(
+            &conn_mcp_role_multi_select,
+            |this, _multi_select, _event: &MultiSelectChanged, cx| {
+                this.handle_mcp_binding_field_change(cx);
+            },
+        );
+
+        let mcp_policy_multi_select_sub = cx.subscribe(
+            &conn_mcp_policy_multi_select,
+            |this, _multi_select, _event: &MultiSelectChanged, cx| {
+                this.handle_mcp_binding_field_change(cx);
+            },
+        );
+
+        #[cfg(feature = "mcp")]
+        let mcp_client_filter_sub = cx.subscribe_in(
+            &conn_mcp_client_filter_input,
+            window,
+            |this, _, event: &InputEvent, window, cx| match event {
+                InputEvent::Change => cx.notify(),
+                InputEvent::Blur => this.exit_edit_mode_on_blur(window, cx),
+                _ => {}
+            },
+        );
+
         let app_state_changed_sub = cx.subscribe(
             &app_state,
             |this, _, _: &dbflux_ui_base::AppStateChanged, cx| {
@@ -590,7 +723,7 @@ impl ConnectionManagerWindow {
                         this.focus_down(cx);
                     }
                     InputEvent::Blur => {
-                        this.exit_edit_mode_on_blur(cx);
+                        this.exit_edit_mode_on_blur(window, cx);
                     }
                     _ => {}
                 },
@@ -608,7 +741,7 @@ impl ConnectionManagerWindow {
                     this.focus_down(cx);
                 }
                 InputEvent::Blur => {
-                    this.exit_edit_mode_on_blur(cx);
+                    this.exit_edit_mode_on_blur(window, cx);
                 }
                 InputEvent::Change => {
                     this.handle_field_change("password", window, cx);
@@ -647,7 +780,8 @@ impl ConnectionManagerWindow {
             },
         );
 
-        let subscriptions = vec![
+        #[cfg_attr(not(feature = "mcp"), allow(unused_mut))]
+        let mut subscriptions = vec![
             import_panel_sub,
             driver_filter_focus_sub,
             dropdown_subscription,
@@ -655,6 +789,10 @@ impl ConnectionManagerWindow {
             auth_profile_dropdown_sub,
             access_method_dropdown_sub,
             ssm_auth_profile_dropdown_sub,
+            mcp_role_dropdown_sub,
+            mcp_policy_dropdown_sub,
+            mcp_role_multi_select_sub,
+            mcp_policy_multi_select_sub,
             app_state_changed_sub,
             auth_profile_created_sub,
             subscribe_input(cx, window, &input_name),
@@ -669,6 +807,8 @@ impl ConnectionManagerWindow {
             subscribe_input(cx, window, &input_ssm_region),
             subscribe_input(cx, window, &input_ssm_remote_port),
         ];
+        #[cfg(feature = "mcp")]
+        subscriptions.push(mcp_client_filter_sub);
 
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle, cx);
@@ -709,6 +849,7 @@ impl ConnectionManagerWindow {
                 user_value_source_selector,
                 password_value_source_selector,
                 checkbox_states: HashMap::new(),
+                select_values: HashMap::new(),
                 selected_ssl_mode: String::new(),
                 ssl_ca_cert_input,
                 ssl_client_cert_input,
@@ -783,11 +924,18 @@ impl ConnectionManagerWindow {
             },
             mcp_tab: McpTabState {
                 conn_mcp_enabled: false,
-                conn_mcp_actor_dropdown,
                 conn_mcp_role_dropdown,
                 conn_mcp_role_multi_select,
                 conn_mcp_policy_dropdown,
                 conn_mcp_policy_multi_select,
+                #[cfg(feature = "mcp")]
+                conn_mcp_client_filter_input,
+                #[cfg(feature = "mcp")]
+                conn_mcp_client_list_scroll_handle: ScrollHandle::new(),
+                #[cfg(feature = "mcp")]
+                conn_mcp_detail_scroll_handle: ScrollHandle::new(),
+                bindings: Vec::new(),
+                selected_actor_id: None,
             },
             pending: PendingActions::default(),
         }
@@ -808,6 +956,17 @@ impl ConnectionManagerWindow {
     pub(super) fn open_import(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.import_panel.update(cx, |panel, cx| {
             panel.reset(window, cx);
+        });
+        self.view = View::Import;
+        cx.notify();
+    }
+
+    /// Switch to the in-window import panel, pre-selecting an external-client
+    /// source (DBeaver, Beekeeper Studio, ...) instead of the native bundle.
+    pub(super) fn open_import_external(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.import_panel.update(cx, |panel, cx| {
+            panel.reset(window, cx);
+            panel.preselect_external_source(cx);
         });
         self.view = View::Import;
         cx.notify();
@@ -871,6 +1030,12 @@ impl ConnectionManagerWindow {
                     ssl_client_cert_path,
                     ssl_client_key_path,
                     ..
+                }
+                | DbConfig::Redshift {
+                    ssl_root_cert_path,
+                    ssl_client_cert_path,
+                    ssl_client_key_path,
+                    ..
                 } => (
                     ssl_root_cert_path.clone().unwrap_or_default(),
                     ssl_client_cert_path.clone().unwrap_or_default(),
@@ -917,15 +1082,29 @@ impl ConnectionManagerWindow {
 
         instance.mcp_tab.conn_mcp_enabled =
             profile.mcp_governance.as_ref().is_some_and(|g| g.enabled);
+        instance.mcp_tab.bindings = profile
+            .mcp_governance
+            .as_ref()
+            .map(|governance| governance.policy_bindings.clone())
+            .unwrap_or_default();
+        instance.mcp_tab.selected_actor_id = instance
+            .mcp_tab
+            .bindings
+            .first()
+            .map(|binding| binding.actor_id.clone());
 
         #[cfg(feature = "mcp")]
         {
-            let first_binding = profile
-                .mcp_governance
-                .as_ref()
-                .and_then(|governance| governance.policy_bindings.first().cloned());
+            let selected_binding = instance.mcp_tab.selected_actor_id.clone().and_then(|id| {
+                instance
+                    .mcp_tab
+                    .bindings
+                    .iter()
+                    .find(|binding| binding.actor_id == id)
+                    .cloned()
+            });
 
-            instance.load_mcp_dropdowns(first_binding.as_ref(), window, cx);
+            instance.load_mcp_dropdowns(selected_binding.as_ref(), window, cx);
         }
 
         instance.access.selected_proxy_id = profile.proxy_profile_id;
@@ -1085,6 +1264,8 @@ impl ConnectionManagerWindow {
         self.reset_value_source_selectors(window, cx);
 
         self.load_settings_tab(None, None, None, window, cx);
+        self.mcp_tab.bindings = Vec::new();
+        self.mcp_tab.selected_actor_id = None;
         #[cfg(feature = "mcp")]
         self.load_mcp_dropdowns(None, window, cx);
         self.populate_auth_profile_dropdown(cx);
@@ -1106,6 +1287,7 @@ impl ConnectionManagerWindow {
         cx: &mut Context<Self>,
     ) {
         self.form.driver_inputs.clear();
+        self.form.select_values.clear();
 
         let fields: Vec<&FormFieldDef> = form
             .tabs
@@ -1114,6 +1296,9 @@ impl ConnectionManagerWindow {
             .flat_map(|tab| tab.sections.iter())
             .flat_map(|section| section.fields.iter())
             .filter(|field| field.id != "password")
+            // Select fields are rendered as a segmented control backed by
+            // `self.form.select_values`, not a plain `InputState`.
+            .filter(|field| !matches!(field.kind, FormFieldKind::Select { .. }))
             .collect();
 
         for field in fields {
@@ -1145,7 +1330,7 @@ impl ConnectionManagerWindow {
                         this.focus_down(cx);
                     }
                     InputEvent::Blur => {
-                        this.exit_edit_mode_on_blur(cx);
+                        this.exit_edit_mode_on_blur(window, cx);
                     }
                     InputEvent::Change => {
                         this.handle_field_change(&field_id, window, cx);
@@ -1175,6 +1360,12 @@ impl ConnectionManagerWindow {
                         self.form
                             .checkbox_states
                             .insert(field.id.clone(), is_checked);
+                    } else if matches!(field.kind, FormFieldKind::Select { .. }) {
+                        let selected = values
+                            .get(&field.id)
+                            .cloned()
+                            .unwrap_or_else(|| field.default_value.clone());
+                        self.form.select_values.insert(field.id.clone(), selected);
                     }
                 }
             }
@@ -1196,13 +1387,19 @@ impl ConnectionManagerWindow {
     ) -> dbflux_core::FormValues {
         let dropdowns = HashMap::new();
 
-        form_renderer::collect_values(
+        let mut values = form_renderer::collect_values(
             form,
             &self.form.driver_inputs,
             &self.form.checkbox_states,
             &dropdowns,
             cx,
-        )
+        );
+
+        for (field_id, value) in &self.form.select_values {
+            values.insert(field_id.clone(), value.clone());
+        }
+
+        values
     }
 
     fn reset_value_source_selectors(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1547,7 +1744,7 @@ impl ConnectionManagerWindow {
 
     /// Check if a field is enabled based on its conditional dependencies.
     fn is_field_enabled(&self, field: &FormFieldDef) -> bool {
-        form_renderer::is_field_enabled(field, &self.form.checkbox_states)
+        form_renderer::is_field_enabled(field, &self.form.checkbox_states, &self.form.select_values)
     }
 
     /// Map a field ID to its FormFocus variant.
@@ -1633,8 +1830,9 @@ impl ConnectionManagerWindow {
         }
     }
 
-    /// Populate the MCP actor/role/policy dropdowns from the global governance state and
-    /// optionally pre-select the actor/role/policy from an existing policy binding.
+    /// Populate the MCP role/policy dropdowns from the global governance state and
+    /// optionally pre-select the role/policy from an existing policy binding for the
+    /// currently selected trusted client.
     #[cfg(feature = "mcp")]
     fn load_mcp_dropdowns(
         &mut self,
@@ -1642,11 +1840,6 @@ impl ConnectionManagerWindow {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let clients = self
-            .app_state
-            .read(cx)
-            .list_mcp_trusted_clients()
-            .unwrap_or_default();
         let roles = self.app_state.read(cx).list_mcp_roles().unwrap_or_default();
         let policies = self
             .app_state
@@ -1654,18 +1847,9 @@ impl ConnectionManagerWindow {
             .list_mcp_policies()
             .unwrap_or_default();
 
-        let actor_items: Vec<dbflux_components::controls::DropdownItem> = clients
-            .iter()
-            .map(|c| {
-                dbflux_components::controls::DropdownItem::with_value(
-                    format!("{} ({})", c.name, c.id),
-                    c.id.clone(),
-                )
-            })
-            .collect();
-
         let mut role_items = vec![dbflux_components::controls::DropdownItem::with_value(
-            "No role", "",
+            dbflux_i18n::t!("connection_manager.placeholder.no_role"),
+            "",
         )];
         role_items.extend(roles.iter().map(|r| {
             let label = dbflux_mcp::builtin_display_name(&r.id)
@@ -1675,7 +1859,7 @@ impl ConnectionManagerWindow {
         }));
 
         let mut policy_items = vec![dbflux_components::controls::DropdownItem::with_value(
-            "No policy",
+            dbflux_i18n::t!("connection_manager.placeholder.no_policy"),
             "",
         )];
         policy_items.extend(policies.iter().map(|p| {
@@ -1685,11 +1869,6 @@ impl ConnectionManagerWindow {
             dbflux_components::controls::DropdownItem::with_value(label, p.id.clone())
         }));
 
-        let actor_index = binding.and_then(|b| {
-            actor_items
-                .iter()
-                .position(|item| item.value.as_ref() == b.actor_id.as_str())
-        });
         let role_index = binding.and_then(|b| {
             b.role_ids.first().and_then(|role_id| {
                 role_items
@@ -1705,10 +1884,6 @@ impl ConnectionManagerWindow {
             })
         });
 
-        self.mcp_tab.conn_mcp_actor_dropdown.update(cx, |d, cx| {
-            d.set_items(actor_items, cx);
-            d.set_selected_index(actor_index, cx);
-        });
         self.mcp_tab.conn_mcp_role_dropdown.update(cx, |d, cx| {
             d.set_items(role_items, cx);
             d.set_selected_index(role_index.or(Some(0)), cx);
@@ -1751,23 +1926,126 @@ impl ConnectionManagerWindow {
                 ms.set_items(all_policy_items, cx);
             });
 
-        // Set selected values from binding
-        if let Some(binding) = binding {
-            let extra_roles: Vec<String> = binding.role_ids.iter().skip(1).cloned().collect();
-            let extra_policies: Vec<String> = binding.policy_ids.iter().skip(1).cloned().collect();
+        // Set selected values from the binding, clearing them when there is none
+        // (e.g. the selected client has no binding yet).
+        let extra_roles: Vec<String> = binding
+            .map(|b| b.role_ids.iter().skip(1).cloned().collect())
+            .unwrap_or_default();
+        let extra_policies: Vec<String> = binding
+            .map(|b| b.policy_ids.iter().skip(1).cloned().collect())
+            .unwrap_or_default();
 
-            self.mcp_tab
-                .conn_mcp_role_multi_select
-                .update(cx, |ms, cx| {
-                    ms.set_selected_values(&extra_roles, cx);
-                });
+        self.mcp_tab
+            .conn_mcp_role_multi_select
+            .update(cx, |ms, cx| {
+                ms.set_selected_values(&extra_roles, cx);
+            });
 
-            self.mcp_tab
-                .conn_mcp_policy_multi_select
-                .update(cx, |ms, cx| {
-                    ms.set_selected_values(&extra_policies, cx);
-                });
+        self.mcp_tab
+            .conn_mcp_policy_multi_select
+            .update(cx, |ms, cx| {
+                ms.set_selected_values(&extra_policies, cx);
+            });
+    }
+
+    /// Reads the role/policy dropdown and multi-select widgets and merges each
+    /// pair (primary dropdown + multi-select extras) into a deduped id list,
+    /// primary first.
+    pub(super) fn read_selected_mcp_role_and_policy_ids(
+        &self,
+        cx: &Context<Self>,
+    ) -> (Vec<String>, Vec<String>) {
+        let primary_role = self
+            .mcp_tab
+            .conn_mcp_role_dropdown
+            .read(cx)
+            .selected_value()
+            .map(|v| v.to_string());
+        let extra_roles: Vec<String> = self
+            .mcp_tab
+            .conn_mcp_role_multi_select
+            .read(cx)
+            .selected_values()
+            .into_iter()
+            .map(|v| v.to_string())
+            .collect();
+        let role_ids = mcp_bindings::merge_primary_and_extras(primary_role, extra_roles);
+
+        let primary_policy = self
+            .mcp_tab
+            .conn_mcp_policy_dropdown
+            .read(cx)
+            .selected_value()
+            .map(|v| v.to_string());
+        let extra_policies: Vec<String> = self
+            .mcp_tab
+            .conn_mcp_policy_multi_select
+            .read(cx)
+            .selected_values()
+            .into_iter()
+            .map(|v| v.to_string())
+            .collect();
+        let policy_ids = mcp_bindings::merge_primary_and_extras(primary_policy, extra_policies);
+
+        (role_ids, policy_ids)
+    }
+
+    /// Rewrites the binding for the currently selected trusted client from the
+    /// role/policy dropdown and multi-select widgets. No-op when no client is
+    /// selected. Called on every dropdown/multi-select change so switching the
+    /// selected client (which repopulates these widgets) never loses edits.
+    fn handle_mcp_binding_field_change(&mut self, cx: &mut Context<Self>) {
+        let Some(actor_id) = self.mcp_tab.selected_actor_id.clone() else {
+            return;
+        };
+
+        let (role_ids, policy_ids) = self.read_selected_mcp_role_and_policy_ids(cx);
+
+        mcp_bindings::apply_selection(&mut self.mcp_tab.bindings, &actor_id, role_ids, policy_ids);
+        cx.notify();
+    }
+
+    /// Selects a trusted client in the MCP tab's master-detail list and
+    /// repopulates the role/policy widgets from its existing binding, if any.
+    #[cfg(feature = "mcp")]
+    fn select_mcp_client(&mut self, actor_id: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.mcp_tab.selected_actor_id = Some(actor_id.clone());
+
+        let binding = self
+            .mcp_tab
+            .bindings
+            .iter()
+            .find(|binding| binding.actor_id == actor_id)
+            .cloned();
+
+        self.load_mcp_dropdowns(binding.as_ref(), window, cx);
+        cx.notify();
+    }
+
+    /// Adds or removes the binding for `actor_id`, then repopulates the
+    /// role/policy widgets when that client is the one currently selected.
+    #[cfg(feature = "mcp")]
+    fn set_mcp_client_allowed(
+        &mut self,
+        actor_id: String,
+        allowed: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        mcp_bindings::set_binding_presence(&mut self.mcp_tab.bindings, &actor_id, allowed);
+
+        if self.mcp_tab.selected_actor_id.as_deref() == Some(actor_id.as_str()) {
+            let binding = self
+                .mcp_tab
+                .bindings
+                .iter()
+                .find(|binding| binding.actor_id == actor_id)
+                .cloned();
+
+            self.load_mcp_dropdowns(binding.as_ref(), window, cx);
         }
+
+        cx.notify();
     }
 
     /// Initialize the Settings tab controls from the selected driver's defaults
@@ -1793,8 +2071,14 @@ impl ConnectionManagerWindow {
         let effective = self.resolve_driver_effective_settings(cx);
 
         let policy_items = vec![
-            dbflux_components::controls::DropdownItem::with_value("Manual", "manual"),
-            dbflux_components::controls::DropdownItem::with_value("Interval", "interval"),
+            dbflux_components::controls::DropdownItem::with_value(
+                dbflux_i18n::t!("settings.general.refresh_policy.option.manual"),
+                "manual",
+            ),
+            dbflux_components::controls::DropdownItem::with_value(
+                dbflux_i18n::t!("settings.general.refresh_policy.option.interval"),
+                "interval",
+            ),
         ];
         let policy_index = match overrides.refresh_policy.unwrap_or(effective.refresh_policy) {
             dbflux_core::RefreshPolicySetting::Manual => 0,
@@ -1817,9 +2101,18 @@ impl ConnectionManagerWindow {
             });
 
         let boolean_items = vec![
-            dbflux_components::controls::DropdownItem::with_value("Use Driver Default", "default"),
-            dbflux_components::controls::DropdownItem::with_value("On", "on"),
-            dbflux_components::controls::DropdownItem::with_value("Off", "off"),
+            dbflux_components::controls::DropdownItem::with_value(
+                dbflux_i18n::t!("connection_manager.placeholder.use_driver_default"),
+                "default",
+            ),
+            dbflux_components::controls::DropdownItem::with_value(
+                dbflux_i18n::t!("connection_manager.overrides.on"),
+                "on",
+            ),
+            dbflux_components::controls::DropdownItem::with_value(
+                dbflux_i18n::t!("connection_manager.overrides.off"),
+                "off",
+            ),
         ];
 
         let bool_index = |opt: Option<bool>| -> usize {
@@ -1850,7 +2143,8 @@ impl ConnectionManagerWindow {
             });
 
         let mut hook_items = vec![dbflux_components::controls::DropdownItem::with_value(
-            "No hook", "",
+            dbflux_i18n::t!("connection_manager.placeholder.no_hook"),
+            "",
         )];
 
         let hook_definitions = self.app_state.read(cx).hook_definitions().clone();
@@ -2258,9 +2552,8 @@ impl ConnectionManagerWindow {
 
         for (label, primary, extra) in phases {
             for token in Self::unresolved_hook_tokens(primary, &extra, &name_to_id, &known_ids) {
-                self.validation_errors.push(format!(
-                    "Unknown {label} hook '{token}'. Configure it in Settings > Hooks"
-                ));
+                self.validation_errors
+                    .push(crate::labels::form_unknown_hook(label, &token));
             }
         }
     }
@@ -2551,10 +2844,11 @@ impl ConnectionManagerWindow {
         let reference_only = self.app_state.read(cx).reference_only_auth_provider_ids();
 
         let mut auth_items = vec![dbflux_components::controls::DropdownItem::with_value(
-            "None", "",
+            dbflux_i18n::t!("connection_manager.placeholder.none"),
+            "",
         )];
         let mut ssm_items = vec![dbflux_components::controls::DropdownItem::with_value(
-            "Use Connection Auth Profile",
+            dbflux_i18n::t!("connection_manager.placeholder.use_connection_auth_profile"),
             "",
         )];
 
@@ -2596,12 +2890,12 @@ impl ConnectionManagerWindow {
         }
 
         auth_items.push(dbflux_components::controls::DropdownItem::with_value(
-            "New Auth Profile...",
+            dbflux_i18n::t!("connection_manager.new_auth_profile"),
             "__new_auth_profile__",
         ));
 
         ssm_items.push(dbflux_components::controls::DropdownItem::with_value(
-            "New Auth Profile...",
+            dbflux_i18n::t!("connection_manager.new_auth_profile"),
             "__new_auth_profile__",
         ));
 
@@ -2735,7 +3029,7 @@ impl ConnectionManagerWindow {
         let mut options = WindowOptions {
             app_id: Some(dbflux_core::ReleaseChannel::current().app_id().into()),
             titlebar: Some(TitlebarOptions {
-                title: Some("AWS SSO Wizard".into()),
+                title: Some(dbflux_i18n::t!("connection_manager.aws_sso_wizard_title").into()),
                 ..Default::default()
             }),
             window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -2753,8 +3047,11 @@ impl ConnectionManagerWindow {
             cx.new(|cx| Root::new(wizard, window, cx))
         }) {
             report_error(
-                UserFacingError::new(ErrorKind::User, "Failed to open AWS SSO wizard window")
-                    .with_cause(format!("{error}")),
+                UserFacingError::new(
+                    ErrorKind::User,
+                    dbflux_i18n::t!("connection_manager.aws_sso_open_failed"),
+                )
+                .with_cause(format!("{error}")),
                 cx,
             );
         }
@@ -2786,8 +3083,9 @@ impl ConnectionManagerWindow {
                     self.access.selected_ssm_auth_profile_id = Some(profile_id);
                 }
 
-                self.auth_profile.auth_profile_action_message =
-                    Some("Selected profile created by AWS SSO wizard.".to_string());
+                self.auth_profile.auth_profile_action_message = Some(dbflux_i18n::t!(
+                    "connection_manager.auth.profile_created_sso"
+                ));
             }
 
             self.auth_profile.pending_wizard_auth_profile_selection = false;
@@ -2807,8 +3105,9 @@ impl ConnectionManagerWindow {
         }
 
         self.auth_profile.pending_wizard_auth_profile_selection = false;
-        self.auth_profile.auth_profile_action_message =
-            Some("Selected profile created by wizard.".to_string());
+        self.auth_profile.auth_profile_action_message = Some(dbflux_i18n::t!(
+            "connection_manager.auth.profile_created_wizard"
+        ));
 
         self.populate_auth_profile_dropdown(cx);
         self.refresh_auth_profile_sessions(cx);
@@ -2816,16 +3115,18 @@ impl ConnectionManagerWindow {
     }
 
     fn refresh_auth_profile_statuses(&mut self, cx: &mut Context<Self>) {
-        self.auth_profile.auth_profile_action_message =
-            Some("Refreshing auth profile sessions...".to_string());
+        self.auth_profile.auth_profile_action_message = Some(dbflux_i18n::t!(
+            "connection_manager.auth.refreshing_sessions"
+        ));
         self.refresh_auth_profile_sessions(cx);
         cx.notify();
     }
 
     fn login_selected_auth_profile(&mut self, cx: &mut Context<Self>) {
         let Some(profile) = self.selected_auth_profile(cx) else {
-            self.auth_profile.auth_profile_action_message =
-                Some("Select an auth profile before logging in.".to_string());
+            self.auth_profile.auth_profile_action_message = Some(dbflux_i18n::t!(
+                "connection_manager.auth.select_before_login"
+            ));
             cx.notify();
             return;
         };
@@ -2835,26 +3136,24 @@ impl ConnectionManagerWindow {
             .read(cx)
             .auth_provider_by_id(&profile.provider_id)
         else {
-            self.auth_profile.auth_profile_action_message = Some(format!(
-                "Auth provider '{}' is not available.",
-                profile.provider_id
-            ));
+            self.auth_profile.auth_profile_action_message = Some(
+                crate::labels::auth_provider_unavailable(&profile.provider_id),
+            );
             cx.notify();
             return;
         };
 
         if !provider.capabilities().login.supported {
-            self.auth_profile.auth_profile_action_message =
-                Some("Interactive login is not available for this auth profile.".to_string());
+            self.auth_profile.auth_profile_action_message = Some(dbflux_i18n::t!(
+                "connection_manager.auth.interactive_login_unavailable"
+            ));
             cx.notify();
             return;
         }
 
         self.auth_profile.auth_profile_login_in_progress = true;
-        self.auth_profile.auth_profile_action_message = Some(format!(
-            "Starting auth-provider login for '{}'...",
-            profile.name
-        ));
+        self.auth_profile.auth_profile_action_message =
+            Some(crate::labels::auth_login_starting(&profile.name));
         cx.notify();
 
         let this = cx.entity().clone();
@@ -2866,10 +3165,9 @@ impl ConnectionManagerWindow {
                 this.update(cx, |this, cx| {
                     this.auth_profile.auth_profile_login_in_progress = false;
                     this.auth_profile.auth_profile_action_message = Some(match result {
-                        Ok(_) => "Auth-provider login completed.".to_string(),
-                        Err(error) => format!("Auth-provider login failed: {}", error),
+                        Ok(_) => dbflux_i18n::t!("connection_manager.auth.login_completed"),
+                        Err(error) => crate::labels::auth_login_failed(&error.to_string()),
                     });
-
                     this.refresh_auth_profile_sessions(cx);
                 });
             });
@@ -2887,16 +3185,22 @@ impl ConnectionManagerWindow {
         let text = match status {
             AuthSessionState::Valid { expires_at } => {
                 if let Some(expires_at) = expires_at {
-                    return Some(format!("Session status: valid (expires at {})", expires_at));
+                    return Some(crate::labels::auth_session_status_valid_expires(
+                        &expires_at.to_string(),
+                    ));
                 }
 
-                "Session status: valid"
+                dbflux_i18n::t!("connection_manager.auth.session_status_valid")
             }
-            AuthSessionState::Expired => "Session status: expired",
-            AuthSessionState::LoginRequired => "Session status: login required",
+            AuthSessionState::Expired => {
+                dbflux_i18n::t!("connection_manager.auth.session_status_expired")
+            }
+            AuthSessionState::LoginRequired => {
+                dbflux_i18n::t!("connection_manager.auth.session_status_login_required")
+            }
         };
 
-        Some(text.to_string())
+        Some(text)
     }
 
     fn selected_auth_profile_is_valid(&self, cx: &App) -> bool {
@@ -3263,7 +3567,9 @@ impl ConnectionManagerWindow {
 
         let Some((ssh_config, ssh_secret)) = self.effective_ssh_test_target(cx) else {
             self.ssh_test_status = TestStatus::Failed;
-            self.ssh_test_error = Some("SSH configuration incomplete".to_string());
+            self.ssh_test_error = Some(dbflux_i18n::t!(
+                "connection_manager.auth.ssh_config_incomplete"
+            ));
             cx.notify();
             return;
         };
@@ -3306,7 +3612,7 @@ impl ConnectionManagerWindow {
 
         let task = cx.background_executor().spawn(async move {
             let dialog = rfd::FileDialog::new()
-                .set_title("Select SSH Private Key")
+                .set_title(dbflux_i18n::t!("connection_manager.select_ssh_key_title"))
                 .set_directory(&start_dir);
 
             dialog.pick_file()
@@ -3340,9 +3646,9 @@ impl ConnectionManagerWindow {
         let this = cx.entity().clone();
 
         let title = match slot {
-            SslCertSlot::CaCert => "Select CA certificate",
-            SslCertSlot::ClientCert => "Select client certificate",
-            SslCertSlot::ClientKey => "Select client key",
+            SslCertSlot::CaCert => dbflux_i18n::t!("connection_manager.select_ca_cert"),
+            SslCertSlot::ClientCert => dbflux_i18n::t!("connection_manager.select_client_cert"),
+            SslCertSlot::ClientKey => dbflux_i18n::t!("connection_manager.select_client_key"),
         };
 
         let start_dir = current_value
@@ -3356,8 +3662,14 @@ impl ConnectionManagerWindow {
             let dialog = rfd::FileDialog::new()
                 .set_title(title)
                 .set_directory(&start_dir)
-                .add_filter("Certificates / keys", &["pem", "crt", "cer", "key", "der"])
-                .add_filter("All files", &["*"]);
+                .add_filter(
+                    dbflux_i18n::t!("connection_manager.filter_certificates"),
+                    &["pem", "crt", "cer", "key", "der"],
+                )
+                .add_filter(
+                    dbflux_i18n::t!("connection_manager.filter_all_files"),
+                    &["*"],
+                );
 
             dialog.pick_file()
         });
@@ -3427,7 +3739,7 @@ impl ConnectionManagerWindow {
 
         let task = cx.background_executor().spawn(async move {
             let dialog = rfd::FileDialog::new()
-                .set_title("Select Database File")
+                .set_title(dbflux_i18n::t!("connection_manager.select_database_file"))
                 .set_directory(&start_dir);
             dialog.pick_file()
         });
@@ -3472,10 +3784,22 @@ impl ConnectionManagerWindow {
     /// Populate the access method dropdown with the unified access modes.
     fn populate_access_method_dropdown(&mut self, cx: &mut Context<Self>) {
         let items = vec![
-            dbflux_components::controls::DropdownItem::with_value("Direct", "direct"),
-            dbflux_components::controls::DropdownItem::with_value("SSH Tunnel", "ssh"),
-            dbflux_components::controls::DropdownItem::with_value("Proxy", "proxy"),
-            dbflux_components::controls::DropdownItem::with_value("SSM Port Forwarding", "ssm"),
+            dbflux_components::controls::DropdownItem::with_value(
+                dbflux_i18n::t!("connection_manager.access_method.direct"),
+                "direct",
+            ),
+            dbflux_components::controls::DropdownItem::with_value(
+                dbflux_i18n::t!("connection_manager.access_method.ssh_tunnel"),
+                "ssh",
+            ),
+            dbflux_components::controls::DropdownItem::with_value(
+                dbflux_i18n::t!("connection_manager.access_method.proxy"),
+                "proxy",
+            ),
+            dbflux_components::controls::DropdownItem::with_value(
+                dbflux_i18n::t!("connection_manager.access_method.ssm"),
+                "ssm",
+            ),
         ];
 
         let selected_index = self.access_tab_mode_to_dropdown_index();
@@ -3809,6 +4133,7 @@ mod tests {
                             enabled_when_checked: None,
                             enabled_when_unchecked: None,
                             disabled_when_field_set: None,
+                            enabled_when_field_equals: None,
                             help: None,
                         }],
                     }],
@@ -3835,6 +4160,237 @@ mod tests {
             auth_profile_ref_field_id_from_form(&empty_form),
             None,
             "Empty form must return None"
+        );
+    }
+
+    const CONNECTION_MANAGER_PLACEHOLDER_KEYS: &[&str] = &[
+        "connection_manager.placeholder.connection_name",
+        "connection_manager.placeholder.password",
+        "connection_manager.placeholder.key_passphrase_optional",
+        "connection_manager.placeholder.ssh_password",
+        "connection_manager.placeholder.ca_cert_path",
+        "connection_manager.placeholder.client_cert_path",
+        "connection_manager.placeholder.client_key_path",
+        "connection_manager.placeholder.select_ssh_tunnel",
+        "connection_manager.placeholder.select_proxy",
+        "connection_manager.placeholder.none",
+        "connection_manager.placeholder.use_driver_default",
+        "connection_manager.placeholder.no_hook",
+        "connection_manager.placeholder.select_trusted_client",
+        "connection_manager.placeholder.filter_trusted_clients",
+        "connection_manager.placeholder.no_role",
+        "connection_manager.placeholder.no_policy",
+        "connection_manager.access_method.direct",
+        "connection_manager.access_method.ssh_tunnel",
+        "connection_manager.access_method.proxy",
+        "connection_manager.access_method.ssm",
+        "connection_manager.new_auth_profile",
+        "connection_manager.aws_sso_wizard_title",
+        "connection_manager.aws_sso_open_failed",
+        "connection_manager.select_ssh_key_title",
+        "connection_manager.select_ca_cert",
+        "connection_manager.select_client_cert",
+        "connection_manager.select_client_key",
+        "connection_manager.filter_certificates",
+        "connection_manager.filter_all_files",
+        "connection_manager.select_database_file",
+    ];
+
+    #[test]
+    fn connection_manager_placeholder_keys_resolve_in_both_locales() {
+        for locale in ["en", "es"] {
+            for key in CONNECTION_MANAGER_PLACEHOLDER_KEYS {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(
+                    !value.is_empty(),
+                    "key {key} resolved empty for locale {locale}"
+                );
+                assert_ne!(value, *key, "key {key} did not resolve for locale {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "key {key} fell back to the raw locale-qualified form for locale {locale}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn connection_manager_access_method_differs_between_locales() {
+        let en = dbflux_i18n::t!("connection_manager.access_method.ssh_tunnel", locale = "en");
+        let es = dbflux_i18n::t!("connection_manager.access_method.ssh_tunnel", locale = "es");
+
+        assert_ne!(
+            en, es,
+            "connection_manager.access_method.ssh_tunnel should differ between en and es"
+        );
+    }
+
+    #[test]
+    fn connection_manager_new_auth_profile_exact_values() {
+        let en = dbflux_i18n::t!("connection_manager.new_auth_profile", locale = "en");
+        let es = dbflux_i18n::t!("connection_manager.new_auth_profile", locale = "es");
+
+        assert_eq!(en, "New Auth Profile...");
+        assert_eq!(es, "Nuevo perfil de autenticación...");
+    }
+
+    #[test]
+    fn access_method_dropdown_item_value_ids_stay_untranslated() {
+        for locale in ["en", "es"] {
+            let label = dbflux_i18n::t!(
+                "connection_manager.access_method.ssh_tunnel",
+                locale = locale
+            );
+            let item = dbflux_components::controls::DropdownItem::with_value(label, "ssh");
+
+            assert_eq!(
+                item.value, "ssh",
+                "dropdown item id must stay untranslated for locale {locale}"
+            );
+        }
+    }
+
+    // --- auth flow i18n ---
+
+    const CONNECTION_MANAGER_AUTH_KEYS: &[&str] = &[
+        "connection_manager.auth.profile_created_sso",
+        "connection_manager.auth.profile_created_wizard",
+        "connection_manager.auth.refreshing_sessions",
+        "connection_manager.auth.select_before_login",
+        "connection_manager.auth.provider_unavailable",
+        "connection_manager.auth.interactive_login_unavailable",
+        "connection_manager.auth.login_starting",
+        "connection_manager.auth.login_completed",
+        "connection_manager.auth.login_failed",
+        "connection_manager.auth.session_status_valid_expires",
+        "connection_manager.auth.session_status_valid",
+        "connection_manager.auth.session_status_expired",
+        "connection_manager.auth.session_status_login_required",
+    ];
+
+    #[test]
+    fn connection_manager_auth_keys_resolve_in_both_locales() {
+        for locale in ["en", "es"] {
+            for key in CONNECTION_MANAGER_AUTH_KEYS {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(
+                    !value.is_empty(),
+                    "key {key} resolved empty for locale {locale}"
+                );
+                assert_ne!(value, *key, "key {key} did not resolve for locale {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "key {key} fell back to the raw locale-qualified form for locale {locale}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn connection_manager_auth_login_completed_differs_between_locales() {
+        let en = dbflux_i18n::t!("connection_manager.auth.login_completed", locale = "en");
+        let es = dbflux_i18n::t!("connection_manager.auth.login_completed", locale = "es");
+
+        assert_ne!(
+            en, es,
+            "connection_manager.auth.login_completed should differ between en and es"
+        );
+    }
+
+    #[test]
+    fn connection_manager_auth_login_completed_exact_english_value() {
+        let en = dbflux_i18n::t!("connection_manager.auth.login_completed", locale = "en");
+
+        assert_eq!(en, "Auth-provider login completed.");
+    }
+
+    // --- dialog / tab / driver-select i18n (PR14) ---
+
+    const CONNECTION_MANAGER_DIALOG_KEYS: &[&str] = &[
+        "connection_manager.tab.main",
+        "connection_manager.tab.settings",
+        "connection_manager.tab.mcp",
+        "connection_manager.field.name",
+        "connection_manager.field.ssl_mode",
+        "connection_manager.field.ca_certificate",
+        "connection_manager.field.client_cert",
+        "connection_manager.field.client_key",
+        "connection_manager.section.transport",
+        "connection_manager.banner.correct_following",
+        "connection_manager.banner.testing_connection",
+        "connection_manager.banner.connection_successful",
+        "connection_manager.banner.connection_successful_warnings",
+        "connection_manager.banner.connection_failed",
+        "connection_manager.action.copy",
+        "connection_manager.action.back",
+        "connection_manager.action.test_connection",
+        "connection_manager.action.save",
+        "connection_manager.action.browse",
+        "connection_manager.window_title",
+        "connection_manager.driver_select.search_placeholder",
+        "connection_manager.driver_select.title",
+        "connection_manager.driver_select.subtitle",
+        "connection_manager.driver_select.empty_state",
+        "connection_manager.driver_select.import_from_file",
+        "connection_manager.driver_select.import_from_client",
+        "connection_manager.driver_select.cancel",
+        "connection_manager.driver_select.configure",
+        "connection_manager.driver_select.configure_named",
+        "connection_manager.auth.ssh_config_incomplete",
+    ];
+
+    #[test]
+    fn connection_manager_dialog_keys_resolve_in_both_locales() {
+        for locale in ["en", "es"] {
+            for key in CONNECTION_MANAGER_DIALOG_KEYS {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(
+                    !value.is_empty(),
+                    "key {key} resolved empty for locale {locale}"
+                );
+                assert_ne!(value, *key, "key {key} did not resolve for locale {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "key {key} fell back to the raw locale-qualified form for locale {locale}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn connection_manager_window_title_differs_between_locales() {
+        let en = dbflux_i18n::t!("connection_manager.window_title", locale = "en");
+        let es = dbflux_i18n::t!("connection_manager.window_title", locale = "es");
+
+        assert_ne!(
+            en, es,
+            "connection_manager.window_title should differ between en and es"
+        );
+    }
+
+    #[test]
+    fn connection_manager_window_title_exact_values() {
+        let en = dbflux_i18n::t!("connection_manager.window_title", locale = "en");
+        let es = dbflux_i18n::t!("connection_manager.window_title", locale = "es");
+
+        assert_eq!(en, "Connection Manager");
+        assert_eq!(es, "Administrador de conexiones");
+    }
+
+    #[test]
+    fn connection_manager_banner_connection_failed_differs_between_locales() {
+        let en = dbflux_i18n::t!("connection_manager.banner.connection_failed", locale = "en");
+        let es = dbflux_i18n::t!("connection_manager.banner.connection_failed", locale = "es");
+
+        assert_ne!(
+            en, es,
+            "connection_manager.banner.connection_failed should differ between en and es"
         );
     }
 }

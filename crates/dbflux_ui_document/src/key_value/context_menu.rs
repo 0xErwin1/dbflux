@@ -19,7 +19,7 @@ pub(super) enum KvMenuTarget {
 }
 
 pub(super) struct KvMenuItem {
-    pub label: &'static str,
+    pub label: SharedString,
     pub action: KvMenuAction,
     pub icon: AppIcon,
     pub is_danger: bool,
@@ -44,31 +44,31 @@ impl super::KeyValueDocument {
     pub(super) fn build_key_menu_items(&self) -> Vec<KvMenuItem> {
         let mut items = vec![
             KvMenuItem {
-                label: "Copy Key",
+                label: dbflux_i18n::t!("document.key_value.context_menu.copy_key").into(),
                 action: KvMenuAction::CopyKey,
                 icon: AppIcon::Columns,
                 is_danger: false,
             },
             KvMenuItem {
-                label: "Copy as Command",
+                label: dbflux_i18n::t!("document.key_value.context_menu.copy_as_command").into(),
                 action: KvMenuAction::CopyAsCommand,
                 icon: AppIcon::Code,
                 is_danger: false,
             },
             KvMenuItem {
-                label: "Rename",
+                label: dbflux_i18n::t!("document.key_value.context_menu.rename").into(),
                 action: KvMenuAction::RenameKey,
                 icon: AppIcon::Pencil,
                 is_danger: false,
             },
             KvMenuItem {
-                label: "New Key",
+                label: dbflux_i18n::t!("document.key_value.context_menu.new_key").into(),
                 action: KvMenuAction::NewKey,
                 icon: AppIcon::Plus,
                 is_danger: false,
             },
             KvMenuItem {
-                label: "Delete Key",
+                label: dbflux_i18n::t!("document.key_value.context_menu.delete_key").into(),
                 action: KvMenuAction::DeleteKey,
                 icon: AppIcon::Delete,
                 is_danger: true,
@@ -86,25 +86,26 @@ impl super::KeyValueDocument {
         if self.is_stream_type() {
             vec![
                 KvMenuItem {
-                    label: "Copy Entry",
+                    label: dbflux_i18n::t!("document.key_value.context_menu.copy_entry").into(),
                     action: KvMenuAction::CopyMember,
                     icon: AppIcon::Columns,
                     is_danger: false,
                 },
                 KvMenuItem {
-                    label: "Copy as Command",
+                    label: dbflux_i18n::t!("document.key_value.context_menu.copy_as_command")
+                        .into(),
                     action: KvMenuAction::CopyAsCommand,
                     icon: AppIcon::Code,
                     is_danger: false,
                 },
                 KvMenuItem {
-                    label: "Add Entry",
+                    label: dbflux_i18n::t!("document.key_value.context_menu.add_entry").into(),
                     action: KvMenuAction::AddMember,
                     icon: AppIcon::Plus,
                     is_danger: false,
                 },
                 KvMenuItem {
-                    label: "Delete Entry",
+                    label: dbflux_i18n::t!("document.key_value.context_menu.delete_entry").into(),
                     action: KvMenuAction::DeleteMember,
                     icon: AppIcon::Delete,
                     is_danger: true,
@@ -113,31 +114,32 @@ impl super::KeyValueDocument {
         } else if self.is_structured_type() {
             vec![
                 KvMenuItem {
-                    label: "Copy Member",
+                    label: dbflux_i18n::t!("document.key_value.context_menu.copy_member").into(),
                     action: KvMenuAction::CopyMember,
                     icon: AppIcon::Columns,
                     is_danger: false,
                 },
                 KvMenuItem {
-                    label: "Copy as Command",
+                    label: dbflux_i18n::t!("document.key_value.context_menu.copy_as_command")
+                        .into(),
                     action: KvMenuAction::CopyAsCommand,
                     icon: AppIcon::Code,
                     is_danger: false,
                 },
                 KvMenuItem {
-                    label: "Edit Member",
+                    label: dbflux_i18n::t!("document.key_value.context_menu.edit_member").into(),
                     action: KvMenuAction::EditMember,
                     icon: AppIcon::Pencil,
                     is_danger: false,
                 },
                 KvMenuItem {
-                    label: "Add Member",
+                    label: dbflux_i18n::t!("document.key_value.context_menu.add_member").into(),
                     action: KvMenuAction::AddMember,
                     icon: AppIcon::Plus,
                     is_danger: false,
                 },
                 KvMenuItem {
-                    label: "Delete Member",
+                    label: dbflux_i18n::t!("document.key_value.context_menu.delete_member").into(),
                     action: KvMenuAction::DeleteMember,
                     icon: AppIcon::Delete,
                     is_danger: true,
@@ -146,25 +148,26 @@ impl super::KeyValueDocument {
         } else {
             vec![
                 KvMenuItem {
-                    label: "Copy Value",
+                    label: dbflux_i18n::t!("document.key_value.context_menu.copy_value").into(),
                     action: KvMenuAction::CopyValue,
                     icon: AppIcon::Columns,
                     is_danger: false,
                 },
                 KvMenuItem {
-                    label: "Copy as Command",
+                    label: dbflux_i18n::t!("document.key_value.context_menu.copy_as_command")
+                        .into(),
                     action: KvMenuAction::CopyAsCommand,
                     icon: AppIcon::Code,
                     is_danger: false,
                 },
                 KvMenuItem {
-                    label: "Edit Value",
+                    label: dbflux_i18n::t!("document.key_value.context_menu.edit_value").into(),
                     action: KvMenuAction::EditValue,
                     icon: AppIcon::Pencil,
                     is_danger: false,
                 },
                 KvMenuItem {
-                    label: "Delete Key",
+                    label: dbflux_i18n::t!("document.key_value.context_menu.delete_key").into(),
                     action: KvMenuAction::DeleteKey,
                     icon: AppIcon::Delete,
                     is_danger: true,
@@ -344,5 +347,66 @@ impl super::KeyValueDocument {
         }
 
         cx.notify();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{KvMenuAction, KvMenuItem};
+    use dbflux_components::icons::AppIcon;
+
+    const CONTEXT_MENU_KEYS: &[&str] = &[
+        "document.key_value.context_menu.add_entry",
+        "document.key_value.context_menu.add_member",
+        "document.key_value.context_menu.copy_as_command",
+        "document.key_value.context_menu.copy_entry",
+        "document.key_value.context_menu.copy_key",
+        "document.key_value.context_menu.copy_member",
+        "document.key_value.context_menu.copy_value",
+        "document.key_value.context_menu.delete_entry",
+        "document.key_value.context_menu.delete_key",
+        "document.key_value.context_menu.delete_member",
+        "document.key_value.context_menu.edit_member",
+        "document.key_value.context_menu.edit_value",
+        "document.key_value.context_menu.new_key",
+        "document.key_value.context_menu.rename",
+    ];
+
+    #[test]
+    fn key_value_context_menu_keys_resolve_in_both_locales() {
+        for key in CONTEXT_MENU_KEYS {
+            let english = dbflux_i18n::t!(key, locale = "en");
+            let spanish = dbflux_i18n::t!(key, locale = "es");
+
+            assert!(!english.is_empty(), "empty English translation for {key}");
+            assert!(!spanish.is_empty(), "empty Spanish translation for {key}");
+            assert_ne!(english, *key, "English translation missing for {key}");
+            assert_ne!(spanish, *key, "Spanish translation missing for {key}");
+            assert_ne!(
+                english,
+                format!("en.{key}"),
+                "English translation missing for {key}"
+            );
+            assert_ne!(
+                spanish,
+                format!("es.{key}"),
+                "Spanish translation missing for {key}"
+            );
+        }
+    }
+
+    #[test]
+    fn key_value_context_menu_label_round_trips_translated_value() {
+        let item = KvMenuItem {
+            label: dbflux_i18n::t!("document.key_value.context_menu.copy_key").into(),
+            action: KvMenuAction::CopyKey,
+            icon: AppIcon::Columns,
+            is_danger: false,
+        };
+
+        assert_eq!(
+            item.label.to_string(),
+            dbflux_i18n::t!("document.key_value.context_menu.copy_key")
+        );
     }
 }

@@ -7,6 +7,7 @@ impl Sidebar {
             &self.metric_fetch_errors,
             &self.instance_metrics_cache,
             &self.instance_inspectors_cache,
+            &self.bucket_cache,
         );
         let items = self.apply_expansion_overrides(items);
 
@@ -96,7 +97,7 @@ impl Sidebar {
         if self.loading_items.contains(&item_id) && children.is_empty() {
             children.push(TreeItem::new(
                 format!("{}_loading", item_id),
-                "Loading...".to_string(),
+                dbflux_i18n::t!("sidebar.tree.status.loading"),
             ));
         }
 
@@ -113,7 +114,13 @@ impl Sidebar {
     }
 
     pub(super) fn build_tree_items(state: &AppStateEntity) -> Vec<TreeItem> {
-        Self::build_tree_items_with_errors(state, &HashMap::new(), &HashMap::new(), &HashMap::new())
+        Self::build_tree_items_with_errors(
+            state,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+        )
     }
 
     pub(super) fn build_tree_items_with_errors(
@@ -121,6 +128,7 @@ impl Sidebar {
         metric_fetch_errors: &HashMap<String, String>,
         instance_metrics_cache: &HashMap<Uuid, Vec<dbflux_core::InstanceMetricDef>>,
         instance_inspectors_cache: &HashMap<Uuid, Vec<dbflux_core::InstanceInspectorDef>>,
+        bucket_cache: &HashMap<Uuid, Vec<dbflux_core::BucketInfo>>,
     ) -> Vec<TreeItem> {
         let root_nodes = state.connection_tree().root_nodes();
         Self::build_tree_nodes_recursive_with_errors(
@@ -129,6 +137,7 @@ impl Sidebar {
             metric_fetch_errors,
             instance_metrics_cache,
             instance_inspectors_cache,
+            bucket_cache,
         )
     }
 
@@ -178,6 +187,7 @@ impl Sidebar {
         metric_fetch_errors: &HashMap<String, String>,
         instance_metrics_cache: &HashMap<Uuid, Vec<dbflux_core::InstanceMetricDef>>,
         instance_inspectors_cache: &HashMap<Uuid, Vec<dbflux_core::InstanceInspectorDef>>,
+        bucket_cache: &HashMap<Uuid, Vec<dbflux_core::BucketInfo>>,
     ) -> Vec<TreeItem> {
         let mut items = Vec::new();
 
@@ -193,6 +203,7 @@ impl Sidebar {
                         metric_fetch_errors,
                         instance_metrics_cache,
                         instance_inspectors_cache,
+                        bucket_cache,
                     );
 
                     let folder_item = TreeItem::new(
@@ -215,6 +226,7 @@ impl Sidebar {
                             metric_fetch_errors,
                             instance_metrics_cache,
                             instance_inspectors_cache,
+                            bucket_cache,
                         );
                         items.push(profile_item);
                     }
@@ -231,6 +243,7 @@ impl Sidebar {
         metric_fetch_errors: &HashMap<String, String>,
         instance_metrics_cache: &HashMap<Uuid, Vec<dbflux_core::InstanceMetricDef>>,
         instance_inspectors_cache: &HashMap<Uuid, Vec<dbflux_core::InstanceInspectorDef>>,
+        bucket_cache: &HashMap<Uuid, Vec<dbflux_core::BucketInfo>>,
     ) -> TreeItem {
         let profile_id = profile.id;
         let is_connected = state.connections().contains_key(&profile_id);
@@ -238,7 +251,7 @@ impl Sidebar {
         let is_connecting = state.is_operation_pending(profile_id, None);
 
         let profile_label = if is_connecting {
-            format!("{} (connecting...)", profile.name)
+            crate::labels::profile_connecting_label(&profile.name)
         } else {
             profile.name.clone()
         };
@@ -285,7 +298,12 @@ impl Sidebar {
             let supports_routines = conn_capabilities.contains(DriverCapabilities::ROUTINES);
             let metric_cache = state.metric_catalog_cache().clone();
 
-            if schema.is_key_value() {
+            if conn_category == DatabaseCategory::ObjectStorage {
+                // Object storage lists its containers flat under the
+                // connection: the prefix hierarchy lives in the object browser
+                // document, never in the global tree.
+                profile_children.extend(build_bucket_children(profile_id, bucket_cache));
+            } else if schema.is_key_value() {
                 let kv_items = build_kv_database_children(profile_id, connected, state);
                 profile_children.push(Self::build_databases_folder_item(profile_id, kv_items));
             } else if !schema.databases().is_empty() {
@@ -371,7 +389,7 @@ impl Sidebar {
         let children = Self::build_dashboard_children(profile_id, state);
         TreeItem::new(
             SchemaNodeId::DashboardsFolder { profile_id }.to_string(),
-            "Dashboards".to_string(),
+            crate::labels::dashboards_folder_label(),
         )
         .expanded(false)
         .children(children)
@@ -396,14 +414,14 @@ impl Sidebar {
                     .dashboard_source()
                     .map(|s| s.container_label().to_string())
             })
-            .unwrap_or_else(|| "Dashboards".to_string());
+            .unwrap_or_else(crate::labels::dashboards_folder_label);
 
         let folder_id = SchemaNodeId::RemoteDashboardsFolder { profile_id }.to_string();
         let children =
             Self::build_remote_dashboard_children(profile_id, state, &folder_id, fetch_errors);
 
         let label = match state.remote_dashboard_cache().peek(profile_id) {
-            Some(list) => format!("{} ({})", label, list.len()),
+            Some(list) => crate::labels::remote_dashboards_count_label(&label, list.len()),
             None => label,
         };
 
@@ -428,7 +446,7 @@ impl Sidebar {
             if let Some(error) = fetch_errors.get(folder_id) {
                 return vec![TreeItem::new(
                     format!("remote_dashboards_error:{profile_id}"),
-                    format!("Error: {error} — collapse and expand to retry"),
+                    crate::labels::remote_dashboards_error_label(error),
                 )];
             }
             return vec![Self::loading_placeholder(
@@ -441,7 +459,7 @@ impl Sidebar {
         if dashboards.is_empty() {
             return vec![TreeItem::new(
                 format!("remote_dashboards_empty:{profile_id}"),
-                "No dashboards in this account/region".to_string(),
+                crate::labels::remote_dashboards_empty_label(),
             )];
         }
 
@@ -469,7 +487,7 @@ impl Sidebar {
         let children = Self::build_saved_chart_children(profile_id, state);
         TreeItem::new(
             SchemaNodeId::SavedChartsFolder { profile_id }.to_string(),
-            "Saved Charts".to_string(),
+            crate::labels::saved_charts_folder_label(),
         )
         .expanded(false)
         .children(children)
@@ -483,7 +501,7 @@ impl Sidebar {
     fn build_databases_folder_item(profile_id: Uuid, children: Vec<TreeItem>) -> TreeItem {
         TreeItem::new(
             SchemaNodeId::DatabasesFolder { profile_id }.to_string(),
-            "Databases".to_string(),
+            dbflux_i18n::t!("sidebar.tree.folder.databases"),
         )
         .expanded(true)
         .children(children)
@@ -509,7 +527,7 @@ impl Sidebar {
     ) -> TreeItem {
         TreeItem::new(
             SchemaNodeId::InstanceMetricsFolder { profile_id }.to_string(),
-            "Instance Metrics".to_string(),
+            crate::labels::instance_metrics_folder_label(),
         )
         .expanded(false)
         .children(children)
@@ -527,7 +545,7 @@ impl Sidebar {
     ) -> TreeItem {
         TreeItem::new(
             SchemaNodeId::InstanceInspectorsFolder { profile_id }.to_string(),
-            "Instance Inspectors".to_string(),
+            crate::labels::instance_inspectors_folder_label(),
         )
         .expanded(false)
         .children(children)
@@ -546,14 +564,14 @@ impl Sidebar {
         let Some(metrics) = cache.get(&profile_id) else {
             return vec![TreeItem::new(
                 format!("instance-metrics-loading:{profile_id}"),
-                "Loading\u{2026}".to_string(),
+                dbflux_i18n::t!("sidebar.tree.status.loading"),
             )];
         };
 
         if metrics.is_empty() {
             return vec![TreeItem::new(
                 format!("instance-metrics-empty:{profile_id}"),
-                "No metrics available".to_string(),
+                crate::labels::no_metrics_available_label(),
             )];
         }
 
@@ -585,14 +603,14 @@ impl Sidebar {
         let Some(inspectors) = cache.get(&profile_id) else {
             return vec![TreeItem::new(
                 format!("instance-inspectors-loading:{profile_id}"),
-                "Loading\u{2026}".to_string(),
+                dbflux_i18n::t!("sidebar.tree.status.loading"),
             )];
         };
 
         if inspectors.is_empty() {
             return vec![TreeItem::new(
                 format!("instance-inspectors-empty:{profile_id}"),
-                "No inspectors available".to_string(),
+                crate::labels::no_inspectors_available_label(),
             )];
         }
 
@@ -619,7 +637,7 @@ impl Sidebar {
     pub(crate) fn build_instance_overview_leaf(profile_id: Uuid) -> TreeItem {
         TreeItem::new(
             SchemaNodeId::InstanceOverviewLeaf { profile_id }.to_string(),
-            "Instance Overview".to_string(),
+            crate::labels::instance_overview_label(),
         )
     }
 
@@ -642,15 +660,9 @@ impl Sidebar {
                     caps.contains(dbflux_core::DriverCapabilities::DASHBOARD_IMPORT)
                 });
 
-            let hint = if can_import {
-                "No dashboards yet — right-click to create or import"
-            } else {
-                "No dashboards yet — right-click to create"
-            };
-
             return vec![TreeItem::new(
                 format!("dashboards_empty:{profile_id}"),
-                hint.to_string(),
+                crate::labels::no_dashboards_yet_label(can_import),
             )];
         }
 
@@ -681,7 +693,7 @@ impl Sidebar {
         if charts.is_empty() {
             return vec![TreeItem::new(
                 format!("saved_charts_empty:{profile_id}"),
-                "No saved charts yet — save a chart from a query result".to_string(),
+                crate::labels::no_saved_charts_yet_label(),
             )];
         }
 
@@ -724,7 +736,7 @@ impl Sidebar {
             }
         }
 
-        "Untitled chart".to_string()
+        crate::labels::untitled_chart_label()
     }
 
     pub(super) fn count_visible_entries(items: &[TreeItem]) -> usize {
@@ -994,7 +1006,7 @@ impl Sidebar {
         suffix: &str,
     ) -> TreeItem {
         let id = format!("{}|{}|{}", suffix, profile_id, database_name);
-        TreeItem::new(id, "Loading...".to_string())
+        TreeItem::new(id, dbflux_i18n::t!("sidebar.tree.status.loading"))
     }
 
     /// Build an error retry placeholder child for metric sidebar nodes.
@@ -1002,7 +1014,7 @@ impl Sidebar {
     /// The sentinel ID encodes the retry key so `execute_item` can route it
     /// back to the appropriate fetch helper.
     pub(crate) fn error_retry_placeholder(retry_sentinel_id: &str, error_msg: &str) -> TreeItem {
-        let label = format!("Error: {} — click to retry", error_msg);
+        let label = crate::labels::error_retry_label(error_msg);
         TreeItem::new(retry_sentinel_id.to_string(), label)
     }
 
@@ -1044,7 +1056,10 @@ impl Sidebar {
                     database: database_name.to_string(),
                 }
                 .to_string(),
-                format!("Measurements ({})", measurements.len()),
+                crate::labels::container_folder_label(
+                    dbflux_core::DatabaseCategory::TimeSeries,
+                    measurements.len(),
+                ),
             )
             .expanded(true)
             .children(measurement_items),
@@ -1158,7 +1173,7 @@ impl Sidebar {
                         collection: coll_name.to_string(),
                     }
                     .to_string(),
-                    format!("Fields ({})", field_count),
+                    crate::labels::fields_folder_label(field_count),
                 )
                 .expanded(false)
                 .children(field_children),
@@ -1169,7 +1184,7 @@ impl Sidebar {
                         collection: coll_name.to_string(),
                     }
                     .to_string(),
-                    format!("Indexes ({})", index_count),
+                    crate::labels::indexes_folder_label(index_count),
                 )
                 .expanded(false)
                 .children(index_children),
@@ -1382,6 +1397,17 @@ impl Sidebar {
             Vec::new()
         };
 
+        let storage_children = if details_loaded {
+            build_table_storage_children(
+                profile_id,
+                schema_name,
+                &table.name,
+                effective_table.storage_hints.as_deref(),
+            )
+        } else {
+            Vec::new()
+        };
+
         // Lookup key must match the cache write path in populate_dependents.
         // The cache key mirrors `table_details`: (database-or-schema, schema, table).
         let dep_key = (
@@ -1402,10 +1428,13 @@ impl Sidebar {
             schema_name,
             &table.name,
             details_loaded,
-            column_children,
-            index_children,
-            fk_children,
-            constraint_children,
+            TableSectionChildren {
+                columns: column_children,
+                indexes: index_children,
+                foreign_keys: fk_children,
+                constraints: constraint_children,
+                storage: storage_children,
+            },
             dependents_folder,
         );
 
@@ -1463,14 +1492,14 @@ fn build_kv_database_children(
                     database: database_name.clone(),
                 }
                 .to_string(),
-                "Loading...".to_string(),
+                dbflux_i18n::t!("sidebar.tree.status.loading"),
             )]
         } else {
             Vec::new()
         };
 
         let db_label = if is_pending {
-            format!("{} (loading...)", database_name)
+            crate::labels::node_loading_label(&database_name)
         } else {
             database_name.clone()
         };
@@ -1620,7 +1649,7 @@ fn resolve_db_children(
                     database: db_name.to_owned(),
                 }
                 .to_string(),
-                "Loading...".to_string(),
+                dbflux_i18n::t!("sidebar.tree.status.loading"),
             )]
         } else {
             Vec::new()
@@ -1662,6 +1691,7 @@ fn resolve_db_children(
                     sample_fields: collection.sample_fields.clone(),
                     presentation: collection.presentation,
                     child_items: collection.child_items.clone(),
+                    storage_hints: None,
                 })
                 .collect::<Vec<_>>();
 
@@ -1709,7 +1739,7 @@ fn resolve_db_children(
                 database: db_name.to_owned(),
             }
             .to_string(),
-            "Loading...".to_string(),
+            dbflux_i18n::t!("sidebar.tree.status.loading"),
         )]
     } else {
         Vec::new()
@@ -1733,7 +1763,7 @@ fn build_named_db_item(
     db_children: Vec<TreeItem>,
 ) -> TreeItem {
     let db_label = if is_pending {
-        format!("{} (loading...)", db_name)
+        crate::labels::node_loading_label(db_name)
     } else {
         db_name.to_owned()
     };
@@ -1800,6 +1830,46 @@ fn build_instance_section(
     items
 }
 
+/// Build the flat bucket rows shown under an object-storage connection.
+///
+/// The listing is session-cached and fetched on first expansion of the
+/// connection node; until it resolves a single non-clickable placeholder keeps
+/// the node from looking empty. Buckets have no children here by design — the
+/// prefix hierarchy belongs to the object browser document.
+fn build_bucket_children(
+    profile_id: Uuid,
+    bucket_cache: &HashMap<Uuid, Vec<dbflux_core::BucketInfo>>,
+) -> Vec<TreeItem> {
+    let Some(buckets) = bucket_cache.get(&profile_id) else {
+        return vec![Sidebar::loading_placeholder(
+            profile_id,
+            "buckets",
+            "buckets-loading",
+        )];
+    };
+
+    if buckets.is_empty() {
+        return vec![TreeItem::new(
+            format!("buckets-empty|{profile_id}"),
+            dbflux_i18n::t!("sidebar.tree.empty.buckets"),
+        )];
+    }
+
+    buckets
+        .iter()
+        .map(|bucket| {
+            TreeItem::new(
+                SchemaNodeId::Bucket {
+                    profile_id,
+                    name: bucket.name.clone(),
+                }
+                .to_string(),
+                bucket.name.clone(),
+            )
+        })
+        .collect()
+}
+
 fn build_collections_folder(
     profile_id: Uuid,
     database_name: &str,
@@ -1833,7 +1903,7 @@ fn build_collections_folder(
                 database: database_name.to_string(),
             }
             .to_string(),
-            format!("{} ({})", category.container_name(), db_schema.tables.len()),
+            crate::labels::container_folder_label(category, db_schema.tables.len()),
         )
         .expanded(category.default_expand_container())
         .children(collection_children),
@@ -1860,7 +1930,7 @@ fn build_metrics_folder(
     };
 
     Some(
-        TreeItem::new(parent_id, "Metrics".to_string())
+        TreeItem::new(parent_id, crate::labels::metrics_folder_label())
             .expanded(false)
             .children(children),
     )
@@ -1934,7 +2004,7 @@ fn build_db_collection_indexes_folder(
                 database: database_name.to_string(),
             }
             .to_string(),
-            format!("Indexes ({})", all_index_items.len()),
+            crate::labels::indexes_folder_label(all_index_items.len()),
         )
         .expanded(false)
         .children(all_index_items),
@@ -2060,6 +2130,63 @@ fn build_table_constraint_children(
         .collect()
 }
 
+/// Build the generic storage-hints folder for a table, driven entirely by
+/// `TableInfo.storage_hints`. Any driver that populates hints (e.g. a
+/// distribution/sort key, or an informational-only constraint) gets this
+/// folder for free; drivers that leave it `None`/empty render nothing here —
+/// never an empty placeholder folder.
+fn build_table_storage_children(
+    profile_id: Uuid,
+    schema_name: &str,
+    table_name: &str,
+    storage_hints: Option<&[dbflux_core::TableStorageHint]>,
+) -> Vec<TreeItem> {
+    let Some(hints) = storage_hints else {
+        return Vec::new();
+    };
+
+    if hints.is_empty() {
+        return Vec::new();
+    }
+
+    let hint_items: Vec<TreeItem> = hints
+        .iter()
+        .map(|hint| {
+            let mut label = hint.label.clone();
+            if !hint.columns.is_empty() {
+                label.push_str(&format!(" ({})", hint.columns.join(", ")));
+            }
+            if let Some(ref detail) = hint.detail {
+                label.push_str(&format!(" — {}", detail));
+            }
+
+            TreeItem::new(
+                SchemaNodeId::StorageHintItem {
+                    profile_id,
+                    table: table_name.to_string(),
+                    name: hint.label.clone(),
+                }
+                .to_string(),
+                label,
+            )
+        })
+        .collect();
+
+    vec![
+        TreeItem::new(
+            SchemaNodeId::StorageHintsFolder {
+                profile_id,
+                schema: schema_name.to_string(),
+                table: table_name.to_string(),
+            }
+            .to_string(),
+            crate::labels::storage_folder_label(hint_items.len()),
+        )
+        .expanded(false)
+        .children(hint_items),
+    ]
+}
+
 fn build_table_dependents_folder(
     profile_id: Uuid,
     schema_name: &str,
@@ -2073,12 +2200,7 @@ fn build_table_dependents_folder(
     let dep_items: Vec<TreeItem> = deps
         .iter()
         .map(|dep| {
-            let kind_label = match dep.kind {
-                dbflux_core::RelationKind::View => "View",
-                dbflux_core::RelationKind::MaterializedView => "Materialized View",
-                dbflux_core::RelationKind::ForeignKeyChild => "FK Child",
-                dbflux_core::RelationKind::Trigger => "Trigger",
-            };
+            let kind_label = crate::labels::dependent_kind_label(&dep.kind);
             let label = format!("{} ({})", dep.qualified_name, kind_label);
 
             TreeItem::new(
@@ -2102,7 +2224,7 @@ fn build_table_dependents_folder(
                 table: table_name.to_string(),
             }
             .to_string(),
-            format!("Used by {} objects", deps.len()),
+            crate::labels::used_by_label(deps.len()),
         )
         .expanded(false)
         .children(dep_items),
@@ -2114,17 +2236,25 @@ fn build_table_dependents_folder(
 /// When `details_loaded` is false, emits a single "Loading…" placeholder
 /// instead of four empty section folders. Once details are available the four
 /// folders (Columns, Indexes, Foreign Keys, Constraints) appear with their
-/// real counts; the optional dependents folder is appended last.
-#[allow(clippy::too_many_arguments)]
+/// real counts, followed by the generic Storage folder (only when the driver
+/// populated `storage_hints`); the optional dependents folder is appended last.
+/// The per-table section child lists that [`build_table_sections`] assembles
+/// into folder nodes. Grouping the five structurally identical `Vec<TreeItem>`
+/// lists into named fields prevents a silent call-site argument swap.
+struct TableSectionChildren {
+    columns: Vec<TreeItem>,
+    indexes: Vec<TreeItem>,
+    foreign_keys: Vec<TreeItem>,
+    constraints: Vec<TreeItem>,
+    storage: Vec<TreeItem>,
+}
+
 fn build_table_sections(
     profile_id: Uuid,
     schema_name: &str,
     table_name: &str,
     details_loaded: bool,
-    column_children: Vec<TreeItem>,
-    index_children: Vec<TreeItem>,
-    fk_children: Vec<TreeItem>,
-    constraint_children: Vec<TreeItem>,
+    children: TableSectionChildren,
     dependents_folder: Option<TreeItem>,
 ) -> Vec<TreeItem> {
     let mut sections = if details_loaded {
@@ -2156,33 +2286,38 @@ fn build_table_sections(
         vec![
             TreeItem::new(
                 columns_folder_id,
-                format!("Columns ({})", column_children.len()),
+                crate::labels::columns_folder_label(children.columns.len()),
             )
             .expanded(false)
-            .children(column_children),
+            .children(children.columns),
             TreeItem::new(
                 indexes_folder_id,
-                format!("Indexes ({})", index_children.len()),
+                crate::labels::indexes_folder_label(children.indexes.len()),
             )
             .expanded(false)
-            .children(index_children),
+            .children(children.indexes),
             TreeItem::new(
                 fks_folder_id,
-                format!("Foreign Keys ({})", fk_children.len()),
+                crate::labels::foreign_keys_folder_label(children.foreign_keys.len()),
             )
             .expanded(false)
-            .children(fk_children),
+            .children(children.foreign_keys),
             TreeItem::new(
                 constraints_folder_id,
-                format!("Constraints ({})", constraint_children.len()),
+                crate::labels::constraints_folder_label(children.constraints.len()),
             )
             .expanded(false)
-            .children(constraint_children),
+            .children(children.constraints),
         ]
     } else {
         let table_loading_id = format!("T|{}|{}|{}_loading", profile_id, schema_name, table_name);
-        vec![TreeItem::new(table_loading_id, "Loading…".to_string())]
+        vec![TreeItem::new(
+            table_loading_id,
+            dbflux_i18n::t!("sidebar.tree.status.loading"),
+        )]
     };
+
+    sections.extend(children.storage);
 
     if let Some(dep_folder) = dependents_folder {
         sections.push(dep_folder);
@@ -2225,7 +2360,10 @@ fn build_schema_tables_folder(
                 schema: schema_name.to_string(),
             }
             .to_string(),
-            format!("Tables ({})", tables.len()),
+            crate::labels::container_folder_label(
+                dbflux_core::DatabaseCategory::Relational,
+                tables.len(),
+            ),
         )
         .expanded(true)
         .children(table_children),
@@ -2266,7 +2404,7 @@ fn build_schema_views_folder(
                 schema: schema_name.to_string(),
             }
             .to_string(),
-            format!("Views ({})", views.len()),
+            crate::labels::views_folder_label(views.len()),
         )
         .expanded(true)
         .children(view_children),
@@ -2304,11 +2442,14 @@ fn build_schema_types_folder(
                 })
                 .collect();
 
-            TreeItem::new(types_item_id, format!("Data Types ({})", types.len()))
-                .expanded(false)
-                .children(type_children)
+            TreeItem::new(
+                types_item_id,
+                crate::labels::data_types_folder_label(types.len()),
+            )
+            .expanded(false)
+            .children(type_children)
         } else {
-            TreeItem::new(types_item_id, "Data Types (0)".to_string())
+            TreeItem::new(types_item_id, crate::labels::data_types_folder_label(0))
                 .expanded(false)
                 .children(vec![])
         }
@@ -2320,12 +2461,15 @@ fn build_schema_types_folder(
                 schema: schema_name.to_string(),
             }
             .to_string(),
-            "Loading...".to_string(),
+            dbflux_i18n::t!("sidebar.tree.status.loading"),
         );
 
-        TreeItem::new(types_item_id, "Data Types".to_string())
-            .expanded(false)
-            .children(vec![placeholder])
+        TreeItem::new(
+            types_item_id,
+            crate::labels::data_types_folder_label_plain(),
+        )
+        .expanded(false)
+        .children(vec![placeholder])
     }
 }
 
@@ -2372,11 +2516,11 @@ fn build_schema_indexes_folder(
                 })
                 .collect();
 
-            TreeItem::new(item_id, format!("Indexes ({})", indexes.len()))
+            TreeItem::new(item_id, crate::labels::indexes_folder_label(indexes.len()))
                 .expanded(false)
                 .children(index_children)
         } else {
-            TreeItem::new(item_id, "Indexes (0)".to_string())
+            TreeItem::new(item_id, crate::labels::indexes_folder_label(0))
                 .expanded(false)
                 .children(vec![])
         }
@@ -2388,10 +2532,10 @@ fn build_schema_indexes_folder(
                 schema: schema_name.to_string(),
             }
             .to_string(),
-            "Loading...".to_string(),
+            dbflux_i18n::t!("sidebar.tree.status.loading"),
         );
 
-        TreeItem::new(item_id, "Indexes".to_string())
+        TreeItem::new(item_id, crate::labels::indexes_folder_label_plain())
             .expanded(false)
             .children(vec![placeholder])
     }
@@ -2441,11 +2585,11 @@ fn build_schema_fks_folder(
                 })
                 .collect();
 
-            TreeItem::new(item_id, format!("Foreign Keys ({})", fks.len()))
+            TreeItem::new(item_id, crate::labels::foreign_keys_folder_label(fks.len()))
                 .expanded(false)
                 .children(fk_children)
         } else {
-            TreeItem::new(item_id, "Foreign Keys (0)".to_string())
+            TreeItem::new(item_id, crate::labels::foreign_keys_folder_label(0))
                 .expanded(false)
                 .children(vec![])
         }
@@ -2457,10 +2601,10 @@ fn build_schema_fks_folder(
                 schema: schema_name.to_string(),
             }
             .to_string(),
-            "Loading...".to_string(),
+            dbflux_i18n::t!("sidebar.tree.status.loading"),
         );
 
-        TreeItem::new(item_id, "Foreign Keys".to_string())
+        TreeItem::new(item_id, crate::labels::foreign_keys_folder_label_plain())
             .expanded(false)
             .children(vec![placeholder])
     }
@@ -2509,13 +2653,16 @@ fn build_schema_routines_folder(
                 .collect();
 
             Some(
-                TreeItem::new(item_id, format!("Routines ({})", routines.len()))
-                    .expanded(false)
-                    .children(routine_children),
+                TreeItem::new(
+                    item_id,
+                    crate::labels::routines_folder_label(routines.len()),
+                )
+                .expanded(false)
+                .children(routine_children),
             )
         } else {
             Some(
-                TreeItem::new(item_id, "Routines (0)".to_string())
+                TreeItem::new(item_id, crate::labels::routines_folder_label(0))
                     .expanded(false)
                     .children(vec![]),
             )
@@ -2528,11 +2675,11 @@ fn build_schema_routines_folder(
                 schema: schema_name.to_string(),
             }
             .to_string(),
-            "Loading...".to_string(),
+            dbflux_i18n::t!("sidebar.tree.status.loading"),
         );
 
         Some(
-            TreeItem::new(item_id, "Routines".to_string())
+            TreeItem::new(item_id, crate::labels::routines_folder_label_plain())
                 .expanded(false)
                 .children(vec![placeholder]),
         )
@@ -2805,7 +2952,7 @@ mod tests {
             "Metrics folder must appear when METRIC_CATALOG capability is set"
         );
         let folder = metrics_folder.unwrap();
-        assert_eq!(folder.label.as_ref(), "Metrics");
+        assert_eq!(folder.label.as_ref(), crate::labels::metrics_folder_label());
         assert!(!folder.is_expanded());
     }
 
@@ -2847,6 +2994,99 @@ mod tests {
         );
     }
 
+    /// T21: before the listing resolves the connection shows a single
+    /// non-clickable loading placeholder, never an empty node.
+    #[test]
+    fn bucket_children_show_a_loading_placeholder_on_cache_miss() {
+        use super::build_bucket_children;
+        use dbflux_core::SchemaNodeId;
+
+        let profile_id = Uuid::new_v4();
+
+        let children = build_bucket_children(profile_id, &HashMap::new());
+
+        assert_eq!(children.len(), 1);
+        assert!(children[0].label.as_ref().contains("Loading"));
+        assert!(
+            children[0]
+                .id
+                .as_ref()
+                .parse::<SchemaNodeId>()
+                .is_err_and(|_| true)
+                || !matches!(
+                    children[0].id.as_ref().parse::<SchemaNodeId>(),
+                    Ok(SchemaNodeId::Bucket { .. })
+                ),
+            "the placeholder must not parse as a bucket node"
+        );
+    }
+
+    /// T21: buckets render flat, one clickable row each, with no children —
+    /// the prefix hierarchy stays inside the object browser document.
+    #[test]
+    fn bucket_children_render_one_flat_row_per_bucket() {
+        use super::build_bucket_children;
+        use dbflux_core::SchemaNodeId;
+
+        let profile_id = Uuid::new_v4();
+        let mut cache: HashMap<Uuid, Vec<dbflux_core::BucketInfo>> = HashMap::new();
+        cache.insert(
+            profile_id,
+            vec![
+                dbflux_core::BucketInfo {
+                    name: "prod-logs".to_string(),
+                    created_at: None,
+                },
+                dbflux_core::BucketInfo {
+                    name: "media.assets".to_string(),
+                    created_at: None,
+                },
+            ],
+        );
+
+        let children = build_bucket_children(profile_id, &cache);
+
+        assert_eq!(children.len(), 2);
+        assert!(children.iter().all(|item| item.children.is_empty()));
+
+        let parsed: Vec<SchemaNodeId> = children
+            .iter()
+            .filter_map(|item| item.id.as_ref().parse::<SchemaNodeId>().ok())
+            .collect();
+
+        assert_eq!(
+            parsed,
+            vec![
+                SchemaNodeId::Bucket {
+                    profile_id,
+                    name: "prod-logs".to_string()
+                },
+                SchemaNodeId::Bucket {
+                    profile_id,
+                    name: "media.assets".to_string()
+                },
+            ]
+        );
+    }
+
+    /// T21: a connection with no buckets says so instead of rendering nothing.
+    #[test]
+    fn bucket_children_report_an_empty_connection() {
+        use super::build_bucket_children;
+
+        let profile_id = Uuid::new_v4();
+        let mut cache: HashMap<Uuid, Vec<dbflux_core::BucketInfo>> = HashMap::new();
+        cache.insert(profile_id, Vec::new());
+
+        let children = build_bucket_children(profile_id, &cache);
+
+        assert_eq!(children.len(), 1);
+        assert_eq!(
+            children[0].label.as_ref(),
+            dbflux_i18n::t!("sidebar.tree.empty.buckets")
+        );
+    }
+
     #[test]
     fn collection_item_builds_default_field_and_index_sections() {
         let item = Sidebar::build_collection_item(
@@ -2862,6 +3102,7 @@ mod tests {
                 sample_fields: None,
                 presentation: CollectionPresentation::DataGrid,
                 child_items: None,
+                storage_hints: None,
             },
             &Default::default(),
             &Default::default(),
@@ -2869,8 +3110,14 @@ mod tests {
 
         assert_eq!(item.label.as_ref(), "/aws/lambda/app");
         assert_eq!(item.children.len(), 2);
-        assert!(item.children[0].label.as_ref().starts_with("Fields"));
-        assert!(item.children[1].label.as_ref().starts_with("Indexes"));
+        assert_eq!(
+            item.children[0].label.as_ref(),
+            crate::labels::fields_folder_label(0)
+        );
+        assert_eq!(
+            item.children[1].label.as_ref(),
+            crate::labels::indexes_folder_label(0)
+        );
     }
 
     #[test]
@@ -2901,6 +3148,7 @@ mod tests {
                     last_event_ts_ms: Some(1_776_777_600_000),
                     presentation: CollectionPresentation::EventStream,
                 }]),
+                storage_hints: None,
             },
             &Default::default(),
             &Default::default(),
@@ -2942,6 +3190,7 @@ mod tests {
                 sample_fields: None,
                 presentation: CollectionPresentation::EventStream,
                 child_items: None,
+                storage_hints: None,
             },
             &Default::default(),
             &child_cache,
@@ -2984,7 +3233,10 @@ mod tests {
         // Should produce exactly one "Measurements (N)" folder
         assert_eq!(result.len(), 1);
         let folder = &result[0];
-        assert_eq!(folder.label.as_ref(), "Measurements (2)");
+        assert_eq!(
+            folder.label.as_ref(),
+            crate::labels::container_folder_label(dbflux_core::DatabaseCategory::TimeSeries, 2)
+        );
         assert!(folder.is_expanded());
 
         // Each measurement becomes a Collection leaf
@@ -3040,6 +3292,7 @@ mod tests {
                     sample_fields: None,
                     presentation: CollectionPresentation::DataGrid,
                     child_items: None,
+                    storage_hints: None,
                 },
                 TableInfo {
                     name: "employees".to_string(),
@@ -3051,6 +3304,7 @@ mod tests {
                     sample_fields: None,
                     presentation: CollectionPresentation::DataGrid,
                     child_items: None,
+                    storage_hints: None,
                 },
                 TableInfo {
                     name: "fallback".to_string(),
@@ -3062,6 +3316,7 @@ mod tests {
                     sample_fields: None,
                     presentation: CollectionPresentation::DataGrid,
                     child_items: None,
+                    storage_hints: None,
                 },
             ],
             views: vec![ViewInfo {
@@ -3102,7 +3357,13 @@ mod tests {
 
         let tables_folder = content
             .iter()
-            .find(|item| item.label.as_ref().starts_with("Tables"))
+            .find(|item| {
+                item.label.as_ref()
+                    == crate::labels::container_folder_label(
+                        dbflux_core::DatabaseCategory::Relational,
+                        3,
+                    )
+            })
             .expect("Tables folder present");
         assert_eq!(tables_folder.children.len(), 3);
 
@@ -3118,7 +3379,7 @@ mod tests {
 
         let views_folder = content
             .iter()
-            .find(|item| item.label.as_ref().starts_with("Views"))
+            .find(|item| item.label.as_ref() == crate::labels::views_folder_label(1))
             .expect("Views folder present");
         assert_eq!(views_folder.children.len(), 1);
         let view_id: SchemaNodeId = views_folder.children[0]
@@ -3136,7 +3397,7 @@ mod tests {
 
         let types_folder = content
             .iter()
-            .find(|item| item.label.as_ref().starts_with("Data Types"))
+            .find(|item| item.label.as_ref() == crate::labels::data_types_folder_label(2))
             .expect("Data Types folder present");
         assert_eq!(types_folder.children.len(), 2);
 
@@ -3272,6 +3533,96 @@ mod tests {
     }
 
     #[test]
+    fn test_build_dashboards_folder_item_uses_translated_label() {
+        let (state, profile_id) = make_state_with_profile();
+        let item = Sidebar::build_dashboards_folder_item(profile_id, &state);
+        assert_eq!(
+            item.label.as_ref(),
+            crate::labels::dashboards_folder_label()
+        );
+    }
+
+    #[test]
+    fn test_build_saved_charts_folder_item_uses_translated_label() {
+        let (state, profile_id) = make_state_with_profile();
+        let item = Sidebar::build_saved_charts_folder_item(profile_id, &state);
+        assert_eq!(
+            item.label.as_ref(),
+            crate::labels::saved_charts_folder_label()
+        );
+    }
+
+    #[test]
+    fn tree_folder_saved_charts_differs_between_locales() {
+        let english = dbflux_i18n::t!("sidebar.tree.folder.saved_charts", locale = "en");
+        let spanish = dbflux_i18n::t!("sidebar.tree.folder.saved_charts", locale = "es");
+
+        assert_ne!(english, spanish);
+    }
+
+    const C2_TREE_KEYS: [&str; 4] = [
+        "sidebar.tree.folder.instance_metrics",
+        "sidebar.tree.folder.instance_inspectors",
+        "sidebar.tree.folder.metrics",
+        "sidebar.tree.node.instance_overview",
+    ];
+
+    #[test]
+    fn tree_c2_keys_resolve_in_both_locales() {
+        for key in C2_TREE_KEYS {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert_ne!(value, key, "missing translation for {locale}.{key}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "translation fell back to the miss sentinel for {locale}.{key}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_build_remote_dashboards_folder_item_falls_back_to_translated_label() {
+        let (state, profile_id) = make_state_with_profile();
+        let item =
+            Sidebar::build_remote_dashboards_folder_item(profile_id, &state, &HashMap::new());
+        assert_eq!(
+            item.label.as_ref(),
+            crate::labels::dashboards_folder_label()
+        );
+    }
+
+    #[test]
+    fn test_build_remote_dashboards_folder_item_appends_cached_count() {
+        let (state, profile_id) = make_state_with_profile();
+        state.remote_dashboard_cache().store(
+            profile_id,
+            vec![
+                dbflux_core::DashboardRef {
+                    name: "prod".to_string(),
+                    last_modified: None,
+                },
+                dbflux_core::DashboardRef {
+                    name: "staging".to_string(),
+                    last_modified: None,
+                },
+            ],
+        );
+
+        let item =
+            Sidebar::build_remote_dashboards_folder_item(profile_id, &state, &HashMap::new());
+        assert_eq!(
+            item.label.as_ref(),
+            crate::labels::remote_dashboards_count_label(
+                &crate::labels::dashboards_folder_label(),
+                2
+            )
+        );
+    }
+
+    #[test]
     fn test_remote_dashboard_children_show_loading_on_cache_miss() {
         let (state, profile_id) = make_state_with_profile();
         let folder_id =
@@ -3282,7 +3633,10 @@ mod tests {
             Sidebar::build_remote_dashboard_children(profile_id, &state, &folder_id, &errors);
 
         assert_eq!(children.len(), 1);
-        assert_eq!(children[0].label.as_ref(), "Loading...");
+        assert_eq!(
+            children[0].label.as_ref(),
+            dbflux_i18n::t!("sidebar.tree.status.loading")
+        );
     }
 
     #[test]
@@ -3297,7 +3651,28 @@ mod tests {
             Sidebar::build_remote_dashboard_children(profile_id, &state, &folder_id, &errors);
 
         assert_eq!(children.len(), 1);
-        assert!(children[0].label.as_ref().contains("access denied"));
+        assert_eq!(
+            children[0].label.as_ref(),
+            crate::labels::remote_dashboards_error_label("access denied")
+        );
+    }
+
+    #[test]
+    fn test_remote_dashboard_children_show_placeholder_when_listing_is_empty() {
+        let (state, profile_id) = make_state_with_profile();
+        state.remote_dashboard_cache().store(profile_id, Vec::new());
+
+        let folder_id =
+            dbflux_core::SchemaNodeId::RemoteDashboardsFolder { profile_id }.to_string();
+        let errors = HashMap::new();
+        let children =
+            Sidebar::build_remote_dashboard_children(profile_id, &state, &folder_id, &errors);
+
+        assert_eq!(children.len(), 1);
+        assert_eq!(
+            children[0].label.as_ref(),
+            crate::labels::remote_dashboards_empty_label()
+        );
     }
 
     #[test]
@@ -3337,7 +3712,10 @@ mod tests {
             children[0].id.as_ref(),
             format!("dashboards_empty:{profile_id}")
         );
-        assert!(children[0].label.to_string().contains("No dashboards yet"));
+        assert_eq!(
+            children[0].label.as_ref(),
+            crate::labels::no_dashboards_yet_label(false)
+        );
     }
 
     #[test]
@@ -3349,12 +3727,45 @@ mod tests {
             children[0].id.as_ref(),
             format!("saved_charts_empty:{profile_id}")
         );
-        assert!(
-            children[0]
-                .label
-                .to_string()
-                .contains("No saved charts yet")
+        assert_eq!(
+            children[0].label.as_ref(),
+            crate::labels::no_saved_charts_yet_label()
         );
+    }
+
+    #[test]
+    fn saved_chart_display_label_falls_back_to_untitled_chart_for_a_blank_name() {
+        use dbflux_components::chart::{
+            AxisKind, AxisSpec, BindingSpec, ChartKind, ChartSpec, YScale,
+        };
+
+        let placeholder_spec = ChartSpec {
+            kind: ChartKind::Line,
+            x_axis: AxisSpec {
+                column_index: 0,
+                label: String::new(),
+                kind: AxisKind::Time,
+                unit: None,
+            },
+            series: Vec::new(),
+            legend_visible: false,
+            decimation_threshold: 10_000,
+            binding: BindingSpec::default(),
+            track_source_indices: false,
+            y_scale: YScale::Linear,
+        };
+
+        let chart = dbflux_components::SavedChart::new_query(
+            "   ".to_string(),
+            Uuid::new_v4(),
+            "SELECT 1".to_string(),
+            placeholder_spec,
+            BindingSpec::default(),
+        );
+
+        let label = Sidebar::saved_chart_display_label(&chart);
+
+        assert_eq!(label, crate::labels::untitled_chart_label());
     }
 
     #[test]
@@ -3535,6 +3946,7 @@ mod tests {
             connection: Arc::new(CapabilityConnection::with_capabilities(capabilities)),
             schema: None,
             mutation_policy: dbflux_core::MutationPolicy::default(),
+            read_only_reason: None,
             database_schemas: HashMap::new(),
             table_details: HashMap::new(),
             collection_children: HashMap::new(),
@@ -3566,10 +3978,10 @@ mod tests {
             1,
             "empty state must produce one placeholder"
         );
-        let label = children[0].label.to_string().to_ascii_lowercase();
-        assert!(
-            label.contains("import"),
-            "hint must mention 'import' when driver has DASHBOARD_IMPORT: {label:?}"
+        assert_eq!(
+            children[0].label.as_ref(),
+            crate::labels::no_dashboards_yet_label(true),
+            "hint must use the import-capable variant when driver has DASHBOARD_IMPORT"
         );
     }
 
@@ -3584,10 +3996,10 @@ mod tests {
             1,
             "empty state must produce one placeholder"
         );
-        let label = children[0].label.to_string().to_ascii_lowercase();
-        assert!(
-            !label.contains("import"),
-            "hint must not mention 'import' without DASHBOARD_IMPORT: {label:?}"
+        assert_eq!(
+            children[0].label.as_ref(),
+            crate::labels::no_dashboards_yet_label(false),
+            "hint must use the non-import variant without DASHBOARD_IMPORT"
         );
     }
 
@@ -3623,6 +4035,10 @@ mod tests {
             ),
             "folder item must carry InstanceMetricsFolder node ID: {node_id:?}"
         );
+        assert_eq!(
+            item.label.as_ref(),
+            crate::labels::instance_metrics_folder_label()
+        );
     }
 
     /// REQ-UI-1, REQ-UI-5: A driver with `INSTANCE_INSPECTOR` must produce an
@@ -3650,6 +4066,10 @@ mod tests {
                 } if pid == profile_id
             ),
             "folder item must carry InstanceInspectorsFolder node ID: {node_id:?}"
+        );
+        assert_eq!(
+            item.label.as_ref(),
+            crate::labels::instance_inspectors_folder_label()
         );
     }
 
@@ -3899,10 +4319,10 @@ mod tests {
             1,
             "must return one placeholder for empty entry"
         );
-        assert!(
-            leaves[0].label.to_string().contains("No metrics"),
-            "empty-cache placeholder must say 'No metrics available'; got {:?}",
-            leaves[0].label
+        assert_eq!(
+            leaves[0].label.as_ref(),
+            crate::labels::no_metrics_available_label(),
+            "empty-cache placeholder must use the translated 'no metrics available' label"
         );
     }
 
@@ -3921,10 +4341,10 @@ mod tests {
             1,
             "must return one placeholder for empty entry"
         );
-        assert!(
-            leaves[0].label.to_string().contains("No inspectors"),
-            "empty-cache placeholder must say 'No inspectors available'; got {:?}",
-            leaves[0].label
+        assert_eq!(
+            leaves[0].label.as_ref(),
+            crate::labels::no_inspectors_available_label(),
+            "empty-cache placeholder must use the translated 'no inspectors available' label"
         );
     }
 
@@ -3998,6 +4418,235 @@ mod tests {
                 SchemaNodeId::InstanceOverviewLeaf { profile_id: pid } if *pid == profile_id
             ),
             "leaf must carry InstanceOverviewLeaf node ID: {node_id:?}"
+        );
+        assert_eq!(
+            item.label.as_ref(),
+            crate::labels::instance_overview_label()
+        );
+    }
+
+    /// Generic rendering must be driven purely by `storage_hints` content: a
+    /// populated slice produces one "Storage" folder whose children are one
+    /// node per hint, each labeled with the hint's columns and detail.
+    #[test]
+    fn build_table_storage_children_renders_one_folder_with_one_child_per_hint() {
+        use dbflux_core::{SchemaNodeId, TableStorageHint};
+
+        let profile_id = Uuid::new_v4();
+        let hints = vec![
+            TableStorageHint {
+                label: "Distribution Key".to_string(),
+                columns: vec!["customer_id".to_string()],
+                detail: Some("KEY".to_string()),
+            },
+            TableStorageHint {
+                label: "Sort Key".to_string(),
+                columns: vec!["created_at".to_string()],
+                detail: Some("compound".to_string()),
+            },
+            TableStorageHint {
+                label: "Constraints advisory".to_string(),
+                columns: Vec::new(),
+                detail: Some("PK/FK/UNIQUE are informational, not enforced".to_string()),
+            },
+        ];
+
+        let children =
+            super::build_table_storage_children(profile_id, "public", "orders", Some(&hints));
+
+        assert_eq!(children.len(), 1, "exactly one Storage folder node");
+        let folder = &children[0];
+
+        let folder_id: SchemaNodeId = folder
+            .id
+            .as_ref()
+            .parse()
+            .expect("folder must have a valid SchemaNodeId");
+        assert!(
+            matches!(
+                &folder_id,
+                SchemaNodeId::StorageHintsFolder { profile_id: pid, schema, table }
+                    if *pid == profile_id && schema == "public" && table == "orders"
+            ),
+            "folder must carry StorageHintsFolder node ID: {folder_id:?}"
+        );
+        assert_eq!(
+            folder.label.as_ref(),
+            crate::labels::storage_folder_label(3)
+        );
+
+        assert_eq!(folder.children.len(), 3, "one child per hint");
+
+        let dist_child = folder
+            .children
+            .iter()
+            .find(|c| c.label.as_ref().starts_with("Distribution Key"))
+            .expect("Distribution Key child must exist");
+        assert!(
+            dist_child.label.as_ref().contains("customer_id"),
+            "label must include the hint's columns: {}",
+            dist_child.label
+        );
+        assert!(
+            dist_child.label.as_ref().contains("KEY"),
+            "label must include the hint's detail: {}",
+            dist_child.label
+        );
+
+        let dist_id: SchemaNodeId = dist_child
+            .id
+            .as_ref()
+            .parse()
+            .expect("child must have a valid SchemaNodeId");
+        assert!(
+            matches!(
+                &dist_id,
+                SchemaNodeId::StorageHintItem { profile_id: pid, table, name }
+                    if *pid == profile_id && table == "orders" && name == "Distribution Key"
+            ),
+            "child must carry StorageHintItem node ID: {dist_id:?}"
+        );
+    }
+
+    /// No storage hints (driver did not populate any) must produce no folder
+    /// at all — never an empty placeholder folder. This is the seam that
+    /// keeps the sidebar generic: any driver that leaves `storage_hints` as
+    /// `None` renders nothing extra.
+    #[test]
+    fn build_table_storage_children_is_empty_when_no_hints() {
+        let profile_id = Uuid::new_v4();
+
+        let none_children =
+            super::build_table_storage_children(profile_id, "public", "orders", None);
+        assert!(
+            none_children.is_empty(),
+            "None storage_hints must produce no folder"
+        );
+
+        let empty_children =
+            super::build_table_storage_children(profile_id, "public", "orders", Some(&[]));
+        assert!(
+            empty_children.is_empty(),
+            "empty storage_hints must produce no folder"
+        );
+    }
+
+    /// Every translation key wired into this slice's tree-builder functions
+    /// must resolve to a real value in both shipped locales, never fall back
+    /// to the raw key or the `{locale}.{key}` miss sentinel.
+    #[test]
+    fn tree_c1a_keys_resolve_in_both_locales() {
+        const KEYS: [&str; 5] = [
+            "sidebar.tree.folder.databases",
+            "sidebar.tree.status.profile_connecting",
+            "sidebar.tree.status.database_loading",
+            "sidebar.tree.status.error_retry",
+            "sidebar.tree.empty.buckets",
+        ];
+
+        for key in KEYS {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert_ne!(value, key, "missing translation for {locale}.{key}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "translation fell back to the miss sentinel for {locale}.{key}"
+                );
+            }
+        }
+    }
+
+    /// `build_collections_folder`'s container title, now routed through
+    /// `container_folder_label`, must render different text per locale
+    /// instead of the English-only literal it used to hardcode.
+    #[test]
+    fn tree_folder_tables_differs_between_locales() {
+        let english_template = dbflux_i18n::t!("sidebar.tree.container.relational", locale = "en");
+        let spanish_template = dbflux_i18n::t!("sidebar.tree.container.relational", locale = "es");
+
+        assert_ne!(english_template, spanish_template);
+
+        let resolved =
+            crate::labels::container_folder_label(dbflux_core::DatabaseCategory::Relational, 5);
+
+        assert_eq!(
+            resolved,
+            dbflux_i18n::t!("sidebar.tree.container.relational", count = 5)
+        );
+    }
+
+    /// Every translation key wired into this slice's remaining tree-builder
+    /// folder and status functions must resolve to a real value in both
+    /// shipped locales, never fall back to the raw key or the
+    /// `{locale}.{key}` miss sentinel.
+    #[test]
+    fn tree_c1b_keys_resolve_in_both_locales() {
+        const KEYS: [&str; 13] = [
+            "sidebar.tree.folder.fields",
+            "sidebar.tree.folder.indexes",
+            "sidebar.tree.folder.indexes_plain",
+            "sidebar.tree.folder.foreign_keys",
+            "sidebar.tree.folder.foreign_keys_plain",
+            "sidebar.tree.folder.routines",
+            "sidebar.tree.folder.routines_plain",
+            "sidebar.tree.folder.columns",
+            "sidebar.tree.folder.constraints",
+            "sidebar.tree.folder.data_types",
+            "sidebar.tree.folder.data_types_plain",
+            "sidebar.tree.folder.views",
+            "sidebar.tree.folder.storage",
+        ];
+
+        for key in KEYS {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert_ne!(value, key, "missing translation for {locale}.{key}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "translation fell back to the miss sentinel for {locale}.{key}"
+                );
+            }
+        }
+
+        const STATUS_KEYS: [&str; 4] = [
+            "sidebar.tree.status.used_by_objects.one",
+            "sidebar.tree.status.dependent_kind.view",
+            "sidebar.tree.status.dependent_kind.materialized_view",
+            "sidebar.tree.status.dependent_kind.foreign_key_child",
+        ];
+
+        for key in STATUS_KEYS {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert_ne!(value, key, "missing translation for {locale}.{key}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "translation fell back to the miss sentinel for {locale}.{key}"
+                );
+            }
+        }
+    }
+
+    /// `build_schema_indexes_folder`'s populated-count label, now routed
+    /// through `indexes_folder_label`, must render different text per locale.
+    #[test]
+    fn tree_folder_indexes_differs_between_locales() {
+        let english_template = dbflux_i18n::t!("sidebar.tree.folder.indexes", locale = "en");
+        let spanish_template = dbflux_i18n::t!("sidebar.tree.folder.indexes", locale = "es");
+
+        assert_ne!(english_template, spanish_template);
+
+        let resolved = crate::labels::indexes_folder_label(4);
+
+        assert_eq!(
+            resolved,
+            dbflux_i18n::t!("sidebar.tree.folder.indexes", count = 4)
         );
     }
 }

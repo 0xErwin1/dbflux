@@ -41,15 +41,17 @@ impl ConnectionManagerWindow {
             && self.selected_auth_profile_needs_login(cx);
         let auth_profile_is_valid = self.selected_auth_profile_is_valid(cx);
 
+        let access_tab_label = dbflux_i18n::t!("access.tab_label");
+
         let mut sections = vec![
             self.render_section(
-                "Access",
+                &access_tab_label,
                 div().flex().flex_col().gap_2().child(
                     div()
                         .flex()
                         .flex_col()
                         .gap_1()
-                        .child(Label::new("Access Method"))
+                        .child(Label::new(dbflux_i18n::t!("access.method_label")))
                         .child(
                             div()
                                 .min_w(Widths::CM_FORM_DROPDOWN)
@@ -68,13 +70,13 @@ impl ConnectionManagerWindow {
                         .flex()
                         .flex_col()
                         .gap_3()
-                        .child(Text::muted("Direct connections use the database fields from the Main tab."))
+                        .child(Text::muted(dbflux_i18n::t!("access.direct_hint")))
                         .child(
                             div()
                                 .flex()
                                 .flex_col()
                                 .gap_1()
-                                .child(Label::new("Auth Profile (optional)"))
+                                .child(Label::new(dbflux_i18n::t!("access.auth_profile_optional")))
                                 .child(
                                     self.render_focus_shell(
                                         show_focus && self.form_focus == FormFocus::SsmAuthProfile,
@@ -82,17 +84,17 @@ impl ConnectionManagerWindow {
                                         self.auth_profile.auth_profile_dropdown.clone(),
                                         cx,
                                     )
-                                        .min_w(px(280.0))
-                                        .on_mouse_down(
-                                            MouseButton::Left,
-                                            cx.listener(|this, _, window, cx| {
-                                                this.enter_edit_mode_for_field(
-                                                    FormFocus::SsmAuthProfile,
-                                                    window,
-                                                    cx,
-                                                );
-                                            }),
-                                        ),
+                                    .min_w(px(280.0))
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, window, cx| {
+                                            this.enter_edit_mode_for_field(
+                                                FormFocus::SsmAuthProfile,
+                                                window,
+                                                cx,
+                                            );
+                                        }),
+                                    ),
                                 )
                                 .child(
                                     div()
@@ -104,77 +106,85 @@ impl ConnectionManagerWindow {
                                                 show_focus
                                                     && self.form_focus == FormFocus::SsmAuthManage,
                                                 ring_color,
-                                                Button::new("auth-open-settings", "Manage")
-                                                    .ghost()
-                                                    .small()
-                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                        this.open_auth_profiles_settings(cx);
-                                                    })),
+                                                Button::new(
+                                                    "auth-open-settings",
+                                                    dbflux_i18n::t!("access.manage"),
+                                                )
+                                                .ghost()
+                                                .small()
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.open_auth_profiles_settings(cx);
+                                                })),
                                                 cx,
                                             )
-                                                .on_mouse_down(
-                                                    MouseButton::Left,
-                                                    cx.listener(|this, _, window, cx| {
-                                                        this.enter_edit_mode_for_field(
-                                                            FormFocus::SsmAuthManage,
-                                                            window,
-                                                            cx,
-                                                        );
-                                                    }),
-                                                ),
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _, window, cx| {
+                                                    this.enter_edit_mode_for_field(
+                                                        FormFocus::SsmAuthManage,
+                                                        window,
+                                                        cx,
+                                                    );
+                                                }),
+                                            ),
                                         )
                                         .child(
                                             self.render_focus_shell(
                                                 show_focus
                                                     && self.form_focus == FormFocus::SsmAuthLogin,
                                                 ring_color,
-                                                Button::new("auth-login-selected", "Login")
-                                                    .ghost()
-                                                    .small()
-                                                    .disabled(!login_enabled)
-                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                        this.login_selected_auth_profile(cx);
-                                                    })),
+                                                Button::new(
+                                                    "auth-login-selected",
+                                                    dbflux_i18n::t!("access.login"),
+                                                )
+                                                .ghost()
+                                                .small()
+                                                .disabled(!login_enabled)
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.login_selected_auth_profile(cx);
+                                                })),
                                                 cx,
                                             )
-                                                .on_mouse_down(
-                                                    MouseButton::Left,
-                                                    cx.listener(|this, _, window, cx| {
-                                                        this.enter_edit_mode_for_field(
-                                                            FormFocus::SsmAuthLogin,
-                                                            window,
-                                                            cx,
-                                                        );
-                                                    }),
-                                                ),
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _, window, cx| {
+                                                    this.enter_edit_mode_for_field(
+                                                        FormFocus::SsmAuthLogin,
+                                                        window,
+                                                        cx,
+                                                    );
+                                                }),
+                                            ),
                                         )
                                         .child(
                                             self.render_focus_shell(
                                                 show_focus
-                                                    && self.form_focus
-                                                        == FormFocus::SsmAuthRefresh,
+                                                    && self.form_focus == FormFocus::SsmAuthRefresh,
                                                 ring_color,
-                                                Button::new("auth-refresh-session", "Refresh")
-                                                    .ghost()
-                                                    .small()
-                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                        this.refresh_auth_profile_statuses(cx);
-                                                    })),
+                                                Button::new(
+                                                    "auth-refresh-session",
+                                                    dbflux_i18n::t!("access.refresh"),
+                                                )
+                                                .ghost()
+                                                .small()
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.refresh_auth_profile_statuses(cx);
+                                                })),
                                                 cx,
                                             )
-                                                .on_mouse_down(
-                                                    MouseButton::Left,
-                                                    cx.listener(|this, _, window, cx| {
-                                                        this.enter_edit_mode_for_field(
-                                                            FormFocus::SsmAuthRefresh,
-                                                            window,
-                                                            cx,
-                                                        );
-                                                    }),
-                                                ),
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _, window, cx| {
+                                                    this.enter_edit_mode_for_field(
+                                                        FormFocus::SsmAuthRefresh,
+                                                        window,
+                                                        cx,
+                                                    );
+                                                }),
+                                            ),
                                         ),
                                 )
-                                .child(Text::caption("Used for resolving Secret/Parameter/Auth value sources in Direct mode.")),
+                                .child(Text::caption(dbflux_i18n::t!("access.auth_profile_hint"))),
                         )
                         .when_some(self.selected_auth_profile_status_text(cx), |d, status| {
                             d.child(Text::caption(status))
@@ -182,12 +192,13 @@ impl ConnectionManagerWindow {
                         .when(auth_profile_is_valid, |d| {
                             d.child(
                                 StatusIndicator::new(Status::Connected)
-                                    .label("Auth profile session is valid"),
+                                    .label(dbflux_i18n::t!("access.session_valid")),
                             )
                         })
-                        .when_some(self.auth_profile.auth_profile_action_message.as_ref(), |d, message| {
-                            d.child(Text::caption(message.clone()))
-                        })
+                        .when_some(
+                            self.auth_profile.auth_profile_action_message.as_ref(),
+                            |d, message| d.child(Text::caption(message.clone())),
+                        )
                         .into_any_element(),
                 );
             }
@@ -208,14 +219,19 @@ impl ConnectionManagerWindow {
             && self.selected_auth_profile_needs_login(cx);
         let auth_profile_is_valid = self.selected_auth_profile_is_valid(cx);
 
+        let ssm_title = dbflux_i18n::t!("access.ssm_title");
+        let ssm_instance_id_label = dbflux_i18n::t!("access.ssm_instance_id");
+        let ssm_region_label = dbflux_i18n::t!("access.ssm_region");
+        let ssm_remote_port_label = dbflux_i18n::t!("access.ssm_remote_port");
+
         self.render_section(
-            "SSM Port Forwarding",
+            &ssm_title,
             div()
                 .flex()
                 .flex_col()
                 .gap_3()
                 .child(self.render_ssm_value_field(
-                    "Instance ID",
+                    &ssm_instance_id_label,
                     &self.access.input_ssm_instance_id,
                     self.access.ssm_instance_id_value_source_selector.clone(),
                     true,
@@ -227,7 +243,7 @@ impl ConnectionManagerWindow {
                     cx,
                 ))
                 .child(self.render_ssm_value_field(
-                    "Region",
+                    &ssm_region_label,
                     &self.access.input_ssm_region,
                     self.access.ssm_region_value_source_selector.clone(),
                     true,
@@ -239,7 +255,7 @@ impl ConnectionManagerWindow {
                     cx,
                 ))
                 .child(self.render_ssm_value_field(
-                    "Remote Port",
+                    &ssm_remote_port_label,
                     &self.access.input_ssm_remote_port,
                     self.access.ssm_remote_port_value_source_selector.clone(),
                     false,
@@ -250,13 +266,13 @@ impl ConnectionManagerWindow {
                     FormFocus::SsmRemotePort,
                     cx,
                 ))
-                .child(Text::caption("DBFlux and the OS auto-assign the local tunnel port. Only Remote Port is configurable here."))
+                .child(Text::caption(dbflux_i18n::t!("access.ssm_port_hint")))
                 .child(
                     div()
                         .flex()
                         .flex_col()
                         .gap_1()
-                        .child(Label::new("Auth Profile"))
+                        .child(Label::new(dbflux_i18n::t!("access.auth_profile")))
                         .child(
                             self.render_focus_shell(
                                 show_focus && self.form_focus == FormFocus::SsmAuthProfile,
@@ -264,17 +280,17 @@ impl ConnectionManagerWindow {
                                 self.auth_profile.auth_profile_dropdown.clone(),
                                 cx,
                             )
-                                .min_w(px(280.0))
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(|this, _, window, cx| {
-                                        this.enter_edit_mode_for_field(
-                                            FormFocus::SsmAuthProfile,
-                                            window,
-                                            cx,
-                                        );
-                                    }),
-                                ),
+                            .min_w(px(280.0))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, window, cx| {
+                                    this.enter_edit_mode_for_field(
+                                        FormFocus::SsmAuthProfile,
+                                        window,
+                                        cx,
+                                    );
+                                }),
+                            ),
                         )
                         .child(
                             div()
@@ -285,71 +301,86 @@ impl ConnectionManagerWindow {
                                     self.render_focus_shell(
                                         show_focus && self.form_focus == FormFocus::SsmAuthManage,
                                         ring_color,
-                                        Button::new("ssm-auth-open-settings", "Manage")
-                                            .ghost()
-                                            .small()
-                                            .on_click(cx.listener(|this, _, _, cx| {
+                                        Button::new(
+                                            "ssm-auth-open-settings",
+                                            dbflux_i18n::t!("access.manage"),
+                                        )
+                                        .ghost()
+                                        .small()
+                                        .on_click(
+                                            cx.listener(|this, _, _, cx| {
                                                 this.open_auth_profiles_settings(cx);
-                                            })),
-                                        cx,
-                                    )
-                                        .on_mouse_down(
-                                            MouseButton::Left,
-                                            cx.listener(|this, _, window, cx| {
-                                                this.enter_edit_mode_for_field(
-                                                    FormFocus::SsmAuthManage,
-                                                    window,
-                                                    cx,
-                                                );
                                             }),
                                         ),
+                                        cx,
+                                    )
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, window, cx| {
+                                            this.enter_edit_mode_for_field(
+                                                FormFocus::SsmAuthManage,
+                                                window,
+                                                cx,
+                                            );
+                                        }),
+                                    ),
                                 )
                                 .child(
                                     self.render_focus_shell(
                                         show_focus && self.form_focus == FormFocus::SsmAuthLogin,
                                         ring_color,
-                                        Button::new("ssm-auth-login-selected", "Login")
-                                            .ghost()
-                                            .small()
-                                            .disabled(!login_enabled)
-                                            .on_click(cx.listener(|this, _, _, cx| {
+                                        Button::new(
+                                            "ssm-auth-login-selected",
+                                            dbflux_i18n::t!("access.login"),
+                                        )
+                                        .ghost()
+                                        .small()
+                                        .disabled(!login_enabled)
+                                        .on_click(
+                                            cx.listener(|this, _, _, cx| {
                                                 this.login_selected_auth_profile(cx);
-                                            })),
-                                        cx,
-                                    )
-                                        .on_mouse_down(
-                                            MouseButton::Left,
-                                            cx.listener(|this, _, window, cx| {
-                                                this.enter_edit_mode_for_field(
-                                                    FormFocus::SsmAuthLogin,
-                                                    window,
-                                                    cx,
-                                                );
                                             }),
                                         ),
+                                        cx,
+                                    )
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, window, cx| {
+                                            this.enter_edit_mode_for_field(
+                                                FormFocus::SsmAuthLogin,
+                                                window,
+                                                cx,
+                                            );
+                                        }),
+                                    ),
                                 )
                                 .child(
                                     self.render_focus_shell(
                                         show_focus && self.form_focus == FormFocus::SsmAuthRefresh,
                                         ring_color,
-                                        Button::new("ssm-auth-refresh-session", "Refresh")
-                                            .ghost()
-                                            .small()
-                                            .on_click(cx.listener(|this, _, _, cx| {
+                                        Button::new(
+                                            "ssm-auth-refresh-session",
+                                            dbflux_i18n::t!("access.refresh"),
+                                        )
+                                        .ghost()
+                                        .small()
+                                        .on_click(
+                                            cx.listener(|this, _, _, cx| {
                                                 this.refresh_auth_profile_statuses(cx);
-                                            })),
-                                        cx,
-                                    )
-                                        .on_mouse_down(
-                                            MouseButton::Left,
-                                            cx.listener(|this, _, window, cx| {
-                                                this.enter_edit_mode_for_field(
-                                                    FormFocus::SsmAuthRefresh,
-                                                    window,
-                                                    cx,
-                                                );
                                             }),
                                         ),
+                                        cx,
+                                    )
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, window, cx| {
+                                            this.enter_edit_mode_for_field(
+                                                FormFocus::SsmAuthRefresh,
+                                                window,
+                                                cx,
+                                            );
+                                        }),
+                                    ),
                                 ),
                         )
                         .when_some(self.selected_auth_profile_status_text(cx), |d, status| {
@@ -358,7 +389,7 @@ impl ConnectionManagerWindow {
                         .when(auth_profile_is_valid, |d| {
                             d.child(
                                 StatusIndicator::new(Status::Connected)
-                                    .label("Auth profile session is valid"),
+                                    .label(dbflux_i18n::t!("access.session_valid")),
                             )
                         }),
                 ),
@@ -442,8 +473,10 @@ impl ConnectionManagerWindow {
                             .flex_col()
                             .items_center()
                             .gap_2()
-                            .child(Text::muted("No proxy profiles configured"))
-                            .child(Text::caption("Add proxies in Settings > Proxies")),
+                            .child(Text::muted(dbflux_i18n::t!("access.proxy_no_profiles")))
+                            .child(Text::caption(dbflux_i18n::t!(
+                                "access.proxy_no_profiles_hint"
+                            ))),
                     )
                     .into_any_element(),
             );
@@ -456,7 +489,7 @@ impl ConnectionManagerWindow {
                 let label = if p.enabled {
                     p.name.clone()
                 } else {
-                    format!("{} (disabled)", p.name)
+                    crate::labels::access_proxy_disabled_label(&p.name)
                 };
 
                 DropdownItem::with_value(&label, p.id.to_string())
@@ -487,7 +520,7 @@ impl ConnectionManagerWindow {
             .flex()
             .flex_col()
             .gap_2()
-            .child(Label::new("Select Proxy"))
+            .child(Label::new(dbflux_i18n::t!("access.select_proxy")))
             .child(
                 div()
                     .flex()
@@ -504,7 +537,7 @@ impl ConnectionManagerWindow {
                                     dd.border_color(gpui::transparent_black())
                                 })
                                 .child(
-                                    Button::new("clear-proxy", "Clear")
+                                    Button::new("clear-proxy", dbflux_i18n::t!("access.clear"))
                                         .small()
                                         .ghost()
                                         .on_click(cx.listener(|this, _, _, cx| {
@@ -524,22 +557,36 @@ impl ConnectionManagerWindow {
             let kind_label = format!("{:?}", proxy.kind);
             let host_port = format!("{}:{}", proxy.host, proxy.port);
             let auth_label = format!("{:?}", proxy.auth);
-            let enabled_label = if proxy.enabled { "Yes" } else { "No" };
-            let no_proxy_label = proxy.no_proxy.as_deref().unwrap_or("(none)").to_string();
+            let enabled_label = if proxy.enabled {
+                dbflux_i18n::t!("access.value_yes")
+            } else {
+                dbflux_i18n::t!("access.value_no")
+            };
+            let no_proxy_label = proxy
+                .no_proxy
+                .clone()
+                .unwrap_or_else(|| dbflux_i18n::t!("access.no_proxy_placeholder"));
 
             let edit_focused = show_focus && focus == FormFocus::ProxyEditInSettings;
 
+            let proxy_details_title = dbflux_i18n::t!("access.proxy_details");
+            let proxy_type_label = dbflux_i18n::t!("access.proxy_type");
+            let proxy_host_label = dbflux_i18n::t!("access.proxy_host");
+            let proxy_auth_label = dbflux_i18n::t!("access.proxy_auth");
+            let proxy_enabled_label = dbflux_i18n::t!("access.proxy_enabled");
+            let proxy_no_proxy_label = dbflux_i18n::t!("access.proxy_no_proxy");
+
             let details = self.render_section(
-                "Proxy Details",
+                &proxy_details_title,
                 div()
                     .flex()
                     .flex_col()
                     .gap_2()
-                    .child(self.render_readonly_row("Type", &kind_label, &theme))
-                    .child(self.render_readonly_row("Host", &host_port, &theme))
-                    .child(self.render_readonly_row("Auth", &auth_label, &theme))
-                    .child(self.render_readonly_row("Enabled", enabled_label, &theme))
-                    .child(self.render_readonly_row("No Proxy", &no_proxy_label, &theme))
+                    .child(self.render_readonly_row(&proxy_type_label, &kind_label, &theme))
+                    .child(self.render_readonly_row(&proxy_host_label, &host_port, &theme))
+                    .child(self.render_readonly_row(&proxy_auth_label, &auth_label, &theme))
+                    .child(self.render_readonly_row(&proxy_enabled_label, &enabled_label, &theme))
+                    .child(self.render_readonly_row(&proxy_no_proxy_label, &no_proxy_label, &theme))
                     .child(
                         div()
                             .mt_1()
@@ -548,10 +595,13 @@ impl ConnectionManagerWindow {
                             .when(edit_focused, |d| d.border_color(ring_color))
                             .when(!edit_focused, |d| d.border_color(gpui::transparent_black()))
                             .child(
-                                Button::new("proxy-edit-in-settings", "Edit in Settings")
-                                    .small()
-                                    .ghost()
-                                    .icon(Icon::new(AppIcon::ExternalLink)),
+                                Button::new(
+                                    "proxy-edit-in-settings",
+                                    dbflux_i18n::t!("access.edit_in_settings"),
+                                )
+                                .small()
+                                .ghost()
+                                .icon(Icon::new(AppIcon::ExternalLink)),
                             ),
                     ),
                 &theme,
@@ -598,7 +648,7 @@ impl ConnectionManagerWindow {
                         cx.notify();
                     })),
             )
-            .child(Label::new("Use SSH Tunnel"));
+            .child(Label::new(dbflux_i18n::t!("access.use_ssh_tunnel")));
 
         let tunnel_items: Vec<DropdownItem> = ssh_tunnels
             .iter()
@@ -622,54 +672,58 @@ impl ConnectionManagerWindow {
             dropdown.set_focus_ring(focus_color, cx);
         });
 
-        let tunnel_selector: Option<AnyElement> = if ssh_enabled && !ssh_tunnels.is_empty() {
-            let selected_tunnel_name = selected_tunnel_id
-                .and_then(|id| ssh_tunnels.iter().find(|t| t.id == id))
-                .map(|t| t.name.clone());
+        let tunnel_selector: Option<AnyElement> =
+            if ssh_enabled && !ssh_tunnels.is_empty() {
+                let selected_tunnel_name = selected_tunnel_id
+                    .and_then(|id| ssh_tunnels.iter().find(|t| t.id == id))
+                    .map(|t| t.name.clone());
 
-            Some(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_2()
-                    .child(Label::new("SSH Tunnel"))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .child(self.access.ssh_tunnel_dropdown.clone()),
-                            )
-                            .when(selected_tunnel_name.is_some(), |d| {
-                                d.child(
+                Some(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(Label::new(dbflux_i18n::t!("access.ssh_tunnel_label")))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .child(
                                     div()
-                                        .rounded(Radii::SM)
-                                        .border_2()
-                                        .when(tunnel_clear_focused, |dd| {
-                                            dd.border_color(ring_color)
-                                        })
-                                        .when(!tunnel_clear_focused, |dd| {
-                                            dd.border_color(gpui::transparent_black())
-                                        })
-                                        .child(
-                                            Button::new("clear-ssh-tunnel", "Clear")
+                                        .flex_1()
+                                        .child(self.access.ssh_tunnel_dropdown.clone()),
+                                )
+                                .when(selected_tunnel_name.is_some(), |d| {
+                                    d.child(
+                                        div()
+                                            .rounded(Radii::SM)
+                                            .border_2()
+                                            .when(tunnel_clear_focused, |dd| {
+                                                dd.border_color(ring_color)
+                                            })
+                                            .when(!tunnel_clear_focused, |dd| {
+                                                dd.border_color(gpui::transparent_black())
+                                            })
+                                            .child(
+                                                Button::new(
+                                                    "clear-ssh-tunnel",
+                                                    dbflux_i18n::t!("access.clear"),
+                                                )
                                                 .small()
                                                 .ghost()
                                                 .on_click(cx.listener(|this, _, window, cx| {
                                                     this.clear_ssh_tunnel_selection(window, cx);
                                                 })),
-                                        ),
-                                )
-                            }),
-                    )
-                    .into_any_element(),
-            )
-        } else {
-            None
-        };
+                                            ),
+                                    )
+                                }),
+                        )
+                        .into_any_element(),
+                )
+            } else {
+                None
+            };
 
         let theme = cx.theme().clone();
         let _muted_fg = theme.muted_foreground;
@@ -686,28 +740,42 @@ impl ConnectionManagerWindow {
                         let path_str = key_path
                             .as_ref()
                             .map(|p| p.to_string_lossy().to_string())
-                            .unwrap_or_else(|| "SSH Agent / default".to_string());
-                        format!("Private Key ({})", path_str)
+                            .unwrap_or_else(|| dbflux_i18n::t!("ssh.agent_default"));
+                        crate::labels::ssh_private_key_with_path(&path_str)
                     }
-                    dbflux_core::SshAuthMethod::Password => "Password".to_string(),
+                    dbflux_core::SshAuthMethod::Password => dbflux_i18n::t!("ssh.password"),
                 };
 
                 let edit_focused = show_focus && focus == FormFocus::SshEditInSettings;
 
+                let ssh_server_saved_title = dbflux_i18n::t!("access.ssh_server_saved");
+                let ssh_host_label = dbflux_i18n::t!("ssh.host");
+                let ssh_port_label = dbflux_i18n::t!("ssh.port");
+                let ssh_username_label = dbflux_i18n::t!("ssh.username");
+                let ssh_auth_label = dbflux_i18n::t!("ssh.auth_label");
+
                 self.render_section(
-                    "SSH Server (saved tunnel)",
+                    &ssh_server_saved_title,
                     div()
                         .flex()
                         .flex_col()
                         .gap_2()
-                        .child(self.render_readonly_row("Host", &tunnel.config.host, &theme))
                         .child(self.render_readonly_row(
-                            "Port",
+                            &ssh_host_label,
+                            &tunnel.config.host,
+                            &theme,
+                        ))
+                        .child(self.render_readonly_row(
+                            &ssh_port_label,
                             &tunnel.config.port.to_string(),
                             &theme,
                         ))
-                        .child(self.render_readonly_row("Username", &tunnel.config.user, &theme))
-                        .child(self.render_readonly_row("Auth", &auth_label, &theme))
+                        .child(self.render_readonly_row(
+                            &ssh_username_label,
+                            &tunnel.config.user,
+                            &theme,
+                        ))
+                        .child(self.render_readonly_row(&ssh_auth_label, &auth_label, &theme))
                         .child(
                             div()
                                 .mt_1()
@@ -716,10 +784,13 @@ impl ConnectionManagerWindow {
                                 .when(edit_focused, |d| d.border_color(ring_color))
                                 .when(!edit_focused, |d| d.border_color(gpui::transparent_black()))
                                 .child(
-                                    Button::new("ssh-edit-in-settings", "Edit in Settings")
-                                        .small()
-                                        .ghost()
-                                        .icon(Icon::new(AppIcon::ExternalLink)),
+                                    Button::new(
+                                        "ssh-edit-in-settings",
+                                        dbflux_i18n::t!("access.edit_in_settings"),
+                                    )
+                                    .small()
+                                    .ghost()
+                                    .icon(Icon::new(AppIcon::ExternalLink)),
                                 ),
                         ),
                     &theme,
@@ -754,9 +825,14 @@ impl ConnectionManagerWindow {
                 )
                 .into_any_element();
 
+            let ssh_server_title = dbflux_i18n::t!("ssh.ssh_server");
+            let ssh_host_label = dbflux_i18n::t!("ssh.host");
+            let ssh_port_label = dbflux_i18n::t!("ssh.port");
+            let ssh_username_label = dbflux_i18n::t!("ssh.username");
+
             let server_section = self
                 .render_section(
-                    "SSH Server",
+                    &ssh_server_title,
                     div()
                         .flex()
                         .flex_col()
@@ -767,7 +843,7 @@ impl ConnectionManagerWindow {
                                 .flex()
                                 .gap_3()
                                 .child(div().flex_1().child(self.form_field_input(
-                                    "Host",
+                                    &ssh_host_label,
                                     &self.access.input_ssh_host,
                                     true,
                                     show_focus && focus == FormFocus::SshHost,
@@ -776,7 +852,7 @@ impl ConnectionManagerWindow {
                                     cx,
                                 )))
                                 .child(div().w(px(80.0)).child(self.form_field_input(
-                                    "Port",
+                                    &ssh_port_label,
                                     &self.access.input_ssh_port,
                                     false,
                                     show_focus && focus == FormFocus::SshPort,
@@ -786,7 +862,7 @@ impl ConnectionManagerWindow {
                                 ))),
                         )
                         .child(div().id(3usize).child(self.form_field_input(
-                            "Username",
+                            &ssh_username_label,
                             &self.access.input_ssh_user,
                             true,
                             show_focus && focus == FormFocus::SshUser,
@@ -816,7 +892,7 @@ impl ConnectionManagerWindow {
                     d.border_color(gpui::transparent_black())
                 })
                 .child(
-                    Button::new("test-ssh", "Test SSH")
+                    Button::new("test-ssh", dbflux_i18n::t!("access.test_ssh"))
                         .icon(Icon::new(AppIcon::ExternalLink))
                         .small()
                         .ghost()
@@ -829,17 +905,17 @@ impl ConnectionManagerWindow {
             let status_el: Option<AnyElement> = match ssh_test_status {
                 TestStatus::None => None,
                 TestStatus::Testing => {
-                    Some(Text::muted("Testing SSH connection...").into_any_element())
+                    Some(Text::muted(dbflux_i18n::t!("access.testing_ssh")).into_any_element())
                 }
                 TestStatus::Success | TestStatus::SuccessWithWarning => Some(
                     StatusIndicator::new(Status::Connected)
-                        .label("SSH connection successful")
+                        .label(dbflux_i18n::t!("access.ssh_success"))
                         .into_any_element(),
                 ),
                 TestStatus::Failed => Some(
                     StatusIndicator::new(Status::Error)
                         .label(
-                            ssh_test_error.unwrap_or_else(|| "SSH connection failed".to_string()),
+                            ssh_test_error.unwrap_or_else(|| dbflux_i18n::t!("access.ssh_failed")),
                         )
                         .into_any_element(),
                 ),
@@ -857,13 +933,16 @@ impl ConnectionManagerWindow {
                             d.border_color(gpui::transparent_black())
                         })
                         .child(
-                            Button::new("save-ssh-tunnel", "Save as tunnel")
-                                .icon(Icon::new(AppIcon::Plus))
-                                .small()
-                                .ghost()
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.save_current_ssh_as_tunnel(cx);
-                                })),
+                            Button::new(
+                                "save-ssh-tunnel",
+                                dbflux_i18n::t!("access.save_as_tunnel"),
+                            )
+                            .icon(Icon::new(AppIcon::Plus))
+                            .small()
+                            .ghost()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.save_current_ssh_as_tunnel(cx);
+                            })),
                         )
                         .into_any_element(),
                 )
@@ -904,8 +983,9 @@ impl ConnectionManagerWindow {
         }
 
         if let Some(selector) = auth_selector {
+            let authentication_title = dbflux_i18n::t!("ssh.authentication");
             sections.push(
-                self.render_section("Authentication", selector, &theme)
+                self.render_section(&authentication_title, selector, &theme)
                     .into_any_element(),
             );
         }
@@ -925,9 +1005,7 @@ impl ConnectionManagerWindow {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .child(Text::muted(
-                        "Enable SSH tunnel to configure connection through a bastion host",
-                    ))
+                    .child(Text::muted(dbflux_i18n::t!("access.ssh_disabled_hint")))
                     .into_any_element(),
             );
         }
@@ -979,7 +1057,7 @@ impl ConnectionManagerWindow {
                         primary,
                         border,
                     ))
-                    .child(div().text_sm().child("Private Key")),
+                    .child(div().text_sm().child(dbflux_i18n::t!("ssh.private_key"))),
             )
             .child(
                 div()
@@ -1001,7 +1079,7 @@ impl ConnectionManagerWindow {
                         primary,
                         border,
                     ))
-                    .child(div().text_sm().child("Password")),
+                    .child(div().text_sm().child(dbflux_i18n::t!("ssh.password"))),
             )
     }
 
@@ -1062,7 +1140,7 @@ impl ConnectionManagerWindow {
                         .flex()
                         .flex_col()
                         .gap_1()
-                        .child(Label::new("Private Key Path"))
+                        .child(Label::new(dbflux_i18n::t!("ssh.private_key_path")))
                         .child(
                             div()
                                 .flex()
@@ -1098,26 +1176,29 @@ impl ConnectionManagerWindow {
                                             d.border_color(gpui::transparent_black())
                                         })
                                         .child(
-                                            Button::new("browse-ssh-key", "Browse")
-                                                .small()
-                                                .ghost()
-                                                .on_click(cx.listener(|this, _, window, cx| {
+                                            Button::new(
+                                                "browse-ssh-key",
+                                                dbflux_i18n::t!("ssh.browse"),
+                                            )
+                                            .small()
+                                            .ghost()
+                                            .on_click(
+                                                cx.listener(|this, _, window, cx| {
                                                     this.browse_ssh_key(window, cx);
-                                                })),
+                                                }),
+                                            ),
                                         ),
                                 ),
                         ),
                 )
-                .child(Text::caption(
-                    "Leave empty to use SSH agent or default keys (~/.ssh/id_rsa)",
-                ))
+                .child(Text::caption(dbflux_i18n::t!("ssh.private_key_hint")))
                 .child(
                     div()
                         .id(6usize)
                         .flex()
                         .flex_col()
                         .gap_1()
-                        .child(Label::new("Key Passphrase"))
+                        .child(Label::new(dbflux_i18n::t!("ssh.key_passphrase")))
                         .child(
                             div()
                                 .flex()
@@ -1176,12 +1257,16 @@ impl ConnectionManagerWindow {
                                                     .items_center()
                                                     .gap_2()
                                                     .child(checkbox)
-                                                    .child(div().text_sm().child("Save")),
+                                                    .child(
+                                                        div()
+                                                            .text_sm()
+                                                            .child(dbflux_i18n::t!("ssh.save")),
+                                                    ),
                                             ),
                                     )
                                 }),
                         )
-                        .child(Text::caption("Leave empty if key has no passphrase")),
+                        .child(Text::caption(dbflux_i18n::t!("ssh.passphrase_hint"))),
                 )
                 .into_any_element(),
             SshAuthSelection::Password => div()
@@ -1194,7 +1279,7 @@ impl ConnectionManagerWindow {
                         .flex()
                         .flex_col()
                         .gap_1()
-                        .child(Label::new("SSH Password").required(true))
+                        .child(Label::new(dbflux_i18n::t!("ssh.ssh_password")).required(true))
                         .child(
                             div()
                                 .flex()
@@ -1253,7 +1338,11 @@ impl ConnectionManagerWindow {
                                                     .items_center()
                                                     .gap_2()
                                                     .child(checkbox)
-                                                    .child(div().text_sm().child("Save")),
+                                                    .child(
+                                                        div()
+                                                            .text_sm()
+                                                            .child(dbflux_i18n::t!("ssh.save")),
+                                                    ),
                                             ),
                                     )
                                 }),
@@ -1261,5 +1350,226 @@ impl ConnectionManagerWindow {
                 )
                 .into_any_element(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    const ACCESS_DIRECT_SSM_KEYS: &[&str] = &[
+        "access.tab_label",
+        "access.method_label",
+        "access.direct_hint",
+        "access.auth_profile_optional",
+        "access.manage",
+        "access.login",
+        "access.refresh",
+        "access.auth_profile_hint",
+        "access.session_valid",
+        "access.ssm_title",
+        "access.ssm_instance_id",
+        "access.ssm_region",
+        "access.ssm_remote_port",
+        "access.ssm_port_hint",
+        "access.auth_profile",
+    ];
+
+    #[test]
+    fn access_direct_ssm_keys_resolve_in_both_locales() {
+        for locale in ["en", "es"] {
+            for key in ACCESS_DIRECT_SSM_KEYS {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(
+                    !value.is_empty(),
+                    "key {key} resolved empty for locale {locale}"
+                );
+                assert_ne!(value, *key, "key {key} did not resolve for locale {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "key {key} fell back to the raw locale-qualified form for locale {locale}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn access_method_label_differs_between_locales() {
+        let en = dbflux_i18n::t!("access.method_label", locale = "en");
+        let es = dbflux_i18n::t!("access.method_label", locale = "es");
+
+        assert_ne!(
+            en, es,
+            "access.method_label should differ between en and es"
+        );
+    }
+
+    #[test]
+    fn access_ssm_instance_id_label_exact_values() {
+        let en = dbflux_i18n::t!("access.ssm_instance_id", locale = "en");
+        let es = dbflux_i18n::t!("access.ssm_instance_id", locale = "es");
+
+        assert_eq!(en, "Instance ID");
+        assert_eq!(es, "ID de instancia");
+    }
+
+    const ACCESS_PROXY_KEYS: &[&str] = &[
+        "access.proxy_no_profiles",
+        "access.proxy_no_profiles_hint",
+        "access.proxy_disabled_label",
+        "access.select_proxy",
+        "access.clear",
+        "access.proxy_details",
+        "access.proxy_type",
+        "access.proxy_host",
+        "access.proxy_auth",
+        "access.proxy_enabled",
+        "access.proxy_no_proxy",
+        "access.value_yes",
+        "access.value_no",
+        "access.no_proxy_placeholder",
+        "access.edit_in_settings",
+    ];
+
+    #[test]
+    fn access_proxy_keys_resolve_in_both_locales() {
+        for locale in ["en", "es"] {
+            for key in ACCESS_PROXY_KEYS {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(
+                    !value.is_empty(),
+                    "key {key} resolved empty for locale {locale}"
+                );
+                assert_ne!(value, *key, "key {key} did not resolve for locale {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "key {key} fell back to the raw locale-qualified form for locale {locale}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn access_proxy_details_differs_between_locales() {
+        let en = dbflux_i18n::t!("access.proxy_details", locale = "en");
+        let es = dbflux_i18n::t!("access.proxy_details", locale = "es");
+
+        assert_ne!(
+            en, es,
+            "access.proxy_details should differ between en and es"
+        );
+    }
+
+    #[test]
+    fn access_select_proxy_label_exact_values() {
+        let en = dbflux_i18n::t!("access.select_proxy", locale = "en");
+        let es = dbflux_i18n::t!("access.select_proxy", locale = "es");
+
+        assert_eq!(en, "Select Proxy");
+        assert_eq!(es, "Seleccionar proxy");
+    }
+
+    const ACCESS_SSH_KEYS: &[&str] = &[
+        "access.use_ssh_tunnel",
+        "access.ssh_tunnel_label",
+        "access.ssh_server_saved",
+        "access.test_ssh",
+        "access.testing_ssh",
+        "access.ssh_success",
+        "access.ssh_failed",
+        "access.save_as_tunnel",
+        "access.ssh_disabled_hint",
+    ];
+
+    #[test]
+    fn access_ssh_keys_resolve_in_both_locales() {
+        for locale in ["en", "es"] {
+            for key in ACCESS_SSH_KEYS {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(
+                    !value.is_empty(),
+                    "key {key} resolved empty for locale {locale}"
+                );
+                assert_ne!(value, *key, "key {key} did not resolve for locale {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "key {key} fell back to the raw locale-qualified form for locale {locale}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn access_use_ssh_tunnel_label_exact_values() {
+        let en = dbflux_i18n::t!("access.use_ssh_tunnel", locale = "en");
+        let es = dbflux_i18n::t!("access.use_ssh_tunnel", locale = "es");
+
+        assert_eq!(en, "Use SSH Tunnel");
+        assert_eq!(es, "Usar túnel SSH");
+    }
+
+    const SSH_VOCABULARY_KEYS: &[&str] = &[
+        "ssh.agent_default",
+        "ssh.authentication",
+        "ssh.private_key",
+        "ssh.password",
+        "ssh.private_key_path",
+        "ssh.browse",
+        "ssh.key_passphrase",
+        "ssh.save",
+        "ssh.passphrase_hint",
+        "ssh.ssh_password",
+        "ssh.ssh_server",
+        "ssh.host",
+        "ssh.port",
+        "ssh.username",
+        "ssh.private_key_short",
+        "ssh.update",
+        "ssh.create",
+        "ssh.test",
+        "ssh.private_key_with_path",
+        "ssh.private_key_hint",
+        "ssh.auth_label",
+    ];
+
+    #[test]
+    fn ssh_vocabulary_keys_resolve_in_both_locales() {
+        for locale in ["en", "es"] {
+            for key in SSH_VOCABULARY_KEYS {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(
+                    !value.is_empty(),
+                    "key {key} resolved empty for locale {locale}"
+                );
+                assert_ne!(value, *key, "key {key} did not resolve for locale {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "key {key} fell back to the raw locale-qualified form for locale {locale}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ssh_authentication_differs_between_locales() {
+        let en = dbflux_i18n::t!("ssh.authentication", locale = "en");
+        let es = dbflux_i18n::t!("ssh.authentication", locale = "es");
+
+        assert_ne!(en, es, "ssh.authentication should differ between en and es");
+    }
+
+    #[test]
+    fn ssh_passphrase_hint_exact_values() {
+        let en = dbflux_i18n::t!("ssh.passphrase_hint", locale = "en");
+        let es = dbflux_i18n::t!("ssh.passphrase_hint", locale = "es");
+
+        assert_eq!(en, "Leave empty if key has no passphrase");
+        assert_eq!(es, "Déjala vacía si la clave no tiene frase");
     }
 }

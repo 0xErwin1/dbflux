@@ -1399,9 +1399,47 @@ impl ConnectionManagerWindow {
         cx.notify();
     }
 
-    pub(super) fn exit_edit_mode_on_blur(&mut self, cx: &mut Context<Self>) {
+    /// A click that moves focus from one form input to another delivers the
+    /// old input's Blur after the new input is already focused; dropping to
+    /// `Navigating` then would leave single-letter navigation bindings
+    /// (j/k/h/l) swallowing keystrokes typed into the newly focused input.
+    pub(super) fn exit_edit_mode_on_blur(&mut self, window: &Window, cx: &mut Context<Self>) {
+        if self.any_form_input_is_focused(window, cx) {
+            return;
+        }
+
         self.edit_state = EditState::Navigating;
         cx.notify();
+    }
+
+    fn any_form_input_is_focused(&self, window: &Window, cx: &Context<Self>) -> bool {
+        let static_inputs = [
+            &self.form.input_name,
+            &self.form.input_password,
+            &self.form.ssl_ca_cert_input,
+            &self.form.ssl_client_cert_input,
+            &self.form.ssl_client_key_input,
+            &self.access.input_ssh_host,
+            &self.access.input_ssh_port,
+            &self.access.input_ssh_user,
+            &self.access.input_ssh_key_path,
+            &self.access.input_ssh_key_passphrase,
+            &self.access.input_ssh_password,
+            &self.access.input_ssm_instance_id,
+            &self.access.input_ssm_region,
+            &self.access.input_ssm_remote_port,
+        ];
+
+        #[cfg(feature = "mcp")]
+        let mcp_filter_input = Some(&self.mcp_tab.conn_mcp_client_filter_input);
+        #[cfg(not(feature = "mcp"))]
+        let mcp_filter_input: Option<&Entity<dbflux_components::controls::InputState>> = None;
+
+        static_inputs
+            .into_iter()
+            .chain(self.form.driver_inputs.values())
+            .chain(mcp_filter_input)
+            .any(|input| input.read(cx).focus_handle(cx).is_focused(window))
     }
 
     pub(super) fn enter_edit_mode_for_field(
