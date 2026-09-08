@@ -9,9 +9,10 @@ import type { Locale } from '../i18n';
 
 interface Props {
   locale?: Locale;
+  showLanguagePicker?: boolean;
 }
 
-const { locale = localeFromPathname(Astro.url.pathname) } = Astro.props;
+const { locale = localeFromPathname(Astro.url.pathname), showLanguagePicker = true } = Astro.props;
 
 const COLUMNS = [
   {
@@ -73,9 +74,11 @@ const COLUMNS = [
       <div
         class="foot__utilities"
         role="group"
-        aria-label={`${t(locale, 'nav.language')} / ${t(locale, 'nav.theme')}`}
+        aria-label={showLanguagePicker
+          ? `${t(locale, 'nav.language')} / ${t(locale, 'nav.theme')}`
+          : t(locale, 'nav.theme')}
       >
-        <LanguagePicker locale={locale} placement="up-end" />
+        {showLanguagePicker && <LanguagePicker locale={locale} placement="up-end" />}
         <ThemePicker locale={locale} />
       </div>
     </div>

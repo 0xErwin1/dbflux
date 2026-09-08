@@ -26,6 +26,8 @@ interface Props {
   translated?: boolean;
   /** Locales with real content for this exact page; fallback routes are excluded. */
   alternateLocales?: readonly Locale[];
+  /** Whether the footer should offer links to localized versions of this page. */
+  showLanguagePicker?: boolean;
 }
 
 const {
@@ -39,6 +41,7 @@ const {
   locale = localeFromPathname(Astro.url.pathname),
   translated = false,
   alternateLocales = translated ? LOCALES : [],
+  showLanguagePicker = true,
 } = Astro.props;
 // Astro.site is unset when the config fails to load, and a crashed canonical tag
 // should not take the whole page down with it.
@@ -142,7 +145,7 @@ const xDefaultHref =
     <a class="skip-link" href="#main">{t(locale, 'banner.skip_link')}</a>
     <SiteNav current={current} locale={locale} />
     <main id="main"><slot /></main>
-    <SiteFooter locale={locale} />
+    <SiteFooter locale={locale} showLanguagePicker={showLanguagePicker} />
     <BackToTop />
     <Mermaid />
     <SearchDialog indexUrl={searchIndex} locale={locale} />
