@@ -10,6 +10,11 @@ export const en = {
     download: 'Download',
     menu: 'Menu',
     language: 'Language',
+    theme: 'Theme',
+    theme_system: 'System',
+    theme_light: 'Light',
+    theme_dark: 'Dark',
+    theme_mirage: 'Mirage',
   },
   footer: {
     product: 'Product',
@@ -81,9 +86,9 @@ export const en = {
     download_windows: 'Download for Windows',
     view_source: 'View source',
     platforms_meta: 'Linux · macOS · Windows — MIT or Apache-2.0',
-    hero_caption: 'Main server — SELECT * FROM public.transactions (1.5s)',
+    hero_caption: 'Main server — acta.documents',
     hero_alt:
-      'DBFlux with a connection tree open, showing databases, schemas, routines and instance metrics for a PostgreSQL server.',
+      'DBFlux showing acta.documents query results, with a connections sidebar and details for the selected row.',
     drivers_eyebrow: 'Built-in drivers',
     drivers_link: 'Capability matrix →',
     drivers_note:

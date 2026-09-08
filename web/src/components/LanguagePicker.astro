@@ -4,9 +4,10 @@ import type { Locale } from '../i18n';
 
 interface Props {
   locale?: Locale;
+  placement?: 'down-end' | 'up-end';
 }
 
-const { locale = localeFromPathname(Astro.url.pathname) } = Astro.props;
+const { locale = localeFromPathname(Astro.url.pathname), placement = 'down-end' } = Astro.props;
 
 const pathname = Astro.url.pathname;
 
@@ -17,7 +18,7 @@ const options = LOCALES.map((target) => ({
 }));
 ---
 
-<div class="lang" data-lang-picker>
+<div class="lang" data-lang-picker data-placement={placement}>
   <button
     type="button"
     class="lang__button nav__link"
@@ -66,11 +67,6 @@ const options = LOCALES.map((target) => ({
     position: relative;
   }
 
-  /*
-   * `nav__link` on the button only matches SiteNav's scoped styles when the
-   * markup lives there; from this component the class is inert, so the same
-   * typography and colors are restated here.
-   */
   .lang__button {
     position: relative;
     display: flex;
@@ -132,6 +128,11 @@ const options = LOCALES.map((target) => ({
     box-shadow: var(--shadow-lg);
   }
 
+  .lang[data-placement='up-end'] .lang__menu {
+    top: auto;
+    bottom: calc(100% + 8px);
+  }
+
   .lang__menu[hidden] {
     display: none;
   }
@@ -156,6 +157,13 @@ const options = LOCALES.map((target) => ({
   .lang__menu a[aria-current='true'] {
     color: var(--text-strong);
     box-shadow: inset 2px 0 0 0 var(--accent);
+  }
+
+  @media (max-width: 900px) {
+    .lang[data-placement='up-end'] .lang__menu {
+      right: auto;
+      left: 0;
+    }
   }
 </style>
 
