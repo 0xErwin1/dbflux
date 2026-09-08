@@ -31,8 +31,8 @@ fn stub_view_handle(cx: &mut App) -> dbflux_components::result_panel::ViewHandle
         .render(|_w, _cx| div().into_any())
         .focus({
             let focus = focus.clone();
-            move |w, _cx| {
-                focus.focus(w);
+            move |w, cx| {
+                focus.focus(w, cx);
             }
         })
         .focus_handle(move |_cx| focus.clone())
@@ -50,8 +50,8 @@ fn stub_view_handle_two_modes(cx: &mut App) -> dbflux_components::result_panel::
         .render(|_w, _cx| div().into_any())
         .focus({
             let focus = focus.clone();
-            move |w, _cx| {
-                focus.focus(w);
+            move |w, cx| {
+                focus.focus(w, cx);
             }
         })
         .focus_handle(move |_cx| focus.clone())
@@ -165,8 +165,8 @@ fn view_handle_toolbar_segments_closure_called() {
             .render(|_w, _cx| div().into_any())
             .focus({
                 let focus = focus.clone();
-                move |w, _cx| {
-                    focus.focus(w);
+                move |w, cx| {
+                    focus.focus(w, cx);
                 }
             })
             .focus_handle(move |_cx| focus.clone())
@@ -200,8 +200,8 @@ fn merged_segments_sort_correctly() {
             .render(|_w, _cx| div().into_any())
             .focus({
                 let focus = focus.clone();
-                move |w, _cx| {
-                    focus.focus(w);
+                move |w, cx| {
+                    focus.focus(w, cx);
                 }
             })
             .focus_handle(move |_cx| focus.clone())

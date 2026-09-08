@@ -448,8 +448,7 @@ impl QueryCompletionProvider {
                                 result.dependents,
                             );
                         });
-                    })
-                    .ok();
+                    });
                 }
                 Err(err) => {
                     // Release the key so a later keystroke can retry.
@@ -515,8 +514,7 @@ impl QueryCompletionProvider {
                             result.schema,
                         );
                     });
-                })
-                .ok();
+                });
             }
             Err(err) => {
                 // Release the key so a later keystroke can retry.

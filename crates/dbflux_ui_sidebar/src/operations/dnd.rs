@@ -1,7 +1,6 @@
 use super::{HeldDatabaseConnection, try_close_held_database_connection};
 use crate::*;
 use dbflux_core::{Connection, SchemaDropTarget, SchemaObjectKind, TaskKind, TaskTarget};
-use dbflux_ui_base::AsyncUpdateResultExt;
 use dbflux_ui_base::toast::PendingToast;
 use std::sync::Arc;
 
@@ -329,9 +328,9 @@ impl Sidebar {
                         )
                     })
                 }) {
-                    Ok(Ok(plan)) => plan,
-                    Ok(Err(error)) => {
-                        if let Err(update_error) = cx.update(|cx| {
+                    Ok(plan) => plan,
+                    Err(error) => {
+                        cx.update(|cx| {
                             sidebar.update(cx, |sidebar, _cx| {
                                 sidebar.clear_tracked_operation_task(task_id);
                             });
@@ -348,27 +347,7 @@ impl Sidebar {
                                 });
                                 sidebar.refresh_tree(cx);
                             });
-                        }) {
-                            log::warn!(
-                                "Failed to apply database drop release error: {:?}",
-                                update_error
-                            );
-                        }
-                        return;
-                    }
-                    Err(update_error) => {
-                        log::warn!(
-                            "Failed to prepare database drop release: {:?}",
-                            update_error
-                        );
-
-                        cx.update(|cx| {
-                            sidebar.update(cx, |sidebar, _cx| {
-                                sidebar.clear_tracked_operation_task(task_id);
-                            });
-                        })
-                        .log_if_dropped();
-
+                        });
                         return;
                     }
                 }
@@ -451,7 +430,7 @@ impl Sidebar {
                 })
                 .await;
 
-            if let Err(update_error) = cx.update(|cx| match drop_result {
+            cx.update(|cx| match drop_result {
                 DropExecutionOutcome::Dropped {
                     database_release_applied,
                 } => {
@@ -570,9 +549,7 @@ impl Sidebar {
                         sidebar.refresh_tree(cx);
                     });
                 }
-            }) {
-                log::warn!("Failed to apply schema drop result: {:?}", update_error);
-            }
+            });
         });
 
         self.track_operation_task(task_id, operation_task);

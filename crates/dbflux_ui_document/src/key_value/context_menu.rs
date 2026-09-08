@@ -220,7 +220,7 @@ impl super::KeyValueDocument {
             selected_index: 0,
         });
 
-        self.context_menu_focus.focus(window);
+        self.context_menu_focus.focus(window, cx);
         cx.notify();
     }
 
@@ -232,7 +232,7 @@ impl super::KeyValueDocument {
             }
         }
 
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
         cx.notify();
     }
 
@@ -293,7 +293,7 @@ impl super::KeyValueDocument {
             KvMenuTarget::Key => self.focus_mode = KeyValueFocusMode::List,
             KvMenuTarget::Value => self.focus_mode = KeyValueFocusMode::ValuePanel,
         }
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
 
         match action {
             KvMenuAction::CopyKey => {

@@ -167,8 +167,7 @@ impl super::KeyValueDocument {
                     }
                     cx.notify();
                 });
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
     }
@@ -265,8 +264,7 @@ impl super::KeyValueDocument {
                         this.reload_selected_value(cx);
                     }
                 });
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
     }
@@ -294,7 +292,7 @@ impl super::KeyValueDocument {
                 InputEvent::PressEnter { .. } => this.commit_rename(window, cx),
                 InputEvent::Blur => {
                     this.cancel_rename(cx);
-                    this.focus_handle.focus(window);
+                    this.focus_handle.focus(window, cx);
                 }
                 _ => {}
             },
@@ -315,7 +313,7 @@ impl super::KeyValueDocument {
         };
 
         self.focus_mode = KeyValueFocusMode::List;
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
 
         let new_name = input.read(cx).value().trim().to_string();
         let Some(old_name) = self.keys.get(index).map(|k| k.key.clone()) else {
@@ -383,8 +381,7 @@ impl super::KeyValueDocument {
                         cx.notify();
                     }
                 });
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
 
@@ -435,7 +432,7 @@ impl super::KeyValueDocument {
                 InputEvent::PressEnter { .. } => this.commit_string_edit(window, cx),
                 InputEvent::Blur => {
                     this.cancel_string_edit(cx);
-                    this.focus_handle.focus(window);
+                    this.focus_handle.focus(window, cx);
                 }
                 _ => {}
             },
@@ -453,7 +450,7 @@ impl super::KeyValueDocument {
         let new_text = input.read(cx).value().to_string();
 
         self.focus_mode = KeyValueFocusMode::List;
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
 
         let Some(value) = &self.selected_value else {
             cx.notify();
@@ -519,8 +516,7 @@ impl super::KeyValueDocument {
                         cx.notify();
                     }
                 });
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
     }
@@ -556,7 +552,7 @@ impl super::KeyValueDocument {
                 InputEvent::PressEnter { .. } => this.commit_member_edit(window, cx),
                 InputEvent::Blur => {
                     this.cancel_member_edit(cx);
-                    this.focus_handle.focus(window);
+                    this.focus_handle.focus(window, cx);
                 }
                 _ => {}
             },
@@ -593,7 +589,7 @@ impl super::KeyValueDocument {
         let score_input = self.member_edit_score_input.take();
         self.focus_mode = KeyValueFocusMode::ValuePanel;
         self.selected_member_index = Some(member_index);
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
 
         let new_value = input.read(cx).value().to_string();
         let new_score = score_input.map(|si| si.read(cx).value().parse::<f64>().unwrap_or(0.0));
@@ -718,8 +714,7 @@ impl super::KeyValueDocument {
                         cx.notify();
                     }
                 });
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
 
@@ -848,8 +843,7 @@ impl super::KeyValueDocument {
                         cx.notify();
                     }
                 });
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
     }
@@ -998,8 +992,7 @@ impl super::KeyValueDocument {
                         cx.notify();
                     }
                 });
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
     }

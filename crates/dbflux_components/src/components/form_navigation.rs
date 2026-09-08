@@ -42,7 +42,7 @@ pub trait FormNavigation: Sized + 'static {
 
     fn exit_edit_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.set_edit_state(FormEditState::Navigating);
-        window.focus(self.form_focus_handle());
+        window.focus(self.form_focus_handle(), cx);
         cx.notify();
     }
 
@@ -125,7 +125,9 @@ pub fn subscribe_form_input<T: FormNavigation>(
         input,
         window,
         |this: &mut T, _, event: &InputEvent, window, cx| match event {
-            InputEvent::PressEnter { secondary: false } => {
+            InputEvent::PressEnter {
+                secondary: false, ..
+            } => {
                 this.exit_edit_mode(window, cx);
                 this.focus_down(cx);
                 cx.notify();

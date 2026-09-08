@@ -131,9 +131,8 @@ impl ObjectBrowserDocument {
                         millis: elapsed_millis,
                     });
                     doc.apply_prefix_page(&prefix, result, cx);
-                });
-            })
-            .ok();
+                })
+            });
         })
         .detach();
     }
@@ -210,9 +209,8 @@ impl ObjectBrowserDocument {
                         millis: elapsed_millis,
                     });
                     doc.apply_object_metadata(generation, key, result, cx);
-                });
-            })
-            .ok();
+                })
+            });
         })
         .detach();
     }
@@ -356,9 +354,8 @@ impl ObjectBrowserDocument {
                             cx.notify();
                         }
                     }
-                });
-            })
-            .ok();
+                })
+            });
         })
         .detach();
     }
@@ -457,9 +454,8 @@ impl ObjectBrowserDocument {
             cx.update(|cx| {
                 entity.update(cx, |doc, cx| {
                     doc.apply_prepared_preview(generation, key, prepared, cx);
-                });
-            })
-            .ok();
+                })
+            });
         })
         .detach();
     }
@@ -576,9 +572,8 @@ impl ObjectBrowserDocument {
                         Err(err) => BucketDetailsState::Error(err.to_string()),
                     };
                     cx.notify();
-                });
-            })
-            .ok();
+                })
+            });
         })
         .detach();
     }
@@ -628,9 +623,8 @@ impl ObjectBrowserDocument {
                         Err(err) => ObjectVersionsState::Error(err.to_string()),
                     };
                     cx.notify();
-                });
-            })
-            .ok();
+                })
+            });
         })
         .detach();
     }

@@ -849,7 +849,7 @@ impl Render for ObjectBrowserDocument {
                         },
                     )
                     .size_full()
-                    .track_scroll(self.listing_scroll.clone()),
+                    .track_scroll(&self.listing_scroll),
                 )
                 .into_any_element()
         };

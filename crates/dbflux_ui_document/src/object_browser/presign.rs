@@ -292,9 +292,8 @@ impl ObjectBrowserDocument {
             cx.update(|cx| {
                 entity.update(cx, |doc, cx| {
                     doc.apply_presigned_url(generation, result.map_err(|err| err.to_string()), cx);
-                });
-            })
-            .ok();
+                })
+            });
         })
         .detach();
     }

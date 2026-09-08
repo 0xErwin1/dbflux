@@ -129,7 +129,9 @@ impl BucketsTableDocument {
                 &name_input,
                 |this, _input, event: &InputEvent, cx| match event {
                     InputEvent::Change => cx.notify(),
-                    InputEvent::PressEnter { secondary: false } => this.submit_new_bucket(cx),
+                    InputEvent::PressEnter {
+                        secondary: false, ..
+                    } => this.submit_new_bucket(cx),
                     _ => {}
                 },
             ),
@@ -137,7 +139,9 @@ impl BucketsTableDocument {
                 &region_input,
                 |this, _input, event: &InputEvent, cx| match event {
                     InputEvent::Change => cx.notify(),
-                    InputEvent::PressEnter { secondary: false } => this.submit_new_bucket(cx),
+                    InputEvent::PressEnter {
+                        secondary: false, ..
+                    } => this.submit_new_bucket(cx),
                     _ => {}
                 },
             ),
@@ -255,8 +259,7 @@ impl BucketsTableDocument {
                 entity.update(cx, |doc, cx| {
                     doc.apply_bucket_created(name, result.map_err(|err| err.to_string()), cx);
                 });
-            })
-            .ok();
+            });
         })
         .detach();
     }

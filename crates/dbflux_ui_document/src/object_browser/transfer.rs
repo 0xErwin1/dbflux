@@ -216,8 +216,7 @@ impl ObjectBrowserDocument {
                 }
                 .meta_right(now_hms())
                 .push(cx);
-            })
-            .ok();
+            });
         })
         .detach();
     }

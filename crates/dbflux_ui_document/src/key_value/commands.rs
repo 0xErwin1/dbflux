@@ -18,7 +18,7 @@ impl super::KeyValueDocument {
 
             if !self.new_key_modal.read(cx).is_visible() {
                 self.focus_mode = KeyValueFocusMode::List;
-                self.focus_handle.focus(window);
+                self.focus_handle.focus(window, cx);
                 cx.notify();
             }
 
@@ -32,7 +32,7 @@ impl super::KeyValueDocument {
 
             if !self.add_member_modal.read(cx).is_visible() {
                 self.focus_mode = KeyValueFocusMode::ValuePanel;
-                self.focus_handle.focus(window);
+                self.focus_handle.focus(window, cx);
                 cx.notify();
             }
 
@@ -244,7 +244,7 @@ impl super::KeyValueDocument {
             }
             Command::FocusDown => {
                 self.focus_mode = KeyValueFocusMode::List;
-                self.focus_handle.focus(window);
+                self.focus_handle.focus(window, cx);
                 cx.notify();
                 true
             }
@@ -255,18 +255,18 @@ impl super::KeyValueDocument {
                     self.cancel_delete_member(cx);
                 } else if self.string_edit_input.is_some() {
                     self.cancel_string_edit(cx);
-                    self.focus_handle.focus(window);
+                    self.focus_handle.focus(window, cx);
                 } else if self.renaming_index.is_some() {
                     self.cancel_rename(cx);
-                    self.focus_handle.focus(window);
+                    self.focus_handle.focus(window, cx);
                 } else if self.editing_member_index.is_some() {
                     self.cancel_member_edit(cx);
-                    self.focus_handle.focus(window);
+                    self.focus_handle.focus(window, cx);
                 } else if self.runner.cancel_primary(cx) {
                     self.last_error = None;
                 } else {
                     self.focus_mode = KeyValueFocusMode::List;
-                    self.focus_handle.focus(window);
+                    self.focus_handle.focus(window, cx);
                 }
                 cx.notify();
                 true

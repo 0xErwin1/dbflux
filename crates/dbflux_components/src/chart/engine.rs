@@ -1174,7 +1174,7 @@ impl Render for ChartView {
             .overflow_hidden()
             .child(
                 div()
-                    .flex_grow()
+                    .flex_grow(1.0)
                     .relative()
                     .overflow_hidden()
                     .on_mouse_move(cx.listener(
@@ -1872,6 +1872,8 @@ fn paint_y_tick_labels(
         let _ = shaped.paint(
             point(gpui::px(label_x), gpui::px(label_y)),
             line_height,
+            gpui::TextAlign::Left,
+            None,
             window,
             cx,
         );
@@ -1898,6 +1900,8 @@ fn paint_x_tick_labels(
         let _ = shaped.paint(
             point(gpui::px(label_x), gpui::px(x_baseline_y)),
             line_height,
+            gpui::TextAlign::Left,
+            None,
             window,
             cx,
         );

@@ -22,7 +22,7 @@ use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use dbflux_ui_base::{AppStateChanged, AppStateEntity};
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::dialog::Dialog;
+use gpui_component::dialog::AlertDialog;
 use gpui_component::{ActiveTheme, Icon};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
@@ -815,7 +815,7 @@ impl AuthProfilesSection {
         cx.spawn(async move |_this, cx| {
             let result = fetch_task.await;
 
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 this.update(cx, |this, cx| {
                     match result {
                         Ok(response) => {
@@ -1749,7 +1749,7 @@ impl AuthProfilesSection {
             loop {
                 match url_rx.try_recv() {
                     Ok(Some(url)) => {
-                        let _ = cx.update(|cx| {
+                        cx.update(|cx| {
                             this_for_url.update(cx, |this, cx| {
                                 this.active_login_url = Some(url.clone());
                                 this.pending_sso_url =
@@ -1776,7 +1776,7 @@ impl AuthProfilesSection {
         cx.spawn(async move |_this, cx| {
             let result = provider.login(&profile, url_callback).await;
 
-            if let Err(err) = cx.update(|cx| {
+            cx.update(|cx| {
                 this.update(cx, |this, cx| {
                     this.provider_login_loading = false;
                     // Login finished — clear the inline URL display regardless
@@ -1809,9 +1809,7 @@ impl AuthProfilesSection {
 
                     cx.notify();
                 });
-            }) {
-                log::warn!("Failed to apply auth-provider login result: {:?}", err);
-            }
+            });
         })
         .detach();
     }
@@ -2984,7 +2982,7 @@ impl Render for AuthProfilesSection {
                     crate::labels::auth_profiles_delete_body(&delete_name, affected_connections);
 
                 element.child(
-                    Dialog::new(window, cx)
+                    AlertDialog::new(cx)
                         .title(dbflux_i18n::t!(
                             "settings.auth_profiles.delete_dialog_title"
                         ))
@@ -3001,7 +2999,7 @@ impl Render for AuthProfilesSection {
                             });
                             true
                         })
-                        .child(Text::body(body)),
+                        .description(Text::body(body)),
                 )
             }),
         )

@@ -39,8 +39,9 @@ pub mod pane;
 pub mod refresh;
 mod result_view;
 mod result_warnings;
+pub mod schema_viz;
 pub mod tab_bar;
-mod tab_manager;
+pub mod tab_manager;
 mod task_runner;
 mod types;
 
@@ -70,6 +71,7 @@ pub use pane::{
     PaneHandle, StatusSegment,
 };
 pub use result_view::ResultViewMode;
+pub use schema_viz::{SchemaVizDocument, SchemaVizMode};
 pub use tab_bar::{TabBar, TabBarEvent};
 pub use tab_manager::{Tab, TabManager, TabManagerEvent};
 pub use task_runner::{DocumentTaskRunner, MutationCancelHandle};

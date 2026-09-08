@@ -298,6 +298,11 @@ fn raster_format_from_mime(content_type: &str) -> Option<ImageFormat> {
         "image/webp" => Some(ImageFormat::Webp),
         "image/gif" => Some(ImageFormat::Gif),
         "image/bmp" | "image/x-ms-bmp" => Some(ImageFormat::Bmp),
+        "image/x-icon" | "image/vnd.microsoft.icon" => Some(ImageFormat::Ico),
+        "image/x-portable-anymap"
+        | "image/x-portable-bitmap"
+        | "image/x-portable-graymap"
+        | "image/x-portable-pixmap" => Some(ImageFormat::Pnm),
         "image/svg+xml" => Some(ImageFormat::Svg),
         _ => None,
     }
@@ -314,6 +319,8 @@ fn kind_from_extension(key: &str) -> Option<PreviewKind> {
         "webp" => PreviewKind::Image(ImageFormat::Webp),
         "gif" => PreviewKind::Image(ImageFormat::Gif),
         "bmp" => PreviewKind::Image(ImageFormat::Bmp),
+        "ico" => PreviewKind::Image(ImageFormat::Ico),
+        "pnm" | "pbm" | "pgm" | "ppm" => PreviewKind::Image(ImageFormat::Pnm),
         "pdf" => PreviewKind::Pdf,
         "txt" | "text" | "md" | "log" | "json" | "ndjson" | "csv" | "tsv" | "xml" | "yaml"
         | "yml" | "toml" | "ini" | "sql" | "sh" | "conf" | "env" | "properties" => {
@@ -389,6 +396,8 @@ pub fn format_label(format: ImageFormat) -> &'static str {
         ImageFormat::Gif => "GIF",
         ImageFormat::Svg => "SVG",
         ImageFormat::Bmp => "BMP",
+        ImageFormat::Ico => "ICO",
+        ImageFormat::Pnm => "PNM",
         ImageFormat::Tiff => "TIFF",
     }
 }

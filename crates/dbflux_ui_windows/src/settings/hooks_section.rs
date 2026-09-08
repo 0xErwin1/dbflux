@@ -11,7 +11,7 @@ use dbflux_core::{HookExecutionMode, ScriptLanguage};
 use dbflux_ui_base::{AppStateChanged, AppStateEntity};
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::dialog::Dialog;
+use gpui_component::dialog::AlertDialog;
 use std::collections::HashMap;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -677,7 +677,7 @@ impl EventEmitter<SectionFocusEvent> for HooksSection {}
 impl EventEmitter<SettingsEvent> for HooksSection {}
 
 impl Render for HooksSection {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let show_hook_delete = self.pending_delete_hook_id.is_some();
         let hook_delete_name = self.pending_delete_hook_id.clone().unwrap_or_default();
         let show_protected_delete = self.pending_delete_protected_row_id.is_some();
@@ -706,7 +706,7 @@ impl Render for HooksSection {
                 let entity_cancel = entity.clone();
 
                 element.child(
-                    Dialog::new(window, cx)
+                    AlertDialog::new(cx)
                         .title(dbflux_i18n::t!("hooks.delete.title"))
                         .confirm()
                         .on_ok(move |_, window, cx| {
@@ -733,7 +733,7 @@ impl Render for HooksSection {
                 let entity_cancel = entity.clone();
 
                 element.child(
-                    Dialog::new(window, cx)
+                    AlertDialog::new(cx)
                         .title(dbflux_i18n::t!("hooks.delete_unreadable.title"))
                         .confirm()
                         .on_ok(move |_, _, cx| {

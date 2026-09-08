@@ -101,37 +101,23 @@ impl Workspace {
 
             let analyzer = analyzers[selected_index].clone();
 
-            let already_open = match cx.update(|cx| {
+            let already_open = cx.update(|cx| {
                 tab_manager.read(cx).find_by_key(
                     &crate::ui::document::DocumentKey::DumpAnalysis { path: path.clone() },
                     cx,
                 )
-            }) {
-                Ok(value) => value,
-                Err(error) => {
-                    log::warn!(
-                        "Failed to inspect open tabs while opening dump analysis: {:?}",
-                        error
-                    );
-                    None
-                }
-            };
+            });
 
             if let Some(id) = already_open {
-                if let Err(error) = cx.update(|cx| {
+                cx.update(|cx| {
                     tab_manager.update(cx, |mgr, cx| {
                         mgr.activate(id, cx);
                     });
-                }) {
-                    log::warn!(
-                        "Failed to activate already-open dump analysis tab: {:?}",
-                        error
-                    );
-                }
+                });
                 return;
             }
 
-            if let Err(error) = cx.update(|cx| {
+            cx.update(|cx| {
                 this.update(cx, |ws, cx| {
                     let doc = cx.new(|cx| {
                         crate::ui::document::DumpAnalysisDocument::new(
@@ -157,9 +143,7 @@ impl Workspace {
                         inner_error
                     );
                 });
-            }) {
-                log::warn!("Failed to apply picked dump file to workspace: {:?}", error);
-            }
+            });
         })
         .detach();
     }

@@ -256,7 +256,6 @@ pub(super) struct EditorState {
     pub(super) _diagnostic_debounce: Option<Task<()>>,
     pub(super) path: Option<PathBuf>,
     pub(super) is_dirty: bool,
-    pub(super) suppress_dirty: bool,
     /// Buffer length at the previous `Change` event, to detect deletions.
     pub(super) last_change_length: usize,
     /// Shared with the completion provider, which bumps it on every query.
@@ -563,18 +562,13 @@ impl CodeDocument {
                     let provider_queried = generation != this.editor.last_completion_generation;
                     this.editor.last_completion_generation = generation;
 
-                    if this.editor.suppress_dirty {
-                        // Programmatic change (set_content, initial load, or revert):
-                        // consume the flag and do nothing else. This prevents an
-                        // infinite loop where a revert set_content emits another
-                        // Change, which would trigger another revert, ad infinitum.
-                        this.editor.suppress_dirty = false;
-                    } else if this.read_only {
-                        // Genuine user edit on a read-only document: revert once.
-                        // suppress_dirty = true ensures the Change emitted by the
-                        // revert's own set_content is consumed by the branch above.
+                    // Only genuine user edits emit `Change`: `InputState::set_value`
+                    // (used by `set_content`) suppresses events, so programmatic
+                    // content changes never reach this handler.
+                    if this.read_only {
+                        // Revert the edit. The revert's `set_content` goes through
+                        // `set_value` and emits no `Change`, so this fires at most once.
                         let original = this.editor.original_content.clone();
-                        this.editor.suppress_dirty = true;
                         this.set_content(&original, _window, cx);
                     } else {
                         if current_length < previous_length
@@ -901,7 +895,6 @@ impl CodeDocument {
                 _diagnostic_debounce: None,
                 path: None,
                 is_dirty: false,
-                suppress_dirty: false,
                 last_change_length: 0,
                 completion_query_generation,
                 last_completion_generation: 0,
@@ -1041,7 +1034,7 @@ impl CodeDocument {
             loop {
                 cx.background_executor().timer(duration).await;
 
-                let _ = cx.update(|cx| {
+                cx.update(|cx| {
                     let Some(entity) = this.upgrade() else {
                         return;
                     };
@@ -1073,7 +1066,6 @@ impl CodeDocument {
     /// Sets the document content (without marking dirty).
     pub fn set_content(&mut self, sql: &str, window: &mut Window, cx: &mut Context<Self>) {
         let sql_owned = sql.to_string();
-        self.editor.suppress_dirty = true;
         self.editor
             .input_state
             .update(cx, |state, cx| state.set_value(&sql_owned, window, cx));
@@ -1196,8 +1188,7 @@ impl CodeDocument {
                     }
                 })
                 .ok();
-            })
-            .ok();
+            });
         })
         .detach();
     }
@@ -1731,6 +1722,7 @@ impl EventEmitter<DocumentEvent> for CodeDocument {}
 #[cfg(test)]
 mod tests {
     use super::{CodeDocument, diff_stats_from_pair, source_input_values_from_context};
+    use dbflux_components::controls::InputEvent;
     use dbflux_components::theme;
     use dbflux_core::{ExecutionSourceContext, QueryLanguage};
     use dbflux_storage::bootstrap::StorageRuntime;
@@ -1822,10 +1814,11 @@ mod tests {
     /// CodeDocument must be reverted to the original definition.
     ///
     /// Real user keystrokes are now blocked at the InputState level (the Input
-    /// component sets `disabled = true` during render). This test exercises the
-    /// `set_value` path which bypasses the disabled guard and still emits
-    /// `InputEvent::Change`, verifying that the subscription's defensive revert
-    /// fires and keeps the document clean.
+    /// component sets `disabled = true` during render). This test writes a value
+    /// through `set_value` (which bypasses the disabled guard) and then drives an
+    /// `InputEvent::Change` — the same event a genuine keystroke would emit —
+    /// verifying that the subscription's defensive revert fires and keeps the
+    /// document clean.
     #[gpui::test]
     fn read_only_document_reverts_edits(cx: &mut TestAppContext) {
         init_test_runtime(cx);
@@ -1856,17 +1849,21 @@ mod tests {
 
         let doc = doc_holder.borrow().clone().expect("doc should be created");
 
-        // Simulate a programmatic write into the underlying InputState.
-        // `set_value` temporarily bypasses the disabled flag (it is the same
-        // path used by `set_content` internally) so `InputEvent::Change` fires.
-        // The subscription must detect `read_only` and revert the change.
+        // Write a value into the underlying InputState (bypassing the disabled
+        // guard) and then emit the `InputEvent::Change` that a real keystroke
+        // would produce. The subscription must detect `read_only` and revert.
         window.update(|window, cx| {
             doc.update(cx, |d, cx| {
                 d.editor.input_state.update(cx, |state, cx| {
                     state.set_value("DROP TABLE x;", window, cx);
+                    cx.emit(InputEvent::Change);
                 });
             });
         });
+
+        // The revert's `set_content` runs through the subscription handler;
+        // let pending effects flush before asserting.
+        window.run_until_parked();
 
         // After the revert the content must be the original definition and the
         // document must not be dirty.

@@ -229,7 +229,7 @@ impl DataGridPanel {
         if self.context_menu.is_none() {
             self.pending.context_menu_focus = false;
         } else if std::mem::take(&mut self.pending.context_menu_focus) {
-            self.focus.context_menu_focus.focus(window);
+            self.focus.context_menu_focus.focus(window, cx);
         }
 
         if let Some(modal) = self.pending.modal_open.take() {
@@ -1333,7 +1333,7 @@ impl DataGridPanel {
                                                 }
                                             });
                                         }
-                                        window.focus(&this.focus_handle);
+                                        window.focus(&this.focus_handle, cx);
                                     }))
                             })
                             .when(!can_undo, |d| d.border_color(theme.border))
@@ -1377,7 +1377,7 @@ impl DataGridPanel {
                                                 }
                                             });
                                         }
-                                        window.focus(&this.focus_handle);
+                                        window.focus(&this.focus_handle, cx);
                                     }))
                             })
                             .when(!can_redo, |d| d.border_color(theme.border))
@@ -1410,7 +1410,7 @@ impl DataGridPanel {
                                             });
                                         }
                                         // Refocus table after button click
-                                        window.focus(&this.focus_handle);
+                                        window.focus(&this.focus_handle, cx);
                                     }))
                             })
                             .when(!has_changes, |d| d.border_color(theme.border))
@@ -1449,7 +1449,7 @@ impl DataGridPanel {
                                             });
                                         }
                                         // Refocus table after button click
-                                        window.focus(&this.focus_handle);
+                                        window.focus(&this.focus_handle, cx);
                                     }))
                             })
                             .child(
@@ -1957,7 +1957,7 @@ impl DataGridPanel {
                 };
 
                 let chart_row = div()
-                    .flex_grow()
+                    .flex_grow(1.0)
                     .size_full()
                     .pt(Spacing::MD)
                     .pb(Spacing::SM)
@@ -1969,7 +1969,7 @@ impl DataGridPanel {
                     .relative()
                     .flex()
                     .flex_col()
-                    .flex_grow()
+                    .flex_grow(1.0)
                     .min_h_0()
                     .child(chart_row)
                     .when(has_chart_view, |d| {
@@ -2713,7 +2713,7 @@ impl DataGridPanel {
             .border_color(theme.border)
             .bg(theme.popover)
             .occlude()
-            .child(div().flex_grow().min_h_0().overflow_hidden().child(body))
+            .child(div().flex_grow(1.0).min_h_0().overflow_hidden().child(body))
     }
 
     /// Section container helper for the right dock panels.

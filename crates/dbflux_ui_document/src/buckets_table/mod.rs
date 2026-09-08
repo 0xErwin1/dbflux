@@ -185,7 +185,7 @@ impl BucketsTableDocument {
     }
 
     pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
         self.focus_mode = BucketsFocusMode::Table;
         cx.notify();
     }
@@ -392,7 +392,7 @@ impl BucketsTableDocument {
             }
             Command::Cancel => {
                 self.focus_mode = BucketsFocusMode::Table;
-                self.focus_handle.focus(window);
+                self.focus_handle.focus(window, cx);
                 cx.notify();
                 true
             }

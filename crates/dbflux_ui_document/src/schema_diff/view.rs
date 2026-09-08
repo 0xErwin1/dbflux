@@ -302,8 +302,8 @@ impl SchemaDiffDocument {
 
     pub fn apply_refresh_policy(&mut self, _policy: RefreshPolicy, _cx: &mut Context<Self>) {}
 
-    pub fn focus(&mut self, window: &mut Window, _cx: &mut Context<Self>) {
-        self.focus_handle.focus(window);
+    pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.focus_handle.focus(window, cx);
     }
 
     pub fn dispatch_command(

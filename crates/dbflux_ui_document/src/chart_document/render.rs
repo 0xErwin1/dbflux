@@ -22,8 +22,8 @@ use crate::chart::ChartRailTab;
 use crate::chart::metric_picker_render::MetricPickerView;
 use crate::chart::toolbar::{ChartToolbarContext, ChartToolbarHandlers, render_chart_toolbar};
 use dbflux_components::chart::{
-    ChartDetection, ChartView, axis_bar_element, format_span, format_x_value, format_y_value,
-    legend_element,
+    ChartDetection, ChartView, MetricSource, axis_bar_element, format_span, format_x_value,
+    format_y_value, legend_element,
 };
 use dbflux_components::common::time_range::state::TimeRange;
 use dbflux_components::common::time_range::view::{TimeRangeChanged, TimeRangePanel};
@@ -275,26 +275,35 @@ impl ChartDocument {
             // For self-executing sources (MetricSource) the copy is tailored to
             // metric charts; for query/empty sources the generic copy is shown.
             let is_metric = self.data_source.is_self_executing();
-            let msg: String = match &chart_detection {
-                Some(ChartDetection::EmptyResult) | None => {
-                    if is_metric {
-                        if self.exec_state == ExecState::Running {
-                            dbflux_i18n::t!("document.chart.shell.degraded.loading_metric")
+            let metric_unconfigured = self
+                .data_source
+                .as_any()
+                .and_then(|any| any.downcast_ref::<MetricSource>())
+                .is_some_and(|source| source.series.is_empty());
+            let msg = if metric_unconfigured {
+                "This chart has no metric series configured. Edit it to add one.".into()
+            } else {
+                match &chart_detection {
+                    Some(ChartDetection::EmptyResult) | None => {
+                        if is_metric {
+                            if self.exec_state == ExecState::Running {
+                                dbflux_i18n::t!("document.chart.shell.degraded.loading_metric")
+                            } else {
+                                dbflux_i18n::t!("document.chart.shell.degraded.no_data_points")
+                            }
                         } else {
-                            dbflux_i18n::t!("document.chart.shell.degraded.no_data_points")
+                            dbflux_i18n::t!("document.chart.shell.degraded.run_query")
                         }
-                    } else {
-                        dbflux_i18n::t!("document.chart.shell.degraded.run_query")
                     }
-                }
-                Some(ChartDetection::NoTimeColumn) => {
-                    dbflux_i18n::t!("document.chart.shell.degraded.no_time_column")
-                }
-                Some(ChartDetection::NoNumericSeries) => {
-                    dbflux_i18n::t!("document.chart.shell.degraded.no_numeric_series")
-                }
-                Some(ChartDetection::Ok { .. }) => {
-                    dbflux_i18n::t!("document.chart.shell.degraded.build_failed")
+                    Some(ChartDetection::NoTimeColumn) => {
+                        dbflux_i18n::t!("document.chart.shell.degraded.no_time_column")
+                    }
+                    Some(ChartDetection::NoNumericSeries) => {
+                        dbflux_i18n::t!("document.chart.shell.degraded.no_numeric_series")
+                    }
+                    Some(ChartDetection::Ok { .. }) => {
+                        dbflux_i18n::t!("document.chart.shell.degraded.build_failed")
+                    }
                 }
             };
             div()
@@ -583,7 +592,13 @@ impl ChartDocument {
                         .border_color(theme.border)
                         .bg(theme.popover)
                         .occlude()
-                        .child(div().flex_grow().min_h_0().overflow_hidden().child(element))
+                        .child(
+                            div()
+                                .flex_grow(1.0)
+                                .min_h_0()
+                                .overflow_hidden()
+                                .child(element),
+                        )
                         .into_any_element()
                 })
             } else {
@@ -959,7 +974,7 @@ impl ChartDocument {
             .bg(theme.popover)
             .occlude()
             .child(header)
-            .child(div().flex_grow().min_h_0().overflow_hidden().child(body))
+            .child(div().flex_grow(1.0).min_h_0().overflow_hidden().child(body))
             .into_any_element()
     }
 }

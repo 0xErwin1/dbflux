@@ -153,9 +153,8 @@ impl ObjectBrowserDocument {
                     Toast::success(message).meta_right(now_hms()).push(cx);
                 }
 
-                entity.update(cx, |doc, cx| doc.reload_current_prefix(cx));
-            })
-            .ok();
+                entity.update(cx, |doc, cx| doc.reload_current_prefix(cx))
+            });
         })
         .detach();
     }

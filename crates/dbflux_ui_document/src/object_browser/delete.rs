@@ -51,7 +51,7 @@ impl ObjectBrowserDocument {
         let action = self.take_pending_object_action();
 
         if action.is_some() {
-            self.focus_handle.focus(window);
+            self.focus_handle.focus(window, cx);
         }
 
         match action {
@@ -158,8 +158,7 @@ impl ObjectBrowserDocument {
                         ))
                         .meta_right(now_hms())
                         .push(cx);
-                    })
-                    .ok();
+                    });
                 }
                 Err(err) => report_error_async(db_error_to_user_facing(err), cx),
             }
@@ -171,9 +170,8 @@ impl ObjectBrowserDocument {
                             doc.close_preview_now(cx);
                         }
                         doc.reload_current_prefix(cx);
-                    });
-                })
-                .ok();
+                    })
+                });
             }
         })
         .detach();

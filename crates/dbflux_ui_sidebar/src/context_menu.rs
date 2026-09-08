@@ -299,6 +299,16 @@ impl Sidebar {
                     ],
                 );
 
+                // Add "View Relationships" only for Table nodes (Views don't have FK metadata)
+                if node_kind == SchemaNodeKind::Table
+                    && self.is_relational_with_fk_support(item_id, cx)
+                {
+                    items.push(ContextMenuItem::item(
+                        "View Relationships",
+                        ContextMenuAction::ViewRelationships,
+                    ));
+                }
+
                 // Get code generators from driver (if connected)
                 let generators = self.get_code_generators_for_item(item_id, node_kind, cx);
                 if !generators.is_empty() {
@@ -596,6 +606,16 @@ impl Sidebar {
                             [ContextMenuItem::item(
                                 dbflux_i18n::t!("sidebar.menu.close"),
                                 ContextMenuAction::CloseDatabase,
+                            )],
+                        );
+                    }
+
+                    if self.is_relational_with_fk_support(item_id, cx) {
+                        Self::append_menu_section(
+                            &mut items,
+                            [ContextMenuItem::item(
+                                "View Schema Diagram",
+                                ContextMenuAction::ViewSchemaDiagram,
                             )],
                         );
                     }
@@ -1525,6 +1545,12 @@ impl Sidebar {
             ContextMenuAction::ViewSchema => {
                 self.set_expanded(&item_id, true, cx);
             }
+            ContextMenuAction::ViewRelationships => {
+                self.open_schema_viz(&item_id, cx);
+            }
+            ContextMenuAction::ViewSchemaDiagram => {
+                self.open_schema_diagram(&item_id, cx);
+            }
             ContextMenuAction::GenerateCode(generator_id) => {
                 self.generate_code(&item_id, &generator_id, cx);
             }
@@ -1843,6 +1869,23 @@ impl Sidebar {
         let y = header_height + (row_height * (index as f32));
 
         Point::new(menu_x, y)
+    }
+
+    /// Returns true if the profile supports FK metadata for schema visualization.
+    /// Checks that the driver is Relational and has FOREIGN_KEYS capability.
+    pub(super) fn is_relational_with_fk_support(&self, item_id: &str, cx: &App) -> bool {
+        let Some(profile_id) = Self::extract_profile_id_from_item(item_id) else {
+            return false;
+        };
+        let state = self.app_state.read(cx);
+        let Some(conn) = state.connections().get(&profile_id) else {
+            return false;
+        };
+        let metadata = conn.connection.metadata();
+        metadata.category == DatabaseCategory::Relational
+            && metadata
+                .capabilities
+                .contains(DriverCapabilities::FOREIGN_KEYS)
     }
 }
 

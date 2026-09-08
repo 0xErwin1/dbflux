@@ -183,9 +183,9 @@ impl DumpAnalysisDocument {
     pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(state) = &self.largest_keys_state {
             let handle = state.read(cx).focus_handle().clone();
-            handle.focus(window);
+            handle.focus(window, cx);
         } else {
-            self.focus_handle.focus(window);
+            self.focus_handle.focus(window, cx);
         }
     }
 
@@ -211,42 +211,40 @@ impl DumpAnalysisDocument {
                     .timer(Duration::from_millis(150))
                     .await;
 
-                let still_running = cx
-                    .update(|cx| {
-                        this.update(cx, |doc, cx| {
-                            let is_running = doc
-                                .app_state
-                                .read(cx)
-                                .tasks()
-                                .get(task_id)
-                                .map(|snapshot| snapshot.status == TaskStatus::Running)
-                                .unwrap_or(false);
+                let still_running = cx.update(|cx| {
+                    this.update(cx, |doc, cx| {
+                        let is_running = doc
+                            .app_state
+                            .read(cx)
+                            .tasks()
+                            .get(task_id)
+                            .map(|snapshot| snapshot.status == TaskStatus::Running)
+                            .unwrap_or(false);
 
-                            if !is_running {
-                                return false;
-                            }
+                        if !is_running {
+                            return false;
+                        }
 
-                            let (bytes_read, total_bytes) = *ticker_progress
-                                .lock()
-                                .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        let (bytes_read, total_bytes) = *ticker_progress
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
 
-                            doc.phase = DumpAnalysisPhase::Parsing {
-                                bytes_read,
-                                total_bytes,
-                            };
+                        doc.phase = DumpAnalysisPhase::Parsing {
+                            bytes_read,
+                            total_bytes,
+                        };
 
-                            if let Some(fraction) = progress_fraction(bytes_read, total_bytes) {
-                                doc.app_state.update(cx, |state, _cx| {
-                                    state.tasks_mut().update_progress(task_id, fraction);
-                                });
-                            }
+                        if let Some(fraction) = progress_fraction(bytes_read, total_bytes) {
+                            doc.app_state.update(cx, |state, _cx| {
+                                state.tasks_mut().update_progress(task_id, fraction);
+                            });
+                        }
 
-                            cx.notify();
-                            true
-                        })
-                        .unwrap_or(false)
+                        cx.notify();
+                        true
                     })
-                    .unwrap_or(false);
+                    .unwrap_or(false)
+                });
 
                 if !still_running {
                     break;

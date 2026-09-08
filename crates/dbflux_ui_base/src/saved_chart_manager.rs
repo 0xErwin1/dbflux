@@ -136,11 +136,9 @@ fn dto_to_chart(dto: SavedChartDto) -> Result<SavedChart, StorageError> {
             if let Some(metric_id) = dto.instance_metric_id {
                 SavedChartSource::InstanceMetric { metric_id }
             } else {
-                if dto.metric_series.is_empty() {
-                    return Err(StorageError::Data(
-                        "metric source must carry at least one series row".to_string(),
-                    ));
-                }
+                // An empty series list is kept rather than rejected: the chart
+                // still loads and renders an empty board with a placeholder,
+                // instead of silently disappearing from the dashboard.
 
                 // Group dimensions by series_index for stable per-series ordering.
                 let mut dims_by_series: std::collections::HashMap<i64, Vec<(String, String)>> =

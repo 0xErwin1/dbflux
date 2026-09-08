@@ -428,6 +428,7 @@ mod tests {
     use super::*;
     use crate::api::hook::LuaHookOutcome;
     use std::sync::{Arc, Mutex};
+
     use std::time::Instant;
 
     fn test_state(

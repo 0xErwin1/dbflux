@@ -247,7 +247,7 @@ impl ObjectEditorDocument {
                 .input
                 .clone()
                 .update(cx, |state, cx| state.focus(window, cx)),
-            None => self.focus_handle.focus(window),
+            None => self.focus_handle.focus(window, cx),
         }
 
         cx.notify();
@@ -321,8 +321,7 @@ impl ObjectEditorDocument {
                 entity.update(cx, |doc, cx| {
                     doc.apply_load_outcome(result, cx);
                 });
-            })
-            .ok();
+            });
         })
         .detach();
     }
@@ -532,8 +531,7 @@ impl ObjectEditorDocument {
                 entity.update(cx, |doc, cx| {
                     doc.apply_save_outcome(text, byte_len, result.is_ok(), cx);
                 });
-            })
-            .ok();
+            });
         })
         .detach();
     }

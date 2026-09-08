@@ -99,7 +99,7 @@ impl QueryBuilderPanel {
         let schema_cache_for_finish = schema_cache.clone();
         cx.spawn(async move |_this, cx| {
             let result = task.await;
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 {
                     let mut cache = schema_cache_for_finish.borrow_mut();
                     cache.fetching.remove(&key_for_task);
@@ -219,8 +219,7 @@ impl QueryBuilderPanel {
                     }
                 }
                 _this.update(cx, |_panel, cx| cx.notify()).ok();
-            })
-            .ok();
+            });
         })
         .detach();
     }

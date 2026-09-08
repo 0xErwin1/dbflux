@@ -840,7 +840,7 @@ impl ConnectionManagerWindow {
             )
             .await;
 
-            if let Err(error) = cx.update(|cx| {
+            cx.update(|cx| {
                 this.update(cx, |this, cx| {
                     match result {
                         Ok(result) => {
@@ -864,12 +864,7 @@ impl ConnectionManagerWindow {
                     }
                     cx.notify();
                 });
-            }) {
-                log::warn!(
-                    "Failed to apply test connection result to UI state: {:?}",
-                    error
-                );
-            }
+            });
         })
         .detach();
     }

@@ -283,6 +283,7 @@ impl TabBar {
             super::types::DocumentIcon::Collection => AppIcon::Folder,
             super::types::DocumentIcon::Script => AppIcon::ScrollText,
             super::types::DocumentIcon::Audit => AppIcon::ScrollText,
+            super::types::DocumentIcon::SchemaViz => AppIcon::Link2,
             super::types::DocumentIcon::Chart => AppIcon::ChartSpline,
             super::types::DocumentIcon::Dashboard => AppIcon::ChartSpline,
             super::types::DocumentIcon::Buckets => AppIcon::Box,

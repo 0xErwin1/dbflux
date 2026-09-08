@@ -85,7 +85,7 @@ impl ModalCreateDashboard {
         );
         self._subscriptions = vec![sub];
 
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
         cx.notify();
     }
 

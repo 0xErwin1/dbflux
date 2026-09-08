@@ -7,7 +7,6 @@
 use dbflux_core::{
     DecodeOutcome, DecodedPayload, Encoding, KeyGetResult, KeyLoadState, KeyType, ValueRepr,
 };
-use dbflux_ui_base::AsyncUpdateResultExt;
 use gpui::Context;
 
 /// Values at or under this size are decoded on the same task that already
@@ -293,8 +292,7 @@ impl super::KeyValueDocument {
                     this.kv_decode_outcome = outcome;
                     cx.notify();
                 });
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
     }
