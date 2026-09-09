@@ -125,6 +125,12 @@ charts:
     error:
       create_editable_failed: "No se pudo crear el dashboard editable: %{error}"
 components:
+  data_table:
+    record:
+      empty: No hay filas que mostrar
+      name_header: Nombre
+      position: "Fila %{row} de %{total}"
+      value_header: Valor
   json_editor:
     empty_error: El documento no puede estar vacío
     format: Formatear
@@ -1096,6 +1102,8 @@ document:
       loading: Cargando…
       empty: Sin datos
       views:
+        grid: Cuadrícula
+        record: Registro
         table: Datos
         chart: Gráfico
         json: JSON
@@ -2701,6 +2709,7 @@ settings:
       results_duplicate_row: Duplicar fila
       results_copy_row: Copiar fila
       results_copy_cell: Copiar celda
+      toggle_record_view: Alternar vista de registro
       results_set_null: Establecer celda en NULL
       open_context_menu: Abrir menú contextual
       menu_up: "Menú: arriba"

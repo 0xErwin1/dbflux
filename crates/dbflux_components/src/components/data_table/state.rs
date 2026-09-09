@@ -40,6 +40,16 @@ pub struct DataTableState {
     /// Scroll handle for vertical scrolling (uniform list).
     vertical_scroll_handle: UniformListScrollHandle,
 
+    /// Scroll handle for the record-mode field list. Record mode lays the
+    /// columns out vertically, so it needs its own list offset that survives
+    /// switching back and forth with the grid.
+    record_scroll_handle: UniformListScrollHandle,
+
+    /// When true the table renders one row at a time as a vertical
+    /// name/value list instead of the grid. Navigation is transposed:
+    /// up/down walk the fields of the current row, left/right walk rows.
+    record_mode: bool,
+
     /// Scroll handle for horizontal scrolling.
     horizontal_scroll_handle: ScrollHandle,
 
@@ -128,6 +138,8 @@ impl DataTableState {
             selection: SelectionState::new(),
             focus_handle: cx.focus_handle(),
             vertical_scroll_handle: UniformListScrollHandle::new(),
+            record_scroll_handle: UniformListScrollHandle::new(),
+            record_mode: false,
             horizontal_scroll_handle: ScrollHandle::new(),
             horizontal_offset: px(0.0),
             editing_cell: None,
@@ -284,6 +296,25 @@ impl DataTableState {
         cx.notify();
     }
 
+    /// Selection change for a primary click on a cell.
+    ///
+    /// Shift extends the range from the anchor, as Shift with the arrow keys
+    /// does; a plain click starts a new selection there. The grid and the
+    /// record view both route their clicks here so the modifier means the same
+    /// thing in either layout.
+    pub fn click_cell(
+        &mut self,
+        coord: CellCoord,
+        modifiers: gpui::Modifiers,
+        cx: &mut Context<Self>,
+    ) {
+        if modifiers.shift {
+            self.extend_selection(coord, cx);
+        } else {
+            self.select_cell(coord, cx);
+        }
+    }
+
     /// Commit an open inline editor, the way Enter does.
     ///
     /// Selecting a cell is a deliberate act, so a value typed into the previous
@@ -313,6 +344,67 @@ impl DataTableState {
         cx.notify();
     }
 
+    // --- Record mode ---
+
+    /// Whether the table renders as a vertical single-row record instead of a grid.
+    pub fn record_mode(&self) -> bool {
+        self.record_mode
+    }
+
+    /// Switch between grid and record presentation.
+    pub fn set_record_mode(&mut self, record_mode: bool, cx: &mut Context<Self>) {
+        if self.record_mode == record_mode {
+            return;
+        }
+        self.record_mode = record_mode;
+
+        // The record view highlights the active field, and Enter edits it, so
+        // entering the mode without a selection would leave both with nothing
+        // to act on.
+        if record_mode && self.selection.active.is_none() && self.row_count() > 0 {
+            self.select_cell(CellCoord::new(0, 0), cx);
+        }
+
+        if let Some(active) = self.selection.active {
+            self.scroll_to_cell(active.row, active.col);
+        }
+        cx.notify();
+    }
+
+    /// Scroll handle for the record-mode field list.
+    pub fn record_scroll_handle(&self) -> &UniformListScrollHandle {
+        &self.record_scroll_handle
+    }
+
+    /// Record mode transposes the table: a visual "down" walks to the next
+    /// field of the same row, a visual "right" walks to the next row.
+    fn effective_direction(&self, direction: Direction) -> Direction {
+        if !self.record_mode {
+            return direction;
+        }
+        match direction {
+            Direction::Up => Direction::Left,
+            Direction::Down => Direction::Right,
+            Direction::Left => Direction::Up,
+            Direction::Right => Direction::Down,
+        }
+    }
+
+    /// Transposed edges for record mode. `Home` / `End` deliberately map to
+    /// the first / last field of the current row rather than to the first /
+    /// last row, because in record mode those are the visual extremes.
+    fn effective_edge(&self, edge: Edge) -> Edge {
+        if !self.record_mode {
+            return edge;
+        }
+        match edge {
+            Edge::Top | Edge::Home => Edge::Left,
+            Edge::Bottom | Edge::End => Edge::Right,
+            Edge::Left => Edge::Top,
+            Edge::Right => Edge::Bottom,
+        }
+    }
+
     // --- Navigation ---
 
     /// Move active cell in a direction. If extend is true, extend selection instead of moving.
@@ -331,7 +423,7 @@ impl DataTableState {
             return;
         };
 
-        let new_coord = match direction {
+        let new_coord = match self.effective_direction(direction) {
             Direction::Up => CellCoord::new(current.row.saturating_sub(1), current.col),
             Direction::Down => CellCoord::new((current.row + 1).min(row_count - 1), current.col),
             Direction::Left => CellCoord::new(current.row, current.col.saturating_sub(1)),
@@ -357,7 +449,7 @@ impl DataTableState {
         }
 
         let current = self.selection.active.unwrap_or(CellCoord::new(0, 0));
-        let new_coord = match edge {
+        let new_coord = match self.effective_edge(edge) {
             Edge::Top => CellCoord::new(0, current.col),
             Edge::Bottom => CellCoord::new(row_count - 1, current.col),
             Edge::Left => CellCoord::new(current.row, 0),
@@ -480,7 +572,17 @@ impl DataTableState {
     }
 
     /// Scroll to ensure the given cell is visible (both row and column).
+    ///
+    /// In record mode the column is the vertical axis, so only the field list
+    /// is scrolled; the grid's own handles are left untouched and keep their
+    /// offsets for when the user switches back.
     pub fn scroll_to_cell(&self, row: usize, col: usize) {
+        if self.record_mode {
+            self.record_scroll_handle
+                .scroll_to_item(col, gpui::ScrollStrategy::Center);
+            return;
+        }
+
         self.scroll_to_row(row);
         self.scroll_to_column(col);
     }
@@ -1509,6 +1611,186 @@ mod tests {
         assert!(
             !refocus,
             "focus leaving the table must not be pulled back into it"
+        );
+    }
+
+    // =========================================================================
+    // Record mode
+    // =========================================================================
+
+    /// Build a two-row / two-column state in record mode with (0,0) selected.
+    fn record_mode_state(
+        cx: &mut gpui::TestAppContext,
+    ) -> (
+        gpui::Entity<super::DataTableState>,
+        &mut gpui::VisualTestContext,
+    ) {
+        use super::super::selection::CellCoord;
+
+        let state_holder = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let holder_clone = state_holder.clone();
+
+        let (_, window) = cx.add_window_view(move |_window, cx| {
+            let state = cx.new(|cx| {
+                let mut s = super::DataTableState::new(two_row_model(), cx);
+                s.select_cell(CellCoord::new(0, 0), cx);
+                s.set_record_mode(true, cx);
+                s
+            });
+            holder_clone.replace(Some(state.clone()));
+            StateHarness { state }
+        });
+
+        let state = state_holder
+            .borrow()
+            .clone()
+            .expect("state entity must be created");
+
+        (state, window)
+    }
+
+    #[gpui::test]
+    fn record_mode_transposes_arrow_navigation(cx: &mut gpui::TestAppContext) {
+        use super::super::events::Direction;
+        use super::super::selection::CellCoord;
+
+        let (state, window) = record_mode_state(cx);
+
+        // Visual "down" walks to the next field of the same row.
+        window.update(|_, app| {
+            state.update(app, |s, cx| s.move_active(Direction::Down, false, cx));
+        });
+        assert_eq!(
+            window.update(|_, app| state.read(app).selection().active),
+            Some(CellCoord::new(0, 1)),
+            "down must move to the next field, not the next row"
+        );
+
+        // Visual "right" walks to the next row, keeping the field.
+        window.update(|_, app| {
+            state.update(app, |s, cx| s.move_active(Direction::Right, false, cx));
+        });
+        assert_eq!(
+            window.update(|_, app| state.read(app).selection().active),
+            Some(CellCoord::new(1, 1)),
+            "right must move to the next row, not the next field"
+        );
+    }
+
+    #[gpui::test]
+    fn record_mode_home_and_end_walk_fields(cx: &mut gpui::TestAppContext) {
+        use super::super::events::Edge;
+        use super::super::selection::CellCoord;
+
+        let (state, window) = record_mode_state(cx);
+
+        window.update(|_, app| {
+            state.update(app, |s, cx| s.move_to_edge(Edge::End, false, cx));
+        });
+        assert_eq!(
+            window.update(|_, app| state.read(app).selection().active),
+            Some(CellCoord::new(0, 1)),
+            "End must jump to the last field of the current row, not the last row"
+        );
+
+        window.update(|_, app| {
+            state.update(app, |s, cx| s.move_to_edge(Edge::Home, false, cx));
+        });
+        assert_eq!(
+            window.update(|_, app| state.read(app).selection().active),
+            Some(CellCoord::new(0, 0)),
+            "Home must jump to the first field of the current row"
+        );
+    }
+
+    #[gpui::test]
+    fn record_mode_shift_click_extends_the_field_range(cx: &mut gpui::TestAppContext) {
+        use super::super::selection::CellCoord;
+
+        let (state, window) = record_mode_state(cx);
+        let shift = gpui::Modifiers {
+            shift: true,
+            ..gpui::Modifiers::default()
+        };
+
+        window.update(|_, app| {
+            state.update(app, |s, cx| s.click_cell(CellCoord::new(0, 1), shift, cx));
+        });
+        window.update(|_, app| {
+            let selection = state.read(app).selection();
+            let range = selection
+                .selected_range()
+                .expect("shift-click must produce a range");
+            assert!(
+                range.contains(CellCoord::new(0, 0)),
+                "the anchor field must stay selected"
+            );
+            assert!(
+                range.contains(CellCoord::new(0, 1)),
+                "the shift-clicked field must join the range"
+            );
+        });
+
+        // A plain click starts over, as it does in the grid.
+        window.update(|_, app| {
+            state.update(app, |s, cx| {
+                s.click_cell(CellCoord::new(1, 1), gpui::Modifiers::default(), cx)
+            });
+        });
+        window.update(|_, app| {
+            let selection = state.read(app).selection();
+            assert_eq!(selection.active, Some(CellCoord::new(1, 1)));
+            assert!(!selection.is_selected(CellCoord::new(0, 0)));
+        });
+    }
+
+    #[gpui::test]
+    fn leaving_record_mode_restores_grid_navigation(cx: &mut gpui::TestAppContext) {
+        use super::super::events::Direction;
+        use super::super::selection::CellCoord;
+
+        let (state, window) = record_mode_state(cx);
+
+        window.update(|_, app| {
+            state.update(app, |s, cx| {
+                s.set_record_mode(false, cx);
+                s.move_active(Direction::Down, false, cx);
+            });
+        });
+
+        assert_eq!(
+            window.update(|_, app| state.read(app).selection().active),
+            Some(CellCoord::new(1, 0)),
+            "back in the grid, down must move to the next row again"
+        );
+    }
+
+    #[gpui::test]
+    fn entering_record_mode_selects_a_field_when_nothing_is_active(cx: &mut gpui::TestAppContext) {
+        use super::super::selection::CellCoord;
+
+        let state_holder = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let holder_clone = state_holder.clone();
+
+        let (_, window) = cx.add_window_view(move |_window, cx| {
+            let state = cx.new(|cx| {
+                let mut s = super::DataTableState::new(two_row_model(), cx);
+                s.set_record_mode(true, cx);
+                s
+            });
+            holder_clone.replace(Some(state.clone()));
+            StateHarness { state }
+        });
+
+        let state = state_holder
+            .borrow()
+            .clone()
+            .expect("state entity must be created");
+
+        assert_eq!(
+            window.update(|_, app| state.read(app).selection().active),
+            Some(CellCoord::new(0, 0)),
+            "record mode highlights and edits the active field, so it must select one"
         );
     }
 }

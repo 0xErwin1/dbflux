@@ -52,6 +52,15 @@ pub(crate) fn result_view_mode_label(mode: crate::result_view::ResultViewMode) -
     }
 }
 
+/// Label for the grid / record presentation toggle in the results status bar.
+pub(crate) fn record_mode_label(record_mode: bool) -> String {
+    if record_mode {
+        dbflux_i18n::t!("document.data.grid.views.record")
+    } else {
+        dbflux_i18n::t!("document.data.grid.views.grid")
+    }
+}
+
 /// Toast text shown when the user tries to enable auto-refresh on a result
 /// that has no backing table (a raw query result or a builder query).
 pub(crate) fn auto_refresh_unavailable_toast() -> String {

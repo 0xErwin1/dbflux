@@ -644,6 +644,12 @@ impl DataGridPanel {
                 self.handle_copy(window, cx);
                 true
             }
+            Command::ToggleRecordView => {
+                if self.record_view_available() {
+                    self.set_record_mode(!self.record_mode(), cx);
+                }
+                true
+            }
             _ => false,
         }
     }

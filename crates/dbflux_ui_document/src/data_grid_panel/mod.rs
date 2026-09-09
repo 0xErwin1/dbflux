@@ -512,6 +512,9 @@ struct ChromeState {
     toolbar_in_chrome_row: bool,
     export_menu_open: bool,
     result_view_mode: ResultViewMode,
+    /// When `true`, the result area shows the active row as a vertical
+    /// name/value record instead of the grid.
+    record_mode: bool,
     derived_json: Option<String>,
     derived_text: Option<String>,
 }
@@ -1137,6 +1140,7 @@ impl DataGridPanel {
                 toolbar_in_chrome_row: false,
                 export_menu_open: false,
                 result_view_mode,
+                record_mode: false,
                 derived_json: None,
                 derived_text: None,
             },
@@ -1385,6 +1389,77 @@ impl DataGridPanel {
     /// Check if view mode toggle is available for the current source.
     pub fn can_toggle_view(&self) -> bool {
         super::data_view::DataViewMode::available_for(&self.source).len() > 1
+    }
+
+    pub fn record_mode(&self) -> bool {
+        self.chrome.record_mode
+    }
+
+    /// Switch the result area between the grid and the record view.
+    ///
+    /// The flag lives on the panel rather than only on `DataTableState`
+    /// because `rebuild_table` creates a fresh state on every refresh and
+    /// requery; `apply_record_mode` re-applies it there.
+    pub fn set_record_mode(&mut self, record_mode: bool, cx: &mut Context<Self>) {
+        if record_mode && !self.record_view_available() {
+            return;
+        }
+
+        if self.chrome.record_mode == record_mode {
+            return;
+        }
+
+        self.chrome.record_mode = record_mode;
+        self.apply_record_mode(cx);
+        cx.notify();
+    }
+
+    /// Whether the record view can be entered right now.
+    ///
+    /// It is a presentation of the data grid, so it exists only where the grid
+    /// itself is on screen: a result shown as JSON, text, raw bytes or a chart
+    /// has no grid to transpose, the document tree is not a grid, and a grouped
+    /// aggregate has no addressable source row. The status-bar toggle, the
+    /// keyboard command and `set_record_mode` all go through this one check so
+    /// none of them can flip a mode the user cannot see.
+    pub fn record_view_available(&self) -> bool {
+        self.grid_table.table_state.is_some()
+            && self.shows_table_content()
+            && !self.is_grouped_result()
+    }
+
+    /// Whether the result area renders the data grid, as opposed to a result
+    /// view, the document tree or the empty fallback.
+    fn shows_table_content(&self) -> bool {
+        let has_data = !self.result.rows.is_empty()
+            || self.result.text_body.is_some()
+            || self.result.raw_bytes.is_some();
+        let has_columns = !self.result.columns.is_empty();
+        let content_mode = render::content_mode_for_result(
+            self.uses_result_view(),
+            self.view_config.mode,
+            has_columns,
+            has_data,
+        );
+        matches!(content_mode, render::DataGridContentMode::Table)
+    }
+
+    /// Push the panel's record-mode flag onto the current `DataTableState`.
+    ///
+    /// This runs after every rebuild, so it is also where a result that cannot
+    /// be shown as a record clears the flag: a query that was in record mode
+    /// and comes back grouped would otherwise reapply the cached `true` around
+    /// the guard in `set_record_mode`, leaving the aggregate in a mode whose
+    /// toggle has just disappeared.
+    fn apply_record_mode(&mut self, cx: &mut Context<Self>) {
+        if self.chrome.record_mode && self.is_grouped_result() {
+            self.chrome.record_mode = false;
+        }
+
+        let record_mode = self.chrome.record_mode;
+        if let Some(table_state) = &self.grid_table.table_state {
+            table_state.update(cx, |state, cx| state.set_record_mode(record_mode, cx));
+        }
     }
 
     pub fn result_view_mode(&self) -> ResultViewMode {
@@ -2070,6 +2145,11 @@ impl DataGridPanel {
         self.grid_table.table_state = Some(table_state);
         self.grid_table.data_table = Some(data_table);
         self.grid_table.table_subscription = Some(subscription);
+
+        // Every rebuild — refresh, requery, sort, filter — creates a fresh
+        // DataTableState, so the panel's presentation flag has to be pushed
+        // back onto it here rather than at any one call site.
+        self.apply_record_mode(cx);
 
         // Build document tree for collections OR JSON-shaped query results
         let should_build_tree = self.source.is_collection()
@@ -6832,5 +6912,122 @@ mod tests {
             dbflux_core::Value::Text("bob".to_string()),
             "change must carry the new cell value"
         );
+    }
+
+    #[gpui::test]
+    fn grouped_result_after_rebuild_leaves_record_mode(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let panel_holder = Rc::new(RefCell::new(None));
+        let panel_handle = panel_holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let panel = cx.new(|cx| {
+                let source = DataSource::Table {
+                    profile_id: Uuid::nil(),
+                    database: Some("app".to_string()),
+                    table: TableRef::with_schema("public", "orders"),
+                    pagination: Pagination::default(),
+                    order_by: Vec::new(),
+                    total_rows: None,
+                };
+
+                let mut panel =
+                    DataGridPanel::new_internal(source, app_state.clone(), vec![], window, cx);
+                panel.set_result(zero_row_result(), cx);
+                panel
+            });
+
+            panel_handle.replace(Some(panel.clone()));
+            Root::new(panel, window, cx)
+        });
+
+        let panel = panel_holder
+            .borrow()
+            .clone()
+            .expect("panel should be created");
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                assert!(panel.record_view_available());
+                panel.set_record_mode(true, cx);
+                assert!(panel.record_mode());
+
+                // The next query comes back grouped. The aggregate has no row
+                // to transpose, so the rebuild must drop the mode instead of
+                // reapplying the cached flag around the guard.
+                panel.builder.current_visual_spec = Some(make_grouped_spec());
+                panel.rebuild_table(None, cx);
+
+                assert!(
+                    !panel.record_mode(),
+                    "a grouped result must leave record mode"
+                );
+                assert!(!panel.record_view_available());
+                let table_in_record_mode = panel
+                    .grid_table
+                    .table_state
+                    .as_ref()
+                    .expect("rebuild creates a table state")
+                    .read(cx)
+                    .record_mode();
+                assert!(
+                    !table_in_record_mode,
+                    "the fresh table state must not inherit record mode"
+                );
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn record_view_is_offered_only_while_the_grid_is_shown(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let panel_holder = Rc::new(RefCell::new(None));
+        let panel_handle = panel_holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let panel = cx.new(|cx| {
+                let source = DataSource::QueryResult {
+                    result: Arc::new(zero_row_result()),
+                    original_query: "SELECT id, name FROM users".to_string(),
+                    profile_id: None,
+                };
+
+                let mut panel =
+                    DataGridPanel::new_internal(source, app_state.clone(), vec![], window, cx);
+                panel.set_result(zero_row_result(), cx);
+                panel
+            });
+
+            panel_handle.replace(Some(panel.clone()));
+            Root::new(panel, window, cx)
+        });
+
+        let panel = panel_holder
+            .borrow()
+            .clone()
+            .expect("panel should be created");
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                assert!(panel.record_view_available());
+
+                // JSON, text and raw are result views without a grid, so the
+                // toggle is not offered and the command does nothing there.
+                panel.set_result_view_mode(super::ResultViewMode::Json, cx);
+                assert!(!panel.record_view_available());
+                panel.set_record_mode(true, cx);
+                assert!(
+                    !panel.record_mode(),
+                    "record mode must not switch on behind a result view"
+                );
+
+                panel.set_result_view_mode(super::ResultViewMode::Table, cx);
+                assert!(panel.record_view_available());
+            });
+        });
     }
 }

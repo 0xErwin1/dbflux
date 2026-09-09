@@ -100,7 +100,10 @@ impl Workspace {
                 Some(true)
             }
 
-            Command::ResultsAddRow | Command::ResultsCopyRow | Command::ResultsCopyCell => {
+            Command::ResultsAddRow
+            | Command::ResultsCopyRow
+            | Command::ResultsCopyCell
+            | Command::ToggleRecordView => {
                 self.tab_manager.update(cx, |mgr, cx| {
                     mgr.dispatch_active(cmd, window, cx);
                 });

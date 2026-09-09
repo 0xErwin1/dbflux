@@ -125,6 +125,12 @@ charts:
     error:
       create_editable_failed: "创建可编辑仪表盘失败：%{error}"
 components:
+  data_table:
+    record:
+      empty: 没有可显示的行
+      name_header: 名称
+      position: "第 %{row} 行，共 %{total} 行"
+      value_header: 值
   json_editor:
     empty_error: 文档不能为空
     format: 格式化
@@ -1067,6 +1073,8 @@ document:
       loading: 加载中…
       empty: 暂无数据
       views:
+        grid: 网格
+        record: 记录
         table: 数据
         chart: 图表
         json: JSON
@@ -2591,6 +2599,7 @@ settings:
       results_duplicate_row: 复制行
       results_copy_row: 复制行
       results_copy_cell: 复制单元格
+      toggle_record_view: 切换记录视图
       results_set_null: 将单元格设为 NULL
       open_context_menu: 打开上下文菜单
       menu_up: 菜单上移

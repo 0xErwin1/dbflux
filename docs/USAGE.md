@@ -289,6 +289,15 @@ When the results panel has focus:
 - `z` toggles collapsing the panel.
 - `m` (or `Shift+F10`) opens the row/cell context menu.
 
+### Record view
+
+Press `i`, or use the Grid / Record toggle in the result status bar, to show
+the active row as a Name / Value list that fills the result area. The header
+names the row's position in the result. Fields are edited exactly like grid
+cells, so unsaved changes, Save Row and revert work the same in both layouts;
+`Up`/`Down` move between fields and `Left`/`Right` move between rows. Press
+`i` again to return to the grid.
+
 ### Filtering results
 
 The data grid toolbar has a `WHERE` filter input that re-runs the query with the
@@ -492,6 +501,7 @@ stay `Ctrl` on all platforms (to avoid clashing with macOS system shortcuts).
 | `r` | Rename / edit |
 | `o` | Add row |
 | `y` | Copy row |
+| `i` | Toggle the record view (one row, field per line) |
 | `Ctrl+c` / `Cmd+c` | Copy cell(s) |
 | `z` | Toggle panel collapse |
 | `m` (or `Shift+F10`) | Open context menu |

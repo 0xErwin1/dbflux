@@ -1,6 +1,7 @@
 pub mod clipboard;
 mod events;
 pub mod model;
+mod record;
 pub mod selection;
 mod state;
 mod table;
