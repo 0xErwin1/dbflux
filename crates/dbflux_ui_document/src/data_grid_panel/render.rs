@@ -3431,6 +3431,16 @@ impl DataGridPanel {
         };
         let current_result_mode = self.chrome.result_view_mode;
 
+        // The record view is a presentation of the data grid, so it is only
+        // offered where the grid itself is on screen: not for charts, not for
+        // the document tree, and not for grouped aggregates that have no
+        // addressable source row.
+        let show_record_toggle = has_data
+            && self.grid_table.table_state.is_some()
+            && current_result_mode != ResultViewMode::Chart
+            && self.view_config.mode != crate::DataViewMode::Document
+            && !self.is_grouped_result();
+
         div()
             .flex()
             .items_center()
@@ -3494,6 +3504,46 @@ impl DataGridPanel {
                             ))
                         },
                     )
+                    // Grid / record presentation toggle. Mirrors the `i`
+                    // binding so the mode is discoverable and reversible with
+                    // the mouse alone.
+                    .when(show_record_toggle, |d| {
+                        let record_mode = self.chrome.record_mode;
+                        let icon = if record_mode {
+                            AppIcon::Columns
+                        } else {
+                            AppIcon::Table
+                        };
+                        d.child(
+                            div()
+                                .id("record-mode-toggle")
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .px(Spacing::SM)
+                                .text_size(FontSizes::XS)
+                                .cursor_pointer()
+                                .rounded(Radii::SM)
+                                .when(record_mode, |d| d.bg(theme.accent.opacity(0.15)))
+                                .when(!record_mode, |d| d.hover(|d| d.bg(theme.secondary)))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.set_record_mode(!this.record_mode(), cx);
+                                }))
+                                .child(
+                                    Icon::new(icon)
+                                        .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
+                                        .color(if record_mode {
+                                            theme.foreground
+                                        } else {
+                                            theme.muted_foreground
+                                        }),
+                                )
+                                .child(Self::result_mode_label(
+                                    crate::labels::record_mode_label(record_mode),
+                                    record_mode,
+                                )),
+                        )
+                    })
                     // Shape badge
                     .when_some(result_shape_label, |d, shape| {
                         let label = match &shape {

@@ -14,6 +14,13 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Added
 
+* **Record view for the results grid (#537)** — `i`, or the Grid / Record
+  toggle in the result status bar, transposes the active row into a Name /
+  Value list that fills the result area, headed by its position in the result
+  (Row 3 of 240). Fields edit through the same path as grid cells, so dirty
+  marks, Save Row and revert behave identically in both layouts; up/down walk
+  the fields of the row, left/right walk rows.
+
 * **Complete Spanish documentation and a language menu (#360)** — the
   website's language switcher is now a dropdown listing every supported
   language, ready to grow beyond two; the docs links in the navigation and

@@ -466,6 +466,10 @@ fn results_layer() -> KeymapLayer {
         KeyChord::new("y", Modifiers::none()),
         Command::ResultsCopyRow,
     );
+    layer.bind(
+        KeyChord::new("i", Modifiers::none()),
+        Command::ToggleRecordView,
+    );
 
     // Copy selected cell(s) to clipboard — Cmd+C on macOS, Ctrl+C elsewhere.
     // GPUI reports cmd vs ctrl on separate modifier fields, so binding only
@@ -981,6 +985,7 @@ mod tests {
             ('k', Command::SelectPrev),
             ('r', Command::Rename),
             ('o', Command::ResultsAddRow),
+            ('i', Command::ToggleRecordView),
             ('x', Command::Delete),
         ];
         for (letter, expected) in expectations {
@@ -1027,6 +1032,9 @@ mod tests {
         }
     }
 
+    /// In the results grid, Cmd+S and Cmd+Enter commit the edited row. The
+    /// grid's own binding must win over the inherited script Save, and only
+    /// there — an editor with focus still saves the script.
     /// Save must resolve while a text buffer owns the keyboard — the S3
     /// object editors report `ContextId::TextInput`, which inherits from no
     /// parent layer.

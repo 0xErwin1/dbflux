@@ -313,6 +313,16 @@ Cuando el panel de resultados tiene el foco:
 - `z` alterna el colapso del panel.
 - `m` (o `Shift+F10`) abre el menú contextual de fila/celda.
 
+### Vista de registro
+
+Pulsa `i`, o usa el conmutador Cuadrícula / Registro en la barra de estado del
+resultado, para mostrar la fila activa como una lista de Nombre / Valor que
+ocupa toda el área de resultados. La cabecera indica la posición de la fila en
+el resultado. Los campos se editan igual que las celdas de la cuadrícula, así
+que los cambios sin guardar, Guardar fila y revertir funcionan igual en ambos
+modos; `Up`/`Down` recorren los campos y `Left`/`Right` cambian de fila. Pulsa
+`i` de nuevo para volver a la cuadrícula.
+
 ### Filtrar resultados
 
 La toolbar del data grid tiene un input de filtro `WHERE` que vuelve a ejecutar
@@ -529,6 +539,7 @@ así la escritura funciona con normalidad.)
 | `r`                                           | Renombrar / editar                         |
 | `o`                                           | Añadir fila                                |
 | `y`                                           | Copiar fila                                |
+| `i`                                           | Alternar la vista de registro (una fila)   |
 | `Ctrl+c` / `Cmd+c`                            | Copiar celda(s)                            |
 | `z`                                           | Alternar colapso del panel                 |
 | `m` (o `Shift+F10`)                           | Abrir menú contextual                      |

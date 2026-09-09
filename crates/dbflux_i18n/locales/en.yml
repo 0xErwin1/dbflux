@@ -125,6 +125,12 @@ charts:
     error:
       create_editable_failed: "Failed to create editable dashboard: %{error}"
 components:
+  data_table:
+    record:
+      empty: No rows to show
+      name_header: Name
+      position: "Row %{row} of %{total}"
+      value_header: Value
   json_editor:
     empty_error: Document cannot be empty
     format: Format
@@ -1096,6 +1102,8 @@ document:
       loading: Loading…
       empty: No data
       views:
+        grid: Grid
+        record: Record
         table: Data
         chart: Chart
         json: JSON
@@ -2701,6 +2709,7 @@ settings:
       results_duplicate_row: Duplicate Row
       results_copy_row: Copy Row
       results_copy_cell: Copy Cell
+      toggle_record_view: Toggle Record View
       results_set_null: Set Cell to NULL
       open_context_menu: Open Context Menu
       menu_up: Menu Up

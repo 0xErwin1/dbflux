@@ -512,6 +512,9 @@ struct ChromeState {
     toolbar_in_chrome_row: bool,
     export_menu_open: bool,
     result_view_mode: ResultViewMode,
+    /// When `true`, the result area shows the active row as a vertical
+    /// name/value record instead of the grid.
+    record_mode: bool,
     derived_json: Option<String>,
     derived_text: Option<String>,
 }
@@ -1137,6 +1140,7 @@ impl DataGridPanel {
                 toolbar_in_chrome_row: false,
                 export_menu_open: false,
                 result_view_mode,
+                record_mode: false,
                 derived_json: None,
                 derived_text: None,
             },
@@ -1385,6 +1389,37 @@ impl DataGridPanel {
     /// Check if view mode toggle is available for the current source.
     pub fn can_toggle_view(&self) -> bool {
         super::data_view::DataViewMode::available_for(&self.source).len() > 1
+    }
+
+    pub fn record_mode(&self) -> bool {
+        self.chrome.record_mode
+    }
+
+    /// Switch the result area between the grid and the record view.
+    ///
+    /// The flag lives on the panel rather than only on `DataTableState`
+    /// because `rebuild_table` creates a fresh state on every refresh and
+    /// requery; `apply_record_mode` re-applies it there.
+    pub fn set_record_mode(&mut self, record_mode: bool, cx: &mut Context<Self>) {
+        // Grouped results are an aggregate presentation with no addressable
+        // source row, so there is nothing meaningful to show as a record.
+        let record_mode = record_mode && !self.is_grouped_result();
+
+        if self.chrome.record_mode == record_mode {
+            return;
+        }
+
+        self.chrome.record_mode = record_mode;
+        self.apply_record_mode(cx);
+        cx.notify();
+    }
+
+    /// Push the panel's record-mode flag onto the current `DataTableState`.
+    fn apply_record_mode(&mut self, cx: &mut Context<Self>) {
+        let record_mode = self.chrome.record_mode;
+        if let Some(table_state) = &self.grid_table.table_state {
+            table_state.update(cx, |state, cx| state.set_record_mode(record_mode, cx));
+        }
     }
 
     pub fn result_view_mode(&self) -> ResultViewMode {
@@ -2070,6 +2105,11 @@ impl DataGridPanel {
         self.grid_table.table_state = Some(table_state);
         self.grid_table.data_table = Some(data_table);
         self.grid_table.table_subscription = Some(subscription);
+
+        // Every rebuild — refresh, requery, sort, filter — creates a fresh
+        // DataTableState, so the panel's presentation flag has to be pushed
+        // back onto it here rather than at any one call site.
+        self.apply_record_mode(cx);
 
         // Build document tree for collections OR JSON-shaped query results
         let should_build_tree = self.source.is_collection()
