@@ -298,6 +298,15 @@ cells, so unsaved changes, Save Row and revert work the same in both layouts;
 `Up`/`Down` move between fields and `Left`/`Right` move between rows. Press
 `i` again to return to the grid.
 
+### Value panel
+
+Right-click a cell and choose **View Value**, or press `v`, to open the cell
+in the inspector rail on the right. The panel shows the value as JSON, XML or
+plain text — detected from the content, and only when it really parses — with
+pretty-print, compact and word wrap. You can edit there: **Save** commits the
+row directly, **Revert** discards the edit. The panel follows the selected cell
+as you move through the grid, except while it holds an unsaved change.
+
 ### Filtering results
 
 The data grid toolbar has a `WHERE` filter input that re-runs the query with the
@@ -502,6 +511,7 @@ stay `Ctrl` on all platforms (to avoid clashing with macOS system shortcuts).
 | `o` | Add row |
 | `y` | Copy row |
 | `i` | Toggle the record view (one row, field per line) |
+| `v` | Toggle the value panel for the selected cell |
 | `Ctrl+c` / `Cmd+c` | Copy cell(s) |
 | `z` | Toggle panel collapse |
 | `m` (or `Shift+F10`) | Open context menu |

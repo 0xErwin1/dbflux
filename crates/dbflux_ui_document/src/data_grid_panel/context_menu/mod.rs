@@ -547,6 +547,16 @@ impl DataGridPanel {
             return ContextId::TextInput;
         }
 
+        // The value panel's editor is a plain text buffer sitting next to the
+        // grid. Without this the results keymap would claim every bare letter
+        // the user types into it as a grid command.
+        if self.inspector.value_panel_open
+            && let Some(panel) = self.inspector.value_panel.as_ref()
+            && panel.read(cx).editor_has_focus()
+        {
+            return ContextId::TextInput;
+        }
+
         let inline_text_input_active = self
             .grid_table
             .table_state
@@ -913,6 +923,7 @@ impl DataGridPanel {
             action,
             ContextMenuAction::Edit
                 | ContextMenuAction::EditInModal
+                | ContextMenuAction::ViewValue
                 | ContextMenuAction::SetDefault
                 | ContextMenuAction::SetNull
                 | ContextMenuAction::DuplicateRow
@@ -1405,6 +1416,9 @@ impl DataGridPanel {
             }
             ContextMenuAction::Paste => self.handle_paste(window, cx),
             ContextMenuAction::Edit => self.handle_edit(menu.row, menu.col, window, cx),
+            ContextMenuAction::ViewValue => {
+                self.request_value_panel(menu.row, menu.col, cx);
+            }
             ContextMenuAction::EditInModal => {
                 if menu.is_document_view {
                     self.handle_view_document(menu.row, cx);
@@ -1523,6 +1537,7 @@ impl DataGridPanel {
         // the result. Drop the cached state and hide the rail rather than
         // showing a phantom row of nulls.
         if row >= model.row_count() {
+            self.inspector.follow_selection = false;
             self.inspector.inspector_row = None;
             self.inspector.row_inspector_content = None;
             cx.emit(DataGridEvent::CloseInspector);
@@ -1597,6 +1612,7 @@ impl DataGridPanel {
 
         // Remember the active coordinates so refresh / tab activation /
         // selection navigation can rebuild the snapshot from fresh data.
+        self.inspector.follow_selection = true;
         self.inspector.inspector_row = Some((row, col));
 
         // Tell the workspace to mount/replace the inspector rail.
@@ -2065,6 +2081,22 @@ impl DataGridPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.write_cell_value(row, col, value, cx);
+        self.focus_table(window, cx);
+    }
+
+    /// Write `value` into the edit buffer at the given visual coordinates.
+    ///
+    /// Split out of `handle_cell_editor_save` because the value panel saves
+    /// without dismissing itself: pulling focus back to the table after every
+    /// save would eject the user from the editor they are still typing in.
+    pub(super) fn write_cell_value(
+        &mut self,
+        row: usize,
+        col: usize,
+        value: &str,
+        cx: &mut Context<Self>,
+    ) {
         use dbflux_components::components::data_table::model::VisualRowSource;
 
         let Some(table_state) = &self.grid_table.table_state else {
@@ -2089,8 +2121,6 @@ impl DataGridPanel {
 
             cx.notify();
         });
-
-        self.focus_table(window, cx);
     }
 
     pub(super) fn handle_document_preview_save(
@@ -3673,6 +3703,21 @@ mod tests {
             labels(&items),
             vec![item_label("document.data.context_menu.item.copy")]
         );
+    }
+
+    /// The value panel is a reader as much as an editor, so a read-only
+    /// result still offers it — but only over an actual row.
+    #[test]
+    fn non_editable_table_menu_offers_view_value_over_a_row() {
+        let with_row = labels(&DataGridPanel::build_context_menu_items(
+            false, false, true, false, true,
+        ));
+        assert!(with_row.contains(&item_label("document.data.context_menu.item.view_value")));
+
+        let without_row = labels(&DataGridPanel::build_context_menu_items(
+            false, false, false, false, true,
+        ));
+        assert!(!without_row.contains(&item_label("document.data.context_menu.item.view_value")));
     }
 
     #[test]

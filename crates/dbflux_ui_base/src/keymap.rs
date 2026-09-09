@@ -470,6 +470,10 @@ fn results_layer() -> KeymapLayer {
         KeyChord::new("i", Modifiers::none()),
         Command::ToggleRecordView,
     );
+    layer.bind(
+        KeyChord::new("v", Modifiers::none()),
+        Command::ToggleValuePanel,
+    );
 
     // Copy selected cell(s) to clipboard — Cmd+C on macOS, Ctrl+C elsewhere.
     // GPUI reports cmd vs ctrl on separate modifier fields, so binding only
@@ -986,6 +990,7 @@ mod tests {
             ('r', Command::Rename),
             ('o', Command::ResultsAddRow),
             ('i', Command::ToggleRecordView),
+            ('v', Command::ToggleValuePanel),
             ('x', Command::Delete),
         ];
         for (letter, expected) in expectations {

@@ -27,6 +27,7 @@ thiserror.workspace = true
 log.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+quick-xml.workspace = true
 uuid = { workspace = true }
 chrono.workspace = true
 

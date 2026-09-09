@@ -140,6 +140,16 @@ pub struct PaneHandle {
     /// here so the rail stays closed on subsequent tab activations.
     pub mark_inspector_closed: Option<Box<dyn Fn(&mut App)>>,
 
+    /// Row-inspector tracking is transferred between table tabs so an open
+    /// inspector follows the active grid instead of showing stale content.
+    pub row_inspector_is_tracking: Option<Box<dyn Fn(&App) -> bool>>,
+    pub set_row_inspector_tracking: Option<Box<dyn Fn(bool, &mut App)>>,
+
+    /// The value panel is transferred the same way, so switching tables keeps
+    /// it open and re-points it at the new grid's cell.
+    pub value_panel_is_open: Option<Box<dyn Fn(&App) -> bool>>,
+    pub set_value_panel_open: Option<Box<dyn Fn(bool, &mut App)>>,
+
     /// Returns the document's contributed status-bar segments (e.g. engine +
     /// region, bucket path, key count, last-operation timing). `None` means
     /// the document does not contribute any — `StatusBar` renders nothing
@@ -210,6 +220,10 @@ impl PaneHandle {
             is_file_backed_empty: None,
             session_tab_snapshot: None,
             mark_inspector_closed: None,
+            row_inspector_is_tracking: None,
+            set_row_inspector_tracking: None,
+            value_panel_is_open: None,
+            set_value_panel_open: None,
             status_segments: None,
             take_pending_open_bucket: None,
             take_pending_open_object_editor: None,

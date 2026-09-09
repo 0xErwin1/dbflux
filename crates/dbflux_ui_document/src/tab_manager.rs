@@ -172,6 +172,41 @@ impl Tab {
         }
     }
 
+    pub fn row_inspector_is_tracking(&self, cx: &App) -> bool {
+        match self {
+            Tab::Pane(p) => p
+                .row_inspector_is_tracking
+                .as_ref()
+                .is_some_and(|tracking| tracking(cx)),
+        }
+    }
+
+    pub fn set_row_inspector_tracking(&self, tracking: bool, cx: &mut App) {
+        match self {
+            Tab::Pane(p) => {
+                if let Some(set_tracking) = p.set_row_inspector_tracking.as_ref() {
+                    set_tracking(tracking, cx);
+                }
+            }
+        }
+    }
+
+    pub fn value_panel_is_open(&self, cx: &App) -> bool {
+        match self {
+            Tab::Pane(p) => p.value_panel_is_open.as_ref().is_some_and(|open| open(cx)),
+        }
+    }
+
+    pub fn set_value_panel_open(&self, open: bool, cx: &mut App) {
+        match self {
+            Tab::Pane(p) => {
+                if let Some(set_open) = p.set_value_panel_open.as_ref() {
+                    set_open(open, cx);
+                }
+            }
+        }
+    }
+
     /// Returns a session snapshot for this tab if it is a code document with
     /// a persistent backing (file-backed or scratch). Returns `None` for all
     /// other document types and for ephemeral tabs with no backing path.
@@ -232,6 +267,14 @@ pub struct TabManager {
 
     /// Subscriptions per document (for cleanup on close).
     subscriptions: HashMap<DocumentId, Subscription>,
+}
+
+/// The shared inspector rail's per-tab state, carried from the outgoing
+/// document to the incoming one so an open rail follows the user.
+#[derive(Clone, Copy, Default)]
+struct RailState {
+    row_inspector_tracking: bool,
+    value_panel_open: bool,
 }
 
 impl TabManager {
@@ -308,15 +351,22 @@ impl TabManager {
             });
         });
 
+        let rail = self.capture_rail_state(cx);
+
         self.subscriptions.insert(id, subscription);
         self.documents.push(doc);
         let new_index = self.documents.len() - 1;
         self.active_index = Some(new_index);
+        self.hand_over_rail_state(new_index, rail, cx);
 
         // Add to front of MRU
         self.mru_order.insert(0, id);
 
         cx.emit(TabManagerEvent::Opened(id));
+        // Opening a tab activates it. Without this the workspace never runs
+        // its per-document `set_active_tab` pass, so the shared inspector rail
+        // keeps rendering the tab the user just navigated away from.
+        cx.emit(TabManagerEvent::Activated(id));
         cx.notify();
     }
 
@@ -368,7 +418,10 @@ impl TabManager {
             return; // Already active
         }
 
+        let rail = self.capture_rail_state(cx);
+
         self.active_index = Some(idx);
+        self.hand_over_rail_state(idx, rail, cx);
 
         // Move to front of MRU
         self.mru_order.retain(|&i| i != id);
@@ -376,6 +429,31 @@ impl TabManager {
 
         cx.emit(TabManagerEvent::Activated(id));
         cx.notify();
+    }
+
+    /// Read the rail state of the currently active document, before the
+    /// active index moves.
+    fn capture_rail_state(&self, cx: &App) -> RailState {
+        let outgoing = self
+            .active_index
+            .and_then(|active| self.documents.get(active));
+
+        RailState {
+            row_inspector_tracking: outgoing.is_some_and(|tab| tab.row_inspector_is_tracking(cx)),
+            value_panel_open: outgoing.is_some_and(|tab| tab.value_panel_is_open(cx)),
+        }
+    }
+
+    /// The inspector rail is shared by the workspace, so hand its state to the
+    /// newly active document. A closed rail likewise clears stale per-tab
+    /// state before that tab is mounted.
+    fn hand_over_rail_state(&mut self, idx: usize, rail: RailState, cx: &mut App) {
+        let Some(document) = self.documents.get(idx) else {
+            return;
+        };
+
+        document.set_row_inspector_tracking(rail.row_inspector_tracking, cx);
+        document.set_value_panel_open(rail.value_panel_open, cx);
     }
 
     /// Navigates to the next tab in VISUAL order (Ctrl+PgDn).

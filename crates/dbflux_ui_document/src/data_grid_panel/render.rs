@@ -238,6 +238,10 @@ impl DataGridPanel {
             });
         }
 
+        if let Some(target) = self.pending.value_panel.take() {
+            self.apply_pending_value_panel(target, window, cx);
+        }
+
         if let Some(preview) = self.pending.document_preview.take() {
             self.document_view
                 .document_preview_modal

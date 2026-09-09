@@ -1266,7 +1266,23 @@ impl Workspace {
                             .map(|d| (d.id(), d.id() == *new_id))
                             .collect();
 
-                        for (id, is_active) in doc_ids {
+                        // Hide inactive documents first, then mount the newly
+                        // active inspector last. Otherwise document ordering
+                        // could let an old tab's CloseInspector event win and
+                        // leave stale or hidden rail content after a switch.
+                        for (id, is_active) in
+                            doc_ids.iter().copied().filter(|(_, is_active)| !*is_active)
+                        {
+                            this.tab_manager.update(cx, |mgr, cx| {
+                                if let Some(tab) = mgr.document(id) {
+                                    tab.set_active_tab(is_active, cx);
+                                }
+                            });
+                        }
+
+                        for (id, is_active) in
+                            doc_ids.iter().copied().filter(|(_, is_active)| *is_active)
+                        {
                             this.tab_manager.update(cx, |mgr, cx| {
                                 if let Some(tab) = mgr.document(id) {
                                     tab.set_active_tab(is_active, cx);

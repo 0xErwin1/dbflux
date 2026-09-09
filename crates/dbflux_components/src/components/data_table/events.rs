@@ -70,6 +70,8 @@ pub enum ContextMenuAction {
     Edit,
     /// Open modal editor for the selected cell.
     EditInModal,
+    /// Show the selected cell in the value panel.
+    ViewValue,
     /// Set the cell to its column's default value.
     SetDefault,
     /// Set the cell to NULL.
