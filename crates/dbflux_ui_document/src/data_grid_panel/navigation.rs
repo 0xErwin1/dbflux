@@ -645,7 +645,9 @@ impl DataGridPanel {
                 true
             }
             Command::ToggleRecordView => {
-                self.set_record_mode(!self.record_mode(), cx);
+                if self.record_view_available() {
+                    self.set_record_mode(!self.record_mode(), cx);
+                }
                 true
             }
             _ => false,

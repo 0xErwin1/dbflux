@@ -296,6 +296,25 @@ impl DataTableState {
         cx.notify();
     }
 
+    /// Selection change for a primary click on a cell.
+    ///
+    /// Shift extends the range from the anchor, as Shift with the arrow keys
+    /// does; a plain click starts a new selection there. The grid and the
+    /// record view both route their clicks here so the modifier means the same
+    /// thing in either layout.
+    pub fn click_cell(
+        &mut self,
+        coord: CellCoord,
+        modifiers: gpui::Modifiers,
+        cx: &mut Context<Self>,
+    ) {
+        if modifiers.shift {
+            self.extend_selection(coord, cx);
+        } else {
+            self.select_cell(coord, cx);
+        }
+    }
+
     /// Commit an open inline editor, the way Enter does.
     ///
     /// Selecting a cell is a deliberate act, so a value typed into the previous
@@ -1682,6 +1701,47 @@ mod tests {
             Some(CellCoord::new(0, 0)),
             "Home must jump to the first field of the current row"
         );
+    }
+
+    #[gpui::test]
+    fn record_mode_shift_click_extends_the_field_range(cx: &mut gpui::TestAppContext) {
+        use super::super::selection::CellCoord;
+
+        let (state, window) = record_mode_state(cx);
+        let shift = gpui::Modifiers {
+            shift: true,
+            ..gpui::Modifiers::default()
+        };
+
+        window.update(|_, app| {
+            state.update(app, |s, cx| s.click_cell(CellCoord::new(0, 1), shift, cx));
+        });
+        window.update(|_, app| {
+            let selection = state.read(app).selection();
+            let range = selection
+                .selected_range()
+                .expect("shift-click must produce a range");
+            assert!(
+                range.contains(CellCoord::new(0, 0)),
+                "the anchor field must stay selected"
+            );
+            assert!(
+                range.contains(CellCoord::new(0, 1)),
+                "the shift-clicked field must join the range"
+            );
+        });
+
+        // A plain click starts over, as it does in the grid.
+        window.update(|_, app| {
+            state.update(app, |s, cx| {
+                s.click_cell(CellCoord::new(1, 1), gpui::Modifiers::default(), cx)
+            });
+        });
+        window.update(|_, app| {
+            let selection = state.read(app).selection();
+            assert_eq!(selection.active, Some(CellCoord::new(1, 1)));
+            assert!(!selection.is_selected(CellCoord::new(0, 0)));
+        });
     }
 
     #[gpui::test]

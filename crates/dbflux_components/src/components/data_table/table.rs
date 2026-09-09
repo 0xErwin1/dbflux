@@ -1128,15 +1128,10 @@ fn render_rows(
                                 return;
                             }
 
-                            if event.modifiers().shift {
-                                state_for_click.update(cx, |state, cx| {
-                                    state.extend_selection(coord, cx);
-                                });
-                            } else {
-                                state_for_click.update(cx, |state, cx| {
-                                    state.select_cell(coord, cx);
-                                });
-                            }
+                            let modifiers = event.modifiers();
+                            state_for_click.update(cx, |state, cx| {
+                                state.click_cell(coord, modifiers, cx);
+                            });
                         })
                         .on_mouse_down(
                             MouseButton::Right,

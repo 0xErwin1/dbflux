@@ -378,7 +378,6 @@ fn render_fields(
                         .on_click(move |event: &ClickEvent, window, cx| {
                             state_for_click.update(cx, |state, cx| {
                                 state.focus(window, cx);
-                                state.select_cell(coord, cx);
                             });
 
                             // Whether the field can actually be edited is
@@ -389,7 +388,13 @@ fn render_fields(
                                 state_for_click.update(cx, |state, cx| {
                                     state.start_editing(coord, window, cx);
                                 });
+                                return;
                             }
+
+                            let modifiers = event.modifiers();
+                            state_for_click.update(cx, |state, cx| {
+                                state.click_cell(coord, modifiers, cx);
+                            });
                         })
                         .on_mouse_down(
                             MouseButton::Right,

@@ -78,14 +78,14 @@ const SAVE_ROW_SHORTCUT_HINT: &str = "Cmd+↵";
 const SAVE_ROW_SHORTCUT_HINT: &str = "Ctrl+↵";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DataGridContentMode {
+pub(super) enum DataGridContentMode {
     EmptyFallback,
     ResultView,
     Document,
     Table,
 }
 
-fn content_mode_for_result(
+pub(super) fn content_mode_for_result(
     uses_result_view: bool,
     view_mode: DataViewMode,
     has_columns: bool,
@@ -3431,15 +3431,7 @@ impl DataGridPanel {
         };
         let current_result_mode = self.chrome.result_view_mode;
 
-        // The record view is a presentation of the data grid, so it is only
-        // offered where the grid itself is on screen: not for charts, not for
-        // the document tree, and not for grouped aggregates that have no
-        // addressable source row.
-        let show_record_toggle = has_data
-            && self.grid_table.table_state.is_some()
-            && current_result_mode != ResultViewMode::Chart
-            && self.view_config.mode != crate::DataViewMode::Document
-            && !self.is_grouped_result();
+        let show_record_toggle = self.record_view_available();
 
         div()
             .flex()
