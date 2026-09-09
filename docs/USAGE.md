@@ -298,6 +298,12 @@ cells, so unsaved changes, Save Row and revert work the same in both layouts;
 `Up`/`Down` move between fields and `Left`/`Right` move between rows. Press
 `i` again to return to the grid.
 
+### Column header menu
+
+Right-click a column header for a menu scoped to that column: order ascending
+or descending, clear the ordering, and every filter operator, in one flat
+list. A left click on the header still cycles the sort.
+
 ### Value panel
 
 Right-click a cell and choose **View Value**, or press `v`, to open the cell

@@ -135,6 +135,7 @@ pub enum DataTableEvent {
         row: usize,
         col: usize,
         position: Point<Pixels>,
+        is_column_header: bool,
     },
 
     // === Keyboard-triggered row operations ===

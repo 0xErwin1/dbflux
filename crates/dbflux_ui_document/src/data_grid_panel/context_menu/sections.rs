@@ -8,6 +8,182 @@ use gpui::prelude::FluentBuilder;
 use gpui::{deferred, *};
 
 impl DataGridPanel {
+    /// Render the DBeaver-style flat menu opened from a column header.
+    /// Ordering actions are listed first, followed by all filter operators in
+    /// the same panel (no nested flyouts).
+    pub(super) fn render_column_header_menu_items(
+        &self,
+        menu: &TableContextMenu,
+        backend: Option<FilterBackend>,
+        theme: &gpui_component::theme::Theme,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        let col_name = self
+            .result
+            .columns
+            .get(menu.col)
+            .map(|column| column.name.clone())
+            .unwrap_or_default();
+        let remove_ordering = dbflux_i18n::t!("document.data.context_menu.order.remove");
+        let order_title = dbflux_i18n::t!("document.data.context_menu.order.title");
+        let filter_title = dbflux_i18n::t!("document.data.context_menu.filter.title");
+        let (_, _, filter_items, value_ops_count) = self.build_filter_items(menu, backend, cx);
+
+        let mut rows: Vec<AnyElement> = Vec::new();
+        rows.push(
+            div()
+                .px(Spacing::SM)
+                .py(Spacing::XS)
+                .child(
+                    Text::caption(order_title)
+                        .font_size(FontSizes::XS)
+                        .color(theme.muted_foreground),
+                )
+                .into_any_element(),
+        );
+
+        let mut action_index = 0usize;
+        let order_items = [
+            (
+                format!("{} ASC", col_name),
+                ContextMenuAction::Order(dbflux_core::SortDirection::Ascending),
+                Some(AppIcon::ArrowUp),
+                false,
+            ),
+            (
+                format!("{} DESC", col_name),
+                ContextMenuAction::Order(dbflux_core::SortDirection::Descending),
+                Some(AppIcon::ArrowDown),
+                false,
+            ),
+            (
+                remove_ordering,
+                ContextMenuAction::RemoveOrdering,
+                Some(AppIcon::X),
+                true,
+            ),
+        ];
+
+        for (idx, (label, action, icon, is_danger)) in order_items.into_iter().enumerate() {
+            if idx == 2 {
+                rows.push(Self::column_menu_separator(theme));
+            }
+            rows.push(Self::column_menu_action_row(
+                label,
+                action,
+                icon,
+                is_danger,
+                action_index,
+                menu.selected_index,
+                theme,
+                cx,
+            ));
+            action_index += 1;
+        }
+
+        rows.push(Self::column_menu_separator(theme));
+        rows.push(
+            div()
+                .px(Spacing::SM)
+                .py(Spacing::XS)
+                .child(
+                    Text::caption(filter_title)
+                        .font_size(FontSizes::XS)
+                        .color(theme.muted_foreground),
+                )
+                .into_any_element(),
+        );
+
+        let remove_filter_index = filter_items.len().saturating_sub(1);
+        for (idx, (label, action)) in filter_items.into_iter().enumerate() {
+            if (value_ops_count > 0 && idx == value_ops_count) || idx == remove_filter_index {
+                rows.push(Self::column_menu_separator(theme));
+            }
+            let is_danger = matches!(action, ContextMenuAction::RemoveFilter);
+            rows.push(Self::column_menu_action_row(
+                label,
+                action,
+                if is_danger { Some(AppIcon::X) } else { None },
+                is_danger,
+                action_index,
+                menu.selected_index,
+                theme,
+                cx,
+            ));
+            action_index += 1;
+        }
+
+        rows
+    }
+
+    fn column_menu_separator(theme: &gpui_component::theme::Theme) -> AnyElement {
+        div()
+            .h(px(1.0))
+            .mx(Spacing::SM)
+            .my(Spacing::XS)
+            .bg(theme.border)
+            .into_any_element()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn column_menu_action_row(
+        label: String,
+        action: ContextMenuAction,
+        icon: Option<AppIcon>,
+        is_danger: bool,
+        action_index: usize,
+        selected_index: usize,
+        theme: &gpui_component::theme::Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let selected = action_index == selected_index;
+        let color = if is_danger {
+            theme.danger
+        } else if selected {
+            theme.accent_foreground
+        } else {
+            theme.foreground
+        };
+
+        div()
+            .id(SharedString::from(format!(
+                "column-menu-action-{action_index}"
+            )))
+            .flex()
+            .items_center()
+            .gap(Spacing::SM)
+            .h(Heights::ROW_COMPACT)
+            .px(Spacing::SM)
+            .mx(Spacing::XS)
+            .rounded(Radii::SM)
+            .cursor_pointer()
+            .when(selected, |d| {
+                d.bg(if is_danger {
+                    theme.danger.opacity(0.1)
+                } else {
+                    theme.accent
+                })
+            })
+            .when(!selected, |d| d.hover(|d| d.bg(theme.secondary)))
+            .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                if let Some(menu) = this.context_menu.as_mut()
+                    && menu.selected_index != action_index
+                {
+                    menu.selected_index = action_index;
+                    cx.notify();
+                }
+            }))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.handle_context_menu_action(action, window, cx);
+            }))
+            .when_some(icon, |d, icon| {
+                d.child(Icon::new(icon).small().color(color))
+            })
+            .when(icon.is_none(), |d| d.pl(px(20.0)))
+            .child(Text::caption(label).color(color))
+            .into_any_element()
+    }
+
     /// Renders the flat list of visible menu items (Copy, Paste, Edit, Add Row, ...)
     /// built from `build_context_menu_items`, including separators.
     pub(super) fn render_menu_item_rows(

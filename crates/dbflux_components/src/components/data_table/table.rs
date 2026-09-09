@@ -540,6 +540,7 @@ impl gpui::Render for DataTable {
                                         row: 0,
                                         col: 0,
                                         position: event.position,
+                                        is_column_header: false,
                                     });
                                 });
                             }),
@@ -773,6 +774,26 @@ impl DataTable {
                         state_for_click.update(cx, |state, cx| {
                             state.cycle_sort(col_ix, cx);
                         });
+                    })
+                    // Right-click opens the menu scoped to this column: its
+                    // ordering and filtering in one flat list. Left click keeps
+                    // cycling the sort — the fastest interaction in the grid,
+                    // not to be spent on opening a menu for the rare case.
+                    .on_mouse_down(MouseButton::Right, {
+                        let state_for_menu = state_entity.clone();
+                        move |event: &MouseDownEvent, window, cx| {
+                            cx.stop_propagation();
+                            state_for_menu.update(cx, |state, cx| {
+                                state.focus(window, cx);
+                                let row = state.selection().active.map(|c| c.row).unwrap_or(0);
+                                cx.emit(DataTableEvent::ContextMenuRequested {
+                                    row,
+                                    col: col_ix,
+                                    position: event.position,
+                                    is_column_header: true,
+                                });
+                            });
+                        }
                     })
                     .child(
                         div()
@@ -1144,6 +1165,7 @@ fn render_rows(
                                         row: coord.row,
                                         col: coord.col,
                                         position: event.position,
+                                        is_column_header: false,
                                     });
                                 });
                             },

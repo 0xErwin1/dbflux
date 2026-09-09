@@ -355,6 +355,9 @@ struct TableContextMenu {
     submenu_selected_index: usize,
     /// Whether this is a document view context menu (different items shown).
     is_document_view: bool,
+    /// Whether this menu was opened by right-clicking a column header, which
+    /// scopes it to that column's ordering and filtering.
+    is_column_header: bool,
     doc_field_path: Option<Vec<String>>,
     doc_field_value: Option<dbflux_components::components::document_tree::NodeValue>,
     /// Driver-supplied row-level actions (e.g. Kill, Cancel). When non-empty,
@@ -2339,17 +2342,23 @@ impl DataGridPanel {
                     DataTableEvent::SaveRowRequested(row_idx) => {
                         this.handle_save_row(*row_idx, cx);
                     }
-                    DataTableEvent::ContextMenuRequested { row, col, position } => {
+                    DataTableEvent::ContextMenuRequested {
+                        row,
+                        col,
+                        position,
+                        is_column_header,
+                    } => {
                         // Gather any driver-supplied row actions (e.g. Kill, Cancel).
                         // They are injected as extra menu items at the bottom rather
                         // than bypassing the context menu entirely.
-                        let row_actions =
-                            if let Some(provider) = this.inspector.row_action_provider.as_ref() {
-                                let metric_id = this.row_action_metric_id();
-                                provider(metric_id.as_deref().unwrap_or(""))
-                            } else {
-                                Vec::new()
-                            };
+                        let row_actions = if *is_column_header {
+                            Vec::new()
+                        } else if let Some(provider) = this.inspector.row_action_provider.as_ref() {
+                            let metric_id = this.row_action_metric_id();
+                            provider(metric_id.as_deref().unwrap_or(""))
+                        } else {
+                            Vec::new()
+                        };
 
                         this.context_menu = Some(TableContextMenu {
                             row: *row,
@@ -2362,6 +2371,7 @@ impl DataGridPanel {
                             selected_index: 0,
                             submenu_selected_index: 0,
                             is_document_view: false,
+                            is_column_header: *is_column_header,
                             doc_field_path: None,
                             doc_field_value: None,
                             row_actions,
@@ -2504,6 +2514,7 @@ impl DataGridPanel {
                         selected_index: 0,
                         submenu_selected_index: 0,
                         is_document_view: true,
+                        is_column_header: false,
                         doc_field_path: if field_path.is_empty() {
                             None
                         } else {
