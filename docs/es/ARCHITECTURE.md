@@ -730,6 +730,10 @@ módulo):
 4. Agrega una función `open_<name>` en
    `crates/dbflux_ui/src/ui/views/workspace/actions.rs`.
 
+**Ciclo de vida de sesión del editor**
+
+`CodeDocument` posee una vinculación opcional de sesión de ejecución aislada para los controladores que exponen `Connection::execution_session_factory()`. La vinculación compara la identidad `Arc` de la raíz resuelta y la base de datos, serializa apertura y ejecución en el ejecutor de segundo plano, y avanza la generación antes de que cambios de contexto programen el cierre. La sesión se mantiene en un editor durante `BEGIN`, sentencias, `COMMIT` o `ROLLBACK`, y autocommit posterior. El control transaccional no compatible o multi-sentencia se rechaza antes de E/S; los controladores sin fábrica conservan la ejecución raíz. `PaneHandle::on_close` permite que `TabManager::close` inicie la limpieza antes de retirar el panel.
+
 **Notas de arquitectura**
 
 - `KeyValueView` y `LogStreamView` son boundary structs a nivel de archivo, no

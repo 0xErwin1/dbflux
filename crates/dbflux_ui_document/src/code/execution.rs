@@ -617,6 +617,7 @@ impl CodeDocument {
         cx.emit(DocumentEvent::ExecutionStarted);
         cx.notify();
 
+        let session_database = active_database.clone();
         let mut request = query_request_for_execution(
             query.clone(),
             active_database,
@@ -668,13 +669,17 @@ impl CodeDocument {
             .map(|c| c.profile.driver_id())
             .unwrap_or_default();
 
+        let session_binding = self.execution_session.clone();
         let task = cx.background_executor().spawn({
             let connection = connection.clone();
-            async move { connection.execute(&request) }
+            let session_binding = session_binding.clone();
+            async move { session_binding.execute(connection, session_database, &request) }
         });
 
         cx.spawn(async move |this, cx| {
-            let mut result = task.await;
+            let session_execution = task.await;
+            let session_isolated = session_execution.isolated;
+            let mut result = session_execution.result;
 
             if let Ok(query_result) = result.as_mut() {
                 crate::result_warnings::handoff_sql_editor_result(query_result, |warning| {
@@ -685,8 +690,13 @@ impl CodeDocument {
             if cancel_token.is_cancelled() {
                 log::info!("Query was cancelled, discarding result");
 
-                if let Err(error) = connection.cleanup_after_cancel() {
-                    log::warn!("Cleanup after cancel failed: {}", error);
+                if session_isolated {
+                    session_binding.invalidate();
+                    if let Err(error) = session_binding.close() {
+                        log::warn!("Cleanup after isolated-session cancellation failed: {error}");
+                    }
+                } else if let Err(error) = connection.cleanup_after_cancel() {
+                    log::warn!("Cleanup after cancel failed: {error}");
                 }
 
                 let inner_result = this.update(cx, |doc, cx| {

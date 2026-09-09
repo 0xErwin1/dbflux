@@ -518,6 +518,7 @@ fn profile_config_context(config: &DbConfig) -> (Option<String>, Option<u16>, Op
         DbConfig::ClickHouse { url, database, .. } => {
             (credential_free_authority(url), None, Some(database.clone()))
         }
+        DbConfig::Turso { url } => (credential_free_authority(url), None, None),
         DbConfig::SqlServer {
             host,
             port,
@@ -3227,5 +3228,23 @@ mod tests {
 
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("cancelled"));
+    }
+
+    #[test]
+    fn hook_context_for_turso_exposes_only_credential_free_authority() {
+        let profile = ConnectionProfile::new(
+            "turso",
+            DbConfig::Turso {
+                url: "https://token@tenant.turso.io/path?secret=value".to_string(),
+            },
+        );
+
+        let context = HookContext::from_profile(&profile);
+
+        assert_eq!(context.host.as_deref(), Some("https://tenant.turso.io"));
+        assert!(context.port.is_none());
+        assert!(context.database.is_none());
+        assert!(!format!("{context:?}").contains("token"));
+        assert!(!format!("{context:?}").contains("secret"));
     }
 }

@@ -729,8 +729,12 @@ impl AppState {
         self.facade.secrets.secret_store_arc()
     }
 
-    pub fn save_password(&self, profile: &ConnectionProfile, password: &SecretString) {
-        self.facade.secrets.save_password(profile, password);
+    pub fn save_password(
+        &self,
+        profile: &ConnectionProfile,
+        password: &SecretString,
+    ) -> Result<(), dbflux_core::DbError> {
+        self.facade.secrets.save_password(profile, password)
     }
 
     pub fn delete_password(&self, profile: &ConnectionProfile) {

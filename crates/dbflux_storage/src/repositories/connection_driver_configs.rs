@@ -375,6 +375,9 @@ impl ConnectionDriverConfigDto {
                 dto.database_name = Some(database.clone());
                 dto.connect_timeout_secs = persist_timeout_seconds(*request_timeout_seconds);
             }
+            DbConfig::Turso { url } => {
+                dto.uri = Some(url.clone());
+            }
             DbConfig::External { kind, values } => {
                 dto.external_kind = Some(db_kind_to_str(*kind));
                 dto.external_values_json = Some(serde_json::to_string(values).unwrap_or_default());
@@ -601,6 +604,9 @@ impl ConnectionDriverConfigDto {
                     .connect_timeout_secs
                     .and_then(|timeout| u64::try_from(timeout).ok()),
             }),
+            DbKind::Turso => Some(DbConfig::Turso {
+                url: self.uri.clone().unwrap_or_default(),
+            }),
         }
     }
 }
@@ -624,6 +630,7 @@ fn db_kind_to_str(kind: DbKind) -> String {
         DbKind::Redshift => "Redshift",
         DbKind::S3 => "S3",
         DbKind::ClickHouse => "ClickHouse",
+        DbKind::Turso => "Turso",
     }
     .to_string()
 }
@@ -643,6 +650,7 @@ fn str_to_db_kind(s: &str) -> Option<DbKind> {
         "Redshift" => Some(DbKind::Redshift),
         "S3" => Some(DbKind::S3),
         "ClickHouse" => Some(DbKind::ClickHouse),
+        "Turso" => Some(DbKind::Turso),
         _ => None,
     }
 }
@@ -1416,5 +1424,22 @@ mod tests {
             }
             other => panic!("unexpected config: {other:?}"),
         }
+    }
+
+    #[test]
+    fn turso_driver_config_roundtrips_url_without_secret_columns() {
+        let config = DbConfig::Turso {
+            url: "https://example.turso.io".to_string(),
+        };
+        let dto = ConnectionDriverConfigDto::from_db_config("profile".to_string(), &config);
+
+        assert_eq!(dto.config_key, "Turso");
+        assert_eq!(dto.uri.as_deref(), Some("https://example.turso.io"));
+        assert!(dto.password_secret_ref.is_none());
+        assert!(dto.external_values_json.is_none());
+        assert!(matches!(
+            dto.to_db_config(),
+            Some(DbConfig::Turso { url }) if url == "https://example.turso.io"
+        ));
     }
 }

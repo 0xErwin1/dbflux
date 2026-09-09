@@ -377,6 +377,7 @@ impl TabManager {
         };
 
         self.documents[idx].flush_auto_save(cx);
+        self.documents[idx].as_pane().on_close(cx);
         self.remove_document(idx, id, cx);
         true
     }

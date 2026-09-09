@@ -137,6 +137,13 @@ impl CodeDocument {
             },
         );
 
+        handle.on_close = Some({
+            let entity = entity.clone();
+            Box::new(move |cx| {
+                entity.update(cx, |document, cx| document.invalidate_execution_session(cx));
+            })
+        });
+
         // Populate optional helper: empty file-backed detection used by the
         // cleanup path in actions.rs that deletes empty script files on close.
         handle.is_file_backed_empty = Some({

@@ -88,7 +88,7 @@ impl TransactionVocab {
                     "SET SESSION innodb_lock_wait_timeout = DEFAULT",
                 ),
             }),
-            DbKind::SQLite => Some(Self {
+            DbKind::SQLite | DbKind::Turso => Some(Self {
                 begin: "BEGIN IMMEDIATE",
                 commit: "COMMIT",
                 rollback: "ROLLBACK",
@@ -237,5 +237,16 @@ mod tests {
             !vocab.lock_timeout_before_begin,
             "MSSQL lock_timeout must be emitted INSIDE the transaction"
         );
+    }
+
+    #[test]
+    fn turso_uses_sqlite_transaction_vocabulary_without_lock_timeout() {
+        let vocab = TransactionVocab::for_kind(DbKind::Turso).expect("turso vocabulary");
+
+        assert_eq!(vocab.begin, "BEGIN IMMEDIATE");
+        assert_eq!(vocab.commit, "COMMIT");
+        assert_eq!(vocab.rollback, "ROLLBACK");
+        assert!(vocab.lock_timeout_sql(1_000).is_none());
+        assert!(vocab.autocommit_lock_timeout_sql(1_000).is_none());
     }
 }

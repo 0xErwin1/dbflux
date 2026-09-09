@@ -60,6 +60,7 @@ mod completion;
 mod context_bar;
 mod diagnostics;
 mod execution;
+mod execution_session;
 mod file_ops;
 mod focus;
 mod live_output;
@@ -68,6 +69,7 @@ mod render;
 
 use code_actions::SqlCodeActionProvider;
 use completion::QueryCompletionProvider;
+use execution_session::ExecutionSessionBinding;
 use live_output::LiveOutputState;
 
 /// A single result tab within the CodeDocument.
@@ -393,6 +395,7 @@ pub struct CodeDocument {
 
     // Query execution state and result tabs.
     execution: Execution,
+    execution_session: Arc<ExecutionSessionBinding>,
     result_tabs: ResultTabs,
 
     // History modal, refresh timer, and schema drift modal.
@@ -912,6 +915,7 @@ impl CodeDocument {
             },
         );
         let app_state_sub = cx.subscribe(&app_state, |this, _, _: &AppStateChanged, cx| {
+            this.invalidate_execution_session(cx);
             this.sync_context_dropdowns(cx);
             this.try_fetch_pending_routine_definition(cx);
         });
@@ -977,6 +981,7 @@ impl CodeDocument {
                 _live_output_drain: None,
                 active_query_task: None,
             },
+            execution_session: ExecutionSessionBinding::new(),
             result_tabs: ResultTabs {
                 result_tabs: Vec::new(),
                 active_result_index: None,
@@ -1254,6 +1259,7 @@ impl CodeDocument {
 
     /// Set the execution context (e.g. parsed from file header).
     pub fn with_exec_ctx(mut self, ctx: ExecutionContext, cx: &mut Context<Self>) -> Self {
+        self.invalidate_execution_session(cx);
         self.pending.source_input_values = ctx
             .source
             .as_ref()
@@ -1262,6 +1268,19 @@ impl CodeDocument {
         self.source.exec_ctx = ctx;
         self.sync_context_dropdowns(cx);
         self
+    }
+
+    /// Invalidates before detached background cleanup; no document entity is retained.
+    pub(super) fn invalidate_execution_session(&self, cx: &mut Context<Self>) {
+        self.execution_session.invalidate();
+        let binding = self.execution_session.clone();
+        cx.background_executor()
+            .spawn(async move {
+                if let Err(error) = binding.close() {
+                    log::warn!("Failed to close invalidated editor session: {error}");
+                }
+            })
+            .detach();
     }
 
     // === File backing ===

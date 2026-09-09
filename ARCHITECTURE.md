@@ -596,6 +596,10 @@ User-triggered failures route through a single seam in `crates/dbflux_ui_base/sr
 3. Add a `DocumentKey` variant in `crates/dbflux_ui_document/src/dedup.rs` if dedup is needed.
 4. Add an `open_<name>` function in `crates/dbflux_ui/src/ui/views/workspace/actions.rs`.
 
+**Editor session lifetime**
+
+`CodeDocument` owns an optional isolated execution-session binding for drivers that expose `Connection::execution_session_factory()`. The binding compares resolved root `Arc` identity and database, serializes open and execution on the background executor, and advances generation before context changes schedule close. A session stays with one editor through `BEGIN`, statements, `COMMIT` or `ROLLBACK`, and later autocommit. Unsupported or multi-statement transaction control is rejected before session I/O; factory-absent drivers retain root execution. `PaneHandle::on_close` lets `TabManager::close` start cleanup before every tab-removal path removes the pane.
+
 **Architectural notes**
 
 - `KeyValueView` and `LogStreamView` are file-level boundary structs, not separate GPUI entities. GPUI's single-`Context<T>` borrow model makes cross-entity `impl Render` splits infeasible when 40+ `cx.listener()` closures in a document close over `Self`; splitting would require relocating all domain state to the view entity. The achieved boundary is file-level.

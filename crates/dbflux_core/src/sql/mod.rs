@@ -2,6 +2,7 @@ pub(crate) mod code_generation;
 pub(crate) mod dialect;
 pub(crate) mod generation;
 pub(crate) mod query_builder;
+mod transaction_control;
 
 pub use code_generation::{
     AddColumnRequest, AddEnumValueRequest, AddForeignKeyRequest, AlterColumnRequest,
@@ -17,3 +18,4 @@ pub use generation::{
     generate_sql, generate_truncate, generate_update_template,
 };
 pub use query_builder::SqlQueryBuilder;
+pub use transaction_control::{TransactionControl, classify_sql_transaction_control};

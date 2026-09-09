@@ -589,6 +589,7 @@ fn str_to_db_kind(value: &str) -> Option<dbflux_core::DbKind> {
         "Redshift" => Some(dbflux_core::DbKind::Redshift),
         "ClickHouse" => Some(dbflux_core::DbKind::ClickHouse),
         "S3" => Some(dbflux_core::DbKind::S3),
+        "Turso" => Some(dbflux_core::DbKind::Turso),
         _ => None,
     }
 }
@@ -608,6 +609,7 @@ fn default_db_config_for_kind(kind: dbflux_core::DbKind) -> dbflux_core::DbConfi
         dbflux_core::DbKind::Redshift => dbflux_core::DbConfig::default_redshift(),
         dbflux_core::DbKind::ClickHouse => dbflux_core::DbConfig::default_clickhouse(),
         dbflux_core::DbKind::S3 => dbflux_core::DbConfig::default_s3(),
+        dbflux_core::DbKind::Turso => dbflux_core::DbConfig::default_turso(),
     }
 }
 
@@ -1549,5 +1551,14 @@ mod tests {
 
         let policies = runtime.list_policies().expect("list policies");
         assert!(policies.iter().any(|p| p.id == "read-only"));
+    }
+
+    #[test]
+    fn turso_headless_config_uses_the_same_empty_url_default() {
+        assert_eq!(str_to_db_kind("Turso"), Some(dbflux_core::DbKind::Turso));
+        assert!(matches!(
+            default_db_config_for_kind(dbflux_core::DbKind::Turso),
+            dbflux_core::DbConfig::Turso { ref url } if url.is_empty()
+        ));
     }
 }
