@@ -51,6 +51,12 @@ jobs:
 
       - name: Install system dependencies
         run: |
+          # The external Chrome APT source is irrelevant to Rust CI and can fail independently.
+          for chrome_source in /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/google-chrome.sources; do
+            if [ -f "$chrome_source" ]; then
+              sudo mv -- "$chrome_source" "$chrome_source.disabled"
+            fi
+          done
           sudo apt-get update
           sudo apt-get install -y \
             mold \
@@ -84,6 +90,12 @@ jobs:
 
       - name: Install system dependencies
         run: |
+          # The external Chrome APT source is irrelevant to Rust CI and can fail independently.
+          for chrome_source in /etc/apt/sources.list.d/google-chrome.list /etc/apt/sources.list.d/google-chrome.sources; do
+            if [ -f "$chrome_source" ]; then
+              sudo mv -- "$chrome_source" "$chrome_source.disabled"
+            fi
+          done
           sudo apt-get update
           sudo apt-get install -y \
             mold \
