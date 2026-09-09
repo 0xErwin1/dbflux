@@ -1176,17 +1176,17 @@ fn inject_credentials_into_uri(
             ":"
         };
 
-        if !userinfo.is_empty() {
-            if let Some(password) = password {
-                return format!(
-                    "{}{}{}{}{}",
-                    prefix,
-                    &rest[..at_pos],
-                    password_separator,
-                    urlencoding::encode(password),
-                    &rest[at_pos..]
-                );
-            }
+        if !userinfo.is_empty()
+            && let Some(password) = password
+        {
+            return format!(
+                "{}{}{}{}{}",
+                prefix,
+                &rest[..at_pos],
+                password_separator,
+                urlencoding::encode(password),
+                &rest[at_pos..]
+            );
         }
 
         return base_uri.to_string();
