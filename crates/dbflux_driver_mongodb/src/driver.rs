@@ -1155,34 +1155,58 @@ fn inject_credentials_into_uri(
     user: Option<&str>,
     password: Option<&str>,
 ) -> String {
-    let user_val = user.unwrap_or("");
+    let (prefix, rest) = if let Some(rest) = base_uri.strip_prefix("mongodb://") {
+        ("mongodb://", rest)
+    } else if let Some(rest) = base_uri.strip_prefix("mongodb+srv://") {
+        ("mongodb+srv://", rest)
+    } else {
+        return base_uri.to_string();
+    };
 
-    // Do not inject when there is no username — injecting ":password@" produces
-    // a malformed authority and would silently use the stored password against
-    // a URI that was never intended to carry credentials.
-    if user_val.is_empty() {
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let authority = &rest[..authority_end];
+    if let Some(at_pos) = authority.rfind('@') {
+        let userinfo = &authority[..at_pos];
+        let password_separator = if let Some((_, password)) = userinfo.split_once(':') {
+            if !password.is_empty() {
+                return base_uri.to_string();
+            }
+            ""
+        } else {
+            ":"
+        };
+
+        if !userinfo.is_empty() {
+            if let Some(password) = password {
+                return format!(
+                    "{}{}{}{}{}",
+                    prefix,
+                    &rest[..at_pos],
+                    password_separator,
+                    urlencoding::encode(password),
+                    &rest[at_pos..]
+                );
+            }
+        }
+
         return base_uri.to_string();
     }
 
-    if base_uri.contains('@') {
-        base_uri.to_string()
-    } else if let Some(rest) = base_uri.strip_prefix("mongodb://") {
-        format!(
-            "mongodb://{}:{}@{}",
-            urlencoding::encode(user_val),
-            urlencoding::encode(password.unwrap_or("")),
-            rest
-        )
-    } else if let Some(rest) = base_uri.strip_prefix("mongodb+srv://") {
-        format!(
-            "mongodb+srv://{}:{}@{}",
-            urlencoding::encode(user_val),
-            urlencoding::encode(password.unwrap_or("")),
-            rest
-        )
-    } else {
-        base_uri.to_string()
+    let user = user.unwrap_or("");
+    // Do not inject when there is no username — injecting ":password@" produces
+    // a malformed authority and would silently use the stored password against
+    // a URI that was never intended to carry credentials.
+    if user.is_empty() {
+        return base_uri.to_string();
     }
+
+    format!(
+        "{}{}:{}@{}",
+        prefix,
+        urlencoding::encode(user),
+        urlencoding::encode(password.unwrap_or("")),
+        rest
+    )
 }
 
 /// Fills in a default `appName` when the URI did not already set one via `appName=`,
@@ -4233,6 +4257,53 @@ mod tests {
         assert_eq!(
             without_user.get("auth_database").map(String::as_str),
             Some("")
+        );
+    }
+
+    #[test]
+    fn inject_credentials_fills_password_for_username_only_uri_authority() {
+        let srv = inject_credentials_into_uri(
+            "mongodb+srv://user@cluster.mongodb.net/mydb",
+            Some("separate-user"),
+            Some("secret"),
+        );
+        assert_eq!(srv, "mongodb+srv://user:secret@cluster.mongodb.net/mydb");
+
+        let standard = inject_credentials_into_uri(
+            "mongodb://encoded%40user:@localhost:27017/admin",
+            Some("separate-user"),
+            Some("p@ss word"),
+        );
+        assert_eq!(
+            standard,
+            "mongodb://encoded%40user:p%40ss%20word@localhost:27017/admin"
+        );
+
+        let complete = inject_credentials_into_uri(
+            "mongodb://existing:creds@localhost:27017/admin",
+            Some("separate-user"),
+            Some("secret"),
+        );
+        assert_eq!(complete, "mongodb://existing:creds@localhost:27017/admin");
+
+        let without_password = inject_credentials_into_uri(
+            "mongodb+srv://user@cluster.mongodb.net/mydb",
+            Some("separate-user"),
+            None,
+        );
+        assert_eq!(
+            without_password,
+            "mongodb+srv://user@cluster.mongodb.net/mydb"
+        );
+
+        let query_at = inject_credentials_into_uri(
+            "mongodb://localhost:27017/admin?tag=user@example.com",
+            Some("alice"),
+            Some("secret"),
+        );
+        assert_eq!(
+            query_at,
+            "mongodb://alice:secret@localhost:27017/admin?tag=user@example.com"
         );
     }
 
