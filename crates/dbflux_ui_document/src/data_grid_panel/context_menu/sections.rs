@@ -7,9 +7,31 @@ use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
 use gpui::prelude::FluentBuilder;
 use gpui::{deferred, *};
 
+/// Distance from the menu's edge at which a submenu hangs off its item: the
+/// menu width less a small overlap, so the two read as one surface.
+const SUBMENU_OFFSET: Pixels = px(172.0);
+
+/// The frame a submenu hangs in.
+///
+/// It sits beside its row, on the right unless the menu is against the
+/// panel's right edge, and `anchored` slides it back into the window when
+/// it would run past the bottom or a side: a long filter list opened from a
+/// row near the bottom of the window is shifted up rather than cut off.
+fn submenu_frame(open_left: bool, flyout: Div) -> Div {
+    let (frame, corner) = if open_left {
+        (div().absolute().right(SUBMENU_OFFSET), Corner::TopRight)
+    } else {
+        (div().absolute().left(SUBMENU_OFFSET), Corner::TopLeft)
+    };
+    frame.top(px(-4.0)).child(
+        anchored()
+            .anchor(corner)
+            .snap_to_window_with_margin(Spacing::XS)
+            .child(flyout),
+    )
+}
+
 impl DataGridPanel {
-    /// Renders the flat list of visible menu items (Copy, Paste, Edit, Add Row, ...)
-    /// built from `build_context_menu_items`, including separators.
     pub(super) fn render_menu_item_rows(
         theme: &gpui_component::theme::Theme,
         selected_index: usize,
@@ -79,9 +101,10 @@ impl DataGridPanel {
                     })
                     .on_mouse_move(cx.listener(move |this, _, _, cx| {
                         if let Some(ref mut menu) = this.context_menu
-                            && menu.selected_index != current_index
+                            && (menu.selected_index != current_index || menu.any_submenu_open())
                         {
                             menu.selected_index = current_index;
+                            menu.close_submenus();
                             cx.notify();
                         }
                     }))
@@ -120,6 +143,7 @@ impl DataGridPanel {
     pub(super) fn render_filter_submenu_section(
         &self,
         menu: &TableContextMenu,
+        submenus_open_left: bool,
         backend: Option<FilterBackend>,
         has_filter: bool,
         selected_index: usize,
@@ -182,11 +206,16 @@ impl DataGridPanel {
                     d.hover(|d| d.bg(submenu_hover))
                 })
                 .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                    // Hovering opens the submenu, as native menus do; the
+                    // flyout is a child of this row, so moving into it keeps
+                    // bubbling here and the guard leaves it open.
                     if let Some(ref mut menu) = this.context_menu
-                        && menu.selected_index != filter_index
-                        && !menu.filter_submenu_open
+                        && !(menu.selected_index == filter_index && menu.filter_submenu_open)
                     {
                         menu.selected_index = filter_index;
+                        menu.close_submenus();
+                        menu.filter_submenu_open = true;
+                        menu.submenu_selected_index = 0;
                         cx.notify();
                     }
                 }))
@@ -220,14 +249,17 @@ impl DataGridPanel {
                     },
                 ))
                 .when(filter_submenu_open, |d: Stateful<Div>| {
-                    d.child(Self::build_filter_submenu_flyout(
-                        filter_items,
-                        value_ops_count,
-                        filter_submenu_count,
-                        submenu_selected_index,
-                        cell_value_label,
-                        theme,
-                        cx,
+                    d.child(submenu_frame(
+                        submenus_open_left,
+                        Self::build_filter_submenu_flyout(
+                            filter_items,
+                            value_ops_count,
+                            filter_submenu_count,
+                            submenu_selected_index,
+                            cell_value_label,
+                            theme,
+                            cx,
+                        ),
                     ))
                 })
                 .into_any_element(),
@@ -255,9 +287,6 @@ impl DataGridPanel {
         let remove_separator_idx = filter_submenu_count.saturating_sub(1);
 
         div()
-            .absolute()
-            .left(px(172.0))
-            .top(px(-4.0))
             .w(px(280.0))
             .bg(submenu_bg)
             .border_1()
@@ -364,6 +393,7 @@ impl DataGridPanel {
     pub(super) fn render_order_submenu_section(
         &self,
         menu: &TableContextMenu,
+        submenus_open_left: bool,
         has_order: bool,
         selected_index: usize,
         theme: &gpui_component::theme::Theme,
@@ -419,11 +449,16 @@ impl DataGridPanel {
                     d.hover(|d| d.bg(submenu_hover))
                 })
                 .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                    // Hovering opens the submenu, as native menus do; the
+                    // flyout is a child of this row, so moving into it keeps
+                    // bubbling here and the guard leaves it open.
                     if let Some(ref mut menu) = this.context_menu
-                        && menu.selected_index != order_index
-                        && !menu.order_submenu_open
+                        && !(menu.selected_index == order_index && menu.order_submenu_open)
                     {
                         menu.selected_index = order_index;
+                        menu.close_submenus();
+                        menu.order_submenu_open = true;
+                        menu.submenu_selected_index = 0;
                         cx.notify();
                     }
                 }))
@@ -457,12 +492,15 @@ impl DataGridPanel {
                     },
                 ))
                 .when(order_submenu_open, |d: Stateful<Div>| {
-                    d.child(Self::build_order_submenu_flyout(
-                        &col_name_for_order,
-                        submenu_selected_index,
-                        remove_ordering_label,
-                        theme,
-                        cx,
+                    d.child(submenu_frame(
+                        submenus_open_left,
+                        Self::build_order_submenu_flyout(
+                            &col_name_for_order,
+                            submenu_selected_index,
+                            remove_ordering_label,
+                            theme,
+                            cx,
+                        ),
                     ))
                 })
                 .into_any_element(),
@@ -503,9 +541,6 @@ impl DataGridPanel {
         ];
 
         div()
-            .absolute()
-            .left(px(172.0))
-            .top(px(-4.0))
             .w(px(200.0))
             .bg(submenu_bg)
             .border_1()
@@ -594,9 +629,11 @@ impl DataGridPanel {
 
     /// Renders the "Generate SQL" submenu trigger (SELECT WHERE / INSERT / UPDATE / DELETE
     /// templates). Only present for table views, never for the document view.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn render_generate_sql_submenu_section(
         is_document_view: bool,
         menu: &TableContextMenu,
+        submenus_open_left: bool,
         selected_index: usize,
         theme: &gpui_component::theme::Theme,
         menu_items: &mut Vec<AnyElement>,
@@ -655,11 +692,16 @@ impl DataGridPanel {
                     d.hover(|d| d.bg(submenu_hover))
                 })
                 .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                    // Hovering opens the submenu, as native menus do; the
+                    // flyout is a child of this row, so moving into it keeps
+                    // bubbling here and the guard leaves it open.
                     if let Some(ref mut menu) = this.context_menu
-                        && menu.selected_index != gen_sql_index
-                        && !menu.sql_submenu_open
+                        && !(menu.selected_index == gen_sql_index && menu.sql_submenu_open)
                     {
                         menu.selected_index = gen_sql_index;
+                        menu.close_submenus();
+                        menu.sql_submenu_open = true;
+                        menu.submenu_selected_index = 0;
                         cx.notify();
                     }
                 }))
@@ -688,10 +730,9 @@ impl DataGridPanel {
                 ))
                 // Submenu appears to the right
                 .when(sql_submenu_open, |d: Stateful<Div>| {
-                    d.child(Self::build_generate_sql_submenu_flyout(
-                        submenu_selected_index,
-                        theme,
-                        cx,
+                    d.child(submenu_frame(
+                        submenus_open_left,
+                        Self::build_generate_sql_submenu_flyout(submenu_selected_index, theme, cx),
                     ))
                 })
                 .into_any_element(),
@@ -711,9 +752,6 @@ impl DataGridPanel {
         let submenu_hover = theme.secondary;
 
         div()
-            .absolute()
-            .left(px(172.0)) // menu_width - some padding
-            .top(px(-4.0))
             .w(px(160.0))
             .bg(submenu_bg)
             .border_1()
@@ -785,9 +823,11 @@ impl DataGridPanel {
 
     /// Renders the "Copy as Query" submenu trigger (INSERT / UPDATE / DELETE templates
     /// for the current row), gated on driver support for query generation.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn render_copy_query_submenu_section(
         &self,
         menu: &TableContextMenu,
+        submenus_open_left: bool,
         selected_index: usize,
         theme: &gpui_component::theme::Theme,
         menu_items: &mut Vec<AnyElement>,
@@ -837,11 +877,17 @@ impl DataGridPanel {
                     d.hover(|d| d.bg(submenu_hover))
                 })
                 .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                    // Hovering opens the submenu, as native menus do; the
+                    // flyout is a child of this row, so moving into it keeps
+                    // bubbling here and the guard leaves it open.
                     if let Some(ref mut menu) = this.context_menu
-                        && menu.selected_index != copy_query_index
-                        && !menu.copy_query_submenu_open
+                        && !(menu.selected_index == copy_query_index
+                            && menu.copy_query_submenu_open)
                     {
                         menu.selected_index = copy_query_index;
+                        menu.close_submenus();
+                        menu.copy_query_submenu_open = true;
+                        menu.submenu_selected_index = 0;
                         cx.notify();
                     }
                 }))
@@ -875,10 +921,9 @@ impl DataGridPanel {
                     },
                 ))
                 .when(copy_submenu_open, |d: Stateful<Div>| {
-                    d.child(Self::build_copy_query_submenu_flyout(
-                        submenu_selected_index,
-                        theme,
-                        cx,
+                    d.child(submenu_frame(
+                        submenus_open_left,
+                        Self::build_copy_query_submenu_flyout(submenu_selected_index, theme, cx),
                     ))
                 })
                 .into_any_element(),
@@ -898,9 +943,6 @@ impl DataGridPanel {
         let submenu_hover = theme.secondary;
 
         div()
-            .absolute()
-            .left(px(172.0))
-            .top(px(-4.0))
             .w(px(140.0))
             .bg(submenu_bg)
             .border_1()
@@ -1039,9 +1081,10 @@ impl DataGridPanel {
                     })
                     .on_mouse_move(cx.listener(move |this, _, _, cx| {
                         if let Some(ref mut menu) = this.context_menu
-                            && menu.selected_index != current_index
+                            && (menu.selected_index != current_index || menu.any_submenu_open())
                         {
                             menu.selected_index = current_index;
+                            menu.close_submenus();
                             cx.notify();
                         }
                     }))
@@ -1093,6 +1136,19 @@ impl DataGridPanel {
 
     /// Wraps the assembled `menu_items` in the deferred, window-level overlay: a
     /// full-size click-catcher (closes the menu) plus the positioned menu surface.
+    /// Close the menu without running anything and hand focus back.
+    fn dismiss_context_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let is_document_view = self
+            .context_menu
+            .as_ref()
+            .map(|menu| menu.is_document_view)
+            .unwrap_or(false);
+
+        self.context_menu = None;
+        self.restore_focus_after_context_menu(is_document_view, window, cx);
+        cx.notify();
+    }
+
     pub(super) fn render_context_menu_overlay(
         &self,
         menu_x: Pixels,
@@ -1125,31 +1181,17 @@ impl DataGridPanel {
                 }))
                 .on_mouse_down(
                     MouseButton::Left,
-                    cx.listener(|this, _, window, cx| {
-                        let is_document_view = this
-                            .context_menu
-                            .as_ref()
-                            .map(|menu| menu.is_document_view)
-                            .unwrap_or(false);
-
-                        this.context_menu = None;
-                        this.restore_focus_after_context_menu(is_document_view, window, cx);
-                        cx.notify();
-                    }),
+                    cx.listener(|this, _, window, cx| this.dismiss_context_menu(window, cx)),
                 )
                 .on_mouse_down(
                     MouseButton::Right,
-                    cx.listener(|this, _, window, cx| {
-                        let is_document_view = this
-                            .context_menu
-                            .as_ref()
-                            .map(|menu| menu.is_document_view)
-                            .unwrap_or(false);
-
-                        this.context_menu = None;
-                        this.restore_focus_after_context_menu(is_document_view, window, cx);
-                        cx.notify();
-                    }),
+                    cx.listener(|this, _, window, cx| this.dismiss_context_menu(window, cx)),
+                )
+                // The overlay covers the grid, so a wheel here would scroll
+                // nothing; closing instead keeps the menu from hanging over a
+                // grid that has scrolled away from under it.
+                .on_scroll_wheel(
+                    cx.listener(|this, _, window, cx| this.dismiss_context_menu(window, cx)),
                 )
                 .child(
                     surface_raised(cx)
@@ -1160,6 +1202,9 @@ impl DataGridPanel {
                         .w(menu_width)
                         .shadow_lg()
                         .py(Spacing::XS)
+                        // No overflow clip here: the submenus are children
+                        // of their rows and hang outside this panel. Long
+                        // labels are truncated by their own rows instead.
                         .occlude()
                         .on_mouse_down(MouseButton::Left, |_, _, cx| {
                             cx.stop_propagation();
@@ -1173,6 +1218,25 @@ impl DataGridPanel {
 
 #[cfg(test)]
 mod tests {
+    /// The menu panel must not clip its contents: submenus are absolutely
+    /// positioned children of their rows and hang past the panel's right
+    /// edge, so a clip on the panel hides every one of them.
+    #[test]
+    fn menu_panel_does_not_clip_its_submenus() {
+        let source = include_str!("sections.rs");
+        let panel_start = source
+            .find(".id(\"context-menu\")")
+            .expect("the menu panel is built in this file");
+        let panel = &source[panel_start..];
+        let panel_end = panel
+            .find(".children(menu_items)")
+            .expect("the panel takes the menu items");
+        assert!(
+            !panel[..panel_end].contains(".overflow_hidden()"),
+            "the menu panel clips its submenus"
+        );
+    }
+
     #[test]
     fn context_menu_sections_keys_resolve_in_both_locales() {
         let keys = [

@@ -32,6 +32,67 @@ enum FilterBackend {
     Mongo,
 }
 
+/// Gap kept between the context menu and the panel edge.
+const CONTEXT_MENU_EDGE_GAP: Pixels = Spacing::XS;
+
+/// Width of the widest submenu (the filter list). A menu whose right edge
+/// leaves less than this to the panel edge opens its submenus to the left,
+/// provided the left side has the room.
+const SUBMENU_MAX_WIDTH: Pixels = px(280.0);
+
+/// How far a submenu overlaps the menu it hangs off (menu width 180 less the
+/// 172 offset in `sections.rs`), so the room it needs is its width less this.
+const SUBMENU_OVERLAP: Pixels = px(8.0);
+
+/// Where a context menu goes, in panel coordinates.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct ContextMenuPlacement {
+    pub(super) origin: Point<Pixels>,
+    pub(super) submenus_open_left: bool,
+}
+
+/// Keep the menu inside the panel.
+///
+/// The click stays the anchor: the menu is shifted left when it would run
+/// past the right edge and up when it would run past the bottom, and never
+/// past the top-left gap. Submenus open to the right unless the widest one
+/// would not fit there but would fit on the left; in a panel too narrow for
+/// either they stay on the right, where at least their start is visible. A
+/// panel that has not been measured yet reports a zero size;
+/// clamping against it would pin every menu into the corner, so an unmeasured
+/// panel leaves the click alone.
+pub(super) fn place_context_menu(
+    click: Point<Pixels>,
+    menu_width: Pixels,
+    menu_height: Pixels,
+    panel: Size<Pixels>,
+) -> ContextMenuPlacement {
+    if panel.width <= menu_width || panel.height <= menu_height {
+        return ContextMenuPlacement {
+            origin: click,
+            submenus_open_left: false,
+        };
+    }
+
+    let x = click
+        .x
+        .min(panel.width - menu_width - CONTEXT_MENU_EDGE_GAP)
+        .max(CONTEXT_MENU_EDGE_GAP);
+    let y = if click.y + menu_height + CONTEXT_MENU_EDGE_GAP > panel.height {
+        (panel.height - menu_height - CONTEXT_MENU_EDGE_GAP).max(CONTEXT_MENU_EDGE_GAP)
+    } else {
+        click.y
+    };
+
+    let fits_right = x + menu_width - SUBMENU_OVERLAP + SUBMENU_MAX_WIDTH <= panel.width;
+    let fits_left = x + SUBMENU_OVERLAP >= SUBMENU_MAX_WIDTH;
+
+    ContextMenuPlacement {
+        origin: Point { x, y },
+        submenus_open_left: !fits_right && fits_left,
+    }
+}
+
 impl DataGridPanel {
     fn restore_focus_after_context_menu(
         &mut self,
@@ -1289,8 +1350,15 @@ impl DataGridPanel {
         let menu_width = px(180.0);
 
         // Convert window coordinates to panel-relative coordinates
-        let menu_x = menu.position.x - self.panel_origin.x;
-        let menu_y = menu.position.y - self.panel_origin.y;
+        let click = Point {
+            x: menu.position.x - self.panel_origin.x,
+            y: menu.position.y - self.panel_origin.y,
+        };
+        // The horizontal position decides which side the submenus open on,
+        // and the items need to know that before they are built; the
+        // vertical position needs the item count, so it is settled after.
+        let submenus_open_left =
+            place_context_menu(click, menu_width, px(0.0), self.panel_size).submenus_open_left;
 
         // Build visible menu items list for keyboard navigation
         let has_row_target = self.has_context_menu_row_target(menu.row, menu.is_document_view, cx);
@@ -1324,6 +1392,7 @@ impl DataGridPanel {
 
         self.render_filter_submenu_section(
             menu,
+            submenus_open_left,
             backend,
             has_filter,
             selected_index,
@@ -1335,6 +1404,7 @@ impl DataGridPanel {
 
         self.render_order_submenu_section(
             menu,
+            submenus_open_left,
             has_order,
             selected_index,
             theme,
@@ -1346,6 +1416,7 @@ impl DataGridPanel {
         Self::render_generate_sql_submenu_section(
             is_document_view,
             menu,
+            submenus_open_left,
             selected_index,
             theme,
             &mut menu_items,
@@ -1355,6 +1426,7 @@ impl DataGridPanel {
 
         self.render_copy_query_submenu_section(
             menu,
+            submenus_open_left,
             selected_index,
             theme,
             &mut menu_items,
@@ -1371,7 +1443,18 @@ impl DataGridPanel {
             cx,
         );
 
-        self.render_context_menu_overlay(menu_x, menu_y, menu_width, menu_items, cx)
+        // Separators are shorter than rows, so this over-estimates a little;
+        // a menu placed a few pixels higher than necessary is harmless.
+        let menu_height = Heights::ROW_COMPACT * menu_items.len() as f32 + Spacing::XS * 2.0;
+        let placement = place_context_menu(click, menu_width, menu_height, self.panel_size);
+
+        self.render_context_menu_overlay(
+            placement.origin.x,
+            placement.origin.y,
+            menu_width,
+            menu_items,
+            cx,
+        )
     }
 
     pub(super) fn handle_context_menu_action(
@@ -3640,6 +3723,95 @@ fn record_clipboard_audit(
 #[cfg(test)]
 mod tests {
     use super::DataGridPanel;
+    use super::{CONTEXT_MENU_EDGE_GAP, SUBMENU_MAX_WIDTH, SUBMENU_OVERLAP, place_context_menu};
+    use gpui::{Pixels, Point, Size, px};
+
+    fn panel() -> Size<Pixels> {
+        Size {
+            width: px(1000.0),
+            height: px(600.0),
+        }
+    }
+
+    #[test]
+    fn a_menu_that_fits_stays_at_the_click_and_opens_submenus_to_the_right() {
+        let click = Point {
+            x: px(100.0),
+            y: px(100.0),
+        };
+        let placed = place_context_menu(click, px(180.0), px(300.0), panel());
+        assert_eq!(placed.origin, click);
+        assert!(!placed.submenus_open_left);
+    }
+
+    #[test]
+    fn a_menu_near_the_right_edge_is_shifted_in_and_opens_submenus_to_the_left() {
+        let click = Point {
+            x: px(950.0),
+            y: px(100.0),
+        };
+        let placed = place_context_menu(click, px(180.0), px(300.0), panel());
+        assert_eq!(
+            placed.origin.x,
+            px(1000.0) - px(180.0) - CONTEXT_MENU_EDGE_GAP
+        );
+        assert_eq!(placed.origin.y, click.y);
+        assert!(placed.submenus_open_left);
+    }
+
+    #[test]
+    fn submenus_open_left_as_soon_as_the_widest_one_would_not_fit() {
+        let click = Point {
+            x: px(1000.0) - px(180.0) + SUBMENU_OVERLAP - SUBMENU_MAX_WIDTH + px(1.0),
+            y: px(100.0),
+        };
+        let placed = place_context_menu(click, px(180.0), px(300.0), panel());
+        assert_eq!(placed.origin.x, click.x, "the menu itself still fits");
+        assert!(placed.submenus_open_left);
+    }
+
+    /// A panel too narrow for a submenu on either side keeps them on the
+    /// right: a submenu pushed off the left edge would be invisible, one
+    /// hanging past the right edge is at least partly usable.
+    #[test]
+    fn a_narrow_panel_keeps_submenus_on_the_right() {
+        let narrow = Size {
+            width: px(400.0),
+            height: px(600.0),
+        };
+        let click = Point {
+            x: px(20.0),
+            y: px(100.0),
+        };
+        let placed = place_context_menu(click, px(180.0), px(300.0), narrow);
+        assert_eq!(placed.origin, click);
+        assert!(!placed.submenus_open_left);
+    }
+
+    #[test]
+    fn a_menu_near_the_bottom_is_moved_up_to_fit() {
+        let click = Point {
+            x: px(100.0),
+            y: px(500.0),
+        };
+        let placed = place_context_menu(click, px(180.0), px(300.0), panel());
+        assert_eq!(placed.origin.x, click.x);
+        assert_eq!(
+            placed.origin.y,
+            px(600.0) - px(300.0) - CONTEXT_MENU_EDGE_GAP
+        );
+    }
+
+    #[test]
+    fn an_unmeasured_panel_leaves_the_click_alone() {
+        let click = Point {
+            x: px(950.0),
+            y: px(500.0),
+        };
+        let placed = place_context_menu(click, px(180.0), px(300.0), Size::default());
+        assert_eq!(placed.origin, click);
+        assert!(!placed.submenus_open_left);
+    }
 
     fn labels(items: &[super::ContextMenuItem]) -> Vec<String> {
         items

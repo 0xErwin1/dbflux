@@ -362,6 +362,24 @@ struct TableContextMenu {
     row_actions: Vec<dbflux_core::InspectorRowAction>,
 }
 
+impl TableContextMenu {
+    fn any_submenu_open(&self) -> bool {
+        self.sql_submenu_open
+            || self.copy_query_submenu_open
+            || self.filter_submenu_open
+            || self.order_submenu_open
+    }
+
+    /// Hovering a plain item closes whatever submenu was open, as native
+    /// menus do.
+    fn close_submenus(&mut self) {
+        self.sql_submenu_open = false;
+        self.copy_query_submenu_open = false;
+        self.filter_submenu_open = false;
+        self.order_submenu_open = false;
+    }
+}
+
 /// A single item in the context menu.
 struct ContextMenuItem {
     label: SharedString,
@@ -589,6 +607,8 @@ pub struct DataGridPanel {
     runner: DocumentTaskRunner,
     focus_handle: FocusHandle,
     panel_origin: Point<Pixels>,
+    /// Panel size from the same canvas; the context menu is kept inside it.
+    panel_size: Size<Pixels>,
     view_config: super::data_view::DataViewConfig,
     context_menu: Option<TableContextMenu>,
     is_active_tab: bool,
@@ -1163,6 +1183,7 @@ impl DataGridPanel {
             runner,
             focus_handle,
             panel_origin: Point::default(),
+            panel_size: Size::default(),
             view_config,
             context_menu: None,
             is_active_tab: true,
