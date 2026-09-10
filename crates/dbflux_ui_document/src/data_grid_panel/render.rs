@@ -413,6 +413,7 @@ impl DataGridPanel {
             move |bounds, _, cx| {
                 this_entity.update(cx, |this, _cx| {
                     this.panel_origin = bounds.origin;
+                    this.panel_size = bounds.size;
                 });
             },
             |_, _, _, _| {},
