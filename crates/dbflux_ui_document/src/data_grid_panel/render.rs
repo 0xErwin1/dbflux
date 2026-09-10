@@ -359,6 +359,7 @@ impl DataGridPanel {
             && shows_table_content
             && !is_editable
             && !is_grouped_result
+            && !self.pk_details_pending
             && self.builder.current_visual_spec.is_none();
         let show_builder_readonly_hint = is_table_view
             && shows_table_content
