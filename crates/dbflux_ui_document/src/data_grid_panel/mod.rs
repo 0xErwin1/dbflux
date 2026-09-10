@@ -8,6 +8,7 @@ mod query;
 mod render;
 pub mod row_inspector;
 mod utils;
+pub mod value_panel;
 
 use super::query_builder::completion::{
     CompletionMode, FkLink, SchemaCache, SchemaCompletionProvider,
@@ -354,6 +355,9 @@ struct TableContextMenu {
     submenu_selected_index: usize,
     /// Whether this is a document view context menu (different items shown).
     is_document_view: bool,
+    /// Whether this menu was opened by right-clicking a column header, which
+    /// scopes it to that column's ordering and filtering.
+    is_column_header: bool,
     doc_field_path: Option<Vec<String>>,
     doc_field_value: Option<dbflux_components::components::document_tree::NodeValue>,
     /// Driver-supplied row-level actions (e.g. Kill, Cancel). When non-empty,
@@ -401,6 +405,9 @@ struct PendingActions {
     document_preview: Option<PendingDocumentPreview>,
     context_menu_focus: bool,
     mutation_modal: Option<crate::data_grid_panel::mutation_confirm::PendingMutationModal>,
+    /// Cell the value panel should open on. Deferred to render because
+    /// building the panel's code editor needs a `Window`.
+    value_panel: Option<value_panel::ValuePanelTarget>,
 }
 
 /// The rendered table widget and its in-memory sort state.
@@ -526,6 +533,10 @@ struct ChromeState {
 struct InspectorState {
     row_inspector_content: Option<Entity<row_inspector::RowInspectorContent>>,
 
+    /// Whether row selection should keep driving the shared inspector rail,
+    /// including after switching to a different table tab.
+    follow_selection: bool,
+
     /// Last `(row, col)` opened in the row inspector. `Some` means the inspector
     /// is logically "on" for this panel — it should reappear when the panel's
     /// tab is re-activated, follow the user's cursor on `SelectionChanged`, and
@@ -540,6 +551,16 @@ struct InspectorState {
     /// for the first destructive action the provider returns, instead of the
     /// normal context menu.
     row_action_provider: Option<RowActionProvider>,
+
+    /// Value panel content. Kept alive across closes so the user's format and
+    /// word-wrap choices survive reopening.
+    value_panel: Option<Entity<value_panel::ValuePanelContent>>,
+
+    /// Whether the value panel currently owns the shared rail.
+    value_panel_open: bool,
+
+    /// Subscription to the value panel's save event.
+    _value_panel_subscription: Option<Subscription>,
 }
 
 /// Visual Query Builder cluster.
@@ -1146,8 +1167,12 @@ impl DataGridPanel {
             },
             inspector: InspectorState {
                 row_inspector_content: None,
+                follow_selection: false,
                 inspector_row: None,
                 row_action_provider: None,
+                value_panel: None,
+                value_panel_open: false,
+                _value_panel_subscription: None,
             },
             builder: BuilderState {
                 fk_cache: FkLoadState::Loading,
@@ -1700,10 +1725,31 @@ impl DataGridPanel {
                     title: "Query Builder".into(),
                     content: view,
                 });
-            } else if let Some((row, col)) = self.inspector.inspector_row {
-                self.open_row_inspector(row, col, cx);
+            } else if self.inspector.value_panel_open {
+                // Re-read this grid's own cell. Reusing the cached content
+                // would leave the rail showing a value from the table the
+                // user just switched away from.
+                if !self.mount_value_panel_for_active_cell(cx) {
+                    cx.emit(DataGridEvent::CloseInspector);
+                }
+            } else if self.inspector.follow_selection {
+                let active = self
+                    .grid_table
+                    .table_state
+                    .as_ref()
+                    .and_then(|state| state.read(cx).selection().active);
+                if let Some(coord) = active {
+                    self.open_row_inspector(coord.row, coord.col, cx);
+                } else if let Some((row, col)) = self.inspector.inspector_row {
+                    self.open_row_inspector(row, col, cx);
+                }
+            } else {
+                // This tab owns nothing in the rail. Say so explicitly: the
+                // rail is global, so staying silent leaves the previous tab's
+                // content on screen.
+                cx.emit(DataGridEvent::CloseInspector);
             }
-        } else if self.builder.builder_panel.is_some() || self.inspector.inspector_row.is_some() {
+        } else if self.builder.builder_panel.is_some() || self.inspector.value_panel_open {
             // Hide the rail (without dropping cached state) so the next
             // active tab can take it over.
             cx.emit(DataGridEvent::CloseInspector);
@@ -1714,8 +1760,219 @@ impl DataGridPanel {
     /// explicitly (× button or ESC fallback). Drops the cached coordinates so
     /// the rail does not re-open on tab activation or refresh.
     pub fn clear_inspector_state(&mut self, _cx: &mut Context<Self>) {
+        self.inspector.follow_selection = false;
         self.inspector.inspector_row = None;
         self.inspector.row_inspector_content = None;
+        self.inspector.value_panel_open = false;
+        self.pending.value_panel = None;
+    }
+
+    /// Whether the value panel currently owns the shared inspector rail.
+    pub fn value_panel_is_open(&self) -> bool {
+        self.inspector.value_panel_open
+    }
+
+    /// Open the value panel on the active cell, or close it if already open.
+    pub fn toggle_value_panel(&mut self, cx: &mut Context<Self>) {
+        if self.inspector.value_panel_open {
+            self.close_value_panel(cx);
+            return;
+        }
+
+        let active = self
+            .grid_table
+            .table_state
+            .as_ref()
+            .and_then(|state| state.read(cx).selection().active);
+
+        if let Some(coord) = active {
+            self.request_value_panel(coord.row, coord.col, cx);
+        }
+    }
+
+    /// Queue the value panel to open on `(row, col)`.
+    ///
+    /// The builder and the row inspector share this rail, so taking it means
+    /// the row inspector must stop following the cursor — otherwise the two
+    /// would replace each other on every selection change.
+    pub(super) fn request_value_panel(&mut self, row: usize, col: usize, cx: &mut Context<Self>) {
+        let Some(target) = self.value_panel_target(row, col, cx) else {
+            return;
+        };
+
+        self.inspector.follow_selection = false;
+        self.inspector.inspector_row = None;
+        self.inspector.value_panel_open = true;
+        self.pending.value_panel = Some(target);
+        cx.notify();
+    }
+
+    /// Carry the value panel's open state onto this tab.
+    ///
+    /// Called when the tab becomes active. Opening re-reads *this* grid's
+    /// selection, so the rail shows the new table's cell instead of whatever
+    /// the previous tab left there.
+    pub fn set_value_panel_open(&mut self, open: bool, _cx: &mut Context<Self>) {
+        if open && self.builder.builder_panel.is_none() {
+            self.inspector.value_panel_open = true;
+        } else if !open {
+            self.inspector.value_panel_open = false;
+            self.pending.value_panel = None;
+        }
+    }
+
+    /// Point the value panel at the active cell of this grid.
+    ///
+    /// Returns false when there is nothing to show yet — a tab whose grid has
+    /// not loaded, or one with no selection.
+    fn mount_value_panel_for_active_cell(&mut self, cx: &mut Context<Self>) -> bool {
+        let active = self
+            .grid_table
+            .table_state
+            .as_ref()
+            .and_then(|state| state.read(cx).selection().active);
+
+        let Some(coord) = active else {
+            return false;
+        };
+
+        let Some(target) = self.value_panel_target(coord.row, coord.col, cx) else {
+            return false;
+        };
+
+        self.pending.value_panel = Some(target);
+        cx.notify();
+        true
+    }
+
+    /// The value panel when it is open and holds an unsaved edit.
+    pub(super) fn value_panel_pending_save(
+        &self,
+        cx: &App,
+    ) -> Option<Entity<value_panel::ValuePanelContent>> {
+        if !self.inspector.value_panel_open {
+            return None;
+        }
+
+        let panel = self.inspector.value_panel.as_ref()?;
+        panel.read(cx).is_modified(cx).then(|| panel.clone())
+    }
+
+    fn close_value_panel(&mut self, cx: &mut Context<Self>) {
+        self.inspector.value_panel_open = false;
+        self.pending.value_panel = None;
+        cx.emit(DataGridEvent::CloseInspector);
+        cx.notify();
+    }
+
+    /// Read the cell's current edit-buffer text and editability for the panel.
+    fn value_panel_target(
+        &self,
+        row: usize,
+        col: usize,
+        cx: &App,
+    ) -> Option<value_panel::ValuePanelTarget> {
+        use dbflux_components::components::data_table::model::{CellValue, VisualRowSource};
+
+        let table_state = self.grid_table.table_state.as_ref()?;
+        let state = table_state.read(cx);
+        let model = state.model();
+        let column = model.columns.get(col)?;
+
+        let edit_buffer = state.edit_buffer();
+        let null_cell = CellValue::null();
+
+        let value = match edit_buffer.compute_visual_order().get(row).copied()? {
+            VisualRowSource::Base(base_idx) => {
+                let base = model.cell(base_idx, col).unwrap_or(&null_cell);
+                edit_buffer.get_cell(base_idx, col, base).edit_text()
+            }
+            VisualRowSource::Insert(insert_idx) => edit_buffer
+                .get_pending_insert_by_idx(insert_idx)
+                .and_then(|data| data.get(col))
+                .map(|cell| cell.edit_text())
+                .unwrap_or_default(),
+        };
+
+        Some(value_panel::ValuePanelTarget {
+            row,
+            col,
+            column_name: column.title.to_string(),
+            value,
+            editable: state.is_editable() && !state.readonly_columns().contains(&col),
+        })
+    }
+
+    /// Mount or update the value panel. Called from render, where a `Window`
+    /// is available to build the editor.
+    pub(super) fn apply_pending_value_panel(
+        &mut self,
+        target: value_panel::ValuePanelTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use value_panel::{ValuePanelContent, ValuePanelSaveEvent};
+
+        let content = match &self.inspector.value_panel {
+            Some(existing) => {
+                existing.update(cx, |panel, cx| panel.open(target, window, cx));
+                existing.clone()
+            }
+            None => {
+                let content = cx.new(|cx| ValuePanelContent::new(target, window, cx));
+                self.inspector._value_panel_subscription = Some(cx.subscribe(
+                    &content,
+                    |this, _, event: &ValuePanelSaveEvent, cx| {
+                        // Save in the panel means "write this value to the
+                        // database", not "stage it": having to confirm again in
+                        // the toolbar after pressing Save reads as the panel
+                        // having done nothing. The commit goes through the
+                        // normal row-save path, so mutation policy, approval,
+                        // and the task list all still apply.
+                        this.write_cell_value(event.row, event.col, &event.value, cx);
+
+                        if let Some(table_state) = this.grid_table.table_state.clone() {
+                            table_state.update(cx, |state, cx| {
+                                state.request_save_row_at(event.row, cx);
+                            });
+                        }
+                    },
+                ));
+                self.inspector.value_panel = Some(content.clone());
+                content
+            }
+        };
+
+        cx.emit(DataGridEvent::OpenInspector {
+            title: SharedString::from(dbflux_i18n::t!("components.value_panel.title")),
+            content: AnyView::from(content),
+        });
+    }
+
+    /// Whether the panel may be re-pointed at `(row, col)`.
+    ///
+    /// An edited-but-unsaved panel stays pinned to its cell; following the
+    /// cursor there would throw the user's typing away without asking.
+    fn value_panel_can_follow(&self, row: usize, col: usize, cx: &App) -> bool {
+        let Some(panel) = self.inspector.value_panel.as_ref() else {
+            return true;
+        };
+
+        let panel = panel.read(cx);
+        !panel.is_modified(cx) && panel.target_cell() != (row, col)
+    }
+
+    /// Whether the grid currently renders as a single-row record view.
+    pub fn row_inspector_is_tracking(&self) -> bool {
+        self.inspector.follow_selection
+    }
+
+    pub fn set_row_inspector_tracking(&mut self, tracking: bool, cx: &mut Context<Self>) {
+        if tracking && self.builder.builder_panel.is_none() && !self.is_grouped_result() {
+            self.inspector.follow_selection = true;
+        } else if !tracking {
+            self.clear_inspector_state(cx);
+        }
     }
 
     pub fn refresh_policy(&self) -> RefreshPolicy {
@@ -1857,6 +2114,24 @@ impl DataGridPanel {
         // keeps following the same row position across refreshes.
         if let Some((row, col)) = self.inspector.inspector_row {
             self.open_row_inspector(row, col, cx);
+        }
+
+        // The panel's cached target came from the pre-refresh result, so
+        // re-read it rather than leaving a value the grid no longer holds.
+        // A tab that inherited an open panel but has never shown one yet has
+        // no cached cell, so it starts from the current selection instead.
+        if self.inspector.value_panel_open {
+            match self
+                .inspector
+                .value_panel
+                .as_ref()
+                .map(|panel| panel.read(cx).target_cell())
+            {
+                Some((row, col)) => self.request_value_panel(row, col, cx),
+                None => {
+                    self.mount_value_panel_for_active_cell(cx);
+                }
+            }
         }
 
         cx.notify();
@@ -2051,26 +2326,39 @@ impl DataGridPanel {
                         // When the row inspector is active, follow the user's
                         // cursor so click / arrow-key navigation updates the
                         // rail in place.
-                        if this.inspector.inspector_row.is_some()
+                        if this.inspector.follow_selection
                             && let Some(active) = selection.active
                         {
                             this.open_row_inspector(active.row, active.col, cx);
+                        }
+
+                        if this.inspector.value_panel_open
+                            && let Some(active) = selection.active
+                            && this.value_panel_can_follow(active.row, active.col, cx)
+                        {
+                            this.request_value_panel(active.row, active.col, cx);
                         }
                     }
                     DataTableEvent::SaveRowRequested(row_idx) => {
                         this.handle_save_row(*row_idx, cx);
                     }
-                    DataTableEvent::ContextMenuRequested { row, col, position } => {
+                    DataTableEvent::ContextMenuRequested {
+                        row,
+                        col,
+                        position,
+                        is_column_header,
+                    } => {
                         // Gather any driver-supplied row actions (e.g. Kill, Cancel).
                         // They are injected as extra menu items at the bottom rather
                         // than bypassing the context menu entirely.
-                        let row_actions =
-                            if let Some(provider) = this.inspector.row_action_provider.as_ref() {
-                                let metric_id = this.row_action_metric_id();
-                                provider(metric_id.as_deref().unwrap_or(""))
-                            } else {
-                                Vec::new()
-                            };
+                        let row_actions = if *is_column_header {
+                            Vec::new()
+                        } else if let Some(provider) = this.inspector.row_action_provider.as_ref() {
+                            let metric_id = this.row_action_metric_id();
+                            provider(metric_id.as_deref().unwrap_or(""))
+                        } else {
+                            Vec::new()
+                        };
 
                         this.context_menu = Some(TableContextMenu {
                             row: *row,
@@ -2083,6 +2371,7 @@ impl DataGridPanel {
                             selected_index: 0,
                             submenu_selected_index: 0,
                             is_document_view: false,
+                            is_column_header: *is_column_header,
                             doc_field_path: None,
                             doc_field_value: None,
                             row_actions,
@@ -2225,6 +2514,7 @@ impl DataGridPanel {
                         selected_index: 0,
                         submenu_selected_index: 0,
                         is_document_view: true,
+                        is_column_header: false,
                         doc_field_path: if field_path.is_empty() {
                             None
                         } else {
@@ -2914,6 +3204,11 @@ impl DataGridPanel {
             }
             DataSource::QueryResult { .. } => return,
         };
+
+        // The builder and row inspector share one rail. Opening the builder
+        // intentionally ends row-follow mode so tab switches cannot replace
+        // the builder with a row snapshot.
+        self.clear_inspector_state(cx);
 
         let source_schema = source.schema.clone();
 

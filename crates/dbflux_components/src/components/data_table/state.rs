@@ -1049,28 +1049,10 @@ impl DataTableState {
     /// Emits SaveRowRequested for base row edits, CommitInsertRequested for pending inserts,
     /// CommitDeleteRequested for rows marked for deletion.
     pub fn request_save_row(&mut self, cx: &mut Context<Self>) {
-        use super::model::VisualRowSource;
-
-        if let Some(coord) = self.selection.active {
-            let visual_order = self.edit_buffer.compute_visual_order();
-            match visual_order.get(coord.row).copied() {
-                Some(VisualRowSource::Base(base_idx)) => {
-                    let row_state = self.edit_buffer.row_state(base_idx);
-                    if row_state.is_pending_delete() {
-                        cx.emit(DataTableEvent::CommitDeleteRequested(base_idx));
-                        return;
-                    }
-                    if row_state.is_dirty() {
-                        cx.emit(DataTableEvent::SaveRowRequested(base_idx));
-                        return;
-                    }
-                }
-                Some(VisualRowSource::Insert(insert_idx)) => {
-                    cx.emit(DataTableEvent::CommitInsertRequested(insert_idx));
-                    return;
-                }
-                None => {}
-            }
+        if let Some(coord) = self.selection.active
+            && self.request_save_row_at(coord.row, cx)
+        {
+            return;
         }
 
         if let Some(row_idx) = self.edit_buffer.pending_delete_rows().into_iter().next() {
@@ -1080,6 +1062,35 @@ impl DataTableState {
 
         if let Some(row_idx) = self.edit_buffer.dirty_rows().into_iter().next() {
             cx.emit(DataTableEvent::SaveRowRequested(row_idx));
+        }
+    }
+
+    /// Commit one visual row, whatever its pending state is.
+    ///
+    /// Returns whether a commit was actually requested — a clean row has
+    /// nothing to save, which lets `request_save_row` fall back to the first
+    /// pending row elsewhere in the result.
+    pub fn request_save_row_at(&mut self, row: usize, cx: &mut Context<Self>) -> bool {
+        use super::model::VisualRowSource;
+
+        match self.edit_buffer.compute_visual_order().get(row).copied() {
+            Some(VisualRowSource::Base(base_idx)) => {
+                let row_state = self.edit_buffer.row_state(base_idx);
+                if row_state.is_pending_delete() {
+                    cx.emit(DataTableEvent::CommitDeleteRequested(base_idx));
+                    return true;
+                }
+                if row_state.is_dirty() {
+                    cx.emit(DataTableEvent::SaveRowRequested(base_idx));
+                    return true;
+                }
+                false
+            }
+            Some(VisualRowSource::Insert(insert_idx)) => {
+                cx.emit(DataTableEvent::CommitInsertRequested(insert_idx));
+                true
+            }
+            None => false,
         }
     }
 

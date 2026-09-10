@@ -407,6 +407,7 @@ fn render_fields(
                                         row: coord.row,
                                         col: coord.col,
                                         position: event.position,
+                                        is_column_header: false,
                                     });
                                 });
                             },

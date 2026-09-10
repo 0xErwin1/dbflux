@@ -125,6 +125,14 @@ charts:
     error:
       create_editable_failed: "No se pudo crear el dashboard editable: %{error}"
 components:
+  value_panel:
+    empty: Ninguna celda seleccionada
+    error:
+      not_xml: No es un documento XML
+    read_only: Solo lectura
+    revert: Revertir
+    title: Valor
+    wrap: Ajuste de línea
   data_table:
     record:
       empty: No hay filas que mostrar
@@ -1025,6 +1033,7 @@ document:
         set_null: Establecer NULL
         add_row: Agregar fila
         inspect_row: Inspeccionar fila
+        view_value: Ver valor
         duplicate_row: Duplicar fila
         delete_row: Eliminar fila
         chart_this_query: Graficar esta consulta
@@ -2710,6 +2719,7 @@ settings:
       results_copy_row: Copiar fila
       results_copy_cell: Copiar celda
       toggle_record_view: Alternar vista de registro
+      toggle_value_panel: Alternar panel de valor
       results_set_null: Establecer celda en NULL
       open_context_menu: Abrir menú contextual
       menu_up: "Menú: arriba"

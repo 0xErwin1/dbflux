@@ -323,6 +323,23 @@ que los cambios sin guardar, Guardar fila y revertir funcionan igual en ambos
 modos; `Up`/`Down` recorren los campos y `Left`/`Right` cambian de fila. Pulsa
 `i` de nuevo para volver a la cuadrícula.
 
+### Menú de la cabecera de columna
+
+Haz clic derecho en la cabecera de una columna para abrir un menú limitado a
+esa columna: ordenar ascendente o descendente, quitar el orden y todos los
+operadores de filtro, en una sola lista plana. El clic izquierdo en la
+cabecera sigue alternando el orden.
+
+### Panel de valor
+
+Haz clic derecho en una celda y elige **Ver valor**, o pulsa `v`, para abrir la
+celda en el panel inspector de la derecha. Muestra el valor como JSON, XML o
+texto plano — detectado a partir del contenido, y solo cuando realmente se
+analiza — con formato legible, compacto y ajuste de línea. Se puede editar allí:
+**Guardar** confirma la fila directamente y **Revertir** descarta el cambio. El
+panel sigue la celda seleccionada al moverte por la cuadrícula, salvo mientras
+tenga un cambio sin guardar.
+
 ### Filtrar resultados
 
 La toolbar del data grid tiene un input de filtro `WHERE` que vuelve a ejecutar
@@ -540,6 +557,7 @@ así la escritura funciona con normalidad.)
 | `o`                                           | Añadir fila                                |
 | `y`                                           | Copiar fila                                |
 | `i`                                           | Alternar la vista de registro (una fila)   |
+| `v`                                           | Alternar el panel de valor de la celda     |
 | `Ctrl+c` / `Cmd+c`                            | Copiar celda(s)                            |
 | `z`                                           | Alternar colapso del panel                 |
 | `m` (o `Shift+F10`)                           | Abrir menú contextual                      |

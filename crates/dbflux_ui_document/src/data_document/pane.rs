@@ -147,6 +147,30 @@ impl DataDocument {
             })
         });
 
+        handle.row_inspector_is_tracking = Some({
+            let e = entity.clone();
+            Box::new(move |cx| e.read(cx).row_inspector_is_tracking(cx))
+        });
+
+        handle.set_row_inspector_tracking = Some({
+            let e = entity.clone();
+            Box::new(move |tracking, cx| {
+                e.update(cx, |d, cx| d.set_row_inspector_tracking(tracking, cx));
+            })
+        });
+
+        handle.value_panel_is_open = Some({
+            let e = entity.clone();
+            Box::new(move |cx| e.read(cx).value_panel_is_open(cx))
+        });
+
+        handle.set_value_panel_open = Some({
+            let e = entity.clone();
+            Box::new(move |open, cx| {
+                e.update(cx, |d, cx| d.set_value_panel_open(open, cx));
+            })
+        });
+
         handle
     }
 }
