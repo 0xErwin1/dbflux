@@ -188,6 +188,11 @@ impl DbFluxServer {
                         tokio::task::spawn_blocking(move || {
                             let version_query = conn_for_blocking.version_query();
 
+                            // `confirmed_ceiling` mirrors the classification
+                            // this call site was already authorised at
+                            // (`Metadata`, above) — never a value the MCP
+                            // client supplied. See
+                            // `QueryRequest::confirmed_ceiling`'s invariant.
                             let result = conn_for_blocking.execute(&QueryRequest {
                                 sql: version_query.to_string(),
                                 params: Vec::new(),
@@ -196,6 +201,7 @@ impl DbFluxServer {
                                 statement_timeout: None,
                                 database: None,
                                 execution_context: None,
+                                confirmed_ceiling: Some(ExecutionClassification::Metadata),
                             });
 
                             result.ok().and_then(|r| {

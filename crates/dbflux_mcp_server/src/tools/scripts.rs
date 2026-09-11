@@ -327,10 +327,15 @@ impl DbFluxServer {
                 Some(&params.connection_id),
                 classification,
                 move || async move {
-                    let result =
-                        Self::execute_script_impl(state_clone, &content, &connection_id, &language)
-                            .await
-                            .map_err(|e| e.into_error_data())?;
+                    let result = Self::execute_script_impl(
+                        state_clone,
+                        &content,
+                        &connection_id,
+                        &language,
+                        classification,
+                    )
+                    .await
+                    .map_err(|e| e.into_error_data())?;
 
                     Ok(CallToolResult::success(vec![to_json_content(&result)?]))
                 },
@@ -614,6 +619,7 @@ impl DbFluxServer {
         content: &str,
         connection_id: &str,
         language: &QueryLanguage,
+        classification: dbflux_policy::ExecutionClassification,
     ) -> Result<serde_json::Value, String> {
         // Only SQL/MongoDB/Redis queries are supported for execution
         match language {
@@ -628,7 +634,7 @@ impl DbFluxServer {
             | QueryLanguage::InfluxQuery
             | QueryLanguage::Flux => {
                 // Execute as query
-                Self::execute_query_content(state, connection_id, content).await
+                Self::execute_query_content(state, connection_id, content, classification).await
             }
             QueryLanguage::Lua | QueryLanguage::Python | QueryLanguage::Bash => Err(
                 "Script language not supported for execution (only database queries)".to_string(),
@@ -644,11 +650,17 @@ impl DbFluxServer {
         state: ServerState,
         connection_id: &str,
         query: &str,
+        classification: dbflux_policy::ExecutionClassification,
     ) -> Result<serde_json::Value, String> {
         use crate::helper::serialize_query_result;
 
         let conn = Self::get_or_connect(state, connection_id).await?;
 
+        // `confirmed_ceiling` is the classification the policy engine already
+        // approved for this actor/connection (the caller only reaches this
+        // point after `GovernanceMiddleware::authorize_and_execute` allowed
+        // it) — never a value the MCP client supplied. See
+        // `QueryRequest::confirmed_ceiling`'s invariant.
         let request = QueryRequest {
             sql: query.to_string(),
             params: Vec::new(),
@@ -657,6 +669,7 @@ impl DbFluxServer {
             statement_timeout: None,
             database: None,
             execution_context: None,
+            confirmed_ceiling: Some(classification),
         };
 
         let result = Self::execute_connection_blocking(conn.clone(), move |connection| {
