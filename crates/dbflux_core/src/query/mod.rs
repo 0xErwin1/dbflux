@@ -4,6 +4,7 @@ pub(crate) mod keyset;
 pub(crate) mod language_service;
 pub mod relational_filter;
 pub(crate) mod safety;
+pub(crate) mod script_operation;
 pub(crate) mod semantic;
 pub(crate) mod sql_context;
 pub(crate) mod table_browser;
@@ -29,6 +30,10 @@ pub use language_service::{
     detect_dangerous_sql, strip_leading_comments,
 };
 pub use safety::{classify_query_for_governance, classify_sql_execution, is_safe_read_query};
+pub use script_operation::{
+    ScriptMethod, ScriptOperation, ScriptOperationCounts, ScriptOperationHost,
+    ScriptOperationOutcome, ScriptTarget, ceiling_permits,
+};
 pub use semantic::{
     AggregateFunction, AggregateRequest, AggregateSpec, PlannedQuery, SemanticFieldRef,
     SemanticFilter, SemanticPlan, SemanticPlanKind, SemanticPlanner, SemanticPredicate,

@@ -290,17 +290,22 @@ pub fn classify_query_for_language(
 /// Classify a query's execution impact, optionally delegating driver-owned
 /// languages to the driver's own [`LanguageService`].
 ///
-/// `Sql`, `MongoQuery`, and `RedisCommands` have a shared heuristic in core and
-/// are classified directly from the language, ignoring `service`. Every other
+/// `Sql` and `RedisCommands` have a shared heuristic in core and are
+/// classified directly from the language, ignoring `service`. `MongoQuery`
+/// consults `service.classify_execution` first — this is how a mongosh-style
+/// script's dispatch-boundary classification (computed method names, ops
+/// reached only inside a loop or conditional) reaches governance instead of
+/// the core text heuristic, which cannot see past source text. Every other
 /// language — `Custom(_)` as well as the fixed non-SQL variants that still have
 /// no shared core heuristic (`CloudWatchLogsInsightsQl`, `OpenSearchPpl`,
-/// `OpenSearchSql`, `InfluxQuery`, `Flux`) — consults `service.classify_execution`
-/// (when present) first, so a driver-defined surface is classified by the
-/// driver rather than dead-ending at a conservative default. With no service,
-/// or when the service's `classify_execution` returns `None` (its default),
-/// each of those languages falls back to the same conservative default it used
-/// before delegation existed: `Read` for the CloudWatch/OpenSearch trio, `Write`
-/// for everything else in this group.
+/// `OpenSearchSql`, `InfluxQuery`, `Flux`) — also consults
+/// `service.classify_execution` (when present) first, so a driver-defined
+/// surface is classified by the driver rather than dead-ending at a
+/// conservative default. With no service, or when the service's
+/// `classify_execution` returns `None` (its default), `MongoQuery` falls back
+/// to `classify_mongo_query` (the pre-existing text heuristic, unchanged);
+/// the CloudWatch/OpenSearch trio falls back to `Read`; everything else in
+/// this group falls back to `Write`.
 pub fn classify_query_for_language_with_service(
     query_language: &QueryLanguage,
     query: &str,
@@ -322,7 +327,9 @@ pub fn classify_query_for_language_with_service(
             .and_then(|service| service.classify_execution(query))
             .unwrap_or(ExecutionClassification::Read),
 
-        QueryLanguage::MongoQuery => classify_mongo_query(query),
+        QueryLanguage::MongoQuery => service
+            .and_then(|service| service.classify_execution(query))
+            .unwrap_or_else(|| classify_mongo_query(query)),
         QueryLanguage::RedisCommands => classify_redis_query(query),
 
         QueryLanguage::InfluxQuery | QueryLanguage::Flux | QueryLanguage::Custom(_) => service
@@ -1778,6 +1785,61 @@ END $$;"#;
                 ExecutionClassification::Destructive
             );
         }
+    }
+
+    // ==================== MongoQuery delegates to the driver's LanguageService ====================
+    // DEC — MongoQuery joins the fixed non-SQL delegation group so a script's
+    // dispatch-boundary classification (which the text heuristic cannot see)
+    // reaches governance. See mongo-js-script-runtime design.
+
+    #[test]
+    fn mongoquery_delegates_to_service_when_it_classifies() {
+        let service = DestructiveOnDropService;
+
+        assert_eq!(
+            classify_query_for_language_with_service(
+                &QueryLanguage::MongoQuery,
+                "some script text the text heuristic would not flag, but DROP nonetheless",
+                Some(&service),
+            ),
+            ExecutionClassification::Destructive
+        );
+    }
+
+    #[test]
+    fn mongoquery_falls_back_to_classify_mongo_query_when_no_service() {
+        // No service at all: falls back to the pre-existing text heuristic,
+        // not the Write constant used by the Influx/Flux/Custom group.
+        assert_eq!(
+            classify_query_for_language_with_service(
+                &QueryLanguage::MongoQuery,
+                "db.users.dropDatabase()",
+                None,
+            ),
+            ExecutionClassification::Destructive
+        );
+        assert_eq!(
+            classify_query_for_language_with_service(
+                &QueryLanguage::MongoQuery,
+                "db.users.find({})",
+                None,
+            ),
+            ExecutionClassification::Read
+        );
+    }
+
+    #[test]
+    fn mongoquery_falls_back_to_classify_mongo_query_when_service_returns_none() {
+        let service = NeverOverridesService;
+
+        assert_eq!(
+            classify_query_for_language_with_service(
+                &QueryLanguage::MongoQuery,
+                "db.users.dropDatabase()",
+                Some(&service),
+            ),
+            ExecutionClassification::Destructive
+        );
     }
 
     #[test]

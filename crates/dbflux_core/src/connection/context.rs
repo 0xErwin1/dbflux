@@ -376,4 +376,35 @@ SELECT 1;
         assert_eq!(ctx.database.as_deref(), Some("mydb"));
         assert!(ctx.schema.is_none());
     }
+
+    /// Governance bypass — forged ceiling (threat matrix row). A file header
+    /// claiming `@confirmed_ceiling: destructive` must not raise the
+    /// governance ceiling: `ExecutionContext` has no field for it — parsing
+    /// falls through the unrecognised-key arm — and `QueryRequest` is built
+    /// from Rust, never deserialized from this content, so nothing in this
+    /// parse path can ever populate `QueryRequest::confirmed_ceiling`.
+    #[test]
+    fn forged_confirmed_ceiling_header_is_not_recognised() {
+        let content = "\
+// @connection: 550e8400-e29b-41d4-a716-446655440000
+// @confirmed_ceiling: destructive
+db.users.deleteMany({});
+";
+        let ctx = ExecutionContext::parse_from_content(content, QueryLanguage::MongoQuery);
+
+        assert_eq!(
+            ctx.connection_id,
+            Some(Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap())
+        );
+
+        // A request built from this buffer, exactly as production code does
+        // (never deserialized), still defaults confirmed_ceiling to None —
+        // which the driver treats as the restrictive Read ceiling.
+        let request = crate::QueryRequest {
+            sql: content.to_string(),
+            execution_context: Some(ctx),
+            ..Default::default()
+        };
+        assert_eq!(request.confirmed_ceiling, None);
+    }
 }

@@ -617,12 +617,40 @@ impl CodeDocument {
         cx.emit(DocumentEvent::ExecutionStarted);
         cx.notify();
 
-        let request = query_request_for_execution(
+        let mut request = query_request_for_execution(
             query.clone(),
             active_database,
             &self.source.exec_ctx,
             self.effective_language().clone(),
         );
+
+        // Governance ceiling for a driver-dispatched multi-statement script
+        // (see `QueryRequest::confirmed_ceiling`). Reusing `detect_dangerous`
+        // here — rather than threading the earlier `run_query_text` call's
+        // result through `pending` — keeps this a pure re-derivation from
+        // the query text and connection, with no extra state to go stale.
+        // Any dangerous kind reaching this point was already either
+        // confirmed by the user or explicitly allowed by settings, so it is
+        // safe to raise the ceiling; an absent dangerous kind leaves the
+        // ceiling `None`, which the driver defaults to the restrictive
+        // `Read`. This never branches on a concrete driver id — the
+        // downstream driver decides whether the ceiling even applies to it.
+        let confirmed_ceiling = self.connection_id.and_then(|conn_id| {
+            self.app_state
+                .read(cx)
+                .connections()
+                .get(&conn_id)
+                .and_then(|connected| {
+                    connected
+                        .connection
+                        .language_service()
+                        .detect_dangerous(&query)
+                })
+        });
+        if confirmed_ceiling.is_some() {
+            request =
+                request.with_confirmed_ceiling(dbflux_core::ExecutionClassification::Destructive);
+        }
 
         // Capture audit_service, task_target, and started_at before spawning so we can emit
         // audit events even if the document is closed before the deferred task runs.
@@ -929,6 +957,85 @@ impl CodeDocument {
         cx.notify();
     }
 
+    /// Fans a script run's dispatch ledger (`metadata_extra["script_operations"]`,
+    /// a JSON array shaped by `dbflux_js`/the driver — see
+    /// `ScriptLedgerEntry`) into one `EventRecord` per entry, all sharing
+    /// `correlation_id`. Keyed on the generic field name only; no driver-id
+    /// branching.
+    fn emit_script_operation_events(
+        &self,
+        cx: &Context<Self>,
+        correlation_id: Uuid,
+        ledger: &[serde_json::Value],
+    ) {
+        let Some(conn_id) = self.connection_id else {
+            return;
+        };
+        let Some((database_name, driver_id)) = self
+            .app_state
+            .read(cx)
+            .connections()
+            .get(&conn_id)
+            .map(|c| {
+                let db = self
+                    .source
+                    .exec_ctx
+                    .database
+                    .clone()
+                    .or(c.active_database.clone());
+                (db.unwrap_or_default(), c.profile.driver_id())
+            })
+        else {
+            return;
+        };
+
+        let audit_service = self.app_state.read(cx).audit_service().clone();
+        let ts_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+
+        for entry in ledger {
+            let failed = entry.get("outcome").and_then(|v| v.as_str()) == Some("failed");
+            let outcome = if failed {
+                EventOutcome::Failure
+            } else {
+                EventOutcome::Success
+            };
+            let action = if failed {
+                audit_actions::QUERY_EXECUTE_FAILED
+            } else {
+                audit_actions::QUERY_EXECUTE
+            };
+            let severity = if failed {
+                EventSeverity::Error
+            } else {
+                EventSeverity::Info
+            };
+            let method = entry.get("method").and_then(|v| v.as_str()).unwrap_or("");
+
+            let mut event = EventRecord::new(ts_ms, severity, EventCategory::Query, outcome)
+                .with_typed_action(action)
+                .with_summary(format!("Script operation .{method}()"))
+                .with_connection_context(
+                    conn_id.to_string(),
+                    database_name.clone(),
+                    driver_id.clone(),
+                )
+                .with_origin(EventOrigin::local())
+                .with_correlation_id(correlation_id.to_string())
+                .with_details_json(entry.to_string());
+
+            if let Some(message) = entry.get("message").and_then(|v| v.as_str()) {
+                event.error_message = Some(message.to_string());
+            }
+
+            if let Err(e) = audit_service.record(event) {
+                log::warn!("Failed to emit script operation audit event: {}", e);
+            }
+        }
+    }
+
     /// Process pending query selected from history modal (called from render).
     pub(super) fn process_pending_set_query(
         &mut self,
@@ -1114,6 +1221,40 @@ impl CodeDocument {
                         None,
                         metadata_extra.as_ref(),
                     );
+                }
+
+                // A driver-dispatched multi-statement script (currently only
+                // MongoDB's JS engine) carries its own dispatch ledger under
+                // the generic `script_operations`/`script_failure` keys.
+                // Fan the ledger into one audit row per dispatched operation
+                // sharing this run's correlation id, and route a mid-script
+                // failure through the same seam every other user-facing
+                // driver failure uses. This is the ONLY catch site for
+                // `script_failure` — the driver never toasts and the engine
+                // never reports.
+                if let Some(extra) = metadata_extra.as_ref() {
+                    if let Some(script_operations) =
+                        extra.get("script_operations").and_then(|v| v.as_array())
+                    {
+                        self.emit_script_operation_events(cx, pending.exec_id, script_operations);
+                    }
+
+                    if let Some(failure) = extra.get("script_failure") {
+                        let message = failure
+                            .get("message")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("script execution failed")
+                            .to_string();
+
+                        self.state = DocumentState::Error;
+                        dbflux_ui_base::user_error::report_error(
+                            dbflux_ui_base::user_error::UserFacingError::from_formatted(
+                                dbflux_ui_base::user_error::ErrorKind::Driver,
+                                dbflux_core::FormattedError::new(message),
+                            ),
+                            cx,
+                        );
+                    }
                 }
             }
             Err(e) => {

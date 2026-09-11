@@ -10,6 +10,7 @@ members = [
     "crates/dbflux_components",
     "crates/dbflux_core",
     "crates/dbflux_lua",
+    "crates/dbflux_js",
     "crates/dbflux_ipc",
     "crates/dbflux_driver_ipc",
     "crates/dbflux_test_support",
@@ -63,6 +64,7 @@ license = "MIT OR Apache-2.0"
 dbflux = { path = "crates/dbflux" }
 dbflux_core = { path = "crates/dbflux_core" }
 dbflux_lua = { path = "crates/dbflux_lua" }
+dbflux_js = { path = "crates/dbflux_js" }
 dbflux_test_support = { path = "crates/dbflux_test_support" }
 dbflux_driver_sqlite = { path = "crates/dbflux_driver_sqlite" }
 dbflux_driver_postgres = { path = "crates/dbflux_driver_postgres" }
@@ -168,6 +170,7 @@ hex = "0.4"
 sha2 = "0.11"
 interprocess = "2.4"
 mlua = "0.11"
+rquickjs = "0.13"
 flate2 = "1"
 zstd = "0.13"
 snap = "1"

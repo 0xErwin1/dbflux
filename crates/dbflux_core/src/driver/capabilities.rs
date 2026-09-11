@@ -641,6 +641,13 @@ bitflags! {
         /// via a batched delete API, rather than one `delete_object` call per
         /// key. Gates the recursive prefix/bucket delete flow.
         const OBJECT_PREFIX_DELETE = 1 << 60;
+
+        /// Driver can execute a multi-statement script (e.g. mongosh-style
+        /// JavaScript) through a sandboxed engine, dispatching each statement
+        /// as a classified operation rather than a single opaque query. Gates
+        /// routing JS-looking input to the script engine instead of the
+        /// driver's normal query parser.
+        const SCRIPT_EXECUTION = 1 << 61;
     }
 }
 
@@ -681,6 +688,11 @@ mod capability_bits_tests {
     #[test]
     fn object_prefix_delete_bit_value() {
         assert_eq!(DriverCapabilities::OBJECT_PREFIX_DELETE.bits(), 1u64 << 60);
+    }
+
+    #[test]
+    fn script_execution_bit_value() {
+        assert_eq!(DriverCapabilities::SCRIPT_EXECUTION.bits(), 1u64 << 61);
     }
 
     #[test]
@@ -747,6 +759,7 @@ mod capability_bits_tests {
             DriverCapabilities::DISABLE_FK_CHECKS,
             DriverCapabilities::OBJECT_STORAGE,
             DriverCapabilities::OBJECT_PREFIX_DELETE,
+            DriverCapabilities::SCRIPT_EXECUTION,
         ];
 
         let mut seen_bits: u64 = 0;

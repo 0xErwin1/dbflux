@@ -1,7 +1,8 @@
 use dbflux_core::{
-    DangerousQueryKind, DiagnosticSeverity, EditorDiagnostic, LanguageService, QueryLanguage,
-    TextPosition, TextPositionRange, ValidationResult,
+    DangerousQueryKind, DiagnosticSeverity, EditorDiagnostic, ExecutionClassification,
+    LanguageService, QueryLanguage, TextPosition, TextPositionRange, ValidationResult,
 };
+use dbflux_js::StaticScanOutcome;
 
 /// MongoDB language service with lightweight syntax/language checks.
 pub struct MongoLanguageService;
@@ -36,7 +37,47 @@ impl LanguageService for MongoLanguageService {
     }
 
     fn detect_dangerous(&self, query: &str) -> Option<DangerousQueryKind> {
+        if crate::query_parser::is_script_input(query) {
+            return match dbflux_js::static_scan(query) {
+                // The scan proves the script cannot reach anything worse
+                // than a read: no up-front confirmation needed.
+                StaticScanOutcome::Read => None,
+                // Either the scan cannot prove safety, or the script uses a
+                // construct the engine rejects outright — both cases get one
+                // up-front confirmation. A rejected construct still aborts
+                // at the interpreter with a clear error either way; treating
+                // it as dangerous here is the conservative choice, not a
+                // correctness requirement.
+                StaticScanOutcome::RequiresConfirmation | StaticScanOutcome::Rejected { .. } => {
+                    Some(DangerousQueryKind::Script)
+                }
+            };
+        }
+
         detect_dangerous_mongo(query)
+    }
+
+    /// Classifies execution impact for dispatch-boundary governance
+    /// (`classify_query_for_language_with_service`).
+    ///
+    /// Non-script input defers to the core text heuristic by returning
+    /// `None` — stage-1 single-statement classification is unchanged. A
+    /// JS-looking script's ceiling comes from the same conservative static
+    /// scan `detect_dangerous` uses: proven read-only classifies as `Read`;
+    /// anything the scan cannot prove safe (including a rejected construct,
+    /// which never dispatches) classifies as `Destructive`, the worst case a
+    /// dispatch-boundary classification could produce.
+    fn classify_execution(&self, query: &str) -> Option<ExecutionClassification> {
+        if !crate::query_parser::is_script_input(query) {
+            return None;
+        }
+
+        Some(match dbflux_js::static_scan(query) {
+            StaticScanOutcome::Read => ExecutionClassification::Read,
+            StaticScanOutcome::RequiresConfirmation | StaticScanOutcome::Rejected { .. } => {
+                ExecutionClassification::Destructive
+            }
+        })
     }
 
     fn editor_diagnostics(&self, query: &str) -> Vec<EditorDiagnostic> {
@@ -263,5 +304,54 @@ mod tests {
         let diagnostics = MongoLanguageService.editor_diagnostics("SELECT * FROM users");
         assert_eq!(diagnostics.len(), 1);
         assert_eq!(diagnostics[0].severity, DiagnosticSeverity::Error);
+    }
+
+    // ==================== T10: classify_execution / JS-aware detect_dangerous ====================
+
+    #[test]
+    fn classify_execution_defers_to_core_heuristic_for_a_single_statement() {
+        // Non-script input must return None, letting the core fallback
+        // (`classify_mongo_query`) decide — stage-1 parity.
+        assert_eq!(
+            MongoLanguageService.classify_execution("db.users.find({})"),
+            None
+        );
+        assert_eq!(
+            MongoLanguageService.classify_execution("db.dropDatabase()"),
+            None
+        );
+    }
+
+    #[test]
+    fn classify_execution_on_read_only_script_returns_read() {
+        let script = "db.users.find({}); db.orders.aggregate([]);";
+        assert_eq!(
+            MongoLanguageService.classify_execution(script),
+            Some(ExecutionClassification::Read)
+        );
+    }
+
+    #[test]
+    fn classify_execution_on_unproven_script_returns_destructive() {
+        let script = "const m = 'deleteMany'; db.users[m]({});";
+        assert_eq!(
+            MongoLanguageService.classify_execution(script),
+            Some(ExecutionClassification::Destructive)
+        );
+    }
+
+    #[test]
+    fn detect_dangerous_on_proven_read_only_script_requires_no_confirmation() {
+        let script = "db.users.find({}); db.orders.aggregate([]);";
+        assert_eq!(MongoLanguageService.detect_dangerous(script), None);
+    }
+
+    #[test]
+    fn detect_dangerous_on_unproven_script_requires_confirmation() {
+        let script = "db.users.insertOne({name: 'a'}); db.users.find({});";
+        assert_eq!(
+            MongoLanguageService.detect_dangerous(script),
+            Some(DangerousQueryKind::Script)
+        );
     }
 }

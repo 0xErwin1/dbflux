@@ -74,7 +74,14 @@ fn parse_query_positional(input: &str) -> Result<MongoQuery, MongoParseError> {
     parse_json_format(trimmed).map_err(|e| MongoParseError::from_db_error(e, trim_offset))
 }
 
-const SCRIPT_UNSUPPORTED_MESSAGE: &str = "JavaScript scripts are not supported yet. Run a single db.collection.method(...) call, \
+/// Message the stage-1 parser returns for input it cannot express as one
+/// query: a genuine JS construct (`looks_like_javascript`), or a `db.`-shell
+/// call with unparsed trailing content (a second statement). Both shapes are
+/// exactly what the multi-statement script engine (`dbflux_js`) exists to
+/// run, so `driver.rs`'s routing compares a `parse_query` error against this
+/// constant to decide whether to retry through the engine instead of
+/// surfacing the error.
+pub(crate) const SCRIPT_UNSUPPORTED_MESSAGE: &str = "JavaScript scripts are not supported yet. Run a single db.collection.method(...) call, \
      a db.method(...) call, or a JSON query.";
 
 /// Statement forms that open a script rather than a single query.
@@ -106,12 +113,31 @@ const JAVASCRIPT_STATEMENT_STARTERS: &[&str] = &[
 /// "scripts are unsupported" error and the JSON fallback. A JSON query needs
 /// no guard here: every starter above begins with a letter or a slash, so an
 /// object or an array can never match one.
-fn looks_like_javascript(input: &str) -> bool {
+pub(crate) fn looks_like_javascript(input: &str) -> bool {
     let trimmed = input.trim_start();
 
     JAVASCRIPT_STATEMENT_STARTERS
         .iter()
         .any(|starter| trimmed.starts_with(starter))
+}
+
+/// True when `query` belongs to the multi-statement script engine rather
+/// than the single-statement shell/JSON parser.
+///
+/// This is the union of the two shapes stage 1's parser already refuses with
+/// `SCRIPT_UNSUPPORTED_MESSAGE`: a genuine JS construct (`looks_like_javascript`)
+/// and a `db.`-shell buffer with unparsed trailing content after the first
+/// statement (a second `db.` call). Driver routing (`driver.rs::execute`)
+/// and dispatch-boundary classification (`MongoLanguageService`) both need
+/// the SAME signal — testing `looks_like_javascript` alone would silently
+/// leave a plain `db.a.find({}); db.b.deleteMany({});` sequence classified
+/// by the old single-statement text heuristic instead of the JS-aware
+/// static scan, which is exactly the gap this change closes.
+pub(crate) fn is_script_input(query: &str) -> bool {
+    matches!(
+        parse_query(query),
+        Err(e) if e.to_string() == SCRIPT_UNSUPPORTED_MESSAGE
+    )
 }
 
 /// Parse a query string into a MongoQuery.
