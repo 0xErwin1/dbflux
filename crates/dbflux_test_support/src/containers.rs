@@ -448,7 +448,9 @@ where
     let access_key_id = "minioadmin";
     let secret_access_key = "minioadmin";
 
-    let image = GenericImage::new("minio/minio", "RELEASE.2025-09-07T16-13-09Z")
+    // quay.io, not Docker Hub: the minio/minio repository was withdrawn from
+    // Docker Hub, so the Hub reference 404s on every pull. Same release tag.
+    let image = GenericImage::new("quay.io/minio/minio", "RELEASE.2025-09-07T16-13-09Z")
         .with_exposed_port(ContainerPort::Tcp(9000))
         .with_wait_for(WaitFor::seconds(1))
         .with_env_var("MINIO_ROOT_USER", access_key_id)
