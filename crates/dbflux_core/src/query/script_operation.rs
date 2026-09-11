@@ -145,6 +145,32 @@ pub trait ScriptOperationHost: Send {
     fn dispatch(&self, op: &ScriptOperation) -> Result<ScriptOperationOutcome, crate::DbError>;
 }
 
+/// Total ordering used to compare a script-run ceiling against a dispatched
+/// operation's classification. An exhaustive `match` with no `_` arm, so
+/// adding a new [`ExecutionClassification`] variant fails the build instead
+/// of silently defaulting to permitted.
+fn severity_rank(c: ExecutionClassification) -> u8 {
+    match c {
+        ExecutionClassification::Metadata => 0,
+        ExecutionClassification::Read => 1,
+        ExecutionClassification::Write => 2,
+        ExecutionClassification::Destructive => 3,
+        ExecutionClassification::AdminSafe => 4,
+        ExecutionClassification::Admin => 5,
+        ExecutionClassification::AdminDestructive => 6,
+    }
+}
+
+/// Returns whether `op`'s classification is permitted under `ceiling`.
+///
+/// An absent ceiling is never represented here — callers resolving a
+/// `None` `confirmed_ceiling` must default to [`ExecutionClassification::Read`]
+/// before calling this (see `QueryRequest::confirmed_ceiling`'s doc comment):
+/// an omitted ceiling refuses a destructive op, it never permits one.
+pub fn ceiling_permits(ceiling: ExecutionClassification, op: ExecutionClassification) -> bool {
+    severity_rank(op) <= severity_rank(ceiling)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -283,5 +309,49 @@ mod tests {
             vec![serde_json::json!({})],
         );
         assert_eq!(op.classification(), ExecutionClassification::Destructive);
+    }
+
+    // ==================== ceiling_permits (Addendum A) ====================
+
+    #[test]
+    fn ceiling_permits_refuses_write_under_a_read_ceiling() {
+        assert!(!ceiling_permits(
+            ExecutionClassification::Read,
+            ExecutionClassification::Write
+        ));
+    }
+
+    #[test]
+    fn ceiling_permits_allows_equal_or_lower_severity() {
+        assert!(ceiling_permits(
+            ExecutionClassification::Destructive,
+            ExecutionClassification::Destructive
+        ));
+        assert!(ceiling_permits(
+            ExecutionClassification::Destructive,
+            ExecutionClassification::Read
+        ));
+    }
+
+    #[test]
+    fn ceiling_permits_refuses_higher_severity_for_every_pair() {
+        const ORDER: [ExecutionClassification; 7] = [
+            ExecutionClassification::Metadata,
+            ExecutionClassification::Read,
+            ExecutionClassification::Write,
+            ExecutionClassification::Destructive,
+            ExecutionClassification::AdminSafe,
+            ExecutionClassification::Admin,
+            ExecutionClassification::AdminDestructive,
+        ];
+        for (ceiling_idx, ceiling) in ORDER.iter().enumerate() {
+            for (op_idx, op) in ORDER.iter().enumerate() {
+                assert_eq!(
+                    ceiling_permits(*ceiling, *op),
+                    op_idx <= ceiling_idx,
+                    "ceiling_permits({ceiling:?}, {op:?}) mismatch"
+                );
+            }
+        }
     }
 }

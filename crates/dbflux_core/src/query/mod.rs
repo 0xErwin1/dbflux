@@ -32,7 +32,7 @@ pub use language_service::{
 pub use safety::{classify_query_for_governance, classify_sql_execution, is_safe_read_query};
 pub use script_operation::{
     ScriptMethod, ScriptOperation, ScriptOperationCounts, ScriptOperationHost,
-    ScriptOperationOutcome, ScriptTarget,
+    ScriptOperationOutcome, ScriptTarget, ceiling_permits,
 };
 pub use semantic::{
     AggregateFunction, AggregateRequest, AggregateSpec, PlannedQuery, SemanticFieldRef,

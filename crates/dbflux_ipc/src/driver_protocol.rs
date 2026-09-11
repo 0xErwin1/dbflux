@@ -92,6 +92,11 @@ impl From<QueryRequestDto> for QueryRequest {
             statement_timeout: value.statement_timeout_ms.map(Duration::from_millis),
             database: value.database,
             execution_context: value.execution_context,
+            // `confirmed_ceiling` deliberately has no wire representation on
+            // this DTO (see `QueryRequest::confirmed_ceiling`'s invariant) —
+            // an RPC-backed driver always sees the restrictive `None`
+            // default rather than a value that crossed a process boundary.
+            ..Default::default()
         }
     }
 }
@@ -643,6 +648,7 @@ mod tests {
                     query_mode: Some("cwli".into()),
                 }),
             }),
+            ..Default::default()
         };
 
         let dto = QueryRequestDto::from(&request);

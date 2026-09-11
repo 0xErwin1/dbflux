@@ -47,11 +47,12 @@ pub fn classify_sql_execution(sql: &str) -> ExecutionClassification {
 ///
 /// Pass the live connection's `Connection::language_service()` as `service`
 /// whenever one is available, so driver-owned dialects (`InfluxQuery`, `Flux`,
-/// `Custom(_)`, and the CloudWatch/OpenSearch trio) are classified by the
-/// driver instead of a conservative default. `None` preserves the
-/// language-keyed fallback classification for those dialects; `Sql`,
-/// `MongoQuery`, and `RedisCommands` always use the shared core heuristic
-/// regardless of `service`.
+/// `Custom(_)`, `MongoQuery`, and the CloudWatch/OpenSearch trio) are
+/// classified by the driver instead of a conservative default. `None`
+/// preserves the language-keyed fallback classification for those dialects —
+/// for `MongoQuery` that fallback is the pre-existing core text heuristic
+/// (`classify_mongo_query`), unchanged. `Sql` and `RedisCommands` always use
+/// the shared core heuristic regardless of `service`.
 pub fn classify_query_for_governance(
     query_language: &QueryLanguage,
     query: &str,

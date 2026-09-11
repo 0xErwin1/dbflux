@@ -10,7 +10,10 @@ mod engine;
 mod limits;
 mod scan;
 
-pub use engine::{ScriptEngineError, ScriptRunConfig, ScriptRunOutcome, run};
+pub use engine::{
+    ScriptEngineError, ScriptFailure, ScriptLedgerEntry, ScriptLedgerOutcome, ScriptRunConfig,
+    ScriptRunOutcome, ScriptStatementResult, run,
+};
 pub use scan::{StaticScanOutcome, static_scan};
 
 #[cfg(test)]
