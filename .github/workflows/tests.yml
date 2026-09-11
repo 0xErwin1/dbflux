@@ -117,6 +117,12 @@ jobs:
       # aborts mid-stream ("bytes remaining on stream"). Pulling everything
       # up front, serially and with retries, removes that failure mode.
       #
+      # Most images come from mirror.gcr.io, Google's pull-through mirror of
+      # Docker Hub: it has no per-IP rate limit and needs no credentials, so
+      # it removes the throttling this step was built to survive and keeps
+      # working on pull requests from forks. grokzen/redis-cluster is not
+      # carried there and stays on Docker Hub.
+      #
       # This step is an optimisation, not a gate, so it never fails the job.
       # It used to `exit 1` on the first image it could not fetch, which meant
       # one withdrawn image took down every driver suite — a dead MinIO tag
@@ -128,19 +134,19 @@ jobs:
       - name: Pre-pull container images
         run: |
           images=(
-            postgres:16
-            pgvector/pgvector:0.8.0-pg16
-            mysql:8.4
-            mongo:7
-            redis:7
+            mirror.gcr.io/library/postgres:16
+            mirror.gcr.io/pgvector/pgvector:0.8.0-pg16
+            mirror.gcr.io/library/mysql:8.4
+            mirror.gcr.io/library/mongo:7
+            mirror.gcr.io/library/redis:7
             grokzen/redis-cluster:7.0.10
-            clickhouse/clickhouse-server:25.8.30.16
+            mirror.gcr.io/clickhouse/clickhouse-server:25.8.30.16
             mcr.microsoft.com/mssql/server:2022-latest
-            amazon/dynamodb-local:latest
-            influxdb:2.7
-            influxdb:1.8
+            mirror.gcr.io/amazon/dynamodb-local:latest
+            mirror.gcr.io/library/influxdb:2.7
+            mirror.gcr.io/library/influxdb:1.8
             quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
-            localstack/localstack:3
+            mirror.gcr.io/localstack/localstack:3
           )
           unpulled=()
           for image in "${images[@]}"; do
