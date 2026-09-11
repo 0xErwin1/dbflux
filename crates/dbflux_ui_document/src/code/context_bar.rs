@@ -56,6 +56,32 @@ fn resolve_query_mode_selection(
         .or_else(|| spec_default.map(|mode| mode.to_string()))
 }
 
+/// Resolve the language an editor presents and classifies with.
+///
+/// Precedence: a driver-declared query mode is the user's own explicit choice
+/// inside one connection (InfluxDB's InfluxQL/Flux toggle), so it outranks
+/// everything. A pinned document then keeps its own language. Otherwise the
+/// bound connection decides, because that connection already decides which
+/// driver executes the text — `document` is only the fallback for a tab with
+/// nothing bound yet.
+fn resolve_effective_language(
+    binding: LanguageBinding,
+    document: &QueryLanguage,
+    connection: Option<&QueryLanguage>,
+    source_mode: Option<&QueryLanguage>,
+) -> QueryLanguage {
+    if let Some(mode) = source_mode {
+        return mode.clone();
+    }
+
+    match binding {
+        LanguageBinding::Pinned => document.clone(),
+        LanguageBinding::FollowsConnection => {
+            connection.cloned().unwrap_or_else(|| document.clone())
+        }
+    }
+}
+
 impl CodeDocument {
     // === Context dropdown creation ===
 
@@ -139,6 +165,7 @@ impl CodeDocument {
 
         self.editor.cached_supports_connection_context = editor_profile.supports_connection_context;
         self.editor.cached_comment_prefix = editor_profile.comment_prefix;
+        self.editor.cached_effective_language = query_language.clone();
 
         let completion_provider: Rc<dyn CompletionProvider> =
             Rc::new(QueryCompletionProvider::new(
@@ -197,17 +224,29 @@ impl CodeDocument {
     }
 
     pub(super) fn effective_query_language(&self, cx: &App) -> QueryLanguage {
-        let Some(spec) = self.current_source_context_spec(cx) else {
-            return self.editor.query_language.clone();
-        };
+        let source_mode = self.current_source_context_spec(cx).and_then(|spec| {
+            let selected_mode = self.current_source_query_mode_value(cx);
 
-        let selected_mode = self.current_source_query_mode_value(cx);
+            spec.query_modes
+                .into_iter()
+                .find(|mode| Some(mode.value.as_str()) == selected_mode.as_deref())
+                .map(|mode| mode.query_language)
+        });
 
-        spec.query_modes
-            .into_iter()
-            .find(|mode| Some(mode.value.as_str()) == selected_mode.as_deref())
-            .map(|mode| mode.query_language)
-            .unwrap_or_else(|| self.editor.query_language.clone())
+        let connection_language = self
+            .source
+            .exec_ctx
+            .connection_id
+            .or(self.connection_id)
+            .and_then(|id| self.app_state.read(cx).connections().get(&id))
+            .map(|connected| connected.connection.metadata().query_language.clone());
+
+        resolve_effective_language(
+            self.editor.language_binding,
+            &self.editor.query_language,
+            connection_language.as_ref(),
+            source_mode.as_ref(),
+        )
     }
 
     pub(super) fn should_show_source_controls(&self, cx: &App) -> bool {
@@ -1585,12 +1624,108 @@ impl CodeDocument {
 #[cfg(test)]
 mod tests {
     use super::{
-        ContextBarSlot, SqlQueryFocus, build_source_window_context, context_dropdown_min_width,
-        context_slot_is_keyboard_focused, parse_source_datetime_input,
-        resolve_query_mode_selection,
+        ContextBarSlot, LanguageBinding, SqlQueryFocus, build_source_window_context,
+        context_dropdown_min_width, context_slot_is_keyboard_focused, parse_source_datetime_input,
+        resolve_effective_language, resolve_query_mode_selection,
     };
-    use dbflux_core::ExecutionSourceContext;
+    use dbflux_core::{ExecutionSourceContext, QueryLanguage};
     use gpui::px;
+
+    /// Retargeting a scratch tab's connection dropdown from a relational
+    /// profile to a document one must re-derive the language. Before this,
+    /// `editor.query_language` was written once at construction and never
+    /// reassigned, so the tab kept SQL highlighting, SQL time-macro
+    /// substitution, and — the part that actually matters — SQL dangerous-query
+    /// classification while executing against MongoDB, where `deleteMany` then
+    /// went undetected.
+    #[test]
+    fn unpinned_document_follows_the_bound_connection() {
+        assert_eq!(
+            resolve_effective_language(
+                LanguageBinding::FollowsConnection,
+                &QueryLanguage::Sql,
+                Some(&QueryLanguage::MongoQuery),
+                None,
+            ),
+            QueryLanguage::MongoQuery
+        );
+    }
+
+    /// A file's extension chose its language, so no connection may override it:
+    /// a `.sql` file opened against a MongoDB connection is still SQL.
+    #[test]
+    fn pinned_document_ignores_the_bound_connection() {
+        assert_eq!(
+            resolve_effective_language(
+                LanguageBinding::Pinned,
+                &QueryLanguage::Sql,
+                Some(&QueryLanguage::MongoQuery),
+                None,
+            ),
+            QueryLanguage::Sql
+        );
+    }
+
+    /// An in-process script language is pinned for the same reason: no
+    /// connection can turn a Lua buffer into a query buffer.
+    #[test]
+    fn pinned_script_language_survives_a_connection() {
+        assert_eq!(
+            resolve_effective_language(
+                LanguageBinding::Pinned,
+                &QueryLanguage::Lua,
+                Some(&QueryLanguage::Sql),
+                None,
+            ),
+            QueryLanguage::Lua
+        );
+    }
+
+    /// A driver-declared query mode is the user's own explicit choice within
+    /// one connection (InfluxDB's InfluxQL/Flux toggle), so it outranks the
+    /// connection's default language.
+    #[test]
+    fn source_query_mode_outranks_the_connection() {
+        assert_eq!(
+            resolve_effective_language(
+                LanguageBinding::FollowsConnection,
+                &QueryLanguage::InfluxQuery,
+                Some(&QueryLanguage::InfluxQuery),
+                Some(&QueryLanguage::Flux),
+            ),
+            QueryLanguage::Flux
+        );
+    }
+
+    /// A query mode is an explicit choice even on a pinned document, so it
+    /// still wins there.
+    #[test]
+    fn source_query_mode_outranks_a_pin() {
+        assert_eq!(
+            resolve_effective_language(
+                LanguageBinding::Pinned,
+                &QueryLanguage::InfluxQuery,
+                Some(&QueryLanguage::InfluxQuery),
+                Some(&QueryLanguage::Flux),
+            ),
+            QueryLanguage::Flux
+        );
+    }
+
+    /// A scratch tab with no connection bound keeps the language it was
+    /// created with rather than silently collapsing to SQL.
+    #[test]
+    fn unpinned_document_without_a_connection_keeps_its_own_language() {
+        assert_eq!(
+            resolve_effective_language(
+                LanguageBinding::FollowsConnection,
+                &QueryLanguage::MongoQuery,
+                None,
+                None,
+            ),
+            QueryLanguage::MongoQuery
+        );
+    }
 
     #[test]
     fn query_mode_selection_prefers_committed_then_dropdown() {

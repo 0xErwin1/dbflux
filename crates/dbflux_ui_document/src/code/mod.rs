@@ -233,6 +233,23 @@ pub(super) struct SourceContext {
     pub(super) _context_subscriptions: Vec<Subscription>,
 }
 
+/// How a document's editor language is bound over its lifetime.
+///
+/// A scratch query tab follows its connection: retargeting the connection
+/// dropdown from a relational profile to a document one has to re-derive
+/// highlighting, time-macro substitution, and dangerous-query classification,
+/// because `connection_id` alone already decides which driver executes the text.
+/// A document whose language came from somewhere the connection cannot speak
+/// for — a file extension, an in-process script language, a read-only routine
+/// body — keeps it instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum LanguageBinding {
+    /// Re-derive the language from whichever connection the tab is bound to.
+    FollowsConnection,
+    /// Keep the document's own language regardless of the bound connection.
+    Pinned,
+}
+
 /// Text editor entity, file-backing metadata, language mode, and diagnostic debounce.
 ///
 /// Groups the `InputState` entity and its subscription together with the fields
@@ -266,7 +283,17 @@ pub(super) struct EditorState {
     pub(super) completion_query_generation: Rc<Cell<u64>>,
     /// Value of `completion_query_generation` at the previous `Change` event.
     pub(super) last_completion_generation: u64,
+    /// The language this document declares for itself: derived from the active
+    /// connection at construction, from a file extension, or passed explicitly.
+    /// Read it through `CodeDocument::effective_language()` rather than
+    /// directly — an unpinned document resolves to its bound connection's
+    /// language instead.
     pub(super) query_language: QueryLanguage,
+    pub(super) language_binding: LanguageBinding,
+    /// Cached `resolve_effective_language` result, refreshed alongside
+    /// `cached_supports_connection_context` whenever the effective language can
+    /// change (construction, connection change, query-mode switch).
+    pub(super) cached_effective_language: QueryLanguage,
 }
 
 /// Auto-save-to-disk machinery and saved-label UI feedback.
@@ -538,6 +565,17 @@ impl CodeDocument {
             Self::resolve_editor_profile(&app_state, connection_id, &query_language, cx);
         let editor_mode = editor_profile.editor_mode.clone();
         let placeholder = editor_profile.placeholder.clone();
+
+        // An in-process script language (Lua/Python/Bash) is pinned on sight: no
+        // connection can turn a script buffer into a query buffer. Every other
+        // language starts out following the bound connection; `with_path` and
+        // `with_read_only` pin it afterwards for the documents whose language
+        // came from a file extension or a routine body.
+        let language_binding = if query_language.supports_connection_context() {
+            LanguageBinding::FollowsConnection
+        } else {
+            LanguageBinding::Pinned
+        };
 
         let input_state = cx.new(|cx| {
             InputState::new(window, cx)
@@ -905,6 +943,8 @@ impl CodeDocument {
                 last_change_length: 0,
                 completion_query_generation,
                 last_completion_generation: 0,
+                cached_effective_language: query_language.clone(),
+                language_binding,
                 query_language,
             },
             source: SourceContext {
@@ -1089,8 +1129,13 @@ impl CodeDocument {
     }
 
     /// Attach a file path (used after opening or "Save As").
+    ///
+    /// This pins the language: the file's extension chose it, so retargeting the
+    /// document at another connection must not override it.
     pub fn with_path(mut self, path: PathBuf) -> Self {
         self.editor.path = Some(path);
+        self.editor.language_binding = LanguageBinding::Pinned;
+        self.editor.cached_effective_language = self.editor.query_language.clone();
         self
     }
 
@@ -1099,6 +1144,11 @@ impl CodeDocument {
     /// popup appears on focus or key events.
     pub fn with_read_only(mut self, cx: &mut Context<Self>) -> Self {
         self.read_only = true;
+
+        // A read-only document shows a fixed body (a routine definition), not a
+        // buffer the user retargets at another connection.
+        self.editor.language_binding = LanguageBinding::Pinned;
+        self.editor.cached_effective_language = self.editor.query_language.clone();
 
         // Disable the LSP completion provider so no autocomplete popup fires
         // when the user focuses or types (which would otherwise happen because
@@ -1226,7 +1276,18 @@ impl CodeDocument {
 
     #[allow(dead_code)]
     pub fn query_language(&self) -> QueryLanguage {
-        self.editor.query_language.clone()
+        self.effective_language().clone()
+    }
+
+    /// The language this editor currently presents and classifies with.
+    ///
+    /// This is the cached `resolve_effective_language` result, so for an
+    /// unpinned document it tracks the bound connection. Every consumer that
+    /// drives user-visible or governance behaviour — highlighting, time-macro
+    /// substitution, statement counting, dangerous-query classification — must
+    /// read this rather than `editor.query_language`.
+    pub(super) fn effective_language(&self) -> &QueryLanguage {
+        &self.editor.cached_effective_language
     }
 
     /// Returns true if the editor content is empty or whitespace-only.
@@ -1729,8 +1790,120 @@ impl CodeDocument {
 impl EventEmitter<DocumentEvent> for CodeDocument {}
 
 #[cfg(test)]
+mod language_binding_tests {
+    use super::{CodeDocument, LanguageBinding};
+    use dbflux_components::theme;
+    use dbflux_core::QueryLanguage;
+    use dbflux_storage::bootstrap::StorageRuntime;
+    use dbflux_ui_base::AppStateEntity;
+    use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
+    use gpui::{AppContext, TestAppContext};
+    use gpui_component::Root;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    fn isolated_test_app_state(cx: &mut TestAppContext) -> gpui::Entity<AppStateEntity> {
+        cx.update(|cx| {
+            cx.new(|_| {
+                let storage_runtime =
+                    StorageRuntime::in_memory().expect("isolated storage runtime");
+                AppStateEntity::new_with_storage_runtime(storage_runtime)
+                    .expect("test storage setup")
+            })
+        })
+    }
+
+    fn init_test_runtime(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        cx.update(theme::init);
+        cx.update(|cx| {
+            let host = cx.new(|_| ToastHost::new());
+            cx.set_global(ToastGlobal { host });
+        });
+    }
+
+    /// Build a document and report the language binding it ended up with.
+    ///
+    /// `customize` runs the builder steps under test (`with_path`,
+    /// `with_read_only`, or nothing at all).
+    fn binding_for(
+        cx: &mut TestAppContext,
+        language: QueryLanguage,
+        customize: impl Fn(CodeDocument, &mut gpui::Context<CodeDocument>) -> CodeDocument + 'static,
+    ) -> LanguageBinding {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let doc_holder: Rc<RefCell<Option<gpui::Entity<CodeDocument>>>> =
+            Rc::new(RefCell::new(None));
+        let doc_ref = doc_holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let doc = cx.new(|cx| {
+                let document = CodeDocument::new_with_language(
+                    app_state.clone(),
+                    None,
+                    language.clone(),
+                    window,
+                    cx,
+                );
+                customize(document, cx)
+            });
+            doc_ref.replace(Some(doc.clone()));
+            Root::new(doc, window, cx)
+        });
+
+        let doc = doc_holder.borrow().clone().expect("doc should be created");
+
+        window.update(|_, app| doc.read(app).editor.language_binding)
+    }
+
+    /// A plain scratch query tab must follow its connection, so retargeting the
+    /// connection dropdown re-derives the language.
+    #[gpui::test]
+    fn a_scratch_query_tab_follows_its_connection(cx: &mut TestAppContext) {
+        assert_eq!(
+            binding_for(cx, QueryLanguage::Sql, |doc, _cx| doc),
+            LanguageBinding::FollowsConnection
+        );
+    }
+
+    /// An in-process script language is pinned at construction: no connection
+    /// can turn a Lua buffer into a query buffer.
+    #[gpui::test]
+    fn a_script_language_is_pinned_on_sight(cx: &mut TestAppContext) {
+        assert_eq!(
+            binding_for(cx, QueryLanguage::Lua, |doc, _cx| doc),
+            LanguageBinding::Pinned
+        );
+    }
+
+    /// A file's extension chose its language, so attaching a path pins it.
+    #[gpui::test]
+    fn attaching_a_file_path_pins_the_language(cx: &mut TestAppContext) {
+        assert_eq!(
+            binding_for(cx, QueryLanguage::Sql, |doc, _cx| doc
+                .with_path(std::path::PathBuf::from("/tmp/report.sql"))),
+            LanguageBinding::Pinned
+        );
+    }
+
+    /// A read-only document shows a fixed routine body, not a buffer the user
+    /// retargets at another connection.
+    #[gpui::test]
+    fn a_read_only_document_pins_its_language(cx: &mut TestAppContext) {
+        assert_eq!(
+            binding_for(cx, QueryLanguage::Sql, |doc, cx| doc.with_read_only(cx)),
+            LanguageBinding::Pinned
+        );
+    }
+}
+
+#[cfg(test)]
 mod tests {
-    use super::{CodeDocument, diff_stats_from_pair, source_input_values_from_context};
+    use super::{
+        CodeDocument, LanguageBinding, diff_stats_from_pair, source_input_values_from_context,
+    };
     use dbflux_components::theme;
     use dbflux_core::{ExecutionSourceContext, QueryLanguage};
     use dbflux_storage::bootstrap::StorageRuntime;
