@@ -116,7 +116,7 @@ pub(crate) fn retain_database_cache_entries<T>(
 /// Cancellation short-circuits the wait and defers to the hook phase runner's
 /// own cancellation handling.
 async fn wait_for_connection_teardown(
-    teardown: std::thread::JoinHandle<()>,
+    teardown: std::thread::JoinHandle<Result<(), dbflux_core::DbError>>,
     cancel_token: &dbflux_core::CancelToken,
     cx: &gpui::AsyncApp,
 ) -> Option<String> {
@@ -145,11 +145,11 @@ async fn wait_for_connection_teardown(
             .await;
     }
 
-    if teardown.join().is_err() {
-        log::warn!("Connection teardown thread panicked");
+    match teardown.join() {
+        Ok(Ok(())) => None,
+        Ok(Err(error)) => Some(format!("connection cleanup failed: {error}")),
+        Err(_) => Some("connection teardown thread panicked".to_string()),
     }
-
-    None
 }
 
 impl Sidebar {
@@ -1147,7 +1147,10 @@ mod tests {
 
     /// Spawns a thread that blocks until the returned gate is released,
     /// standing in for a driver teardown stuck on cancel/close work.
-    fn gated_teardown_thread() -> (std::thread::JoinHandle<()>, Arc<(Mutex<bool>, Condvar)>) {
+    fn gated_teardown_thread() -> (
+        std::thread::JoinHandle<Result<(), dbflux_core::DbError>>,
+        Arc<(Mutex<bool>, Condvar)>,
+    ) {
         let gate = Arc::new((Mutex::new(false), Condvar::new()));
 
         let thread_gate = gate.clone();
@@ -1158,6 +1161,7 @@ mod tests {
             while !*released {
                 released = condvar.wait(released).expect("gate wait");
             }
+            Ok(())
         });
 
         (handle, gate)
@@ -1256,6 +1260,34 @@ mod tests {
             Some(None),
             "wait must complete without a warning once the teardown thread finishes"
         );
+    }
+
+    #[gpui::test]
+    fn wait_for_connection_teardown_returns_cleanup_error_once(cx: &mut TestAppContext) {
+        let teardown =
+            std::thread::spawn(|| Err(dbflux_core::DbError::query_failed("close failed")));
+        let cancel_token = CancelToken::new();
+        let (done_sender, done_receiver) = mpsc::channel();
+        cx.update(|cx| {
+            cx.spawn(async move |cx| {
+                done_sender
+                    .send(wait_for_connection_teardown(teardown, &cancel_token, cx).await)
+                    .expect("test completion receiver");
+            })
+            .detach();
+        });
+        for _ in 0..10 {
+            cx.executor().advance_clock(Duration::from_millis(50));
+            cx.run_until_parked();
+            if let Ok(warning) = done_receiver.try_recv() {
+                assert_eq!(
+                    warning.as_deref(),
+                    Some("connection cleanup failed: close failed")
+                );
+                return;
+            }
+        }
+        panic!("cleanup error was not reported");
     }
 
     #[gpui::test]

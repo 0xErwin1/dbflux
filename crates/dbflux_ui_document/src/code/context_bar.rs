@@ -686,7 +686,7 @@ impl CodeDocument {
         self.sync_editor_language(cx);
 
         if did_change {
-            self.invalidate_execution_session(cx);
+            self.invalidate_execution_session_if_context_changed(cx);
             cx.emit(DocumentEvent::MetaChanged);
         }
 
@@ -790,8 +790,11 @@ impl CodeDocument {
         }
     }
 
-    fn on_database_changed(&mut self, item: &DropdownItem, cx: &mut Context<Self>) {
+    pub(super) fn on_database_changed(&mut self, item: &DropdownItem, cx: &mut Context<Self>) {
         let db_name = item.value.to_string();
+        if self.source.exec_ctx.database.as_deref() == Some(db_name.as_str()) {
+            return;
+        }
 
         // Save previous state so we can revert on connection failure.
         let prev_database = self.source.exec_ctx.database.clone();

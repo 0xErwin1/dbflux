@@ -3,8 +3,8 @@ use std::time::Duration;
 
 use dbflux_core::{
     Connection, DriverCapabilities, EventCategory, EventOutcome, EventRecord, EventSeverity,
-    EventSink, MutationKind, MutationPolicy, QueryRequest, TransactionVocab, Value,
-    VisualMutationSpec, inline_params, render_filter_node_sql,
+    EventSink, ExecutionSessionScope, MutationKind, MutationPolicy, QueryRequest, TransactionVocab,
+    Value, VisualMutationSpec, inline_params, render_filter_node_sql,
 };
 
 /// Execution modes for visual bulk mutations.
@@ -344,7 +344,15 @@ impl MutationExecutor {
         &self,
         cancel: &crate::task_runner::MutationCancelHandle,
     ) -> Result<MutationOutcome, ExecutorError> {
-        let generator = self.deps.connection.query_generator().ok_or_else(|| {
+        self.with_operation_session(|connection| self.run_single_tx_on(connection, cancel))
+    }
+
+    fn run_single_tx_on(
+        &self,
+        connection: Arc<dyn Connection>,
+        cancel: &crate::task_runner::MutationCancelHandle,
+    ) -> Result<MutationOutcome, ExecutorError> {
+        let generator = connection.query_generator().ok_or_else(|| {
             ExecutorError::Generation("driver does not support SQL generation".to_string())
         })?;
 
@@ -359,7 +367,7 @@ impl MutationExecutor {
                 .map_err(|e| ExecutorError::Generation(e.to_string()))?,
         };
 
-        let vocab = TransactionVocab::for_kind(self.deps.connection.kind()).ok_or_else(|| {
+        let vocab = TransactionVocab::for_kind(connection.kind()).ok_or_else(|| {
             ExecutorError::Transaction("driver does not support SQL transactions".to_string())
         })?;
 
@@ -392,10 +400,10 @@ impl MutationExecutor {
             && let Some(lock_sql) = vocab.lock_timeout_sql(ms)
         {
             let lock_req = QueryRequest::new(lock_sql);
-            if let Err(e) = self.deps.connection.execute(&lock_req) {
+            if let Err(e) = connection.execute(&lock_req) {
                 let err_msg = e.to_string();
                 self.emit_failure_event(&run_id, op_kind, &table_name, &err_msg);
-                self.reset_lock_timeout_if_needed(&vocab);
+                self.reset_lock_timeout_if_needed(&vocab, &connection);
                 return Err(ExecutorError::Transaction(err_msg));
             }
         }
@@ -404,29 +412,29 @@ impl MutationExecutor {
         // The SET ran but no transaction was opened, so no ROLLBACK is needed.
         if cancel.is_cancelled() {
             self.emit_cancelled_event(&run_id, op_kind, &table_name, 0);
-            self.reset_lock_timeout_if_needed(&vocab);
+            self.reset_lock_timeout_if_needed(&vocab, &connection);
             return Ok(MutationOutcome::Cancelled { rows_affected: 0 });
         }
 
         let begin_req = QueryRequest::new(vocab.begin);
-        if let Err(e) = self.deps.connection.execute(&begin_req) {
+        if let Err(e) = connection.execute(&begin_req) {
             let err_msg = e.to_string();
             self.emit_failure_event(&run_id, op_kind, &table_name, &err_msg);
-            self.reset_lock_timeout_if_needed(&vocab);
+            self.reset_lock_timeout_if_needed(&vocab, &connection);
             return Err(ExecutorError::Transaction(err_msg));
         }
 
         // Site (c): cancel check after BEGIN, before DML (existing).
         if cancel.is_cancelled() {
             let rollback_req = QueryRequest::new(vocab.rollback);
-            if let Err(rb_err) = self.deps.connection.execute(&rollback_req) {
-                log::warn!(
-                    "ROLLBACK failed during cancellation after BEGIN: {}",
-                    rb_err
-                );
+            if let Err(rb_err) = connection.execute(&rollback_req) {
+                let error = format!("ROLLBACK failed during cancellation after BEGIN: {rb_err}");
+                self.emit_failure_event(&run_id, op_kind, &table_name, &error);
+                self.reset_lock_timeout_if_needed(&vocab, &connection);
+                return Err(ExecutorError::Transaction(error));
             }
             self.emit_cancelled_event(&run_id, op_kind, &table_name, 0);
-            self.reset_lock_timeout_if_needed(&vocab);
+            self.reset_lock_timeout_if_needed(&vocab, &connection);
             return Ok(MutationOutcome::Cancelled { rows_affected: 0 });
         }
 
@@ -435,35 +443,31 @@ impl MutationExecutor {
             && let Some(lock_sql) = vocab.lock_timeout_sql(ms)
         {
             let lock_req = QueryRequest::new(lock_sql);
-            if let Err(e) = self.deps.connection.execute(&lock_req) {
+            if let Err(e) = connection.execute(&lock_req) {
                 let err_msg = e.to_string();
                 let rollback_req = QueryRequest::new(vocab.rollback);
-                if let Err(rb_err) = self.deps.connection.execute(&rollback_req) {
+                if let Err(rb_err) = connection.execute(&rollback_req) {
                     log::warn!("ROLLBACK failed after lock_timeout error: {}", rb_err);
                 }
                 self.emit_failure_event(&run_id, op_kind, &table_name, &err_msg);
-                self.reset_lock_timeout_if_needed(&vocab);
+                self.reset_lock_timeout_if_needed(&vocab, &connection);
                 return Err(ExecutorError::Transaction(err_msg));
             }
         }
 
-        let dml_sql = inline_params(
-            &generated.sql,
-            &generated.params,
-            self.deps.connection.dialect(),
-        );
+        let dml_sql = inline_params(&generated.sql, &generated.params, connection.dialect());
         let dml_req = QueryRequest::new(dml_sql);
-        let dml_result = self.deps.connection.execute(&dml_req);
+        let dml_result = connection.execute(&dml_req);
 
         match dml_result {
             Err(e) => {
                 let err_msg = e.to_string();
                 let rollback_req = QueryRequest::new(vocab.rollback);
-                if let Err(rb_err) = self.deps.connection.execute(&rollback_req) {
+                if let Err(rb_err) = connection.execute(&rollback_req) {
                     log::warn!("ROLLBACK failed during error recovery: {}", rb_err);
                 }
                 self.emit_failure_event(&run_id, op_kind, &table_name, &err_msg);
-                self.reset_lock_timeout_if_needed(&vocab);
+                self.reset_lock_timeout_if_needed(&vocab, &connection);
                 Err(ExecutorError::Transaction(err_msg))
             }
             Ok(result) => {
@@ -473,19 +477,23 @@ impl MutationExecutor {
                 // DML has mutated rows but we haven't committed. ROLLBACK discards the changes.
                 if cancel.is_cancelled() {
                     let rollback_req = QueryRequest::new(vocab.rollback);
-                    if let Err(rb_err) = self.deps.connection.execute(&rollback_req) {
-                        log::warn!("ROLLBACK failed during cancellation after DML: {}", rb_err);
+                    if let Err(rb_err) = connection.execute(&rollback_req) {
+                        let error =
+                            format!("ROLLBACK failed during cancellation after DML: {rb_err}");
+                        self.emit_failure_event(&run_id, op_kind, &table_name, &error);
+                        self.reset_lock_timeout_if_needed(&vocab, &connection);
+                        return Err(ExecutorError::Transaction(error));
                     }
                     self.emit_cancelled_event(&run_id, op_kind, &table_name, 0);
-                    self.reset_lock_timeout_if_needed(&vocab);
+                    self.reset_lock_timeout_if_needed(&vocab, &connection);
                     return Ok(MutationOutcome::Cancelled { rows_affected: 0 });
                 }
 
                 let commit_req = QueryRequest::new(vocab.commit);
-                if let Err(e) = self.deps.connection.execute(&commit_req) {
+                if let Err(e) = connection.execute(&commit_req) {
                     let err_msg = e.to_string();
                     self.emit_failure_event(&run_id, op_kind, &table_name, &err_msg);
-                    self.reset_lock_timeout_if_needed(&vocab);
+                    self.reset_lock_timeout_if_needed(&vocab, &connection);
                     return Err(ExecutorError::Transaction(err_msg));
                 }
 
@@ -503,7 +511,7 @@ impl MutationExecutor {
                 .with_correlation_id(run_id);
 
                 self.emit_event(success_event);
-                self.reset_lock_timeout_if_needed(&vocab);
+                self.reset_lock_timeout_if_needed(&vocab, &connection);
                 Ok(MutationOutcome::Success { rows_affected })
             }
         }
@@ -520,7 +528,15 @@ impl MutationExecutor {
         &self,
         cancel: &crate::task_runner::MutationCancelHandle,
     ) -> Result<MutationOutcome, ExecutorError> {
-        let generator = self.deps.connection.query_generator().ok_or_else(|| {
+        self.with_operation_session(|connection| self.run_direct_on(connection, cancel))
+    }
+
+    fn run_direct_on(
+        &self,
+        connection: Arc<dyn Connection>,
+        cancel: &crate::task_runner::MutationCancelHandle,
+    ) -> Result<MutationOutcome, ExecutorError> {
+        let generator = connection.query_generator().ok_or_else(|| {
             ExecutorError::Generation("driver does not support SQL generation".to_string())
         })?;
 
@@ -560,7 +576,7 @@ impl MutationExecutor {
             return Ok(MutationOutcome::Cancelled { rows_affected: 0 });
         }
 
-        let vocab = TransactionVocab::for_kind(self.deps.connection.kind());
+        let vocab = TransactionVocab::for_kind(connection.kind());
 
         // Use the autocommit-specific lock_timeout variant. For Postgres, `SET LOCAL` is
         // transaction-scoped and silently does nothing outside a transaction; the autocommit
@@ -571,10 +587,10 @@ impl MutationExecutor {
             && let Some(lock_sql) = v.autocommit_lock_timeout_sql(ms)
         {
             let lock_req = QueryRequest::new(lock_sql);
-            if let Err(e) = self.deps.connection.execute(&lock_req) {
+            if let Err(e) = connection.execute(&lock_req) {
                 let err_msg = e.to_string();
                 self.emit_failure_event(&run_id, op_kind, &table_name, &err_msg);
-                self.reset_autocommit_lock_timeout_if_needed(v);
+                self.reset_autocommit_lock_timeout_if_needed(v, &connection);
                 return Err(ExecutorError::Transaction(err_msg));
             }
             true
@@ -582,19 +598,15 @@ impl MutationExecutor {
             false
         };
 
-        let dml_sql = inline_params(
-            &generated.sql,
-            &generated.params,
-            self.deps.connection.dialect(),
-        );
+        let dml_sql = inline_params(&generated.sql, &generated.params, connection.dialect());
         let dml_req = QueryRequest::new(dml_sql);
 
-        match self.deps.connection.execute(&dml_req) {
+        match connection.execute(&dml_req) {
             Err(e) => {
                 let err_msg = e.to_string();
                 self.emit_failure_event(&run_id, op_kind, &table_name, &err_msg);
                 if lock_timeout_set && let Some(v) = &vocab {
-                    self.reset_autocommit_lock_timeout_if_needed(v);
+                    self.reset_autocommit_lock_timeout_if_needed(v, &connection);
                 }
                 Err(ExecutorError::Transaction(err_msg))
             }
@@ -616,7 +628,7 @@ impl MutationExecutor {
 
                 self.emit_event(success_event);
                 if lock_timeout_set && let Some(v) = &vocab {
-                    self.reset_autocommit_lock_timeout_if_needed(v);
+                    self.reset_autocommit_lock_timeout_if_needed(v, &connection);
                 }
                 Ok(MutationOutcome::Success { rows_affected })
             }
@@ -651,13 +663,24 @@ impl MutationExecutor {
         pk_cols: &[&str],
         cancel: &crate::task_runner::MutationCancelHandle,
     ) -> Result<MutationOutcome, ExecutorError> {
+        self.with_operation_session(|connection| {
+            self.run_chunked_tx_on(connection, pk_cols, cancel)
+        })
+    }
+
+    fn run_chunked_tx_on(
+        &self,
+        connection: Arc<dyn Connection>,
+        pk_cols: &[&str],
+        cancel: &crate::task_runner::MutationCancelHandle,
+    ) -> Result<MutationOutcome, ExecutorError> {
         use dbflux_core::lower_keyset_predicate;
 
-        let generator = self.deps.connection.query_generator().ok_or_else(|| {
+        let generator = connection.query_generator().ok_or_else(|| {
             ExecutorError::Generation("driver does not support SQL generation".to_string())
         })?;
 
-        let vocab = TransactionVocab::for_kind(self.deps.connection.kind()).ok_or_else(|| {
+        let vocab = TransactionVocab::for_kind(connection.kind()).ok_or_else(|| {
             ExecutorError::Transaction("driver does not support SQL transactions".to_string())
         })?;
 
@@ -685,7 +708,7 @@ impl MutationExecutor {
         let mut rows_affected_total: u64 = 0;
         let mut chunks_committed: u32 = 0;
 
-        let dialect = self.deps.connection.dialect();
+        let dialect = connection.dialect();
 
         // Clamp chunk_size to stay within the driver's max_query_parameters limit.
         // A composite PK chunk binds `chunk_size * pk_cols.len()` params for PK IN,
@@ -742,7 +765,7 @@ impl MutationExecutor {
                 ))
                 .with_correlation_id(run_id.clone());
                 self.emit_event(cancelled_event);
-                self.reset_lock_timeout_if_needed(&vocab);
+                self.reset_lock_timeout_if_needed(&vocab, &connection);
                 return Ok(MutationOutcome::Cancelled {
                     rows_affected: rows_affected_total,
                 });
@@ -812,12 +835,12 @@ impl MutationExecutor {
 
             let select_req = QueryRequest::new(inline_params(&select_sql, &select_params, dialect));
 
-            let pk_rows = match self.deps.connection.execute(&select_req) {
+            let pk_rows = match connection.execute(&select_req) {
                 Ok(r) => r.rows,
                 Err(e) => {
                     let err_msg = e.to_string();
                     self.emit_failure_event(&run_id, op_kind, &table_name, &err_msg);
-                    self.reset_lock_timeout_if_needed(&vocab);
+                    self.reset_lock_timeout_if_needed(&vocab, &connection);
                     return Err(ExecutorError::Transaction(err_msg));
                 }
             };
@@ -849,10 +872,10 @@ impl MutationExecutor {
                 && let Some(lock_sql) = vocab.lock_timeout_sql(ms)
             {
                 let lock_req = QueryRequest::new(lock_sql);
-                if let Err(e) = self.deps.connection.execute(&lock_req) {
+                if let Err(e) = connection.execute(&lock_req) {
                     let err_msg = e.to_string();
                     self.emit_failure_event(&run_id, op_kind, &table_name, &err_msg);
-                    self.reset_lock_timeout_if_needed(&vocab);
+                    self.reset_lock_timeout_if_needed(&vocab, &connection);
                     return Err(ExecutorError::Transaction(err_msg));
                 }
             }
@@ -874,17 +897,17 @@ impl MutationExecutor {
                     ))
                     .with_correlation_id(run_id.clone()),
                 );
-                self.reset_lock_timeout_if_needed(&vocab);
+                self.reset_lock_timeout_if_needed(&vocab, &connection);
                 return Ok(MutationOutcome::Cancelled {
                     rows_affected: rows_affected_total,
                 });
             }
 
             let begin_req = QueryRequest::new(vocab.begin);
-            if let Err(e) = self.deps.connection.execute(&begin_req) {
+            if let Err(e) = connection.execute(&begin_req) {
                 let err_msg = e.to_string();
                 self.emit_failure_event(&run_id, op_kind, &table_name, &err_msg);
-                self.reset_lock_timeout_if_needed(&vocab);
+                self.reset_lock_timeout_if_needed(&vocab, &connection);
                 return Err(ExecutorError::Transaction(err_msg));
             }
 
@@ -893,27 +916,27 @@ impl MutationExecutor {
                 && let Some(lock_sql) = vocab.lock_timeout_sql(ms)
             {
                 let lock_req = QueryRequest::new(lock_sql);
-                if let Err(e) = self.deps.connection.execute(&lock_req) {
+                if let Err(e) = connection.execute(&lock_req) {
                     let err_msg = e.to_string();
                     let rollback_req = QueryRequest::new(vocab.rollback);
-                    if let Err(rb_err) = self.deps.connection.execute(&rollback_req) {
+                    if let Err(rb_err) = connection.execute(&rollback_req) {
                         log::warn!("ROLLBACK failed after lock_timeout error: {}", rb_err);
                     }
                     self.emit_failure_event(&run_id, op_kind, &table_name, &err_msg);
-                    self.reset_lock_timeout_if_needed(&vocab);
+                    self.reset_lock_timeout_if_needed(&vocab, &connection);
                     return Err(ExecutorError::Transaction(err_msg));
                 }
             }
 
             let dml_req =
                 QueryRequest::new(inline_params(&generated.sql, &generated.params, dialect));
-            let dml_result = self.deps.connection.execute(&dml_req);
+            let dml_result = connection.execute(&dml_req);
 
             match dml_result {
                 Err(e) => {
                     let err_msg = e.to_string();
                     let rollback_req = QueryRequest::new(vocab.rollback);
-                    if let Err(rb_err) = self.deps.connection.execute(&rollback_req) {
+                    if let Err(rb_err) = connection.execute(&rollback_req) {
                         log::warn!("ROLLBACK failed during chunk error recovery: {}", rb_err);
                     }
 
@@ -933,7 +956,7 @@ impl MutationExecutor {
                     self.emit_event(chunk_event);
 
                     self.emit_failure_event(&run_id, op_kind, &table_name, &err_msg);
-                    self.reset_lock_timeout_if_needed(&vocab);
+                    self.reset_lock_timeout_if_needed(&vocab, &connection);
                     return Err(ExecutorError::Transaction(err_msg));
                 }
                 Ok(result) => {
@@ -943,11 +966,13 @@ impl MutationExecutor {
                     // DML mutated rows but they're uncommitted — ROLLBACK discards them.
                     if cancel.is_cancelled() {
                         let rollback_req = QueryRequest::new(vocab.rollback);
-                        if let Err(rb_err) = self.deps.connection.execute(&rollback_req) {
-                            log::warn!(
-                                "ROLLBACK failed during cancellation after chunk DML: {}",
-                                rb_err
+                        if let Err(rb_err) = connection.execute(&rollback_req) {
+                            let error = format!(
+                                "ROLLBACK failed during cancellation after chunk DML: {rb_err}"
                             );
+                            self.emit_failure_event(&run_id, op_kind, &table_name, &error);
+                            self.reset_lock_timeout_if_needed(&vocab, &connection);
+                            return Err(ExecutorError::Transaction(error));
                         }
                         self.emit_event(
                             EventRecord::new(
@@ -963,17 +988,17 @@ impl MutationExecutor {
                             ))
                             .with_correlation_id(run_id.clone()),
                         );
-                        self.reset_lock_timeout_if_needed(&vocab);
+                        self.reset_lock_timeout_if_needed(&vocab, &connection);
                         return Ok(MutationOutcome::Cancelled {
                             rows_affected: rows_affected_total,
                         });
                     }
 
                     let commit_req = QueryRequest::new(vocab.commit);
-                    if let Err(e) = self.deps.connection.execute(&commit_req) {
+                    if let Err(e) = connection.execute(&commit_req) {
                         let err_msg = e.to_string();
                         self.emit_failure_event(&run_id, op_kind, &table_name, &err_msg);
-                        self.reset_lock_timeout_if_needed(&vocab);
+                        self.reset_lock_timeout_if_needed(&vocab, &connection);
                         return Err(ExecutorError::Transaction(err_msg));
                     }
 
@@ -1014,11 +1039,24 @@ impl MutationExecutor {
         ))
         .with_correlation_id(run_id);
         self.emit_event(success_event);
-        self.reset_lock_timeout_if_needed(&vocab);
+        self.reset_lock_timeout_if_needed(&vocab, &connection);
 
         Ok(MutationOutcome::Success {
             rows_affected: rows_affected_total,
         })
+    }
+
+    fn with_operation_session<T>(
+        &self,
+        operation: impl FnOnce(Arc<dyn Connection>) -> Result<T, ExecutorError>,
+    ) -> Result<T, ExecutorError> {
+        let mut scope = ExecutionSessionScope::new(self.deps.connection.clone())
+            .map_err(|error| ExecutorError::Transaction(error.to_string()))?;
+        let result = operation(scope.connection())
+            .map_err(|error| dbflux_core::DbError::query_failed(error.to_string()));
+        scope
+            .finish(result)
+            .map_err(|error| ExecutorError::Transaction(error.to_string()))
     }
 
     /// Emit the driver's lock timeout reset SQL if one was set for this run.
@@ -1029,12 +1067,16 @@ impl MutationExecutor {
     /// connection do not silently inherit the previous timeout.
     ///
     /// Failure to reset is a `log::warn!` only — the primary mutation has already completed.
-    fn reset_lock_timeout_if_needed(&self, vocab: &TransactionVocab) {
+    fn reset_lock_timeout_if_needed(
+        &self,
+        vocab: &TransactionVocab,
+        connection: &Arc<dyn Connection>,
+    ) {
         if self.opts.lock_timeout_ms.is_some()
             && let Some(reset_sql) = vocab.lock_timeout_reset_sql
         {
             let reset_req = dbflux_core::QueryRequest::new(reset_sql);
-            if let Err(e) = self.deps.connection.execute(&reset_req) {
+            if let Err(e) = connection.execute(&reset_req) {
                 log::warn!(
                     "lock_timeout reset failed (connection may retain previous timeout): {}",
                     e
@@ -1048,12 +1090,16 @@ impl MutationExecutor {
     /// `run_direct` uses the autocommit-specific SET variant (e.g. session-scoped `SET
     /// lock_timeout` for Postgres) which persists beyond the statement. This cleans up
     /// the session state so subsequent autocommit operations don't inherit the timeout.
-    fn reset_autocommit_lock_timeout_if_needed(&self, vocab: &TransactionVocab) {
+    fn reset_autocommit_lock_timeout_if_needed(
+        &self,
+        vocab: &TransactionVocab,
+        connection: &Arc<dyn Connection>,
+    ) {
         if self.opts.lock_timeout_ms.is_some()
             && let Some(reset_sql) = vocab.autocommit_lock_timeout_reset_sql
         {
             let reset_req = dbflux_core::QueryRequest::new(reset_sql);
-            if let Err(e) = self.deps.connection.execute(&reset_req) {
+            if let Err(e) = connection.execute(&reset_req) {
                 log::warn!(
                     "autocommit lock_timeout reset failed (connection may retain previous timeout): {}",
                     e
@@ -1148,6 +1194,9 @@ mod tests {
             db_kind: DbKind,
             meta: dbflux_core::DriverMetadata,
             calls: Mutex<Vec<String>>,
+            failures: Mutex<Vec<String>>,
+            cancel_after: Mutex<Option<(String, crate::task_runner::MutationCancelHandle)>>,
+            pk_batches: Mutex<Vec<Vec<Vec<Value>>>>,
             dml_affected_rows: u64,
         }
 
@@ -1165,12 +1214,27 @@ mod tests {
                     db_kind: kind,
                     meta,
                     calls: Mutex::new(Vec::new()),
+                    failures: Mutex::new(Vec::new()),
+                    cancel_after: Mutex::new(None),
+                    pk_batches: Mutex::new(Vec::new()),
                     dml_affected_rows,
                 })
             }
 
             pub(super) fn recorded_calls(&self) -> Vec<String> {
                 self.calls.lock().unwrap().clone()
+            }
+
+            fn fail_on(&self, sql: &str) {
+                self.failures.lock().unwrap().push(sql.to_string());
+            }
+
+            fn cancel_after(&self, sql: &str, cancel: crate::task_runner::MutationCancelHandle) {
+                *self.cancel_after.lock().unwrap() = Some((sql.to_string(), cancel));
+            }
+
+            fn set_pk_batches(&self, batches: Vec<Vec<Vec<Value>>>) {
+                *self.pk_batches.lock().unwrap() = batches;
             }
         }
 
@@ -1192,7 +1256,27 @@ mod tests {
                 req: &dbflux_core::QueryRequest,
             ) -> Result<QueryResult, dbflux_core::DbError> {
                 self.calls.lock().unwrap().push(req.sql.clone());
+                if self
+                    .failures
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|sql| sql == &req.sql)
+                {
+                    return Err(dbflux_core::DbError::query_failed(format!(
+                        "{} failed",
+                        req.sql
+                    )));
+                }
+                if let Some((sql, cancel)) = self.cancel_after.lock().unwrap().as_ref()
+                    && sql == &req.sql
+                {
+                    cancel.cancel();
+                }
                 let mut result = QueryResult::empty();
+                if req.sql.starts_with("SELECT") {
+                    result.rows = self.pk_batches.lock().unwrap().pop().unwrap_or_default();
+                }
                 // DML statements (not BEGIN/COMMIT/ROLLBACK) get affected_rows
                 let sql_upper = req.sql.to_ascii_uppercase();
                 if sql_upper.starts_with("UPDATE")
@@ -1230,6 +1314,100 @@ mod tests {
             fn query_generator(&self) -> Option<&dyn QueryGenerator> {
                 static GENERATOR: SimpleDeleteGenerator = SimpleDeleteGenerator;
                 Some(&GENERATOR)
+            }
+        }
+
+        // -----------------------------------------------------------------
+        // Factory-backed fixture — proves public execution owns one child session.
+        // -----------------------------------------------------------------
+
+        struct FactoryBackedConnection {
+            root: Arc<RecordingConnection>,
+            factory: Arc<Factory>,
+        }
+
+        impl dbflux_core::Connection for FactoryBackedConnection {
+            fn metadata(&self) -> &dbflux_core::DriverMetadata {
+                self.root.metadata()
+            }
+            fn ping(&self) -> Result<(), dbflux_core::DbError> {
+                self.root.ping()
+            }
+            fn close(&mut self) -> Result<(), dbflux_core::DbError> {
+                Ok(())
+            }
+            fn execute(
+                &self,
+                request: &dbflux_core::QueryRequest,
+            ) -> Result<QueryResult, dbflux_core::DbError> {
+                self.root.execute(request)
+            }
+            fn cancel(
+                &self,
+                handle: &dbflux_core::QueryHandle,
+            ) -> Result<(), dbflux_core::DbError> {
+                self.root.cancel(handle)
+            }
+            fn schema(&self) -> Result<SchemaSnapshot, dbflux_core::DbError> {
+                self.root.schema()
+            }
+            fn kind(&self) -> DbKind {
+                self.root.kind()
+            }
+            fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
+                self.root.schema_loading_strategy()
+            }
+            fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
+                self.root.dialect()
+            }
+            fn query_generator(&self) -> Option<&dyn QueryGenerator> {
+                self.root.query_generator()
+            }
+            fn execution_session_factory(
+                &self,
+            ) -> Option<&dyn dbflux_core::ExecutionSessionFactory> {
+                Some(self.factory.as_ref())
+            }
+        }
+
+        struct Factory {
+            child: Arc<RecordingConnection>,
+            opens: std::sync::atomic::AtomicUsize,
+            finishes: Arc<std::sync::atomic::AtomicUsize>,
+        }
+
+        impl dbflux_core::ExecutionSessionFactory for Factory {
+            fn open(&self) -> Result<Arc<dyn dbflux_core::ExecutionSession>, dbflux_core::DbError> {
+                self.opens.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(Arc::new(Session {
+                    child: self.child.clone(),
+                    finishes: self.finishes.clone(),
+                }))
+            }
+            fn shutdown(&self) -> Result<(), dbflux_core::DbError> {
+                Ok(())
+            }
+        }
+
+        struct Session {
+            child: Arc<RecordingConnection>,
+            finishes: Arc<std::sync::atomic::AtomicUsize>,
+        }
+
+        impl dbflux_core::ExecutionSession for Session {
+            fn connection(&self) -> Arc<dyn dbflux_core::Connection> {
+                self.child.clone()
+            }
+            fn close(&self) -> Result<(), dbflux_core::DbError> {
+                Ok(())
+            }
+            fn finish_operation(&self) -> Result<(), dbflux_core::DbError> {
+                self.finishes
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            }
+            fn is_closed(&self) -> bool {
+                false
             }
         }
 
@@ -1297,6 +1475,14 @@ mod tests {
                     used_raw_expression: false,
                 })
             }
+            fn generate_delete_chunk_from_spec(
+                &self,
+                spec: &VisualMutationSpec,
+                _pk_cols: &[&str],
+                _pk_values: &[Vec<Value>],
+            ) -> Result<GeneratedMutation, dbflux_core::GeneratorError> {
+                self.generate_delete_from_spec(spec)
+            }
         }
 
         pub(super) fn make_delete_spec(table: &str) -> VisualMutationSpec {
@@ -1337,6 +1523,147 @@ mod tests {
                 event_sink,
                 policy: MutationPolicy::Allowed,
             }
+        }
+
+        #[test]
+        fn factory_backed_single_transaction_uses_one_child_and_finishes_it() {
+            let root = RecordingConnection::new(DbKind::Postgres, 3);
+            let child = RecordingConnection::new(DbKind::Postgres, 3);
+            let finishes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let factory = Arc::new(Factory {
+                child: child.clone(),
+                opens: std::sync::atomic::AtomicUsize::new(0),
+                finishes: finishes.clone(),
+            });
+            let connection: Arc<dyn dbflux_core::Connection> = Arc::new(FactoryBackedConnection {
+                root: root.clone(),
+                factory: factory.clone(),
+            });
+            let executor = MutationExecutor::new(
+                make_delete_spec("widgets"),
+                MutationExecOptions::single_transaction(),
+                MutationDeps {
+                    connection,
+                    event_sink: None,
+                    policy: MutationPolicy::Allowed,
+                },
+            );
+
+            assert_eq!(
+                executor.run_single_tx(&no_cancel()).unwrap(),
+                MutationOutcome::Success { rows_affected: 3 }
+            );
+            assert_eq!(factory.opens.load(std::sync::atomic::Ordering::SeqCst), 1);
+            assert_eq!(finishes.load(std::sync::atomic::Ordering::SeqCst), 1);
+            assert_eq!(
+                child.recorded_calls(),
+                vec!["BEGIN", "DELETE FROM widgets", "COMMIT"]
+            );
+            assert!(root.recorded_calls().is_empty());
+        }
+
+        #[test]
+        fn factory_backed_operation_finishes_on_error_and_pre_begin_cancellation() {
+            let root = RecordingConnection::new(DbKind::Postgres, 3);
+            let child = RecordingConnection::new(DbKind::Postgres, 3);
+            child.fail_on("DELETE FROM widgets");
+            let finishes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let factory = Arc::new(Factory {
+                child: child.clone(),
+                opens: std::sync::atomic::AtomicUsize::new(0),
+                finishes: finishes.clone(),
+            });
+            let connection: Arc<dyn dbflux_core::Connection> = Arc::new(FactoryBackedConnection {
+                root,
+                factory: factory.clone(),
+            });
+            let executor = MutationExecutor::new(
+                make_delete_spec("widgets"),
+                MutationExecOptions::single_transaction(),
+                MutationDeps {
+                    connection,
+                    event_sink: None,
+                    policy: MutationPolicy::Allowed,
+                },
+            );
+
+            assert!(executor.run_single_tx(&no_cancel()).is_err());
+            assert_eq!(finishes.load(std::sync::atomic::Ordering::SeqCst), 1);
+            assert_eq!(
+                child.recorded_calls(),
+                vec!["BEGIN", "DELETE FROM widgets", "ROLLBACK"]
+            );
+
+            let cancel = no_cancel();
+            cancel.cancel();
+            assert_eq!(
+                executor.run_single_tx(&cancel).unwrap(),
+                MutationOutcome::Cancelled { rows_affected: 0 }
+            );
+            assert_eq!(factory.opens.load(std::sync::atomic::Ordering::SeqCst), 2);
+            assert_eq!(finishes.load(std::sync::atomic::Ordering::SeqCst), 2);
+        }
+
+        #[test]
+        fn factory_backed_chunked_operation_reuses_one_child_across_chunks() {
+            let root = RecordingConnection::new(DbKind::Postgres, 1);
+            let child = RecordingConnection::new(DbKind::Postgres, 1);
+            child.set_pk_batches(vec![
+                vec![vec![Value::Int(1001)]],
+                (0..1_000).map(|id| vec![Value::Int(id)]).collect(),
+            ]);
+            let finishes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let factory = Arc::new(Factory {
+                child: child.clone(),
+                opens: std::sync::atomic::AtomicUsize::new(0),
+                finishes: finishes.clone(),
+            });
+            let connection: Arc<dyn dbflux_core::Connection> = Arc::new(FactoryBackedConnection {
+                root,
+                factory: factory.clone(),
+            });
+            let executor = MutationExecutor::new(
+                make_delete_spec("widgets"),
+                MutationExecOptions::chunked(1_000),
+                MutationDeps {
+                    connection,
+                    event_sink: None,
+                    policy: MutationPolicy::Allowed,
+                },
+            );
+
+            assert_eq!(
+                executor.run_chunked_tx(&["id"], &no_cancel()).unwrap(),
+                MutationOutcome::Success { rows_affected: 2 }
+            );
+            assert_eq!(factory.opens.load(std::sync::atomic::Ordering::SeqCst), 1);
+            assert_eq!(finishes.load(std::sync::atomic::Ordering::SeqCst), 1);
+            assert_eq!(
+                child
+                    .recorded_calls()
+                    .iter()
+                    .filter(|sql| sql.as_str() == "BEGIN")
+                    .count(),
+                2
+            );
+        }
+
+        #[test]
+        fn cancellation_with_failed_rollback_is_not_reported_as_cancelled() {
+            let connection = RecordingConnection::new(DbKind::Postgres, 1);
+            let cancel = no_cancel();
+            connection.cancel_after("BEGIN", cancel.clone());
+            connection.fail_on("ROLLBACK");
+            let executor = MutationExecutor::new(
+                make_delete_spec("widgets"),
+                MutationExecOptions::single_transaction(),
+                make_deps(connection, None),
+            );
+
+            let error = executor
+                .run_single_tx(&cancel)
+                .expect_err("rollback failure must remain an error");
+            assert!(error.to_string().contains("ROLLBACK failed"));
         }
 
         // Regression: drivers do not bind QueryRequest.params, so the executor

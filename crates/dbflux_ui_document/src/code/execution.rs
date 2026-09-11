@@ -585,6 +585,10 @@ impl CodeDocument {
             }
         };
 
+        self.execution_session_context = Some(ExecutionSessionContext {
+            root: connection.clone(),
+            database: active_database.clone(),
+        });
         self.clear_live_output();
         self.result_tabs.run_in_new_tab = in_new_tab;
 
@@ -611,6 +615,7 @@ impl CodeDocument {
         self.execution.active_query_task = Some(ActiveQueryTask {
             task_id,
             target: task_target.clone(),
+            uses_isolated_session: connection.execution_session_factory().is_some(),
         });
 
         self.state = DocumentState::Executing;
@@ -670,6 +675,7 @@ impl CodeDocument {
             .unwrap_or_default();
 
         let session_binding = self.execution_session.clone();
+        let session_generation = session_binding.current_generation();
         let task = cx.background_executor().spawn({
             let connection = connection.clone();
             let session_binding = session_binding.clone();
@@ -687,15 +693,31 @@ impl CodeDocument {
                 });
             }
 
-            if cancel_token.is_cancelled() {
+            if cancel_token.is_cancelled() && session_isolated {
+                // Local task cancellation does not cancel the remote isolated session. Wait for
+                // the completed operation, then retire only that session in the background.
+                let cleanup_binding = session_binding.clone();
+                let cleanup = cx
+                    .background_executor()
+                    .spawn(async move {
+                        let generation = cleanup_binding.invalidate();
+                        cleanup_binding.close_invalidated(generation)
+                    })
+                    .await;
+                if let Err(error) = cleanup {
+                    dbflux_ui_base::user_error::report_error_async(
+                        dbflux_ui_base::user_error::UserFacingError::new(
+                            dbflux_ui_base::user_error::ErrorKind::Driver,
+                            "Could not confirm cleanup of the cancelled isolated query",
+                        )
+                        .with_cause(error.to_string()),
+                        cx,
+                    );
+                }
+            } else if cancel_token.is_cancelled() {
                 log::info!("Query was cancelled, discarding result");
 
-                if session_isolated {
-                    session_binding.invalidate();
-                    if let Err(error) = session_binding.close() {
-                        log::warn!("Cleanup after isolated-session cancellation failed: {error}");
-                    }
-                } else if let Err(error) = connection.cleanup_after_cancel() {
+                if let Err(error) = connection.cleanup_after_cancel() {
                     log::warn!("Cleanup after cancel failed: {error}");
                 }
 
@@ -708,21 +730,13 @@ impl CodeDocument {
                         cx,
                     );
                 });
-                // Fallback fires if the entity is gone (this.update failed). If this.update
-                // succeeded, the entity is alive and process_pending_result will emit via the
-                // normal path — no second probe needed. This avoids both double-logging and
-                // the overhead of a separate cx.update call.
                 if inner_result.is_err() {
-                    // Entity is gone; process_pending_result won't run. Emit via fallback so the event
-                    // is not silently dropped.
                     let ts_ms = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .map(|d| d.as_millis() as i64)
                         .unwrap_or(0);
                     let duration_ms = started_at.elapsed().as_millis() as i64;
-
                     let details_json = serde_json::json!({ "query": query }).to_string();
-
                     let mut event = EventRecord::new(
                         ts_ms,
                         EventSeverity::Warn,
@@ -740,14 +754,21 @@ impl CodeDocument {
                     event.source_id = EventSourceId::Local;
                     event.actor_type = EventActorType::User;
                     event.duration_ms = Some(duration_ms);
-                    if let Err(e) = audit_service.record(event) {
+                    if let Err(error) = audit_service.record(event) {
                         log::warn!(
-                            "Failed to emit cancelled query audit event via fallback: {}",
-                            e
+                            "Failed to emit cancelled query audit event via fallback: {error}"
                         );
                     }
                 }
+                return;
+            }
 
+            if !cancel_token.is_cancelled()
+                && !session_binding.is_current_generation(session_generation)
+            {
+                let _ = this.update(cx, |doc, cx| {
+                    doc.discard_stale_query(task_id, exec_id, cx);
+                });
                 return;
             }
 
@@ -960,6 +981,36 @@ impl CodeDocument {
             None,
             None,
         );
+    }
+
+    fn discard_stale_query(
+        &mut self,
+        task_id: dbflux_core::TaskId,
+        exec_id: Uuid,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(record) = self
+            .execution
+            .execution_history
+            .iter_mut()
+            .find(|record| record.id == exec_id)
+        {
+            record.finished_at = Some(Instant::now());
+            record.error = Some("Execution result discarded after context changed".to_string());
+        }
+        if self
+            .execution
+            .active_query_task
+            .as_ref()
+            .is_some_and(|task| task.task_id == task_id)
+        {
+            self.runner.clear_primary(task_id);
+            self.execution.active_query_task = None;
+            self.state = DocumentState::Clean;
+            cx.emit(DocumentEvent::ExecutionFinished);
+            cx.emit(DocumentEvent::MetaChanged);
+            cx.notify();
+        }
     }
 
     pub(super) fn cancel_dangerous_query(&mut self, cx: &mut Context<Self>) {
@@ -1544,9 +1595,11 @@ impl CodeDocument {
             }
 
             if let Some(task) = self.execution.active_query_task.as_ref() {
-                self.app_state
-                    .read(cx)
-                    .cancel_query_for_target(&task.target);
+                if !task.uses_isolated_session {
+                    self.app_state
+                        .read(cx)
+                        .cancel_query_for_target(&task.target);
+                }
             } else if let Some(conn_id) = self.connection_id
                 && let Some(connected) = self.app_state.read(cx).connections().get(&conn_id)
             {

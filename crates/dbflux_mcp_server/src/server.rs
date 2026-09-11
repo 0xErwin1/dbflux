@@ -466,9 +466,14 @@ impl DbFluxServer {
     {
         let connection = Self::get_or_connect(state, connection_id).await?;
 
-        tokio::task::spawn_blocking(move || f(connection))
-            .await
-            .map_err(|e| format!("Blocking task failed: {}", e))?
+        tokio::task::spawn_blocking(move || {
+            let mut scope = dbflux_core::ExecutionSessionScope::new(connection)
+                .map_err(|error| error.to_string())?;
+            let result = f(scope.connection()).map_err(dbflux_core::DbError::query_failed);
+            scope.finish(result).map_err(|error| error.to_string())
+        })
+        .await
+        .map_err(|e| format!("Blocking task failed: {}", e))?
     }
 
     pub(crate) async fn execute_connection_blocking<F, T>(
@@ -479,9 +484,14 @@ impl DbFluxServer {
         F: FnOnce(Arc<dyn Connection>) -> Result<T, String> + Send + 'static,
         T: Send + 'static,
     {
-        tokio::task::spawn_blocking(move || f(connection))
-            .await
-            .map_err(|e| format!("Blocking task failed: {}", e))?
+        tokio::task::spawn_blocking(move || {
+            let mut scope = dbflux_core::ExecutionSessionScope::new(connection)
+                .map_err(|error| error.to_string())?;
+            let result = f(scope.connection()).map_err(dbflux_core::DbError::query_failed);
+            scope.finish(result).map_err(|error| error.to_string())
+        })
+        .await
+        .map_err(|e| format!("Blocking task failed: {}", e))?
     }
 
     /// Get or establish a connection for the given connection_id

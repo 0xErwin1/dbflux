@@ -135,10 +135,25 @@ impl DbFluxServer {
                 Some(&params.connection_id),
                 ExecutionClassification::Metadata,
                 move || async move {
-                    {
+                    let retired_connections = {
                         let mut cache = state.connection_cache.write().await;
-                        cache.remove_connection_variants(&connection_id);
-                    }
+                        cache.drain_connection_variants(&connection_id)
+                    };
+
+                    // Factory shutdown may synchronously acquire cache-owned state. Ownership
+                    // was drained above, so this blocking cleanup never runs under the write lock.
+                    tokio::task::spawn_blocking(move || {
+                        for cached in retired_connections {
+                            let connection = cached.connection();
+                            if let Some(factory) = connection.execution_session_factory() {
+                                factory.shutdown().map_err(|error| error.to_string())?;
+                            }
+                        }
+                        Ok::<(), String>(())
+                    })
+                    .await
+                    .map_err(|error| ErrorData::internal_error(error.to_string(), None))?
+                    .map_err(|error| ErrorData::internal_error(error, None))?;
 
                     Ok(CallToolResult::success(vec![to_json_content(
                         &serde_json::json!({
