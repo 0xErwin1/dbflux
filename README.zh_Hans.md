@@ -104,7 +104,7 @@ curl -fsSL https://raw.githubusercontent.com/0xErwin1/dbflux/main/scripts/instal
 - 「复制为查询」上下文菜单，可将 INSERT / UPDATE / DELETE 复制为 SQL、MongoDB shell 或 Redis 命令
 - 查询预览模态框，按语言提供语法高亮
 - 命令面板，支持模糊搜索
-- 自定义 toast 通知，支持自动消失
+- 自定义 Toast 提示，支持自动消失
 - 后台任务面板
 - 会话恢复：启动时恢复已打开的标签页，并对外部修改过的文件做冲突检测
 
@@ -146,7 +146,7 @@ curl -fsSL https://raw.githubusercontent.com/0xErwin1/dbflux/main/scripts/instal
 ### 审计与脚本
 
 - 基于 SQLite 的审计日志，记录查询、连接、Hook、脚本、MCP、治理与配置事件，支持脱敏与查询指纹 — 参见 [docs/AUDIT.md](docs/AUDIT.md)
-- 集中式的用户错误上报：失败以 toast 呈现，附带关联 ID 与「在审计中查看」操作，驱动状态栏的错误徽标，并与对应的审计记录相关联
+- 集中式的用户错误上报：失败以 Toast 提示呈现，附带关联 ID 与「在审计中查看」操作，驱动状态栏的错误徽标，并与对应的审计记录相关联
 - Lua、Python 与 Bash 脚本以文档形式执行，输出实时流式呈现 — 参见 [docs/LUA.md](docs/LUA.md)
 
 ### 键盘导航

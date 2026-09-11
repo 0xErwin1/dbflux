@@ -350,11 +350,11 @@ UPDATE cfg_audit_settings SET log_capture_min_level = 'warn';
 
 未识别的字段会以 JSON 对象的形式累积到 `details_json` 中。若消息超过 512 个字符，会用 `…` 截断，完整消息存放在 `details_json["message"]` 里。
 
-桥接还会把 `correlation_id` 直接映射到 `EventRecord.correlation_id`（而不是放进 `details_json`），从而实现面向用户的错误 toast 与其对应审计记录之间的跨组件关联。
+桥接还会把 `correlation_id` 直接映射到 `EventRecord.correlation_id`（而不是放进 `details_json`），从而实现面向用户的错误 Toast 提示与其对应审计记录之间的跨组件关联。
 
 ### 面向用户的错误事件
 
-面向用户的错误（存储失败、驱动错误、网络问题、配置持久化失败）通过 `dbflux_ui_base::user_error` 的 `report_error` / `report_error_async` 上报。每次调用都会发出一个流经桥接的跟踪事件，同时推送一条 toast 通知。
+面向用户的错误（存储失败、驱动错误、网络问题、配置持久化失败）通过 `dbflux_ui_base::user_error` 的 `report_error` / `report_error_async` 上报。每次调用都会发出一个流经桥接的跟踪事件，同时推送一条 Toast 提示。
 
 跟踪事件的结构：
 
@@ -364,22 +364,22 @@ UPDATE cfg_audit_settings SET log_capture_min_level = 'warn';
 | `action` | `user_error` |
 | `outcome` | `failure` |
 | `kind` | `ErrorKind` 的字符串形式（`storage`、`network`、`auth`、`hook`、`driver`、`user`、`config`） |
-| `correlation_id` | UUID v7，用于将 toast 与审计记录关联起来 |
-| `message` | toast 中显示的可读摘要 |
+| `correlation_id` | UUID v7，用于将 Toast 提示与审计记录关联起来 |
+| `message` | Toast 提示中显示的可读摘要 |
 
 `correlation_id` 字段由 `AuditFieldVisitor` 提取到 `EventRecord.correlation_id` 中。注意：该访问器把 `record_str`（Display 标记符 `%val`）与 `record_debug`（Debug 标记符 `?val`）都交由同一个 `record_string_by_name` 分发器处理，因此将来新增的类型化槽位无论调用方使用哪种标记符都能被识别。
 
 从界面回到审计文档有两条路径：
 
-- **每条 toast 上的「在审计中查看」操作** — 发出 `OpenAuditRequested(Some(correlation_id))`。工作区会打开（或聚焦）审计文档，并应用匹配的关联筛选，使用户看到的正是与该 toast 绑定的那一条事件。
+- **每条 Toast 提示上的「在审计中查看」操作** — 发出 `OpenAuditRequested(Some(correlation_id))`。工作区会打开（或聚焦）审计文档，并应用匹配的关联筛选，使用户看到的正是与该 Toast 提示绑定的那一条事件。
 - **点击状态栏错误徽标** — 发出 `OpenAuditRequested(None)`。工作区会打开审计文档，并应用默认的用户错误筛选（在最近时间窗口内 `target = dbflux_ui::user_error`），便于用户浏览近期所有面向用户的失败。
 
 两个事件都经由 `AppStateEntity::request_open_audit` 流转，因此工作区只需订阅一次。
 
 从 `EventSeverity` 到日志级别的映射：
 
-- `EventSeverity::Info` 与 `EventSeverity::Warn` — 以 `WARN` 级别发出；会做限流（5 令牌桶，每 2 秒补充 1 个，按级别分别计算）
-- `EventSeverity::Error` 与 `EventSeverity::Fatal` — 以 `ERROR` 级别发出；不限流
+- `EventSeverity::Info` 与 `EventSeverity::Warn` — 以 `WARN` 级别发出；会做节流（5 令牌桶，每 2 秒补充 1 个，按级别分别计算）
+- `EventSeverity::Error` 与 `EventSeverity::Fatal` — 以 `ERROR` 级别发出；不节流
 
 ### 启用桥接
 
