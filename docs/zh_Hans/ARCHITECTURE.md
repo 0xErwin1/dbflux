@@ -557,7 +557,7 @@ crates/
 - **驱动程序数据源**：`UserFacingError::from_formatted(kind, FormattedError)` 采用驱动程序现有的 `ErrorFormatter` 输出。界面代码永远不会依据驱动程序 id 做分支。
 - **审计桥接**：该接缝会发出 `tracing::error!(target = "dbflux_ui::user_error", correlation_id = %id, kind, action = "user_error", outcome = "failure", ...)`。`AuditFieldVisitor`（`crates/dbflux_core/src/observability/tracing_bridge/layer.rs`）把 `record_str` 与 `record_debug` 都经由 `record_string_by_name` 路由，因此无论字段是通过 `%`（Display）还是 `?`（Debug）标记符记录的，类型化的 `EventRecord.correlation_id` 槽位都会被填充。
 - **Toast 提示节流（Throttle）**：`ToastHost` 为 Info 与 Warn 各维护一个按严重级别的令牌桶（容量 5，每 2 秒补充 1 个令牌），以免连接中断的风暴刷屏。Error 与 Fatal 绕过节流。该令牌桶的时钟可注入，便于确定性测试。
-- **徽标与导航**：`AppStateEntity::note_user_error` 会让 `unread_error_count` 加一，并发出 `UserErrorReported`。状态栏徽标订阅它，点击时调用 `AppStateEntity::request_open_audit(None, cx)`，后者发出 `OpenAuditRequested`。toast 上的「在审计中查看」动作会带着 `Some(correlation_id)` 发出同一事件。工作区只订阅一次 `OpenAuditRequested`，并通过 `set_correlation_filter` 或 `new_with_correlation_id` 引导 `AuditDocument`。
+- **徽标与导航**：`AppStateEntity::note_user_error` 会让 `unread_error_count` 加一，并发出 `UserErrorReported`。状态栏徽标订阅它，点击时调用 `AppStateEntity::request_open_audit(None, cx)`，后者发出 `OpenAuditRequested`。Toast 提示上的「在审计中查看」动作会带着 `Some(correlation_id)` 发出同一事件。工作区只订阅一次 `OpenAuditRequested`，并通过 `set_correlation_filter` 或 `new_with_correlation_id` 引导 `AuditDocument`。
 - **约定**：只有第一个捕获点才上报。上层的传播者不得重复上报 —— 运行时没有去重机制，重复的 Toast 提示属代码评审关注点（参见 AGENTS.md § Error Handling）。
 
 ### 文档系统
