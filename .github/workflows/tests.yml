@@ -116,6 +116,15 @@ jobs:
       # binaries race to pull the same tag and anonymous Docker Hub throttling
       # aborts mid-stream ("bytes remaining on stream"). Pulling everything
       # up front, serially and with retries, removes that failure mode.
+      #
+      # This step is an optimisation, not a gate, so it never fails the job.
+      # It used to `exit 1` on the first image it could not fetch, which meant
+      # one withdrawn image took down every driver suite — a dead MinIO tag
+      # blocked PostgreSQL, MySQL, MongoDB, Redis and DynamoDB, none of which
+      # use it, and blocked every pull request in the repository with it.
+      # An image that cannot be pre-pulled is reported here and left to
+      # testcontainers, so only the suite that actually needs it fails, and it
+      # fails with a test error rather than a red job that ran no tests.
       - name: Pre-pull container images
         run: |
           images=(
@@ -130,21 +139,28 @@ jobs:
             amazon/dynamodb-local:latest
             influxdb:2.7
             influxdb:1.8
-            minio/minio:RELEASE.2025-09-07T16-13-09Z
+            quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
             localstack/localstack:3
           )
+          unpulled=()
           for image in "${images[@]}"; do
             for attempt in 1 2 3; do
               if docker pull --quiet "$image"; then
                 break
               fi
               if [ "$attempt" = 3 ]; then
-                echo "failed to pull $image after 3 attempts" >&2
-                exit 1
+                echo "::warning::could not pre-pull $image after 3 attempts; \
+          the suite that needs it will pull it at test time and fail there if it is genuinely gone"
+                unpulled+=("$image")
+                break
               fi
               sleep $((attempt * 15))
             done
           done
+
+          if [ ${#unpulled[@]} -gt 0 ]; then
+            echo "images left for testcontainers to pull: ${unpulled[*]}"
+          fi
 
       - name: Run PostgreSQL live integration tests
         run: cargo test -p dbflux_driver_postgres --locked --test live_integration -- --ignored
