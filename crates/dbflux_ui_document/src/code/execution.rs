@@ -207,7 +207,7 @@ impl CodeDocument {
     /// Returns `None` for a single statement or a driver that cannot execute
     /// batches, in which case no confirmation is shown.
     fn script_statement_count(&self, query: &str, cx: &Context<Self>) -> Option<usize> {
-        let count = self.editor.query_language.statement_count(query);
+        let count = self.effective_language().statement_count(query);
         if count <= 1 {
             return None;
         }
@@ -612,7 +612,7 @@ impl CodeDocument {
             query.clone(),
             active_database,
             &self.source.exec_ctx,
-            self.editor.query_language.clone(),
+            self.effective_language().clone(),
         );
 
         // Capture audit_service, task_target, and started_at before spawning so we can emit
@@ -1525,7 +1525,7 @@ impl CodeDocument {
             return;
         }
 
-        let kind = match &self.editor.query_language {
+        let kind = match self.effective_language() {
             QueryLanguage::Lua => HookKind::Lua {
                 source: ScriptSource::Inline {
                     content: content.clone(),
@@ -1572,7 +1572,7 @@ impl CodeDocument {
             phase: None,
         };
 
-        let description = format!("Run {} script", self.editor.query_language.display_name());
+        let description = format!("Run {} script", self.effective_language().display_name());
         let (output_sender, output_receiver) = dbflux_core::output_channel();
         let (task_id, cancel_token) =
             self.runner

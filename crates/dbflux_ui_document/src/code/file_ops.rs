@@ -70,8 +70,8 @@ impl CodeDocument {
     /// Open a "Save As" dialog and save to the chosen path.
     pub fn save_file_as(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         let content = self.build_file_content(cx);
-        let default_ext = self.editor.query_language.default_extension().to_string();
-        let language_name = self.editor.query_language.display_name().to_string();
+        let default_ext = self.effective_language().default_extension().to_string();
+        let language_name = self.effective_language().display_name().to_string();
 
         let suggested_name = if let Some(path) = &self.editor.path {
             path.file_name()
