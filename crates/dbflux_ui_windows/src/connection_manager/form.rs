@@ -807,8 +807,14 @@ impl ConnectionManagerWindow {
                                         );
                                     }
 
-                                    let overrides =
-                                        ConnectionOverrides::new(pipeline_output.resolved_password);
+                                    // The pipeline only yields a password when the
+                                    // profile carries a `ValueRef` for it. Fall back to
+                                    // the form password (prefilled from the keyring when
+                                    // editing) so a pipeline profile is not probed
+                                    // without credentials.
+                                    let overrides = ConnectionOverrides::new(
+                                        pipeline_output.resolved_password.or(password),
+                                    );
                                     let access_handle_drop = TestConnectionProbeResource {
                                         name: "pipeline access handle",
                                         drop_guard: drop_guards.access_handle,
