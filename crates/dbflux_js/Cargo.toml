@@ -10,6 +10,5 @@ path = "src/lib.rs"
 dbflux_core = { path = "../dbflux_core" }
 rquickjs.workspace = true
 serde_json.workspace = true
-log.workspace = true
 
 [dev-dependencies]

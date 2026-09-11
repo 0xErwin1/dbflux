@@ -3052,7 +3052,6 @@ name = "dbflux_js"
 version = "0.8.0-dev.0"
 dependencies = [
  "dbflux_core",
- "log",
  "rquickjs",
  "serde_json",
 ]
