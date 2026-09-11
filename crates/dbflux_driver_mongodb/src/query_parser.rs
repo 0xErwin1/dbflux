@@ -62,7 +62,56 @@ fn parse_query_positional(input: &str) -> Result<MongoQuery, MongoParseError> {
         return parse_shell_syntax_positional(trimmed, trim_offset);
     }
 
+    if looks_like_javascript(trimmed) {
+        let first_line_len = trimmed.lines().next().unwrap_or(trimmed).len();
+        return Err(MongoParseError::new(
+            SCRIPT_UNSUPPORTED_MESSAGE,
+            trim_offset,
+            first_line_len,
+        ));
+    }
+
     parse_json_format(trimmed).map_err(|e| MongoParseError::from_db_error(e, trim_offset))
+}
+
+const SCRIPT_UNSUPPORTED_MESSAGE: &str = "JavaScript scripts are not supported yet. Run a single db.collection.method(...) call, \
+     a db.method(...) call, or a JSON query.";
+
+/// Statement forms that open a script rather than a single query.
+///
+/// Each keyword carries its delimiter so a longer identifier that merely
+/// starts with the same letters — `constant`, `iffy`, `forEach` — is not
+/// mistaken for the keyword.
+const JAVASCRIPT_STATEMENT_STARTERS: &[&str] = &[
+    "const ",
+    "let ",
+    "var ",
+    "function ",
+    "for ",
+    "for(",
+    "while ",
+    "while(",
+    "if ",
+    "if(",
+    "class ",
+    "async ",
+    "return ",
+    "//",
+    "/*",
+];
+
+/// True when the input opens with a JavaScript statement rather than a query.
+///
+/// Only used once shell syntax has been ruled out, to choose between a
+/// "scripts are unsupported" error and the JSON fallback. A JSON query needs
+/// no guard here: every starter above begins with a letter or a slash, so an
+/// object or an array can never match one.
+fn looks_like_javascript(input: &str) -> bool {
+    let trimmed = input.trim_start();
+
+    JAVASCRIPT_STATEMENT_STARTERS
+        .iter()
+        .any(|starter| trimmed.starts_with(starter))
 }
 
 /// Parse a query string into a MongoQuery.
@@ -77,6 +126,12 @@ pub fn parse_query(input: &str) -> Result<MongoQuery, DbError> {
     // Try shell syntax first
     if trimmed.starts_with("db.") {
         return parse_shell_syntax(trimmed);
+    }
+
+    if looks_like_javascript(trimmed) {
+        return Err(DbError::query_failed(
+            SCRIPT_UNSUPPORTED_MESSAGE.to_string(),
+        ));
     }
 
     // Fall back to JSON format
@@ -343,6 +398,27 @@ fn parse_method_call(input: &str) -> Result<(&str, &str), DbError> {
     let args_start = paren_pos + 1;
     let args_end = find_matching_paren(input, paren_pos)?;
     let args_str = &input[args_start..args_end];
+
+    // Anything beyond the matched `)` was previously parsed and then dropped,
+    // so a chained call ran without its modifier and a second statement never
+    // ran at all — both silently. Refuse instead, and name which one it is.
+    let trailing = input[args_end + 1..].trim().trim_start_matches(';').trim();
+    if let Some(chained) = trailing.strip_prefix('.') {
+        let chained_name: String = chained
+            .chars()
+            .take_while(|character| character.is_alphanumeric() || *character == '_')
+            .collect();
+
+        return Err(DbError::query_failed(format!(
+            "Chained method '.{chained_name}()' is not supported. Express it in the \
+             method's own arguments, or use db.collection.aggregate([...])."
+        )));
+    }
+    if !trailing.is_empty() {
+        return Err(DbError::query_failed(
+            SCRIPT_UNSUPPORTED_MESSAGE.to_string(),
+        ));
+    }
 
     Ok((method_name, args_str))
 }
@@ -1210,5 +1286,123 @@ mod tests {
     fn test_db_level_validation_run_command() {
         let errors = validate_query_positional(r#"db.runCommand({"ping": 1})"#);
         assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn test_javascript_script_reports_unsupported_not_invalid_json() {
+        let script = concat!(
+            "const OLD_ID = \"abc\";\n",
+            "for (const name of db.getCollectionNames()) {\n",
+            "  print(name);\n",
+            "}\n"
+        );
+
+        let message = match parse_query(script) {
+            Ok(_) => panic!("a JS script must not parse as a single query"),
+            Err(error) => error.to_string(),
+        };
+
+        assert_eq!(message, SCRIPT_UNSUPPORTED_MESSAGE);
+    }
+
+    #[test]
+    fn test_javascript_script_diagnostic_points_at_first_statement() {
+        let script = "let total = 0;\ndb.users.countDocuments({});\n";
+
+        let errors = validate_query_positional(script);
+
+        assert_eq!(errors.len(), 1, "expected exactly one diagnostic");
+        assert_eq!(
+            errors[0].offset, 0,
+            "diagnostic should anchor at the script start"
+        );
+        assert_eq!(
+            errors[0].len,
+            "let total = 0;".len(),
+            "diagnostic should underline the first statement only"
+        );
+        assert_eq!(errors[0].message, SCRIPT_UNSUPPORTED_MESSAGE);
+    }
+
+    #[test]
+    fn test_malformed_json_still_reports_invalid_json() {
+        let message = match parse_query(r#"{"collection": "users",}"#) {
+            Ok(_) => panic!("a trailing comma is not valid JSON"),
+            Err(error) => error.to_string(),
+        };
+
+        assert!(
+            message.contains("Invalid JSON"),
+            "genuine JSON breakage must keep its JSON message, got: {message}"
+        );
+    }
+
+    #[test]
+    fn test_identifiers_prefixed_with_a_keyword_are_not_scripts() {
+        // The starter list carries its delimiters precisely so these do not
+        // match; without that, each would be misreported as a script.
+        for input in ["constant", "iffy", "forEach()", "classic", "variable"] {
+            assert!(
+                !looks_like_javascript(input),
+                "{input} is not a script and must not be detected as one"
+            );
+        }
+
+        // ...while the keywords themselves still are.
+        for input in ["const x = 1;", "if (a) {}", "for (const a of b) {}"] {
+            assert!(looks_like_javascript(input), "{input} is a script");
+        }
+    }
+
+    #[test]
+    fn test_script_starting_with_a_db_call_is_rejected_not_silently_truncated() {
+        // Regression: the shell parser used to stop at the first matched `)`
+        // and discard the rest, so this ran ONLY the users query, silently.
+        let script = "db.users.find({});\ndb.orders.find({});\n";
+
+        let message = match parse_query(script) {
+            Ok(_) => panic!("two statements must not parse as one query"),
+            Err(error) => error.to_string(),
+        };
+
+        assert_eq!(message, SCRIPT_UNSUPPORTED_MESSAGE);
+    }
+
+    #[test]
+    fn test_trailing_semicolon_is_accepted() {
+        // mongosh users paste trailing semicolons; rejecting trailing content
+        // must not reject these.
+        let query = parse_query("db.users.find({});").unwrap();
+        assert_eq!(query.collection.as_deref(), Some("users"));
+
+        let db_level = parse_query("db.getName();").unwrap();
+        assert!(db_level.collection.is_none());
+
+        let spaced = parse_query("db.users.find({}) ;  ").unwrap();
+        assert_eq!(spaced.collection.as_deref(), Some("users"));
+    }
+
+    #[test]
+    fn test_chained_method_is_named_not_reported_as_a_script() {
+        // Before the trailing check this ran find({}) and dropped `.limit(5)`,
+        // returning unlimited rows with no warning.
+        let message = match parse_query("db.users.find({}).limit(5)") {
+            Ok(_) => panic!("a chained call must not parse"),
+            Err(error) => error.to_string(),
+        };
+
+        assert!(
+            message.contains("'.limit()'"),
+            "the message must name the chained method, got: {message}"
+        );
+        assert_ne!(message, SCRIPT_UNSUPPORTED_MESSAGE);
+    }
+
+    #[test]
+    fn test_trailing_statement_diagnostic_is_positional() {
+        let errors = validate_query_positional("db.users.find({});\ndb.orders.find({});");
+
+        assert_eq!(errors.len(), 1, "expected exactly one diagnostic");
+        assert_eq!(errors[0].message, SCRIPT_UNSUPPORTED_MESSAGE);
     }
 }

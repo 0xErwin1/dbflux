@@ -58,6 +58,17 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **Honest errors for MongoDB input that is not a single query (#587)** — the
+  Mongo editor accepts one `db.collection.method(...)` call or a JSON query,
+  and it now says so. Pasting a `mongosh` script used to fail with
+  `Invalid JSON: expected value at line 1 column 1`, blaming JSON for input
+  that was never JSON; it now reports that scripts are not supported yet.
+  Two silent failures are gone with it: a script whose first statement was a
+  `db.` call ran that one statement and discarded the rest, and a chained
+  call such as `db.users.find({}).limit(5)` ran the `find` and dropped the
+  `.limit(5)`, returning more rows than asked for. Both are now refused, the
+  chained case naming the method it cannot honour.
+
 * **Several MCP clients per connection (#542)** — the Connection Manager MCP
   tab is now a master-detail view: a filterable list of every trusted client
   on the left, and on the right whether the selected client may use this
