@@ -4,6 +4,29 @@ All notable changes to DBFlux will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+* **MongoDB multi-statement JavaScript script execution** — a buffer that
+  does not parse as a single `db.` call or JSON query now runs as a
+  mongosh-style script in a sandboxed QuickJS engine, executing every
+  statement in source order and reporting a distinct result per statement.
+  `find()`/`aggregate()` return a real bounded JS `Array` (`.forEach`,
+  `for...of`, `.map`, `.length`, `.toArray()`) capped at 10 000 documents
+  with an explicit error on overflow instead of silent truncation, and
+  `print()` output is captured alongside the results. Every dispatched
+  operation is classified from the constructed operation itself, not from
+  source text, so a computed method name or an operation reached only
+  inside a loop or conditional is still classified correctly; a script that
+  cannot be proven read-only requires one up-front confirmation, and any
+  operation exceeding the confirmed ceiling aborts before it reaches the
+  server. Each dispatched operation gets its own audit row sharing one
+  correlation id. Along the way, MCP/AI-client governance classification of
+  MongoDB queries now delegates to the driver's own `LanguageService`
+  instead of a core text heuristic — source-text classification cannot see
+  past a computed method name or a conditionally-reached operation, which
+  dispatch-boundary classification fixes for both scripts and MCP-driven
+  execution.
+
 ### Changed
 
 * **Language list derived from the translation catalogs (#360)** — the
