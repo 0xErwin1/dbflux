@@ -8,8 +8,8 @@
 
 use dbflux_core::{
     CollectionBrowseRequest, CollectionCountRequest, CollectionRef, ConnectionProfile, DbConfig,
-    DbDriver, DbError, DocumentDelete, DocumentFilter, DocumentInsert, DocumentUpdate, Pagination,
-    QueryRequest, SchemaLoadingStrategy,
+    DbDriver, DbError, DocumentDelete, DocumentFilter, DocumentInsert, DocumentUpdate,
+    ExecutionClassification, Pagination, QueryRequest, SchemaLoadingStrategy, Value,
 };
 use dbflux_driver_mongodb::MongoDriver;
 use dbflux_test_support::containers;
@@ -257,6 +257,198 @@ fn mongodb_cancel_returns_ok() -> Result<(), DbError> {
         assert!(cancel.is_ok());
 
         assert!(connection.key_value_api().is_none());
+
+        Ok(())
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Multi-statement script execution (Phase 3 / mongo-js-script-runtime)
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mongodb_script_runs_multiple_statements_and_yields_per_statement_results() -> Result<(), DbError>
+{
+    containers::with_mongodb_url(|uri| {
+        let connection = connect_mongodb(uri)?;
+
+        let script = "db.script_users.insertOne({name: 'a'}); \
+                       db.script_users.insertOne({name: 'b'}); \
+                       db.script_users.find({});";
+
+        let result = connection.execute(
+            &QueryRequest::new(script).with_confirmed_ceiling(ExecutionClassification::Write),
+        )?;
+
+        assert_eq!(
+            result.result_set_count(),
+            3,
+            "three statements must yield three result sets"
+        );
+
+        let ledger = result
+            .metadata_extra
+            .as_ref()
+            .and_then(|extra| extra.get("script_operations"))
+            .expect("script_operations must be present")
+            .as_array()
+            .expect("script_operations must be a JSON array");
+        assert_eq!(ledger.len(), 3);
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mongodb_script_delete_many_behind_a_loop_is_classified_destructive_end_to_end()
+-> Result<(), DbError> {
+    containers::with_mongodb_url(|uri| {
+        let connection = connect_mongodb(uri)?;
+
+        connection.execute(&QueryRequest::new(
+            "db.script_loop.insertMany([{\"a\": 1}, {\"a\": 2}])",
+        ))?;
+
+        let script = "for (let i = 0; i < 1; i++) { db.script_loop.deleteMany({}); }";
+
+        // Under a Read ceiling, the loop-reached deleteMany must abort before
+        // it ever reaches the server (T11's adversarial governance case).
+        let blocked = connection.execute(
+            &QueryRequest::new(script).with_confirmed_ceiling(ExecutionClassification::Read),
+        )?;
+        let failure = blocked
+            .metadata_extra
+            .as_ref()
+            .and_then(|extra| extra.get("script_failure"))
+            .expect("a Read ceiling must abort a Destructive statement reached inside a loop");
+        assert!(
+            failure["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("Destructive")
+        );
+
+        let remaining =
+            connection.execute(&QueryRequest::new("db.script_loop.countDocuments({})"))?;
+        assert_eq!(
+            remaining.rows[0][0],
+            Value::Int(2),
+            "the blocked deleteMany must never have reached the server"
+        );
+
+        // Under a Destructive ceiling the same script proceeds.
+        let allowed = connection.execute(
+            &QueryRequest::new(script).with_confirmed_ceiling(ExecutionClassification::Destructive),
+        )?;
+        assert!(
+            allowed
+                .metadata_extra
+                .as_ref()
+                .and_then(|extra| extra.get("script_failure"))
+                .is_none()
+        );
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mongodb_script_computed_method_name_is_classified_destructive_under_read_ceiling()
+-> Result<(), DbError> {
+    containers::with_mongodb_url(|uri| {
+        let connection = connect_mongodb(uri)?;
+
+        // The method name is string-concatenation-computed at runtime, so no
+        // static grep for "deleteMany" would find it — dispatch-boundary
+        // classification must still catch it (T11 threat-matrix row).
+        let script = "const m = \"deleteM\" + \"any\"; db.script_adversarial[m]({});";
+
+        let result = connection.execute(
+            &QueryRequest::new(script).with_confirmed_ceiling(ExecutionClassification::Read),
+        )?;
+
+        let failure = result
+            .metadata_extra
+            .as_ref()
+            .and_then(|extra| extra.get("script_failure"))
+            .expect("computed deleteMany must abort under a Read ceiling");
+        assert!(
+            failure["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("Destructive")
+        );
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mongodb_script_mid_script_driver_failure_stops_later_statements() -> Result<(), DbError> {
+    containers::with_mongodb_url(|uri| {
+        let connection = connect_mongodb(uri)?;
+
+        let script = "db.script_mid_fail.insertOne({_id: 1, a: 1}); \
+                       db.script_mid_fail.insertOne({_id: 1, a: 2}); \
+                       db.script_mid_fail.insertOne({_id: 2, a: 3});";
+
+        let result = connection.execute(
+            &QueryRequest::new(script).with_confirmed_ceiling(ExecutionClassification::Write),
+        )?;
+
+        // Statement 2 fails on a duplicate `_id`; statement 3 must never
+        // dispatch, so only statement 1's result set is present.
+        assert_eq!(
+            result.result_set_count(),
+            1,
+            "only the first statement must have succeeded"
+        );
+
+        let failure = result
+            .metadata_extra
+            .as_ref()
+            .and_then(|extra| extra.get("script_failure"))
+            .expect("the duplicate-key error must be recorded as a script failure");
+        assert_eq!(failure["index"], 1);
+
+        let after =
+            connection.execute(&QueryRequest::new("db.script_mid_fail.countDocuments({})"))?;
+        assert_eq!(
+            after.rows[0][0],
+            Value::Int(1),
+            "statement 3 must never have run"
+        );
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mongodb_script_single_statement_behaves_identically_to_stage_one() -> Result<(), DbError> {
+    containers::with_mongodb_url(|uri| {
+        let connection = connect_mongodb(uri)?;
+
+        // A single `db.` statement must still route through the stage-1
+        // parser, unaffected by the script engine's existence.
+        connection.execute(&QueryRequest::new(
+            "db.script_stage_one.insertOne({\"a\": 1})",
+        ))?;
+        let result = connection.execute(&QueryRequest::new("db.script_stage_one.find({})"))?;
+
+        assert!(!result.rows.is_empty());
+        assert!(
+            result
+                .metadata_extra
+                .as_ref()
+                .and_then(|extra| extra.get("script_operations"))
+                .is_none(),
+            "a single statement must not go through the script ledger"
+        );
 
         Ok(())
     })
