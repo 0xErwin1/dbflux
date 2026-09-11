@@ -176,6 +176,13 @@ impl McpConnectionFactory {
         driver: Arc<dyn dbflux_core::DbDriver>,
         profile: dbflux_core::ConnectionProfile,
     ) -> Result<Arc<CachedConnection>, String> {
+        // The keyring password is resolved before the pipeline runs: the pipeline
+        // only yields a password when the profile carries a `ValueRef` for it, so a
+        // profile that routes through the pipeline (auth profile, access kind, value
+        // refs) but stores its password in the OS keyring would otherwise connect
+        // with no password at all. The GUI applies the same fallback.
+        let keyring_password =
+            DbFluxServer::resolve_profile_secrets(&self.state, &profile)?.password;
         let pipeline_input = self.build_pipeline_input(profile).await?;
         let (state_tx, _state_rx) = dbflux_core::pipeline_state_channel();
         let pipeline_output = dbflux_core::run_pipeline(pipeline_input, &state_tx)
@@ -191,7 +198,8 @@ impl McpConnectionFactory {
                 .redirect_to_tunnel(access_handle.local_port());
         }
 
-        let overrides = ConnectionOverrides::new(pipeline_output.resolved_password);
+        let overrides =
+            ConnectionOverrides::new(pipeline_output.resolved_password.or(keyring_password));
         let driver_id_for_error = driver_id.clone();
         let connection_key_for_error = connection_key.clone();
 
@@ -759,10 +767,57 @@ mod tests {
         }
     }
 
+    /// In-memory secret store so tests can exercise the keyring-backed
+    /// resolution paths without touching the OS keyring.
+    #[derive(Default)]
+    struct InMemorySecretStore {
+        secrets: Mutex<HashMap<String, String>>,
+    }
+
+    impl dbflux_core::SecretStore for InMemorySecretStore {
+        fn is_available(&self) -> bool {
+            true
+        }
+
+        fn get(&self, secret_ref: &str) -> Result<Option<SecretString>, dbflux_core::DbError> {
+            Ok(self
+                .secrets
+                .lock()
+                .expect("secret store mutex poisoned")
+                .get(secret_ref)
+                .map(|value| SecretString::from(value.clone())))
+        }
+
+        fn set(&self, secret_ref: &str, value: &SecretString) -> Result<(), dbflux_core::DbError> {
+            self.secrets
+                .lock()
+                .expect("secret store mutex poisoned")
+                .insert(secret_ref.to_string(), value.expose_secret().to_string());
+            Ok(())
+        }
+
+        fn delete(&self, secret_ref: &str) -> Result<(), dbflux_core::DbError> {
+            self.secrets
+                .lock()
+                .expect("secret store mutex poisoned")
+                .remove(secret_ref);
+            Ok(())
+        }
+    }
+
     fn test_state_with_driver(
         driver_id: &str,
         driver: Arc<dyn DbDriver>,
         profile: ConnectionProfile,
+    ) -> ServerState {
+        test_state_with_driver_and_store(driver_id, driver, profile, Box::new(NoopSecretStore))
+    }
+
+    fn test_state_with_driver_and_store(
+        driver_id: &str,
+        driver: Arc<dyn DbDriver>,
+        profile: ConnectionProfile,
+        secret_store: Box<dyn dbflux_core::SecretStore>,
     ) -> ServerState {
         let audit_path = dbflux_audit::temp_sqlite_path(&format!(
             "server_test_{}.sqlite",
@@ -792,7 +847,7 @@ mod tests {
                 RwLock::new(crate::connection_cache::ConnectionCache::new()),
             ),
             connection_setup_lock: Arc::new(tokio::sync::Mutex::new(())),
-            secret_manager: Arc::new(dbflux_core::SecretManager::new(Box::new(NoopSecretStore))),
+            secret_manager: Arc::new(dbflux_core::SecretManager::new(secret_store)),
             mcp_enabled_by_default: true,
         }
     }
@@ -859,6 +914,48 @@ mod tests {
         assert_eq!(
             connection.connection().active_database().as_deref(),
             Some("analytics")
+        );
+    }
+
+    #[tokio::test]
+    async fn mcp_connection_factory_falls_back_to_keyring_password_on_pipeline_path() {
+        let driver = RecordingDriver::new(FakeDriver::new(DbKind::Postgres));
+        let driver_handle = Arc::new(driver.clone()) as Arc<dyn DbDriver>;
+
+        // A pipeline profile whose only ValueRef is the host: the pipeline resolves
+        // no password, so the keyring value is the only credential available.
+        let mut profile = ConnectionProfile::new("test-pg", DbConfig::default_postgres());
+        profile.save_password = true;
+        profile.value_refs.insert(
+            "host".to_string(),
+            ValueRef::literal("pipeline.example.internal"),
+        );
+        assert!(profile.uses_pipeline());
+
+        let store = InMemorySecretStore::default();
+        dbflux_core::SecretStore::set(
+            &store,
+            &profile.secret_ref(),
+            &SecretString::from("keyring-password".to_string()),
+        )
+        .expect("in-memory secret store write should succeed");
+
+        let connection_id = profile.id.to_string();
+        let state =
+            test_state_with_driver_and_store("postgres", driver_handle, profile, Box::new(store));
+
+        McpConnectionFactory::new(state)
+            .connect(&connection_id, None)
+            .await
+            .expect("pipeline-backed connection should succeed");
+
+        let invocations = driver.invocations();
+        assert_eq!(invocations.len(), 1, "expected a single driver connection");
+        assert_eq!(
+            invocations[0].password.as_deref(),
+            Some("keyring-password"),
+            "pipeline path must fall back to the keyring password when the \
+             pipeline resolves none"
         );
     }
 }
