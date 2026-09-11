@@ -106,7 +106,7 @@ const JAVASCRIPT_STATEMENT_STARTERS: &[&str] = &[
 /// "scripts are unsupported" error and the JSON fallback. A JSON query needs
 /// no guard here: every starter above begins with a letter or a slash, so an
 /// object or an array can never match one.
-fn looks_like_javascript(input: &str) -> bool {
+pub(crate) fn looks_like_javascript(input: &str) -> bool {
     let trimmed = input.trim_start();
 
     JAVASCRIPT_STATEMENT_STARTERS
