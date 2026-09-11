@@ -88,7 +88,7 @@ DBFlux 把图表配置持久化为**已保存图表**，并把它们组合成**�
 1. 驱动程序通过 `InstanceCatalog::row_actions(metric_id)` 返回一组 `InspectorRowAction`。可用性由各驱动程序的权限探测把关（见各驱动程序 README），因此权限不足的会话永远不会看到自己执行不了的操作。
 2. 标记为 `is_destructive` 的操作在执行前会弹出确认对话框。
 3. 确认后，连接会在**执行时**（而非点击时）重新解析，然后运行 `InstanceCatalog::execute_row_action(metric_id, action_id, row_values)`。
-4. 每次尝试都会记录一条审计事件。失败会经由 `report_error_async`（`ErrorKind::Driver` 的 `UserFacingError`）上报，因此用户会看到一个带有关联 ID 的 toast，可据此跳转到对应的审计记录。
+4. 每次尝试都会记录一条审计事件。失败会经由 `report_error_async`（`ErrorKind::Driver` 的 `UserFacingError`）上报，因此用户会看到一个带有关联 ID 的 Toast 提示，可据此跳转到对应的审计记录。
 
 执行逻辑位于 `crates/dbflux_ui_document/src/instance_inspector/mod.rs`。
 

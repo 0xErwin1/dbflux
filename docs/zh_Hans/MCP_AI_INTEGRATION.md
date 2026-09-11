@@ -293,7 +293,7 @@ if !outcome.allowed {
 - 把 `--config-dir` 指向临时目录，或设置 `HOME` / `XDG_CONFIG_HOME` / `XDG_DATA_HOME`。
 - 审计测试使用临时的 SQLite 路径。
 - 测试代码中不要读写 `~/.config/dbflux` 或 `~/.local/share/dbflux`。
-- 内置策略与角色开箱可用，无需任何设置 —— 不要在测试夹具中手动插入它们。
+- 内置策略与角色开箱可用，无需任何设置 —— 不要在测试固件中手动插入它们。
 - `dbflux_audit::temp_sqlite_path(name)` 这个辅助函数会为每个测试生成一个隔离路径。
 
 ## 12. 故障排查
