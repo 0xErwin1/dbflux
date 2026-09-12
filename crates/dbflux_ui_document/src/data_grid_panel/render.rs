@@ -160,6 +160,9 @@ impl Render for DataGridPanel {
             .when_some(self.context_menu.as_ref(), |d, menu| {
                 d.child(self.render_context_menu(menu, st.is_editable, &st.theme, cx))
             })
+            .when(self.chrome.export_menu_open, |d| {
+                d.child(self.render_export_backdrop(cx))
+            })
             .when(self.pending_delete_confirm.is_some(), |d| {
                 d.child(self.render_delete_confirm_modal(&st.theme, cx))
             })
@@ -3833,11 +3836,43 @@ impl DataGridPanel {
                 .on_mouse_down(MouseButton::Left, |_, _, cx| {
                     cx.stop_propagation();
                 })
-                .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                    this.chrome.export_menu_open = false;
-                    cx.notify();
-                }))
                 .children(items),
+        )
+        // Above the backdrop, which shares the deferred layer.
+        .with_priority(2)
+    }
+
+    /// Full-panel layer under the export menu.
+    ///
+    /// Any press on it closes the menu. Because it also covers the Export
+    /// button, a second click on the button lands here and closes the menu
+    /// rather than reaching the button and reopening it — which is what made
+    /// the button open-only before. Scrolling closes the menu as well.
+    fn render_export_backdrop(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        // The press must end here: the Export button below toggles the menu
+        // on click, so a press that reached it would reopen what this closed.
+        let close = |this: &mut Self, cx: &mut Context<Self>| {
+            this.chrome.export_menu_open = false;
+            cx.stop_propagation();
+            cx.notify();
+        };
+
+        deferred(
+            div()
+                .id("export-menu-backdrop")
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _, _, cx| close(this, cx)),
+                )
+                .on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(move |this, _, _, cx| close(this, cx)),
+                )
+                .on_scroll_wheel(cx.listener(move |this, _, _, cx| close(this, cx))),
         )
         .with_priority(1)
     }
