@@ -93,12 +93,13 @@ pub use core::{
     BucketSizeEstimate, CancelToken, CodeGenScope, CodeGeneratorInfo, Connection,
     ConnectionErrorFormatter, ConnectionExt, ConnectionOverrides, DbDriver, DbError,
     DefaultErrorFormatter, DeletePrefixOutcome, DocumentConnection, ErrorLocation,
-    EventStreamTarget, FormattedError, KeyValueApi, KeyValueConnection, LogErr, NoopCancelHandle,
-    ObjectListingPage, ObjectMetadata, ObjectStoreConnection, ObjectSummary, ObjectVersionSummary,
-    PresignMethod, QueryCancelHandle, QueryErrorFormatter, RelationalConnection, SchemaDropTarget,
-    SchemaFeatures, SchemaLoadingStrategy, SchemaObjectKind, ShutdownCoordinator, ShutdownPhase,
-    SourceContextSpec, SourceQueryMode, TaskId, TaskKind, TaskManager, TaskSlot, TaskSnapshot,
-    TaskStatus, TaskTarget, Value, VersioningStatus, sanitize_uri,
+    EventStreamTarget, ExecutionSession, ExecutionSessionFactory, ExecutionSessionScope,
+    FormattedError, KeyValueApi, KeyValueConnection, LogErr, NoopCancelHandle, ObjectListingPage,
+    ObjectMetadata, ObjectStoreConnection, ObjectSummary, ObjectVersionSummary, PresignMethod,
+    QueryCancelHandle, QueryErrorFormatter, RelationalConnection, SchemaDropTarget, SchemaFeatures,
+    SchemaLoadingStrategy, SchemaObjectKind, ShutdownCoordinator, ShutdownPhase, SourceContextSpec,
+    SourceQueryMode, TaskId, TaskKind, TaskManager, TaskSlot, TaskSnapshot, TaskStatus, TaskTarget,
+    Value, VersioningStatus, sanitize_uri,
 };
 
 pub use data::{
@@ -214,9 +215,10 @@ pub use sql::{
     DefaultSpec, DefaultSqlDialect, DropColumnRequest, DropForeignKeyRequest, DropIndexRequest,
     DropTypeRequest, NoOpCodeGenerator, PlaceholderStyle, ReindexRequest, SqlDialect,
     SqlGenerationOptions, SqlGenerationRequest, SqlOperation, SqlQueryBuilder, SqlValueMode,
-    TypeAttributeDefinition, TypeDefinition, generate_create_table, generate_delete_template,
-    generate_drop_table, generate_insert_template, generate_select_star, generate_sql,
-    generate_truncate, generate_update_template, validate_ddl_fragment,
+    TransactionControl, TypeAttributeDefinition, TypeDefinition, classify_sql_transaction_control,
+    generate_create_table, generate_delete_template, generate_drop_table, generate_insert_template,
+    generate_select_star, generate_sql, generate_truncate, generate_update_template,
+    validate_ddl_fragment,
 };
 
 pub use pipeline::{

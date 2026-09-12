@@ -8,6 +8,7 @@ use dbflux_core::{
 };
 use dbflux_ui_base::hook_phase_runner::{DetachedHookScope, HookPhaseState, run_hook_phase};
 use dbflux_ui_base::toast::{Toast, now_hms};
+use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::*;
 use log::info;
 use std::future::Future;
@@ -16,6 +17,19 @@ use std::sync::{Arc, Mutex};
 
 use super::mcp_bindings;
 use super::{ConnectionManagerWindow, DismissEvent, TestStatus};
+
+const PRIMARY_PASSWORD_SAVE_ERROR: &str =
+    "Unable to save the connection password to the system keyring. Unlock it and try again.";
+
+#[allow(clippy::result_large_err)]
+fn finish_profile_save_after_primary_password(
+    password_save_result: Result<(), dbflux_core::DbError>,
+    commit_profile: impl FnOnce(),
+) -> Result<(), dbflux_core::DbError> {
+    password_save_result?;
+    commit_profile();
+    Ok(())
+}
 
 impl ConnectionManagerWindow {
     fn collect_mcp_governance(&self, cx: &Context<Self>) -> Option<ConnectionMcpGovernance> {
@@ -357,48 +371,7 @@ impl ConnectionManagerWindow {
             self.build_ssh_config(cx)
         };
 
-        match &mut config {
-            DbConfig::Postgres {
-                ssh_tunnel: tunnel,
-                ssh_tunnel_profile_id: profile_id,
-                ..
-            }
-            | DbConfig::MySQL {
-                ssh_tunnel: tunnel,
-                ssh_tunnel_profile_id: profile_id,
-                ..
-            }
-            | DbConfig::MongoDB {
-                ssh_tunnel: tunnel,
-                ssh_tunnel_profile_id: profile_id,
-                ..
-            }
-            | DbConfig::Redis {
-                ssh_tunnel: tunnel,
-                ssh_tunnel_profile_id: profile_id,
-                ..
-            }
-            | DbConfig::SqlServer {
-                ssh_tunnel: tunnel,
-                ssh_tunnel_profile_id: profile_id,
-                ..
-            }
-            | DbConfig::Redshift {
-                ssh_tunnel: tunnel,
-                ssh_tunnel_profile_id: profile_id,
-                ..
-            } => {
-                *tunnel = ssh_tunnel;
-                *profile_id = ssh_tunnel_profile_id;
-            }
-            DbConfig::SQLite { .. }
-            | DbConfig::DynamoDB { .. }
-            | DbConfig::CloudWatchLogs { .. }
-            | DbConfig::InfluxDB { .. }
-            | DbConfig::S3 { .. }
-            | DbConfig::ClickHouse { .. }
-            | DbConfig::External { .. } => {}
-        }
+        config.assign_ssh_tunnel(ssh_tunnel, ssh_tunnel_profile_id);
 
         Some(config)
     }
@@ -541,107 +514,121 @@ impl ConnectionManagerWindow {
             }
         }
 
-        self.app_state.update(cx, |state, cx| {
-            if !password_source_is_literal {
-                state.delete_password(&profile);
-            } else if profile.save_password && !password.is_empty() {
-                info!("Saving password to keyring for profile {}", profile.id);
-                state.save_password(&profile, &SecretString::from(password.clone()));
-            } else if !profile.save_password {
-                state.delete_password(&profile);
-            }
+        #[allow(clippy::result_large_err)]
+        let save_result: Result<(), dbflux_core::DbError> =
+            self.app_state.update(cx, |state, cx| {
+                let password_save_result = if !password_source_is_literal {
+                    state.delete_password(&profile);
+                    Ok(())
+                } else if profile.save_password && !password.is_empty() {
+                    info!("Saving password to keyring for profile {}", profile.id);
+                    state.save_password(&profile, &SecretString::from(password.clone()))
+                } else {
+                    if !profile.save_password {
+                        state.delete_password(&profile);
+                    }
+                    Ok(())
+                };
 
-            if self.form.form_save_ssh_secret {
-                if let Some(ref secret) = ssh_secret {
-                    info!("Saving SSH secret to keyring for profile {}", profile.id);
-                    state.save_ssh_password(&profile, &SecretString::from(secret.clone()));
-                }
-            } else {
-                state.delete_ssh_password(&profile);
-            }
+                finish_profile_save_after_primary_password(password_save_result, || {
+                    if self.form.form_save_ssh_secret {
+                        if let Some(ref secret) = ssh_secret {
+                            info!("Saving SSH secret to keyring for profile {}", profile.id);
+                            state.save_ssh_password(&profile, &SecretString::from(secret.clone()));
+                        }
+                    } else {
+                        state.delete_ssh_password(&profile);
+                    }
 
-            if is_edit {
-                state.update_profile(profile);
+                    if is_edit {
+                        state.update_profile(profile);
 
-                // If the edited profile is currently connected, surface a
-                // reconnect prompt — the sidebar consumes this flag on the
-                // next AppStateChanged and shows a toast with the choice.
-                // The profile change itself is already persisted; only the
-                // live session needs the explicit reconnect to pick it up.
-                if state.connections().contains_key(&saved_profile_id) {
-                    state.pending_edit_reconnect_prompt = Some(saved_profile_id);
-                }
-            } else {
-                state.add_profile_in_folder(profile, self.target_folder_id);
-            }
+                        // If the edited profile is currently connected, surface a
+                        // reconnect prompt — the sidebar consumes this flag on the
+                        // next AppStateChanged and shows a toast with the choice.
+                        // The profile change itself is already persisted; only the
+                        // live session needs the explicit reconnect to pick it up.
+                        if state.connections().contains_key(&saved_profile_id) {
+                            state.pending_edit_reconnect_prompt = Some(saved_profile_id);
+                        }
+                    } else {
+                        state.add_profile_in_folder(profile, self.target_folder_id);
+                    }
 
-            #[cfg(feature = "mcp")]
-            {
-                use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
+                    #[cfg(feature = "mcp")]
+                    {
+                        if let Some(governance) = state
+                            .profiles()
+                            .iter()
+                            .find(|item| item.id == saved_profile_id)
+                            .and_then(|item| item.mcp_governance.clone())
+                        {
+                            let assignments = governance
+                                .policy_bindings
+                                .into_iter()
+                                .map(|binding| dbflux_policy::ConnectionPolicyAssignment {
+                                    actor_id: binding.actor_id,
+                                    scope: dbflux_policy::PolicyBindingScope {
+                                        connection_id: saved_profile_id.to_string(),
+                                    },
+                                    role_ids: binding.role_ids,
+                                    policy_ids: binding.policy_ids,
+                                })
+                                .collect();
 
-                if let Some(governance) = state
-                    .profiles()
-                    .iter()
-                    .find(|item| item.id == saved_profile_id)
-                    .and_then(|item| item.mcp_governance.clone())
-                {
-                    let assignments = governance
-                        .policy_bindings
-                        .into_iter()
-                        .map(|binding| dbflux_policy::ConnectionPolicyAssignment {
-                            actor_id: binding.actor_id,
-                            scope: dbflux_policy::PolicyBindingScope {
+                            if let Err(e) = state.save_mcp_connection_policy_assignment(
+                                dbflux_mcp::ConnectionPolicyAssignmentDto {
+                                    connection_id: saved_profile_id.to_string(),
+                                    assignments,
+                                },
+                            ) {
+                                report_error(
+                                    UserFacingError::new(
+                                        ErrorKind::Config,
+                                        dbflux_i18n::t!(
+                                            "connection_manager.mcp_governance_error.save_policy",
+                                            error = e
+                                        ),
+                                    ),
+                                    cx,
+                                );
+                            }
+                        } else if let Err(e) = state.save_mcp_connection_policy_assignment(
+                            dbflux_mcp::ConnectionPolicyAssignmentDto {
+                                connection_id: saved_profile_id.to_string(),
+                                assignments: Vec::new(),
+                            },
+                        ) {
+                            report_error(
+                                UserFacingError::new(
+                                    ErrorKind::Config,
+                                    dbflux_i18n::t!(
+                                        "connection_manager.mcp_governance_error.clear_policy",
+                                        error = e
+                                    ),
+                                ),
+                                cx,
+                            );
+                        }
+
+                        cx.emit(dbflux_ui_base::McpRuntimeEventRaised {
+                            event: dbflux_mcp::McpRuntimeEvent::ConnectionPolicyUpdated {
                                 connection_id: saved_profile_id.to_string(),
                             },
-                            role_ids: binding.role_ids,
-                            policy_ids: binding.policy_ids,
-                        })
-                        .collect();
-
-                    if let Err(e) = state.save_mcp_connection_policy_assignment(
-                        dbflux_mcp::ConnectionPolicyAssignmentDto {
-                            connection_id: saved_profile_id.to_string(),
-                            assignments,
-                        },
-                    ) {
-                        report_error(
-                            UserFacingError::new(
-                                ErrorKind::Config,
-                                dbflux_i18n::t!(
-                                    "connection_manager.mcp_governance_error.save_policy",
-                                    error = e
-                                ),
-                            ),
-                            cx,
-                        );
+                        });
                     }
-                } else if let Err(e) = state.save_mcp_connection_policy_assignment(
-                    dbflux_mcp::ConnectionPolicyAssignmentDto {
-                        connection_id: saved_profile_id.to_string(),
-                        assignments: Vec::new(),
-                    },
-                ) {
-                    report_error(
-                        UserFacingError::new(
-                            ErrorKind::Config,
-                            dbflux_i18n::t!(
-                                "connection_manager.mcp_governance_error.clear_policy",
-                                error = e
-                            ),
-                        ),
-                        cx,
-                    );
-                }
 
-                cx.emit(dbflux_ui_base::McpRuntimeEventRaised {
-                    event: dbflux_mcp::McpRuntimeEvent::ConnectionPolicyUpdated {
-                        connection_id: saved_profile_id.to_string(),
-                    },
-                });
-            }
+                    cx.emit(dbflux_ui_base::AppStateChanged);
+                })
+            });
 
-            cx.emit(dbflux_ui_base::AppStateChanged);
-        });
+        if save_result.is_err() {
+            report_error(
+                UserFacingError::new(ErrorKind::Storage, PRIMARY_PASSWORD_SAVE_ERROR),
+                cx,
+            );
+            return;
+        }
 
         cx.emit(DismissEvent);
         window.remove_window();
@@ -1086,9 +1073,15 @@ fn normalize_aws_credentials_error(profile_name: &str, error: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dbflux_core::secrecy::{ExposeSecret, SecretString};
     use dbflux_core::{
-        ConnectionHook, ConnectionHooks, HookExecutionMode, HookFailureMode, HookKind,
+        ConnectionHook, ConnectionHooks, ConnectionProfile, DbConfig, HookExecutionMode,
+        HookFailureMode, HookKind, SecretStore,
     };
+    use dbflux_storage::bootstrap::StorageRuntime;
+    use dbflux_ui_base::AppStateEntity;
+    use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
+    use gpui::{Entity, TestAppContext, WindowHandle, WindowOptions};
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
 
@@ -1785,5 +1778,290 @@ mod tests {
     fn normalize_aws_credentials_error_is_case_insensitive() {
         let result = normalize_aws_credentials_error("dev", "NO CREDENTIALS");
         assert!(result.contains("~/.aws/credentials"));
+    }
+
+    #[derive(Clone, Copy)]
+    enum PasswordSaveOutcome {
+        Success,
+        FailBeforeWrite,
+        WriteThenFail,
+    }
+
+    #[derive(Clone)]
+    struct SecretStoreFixture {
+        outcome: Arc<Mutex<PasswordSaveOutcome>>,
+        values: Arc<Mutex<HashMap<String, SecretString>>>,
+    }
+
+    impl SecretStoreFixture {
+        fn new(outcome: PasswordSaveOutcome) -> Self {
+            Self {
+                outcome: Arc::new(Mutex::new(outcome)),
+                values: Arc::new(Mutex::new(HashMap::new())),
+            }
+        }
+    }
+
+    impl SecretStore for SecretStoreFixture {
+        fn is_available(&self) -> bool {
+            true
+        }
+
+        fn get(&self, secret_ref: &str) -> Result<Option<SecretString>, dbflux_core::DbError> {
+            Ok(self
+                .values
+                .lock()
+                .expect("test secret store value lock poisoned")
+                .get(secret_ref)
+                .cloned())
+        }
+
+        fn set(&self, secret_ref: &str, value: &SecretString) -> Result<(), dbflux_core::DbError> {
+            match *self
+                .outcome
+                .lock()
+                .expect("test secret store outcome lock poisoned")
+            {
+                PasswordSaveOutcome::Success => {
+                    self.values
+                        .lock()
+                        .expect("test secret store value lock poisoned")
+                        .insert(secret_ref.to_string(), value.clone());
+                    Ok(())
+                }
+                PasswordSaveOutcome::FailBeforeWrite => Err(dbflux_core::DbError::IoError(
+                    std::io::Error::other("test keyring pre-write failure"),
+                )),
+                PasswordSaveOutcome::WriteThenFail => {
+                    self.values
+                        .lock()
+                        .expect("test secret store value lock poisoned")
+                        .insert(secret_ref.to_string(), value.clone());
+                    Err(dbflux_core::DbError::IoError(std::io::Error::other(
+                        "test keyring write may have persisted",
+                    )))
+                }
+            }
+        }
+
+        fn delete(&self, secret_ref: &str) -> Result<(), dbflux_core::DbError> {
+            self.values
+                .lock()
+                .expect("test secret store value lock poisoned")
+                .remove(secret_ref);
+            Ok(())
+        }
+    }
+
+    fn init_form_test_runtime(cx: &mut TestAppContext) -> Entity<ToastHost> {
+        cx.update(gpui_component::init);
+        cx.update(dbflux_components::theme::init);
+        cx.update(|cx| {
+            let host = cx.new(|_| ToastHost::new());
+            cx.set_global(ToastGlobal { host: host.clone() });
+            host
+        })
+    }
+
+    fn test_app_state(
+        cx: &mut TestAppContext,
+        fixture: SecretStoreFixture,
+    ) -> Entity<AppStateEntity> {
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                AppStateEntity::new_with_storage_runtime(
+                    StorageRuntime::in_memory().expect("test storage runtime"),
+                )
+                .expect("test app state")
+            })
+        });
+        app_state.update(cx, |state, _| {
+            *state
+                .secret_store()
+                .write()
+                .expect("test secret store lock poisoned") = Box::new(fixture);
+        });
+        app_state
+    }
+
+    fn sqlite_profile(name: &str) -> ConnectionProfile {
+        let mut profile = ConnectionProfile::new(name, DbConfig::default_sqlite());
+        profile.save_password = true;
+        if let DbConfig::SQLite { path, .. } = &mut profile.config {
+            *path = ":memory:".into();
+        }
+        profile
+    }
+
+    fn open_new_profile_window(
+        app_state: Entity<AppStateEntity>,
+        cx: &mut TestAppContext,
+    ) -> WindowHandle<ConnectionManagerWindow> {
+        let window = cx
+            .update(|cx| {
+                cx.open_window(WindowOptions::default(), |window, cx| {
+                    cx.new(|cx| ConnectionManagerWindow::new(app_state, window, cx))
+                })
+            })
+            .expect("connection manager window opens");
+        window
+            .update(cx, |manager, window, cx| {
+                manager.select_driver("sqlite", window, cx);
+                manager
+                    .form
+                    .input_name
+                    .update(cx, |input, cx| input.set_value("new profile", window, cx));
+                manager
+                    .form
+                    .driver_inputs
+                    .get("path")
+                    .expect("SQLite path input")
+                    .update(cx, |input, cx| input.set_value(":memory:", window, cx));
+                manager.form.input_password.update(cx, |input, cx| {
+                    input.set_value("primary password", window, cx)
+                });
+            })
+            .expect("new form initializes");
+        window
+    }
+
+    fn open_edit_profile_window(
+        app_state: Entity<AppStateEntity>,
+        profile: ConnectionProfile,
+        cx: &mut TestAppContext,
+    ) -> WindowHandle<ConnectionManagerWindow> {
+        let window = cx
+            .update(|cx| {
+                cx.open_window(WindowOptions::default(), |window, cx| {
+                    cx.new(|cx| {
+                        ConnectionManagerWindow::new_for_edit(app_state, &profile, window, cx)
+                    })
+                })
+            })
+            .expect("connection manager edit window opens");
+        window
+            .update(cx, |manager, window, cx| {
+                manager.form.input_name.update(cx, |input, cx| {
+                    input.set_value("edited profile", window, cx)
+                });
+                manager.form.input_password.update(cx, |input, cx| {
+                    input.set_value("primary password", window, cx)
+                });
+            })
+            .expect("edit form initializes");
+        window
+    }
+
+    #[::core::prelude::v1::test]
+    fn new_profile_password_save_failure_reports_once_and_keeps_the_window_open() {
+        let mut cx = TestAppContext::single();
+        let host = init_form_test_runtime(&mut cx);
+        let app_state = test_app_state(
+            &mut cx,
+            SecretStoreFixture::new(PasswordSaveOutcome::FailBeforeWrite),
+        );
+        let window = open_new_profile_window(app_state.clone(), &mut cx);
+
+        window
+            .update(&mut cx, |manager, window, cx| {
+                manager.save_profile(window, cx)
+            })
+            .expect("failed save leaves the real form window available");
+
+        assert!(window.root(&mut cx).is_ok(), "the form window remains open");
+        assert!(
+            cx.update(|cx| app_state.read(cx).profiles().is_empty()),
+            "a new profile is not committed"
+        );
+        assert_eq!(
+            cx.update(|cx| host.read(cx).toast_count()),
+            1,
+            "one safe failure is reported"
+        );
+        assert_eq!(
+            cx.update(|cx| host.read(cx).last_toast_title()),
+            Some(PRIMARY_PASSWORD_SAVE_ERROR.to_string())
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn edited_profile_partial_password_write_does_not_commit_or_dismiss() {
+        let mut cx = TestAppContext::single();
+        let host = init_form_test_runtime(&mut cx);
+        let app_state = test_app_state(
+            &mut cx,
+            SecretStoreFixture::new(PasswordSaveOutcome::WriteThenFail),
+        );
+        let profile = sqlite_profile("original profile");
+        app_state.update(&mut cx, |state, _| {
+            state.add_profile_in_folder(profile.clone(), None)
+        });
+        let window = open_edit_profile_window(app_state.clone(), profile.clone(), &mut cx);
+
+        window
+            .update(&mut cx, |manager, window, cx| {
+                manager.save_profile(window, cx)
+            })
+            .expect("partial-write failure leaves the real form window available");
+
+        assert!(window.root(&mut cx).is_ok(), "the edit window remains open");
+        let persisted = cx.update(|cx| app_state.read(cx).profiles().to_vec());
+        assert_eq!(persisted.len(), 1, "no extra profile is committed");
+        assert_eq!(
+            persisted[0].name, profile.name,
+            "the existing profile is not updated"
+        );
+        assert_eq!(
+            cx.update(|cx| host.read(cx).toast_count()),
+            1,
+            "one safe failure is reported"
+        );
+    }
+
+    #[::core::prelude::v1::test]
+    fn new_profile_password_save_success_persists_and_closes_the_real_window() {
+        let mut cx = TestAppContext::single();
+        let host = init_form_test_runtime(&mut cx);
+        let app_state = test_app_state(
+            &mut cx,
+            SecretStoreFixture::new(PasswordSaveOutcome::Success),
+        );
+        let window = open_new_profile_window(app_state.clone(), &mut cx);
+
+        window
+            .update(&mut cx, |manager, window, cx| {
+                manager.save_profile(window, cx)
+            })
+            .expect("successful save runs");
+
+        assert!(
+            window.root(&mut cx).is_err(),
+            "a successful save closes the form window"
+        );
+        let profile = cx.update(|cx| {
+            app_state
+                .read(cx)
+                .profiles()
+                .first()
+                .expect("new profile is persisted")
+                .clone()
+        });
+        assert_eq!(profile.name, "new profile");
+        assert_eq!(
+            cx.update(|cx| {
+                app_state
+                    .read(cx)
+                    .get_password(&profile)
+                    .expect("primary password is persisted")
+                    .expose_secret()
+                    .to_string()
+            }),
+            "primary password"
+        );
+        assert_eq!(
+            cx.update(|cx| host.read(cx).toast_count()),
+            0,
+            "success reports no error toast"
+        );
     }
 }

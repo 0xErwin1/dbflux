@@ -2031,6 +2031,7 @@ encryption = "none"
             (DbKind::Redshift, "Redshift", "redshift"),
             (DbKind::S3, "S3", "s3"),
             (DbKind::ClickHouse, "ClickHouse", "clickhouse"),
+            (DbKind::Turso, "Turso", "turso"),
         ];
 
         for (expected, kind_str, driver_id) in variants {
@@ -3195,5 +3196,59 @@ encryption = "none"
             "SSH password must be written exactly once; got {} writes",
             ssh_writes.len()
         );
+    }
+
+    #[test]
+    fn turso_import_uses_serde_kind_and_only_rekeys_opted_in_secrets() {
+        let local_id = "turso";
+        let mut connection = make_connection_entry(local_id);
+        connection.driver_id = "turso".to_string();
+        connection.kind = Some("Turso".to_string());
+        connection.fields =
+            HashMap::from([("url".to_string(), "https://example.turso.io".to_string())]);
+
+        let mut bundle = empty_bundle(EncryptionMode::None);
+        bundle.connections.push(connection.clone());
+        let parsed = crate::ParsedBundle {
+            bundle,
+            decrypted_secrets: None,
+        };
+        let actions = apply(
+            &parsed,
+            &plan(&parsed, &empty_dest()),
+            &ResolutionChoices::default(),
+        )
+        .expect("import URL-only Turso profile");
+        assert!(actions.secret_writes.is_empty());
+        let imported = actions
+            .connections
+            .first()
+            .expect("one imported connection");
+        assert!(matches!(
+            imported.config,
+            dbflux_core::DbConfig::External {
+                kind: dbflux_core::DbKind::Turso,
+                ..
+            }
+        ));
+
+        let mut encrypted_bundle = empty_bundle(EncryptionMode::AgePassphrase);
+        encrypted_bundle.connections.push(connection);
+        let encrypted = crate::ParsedBundle {
+            bundle: encrypted_bundle,
+            decrypted_secrets: Some(HashMap::from([(
+                format!("conn:{local_id}:password"),
+                "turso-token".to_string(),
+            )])),
+        };
+        let actions = apply(
+            &encrypted,
+            &plan(&encrypted, &empty_dest()),
+            &ResolutionChoices::default(),
+        )
+        .expect("import opted-in Turso secret");
+        assert_eq!(actions.secret_writes.len(), 1);
+        let (secret_ref, _) = actions.secret_writes.first().expect("one secret write");
+        assert!(secret_ref.starts_with("dbflux:conn:"));
     }
 }

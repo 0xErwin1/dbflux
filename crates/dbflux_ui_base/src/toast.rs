@@ -415,7 +415,7 @@ mod i18n_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 impl ToastHost {
     /// Returns the number of currently-visible toasts. For use in tests only.
     pub fn toast_count(&self) -> usize {

@@ -1309,72 +1309,56 @@ impl DbFluxServer {
             all_stmts.push(stmts);
         }
 
-        let begin_req = QueryRequest::new("BEGIN");
-        Self::execute_connection_blocking(connection.clone(), move |c| {
-            c.execute(&begin_req)
-                .map(|_| ())
-                .map_err(|e| format!("BEGIN failed: {}", e))
-        })
-        .await?;
+        let transactional_statements: Vec<(usize, String)> = all_stmts
+            .iter()
+            .enumerate()
+            .flat_map(|(operation_index, statements)| {
+                statements
+                    .iter()
+                    .cloned()
+                    .map(move |statement| (operation_index, statement))
+            })
+            .collect();
+        let operation_names: Vec<String> = ops
+            .iter()
+            .map(|operation| operation.action.clone())
+            .collect();
 
-        for (i, stmts) in all_stmts.iter().enumerate() {
-            for stmt in stmts {
-                let stmt_owned = stmt.clone();
-                let request = QueryRequest::new(&stmt_owned);
-                if let Err(exec_err) =
-                    Self::execute_connection_blocking(connection.clone(), move |c| {
-                        c.execute(&request)
-                            .map(|_| ())
-                            .map_err(|e| format!("ALTER TABLE error: {}", e))
-                    })
-                    .await
-                {
-                    let rollback_req = QueryRequest::new("ROLLBACK");
-                    if let Err(rollback_err) =
-                        Self::execute_connection_blocking(connection.clone(), move |c| {
-                            c.execute(&rollback_req)
-                                .map(|_| ())
-                                .map_err(|e| format!("{}", e))
-                        })
-                        .await
-                    {
-                        log::error!(
-                            "ROLLBACK failed after ALTER TABLE error at op {} ({}): {}",
-                            i,
-                            ops[i].action,
-                            rollback_err
-                        );
-                    }
+        // Keep BEGIN, every ALTER, and COMMIT inside one blocking closure. The helper acquires
+        // exactly one ExecutionSessionScope, so a factory-backed connection retains one child
+        // across the entire transaction while legacy connections keep their existing ordering.
+        Self::execute_connection_blocking(connection, move |connection| {
+            connection
+                .execute(&QueryRequest::new("BEGIN"))
+                .map_err(|error| format!("BEGIN failed: {error}"))?;
 
-                    return Err(format!(
-                        "ALTER TABLE aborted and rolled back at operation {} ({}): {}",
-                        i, ops[i].action, exec_err
-                    ));
+            for (operation_index, statement) in transactional_statements {
+                if let Err(execution_error) = connection.execute(&QueryRequest::new(statement)) {
+                    let message = format!(
+                        "ALTER TABLE aborted at operation {} ({}): {}",
+                        operation_index, operation_names[operation_index], execution_error
+                    );
+                    return match connection.execute(&QueryRequest::new("ROLLBACK")) {
+                        Ok(_) => Err(format!("{message}; rolled back")),
+                        Err(rollback_error) => Err(format!(
+                            "{message}; rollback cleanup also failed: {rollback_error}"
+                        )),
+                    };
                 }
             }
-        }
 
-        let commit_req = QueryRequest::new("COMMIT");
-        if let Err(commit_err) = Self::execute_connection_blocking(connection.clone(), move |c| {
-            c.execute(&commit_req)
-                .map(|_| ())
-                .map_err(|e| format!("COMMIT failed: {}", e))
-        })
-        .await
-        {
-            let rollback_req = QueryRequest::new("ROLLBACK");
-            if let Err(rollback_err) =
-                Self::execute_connection_blocking(connection.clone(), move |c| {
-                    c.execute(&rollback_req)
-                        .map(|_| ())
-                        .map_err(|e| format!("{}", e))
-                })
-                .await
-            {
-                log::error!("ROLLBACK failed after COMMIT failure: {}", rollback_err);
+            if let Err(commit_error) = connection.execute(&QueryRequest::new("COMMIT")) {
+                return match connection.execute(&QueryRequest::new("ROLLBACK")) {
+                    Ok(_) => Err(format!("COMMIT failed: {commit_error}; rollback attempted")),
+                    Err(rollback_error) => Err(format!(
+                        "COMMIT failed: {commit_error}; rollback cleanup also failed: {rollback_error}"
+                    )),
+                };
             }
-            return Err(commit_err);
-        }
+
+            Ok(())
+        })
+        .await?;
 
         let operations: Vec<serde_json::Value> = ops
             .iter()

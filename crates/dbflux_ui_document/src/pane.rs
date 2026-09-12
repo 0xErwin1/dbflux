@@ -168,6 +168,9 @@ pub struct PaneHandle {
     /// `take_pending_open_bucket`. Only object-browsing documents populate it.
     pub take_pending_open_object_editor:
         Option<Box<dyn Fn(&mut App) -> Option<ObjectEditorRequest>>>,
+
+    /// Runs document-owned asynchronous teardown before the pane is removed.
+    pub on_close: Option<Box<dyn Fn(&mut App)>>,
 }
 
 impl PaneHandle {
@@ -227,6 +230,7 @@ impl PaneHandle {
             status_segments: None,
             take_pending_open_bucket: None,
             take_pending_open_object_editor: None,
+            on_close: None,
         }
     }
 
@@ -322,6 +326,13 @@ impl PaneHandle {
         F: Fn(&DocumentEvent, &mut App) + 'static,
     {
         (self.subscribe)(cx, Box::new(callback))
+    }
+
+    /// Invokes the optional close hook before tab removal.
+    pub fn on_close(&self, cx: &mut App) {
+        if let Some(close) = self.on_close.as_ref() {
+            close(cx);
+        }
     }
 
     /// Returns the document's contributed status-bar segments.

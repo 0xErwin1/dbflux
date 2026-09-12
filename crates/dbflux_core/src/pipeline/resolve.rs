@@ -269,6 +269,12 @@ fn patch_config_field(config: &mut DbConfig, field: &str, value: &ResolvedValue)
             _ => {}
         },
 
+        DbConfig::Turso { url } => {
+            if field == "url" {
+                *url = val.to_string();
+            }
+        }
+
         DbConfig::External { values, .. } => {
             values.insert(field.to_string(), val.to_string());
         }
@@ -462,5 +468,39 @@ mod tests {
             }
             other => panic!("expected AccessKind::Managed, got {:?}", other),
         }
+    }
+
+    #[tokio::test]
+    async fn resolve_turso_url_without_exposing_the_password_in_config() {
+        let mut profile = ConnectionProfile::new("turso", DbConfig::default_turso());
+        profile.value_refs = HashMap::from([
+            (
+                "url".to_string(),
+                ValueRef::literal("https://example.turso.io"),
+            ),
+            (
+                "password".to_string(),
+                ValueRef::secret("stub", "turso-token", None),
+            ),
+        ]);
+
+        let (patched, password) =
+            resolve_profile_values(&profile, &test_resolver(), &ResolveContext::default())
+                .await
+                .expect("resolve values");
+
+        assert!(matches!(
+            patched.config,
+            DbConfig::Turso { ref url } if url == "https://example.turso.io"
+        ));
+        assert_eq!(
+            password.expect("password").expose_secret(),
+            "resolved-turso-token"
+        );
+        assert!(
+            !serde_json::to_string(&patched.config)
+                .expect("serialize config")
+                .contains("resolved-turso-token")
+        );
     }
 }

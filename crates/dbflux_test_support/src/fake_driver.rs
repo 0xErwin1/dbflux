@@ -316,6 +316,9 @@ impl DbDriver for FakeDriver {
                     .get("request_timeout_seconds")
                     .and_then(|value| value.parse().ok()),
             },
+            DbKind::Turso => DbConfig::Turso {
+                url: get_string(values, "url", ""),
+            },
         };
 
         Ok(config)
@@ -479,6 +482,9 @@ impl DbDriver for FakeDriver {
                         .unwrap_or_default(),
                 );
             }
+            DbConfig::Turso { url } => {
+                values.insert("url".to_string(), url.clone());
+            }
             DbConfig::External { values: vals, .. } => {
                 values.extend(vals.clone());
             }
@@ -627,6 +633,7 @@ impl Connection for FakeConnection {
                 SchemaLoadingStrategy::SingleDatabase
             }
             DbKind::ClickHouse => SchemaLoadingStrategy::LazyPerDatabase,
+            DbKind::Turso => SchemaLoadingStrategy::SingleDatabase,
         }
     }
 
@@ -671,6 +678,7 @@ fn active_database_from_profile(profile: &ConnectionProfile) -> Option<String> {
         DbConfig::Redshift { database, .. } => Some(database.clone()),
         DbConfig::S3 { .. } => None,
         DbConfig::ClickHouse { database, .. } => Some(database.clone()),
+        DbConfig::Turso { .. } => None,
         DbConfig::External { values, .. } => values.get("database").cloned(),
     }
 }
@@ -694,6 +702,7 @@ fn metadata_for_kind(kind: DbKind) -> &'static DriverMetadata {
         DbKind::Redshift => &REDSHIFT_METADATA,
         DbKind::S3 => &FAKE_S3_METADATA,
         DbKind::ClickHouse => &FAKE_CLICKHOUSE_METADATA,
+        DbKind::Turso => &FAKE_TURSO_METADATA,
     }
 }
 
@@ -711,6 +720,7 @@ fn form_for_kind(kind: DbKind) -> &'static DriverFormDef {
         DbKind::Redshift => &REDSHIFT_FORM,
         DbKind::S3 => &S3_FORM,
         DbKind::ClickHouse => &CLICKHOUSE_FORM,
+        DbKind::Turso => &TURSO_FORM,
     }
 }
 
@@ -914,6 +924,45 @@ static CLICKHOUSE_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef
             ],
         }],
     }],
+});
+
+static FAKE_TURSO_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
+    id: "fake-turso".into(),
+    display_name: "Fake TursoDB".into(),
+    description: "Deterministic fake driver for tests".into(),
+    category: DatabaseCategory::Relational,
+    transfer_family: TransferFamily::Sql,
+    deployment_class: None,
+    query_language: QueryLanguage::Sql,
+    capabilities: DriverCapabilities::RELATIONAL_BASE & !DriverCapabilities::TRANSACTIONS,
+    default_port: None,
+    uri_scheme: "https".into(),
+    icon: Icon::Database,
+    syntax: Some(SyntaxInfo {
+        identifier_quote: '"',
+        string_quote: '\'',
+        placeholder_style: dbflux_core::PlaceholderStyle::QuestionMark,
+        supports_schemas: false,
+        default_schema: None,
+        case_sensitive_identifiers: true,
+    }),
+    query: Some(QueryCapabilities::default()),
+    mutation: Some(MutationCapabilities::default()),
+    ddl: Some(DdlCapabilities::default()),
+    transactions: None,
+    limits: Some(DriverLimits {
+        max_parameters: 32766,
+        max_identifier_length: 100_000,
+        max_columns: 32766,
+        max_indexes_per_table: 64,
+        ..Default::default()
+    }),
+    ssl_modes: None,
+    ssl_cert_fields: None,
+    classification_override: None,
+    default_chunk_size: None,
+    supports_lock_timeout: false,
+    editor_profile: None,
 });
 
 static FAKE_SQLITE_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
@@ -1277,6 +1326,20 @@ static S3_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef {
     }],
 });
 
+static TURSO_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef {
+    tabs: vec![FormTab {
+        id: "main".into(),
+        label: "Main".into(),
+        sections: vec![FormSection {
+            title: "Connection".into(),
+            fields: vec![
+                field_required("url", "URL", FormFieldKind::Text, ""),
+                field("password", "Auth Token", FormFieldKind::Password, ""),
+            ],
+        }],
+    }],
+});
+
 static FAKE_CLOUDWATCH_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
     id: "fake-cloudwatch".into(),
     display_name: "Fake CloudWatch Logs".into(),
@@ -1506,6 +1569,7 @@ mod tests {
             (DbKind::MySQL, SchemaLoadingStrategy::LazyPerDatabase),
             (DbKind::MariaDB, SchemaLoadingStrategy::LazyPerDatabase),
             (DbKind::SQLite, SchemaLoadingStrategy::SingleDatabase),
+            (DbKind::Turso, SchemaLoadingStrategy::SingleDatabase),
             (DbKind::MongoDB, SchemaLoadingStrategy::SingleDatabase),
             (DbKind::Redis, SchemaLoadingStrategy::SingleDatabase),
             (DbKind::ClickHouse, SchemaLoadingStrategy::LazyPerDatabase),
@@ -1553,6 +1617,7 @@ mod tests {
                 DbKind::Redshift => DbConfig::default_redshift(),
                 DbKind::S3 => DbConfig::default_s3(),
                 DbKind::ClickHouse => DbConfig::default_clickhouse(),
+                DbKind::Turso => DbConfig::default_turso(),
             };
 
             let profile = ConnectionProfile::new("fake", config);
@@ -1562,5 +1627,28 @@ mod tests {
 
             assert_eq!(connection.schema_loading_strategy(), expected_strategy);
         }
+    }
+
+    #[test]
+    fn turso_fake_driver_roundtrips_url_and_keeps_transactions_disabled() {
+        let driver = FakeDriver::new(DbKind::Turso);
+        let values = dbflux_core::FormValues::from([(
+            "url".to_string(),
+            "https://example.turso.io".to_string(),
+        )]);
+        let config = driver.build_config(&values).expect("build Turso config");
+
+        assert!(matches!(
+            config,
+            DbConfig::Turso { ref url } if url == "https://example.turso.io"
+        ));
+        assert_eq!(driver.extract_values(&config), values);
+        assert!(
+            !driver
+                .metadata()
+                .capabilities
+                .contains(DriverCapabilities::TRANSACTIONS)
+        );
+        assert!(driver.metadata().transactions.is_none());
     }
 }

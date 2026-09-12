@@ -30,7 +30,7 @@ on:
         required: false
 
 env:
-  FEATURES: "sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,clickhouse,aws"
+  FEATURES: "sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,clickhouse,turso,aws"
 
 permissions:
   contents: read

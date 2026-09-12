@@ -30,6 +30,10 @@ rfd.workspace = true
 dirs.workspace = true
 open = "5"
 
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
+dbflux_ui_base = { workspace = true, features = ["test-support"] }
+
 [features]
 default = []
 mcp = ["dbflux_mcp", "dbflux_policy", "dbflux_app/mcp", "dbflux_ui_base/mcp"]

@@ -74,7 +74,7 @@ jobs:
           cache-on-failure: true
 
       - name: Run deterministic workspace tests
-        run: cargo test --workspace --locked --features "sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,clickhouse,aws"
+        run: cargo test --workspace --locked --features "sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,clickhouse,turso,aws"
 
   driver-live-integration:
     name: Driver Live Integration
@@ -147,6 +147,7 @@ jobs:
             mirror.gcr.io/library/influxdb:1.8
             quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
             mirror.gcr.io/localstack/localstack:3
+            ghcr.io/tursodatabase/libsql-server:v0.24.33
           )
           unpulled=()
           for image in "${images[@]}"; do
@@ -216,6 +217,9 @@ jobs:
       - name: Run ClickHouse live integration tests
         run: cargo test -p dbflux_driver_clickhouse --locked --test live_integration -- --ignored --test-threads=1
 
+      - name: Run TursoDB live integration tests
+        run: cargo test -p dbflux_driver_turso --locked --test live_integration -- --ignored --test-threads=1
+
       # Each test spins up its own LocalStack container (~1.3 GB image), so
       # this suite runs single-threaded like the MSSQL/InfluxDB/ClickHouse
       # suites above.
@@ -275,4 +279,4 @@ jobs:
           cache-on-failure: true
 
       - name: Cargo check
-        run: cargo check --workspace --locked --features "sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,clickhouse,aws${{ matrix.extra_features }}"
+        run: cargo check --workspace --locked --features "sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,clickhouse,turso,aws${{ matrix.extra_features }}"

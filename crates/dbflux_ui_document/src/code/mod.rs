@@ -60,6 +60,7 @@ mod completion;
 mod context_bar;
 mod diagnostics;
 mod execution;
+mod execution_session;
 mod file_ops;
 mod focus;
 mod live_output;
@@ -68,6 +69,7 @@ mod render;
 
 use code_actions::SqlCodeActionProvider;
 use completion::QueryCompletionProvider;
+use execution_session::ExecutionSessionBinding;
 use live_output::LiveOutputState;
 
 /// A single result tab within the CodeDocument.
@@ -368,6 +370,11 @@ pub(super) struct PendingActions {
     error: Option<String>,
 }
 
+struct ExecutionSessionContext {
+    root: Arc<dyn dbflux_core::Connection>,
+    database: Option<String>,
+}
+
 pub struct CodeDocument {
     // Identity
     id: DocumentId,
@@ -393,6 +400,8 @@ pub struct CodeDocument {
 
     // Query execution state and result tabs.
     execution: Execution,
+    execution_session: Arc<ExecutionSessionBinding>,
+    execution_session_context: Option<ExecutionSessionContext>,
     result_tabs: ResultTabs,
 
     // History modal, refresh timer, and schema drift modal.
@@ -435,6 +444,7 @@ struct PendingQueryResult {
 pub(super) struct ActiveQueryTask {
     task_id: dbflux_core::TaskId,
     target: TaskTarget,
+    uses_isolated_session: bool,
 }
 
 /// Pending dangerous query confirmation.
@@ -912,6 +922,7 @@ impl CodeDocument {
             },
         );
         let app_state_sub = cx.subscribe(&app_state, |this, _, _: &AppStateChanged, cx| {
+            this.invalidate_execution_session_if_context_changed(cx);
             this.sync_context_dropdowns(cx);
             this.try_fetch_pending_routine_definition(cx);
         });
@@ -977,6 +988,8 @@ impl CodeDocument {
                 _live_output_drain: None,
                 active_query_task: None,
             },
+            execution_session: ExecutionSessionBinding::new(),
+            execution_session_context: None,
             result_tabs: ResultTabs {
                 result_tabs: Vec::new(),
                 active_result_index: None,
@@ -1254,6 +1267,7 @@ impl CodeDocument {
 
     /// Set the execution context (e.g. parsed from file header).
     pub fn with_exec_ctx(mut self, ctx: ExecutionContext, cx: &mut Context<Self>) -> Self {
+        self.invalidate_execution_session(cx);
         self.pending.source_input_values = ctx
             .source
             .as_ref()
@@ -1262,6 +1276,57 @@ impl CodeDocument {
         self.source.exec_ctx = ctx;
         self.sync_context_dropdowns(cx);
         self
+    }
+
+    fn invalidate_execution_session_if_context_changed(&mut self, cx: &mut Context<Self>) {
+        let Some(bound) = self.execution_session_context.as_ref() else {
+            return;
+        };
+
+        let current = self.connection_id.and_then(|connection_id| {
+            let app_state = self.app_state.read(cx);
+            let connected = app_state.connections().get(&connection_id)?;
+            let database = self
+                .source
+                .exec_ctx
+                .database
+                .clone()
+                .or_else(|| connected.active_database.clone());
+            connected
+                .resolve_connection_for_execution(database.as_deref())
+                .ok()
+                .map(|root| (root, database))
+        });
+        let unchanged = current.is_some_and(|(root, database)| {
+            database == bound.database && Arc::ptr_eq(&bound.root, &root)
+        });
+
+        if !unchanged {
+            self.invalidate_execution_session(cx);
+        }
+    }
+
+    /// Invalidates before detached background cleanup; no document entity is retained.
+    pub(super) fn invalidate_execution_session(&mut self, cx: &mut Context<Self>) {
+        self.execution_session_context = None;
+        let generation = self.execution_session.invalidate();
+        let binding = self.execution_session.clone();
+        let cleanup = cx
+            .background_executor()
+            .spawn(async move { binding.close_invalidated(generation) });
+        cx.spawn(async move |_this, cx| {
+            if let Err(error) = cleanup.await {
+                dbflux_ui_base::user_error::report_error_async(
+                    dbflux_ui_base::user_error::UserFacingError::new(
+                        dbflux_ui_base::user_error::ErrorKind::Driver,
+                        "Could not confirm cleanup of the editor execution session",
+                    )
+                    .with_cause(error.to_string()),
+                    cx,
+                );
+            }
+        })
+        .detach();
     }
 
     // === File backing ===

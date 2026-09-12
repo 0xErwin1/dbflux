@@ -6,6 +6,29 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Added
 
+* **TursoDB driver** — connect to Turso Cloud and self-hosted libSQL
+  (`sqld`) servers over HTTP with a URL and an auth token. The driver speaks
+  the SQLite dialect and supports schema discovery (tables, views, columns,
+  indexes, foreign keys, CHECK/UNIQUE constraints), typed grid CRUD, bound
+  parameters, multi-statement scripts, the visual query builder, code
+  generation, and CSV/JSON export. Interactive transactions work per editor
+  tab: each tab runs on its own server stream through a new generic
+  execution-session seam, so a `BEGIN` in one tab is never visible to grid
+  edits, other tabs, or MCP calls, and closing the tab or changing its
+  connection rolls the transaction back. Query cancellation, SSH tunnels,
+  embedded replicas, and database switching are not supported yet.
+* **Isolated execution sessions** — drivers can now expose an
+  `ExecutionSessionFactory`; the editor, grid mutation executor, MCP server,
+  and connection teardown route through it so a driver-owned session is
+  opened, finished, and closed explicitly with cleanup failures surfaced.
+  Existing drivers are unchanged.
+
+### Fixed
+
+* **Password save failures are reported** — a failed keyring write while
+  saving or duplicating a connection profile now keeps the form open and
+  shows the error instead of silently committing a profile with no secret.
+
 * **MongoDB multi-statement JavaScript script execution** — a buffer that
   does not parse as a single `db.` call or JSON query now runs as a
   mongosh-style script in a sandboxed QuickJS engine, executing every

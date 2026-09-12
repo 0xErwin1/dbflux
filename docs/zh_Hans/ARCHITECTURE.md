@@ -463,6 +463,11 @@ crates/
     src/connection.rs       # 查询执行与系统目录发现
     src/types.rs            # ClickHouse 类型解析与值解码
     src/dialect.rs          # SQL 生成方言
+  dbflux_driver_turso/      # 基于 Hrana HTTP 的 TursoDB / libSQL 远程驱动程序
+    src/driver.rs           # 元数据、连接表单、URL 校验与连接
+    src/connection.rs       # Tokio 桥接、批量执行、Schema 发现、CRUD 与错误映射
+    src/session.rs          # 基于每流连接的 ExecutionSessionFactory/ExecutionSession
+    src/dialect.rs          # SQLite 方言、值转换与 DDL 代码生成
   dbflux_driver_cloudwatch/ # AWS CloudWatch Logs 驱动程序（DatabaseCategory::LogStream）
     src/driver.rs           # 日志组/流发现、EventStreamTarget、CollectionPresentation::EventStream
   dbflux_driver_s3/         # AWS S3 对象存储驱动程序（DatabaseCategory::ObjectStorage）
@@ -826,6 +831,10 @@ DBFlux 把图表配置持久化为**已保存图表**，并把它们组合成**�
   - 使用 ClickHouse 的 HTTP(S) 接口，并对任意 Schema 做动态 JSON 结果解码
   - 发现数据库、表、视图、列与引擎元数据，但不把数据库表示成 schema
   - 支持以读取为主的 SQL 与可视化 SELECT 生成；不暴露结构化变更、DDL、事务、SSH 隧道与通用查询参数
+- **TursoDB**：`crates/dbflux_driver_turso/` —— 面向 Turso Cloud 与自托管 `sqld` 的 `DatabaseCategory::Relational` + `QueryLanguage::Sql` 驱动程序：
+  - 把异步的 `turso_serverless` SDK 封装在同步的 `Connection` 契约之后，每个配置一个 Tokio 运行时；当调用方已处于 Tokio 上下文时，future 会在作用域线程中驱动
+  - 在根连接上实现 `ExecutionSessionFactory`：每个隔离会话都是一条新的 Hrana 流，因此编辑器事务、网格 CRUD 与 MCP 操作绝不共享服务端事务状态
+  - 复用 SQLite 方言、基于 PRAGMA 的发现与共享 SQL 构建器；不支持查询取消、SSH 隧道或副本
 - **CloudWatch Logs**：`crates/dbflux_driver_cloudwatch/` —— 面向 AWS CloudWatch Logs 的 `DatabaseCategory::LogStream` 驱动程序：
   - 日志组/流发现以集合形式暴露；日志组经由 `CollectionPresentation::EventStream` 与通用的 `EventStreamTarget` 打开为事件流，由 `AuditDocument`/日志流查看器使用，不带任何驱动程序特有的界面分支
   - 查询模式（Logs Insights QL、OpenSearch PPL/SQL）通过 `SourceContextSpec` 呈现；`DriverMetadata.query_language` 默认取 `Sql`，用于编辑器行为
@@ -940,6 +949,7 @@ DBFlux 支持 Model Context Protocol（MCP），用于接入 AI 客户端，并�
 - Redis：`redis` 驱动程序，带面向所有 Redis 类型的键值 API、变参命令、键空间支持、键扫描与命令生成（crates/dbflux_driver_redis/src/driver.rs）。
 - DynamoDB：`aws-sdk-dynamodb` 驱动程序，支持 AWS 配置/区域以连接远端 DynamoDB，并可为本地模拟器与测试覆盖端点（crates/dbflux_driver_dynamodb/src/driver.rs）。
 - ClickHouse：使用 `reqwest` 的 HTTP(S) 驱动程序，带动态 JSON 解码、数据库/表发现，以及面向自托管 ClickHouse 与 ClickHouse Cloud 的以读取为主的 SQL 支持（crates/dbflux_driver_clickhouse/src/driver.rs）。
+- TursoDB：基于 Hrana HTTP 的 `turso_serverless` 驱动程序，带按配置的 Tokio 桥接、基于 PRAGMA 的 Schema 发现、类型化 CRUD，以及用于交互式事务的按流执行会话（crates/dbflux_driver_turso/src/connection.rs）。
 - Amazon S3：`aws-sdk-s3` 驱动程序，支持 AWS 配置/SSO 或静态凭据，对兼容 S3 的端点（Cloudflare R2、MinIO）支持端点覆盖与路径风格寻址，并支持存储桶/对象 CRUD、预签名 URL 与复制/版本（crates/dbflux_driver_s3/src/driver.rs）。
 - AWS 认证栈：`dbflux_aws` 提供 AWS SSO/共享/静态认证提供程序、SSO 登录编排、账户/角色发现，以及新保存认证配置对 `~/.aws/config` 的回写。
 - 本地 IPC/RPC：`interprocess` Socket + 带版本号的消息信封，用于应用控制与 RPC 服务通信（`crates/dbflux_ipc/`、`crates/dbflux_driver_ipc/`、`crates/dbflux_driver_host/`）。`dbflux_app::rpc_services` 发现已持久化的服务描述符，把 `RpcServiceKind::Driver` 适配为运行时 `DbDriver`，并把 `RpcServiceKind::AuthProvider` 接入 `RpcAuthProvider`（它实现 `DynAuthProvider`）。保持 `rpc:<socket_id>` 的兼容性。认证提供程序的 IPC 协议为 v1.2：新增 `FetchDynamicOptions` / `DynamicOptions` 变体与 `secret_dependency_opt_in` 清单标志。认证令牌由 `dbflux_ipc/src/auth.rs` 管理。

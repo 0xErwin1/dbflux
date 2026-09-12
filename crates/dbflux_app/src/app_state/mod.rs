@@ -169,7 +169,10 @@ impl AppState {
     /// callers can wait for the connection to be fully closed before running
     /// ordered follow-up work (post-disconnect hooks). See
     /// `ConnectionManager::disconnect`.
-    pub fn disconnect(&mut self, profile_id: Uuid) -> Option<std::thread::JoinHandle<()>> {
+    pub fn disconnect(
+        &mut self,
+        profile_id: Uuid,
+    ) -> Option<std::thread::JoinHandle<Result<(), dbflux_core::DbError>>> {
         let teardown = self.facade.connections.disconnect(profile_id);
 
         // Evict stale metric catalog data for this connection.
@@ -729,8 +732,13 @@ impl AppState {
         self.facade.secrets.secret_store_arc()
     }
 
-    pub fn save_password(&self, profile: &ConnectionProfile, password: &SecretString) {
-        self.facade.secrets.save_password(profile, password);
+    #[allow(clippy::result_large_err)]
+    pub fn save_password(
+        &self,
+        profile: &ConnectionProfile,
+        password: &SecretString,
+    ) -> Result<(), dbflux_core::DbError> {
+        self.facade.secrets.save_password(profile, password)
     }
 
     pub fn delete_password(&self, profile: &ConnectionProfile) {
@@ -1578,9 +1586,11 @@ impl AppState {
         self.facade.cancel_all_tasks()
     }
 
-    pub fn close_all_connections(&mut self) {
+    pub fn close_all_connections(
+        &mut self,
+    ) -> Vec<std::thread::JoinHandle<Result<(), dbflux_core::DbError>>> {
         self.cancel_all_detached_hook_tasks();
-        self.facade.close_all_connections();
+        self.facade.close_all_connections()
     }
 
     pub fn complete_shutdown(&self) {

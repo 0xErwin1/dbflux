@@ -144,23 +144,141 @@ impl SecretManager {
         }
     }
 
-    pub fn save_password(&self, profile: &ConnectionProfile, password: &SecretString) {
+    pub fn save_password(
+        &self,
+        profile: &ConnectionProfile,
+        password: &SecretString,
+    ) -> Result<(), crate::DbError> {
         if !profile.save_password {
-            return;
+            return Ok(());
         }
 
         let store = self.store_read();
 
         if !store.is_available() {
-            log::warn!("Secret store unavailable; connection password was NOT persisted");
-            return;
+            return Err(crate::DbError::NotSupported(
+                "System keyring unavailable".to_string(),
+            ));
         }
 
-        if let Err(e) = store.set(&profile.secret_ref(), password) {
-            error!("Failed to save password: {:?}", e);
+        store.set(&profile.secret_ref(), password)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::secrecy::ExposeSecret;
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    struct FakeSecretStore {
+        available: bool,
+        fail_set: bool,
+        values: Mutex<HashMap<String, SecretString>>,
+    }
+
+    impl SecretStore for FakeSecretStore {
+        fn is_available(&self) -> bool {
+            self.available
+        }
+
+        fn get(&self, secret_ref: &str) -> Result<Option<SecretString>, crate::DbError> {
+            Ok(self
+                .values
+                .lock()
+                .expect("fake secret store lock poisoned")
+                .get(secret_ref)
+                .cloned())
+        }
+
+        fn set(&self, secret_ref: &str, value: &SecretString) -> Result<(), crate::DbError> {
+            if self.fail_set {
+                return Err(crate::DbError::IoError(std::io::Error::other(
+                    "fake keyring write failure",
+                )));
+            }
+
+            self.values
+                .lock()
+                .expect("fake secret store lock poisoned")
+                .insert(secret_ref.to_string(), value.clone());
+            Ok(())
+        }
+
+        fn delete(&self, _secret_ref: &str) -> Result<(), crate::DbError> {
+            Ok(())
         }
     }
 
+    fn profile() -> ConnectionProfile {
+        ConnectionProfile::new("test", DbConfig::default_sqlite())
+    }
+
+    #[test]
+    fn save_password_persists_password_when_store_accepts_writes() {
+        let profile = profile();
+        let manager = SecretManager::new(Box::new(FakeSecretStore {
+            available: true,
+            fail_set: false,
+            values: Mutex::new(HashMap::new()),
+        }));
+
+        manager
+            .save_password(&profile, &SecretString::from("new password"))
+            .expect("password save succeeds");
+
+        let saved = manager
+            .get_password(&profile)
+            .expect("password is available after successful save");
+        assert_eq!(saved.expose_secret(), "new password");
+    }
+
+    #[test]
+    fn save_password_returns_error_and_preserves_existing_password_on_write_failure() {
+        let profile = profile();
+        let mut values = HashMap::new();
+        values.insert(
+            profile.secret_ref(),
+            SecretString::from("previous password"),
+        );
+        let manager = SecretManager::new(Box::new(FakeSecretStore {
+            available: true,
+            fail_set: true,
+            values: Mutex::new(values),
+        }));
+
+        assert!(
+            manager
+                .save_password(&profile, &SecretString::from("replacement password"))
+                .is_err()
+        );
+
+        let saved = manager
+            .get_password(&profile)
+            .expect("failed save preserves the previous password");
+        assert_eq!(saved.expose_secret(), "previous password");
+    }
+
+    #[test]
+    fn turso_profiles_do_not_request_ssh_secrets() {
+        let profile = ConnectionProfile::new(
+            "turso",
+            DbConfig::Turso {
+                url: "https://example.turso.io".to_string(),
+            },
+        );
+        let manager = SecretManager::new(Box::new(FakeSecretStore {
+            available: true,
+            fail_set: false,
+            values: Mutex::new(HashMap::new()),
+        }));
+
+        assert!(manager.get_ssh_secret_for_profile(&profile, &[]).is_none());
+    }
+}
+
+impl SecretManager {
     pub fn delete_password(&self, profile: &ConnectionProfile) {
         let store = self.store_read();
 
@@ -315,6 +433,7 @@ impl SecretManager {
             | DbConfig::InfluxDB { .. }
             | DbConfig::S3 { .. }
             | DbConfig::ClickHouse { .. }
+            | DbConfig::Turso { .. }
             | DbConfig::External { .. } => {
                 return None;
             }

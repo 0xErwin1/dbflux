@@ -686,6 +686,7 @@ impl CodeDocument {
         self.sync_editor_language(cx);
 
         if did_change {
+            self.invalidate_execution_session_if_context_changed(cx);
             cx.emit(DocumentEvent::MetaChanged);
         }
 
@@ -773,6 +774,7 @@ impl CodeDocument {
             return;
         };
 
+        self.invalidate_execution_session(cx);
         self.source.exec_ctx.connection_id = Some(new_conn_id);
         self.connection_id = Some(new_conn_id);
         self.source.exec_ctx.database =
@@ -788,13 +790,17 @@ impl CodeDocument {
         }
     }
 
-    fn on_database_changed(&mut self, item: &DropdownItem, cx: &mut Context<Self>) {
+    pub(super) fn on_database_changed(&mut self, item: &DropdownItem, cx: &mut Context<Self>) {
         let db_name = item.value.to_string();
+        if self.source.exec_ctx.database.as_deref() == Some(db_name.as_str()) {
+            return;
+        }
 
         // Save previous state so we can revert on connection failure.
         let prev_database = self.source.exec_ctx.database.clone();
         let prev_schema = self.source.exec_ctx.schema.clone();
 
+        self.invalidate_execution_session(cx);
         self.source.exec_ctx.database = Some(db_name.clone());
         self.source.exec_ctx.schema = None;
 
