@@ -84,6 +84,7 @@ curl -fsSL https://raw.githubusercontent.com/0xErwin1/dbflux/main/scripts/instal
 - **DynamoDB**，支持表浏览、条目增删改查与 AWS 身份验证
 - **InfluxDB** v1 与 v2（v1 为 InfluxQL，v2 为 InfluxQL + Flux）
 - **ClickHouse** 与 ClickHouse Cloud，基于 HTTP(S)，支持数据库 / 表发现、可视化 SELECT 与显式的原始 SQL 执行
+- **TursoDB** 与 libSQL（`sqld`），基于 HTTP，支持 Schema 发现、类型化增删改查以及按编辑器标签页隔离的交互式事务
 - **CloudWatch Logs**，支持日志组 / 流浏览与事件流
 - **Amazon S3**，支持存储桶浏览、对象预览 / 编辑、完整增删改查与预签名 URL，并兼容 S3 端点（Cloudflare R2、MinIO）
 - **基于 RPC 的外部驱动**（通过[驱动 RPC 协议](docs/DRIVER_RPC_PROTOCOL.md)注册进程外驱动）

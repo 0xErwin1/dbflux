@@ -463,6 +463,11 @@ crates/
     src/connection.rs       # Query execution and system-catalog discovery
     src/types.rs            # ClickHouse type parsing and value decoding
     src/dialect.rs          # SQL generation dialect
+  dbflux_driver_turso/      # TursoDB / libSQL remote driver over Hrana HTTP
+    src/driver.rs           # Metadata, connection form, URL validation, connect
+    src/connection.rs       # Tokio bridge, batch execution, schema discovery, CRUD, error mapping
+    src/session.rs          # ExecutionSessionFactory/ExecutionSession over per-stream connections
+    src/dialect.rs          # SQLite dialect, value conversion, DDL code generation
   dbflux_driver_cloudwatch/ # AWS CloudWatch Logs driver (DatabaseCategory::LogStream)
     src/driver.rs           # Log group/stream discovery, EventStreamTarget, CollectionPresentation::EventStream
   dbflux_driver_s3/         # AWS S3 object-storage driver (DatabaseCategory::ObjectStorage)
@@ -830,6 +835,10 @@ The channel/branding model is a runtime seam: UI and app code read `ReleaseChann
   - Uses ClickHouse's HTTP(S) interface and dynamic JSON result decoding for arbitrary schemas
   - Discovers databases, tables, views, columns, and engine metadata without representing databases as schemas
   - Supports read-oriented SQL and visual SELECT generation; structured mutations, DDL, transactions, SSH tunneling, and generic query parameters are not exposed
+- **TursoDB**: `crates/dbflux_driver_turso/` — `DatabaseCategory::Relational` and `QueryLanguage::Sql` driver for Turso Cloud and self-hosted `sqld`:
+  - Wraps the async `turso_serverless` SDK behind the synchronous `Connection` contract with one Tokio runtime per profile; futures are driven from a scoped thread when the caller is already inside a Tokio context
+  - Implements `ExecutionSessionFactory` on the root connection: every isolated session is a fresh Hrana stream, so editor transactions, grid CRUD, and MCP operations never share server-side transaction state
+  - Reuses the SQLite dialect, PRAGMA-based discovery, and shared SQL builders; no query cancellation, SSH tunneling, or replicas
 - **CloudWatch Logs**: `crates/dbflux_driver_cloudwatch/` — `DatabaseCategory::LogStream` driver for AWS CloudWatch Logs:
   - Log group/stream discovery exposed as collections; log groups open as event streams via `CollectionPresentation::EventStream` and a generic `EventStreamTarget`, consumed by the `AuditDocument`/log-stream viewer without any driver-specific UI branch
   - Query modes (Logs Insights QL, OpenSearch PPL/SQL) are surfaced through `SourceContextSpec`; `DriverMetadata.query_language` defaults to `Sql` for editor behavior
@@ -944,6 +953,7 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 - Redis: `redis` driver with key-value API for all Redis types, variadic commands, keyspace support, key scanning, and command generation (crates/dbflux_driver_redis/src/driver.rs).
 - DynamoDB: `aws-sdk-dynamodb` driver with AWS profile/region support for remote DynamoDB, plus optional endpoint override for local emulators and tests (crates/dbflux_driver_dynamodb/src/driver.rs).
 - ClickHouse: HTTP(S) driver using `reqwest` with dynamic JSON decoding, database/table discovery, and read-oriented SQL support for self-hosted ClickHouse and ClickHouse Cloud (crates/dbflux_driver_clickhouse/src/driver.rs).
+- TursoDB: `turso_serverless` driver over Hrana HTTP with per-profile Tokio bridging, PRAGMA-based schema discovery, typed CRUD, and per-stream execution sessions for interactive transactions (crates/dbflux_driver_turso/src/connection.rs).
 - Amazon S3: `aws-sdk-s3` driver with AWS profile/SSO or static credentials, endpoint override and path-style addressing for S3-compatible endpoints (Cloudflare R2, MinIO), bucket/object CRUD, presigned URLs, and copy/versions support (crates/dbflux_driver_s3/src/driver.rs).
 - AWS auth stack: `dbflux_aws` provides AWS SSO/shared/static auth providers, SSO login orchestration, account/role discovery, and `~/.aws/config` profile write-back for newly saved auth profiles.
 - Local IPC/RPC: `interprocess` sockets + versioned envelopes for app control and RPC service communication (`crates/dbflux_ipc/`, `crates/dbflux_driver_ipc/`, `crates/dbflux_driver_host/`). `dbflux_app::rpc_services` discovers persisted service descriptors, adapts `RpcServiceKind::Driver` into runtime `DbDriver`s, and wires `RpcServiceKind::AuthProvider` into `RpcAuthProvider` (which implements `DynAuthProvider`). Preserves `rpc:<socket_id>` compatibility. Auth-provider IPC protocol is at v1.2: adds `FetchDynamicOptions` / `DynamicOptions` variants and the `secret_dependency_opt_in` manifest flag. Auth tokens are managed by `dbflux_ipc/src/auth.rs`.

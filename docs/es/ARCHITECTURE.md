@@ -488,6 +488,11 @@ crates/
     src/connection.rs       # Query execution and system-catalog discovery
     src/types.rs            # ClickHouse type parsing and value decoding
     src/dialect.rs          # SQL generation dialect
+  dbflux_driver_turso/      # TursoDB / libSQL remote driver over Hrana HTTP
+    src/driver.rs           # Metadata, connection form, URL validation, connect
+    src/connection.rs       # Tokio bridge, batch execution, schema discovery, CRUD, error mapping
+    src/session.rs          # ExecutionSessionFactory/ExecutionSession over per-stream connections
+    src/dialect.rs          # SQLite dialect, value conversion, DDL code generation
   dbflux_driver_cloudwatch/ # AWS CloudWatch Logs driver (DatabaseCategory::LogStream)
     src/driver.rs           # Log group/stream discovery, EventStreamTarget, CollectionPresentation::EventStream
   dbflux_driver_s3/         # AWS S3 object-storage driver (DatabaseCategory::ObjectStorage)
@@ -1333,6 +1338,18 @@ flujo de release/nightly en sí está documentado en `docs/RELEASE.md`.
   - Soporta SQL orientado a lectura y generación visual de SELECT; mutations
     estructuradas, DDL, transactions, SSH tunneling y parámetros de query
     genéricos no están expuestos
+- **TursoDB**: `crates/dbflux_driver_turso/` — driver
+  `DatabaseCategory::Relational` y `QueryLanguage::Sql` para Turso Cloud y
+  `sqld` autoalojado:
+  - Envuelve el SDK asíncrono `turso_serverless` detrás del contrato síncrono
+    `Connection` con un runtime Tokio por perfil; los futures se ejecutan desde
+    un hilo con scope cuando el caller ya está dentro de un contexto Tokio
+  - Implementa `ExecutionSessionFactory` en la conexión raíz: cada sesión
+    aislada es un stream Hrana nuevo, así que las transactions del editor, el
+    CRUD de la grilla y las operaciones MCP nunca comparten estado
+    transaccional del servidor
+  - Reutiliza el dialecto SQLite, el descubrimiento basado en PRAGMA y los
+    builders SQL compartidos; sin cancelación de queries, túnel SSH ni réplicas
 - **CloudWatch Logs**: `crates/dbflux_driver_cloudwatch/` — driver
   `DatabaseCategory::LogStream` para AWS CloudWatch Logs:
   - Descubrimiento de log group/stream expuesto como collections; los log groups
@@ -1606,6 +1623,10 @@ IA con una capa completa de gobernanza:
   JSON, descubrimiento de database/table, y soporte de SQL orientado a lectura
   para ClickHouse self-hosted y ClickHouse Cloud
   (crates/dbflux_driver_clickhouse/src/driver.rs).
+- TursoDB: driver `turso_serverless` sobre Hrana HTTP con puente Tokio por
+  perfil, descubrimiento de schema basado en PRAGMA, CRUD tipado y sesiones de
+  ejecución por stream para transactions interactivas
+  (crates/dbflux_driver_turso/src/connection.rs).
 - Amazon S3: driver `aws-sdk-s3` con AWS profile/SSO o credenciales estáticas,
   override de endpoint y direccionamiento path-style para endpoints compatibles
   con S3 (Cloudflare R2, MinIO), CRUD de bucket/object, URLs presignadas, y

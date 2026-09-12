@@ -277,6 +277,60 @@ where
     })
 }
 
+/// Spin up a libSQL server (`sqld`, the engine behind Turso) and wait for its
+/// health endpoint. The container serves the Hrana HTTP protocol without
+/// authentication.
+///
+/// Set `TURSO_TEST_URL` (and optionally `TURSO_TEST_TOKEN`) to target an
+/// existing server instead of starting a container; the closure then receives
+/// that URL and no container is created.
+pub fn with_libsql_server<T, E, F>(run: F) -> Result<T, E>
+where
+    E: From<dbflux_core::DbError>,
+    F: FnOnce(String) -> Result<T, E>,
+{
+    if let Ok(url) = std::env::var("TURSO_TEST_URL") {
+        return run(url);
+    }
+
+    let image = GenericImage::new("ghcr.io/tursodatabase/libsql-server", "v0.24.33")
+        .with_exposed_port(ContainerPort::Tcp(8080))
+        .with_wait_for(WaitFor::seconds(1));
+
+    let container = image
+        .start()
+        .expect("failed to start libsql-server container");
+    let port = container
+        .get_host_port_ipv4(8080)
+        .expect("failed to get libsql-server host port");
+    let endpoint = format!("http://127.0.0.1:{port}");
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .map_err(|error| dbflux_core::DbError::connection_failed(error.to_string()))
+        .map_err(E::from)?;
+
+    retry_db_operation(Duration::from_secs(60), || {
+        client
+            .get(format!("{endpoint}/health"))
+            .send()
+            .map_err(|error| dbflux_core::DbError::connection_failed(error.to_string()))
+            .map_err(E::from)
+            .and_then(|response| {
+                if response.status().is_success() {
+                    Ok(())
+                } else {
+                    Err(E::from(dbflux_core::DbError::connection_failed(format!(
+                        "libsql-server health returned {}",
+                        response.status()
+                    ))))
+                }
+            })
+    })?;
+
+    run(endpoint)
+}
+
 /// Password used when launching the SQL Server test container.
 ///
 /// SQL Server requires a "strong" SA password: at least 8 characters with

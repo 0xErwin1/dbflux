@@ -3220,8 +3220,12 @@ encryption = "none"
         )
         .expect("import URL-only Turso profile");
         assert!(actions.secret_writes.is_empty());
+        let imported = actions
+            .connections
+            .first()
+            .expect("one imported connection");
         assert!(matches!(
-            actions.connections[0].config,
+            imported.config,
             dbflux_core::DbConfig::External {
                 kind: dbflux_core::DbKind::Turso,
                 ..
@@ -3244,6 +3248,7 @@ encryption = "none"
         )
         .expect("import opted-in Turso secret");
         assert_eq!(actions.secret_writes.len(), 1);
-        assert!(actions.secret_writes[0].0.starts_with("dbflux:conn:"));
+        let (secret_ref, _) = actions.secret_writes.first().expect("one secret write");
+        assert!(secret_ref.starts_with("dbflux:conn:"));
     }
 }

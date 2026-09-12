@@ -28,6 +28,7 @@
 | CloudWatch Logs | 日志流 | Sql（元数据默认值） | 认证 | 由 AWS 托管；通过编辑器管理的源上下文执行 Logs Insights QL、OpenSearch PPL 与 OpenSearch SQL；暂不支持查询取消。 |
 | InfluxDB | 时序 | InfluxQuery | 认证、多数据库、分页、CSV/JSON 导出 | 同一个 crate 同时支持 v1 与 v2；两者都支持 InfluxQL，仅 v2 支持 Flux；只读（不支持 INSERT/UPDATE/DELETE）；不支持事务。 |
 | ClickHouse | 关系型 | SQL | 多数据库、视图、认证、分页、排序、筛选、分组、join、CTE、窗口函数、CSV/JSON 导出 | 走 HTTP(S)，包括 ClickHouse Cloud；DBFlux 的集成以读取为主，不支持结构化变更、DDL、事务、SSH 隧道或查询参数。 |
+| TursoDB | 关系型 | SQL | 认证令牌、视图、索引、外键、CHECK/唯一约束、预编译语句、插入/更新/删除、分页、排序、筛选、CSV/JSON 导出、事务、事务性 DDL、多语句 | 走 HTTP 的远程 Turso / libSQL（`libsql://`，本地 `sqld` 用 `http://`）；交互式事务在每个文档独立的服务端流上运行；不支持查询取消、SSH 隧道、副本或切换数据库。 |
 | Amazon S3 | 对象存储 | Custom("S3") | 认证（profile/SSO 或静态凭据、自定义端点）、存储桶浏览、分页的对象导航、预览、完整 CRUD、预签名 URL | 兼容 S3（Cloudflare R2、MinIO）；不支持分段上传/传输面板，不支持内嵌 PDF 查看器，不支持生命周期/ACL 管理或 S3 Select。 |
 
 ## 各驱动程序概要
@@ -75,6 +76,10 @@ AWS CloudWatch Logs 驱动程序，通过 `StartQuery` 执行查询，时间范�
 ### ClickHouse
 
 面向自托管 ClickHouse 与 ClickHouse Cloud 的关系型 SQL 驱动程序，走 HTTP(S)。它可以发现数据库、表、视图、列与引擎元数据，并支持以读取为主的 SQL 工作流，包括分页与可视化 SELECT 生成。在当前的初始范围内，不支持结构化变更、DDL、事务、SSH 隧道与通用查询参数。参见 [`crates/dbflux_driver_clickhouse/README.md`](../crates/dbflux_driver_clickhouse/README.md)。
+
+### TursoDB
+
+面向 Turso Cloud 与自托管 `sqld` 的关系型 SQL 驱动程序，走 HTTP，基于 `turso_serverless` SDK。它使用 SQLite 方言，通过 `sqlite_master` 与 PRAGMA 发现表、视图、列、索引、外键与约束，并支持类型化 CRUD、绑定参数、批量脚本，以及在每个文档独立的服务端流上运行的交互式事务。不支持查询取消、SSH 隧道、嵌入式副本与切换数据库。参见 [`crates/dbflux_driver_turso/README.md`](../crates/dbflux_driver_turso/README.md)。
 
 ### Amazon S3
 

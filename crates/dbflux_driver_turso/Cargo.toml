@@ -14,8 +14,14 @@ path = "src/lib.rs"
 
 [dependencies]
 dbflux_core.workspace = true
-tokio.workspace = true
+hex.workspace = true
+log.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread"] }
 turso_serverless.workspace = true
+
+[dev-dependencies]
+dbflux_test_support.workspace = true
 
 [lints]
 workspace = true

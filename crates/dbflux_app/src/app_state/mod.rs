@@ -732,6 +732,7 @@ impl AppState {
         self.facade.secrets.secret_store_arc()
     }
 
+    #[allow(clippy::result_large_err)]
     pub fn save_password(
         &self,
         profile: &ConnectionProfile,

@@ -44,6 +44,7 @@ The capability flags listed below are exactly the ones each driver's
 | CloudWatch Logs | Log Stream | Sql (metadata default) | Auth | AWS-managed; executes Logs Insights QL, OpenSearch PPL, and OpenSearch SQL via editor-managed source context; no query cancellation yet. |
 | InfluxDB | Time Series | InfluxQuery | Auth, multiple databases, pagination, CSV/JSON export | v1 and v2 in one crate; InfluxQL on both, Flux on v2 only; read-only (no INSERT/UPDATE/DELETE); no transactions. |
 | ClickHouse | Relational | SQL | Multiple databases, views, auth, pagination, sorting, filtering, grouping, joins, CTEs, windows, CSV/JSON export | HTTP(S), including ClickHouse Cloud; read-oriented DBFlux integration with no structured mutations, DDL, transactions, SSH tunneling, or query parameters. |
+| TursoDB | Relational | SQL | Auth token, views, indexes, foreign keys, check/unique constraints, prepared statements, insert/update/delete, pagination, sorting, filtering, CSV/JSON export, transactions, transactional DDL, multi-statement | Remote Turso / libSQL over HTTP (`libsql://`, or `http://` for a local `sqld`); interactive transactions run on per-document server streams; no query cancellation, SSH tunnel, replicas, or database switching. |
 | Amazon S3 | Object Storage | Custom("S3") | Auth (profile/SSO or static credentials, custom endpoint), bucket browsing, paginated object navigation, preview, full CRUD, presigned URLs | S3-compatible (Cloudflare R2, MinIO); no multipart upload/transfers panel, no embedded PDF viewer, no lifecycle/ACL management or S3 Select. |
 
 ## Per-driver summary
@@ -136,6 +137,16 @@ and supports read-oriented SQL workflows with pagination and visual SELECT
 generation. Structured mutations, DDL, transactions, SSH tunneling, and generic
 query parameters are not supported in this initial scope. See
 [`crates/dbflux_driver_clickhouse/README.md`](../crates/dbflux_driver_clickhouse/README.md).
+
+### TursoDB
+
+Relational SQL driver for Turso Cloud and self-hosted `sqld` over HTTP, built on
+the `turso_serverless` SDK. It speaks the SQLite dialect, discovers tables,
+views, columns, indexes, foreign keys, and constraints through `sqlite_master`
+and PRAGMAs, and supports typed CRUD, bound parameters, batched scripts, and
+interactive transactions on per-document server streams. Query cancellation,
+SSH tunneling, embedded replicas, and database switching are not supported. See
+[`crates/dbflux_driver_turso/README.md`](../crates/dbflux_driver_turso/README.md).
 
 ### Amazon S3
 

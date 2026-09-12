@@ -874,6 +874,14 @@ fn build_driver_registry() -> HashMap<String, Arc<dyn DbDriver>> {
         );
     }
 
+    #[cfg(feature = "turso")]
+    {
+        registry.insert(
+            "turso".to_string(),
+            Arc::new(dbflux_driver_turso::TursoDriver::new()),
+        );
+    }
+
     registry
 }
 

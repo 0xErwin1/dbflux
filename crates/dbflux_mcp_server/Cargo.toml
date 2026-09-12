@@ -21,6 +21,7 @@ redis = ["dbflux_driver_redis"]
 dynamodb = ["dbflux_driver_dynamodb"]
 redshift = ["dbflux_driver_redshift"]
 clickhouse = ["dbflux_driver_clickhouse"]
+turso = ["dbflux_driver_turso"]
 aws = ["dbflux_aws", "dbflux_ssm"]
 
 [dependencies]
@@ -42,6 +43,7 @@ dbflux_driver_redis = { workspace = true, optional = true }
 dbflux_driver_dynamodb = { workspace = true, optional = true }
 dbflux_driver_redshift = { workspace = true, optional = true }
 dbflux_driver_clickhouse = { workspace = true, optional = true }
+dbflux_driver_turso = { workspace = true, optional = true }
 dbflux_aws = { workspace = true, optional = true }
 dbflux_ssm = { workspace = true, optional = true }
 

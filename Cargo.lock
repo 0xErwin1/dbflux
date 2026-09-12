@@ -2643,6 +2643,7 @@ dependencies = [
  "dbflux_driver_redshift",
  "dbflux_driver_s3",
  "dbflux_driver_sqlite",
+ "dbflux_driver_turso",
  "dbflux_ipc",
  "dbflux_lua",
  "dbflux_mcp",
@@ -3015,6 +3016,10 @@ name = "dbflux_driver_turso"
 version = "0.8.0-dev.0"
 dependencies = [
  "dbflux_core",
+ "dbflux_test_support",
+ "hex",
+ "log",
+ "serde_json",
  "tokio",
  "turso_serverless",
 ]
@@ -3110,6 +3115,7 @@ dependencies = [
  "dbflux_driver_redis",
  "dbflux_driver_redshift",
  "dbflux_driver_sqlite",
+ "dbflux_driver_turso",
  "dbflux_ipc",
  "dbflux_mcp",
  "dbflux_policy",
