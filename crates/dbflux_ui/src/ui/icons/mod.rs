@@ -90,6 +90,7 @@ pub const ALL_ICONS: &[AppIcon] = &[
     AppIcon::BrandMongodb,
     AppIcon::BrandRedis,
     AppIcon::BrandClickhouse,
+    AppIcon::BrandTurso,
     AppIcon::BrandLua,
     AppIcon::BrandPython,
     AppIcon::BrandBash,
@@ -241,6 +242,7 @@ pub(crate) fn embedded_bytes(icon: AppIcon) -> &'static [u8] {
         AppIcon::BrandClickhouse => {
             include_bytes!("../../../../../resources/icons/brand/clickhouse.svg")
         }
+        AppIcon::BrandTurso => include_bytes!("../../../../../resources/icons/brand/turso.svg"),
         AppIcon::BrandLua => include_bytes!("../../../../../resources/icons/brand/lua.svg"),
         AppIcon::BrandPython => include_bytes!("../../../../../resources/icons/brand/python.svg"),
         AppIcon::BrandBash => include_bytes!("../../../../../resources/icons/brand/gnubash.svg"),
@@ -268,6 +270,7 @@ mod tests {
             AppIcon::ChartNoAxesColumn,
             AppIcon::Boxes,
             AppIcon::BrandClickhouse,
+            AppIcon::BrandTurso,
         ] {
             assert!(ALL_ICONS.contains(&icon));
             assert!(embedded_bytes(icon).starts_with(b"<svg"));

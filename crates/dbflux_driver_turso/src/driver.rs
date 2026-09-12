@@ -65,7 +65,7 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
     ),
     default_port: None,
     uri_scheme: "libsql".into(),
-    icon: Icon::Database,
+    icon: Icon::Turso,
     syntax: Some(SyntaxInfo {
         identifier_quote: '"',
         string_quote: '\'',

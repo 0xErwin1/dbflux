@@ -138,6 +138,7 @@ pub enum Icon {
     Redshift,
     S3,
     Clickhouse,
+    Turso,
 
     // Time-series brands
     Influxdb,
@@ -2974,6 +2975,7 @@ mod tests {
         assert!(matches!(Icon::Dynamodb, Icon::Dynamodb));
         assert!(matches!(Icon::Redshift, Icon::Redshift));
         assert!(matches!(Icon::Clickhouse, Icon::Clickhouse));
+        assert!(matches!(Icon::Turso, Icon::Turso));
         assert!(matches!(Icon::Database, Icon::Database));
     }
 
