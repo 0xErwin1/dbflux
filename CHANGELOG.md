@@ -1,6 +1,22 @@
 # Changelog
 
 All notable changes to DBFlux will be documented in this file.
+## [0.7.8] - 2026-09-12
+
+
+### Fixed
+
+* Pull MinIO from quay and stop one image from blocking every suite (#594)
+* Link the MSVC C runtime statically so dbflux.exe starts without VCRedist (#598)
+* Re-derive the editor language from the bound connection (#592)
+* Report unsupported scripts instead of a JSON parse error (#590)
+* Raise secondary text and icon contrast to WCAG AA on all palettes (#532)
+* Use the keyring password on the pipeline connect path (#589)
+* Hold the no-primary-key banner until the key is fetched (#580)
+* Use separate password in username-only URIs (#574)
+* Keep inline edits when selecting another cell, and hand focus back on close (#541)
+* Draw the level-0 tree guide line on nested sidebar rows (#536)
+
 ## [0.7.7] - 2026-08-18
 
 
