@@ -144,8 +144,9 @@ Relational SQL driver for Turso Cloud and self-hosted `sqld` over HTTP, built on
 the `turso_serverless` SDK. It speaks the SQLite dialect, discovers tables,
 views, columns, indexes, foreign keys, and constraints through `sqlite_master`
 and PRAGMAs, and supports typed CRUD, bound parameters, batched scripts, and
-interactive transactions on per-document server streams. Query cancellation,
-SSH tunneling, embedded replicas, and database switching are not supported. See
+interactive transactions on per-document server streams, one control
+statement per editor run. Query cancellation, savepoints, SSH tunneling,
+embedded replicas, and database switching are not supported. See
 [`crates/dbflux_driver_turso/README.md`](../crates/dbflux_driver_turso/README.md).
 
 ### Amazon S3
