@@ -33,8 +33,13 @@ Remote Turso / libSQL database over HTTP.
   join it.
 - Column kinds from declared types with SQLite affinity rules, falling back to a
   scan of the returned values for expression columns.
+- Pagination, sorting, and filtering as SQL `LIMIT`/`OFFSET`, `ORDER BY`, and
+  `WHERE`, plus CSV and JSON export.
 - SQLite-style code generation (`CREATE TABLE` with rowid semantics,
   `ADD COLUMN`, `DROP COLUMN`, indexes, `REINDEX`) and the visual query builder.
+- Dangerous-query detection uses the shared `SqlLanguageService`: `DELETE` and
+  `UPDATE` without `WHERE`, `DROP`, `TRUNCATE`, and `ALTER` are flagged as for
+  any other SQL driver.
 - Error classification for auth failures, constraint violations, syntax errors,
   missing objects, and busy servers, without leaking response bodies.
 
@@ -44,7 +49,16 @@ Remote Turso / libSQL database over HTTP.
   transport gives up.
 - No SSH tunnels, embedded replicas, local files, or sync; local `sqld`
   instances are reached over plain HTTP only.
+- In the editor, transaction control is one statement per run: `BEGIN`,
+  `COMMIT`, and `ROLLBACK` each run on their own, and a script that mixes
+  them with other statements is rejected before reaching the server.
+  `SAVEPOINT`, `RELEASE`, and `ROLLBACK TO` are rejected the same way.
 - One database per connection; `ATTACH` and database switching are not exposed.
+- No write-privilege probe: the mutation policy is not tightened for
+  read-only tokens, so a write with a read-only token fails at execution time.
+- No instance metrics, inspectors, or dashboard sources.
+- Data transfer into Turso is untested; the driver advertises bulk insert but
+  the transfer engine has not been exercised against a Turso endpoint.
 - Results are fully buffered by the SDK before rows are returned.
 - `PRAGMA foreign_keys` toggling is not exposed because it is per-stream and
   would not apply to isolated sessions.

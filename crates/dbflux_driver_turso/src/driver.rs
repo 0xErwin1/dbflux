@@ -148,7 +148,9 @@ pub static METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata 
         supports_transactions: true,
         supported_isolation_levels: vec![IsolationLevel::ReadCommitted],
         default_isolation_level: Some(IsolationLevel::ReadCommitted),
-        supports_savepoints: true,
+        // SAVEPOINT / RELEASE / ROLLBACK TO are rejected by the editor's
+        // transaction-control classifier before they reach the server.
+        supports_savepoints: false,
         supports_nested_transactions: false,
         supports_read_only: true,
         supports_deferrable: true,

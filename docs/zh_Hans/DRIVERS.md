@@ -79,7 +79,7 @@ AWS CloudWatch Logs 驱动程序，通过 `StartQuery` 执行查询，时间范�
 
 ### TursoDB
 
-面向 Turso Cloud 与自托管 `sqld` 的关系型 SQL 驱动程序，走 HTTP，基于 `turso_serverless` SDK。它使用 SQLite 方言，通过 `sqlite_master` 与 PRAGMA 发现表、视图、列、索引、外键与约束，并支持类型化 CRUD、绑定参数、批量脚本，以及在每个文档独立的服务端流上运行的交互式事务。不支持查询取消、SSH 隧道、嵌入式副本与切换数据库。参见 [`crates/dbflux_driver_turso/README.md`](../crates/dbflux_driver_turso/README.md)。
+面向 Turso Cloud 与自托管 `sqld` 的关系型 SQL 驱动程序，走 HTTP，基于 `turso_serverless` SDK。它使用 SQLite 方言，通过 `sqlite_master` 与 PRAGMA 发现表、视图、列、索引、外键与约束，并支持类型化 CRUD、绑定参数、批量脚本，以及在每个文档独立的服务端流上运行的交互式事务（编辑器每次运行只能执行一条事务控制语句）。不支持查询取消、保存点、SSH 隧道、嵌入式副本与切换数据库。参见 [`crates/dbflux_driver_turso/README.md`](../crates/dbflux_driver_turso/README.md)。
 
 ### Amazon S3
 
