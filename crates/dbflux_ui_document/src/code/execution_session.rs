@@ -178,6 +178,7 @@ impl ExecutionSessionBinding {
     }
 
     /// Closes the session only after prior serialized execution has completed.
+    #[allow(clippy::result_large_err)]
     pub(super) fn close_invalidated(&self, generation: u64) -> Result<(), DbError> {
         let mut slot = self
             .slot
@@ -217,6 +218,7 @@ fn failure(message: &str, isolated: bool) -> SessionExecution {
     }
 }
 
+#[allow(clippy::result_large_err)]
 fn combine_cleanup(
     result: Result<QueryResult, DbError>,
     cleanup: Result<(), DbError>,

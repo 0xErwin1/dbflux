@@ -2,6 +2,7 @@ use crate::*;
 use dbflux_ui_base::AppStateEntity;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 
+#[allow(clippy::result_large_err)]
 fn duplicate_profile_in_state(
     state: &mut AppStateEntity,
     profile_id: Uuid,
@@ -125,6 +126,7 @@ impl Sidebar {
         cx.notify();
     }
 
+    #[allow(clippy::result_large_err)]
     pub(crate) fn duplicate_profile(&mut self, item_id: &str, cx: &mut Context<Self>) {
         let Some(SchemaNodeId::Profile { profile_id }) = parse_node_id(item_id) else {
             return;

@@ -1266,6 +1266,12 @@ mod tests {
     fn wait_for_connection_teardown_returns_cleanup_error_once(cx: &mut TestAppContext) {
         let teardown =
             std::thread::spawn(|| Err(dbflux_core::DbError::query_failed("close failed")));
+        // The helper polls on the executor's virtual clock while the thread
+        // runs in real time; let the thread finish first so the poll loop
+        // cannot outrun it and the test observes the join result.
+        while !teardown.is_finished() {
+            std::thread::yield_now();
+        }
         let cancel_token = CancelToken::new();
         let (done_sender, done_receiver) = mpsc::channel();
         cx.update(|cx| {

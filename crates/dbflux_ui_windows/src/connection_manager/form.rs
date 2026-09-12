@@ -21,6 +21,7 @@ use super::{ConnectionManagerWindow, DismissEvent, TestStatus};
 const PRIMARY_PASSWORD_SAVE_ERROR: &str =
     "Unable to save the connection password to the system keyring. Unlock it and try again.";
 
+#[allow(clippy::result_large_err)]
 fn finish_profile_save_after_primary_password(
     password_save_result: Result<(), dbflux_core::DbError>,
     commit_profile: impl FnOnce(),
@@ -513,6 +514,7 @@ impl ConnectionManagerWindow {
             }
         }
 
+        #[allow(clippy::result_large_err)]
         let save_result: Result<(), dbflux_core::DbError> =
             self.app_state.update(cx, |state, cx| {
                 let password_save_result = if !password_source_is_literal {
