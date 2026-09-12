@@ -3019,7 +3019,6 @@ dependencies = [
  "dbflux_test_support",
  "hex",
  "log",
- "serde_json",
  "tokio",
  "turso_serverless",
 ]
