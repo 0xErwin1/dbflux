@@ -7,7 +7,10 @@
     clippy::unwrap_in_result
 )]
 
-use dbflux_core::{ConnectionProfile, DbConfig, DbDriver, DbError, IndexData, QueryRequest, Value};
+use dbflux_core::{
+    ConnectionProfile, DbConfig, DbDriver, DbError, IndexData, QueryRequest, TableAlterOperation,
+    TableAlterRequest, TableAlterRoute, TableRef, Value,
+};
 use dbflux_driver_sqlite::SqliteDriver;
 use dbflux_test_support::ddl_fixtures::SqliteFixtures;
 use std::path::PathBuf;
@@ -667,5 +670,288 @@ fn sqlite_ddl_error_drop_with_dependents() -> Result<(), DbError> {
     cleanup_test_tables(&*connection);
     drop(connection);
     let _ = std::fs::remove_file(db_path);
+    Ok(())
+}
+
+#[test]
+fn sqlite_native_drop_prepare_is_read_only_for_special_shapes_and_attached_catalogs()
+-> Result<(), DbError> {
+    let (connection, _, db_path) = connect_sqlite()?;
+    for statement in [
+        "CREATE TABLE people (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            retained TEXT NOT NULL,
+            obsolete TEXT,
+            CHECK (length(retained) > 0)
+        )",
+        "INSERT INTO people (retained, obsolete) VALUES ('kept', 'removed')",
+        "CREATE VIEW retained_people AS SELECT id, retained FROM people",
+        "ATTACH DATABASE ':memory:' AS auxiliary",
+    ] {
+        connection.execute(&QueryRequest::new(statement))?;
+    }
+    rusqlite::Connection::open(&db_path)
+        .and_then(|raw| {
+            raw.execute_batch(
+                "CREATE TRIGGER people_after_insert AFTER INSERT ON people
+                 BEGIN INSERT INTO people (retained) VALUES ('triggered'); END",
+            )
+        })
+        .map_err(|error| {
+            DbError::query_failed(format!("could not create fixture trigger: {error}"))
+        })?;
+    let schema_before = connection.execute(&QueryRequest::new(
+        "SELECT type, name, sql FROM main.sqlite_master ORDER BY type, name",
+    ))?;
+    let rows_before = connection.execute(&QueryRequest::new(
+        "SELECT id, retained, obsolete FROM main.people ORDER BY id",
+    ))?;
+    let foreign_keys_before = connection.execute(&QueryRequest::new("PRAGMA foreign_keys"))?;
+
+    let plan = connection
+        .table_alter_planner()
+        .expect("SQLite must opt into table alteration planning")
+        .prepare(&TableAlterRequest {
+            table: TableRef::new("people"),
+            operations: vec![TableAlterOperation::DropColumn {
+                name: "obsolete".to_string(),
+            }],
+            expected_before: Vec::new(),
+        })?;
+
+    assert_eq!(plan.preview().route, TableAlterRoute::Native);
+    assert_eq!(
+        schema_before.rows,
+        connection
+            .execute(&QueryRequest::new(
+                "SELECT type, name, sql FROM main.sqlite_master ORDER BY type, name",
+            ))?
+            .rows,
+        "preparing native DROP must not alter the catalog"
+    );
+    assert_eq!(
+        rows_before.rows,
+        connection
+            .execute(&QueryRequest::new(
+                "SELECT id, retained, obsolete FROM main.people ORDER BY id",
+            ))?
+            .rows,
+        "preparing native DROP must not alter table data"
+    );
+    assert_eq!(
+        foreign_keys_before.rows,
+        connection
+            .execute(&QueryRequest::new("PRAGMA foreign_keys"))?
+            .rows,
+        "preparing native DROP must not change connection settings"
+    );
+
+    plan.execute()?;
+    let retained = connection.execute(&QueryRequest::new(
+        "SELECT id, retained FROM main.people ORDER BY id",
+    ))?;
+    assert_eq!(retained.rows.len(), 1);
+    assert_eq!(
+        connection
+            .execute(&QueryRequest::new("SELECT retained FROM retained_people"))?
+            .rows
+            .len(),
+        1,
+        "an unrelated retained-column view must keep working"
+    );
+    Ok(())
+}
+
+#[test]
+fn sqlite_native_drop_rejects_unsafe_connection_settings_without_mutation() -> Result<(), DbError> {
+    let (connection, _, _db_path) = connect_sqlite()?;
+    connection.execute(&QueryRequest::new(
+        "CREATE TABLE people (id INTEGER PRIMARY KEY, obsolete TEXT, retained TEXT);
+         INSERT INTO people VALUES (1, 'remove', 'keep');
+         PRAGMA writable_schema = ON",
+    ))?;
+    let schema_before = connection.execute(&QueryRequest::new(
+        "SELECT sql FROM main.sqlite_master WHERE type = 'table' AND name = 'people'",
+    ))?;
+    let rows_before = connection.execute(&QueryRequest::new("SELECT * FROM main.people"))?;
+
+    let error = connection
+        .table_alter_planner()
+        .expect("SQLite must opt into table alteration planning")
+        .prepare(&TableAlterRequest {
+            table: TableRef::new("people"),
+            operations: vec![TableAlterOperation::DropColumn {
+                name: "obsolete".to_string(),
+            }],
+            expected_before: Vec::new(),
+        })
+        .err()
+        .expect("unsafe connection settings must reject planning");
+    assert!(
+        error.to_string().contains("writable_schema"),
+        "the rejection must name the unsafe setting: {error}"
+    );
+    assert_eq!(
+        schema_before.rows,
+        connection
+            .execute(&QueryRequest::new(
+                "SELECT sql FROM main.sqlite_master WHERE type = 'table' AND name = 'people'",
+            ))?
+            .rows
+    );
+    assert_eq!(
+        rows_before.rows,
+        connection
+            .execute(&QueryRequest::new("SELECT * FROM main.people"))?
+            .rows
+    );
+    connection.execute(&QueryRequest::new("PRAGMA writable_schema = OFF"))?;
+    Ok(())
+}
+
+#[test]
+fn sqlite_native_drop_preflights_index_and_foreign_key_dependencies() -> Result<(), DbError> {
+    let (connection, _, _db_path) = connect_sqlite()?;
+    for statement in [
+        "PRAGMA foreign_keys = ON",
+        "CREATE TABLE indexed (id INTEGER PRIMARY KEY, obsolete TEXT, retained TEXT)",
+        "CREATE INDEX indexed_obsolete ON indexed(obsolete)",
+        "CREATE TABLE parent (id INTEGER PRIMARY KEY, obsolete TEXT, retained TEXT)",
+        "CREATE TABLE child (id INTEGER PRIMARY KEY, parent_obsolete TEXT REFERENCES parent(obsolete))",
+    ] {
+        connection.execute(&QueryRequest::new(statement))?;
+    }
+
+    for (table, column, dependency) in [
+        ("indexed", "obsolete", "index"),
+        ("indexed", "id", "primary key"),
+        ("parent", "obsolete", "foreign key"),
+    ] {
+        let error = connection
+            .table_alter_planner()
+            .expect("SQLite must opt into table alteration planning")
+            .prepare(&TableAlterRequest {
+                table: TableRef::new(table),
+                operations: vec![TableAlterOperation::DropColumn {
+                    name: column.to_string(),
+                }],
+                expected_before: Vec::new(),
+            })
+            .err()
+            .expect("known selected-column dependencies must reject planning");
+        assert!(
+            error
+                .to_string()
+                .contains(&format!("known dependency: {dependency}")),
+            "the driver must identify the {dependency} before execution: {error}"
+        );
+    }
+
+    assert_eq!(
+        connection
+            .execute(&QueryRequest::new(
+                "SELECT COUNT(*) FROM pragma_table_info('indexed') WHERE name = 'obsolete'",
+            ))?
+            .rows[0][0],
+        Value::Int(1)
+    );
+    assert_eq!(
+        connection
+            .execute(&QueryRequest::new(
+                "SELECT COUNT(*) FROM pragma_table_info('parent') WHERE name = 'obsolete'",
+            ))?
+            .rows[0][0],
+        Value::Int(1)
+    );
+    assert_eq!(
+        connection
+            .execute(&QueryRequest::new(
+                "SELECT COUNT(*) FROM pragma_table_info('indexed') WHERE name = 'id'",
+            ))?
+            .rows[0][0],
+        Value::Int(1)
+    );
+    Ok(())
+}
+
+#[test]
+fn sqlite_native_drop_rolls_back_all_selected_columns_when_later_drop_is_rejected()
+-> Result<(), DbError> {
+    let (connection, _, _db_path) = connect_sqlite()?;
+    for statement in [
+        "CREATE TABLE people (id INTEGER PRIMARY KEY, first_drop TEXT, second_drop TEXT, retained TEXT)",
+        "INSERT INTO people VALUES (1, 'first', 'second', 'kept')",
+        "CREATE VIEW second_drop_view AS SELECT second_drop FROM people",
+    ] {
+        connection.execute(&QueryRequest::new(statement))?;
+    }
+
+    let schema_before = connection.execute(&QueryRequest::new(
+        "SELECT type, name, sql FROM main.sqlite_master ORDER BY type, name",
+    ))?;
+    let data_before = connection.execute(&QueryRequest::new(
+        "SELECT id, first_drop, second_drop, retained FROM main.people",
+    ))?;
+    let foreign_keys_before = connection.execute(&QueryRequest::new("PRAGMA foreign_keys"))?;
+
+    let plan = connection
+        .table_alter_planner()
+        .expect("SQLite must opt into table alteration planning")
+        .prepare(&TableAlterRequest {
+            table: TableRef::new("people"),
+            operations: vec![
+                TableAlterOperation::DropColumn {
+                    name: "first_drop".to_string(),
+                },
+                TableAlterOperation::DropColumn {
+                    name: "second_drop".to_string(),
+                },
+            ],
+            expected_before: Vec::new(),
+        })?;
+
+    let error = plan
+        .execute()
+        .expect_err("SQLite must reject the later view-dependent DROP at execution");
+    assert!(
+        error.to_string().contains("rolled back"),
+        "native execution must report the rollback: {error}"
+    );
+    for column in ["first_drop", "second_drop", "retained"] {
+        assert_eq!(
+            connection
+                .execute(&QueryRequest::new(format!(
+                    "SELECT COUNT(*) FROM pragma_table_info('people') WHERE name = '{column}'"
+                )))?
+                .rows[0][0],
+            Value::Int(1),
+            "the failed later DROP must roll back every selected earlier column"
+        );
+    }
+    assert_eq!(
+        schema_before.rows,
+        connection
+            .execute(&QueryRequest::new(
+                "SELECT type, name, sql FROM main.sqlite_master ORDER BY type, name",
+            ))?
+            .rows,
+        "the failed native transaction must restore the complete main schema"
+    );
+    assert_eq!(
+        data_before.rows,
+        connection
+            .execute(&QueryRequest::new(
+                "SELECT id, first_drop, second_drop, retained FROM main.people",
+            ))?
+            .rows,
+        "the failed native transaction must restore the complete table data"
+    );
+    assert_eq!(
+        foreign_keys_before.rows,
+        connection
+            .execute(&QueryRequest::new("PRAGMA foreign_keys"))?
+            .rows,
+        "native execution must leave connection settings unchanged on rollback"
+    );
     Ok(())
 }
