@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Instant;
 
 use dbflux_core::secrecy::SecretString;
@@ -27,6 +27,8 @@ use dbflux_core::{
 };
 use rusqlite::{Connection as RusqliteConnection, InterruptHandle};
 
+use crate::table_rebuild::SqliteTableAlterPlanner;
+
 pub static SQLITE_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef {
     tabs: vec![FormTab {
         id: "main".into(),
@@ -40,7 +42,7 @@ pub static SQLITE_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef
 
 /// Connection pool for in-memory SQLite databases.
 /// Key is "profile_id:connection_id", value is the pooled connection.
-static POOL: LazyLock<Mutex<HashMap<String, Arc<Mutex<RusqliteConnection>>>>> =
+static POOL: LazyLock<Mutex<HashMap<String, Arc<Mutex<SqliteConnectionState>>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// SQLite driver metadata.
@@ -450,14 +452,13 @@ impl DbDriver for SqliteDriver {
                     let interrupt_handle = conn
                         .lock()
                         .map_err(|_| DbError::connection_failed("connection mutex poisoned"))?
-                        .get_interrupt_handle();
+                        .interrupt_handle();
                     drop(pool_key);
-                    return Ok(Box::new(SqliteConnection {
+                    return Ok(Box::new(SqliteConnection::new(
                         conn,
                         interrupt_handle,
-                        cancelled: Arc::new(AtomicBool::new(false)),
                         path,
-                    }));
+                    )));
                 }
             }
         }
@@ -472,25 +473,24 @@ impl DbDriver for SqliteDriver {
         if is_memory {
             if let Some(id) = &connection_id {
                 let pool_key = format!("{}:{}", profile.id, id);
-                let pooled_conn: Arc<Mutex<RusqliteConnection>> = Arc::new(Mutex::new(conn));
+                let pooled_conn: Arc<Mutex<SqliteConnectionState>> =
+                    Arc::new(Mutex::new(SqliteConnectionState::new(conn)));
                 POOL.lock()
                     .map_err(|_| DbError::connection_failed("connection pool mutex poisoned"))?
                     .insert(pool_key, pooled_conn.clone());
-                return Ok(Box::new(SqliteConnection {
-                    conn: pooled_conn,
+                return Ok(Box::new(SqliteConnection::new(
+                    pooled_conn,
                     interrupt_handle,
-                    cancelled: Arc::new(AtomicBool::new(false)),
                     path,
-                }));
+                )));
             }
         }
 
-        Ok(Box::new(SqliteConnection {
-            conn: Arc::new(Mutex::new(conn)),
+        Ok(Box::new(SqliteConnection::new(
+            Arc::new(Mutex::new(SqliteConnectionState::new(conn))),
             interrupt_handle,
-            cancelled: Arc::new(AtomicBool::new(false)),
             path,
-        }))
+        )))
     }
 
     fn test_connection(&self, profile: &ConnectionProfile) -> Result<(), DbError> {
@@ -539,8 +539,52 @@ impl DbDriver for SqliteDriver {
     }
 }
 
+pub(crate) struct SqliteConnectionState {
+    raw: RusqliteConnection,
+    unusable: Option<String>,
+}
+
+impl SqliteConnectionState {
+    pub(crate) fn new(raw: RusqliteConnection) -> Self {
+        Self {
+            raw,
+            unusable: None,
+        }
+    }
+
+    pub(crate) fn lock_checked(state: &Arc<Mutex<Self>>) -> Result<MutexGuard<'_, Self>, DbError> {
+        let guard = state
+            .lock()
+            .map_err(|_| DbError::query_failed("SQLite connection mutex poisoned".to_string()))?;
+        if let Some(reason) = &guard.unusable {
+            return Err(DbError::query_failed(format!(
+                "SQLite connection is unavailable: {reason}"
+            )));
+        }
+        Ok(guard)
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn mark_unusable(&mut self, reason: impl Into<String>) {
+        self.unusable = Some(reason.into());
+    }
+
+    pub(crate) fn interrupt_handle(&self) -> InterruptHandle {
+        self.raw.get_interrupt_handle()
+    }
+}
+
+impl std::ops::Deref for SqliteConnectionState {
+    type Target = RusqliteConnection;
+
+    fn deref(&self) -> &Self::Target {
+        &self.raw
+    }
+}
+
 pub struct SqliteConnection {
-    conn: Arc<Mutex<RusqliteConnection>>,
+    state: Arc<Mutex<SqliteConnectionState>>,
+    table_alter_planner: SqliteTableAlterPlanner,
     interrupt_handle: InterruptHandle,
     cancelled: Arc<AtomicBool>,
     #[allow(dead_code)]
@@ -721,11 +765,12 @@ impl Connection for SqliteConnection {
         &METADATA
     }
 
+    fn table_alter_planner(&self) -> Option<&dyn dbflux_core::TableAlterPlanner> {
+        Some(&self.table_alter_planner)
+    }
+
     fn ping(&self) -> Result<(), DbError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
+        let conn = self.lock_connection()?;
         conn.execute_batch("SELECT 1")
             .map_err(|e| format_sqlite_query_error(&e))
     }
@@ -736,10 +781,7 @@ impl Connection for SqliteConnection {
 
     fn set_referential_integrity(&self, enabled: bool) -> Result<(), DbError> {
         let value = if enabled { "ON" } else { "OFF" };
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
+        let conn = self.lock_connection()?;
         conn.execute_batch(&format!("PRAGMA foreign_keys = {value}"))
             .map_err(|e| format_sqlite_query_error(&e))
     }
@@ -748,10 +790,7 @@ impl Connection for SqliteConnection {
         self.cancelled.store(false, Ordering::SeqCst);
 
         let start = Instant::now();
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
+        let conn = self.lock_connection()?;
 
         // `rusqlite::prepare` only parses the first statement of a
         // multi-statement string and silently ignores the rest. To run a
@@ -799,18 +838,15 @@ impl Connection for SqliteConnection {
         Arc::new(SqliteCancelHandle {
             cancelled: self.cancelled.clone(),
             interrupt_handle: self
-                .conn
+                .state
                 .lock()
-                .map(|c| c.get_interrupt_handle())
+                .map(|state| state.interrupt_handle())
                 .expect("Failed to get interrupt handle"),
         })
     }
 
     fn schema(&self) -> Result<SchemaSnapshot, DbError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
+        let conn = self.lock_connection()?;
 
         let tables = self.get_tables(&conn)?;
         let views = self.get_views(&conn)?;
@@ -847,10 +883,7 @@ impl Connection for SqliteConnection {
     ) -> Result<TableInfo, DbError> {
         log::info!("[SCHEMA] Fetching details for table: {}", table);
 
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
+        let conn = self.lock_connection()?;
 
         let columns = self.get_columns(&conn, table)?;
         let indexes = self.get_indexes(&conn, table)?;
@@ -885,10 +918,7 @@ impl Connection for SqliteConnection {
         _database: &str,
         _schema: Option<&str>,
     ) -> Result<Vec<SchemaIndexInfo>, DbError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
+        let conn = self.lock_connection()?;
 
         self.get_all_indexes(&conn)
     }
@@ -898,10 +928,7 @@ impl Connection for SqliteConnection {
         _database: &str,
         _schema: Option<&str>,
     ) -> Result<Vec<SchemaForeignKeyInfo>, DbError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
+        let conn = self.lock_connection()?;
 
         self.get_all_foreign_keys(&conn)
     }
@@ -912,10 +939,7 @@ impl Connection for SqliteConnection {
         _schema: Option<&str>,
         table: &str,
     ) -> Result<Vec<dbflux_core::RelationRef>, dbflux_core::DbError> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| dbflux_core::DbError::query_failed(format!("Lock error: {}", e)))?;
+        let conn = self.lock_connection()?;
 
         fetch_dependents(&conn, table)
     }
@@ -995,10 +1019,7 @@ impl Connection for SqliteConnection {
 
         log::debug!("[UPDATE] Executing: {}", update_sql);
 
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
+        let conn = self.lock_connection()?;
 
         let affected = conn
             .execute(&update_sql, [])
@@ -1050,10 +1071,7 @@ impl Connection for SqliteConnection {
 
         log::debug!("[INSERT] Executing: {}", insert_sql);
 
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
+        let conn = self.lock_connection()?;
 
         conn.execute(&insert_sql, [])
             .map_err(|e| format_sqlite_query_error(&e))?;
@@ -1104,10 +1122,7 @@ impl Connection for SqliteConnection {
 
         log::debug!("[DELETE] Fetching row: {}", select_sql);
 
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
+        let conn = self.lock_connection()?;
 
         let returning_row = {
             let mut stmt = conn
@@ -1407,6 +1422,33 @@ impl ConnectionExt for SqliteConnection {
 }
 
 impl SqliteConnection {
+    fn new(
+        state: Arc<Mutex<SqliteConnectionState>>,
+        interrupt_handle: InterruptHandle,
+        path: PathBuf,
+    ) -> Self {
+        Self {
+            table_alter_planner: SqliteTableAlterPlanner::new(state.clone()),
+            state,
+            interrupt_handle,
+            cancelled: Arc::new(AtomicBool::new(false)),
+            path,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test(state: Arc<Mutex<SqliteConnectionState>>) -> Self {
+        let interrupt_handle = state
+            .lock()
+            .expect("test SQLite connection mutex should not be poisoned")
+            .interrupt_handle();
+        Self::new(state, interrupt_handle, PathBuf::from(":memory:"))
+    }
+
+    fn lock_connection(&self) -> Result<MutexGuard<'_, SqliteConnectionState>, DbError> {
+        SqliteConnectionState::lock_checked(&self.state)
+    }
+
     fn get_tables(&self, conn: &RusqliteConnection) -> Result<Vec<TableInfo>, DbError> {
         let mut stmt = conn
             .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
