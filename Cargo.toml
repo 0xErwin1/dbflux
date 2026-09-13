@@ -200,6 +200,13 @@ todo = "warn"
 unimplemented = "warn"
 indexing_slicing = "warn"
 
+# blade-graphics 0.7.1 never recreates a swapchain that goes out of date
+# without a size change (Wayland output moves), freezing the window until a
+# resize (#600). The fork adds that recovery on top of the 0.7.1 tag. Drop this
+# patch once the gpui-pre migration (#601) replaces the blade renderer.
+[patch.crates-io]
+blade-graphics = { git = "https://github.com/0xErwin1/blade", rev = "9935464ccdc882e6078661db99b21bf0851a2126" }
+
 # Development build profile tuned for memory and link speed.
 # Full debug info (debug = 2) is the main driver of peak RAM and disk usage
 # when linking this many crates; line tables keep backtraces usable at a
