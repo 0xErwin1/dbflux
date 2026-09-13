@@ -12,8 +12,8 @@ use crate::{
     FormFieldKind, FormValues, LanguageService, NoOpCodeGenerator, QueryHandle, QueryLanguage,
     QueryRequest, QueryResult, RelationRef, RoutineInfo, RowDelete, RowInsert, RowPatch,
     SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot, SemanticPlan, SemanticPlanner,
-    SemanticRequest, SqlDialect, SqlGenerationRequest, SqlLanguageService, TableBrowseRequest,
-    TableCountRequest, TableInfo, Value, ViewInfo,
+    SemanticRequest, SqlDialect, SqlGenerationRequest, SqlLanguageService, TableAlterPlanner,
+    TableBrowseRequest, TableCountRequest, TableInfo, Value, ViewInfo,
     config::DriverKey,
     data::key_value::{
         HashDeleteRequest, HashSetRequest, KeyBulkGetRequest, KeyDeleteRequest, KeyExistsRequest,
@@ -967,6 +967,14 @@ pub trait Connection: Send + Sync {
 
     /// Close the connection and release resources.
     fn close(&mut self) -> Result<(), DbError>;
+
+    /// Returns a driver-owned planner for catalog-aware table alterations.
+    ///
+    /// Drivers retain their existing generated-statement behavior unless they
+    /// explicitly opt in by returning a planner.
+    fn table_alter_planner(&self) -> Option<&dyn TableAlterPlanner> {
+        None
+    }
 
     /// Returns the optional factory for isolated execution sessions.
     ///
@@ -1959,6 +1967,12 @@ mod tests {
             "default impl must return NotSupported, got: {:?}",
             result
         );
+    }
+
+    #[test]
+    fn table_alter_planner_defaults_to_none_for_legacy_connections() {
+        let conn = StubConnection;
+        assert!(conn.table_alter_planner().is_none());
     }
 
     #[test]

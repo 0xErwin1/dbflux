@@ -1,5 +1,8 @@
 use crate::schema::query_parser::QueryTableRef;
-use crate::{ForeignKeyInfo, IndexData, IndexInfo, TableInfo, TableRef};
+use crate::{
+    ForeignKeyInfo, IndexData, IndexInfo, OwnedDefaultSpec, TableAlterExpectedColumn,
+    TableAlterOperation, TableAlterRequest, TableInfo, TableRef,
+};
 
 /// Snapshot of a column's schema-relevant properties.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -106,6 +109,237 @@ pub struct SchemaDriftDetected {
     /// cache transparently, keyed by `(database, schema, table)`. Provided so
     /// that the "Refresh & re-run" handler can update all tables in one pass.
     pub refreshes: Vec<(crate::schema::TableKey, crate::TableInfo)>,
+}
+
+/// A fail-closed rejection raised while normalizing selected table deltas.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableAlterNormalizationError {
+    pub reason: String,
+}
+
+impl TableAlterNormalizationError {
+    fn new(reason: impl Into<String>) -> Self {
+        Self {
+            reason: reason.into(),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct SelectedColumnAlter {
+    name: String,
+    dropped: bool,
+    new_type: Option<String>,
+    nullable: Option<bool>,
+    default: Option<OwnedDefaultSpec>,
+    default_selected: bool,
+    expected_type: Option<String>,
+    expected_nullable: Option<bool>,
+    expected_default: Option<Option<String>>,
+}
+
+impl SelectedColumnAlter {
+    fn new(name: String) -> Self {
+        Self {
+            name,
+            dropped: false,
+            new_type: None,
+            nullable: None,
+            default: None,
+            default_selected: false,
+            expected_type: None,
+            expected_nullable: None,
+            expected_default: None,
+        }
+    }
+
+    fn reject_if_dropped(&self) -> Result<(), TableAlterNormalizationError> {
+        if self.dropped {
+            return Err(TableAlterNormalizationError::new(format!(
+                "column {} is selected for removal and alteration",
+                self.name
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// Normalize selected per-column differences into one complete table request.
+///
+/// The output only contains selected fields. Any duplicate, conflicting, missing,
+/// or unsupported selected change rejects the entire request so callers cannot
+/// execute a supported prefix of an incoherent table alteration.
+pub fn normalize_selected_table_alter(
+    table: TableRef,
+    selected: &[SchemaChange],
+) -> Result<TableAlterRequest, TableAlterNormalizationError> {
+    validate_identifier(&table.name, "table")?;
+    if selected.is_empty() {
+        return Err(TableAlterNormalizationError::new(
+            "at least one selected table alteration is required",
+        ));
+    }
+
+    let mut columns = Vec::<SelectedColumnAlter>::new();
+    for change in selected {
+        match change {
+            SchemaChange::ColumnAdded(column) => {
+                return unsupported_selected_change(format!(
+                    "adding column {} cannot be mixed into a table alteration request",
+                    column.name
+                ));
+            }
+            SchemaChange::PrimaryKeyChanged { .. }
+            | SchemaChange::ForeignKeyChanged
+            | SchemaChange::IndexAdded(_)
+            | SchemaChange::IndexRemoved(_) => {
+                return unsupported_selected_change(
+                    "selected index or constraint changes cannot be mixed into a table alteration request",
+                );
+            }
+            SchemaChange::ColumnRemoved(before) => {
+                validate_identifier(&before.name, "column")?;
+                let column = selected_column(&mut columns, &before.name)?;
+                if column.dropped
+                    || column.new_type.is_some()
+                    || column.nullable.is_some()
+                    || column.default_selected
+                {
+                    return Err(TableAlterNormalizationError::new(format!(
+                        "column {} has duplicate or conflicting selected changes",
+                        before.name
+                    )));
+                }
+                column.dropped = true;
+                column.expected_type = Some(before.type_name.clone());
+                column.expected_nullable = Some(before.nullable);
+                column.expected_default = Some(before.default_value.clone());
+            }
+            SchemaChange::ColumnTypeChanged { before, after } => {
+                validate_matching_column_names(before, after)?;
+                let column = selected_column(&mut columns, &before.name)?;
+                column.reject_if_dropped()?;
+                if column.new_type.is_some() {
+                    return Err(TableAlterNormalizationError::new(format!(
+                        "column {} has duplicate selected type changes",
+                        before.name
+                    )));
+                }
+                column.new_type = Some(after.type_name.clone());
+                column.expected_type = Some(before.type_name.clone());
+            }
+            SchemaChange::NullabilityChanged {
+                column: name,
+                before,
+                after,
+            } => {
+                validate_identifier(name, "column")?;
+                let column = selected_column(&mut columns, name)?;
+                column.reject_if_dropped()?;
+                if column.nullable.is_some() {
+                    return Err(TableAlterNormalizationError::new(format!(
+                        "column {name} has duplicate selected nullability changes"
+                    )));
+                }
+                column.nullable = Some(*after);
+                column.expected_nullable = Some(*before);
+            }
+            SchemaChange::DefaultChanged {
+                column: name,
+                before,
+                after,
+            } => {
+                validate_identifier(name, "column")?;
+                let column = selected_column(&mut columns, name)?;
+                column.reject_if_dropped()?;
+                if column.default_selected {
+                    return Err(TableAlterNormalizationError::new(format!(
+                        "column {name} has duplicate selected default changes"
+                    )));
+                }
+                column.default = Some(match after {
+                    Some(value) => OwnedDefaultSpec::Set(value.clone()),
+                    None => OwnedDefaultSpec::Drop,
+                });
+                column.default_selected = true;
+                column.expected_default = Some(before.clone());
+            }
+        }
+    }
+
+    let mut operations = Vec::with_capacity(columns.len());
+    let mut expected_before = Vec::with_capacity(columns.len());
+    for column in columns {
+        let name = column.name.clone();
+        if column.dropped {
+            operations.push(TableAlterOperation::DropColumn { name });
+        } else {
+            operations.push(TableAlterOperation::AlterColumn {
+                name,
+                new_type: column.new_type,
+                nullable: column.nullable,
+                default: column.default,
+            });
+        }
+        expected_before.push(TableAlterExpectedColumn {
+            name: column.name,
+            type_name: column.expected_type,
+            nullable: column.expected_nullable,
+            default: column.expected_default,
+        });
+    }
+
+    Ok(TableAlterRequest {
+        table,
+        operations,
+        expected_before,
+    })
+}
+
+fn unsupported_selected_change<T>(
+    reason: impl Into<String>,
+) -> Result<T, TableAlterNormalizationError> {
+    Err(TableAlterNormalizationError::new(reason))
+}
+
+fn selected_column<'a>(
+    columns: &'a mut Vec<SelectedColumnAlter>,
+    name: &str,
+) -> Result<&'a mut SelectedColumnAlter, TableAlterNormalizationError> {
+    if let Some(index) = columns.iter().position(|column| column.name == name) {
+        return columns.get_mut(index).ok_or_else(|| {
+            TableAlterNormalizationError::new("selected column was unavailable by index")
+        });
+    }
+
+    columns.push(SelectedColumnAlter::new(name.to_string()));
+    columns.last_mut().ok_or_else(|| {
+        TableAlterNormalizationError::new("selected column was unavailable after insertion")
+    })
+}
+
+fn validate_matching_column_names(
+    before: &ColumnSnapshot,
+    after: &ColumnSnapshot,
+) -> Result<(), TableAlterNormalizationError> {
+    validate_identifier(&before.name, "column")?;
+    validate_identifier(&after.name, "column")?;
+    if before.name != after.name {
+        return Err(TableAlterNormalizationError::new(format!(
+            "selected type change has mismatched columns {} and {}",
+            before.name, after.name
+        )));
+    }
+    Ok(())
+}
+
+fn validate_identifier(value: &str, kind: &str) -> Result<(), TableAlterNormalizationError> {
+    if value.trim().is_empty() {
+        return Err(TableAlterNormalizationError::new(format!(
+            "selected {kind} identifier must not be empty"
+        )));
+    }
+    Ok(())
 }
 
 /// Compute the list of schema changes between `before` and `after` for one table.
@@ -385,7 +619,10 @@ pub fn diff_schema(before: &[TableInfo], after: &[TableInfo]) -> Vec<TableChange
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ColumnInfo, ForeignKeyInfo, IndexData, IndexInfo, TableInfo};
+    use crate::{
+        ColumnInfo, ForeignKeyInfo, IndexData, IndexInfo, OwnedDefaultSpec, TableAlterOperation,
+        TableInfo,
+    };
 
     fn make_table(columns: Vec<ColumnInfo>) -> TableInfo {
         TableInfo {
@@ -455,6 +692,272 @@ mod tests {
             is_unique,
             is_primary,
         }
+    }
+
+    #[test]
+    fn selected_type_delta_ignores_unselected_after_properties() {
+        let before = ColumnSnapshot {
+            name: "status".to_string(),
+            type_name: "TEXT".to_string(),
+            nullable: true,
+            is_primary_key: false,
+            default_value: None,
+        };
+        let after = ColumnSnapshot {
+            name: "status".to_string(),
+            type_name: "INTEGER".to_string(),
+            nullable: false,
+            is_primary_key: true,
+            default_value: Some("'not-selected'".to_string()),
+        };
+
+        let request = normalize_selected_table_alter(
+            TableRef::new("users"),
+            &[SchemaChange::ColumnTypeChanged { before, after }],
+        )
+        .expect("a selected type change should normalize");
+
+        assert_eq!(
+            request.operations,
+            vec![TableAlterOperation::AlterColumn {
+                name: "status".to_string(),
+                new_type: Some("INTEGER".to_string()),
+                nullable: None,
+                default: None,
+            }]
+        );
+        assert_eq!(
+            request.expected_before,
+            vec![TableAlterExpectedColumn {
+                name: "status".to_string(),
+                type_name: Some("TEXT".to_string()),
+                nullable: None,
+                default: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn selected_deltas_coalesce_only_selected_column_properties() {
+        let type_before = ColumnSnapshot {
+            name: "status".to_string(),
+            type_name: "TEXT".to_string(),
+            nullable: true,
+            is_primary_key: false,
+            default_value: None,
+        };
+        let type_after = ColumnSnapshot {
+            type_name: "INTEGER".to_string(),
+            ..type_before.clone()
+        };
+        let request = normalize_selected_table_alter(
+            TableRef::with_schema("main", "users"),
+            &[
+                SchemaChange::ColumnTypeChanged {
+                    before: type_before,
+                    after: type_after,
+                },
+                SchemaChange::NullabilityChanged {
+                    column: "status".to_string(),
+                    before: true,
+                    after: false,
+                },
+                SchemaChange::DefaultChanged {
+                    column: "status".to_string(),
+                    before: None,
+                    after: Some("NULL".to_string()),
+                },
+            ],
+        )
+        .expect("disjoint selected changes should normalize");
+
+        assert_eq!(request.operations.len(), 1);
+        assert_eq!(
+            request.operations,
+            vec![TableAlterOperation::AlterColumn {
+                name: "status".to_string(),
+                new_type: Some("INTEGER".to_string()),
+                nullable: Some(false),
+                default: Some(OwnedDefaultSpec::Set("NULL".to_string())),
+            }]
+        );
+        assert_eq!(request.expected_before.len(), 1);
+        assert_eq!(
+            request.expected_before[0].type_name.as_deref(),
+            Some("TEXT")
+        );
+        assert_eq!(request.expected_before[0].nullable, Some(true));
+        assert_eq!(request.expected_before[0].default, Some(None));
+    }
+
+    #[test]
+    fn selected_delta_normalizer_rejects_duplicate_conflicting_and_unsupported_changes() {
+        let column = ColumnSnapshot {
+            name: "status".to_string(),
+            type_name: "TEXT".to_string(),
+            nullable: true,
+            is_primary_key: false,
+            default_value: None,
+        };
+        let changed = ColumnSnapshot {
+            type_name: "INTEGER".to_string(),
+            ..column.clone()
+        };
+        let type_change = SchemaChange::ColumnTypeChanged {
+            before: column.clone(),
+            after: changed,
+        };
+        let nullable_change = SchemaChange::NullabilityChanged {
+            column: "status".to_string(),
+            before: true,
+            after: false,
+        };
+        let default_change = SchemaChange::DefaultChanged {
+            column: "status".to_string(),
+            before: None,
+            after: Some("'pending'".to_string()),
+        };
+        let missing_identifier = SchemaChange::ColumnTypeChanged {
+            before: column.clone(),
+            after: ColumnSnapshot {
+                name: String::new(),
+                type_name: "INTEGER".to_string(),
+                nullable: true,
+                is_primary_key: false,
+                default_value: None,
+            },
+        };
+        let index = IndexSnapshot {
+            name: "idx_status".to_string(),
+            columns: vec!["status".to_string()],
+            is_unique: false,
+        };
+
+        let invalid_selections = [
+            (
+                "duplicate type",
+                vec![type_change.clone(), type_change.clone()],
+            ),
+            (
+                "duplicate nullability",
+                vec![nullable_change.clone(), nullable_change.clone()],
+            ),
+            (
+                "duplicate default",
+                vec![default_change.clone(), default_change.clone()],
+            ),
+            (
+                "drop followed by alter",
+                vec![
+                    SchemaChange::ColumnRemoved(column.clone()),
+                    type_change.clone(),
+                ],
+            ),
+            (
+                "alter followed by drop",
+                vec![type_change, SchemaChange::ColumnRemoved(column.clone())],
+            ),
+            (
+                "mixed add",
+                vec![
+                    SchemaChange::ColumnRemoved(column.clone()),
+                    SchemaChange::ColumnAdded(ColumnSnapshot {
+                        name: "new_status".to_string(),
+                        ..column.clone()
+                    }),
+                ],
+            ),
+            (
+                "mixed index",
+                vec![
+                    SchemaChange::ColumnRemoved(column.clone()),
+                    SchemaChange::IndexAdded(index),
+                ],
+            ),
+            (
+                "mixed primary key constraint",
+                vec![
+                    SchemaChange::ColumnRemoved(column.clone()),
+                    SchemaChange::PrimaryKeyChanged {
+                        before: vec!["id".to_string()],
+                        after: vec!["status".to_string()],
+                    },
+                ],
+            ),
+            (
+                "mixed foreign key constraint",
+                vec![
+                    SchemaChange::ColumnRemoved(column.clone()),
+                    SchemaChange::ForeignKeyChanged,
+                ],
+            ),
+            ("missing column identifier", vec![missing_identifier]),
+        ];
+
+        for (description, selected) in invalid_selections {
+            assert!(
+                normalize_selected_table_alter(TableRef::new("users"), &selected).is_err(),
+                "{description} must reject the selected table request: {selected:?}"
+            );
+        }
+        assert!(
+            normalize_selected_table_alter(TableRef::new("users"), &[]).is_err(),
+            "an empty selected list must reject"
+        );
+        assert!(
+            normalize_selected_table_alter(
+                TableRef::new(""),
+                &[SchemaChange::ColumnRemoved(column)],
+            )
+            .is_err(),
+            "an empty table identifier must reject"
+        );
+    }
+
+    #[test]
+    fn selected_delta_normalizer_keeps_absent_default_distinct_from_sql_null_and_drop() {
+        let absent_default = normalize_selected_table_alter(
+            TableRef::new("users"),
+            &[SchemaChange::DefaultChanged {
+                column: "status".to_string(),
+                before: Some("NULL".to_string()),
+                after: None,
+            }],
+        )
+        .expect("dropping a default should normalize");
+        let explicit_null = normalize_selected_table_alter(
+            TableRef::new("users"),
+            &[SchemaChange::DefaultChanged {
+                column: "status".to_string(),
+                before: None,
+                after: Some("NULL".to_string()),
+            }],
+        )
+        .expect("an explicit SQL NULL default should normalize");
+
+        assert_eq!(
+            absent_default.operations,
+            vec![TableAlterOperation::AlterColumn {
+                name: "status".to_string(),
+                new_type: None,
+                nullable: None,
+                default: Some(OwnedDefaultSpec::Drop),
+            }]
+        );
+        assert_eq!(
+            absent_default.expected_before[0].default,
+            Some(Some("NULL".to_string()))
+        );
+        assert_eq!(
+            explicit_null.operations[0],
+            TableAlterOperation::AlterColumn {
+                name: "status".to_string(),
+                new_type: None,
+                nullable: None,
+                default: Some(OwnedDefaultSpec::Set("NULL".to_string())),
+            }
+        );
+        assert_eq!(explicit_null.expected_before[0].default, Some(None));
     }
 
     #[test]
