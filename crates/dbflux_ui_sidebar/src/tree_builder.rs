@@ -1634,7 +1634,7 @@ fn resolve_db_children(
                 Sidebar::build_db_schema_content(
                     profile_id,
                     db_name,
-                    None,
+                    Some(db_name),
                     db_schema,
                     &connected.table_details,
                     &connected.schema_types,
@@ -3784,6 +3784,174 @@ mod tests {
             database_connections: HashMap::new(),
             proxy_tunnel: None,
         }
+    }
+
+    /// Regression for issue #670: lazy relational expansion must keep the
+    /// selected database in Table/View node IDs so cache routing targets the
+    /// selected database instead of falling back to the schema name (dbo).
+    #[test]
+    fn lazy_relational_children_keep_selected_database_across_same_schema_dbs() {
+        use super::resolve_db_children;
+        use dbflux_core::{DatabaseCategory, DriverCapabilities, SchemaNodeId, ViewInfo};
+
+        let profile_id = Uuid::new_v4();
+        let mut connected = make_connected_profile(profile_id, DriverCapabilities::empty());
+
+        for db_name in ["analytics", "archive"] {
+            connected.database_schemas.insert(
+                db_name.to_string(),
+                dbflux_core::DbSchemaInfo {
+                    // MSSQL's lazy producer names the per-database schema
+                    // after the database itself; tables/views keep the real
+                    // object schema (dbo).
+                    name: db_name.to_string(),
+                    tables: vec![TableInfo {
+                        name: "events".to_string(),
+                        schema: Some("dbo".to_string()),
+                        columns: None,
+                        indexes: None,
+                        foreign_keys: None,
+                        constraints: None,
+                        sample_fields: None,
+                        presentation: CollectionPresentation::DataGrid,
+                        child_items: None,
+                        storage_hints: None,
+                    }],
+                    views: vec![ViewInfo {
+                        name: "events_v".to_string(),
+                        schema: Some("dbo".to_string()),
+                    }],
+                    custom_types: None,
+                },
+            );
+        }
+
+        let schema = dbflux_core::SchemaSnapshot::relational(dbflux_core::RelationalSchema {
+            databases: vec![
+                dbflux_core::DatabaseInfo {
+                    name: "analytics".to_string(),
+                    is_current: false,
+                },
+                dbflux_core::DatabaseInfo {
+                    name: "archive".to_string(),
+                    is_current: false,
+                },
+            ],
+            ..Default::default()
+        });
+
+        let metric_cache = dbflux_app::MetricCatalogCache::new();
+        let metric_fetch_errors: HashMap<String, String> = HashMap::new();
+
+        let mut table_ids: HashMap<String, String> = HashMap::new();
+        let mut view_ids: HashMap<String, String> = HashMap::new();
+        let mut folder_ids: HashMap<String, (String, String)> = HashMap::new();
+
+        for db_name in ["analytics", "archive"] {
+            let children = resolve_db_children(
+                profile_id,
+                &connected,
+                &schema,
+                DriverCapabilities::empty(),
+                DatabaseCategory::Relational,
+                &metric_cache,
+                &metric_fetch_errors,
+                false,
+                false,
+                false,
+                true,
+                false,
+                db_name,
+                false,
+            );
+
+            let tables_folder = children
+                .iter()
+                .find(|item| item.label.as_ref().starts_with("Tables"))
+                .expect("Tables folder present");
+            let views_folder = children
+                .iter()
+                .find(|item| item.label.as_ref().starts_with("Views"))
+                .expect("Views folder present");
+
+            folder_ids.insert(
+                db_name.to_string(),
+                (tables_folder.id.to_string(), views_folder.id.to_string()),
+            );
+
+            assert_eq!(tables_folder.children.len(), 1);
+            assert_eq!(views_folder.children.len(), 1);
+
+            let table_id: SchemaNodeId = tables_folder.children[0]
+                .id
+                .as_ref()
+                .parse()
+                .expect("table id parses");
+            let view_id: SchemaNodeId = views_folder.children[0]
+                .id
+                .as_ref()
+                .parse()
+                .expect("view id parses");
+
+            for (id, kind) in [(&table_id, "table"), (&view_id, "view")] {
+                let (database, object_schema) = match id {
+                    SchemaNodeId::Table {
+                        database, schema, ..
+                    }
+                    | SchemaNodeId::View {
+                        database, schema, ..
+                    } => (database, schema),
+                    _ => panic!("{kind} node id has unexpected variant: {id:?}"),
+                };
+                assert_eq!(
+                    database.as_deref(),
+                    Some(db_name),
+                    "{kind} must carry the selected database, not the schema name"
+                );
+                assert_eq!(object_schema, "dbo", "{kind} schema must stay dbo");
+            }
+
+            table_ids.insert(db_name.to_string(), table_id.to_string());
+            view_ids.insert(db_name.to_string(), view_id.to_string());
+
+            // Tables and Views folders stay distinguishable within one database.
+            assert_ne!(
+                tables_folder.id, views_folder.id,
+                "folder IDs must remain distinct within {db_name}"
+            );
+
+            // Cache routing must target the selected database, not dbo.
+            for (id, kind) in [(&table_id, "table"), (&view_id, "view")] {
+                let parts = crate::ItemIdParts::from_node_id(id)
+                    .unwrap_or_else(|| panic!("{kind} id yields ItemIdParts"));
+                assert_eq!(
+                    parts.cache_database(),
+                    db_name,
+                    "{kind} cache_database must route to the selected database"
+                );
+            }
+        }
+
+        assert_ne!(
+            table_ids["analytics"], table_ids["archive"],
+            "same-schema tables in different databases must have distinct node IDs"
+        );
+        assert_ne!(
+            view_ids["analytics"], view_ids["archive"],
+            "same-schema views in different databases must have distinct node IDs"
+        );
+
+        // With the producer-accurate fixture (DbSchemaInfo.name == database),
+        // folder IDs are database-distinct too: they are built from the
+        // schema's own name, which now matches the selected database.
+        assert_ne!(
+            folder_ids["analytics"].0, folder_ids["archive"].0,
+            "TablesFolder IDs must differ across databases"
+        );
+        assert_ne!(
+            folder_ids["analytics"].1, folder_ids["archive"].1,
+            "ViewsFolder IDs must differ across databases"
+        );
     }
 
     #[test]
