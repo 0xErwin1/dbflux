@@ -25,6 +25,14 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **Confirm modals are keyboard-accessible** — Enter now confirms and
+  Escape cancels every confirm dialog (multi-statement script
+  confirmation, dangerous query, and any other modal on the shared
+  `ConfirmModal` keymap context), and focus moves off the SQL editor
+  while a confirmation is open, so typing no longer edits the buffer
+  behind it. Focus returns to the editor when the dialog closes; the
+  script-confirm Run button is highlighted as the primary action.
+
 * **Password save failures are reported** — a failed keyring write while
   saving or duplicating a connection profile now keeps the form open and
   shows the error instead of silently committing a profile with no secret.
