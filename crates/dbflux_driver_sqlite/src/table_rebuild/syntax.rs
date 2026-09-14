@@ -3,7 +3,76 @@ use std::ops::Range;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct CreateTable {
     source: String,
+    table_name_span: Range<usize>,
     columns: Vec<Column>,
+    constraints: Vec<TableConstraint>,
+    key_declarations: Vec<KeyDeclaration>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ColumnFacts {
+    pub name: String,
+    pub declared_type: Option<String>,
+    pub nullable: bool,
+    pub default: Option<String>,
+    pub collation: String,
+    pub primary_key_order: i64,
+    pub primary_key_descending: bool,
+    pub unique: bool,
+    pub foreign_key: Option<ForeignKeyFacts>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct KeyTerm {
+    pub column: String,
+    pub descending: bool,
+    pub explicit_collation: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum KeyKind {
+    PrimaryKey,
+    Unique,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum KeyDeclarationOrigin {
+    Inline,
+    Table,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct KeyDeclaration {
+    pub kind: KeyKind,
+    pub origin: KeyDeclarationOrigin,
+    pub terms: Vec<KeyTerm>,
+    pub source_order: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum TableConstraint {
+    PrimaryKey(Vec<KeyTerm>),
+    Unique(Vec<KeyTerm>),
+    ForeignKey(ForeignKeyFacts),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct CreateIndex {
+    pub name: String,
+    pub target_table: String,
+    pub unique: bool,
+    pub keys: Vec<KeyTerm>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ForeignKeyFacts {
+    pub columns: Vec<String>,
+    pub parent_table: String,
+    pub parent_columns: Option<Vec<String>>,
+    pub on_update: String,
+    pub on_delete: String,
+    pub deferrable: String,
+    declaration_span: Range<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -15,6 +84,10 @@ struct Column {
     default_atom_span: Option<Range<usize>>,
     first_clause_start: usize,
     definition_end: usize,
+    definition_span: Range<usize>,
+    removal_span: Range<usize>,
+    facts: ColumnFacts,
+    key_declarations: Vec<KeyDeclaration>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -78,12 +151,14 @@ pub(super) fn parse_create_table(source: &str) -> Result<CreateTable, String> {
     }
 
     let first_name = cursor.identifier()?;
+    let mut table_name_span = cursor.tokens[cursor.index - 1].span.clone();
     if cursor.symbol('.') {
         if !first_name.eq_ignore_ascii_case("main") {
             return Err("rebuild supports the main schema only".to_string());
         }
         cursor.next();
         cursor.identifier()?;
+        table_name_span = cursor.tokens[cursor.index - 1].span.clone();
     }
     cursor.punctuation('(')?;
     let body_start = cursor.index;
@@ -94,15 +169,48 @@ pub(super) fn parse_create_table(source: &str) -> Result<CreateTable, String> {
     }
 
     let mut columns = Vec::new();
-    for element in elements {
+    let mut constraints = Vec::new();
+    let mut key_declarations = Vec::new();
+    for (element_index, element) in elements.iter().enumerate() {
         let element_tokens = &tokens[body_start + element.start..body_start + element.end];
         if element_tokens.is_empty() {
             return Err("CREATE TABLE contains an empty definition".to_string());
         }
         if starts_table_constraint(source, element_tokens) {
-            validate_table_constraint(source, element_tokens)?;
+            let constraint = parse_table_constraint(source, element_tokens)?;
+            match &constraint {
+                TableConstraint::PrimaryKey(terms) => key_declarations.push(KeyDeclaration {
+                    kind: KeyKind::PrimaryKey,
+                    origin: KeyDeclarationOrigin::Table,
+                    terms: terms.clone(),
+                    source_order: element_tokens[0].span.start,
+                }),
+                TableConstraint::Unique(terms) => key_declarations.push(KeyDeclaration {
+                    kind: KeyKind::Unique,
+                    origin: KeyDeclarationOrigin::Table,
+                    terms: terms.clone(),
+                    source_order: element_tokens[0].span.start,
+                }),
+                TableConstraint::ForeignKey(_) => {}
+            }
+            constraints.push(constraint);
         } else {
-            columns.push(parse_column(source, element_tokens)?);
+            let mut column = parse_column(source, element_tokens)?;
+            key_declarations.append(&mut column.key_declarations);
+            column.removal_span = if element_index == 0 {
+                if let Some(next) = elements.get(element_index + 1) {
+                    column.definition_span.start..tokens[body_start + next.start].span.start
+                } else {
+                    column.definition_span.clone()
+                }
+            } else {
+                let separator = tokens
+                    .get(body_start + element.start - 1)
+                    .filter(|token| token.symbol(','))
+                    .ok_or_else(|| "CREATE TABLE column is missing a separator".to_string())?;
+                separator.span.start..column.definition_span.end
+            };
+            columns.push(column);
         }
     }
 
@@ -117,6 +225,31 @@ pub(super) fn parse_create_table(source: &str) -> Result<CreateTable, String> {
     if names.windows(2).any(|names| names[0] == names[1]) {
         return Err("CREATE TABLE contains duplicate column names".to_string());
     }
+    let table_primary_keys = constraints
+        .iter()
+        .filter_map(|constraint| match constraint {
+            TableConstraint::PrimaryKey(columns) => Some(columns),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if table_primary_keys.len() > 1
+        || (table_primary_keys.len() == 1
+            && columns
+                .iter()
+                .any(|column| column.facts.primary_key_order != 0))
+    {
+        return Err("CREATE TABLE contains ambiguous PRIMARY KEY clauses".to_string());
+    }
+    if let Some(primary_key) = table_primary_keys.first() {
+        for (index, term) in primary_key.iter().enumerate() {
+            let column = columns
+                .iter_mut()
+                .find(|column| column.name.eq_ignore_ascii_case(&term.column))
+                .ok_or_else(|| "PRIMARY KEY names an unknown column".to_string())?;
+            column.facts.primary_key_order = (index + 1) as i64;
+            column.facts.primary_key_descending = term.descending;
+        }
+    }
 
     cursor.index = body_end + 1;
     if cursor.symbol(';') {
@@ -128,7 +261,62 @@ pub(super) fn parse_create_table(source: &str) -> Result<CreateTable, String> {
 
     Ok(CreateTable {
         source: source.to_string(),
+        table_name_span,
         columns,
+        constraints,
+        key_declarations,
+    })
+}
+
+pub(super) fn parse_create_index(source: &str) -> Result<CreateIndex, String> {
+    let tokens = tokenize(source)?;
+    let mut cursor = Cursor::new(source, &tokens);
+    cursor.keyword("CREATE")?;
+    let unique = if cursor.peek_keyword("UNIQUE") {
+        cursor.next();
+        true
+    } else {
+        false
+    };
+    cursor.keyword("INDEX")?;
+    if cursor.peek_keyword("IF") {
+        cursor.keyword("IF")?;
+        cursor.keyword("NOT")?;
+        cursor.keyword("EXISTS")?;
+    }
+    let first_index_name = cursor.identifier()?;
+    let name = if cursor.symbol('.') {
+        if !first_index_name.eq_ignore_ascii_case("main") {
+            return Err("CREATE INDEX supports the main schema only".to_string());
+        }
+        cursor.next();
+        cursor.identifier()?
+    } else {
+        first_index_name
+    };
+    cursor.keyword("ON")?;
+    let first_target_name = cursor.identifier()?;
+    let target_table = if cursor.symbol('.') {
+        if !first_target_name.eq_ignore_ascii_case("main") {
+            return Err("CREATE INDEX target supports the main schema only".to_string());
+        }
+        cursor.next();
+        cursor.identifier()?
+    } else {
+        first_target_name
+    };
+    let keys = parse_key_identifier_list(&mut cursor, true)?;
+    if cursor.symbol(';') {
+        cursor.next();
+    }
+    if !cursor.is_finished() {
+        return Err("CREATE INDEX contains an unsupported suffix".to_string());
+    }
+    Ok(CreateIndex {
+        name,
+        target_table,
+        unique,
+        keys,
     })
 }
 
@@ -219,6 +407,117 @@ impl CreateTable {
         }
         Ok(rewritten)
     }
+
+    pub(super) fn rewrite_rebuild(
+        &self,
+        changes: &[ColumnChange],
+        drops: &[String],
+        replacement_name: &str,
+    ) -> Result<String, String> {
+        let rewritten = if changes.is_empty() {
+            self.source.clone()
+        } else {
+            self.rewrite(changes)?
+        };
+        let parsed = parse_create_table(&rewritten)?;
+        if drops.is_empty() {
+            return parsed.rename_table(replacement_name);
+        }
+        let mut selected = vec![false; parsed.columns.len()];
+        let mut seen = std::collections::HashSet::new();
+        for name in drops {
+            if !seen.insert(name.to_ascii_lowercase()) {
+                return Err(format!("selected column {name:?} is repeated"));
+            }
+            let position = parsed
+                .columns
+                .iter()
+                .position(|column| column.name.eq_ignore_ascii_case(name))
+                .ok_or_else(|| format!("selected column {name:?} is not in CREATE TABLE"))?;
+            selected[position] = true;
+        }
+        if selected.iter().all(|selected| *selected) {
+            return Err("rebuild must retain at least one stored column".to_string());
+        }
+
+        let mut removals = Vec::new();
+        let mut start = 0;
+        while start < selected.len() {
+            if !selected[start] {
+                start += 1;
+                continue;
+            }
+            let mut end = start;
+            while end + 1 < selected.len() && selected[end + 1] {
+                end += 1;
+            }
+            let removal = if start == 0 {
+                parsed.columns[start].definition_span.start
+                    ..parsed.columns[end + 1].definition_span.start
+            } else {
+                parsed.columns[start].removal_span.start..parsed.columns[end].definition_span.end
+            };
+            removals.push(removal);
+            start = end + 1;
+        }
+
+        let mut without_drops = parsed.source.clone();
+        for removal in removals.into_iter().rev() {
+            without_drops.replace_range(removal, "");
+        }
+        parse_create_table(&without_drops)?.rename_table(replacement_name)
+    }
+
+    fn rename_table(&self, replacement_name: &str) -> Result<String, String> {
+        if replacement_name.is_empty() {
+            return Err("rebuild replacement table name is empty".to_string());
+        }
+        let mut rewritten = self.source.clone();
+        rewritten.replace_range(
+            self.table_name_span.clone(),
+            &format!("main.\"{}\"", replacement_name.replace('"', "\"\"")),
+        );
+        parse_create_table(&rewritten)?;
+        Ok(rewritten)
+    }
+
+    pub(super) fn column_names(&self) -> impl Iterator<Item = &str> {
+        self.columns.iter().map(|column| column.name.as_str())
+    }
+
+    pub(super) fn column_facts(&self) -> impl Iterator<Item = &ColumnFacts> {
+        self.columns.iter().map(|column| &column.facts)
+    }
+
+    pub(super) fn constraints(&self) -> &[TableConstraint] {
+        &self.constraints
+    }
+
+    pub(super) fn key_declarations(&self) -> Vec<KeyDeclaration> {
+        let mut declarations = self.key_declarations.clone();
+        declarations.sort_by_key(|declaration| declaration.source_order);
+        declarations
+    }
+
+    pub(super) fn foreign_keys(&self) -> impl Iterator<Item = &ForeignKeyFacts> {
+        self.columns
+            .iter()
+            .filter_map(|column| column.facts.foreign_key.as_ref())
+            .chain(
+                self.constraints
+                    .iter()
+                    .filter_map(|constraint| match constraint {
+                        TableConstraint::ForeignKey(foreign_key) => Some(foreign_key),
+                        _ => None,
+                    }),
+            )
+    }
+
+    pub(super) fn foreign_key_declaration_sources(&self) -> Vec<&str> {
+        self.foreign_keys()
+            .map(|foreign_key| &self.source[foreign_key.declaration_span.clone()])
+            .collect()
+    }
 }
 
 fn parse_column(source: &str, tokens: &[Token]) -> Result<Column, String> {
@@ -231,6 +530,12 @@ fn parse_column(source: &str, tokens: &[Token]) -> Result<Column, String> {
     let mut default_atom_span = None;
     let mut first_clause_start = name_end;
     let mut saw_clause = false;
+    let mut collation = "BINARY".to_string();
+    let mut primary_key = false;
+    let mut primary_key_descending = false;
+    let mut unique = false;
+    let mut key_declarations = Vec::new();
+    let mut foreign_key = None;
 
     if !cursor.is_finished() && !is_clause_start(source, cursor.peek()) {
         let start = cursor
@@ -289,28 +594,45 @@ fn parse_column(source: &str, tokens: &[Token]) -> Result<Column, String> {
             default_span = Some(named_start..cursor.previous_end());
         } else if cursor.peek_keyword("COLLATE") {
             cursor.keyword("COLLATE")?;
-            let collation = cursor.identifier()?;
-            if !matches!(
-                collation.to_ascii_uppercase().as_str(),
-                "BINARY" | "NOCASE" | "RTRIM"
-            ) {
-                return Err(
-                    "rebuild supports only BINARY, NOCASE, and RTRIM collations".to_string()
-                );
-            }
+            collation = parse_builtin_collation(&mut cursor, "rebuild supports only")?;
         } else if cursor.peek_keyword("PRIMARY") {
             cursor.keyword("PRIMARY")?;
             cursor.keyword("KEY")?;
-            if cursor.peek_keyword("DESC") {
-                return Err("PRIMARY KEY DESC is outside the bounded rebuild grammar".to_string());
-            }
-            if cursor.peek_keyword("ASC") {
+            primary_key_descending = if cursor.peek_keyword("DESC") {
                 cursor.next();
-            }
+                true
+            } else {
+                if cursor.peek_keyword("ASC") {
+                    cursor.next();
+                }
+                false
+            };
+            primary_key = true;
+            key_declarations.push(KeyDeclaration {
+                kind: KeyKind::PrimaryKey,
+                origin: KeyDeclarationOrigin::Inline,
+                terms: vec![KeyTerm {
+                    column: name.clone(),
+                    descending: primary_key_descending,
+                    explicit_collation: None,
+                }],
+                source_order: named_start,
+            });
         } else if cursor.peek_keyword("UNIQUE") {
             cursor.next();
+            unique = true;
+            key_declarations.push(KeyDeclaration {
+                kind: KeyKind::Unique,
+                origin: KeyDeclarationOrigin::Inline,
+                terms: vec![KeyTerm {
+                    column: name.clone(),
+                    descending: false,
+                    explicit_collation: None,
+                }],
+                source_order: named_start,
+            });
         } else if cursor.peek_keyword("REFERENCES") {
-            parse_references(&mut cursor)?;
+            foreign_key = Some(parse_references(&mut cursor)?);
         } else {
             return Err(format!(
                 "unsupported column clause {:?}",
@@ -323,6 +645,28 @@ fn parse_column(source: &str, tokens: &[Token]) -> Result<Column, String> {
     }
 
     let definition_end = tokens.last().map_or(name_end, |token| token.span.end);
+    let definition_span = tokens
+        .first()
+        .map(|token| token.span.start..definition_end)
+        .ok_or_else(|| "column definition requires a token".to_string())?;
+    let facts = ColumnFacts {
+        name: name.clone(),
+        declared_type: type_span
+            .as_ref()
+            .map(|span| source[span.clone()].to_string()),
+        nullable: not_null_span.is_none(),
+        default: default_atom_span
+            .as_ref()
+            .map(|span| source[span.clone()].to_string()),
+        collation,
+        primary_key_order: i64::from(primary_key),
+        primary_key_descending,
+        unique,
+        foreign_key: foreign_key.map(|mut foreign_key| {
+            foreign_key.columns.push(name.clone());
+            foreign_key
+        }),
+    };
     Ok(Column {
         name,
         type_span,
@@ -335,6 +679,10 @@ fn parse_column(source: &str, tokens: &[Token]) -> Result<Column, String> {
             definition_end
         },
         definition_end,
+        definition_span: definition_span.clone(),
+        removal_span: definition_span,
+        facts,
+        key_declarations,
     })
 }
 
@@ -522,16 +870,33 @@ fn validate_default_atom(value: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn parse_references(cursor: &mut Cursor<'_>) -> Result<(), String> {
+fn parse_references(cursor: &mut Cursor<'_>) -> Result<ForeignKeyFacts, String> {
+    let declaration_start = cursor
+        .peek()
+        .ok_or_else(|| "REFERENCES requires a keyword".to_string())?
+        .span
+        .start;
     cursor.keyword("REFERENCES")?;
-    cursor.identifier()?;
-    if cursor.symbol('(') {
-        parse_identifier_list(cursor, false)?;
-    }
-    parse_foreign_key_tail(cursor)
+    let parent_table = cursor.identifier()?;
+    let parent_columns = cursor
+        .symbol('(')
+        .then(|| parse_identifier_list(cursor, false))
+        .transpose()?;
+    let (on_update, on_delete, deferrable) = parse_foreign_key_tail(cursor)?;
+    Ok(ForeignKeyFacts {
+        columns: Vec::new(),
+        parent_table,
+        parent_columns,
+        on_update,
+        on_delete,
+        deferrable,
+        declaration_span: declaration_start..cursor.previous_end(),
+    })
 }
 
-fn parse_foreign_key_tail(cursor: &mut Cursor<'_>) -> Result<(), String> {
+fn parse_foreign_key_tail(cursor: &mut Cursor<'_>) -> Result<(String, String, String), String> {
+    let mut on_delete = "NO ACTION".to_string();
+    let mut on_update = "NO ACTION".to_string();
     let mut saw_delete = false;
     let mut saw_update = false;
     while cursor.peek_keyword("ON") {
@@ -548,14 +913,17 @@ fn parse_foreign_key_tail(cursor: &mut Cursor<'_>) -> Result<(), String> {
         if (is_delete && saw_delete) || (!is_delete && saw_update) {
             return Err("FOREIGN KEY contains a repeated ON action".to_string());
         }
+        let action = parse_foreign_key_action(cursor)?;
         if is_delete {
             saw_delete = true;
+            on_delete = action;
         } else {
             saw_update = true;
+            on_update = action;
         }
-        parse_foreign_key_action(cursor)?;
     }
 
+    let mut deferrable = "NOT DEFERRABLE".to_string();
     let mut saw_deferrable = false;
     if cursor.peek_keyword("DEFERRABLE") || cursor.peek_keyword("NOT") {
         if cursor.peek_keyword("NOT") {
@@ -563,6 +931,7 @@ fn parse_foreign_key_tail(cursor: &mut Cursor<'_>) -> Result<(), String> {
             cursor.keyword("DEFERRABLE")?;
         } else {
             cursor.keyword("DEFERRABLE")?;
+            deferrable = "DEFERRABLE".to_string();
         }
         saw_deferrable = true;
     }
@@ -571,64 +940,110 @@ fn parse_foreign_key_tail(cursor: &mut Cursor<'_>) -> Result<(), String> {
             return Err("INITIALLY requires a DEFERRABLE clause".to_string());
         }
         cursor.keyword("INITIALLY")?;
-        if cursor.peek_keyword("DEFERRED") || cursor.peek_keyword("IMMEDIATE") {
+        let initial = if cursor.peek_keyword("DEFERRED") {
             cursor.next();
+            "DEFERRED"
+        } else if cursor.peek_keyword("IMMEDIATE") {
+            cursor.next();
+            "IMMEDIATE"
         } else {
             return Err("INITIALLY must name DEFERRED or IMMEDIATE".to_string());
-        }
+        };
+        deferrable.push_str(" INITIALLY ");
+        deferrable.push_str(initial);
     }
-    Ok(())
+    Ok((on_update, on_delete, deferrable))
 }
 
-fn parse_foreign_key_action(cursor: &mut Cursor<'_>) -> Result<(), String> {
+fn parse_foreign_key_action(cursor: &mut Cursor<'_>) -> Result<String, String> {
     if cursor.peek_keyword("NO") {
         cursor.next();
         cursor.keyword("ACTION")?;
-    } else if cursor.peek_keyword("RESTRICT") || cursor.peek_keyword("CASCADE") {
+        Ok("NO ACTION".to_string())
+    } else if cursor.peek_keyword("RESTRICT") {
         cursor.next();
+        Ok("RESTRICT".to_string())
+    } else if cursor.peek_keyword("CASCADE") {
+        cursor.next();
+        Ok("CASCADE".to_string())
     } else if cursor.peek_keyword("SET") {
         cursor.next();
-        if cursor.peek_keyword("NULL") || cursor.peek_keyword("DEFAULT") {
+        if cursor.peek_keyword("NULL") {
             cursor.next();
+            Ok("SET NULL".to_string())
+        } else if cursor.peek_keyword("DEFAULT") {
+            cursor.next();
+            Ok("SET DEFAULT".to_string())
         } else {
-            return Err("SET action must name NULL or DEFAULT".to_string());
+            Err("SET action must name NULL or DEFAULT".to_string())
         }
     } else {
-        return Err("unsupported REFERENCES action".to_string());
+        Err("unsupported REFERENCES action".to_string())
     }
-    Ok(())
 }
 
-fn parse_identifier_list(cursor: &mut Cursor<'_>, allow_key_details: bool) -> Result<(), String> {
+fn parse_identifier_list(
+    cursor: &mut Cursor<'_>,
+    allow_key_details: bool,
+) -> Result<Vec<String>, String> {
+    parse_key_identifier_list(cursor, allow_key_details)
+        .map(|terms| terms.into_iter().map(|term| term.column).collect())
+}
+
+fn parse_key_identifier_list(
+    cursor: &mut Cursor<'_>,
+    allow_key_details: bool,
+) -> Result<Vec<KeyTerm>, String> {
     cursor.punctuation('(')?;
-    parse_identifier_with_key_details(cursor, allow_key_details)?;
+    let mut terms = vec![parse_identifier_with_key_details(
+        cursor,
+        allow_key_details,
+    )?];
     while cursor.symbol(',') {
         cursor.next();
-        parse_identifier_with_key_details(cursor, allow_key_details)?;
+        terms.push(parse_identifier_with_key_details(
+            cursor,
+            allow_key_details,
+        )?);
     }
     cursor.punctuation(')')?;
-    Ok(())
+    Ok(terms)
 }
 
 fn parse_identifier_with_key_details(
     cursor: &mut Cursor<'_>,
     allow_key_details: bool,
-) -> Result<(), String> {
-    cursor.identifier()?;
-    if allow_key_details && cursor.peek_keyword("COLLATE") {
+) -> Result<KeyTerm, String> {
+    let column = cursor.identifier()?;
+    let explicit_collation = if allow_key_details && cursor.peek_keyword("COLLATE") {
         cursor.keyword("COLLATE")?;
-        let collation = cursor.identifier()?;
-        if !matches!(
-            collation.to_ascii_uppercase().as_str(),
-            "BINARY" | "NOCASE" | "RTRIM"
-        ) {
-            return Err("table key supports only BINARY, NOCASE, and RTRIM collations".to_string());
-        }
-    }
-    if allow_key_details && cursor.peek_keyword("ASC") {
+        Some(parse_builtin_collation(cursor, "table key supports only")?)
+    } else {
+        None
+    };
+    let descending = if allow_key_details && cursor.peek_keyword("DESC") {
         cursor.next();
+        true
+    } else {
+        if allow_key_details && cursor.peek_keyword("ASC") {
+            cursor.next();
+        }
+        false
+    };
+    Ok(KeyTerm {
+        column,
+        descending,
+        explicit_collation,
+    })
+}
+
+fn parse_builtin_collation(cursor: &mut Cursor<'_>, prefix: &str) -> Result<String, String> {
+    let collation = cursor.identifier()?.to_ascii_uppercase();
+    if matches!(collation.as_str(), "BINARY" | "NOCASE" | "RTRIM") {
+        Ok(collation)
+    } else {
+        Err(format!("{prefix} BINARY, NOCASE, and RTRIM collations"))
     }
-    Ok(())
 }
 
 fn starts_table_constraint(source: &str, tokens: &[Token]) -> bool {
@@ -641,30 +1056,38 @@ fn starts_table_constraint(source: &str, tokens: &[Token]) -> bool {
     })
 }
 
-fn validate_table_constraint(source: &str, tokens: &[Token]) -> Result<(), String> {
+fn parse_table_constraint(source: &str, tokens: &[Token]) -> Result<TableConstraint, String> {
     let mut cursor = Cursor::new(source, tokens);
     if cursor.peek_keyword("CONSTRAINT") {
         cursor.next();
         cursor.identifier()?;
     }
-    if cursor.peek_keyword("PRIMARY") || cursor.peek_keyword("UNIQUE") {
+    let constraint = if cursor.peek_keyword("PRIMARY") {
         cursor.next();
         if cursor.peek_keyword("KEY") {
             cursor.next();
         }
-        parse_identifier_list(&mut cursor, true)?;
+        TableConstraint::PrimaryKey(parse_key_identifier_list(&mut cursor, true)?)
+    } else if cursor.peek_keyword("UNIQUE") {
+        cursor.next();
+        if cursor.peek_keyword("KEY") {
+            cursor.next();
+        }
+        TableConstraint::Unique(parse_key_identifier_list(&mut cursor, true)?)
     } else if cursor.peek_keyword("FOREIGN") {
         cursor.keyword("FOREIGN")?;
         cursor.keyword("KEY")?;
-        parse_identifier_list(&mut cursor, false)?;
-        parse_references(&mut cursor)?;
+        let columns = parse_identifier_list(&mut cursor, false)?;
+        let mut foreign_key = parse_references(&mut cursor)?;
+        foreign_key.columns = columns;
+        TableConstraint::ForeignKey(foreign_key)
     } else {
         return Err("CHECK table constraints are outside the bounded rebuild grammar".to_string());
-    }
+    };
     if !cursor.is_finished() {
         return Err("table constraint contains an unsupported tail".to_string());
     }
-    Ok(())
+    Ok(constraint)
 }
 
 fn unsigned_integer(cursor: &mut Cursor<'_>) -> Result<(), String> {
@@ -945,7 +1368,7 @@ impl<'a> Cursor<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ColumnChange, DefaultChange, parse_create_table};
+    use super::{ColumnChange, DefaultChange, KeyKind, parse_create_index, parse_create_table};
 
     #[test]
     fn parses_ordinary_create_table_with_quoted_identifier() {
@@ -982,6 +1405,127 @@ mod tests {
             "CREATE TABLE main.people (id INTEGER, name VARCHAR(32) DEFAULT (NULL))"
         );
         assert!(parse_create_table(&rewritten).is_ok());
+    }
+
+    #[test]
+    fn rebuild_rewrite_normalizes_adjacent_column_removals() {
+        let source = "CREATE TABLE t(id INTEGER PRIMARY KEY, p TEXT DEFAULT 'keep', a TEXT, b TEXT, UNIQUE (p))";
+        let parsed = parse_create_table(source).expect("source should parse");
+        let rewritten = parsed
+            .rewrite_rebuild(
+                &[ColumnChange {
+                    name: "p".to_string(),
+                    new_type: Some("VARCHAR(9)".to_string()),
+                    nullable: None,
+                    default: None,
+                }],
+                &["a".to_string(), "b".to_string()],
+                "__replacement",
+            )
+            .expect("adjacent selected drops should reconstruct safely");
+        assert_eq!(
+            rewritten,
+            "CREATE TABLE main.\"__replacement\"(id INTEGER PRIMARY KEY, p VARCHAR(9) DEFAULT 'keep', UNIQUE (p))"
+        );
+        assert!(parse_create_table(&rewritten).is_ok());
+    }
+
+    #[test]
+    fn rebuild_rewrite_removes_leading_interior_and_trailing_drop_runs_without_touching_constraints()
+     {
+        let cases = [
+            (
+                "CREATE TABLE t(id INTEGER PRIMARY KEY, p TEXT, a TEXT, b TEXT, UNIQUE (p))",
+                &["id", "p"] as &[_],
+                "CREATE TABLE main.\"__replacement\"(a TEXT, b TEXT, UNIQUE (p))",
+            ),
+            (
+                "CREATE TABLE t(id INTEGER PRIMARY KEY, p TEXT, a TEXT, b TEXT, UNIQUE (p))",
+                &["p", "a"] as &[_],
+                "CREATE TABLE main.\"__replacement\"(id INTEGER PRIMARY KEY, b TEXT, UNIQUE (p))",
+            ),
+            (
+                "CREATE TABLE t(id INTEGER PRIMARY KEY, p TEXT, a TEXT, b TEXT, UNIQUE (p))",
+                &["a", "b"] as &[_],
+                "CREATE TABLE main.\"__replacement\"(id INTEGER PRIMARY KEY, p TEXT, UNIQUE (p))",
+            ),
+        ];
+
+        for (source, drops, expected) in cases {
+            let parsed = parse_create_table(source).expect("source should parse");
+            let rewritten = parsed
+                .rewrite_rebuild(
+                    &[],
+                    &drops.iter().map(ToString::to_string).collect::<Vec<_>>(),
+                    "__replacement",
+                )
+                .expect("adjacent drop run should not overlap");
+            assert_eq!(rewritten, expected);
+            assert!(parse_create_table(&rewritten).is_ok());
+        }
+    }
+
+    #[test]
+    fn preserves_key_term_collation_and_direction_details() {
+        let parsed = parse_create_table(
+            "CREATE TABLE keyed (\
+                id INTEGER PRIMARY KEY,\
+                inline_unique TEXT COLLATE NOCASE UNIQUE,\
+                a TEXT COLLATE RTRIM,\
+                b TEXT,\
+                PRIMARY KEY (a COLLATE RTRIM DESC, b ASC),\
+                UNIQUE (a COLLATE BINARY DESC, b ASC)\
+            )",
+        );
+        assert!(
+            parsed.is_err(),
+            "mixed inline and table PRIMARY KEY clauses must reject"
+        );
+
+        let parsed = parse_create_table(
+            "CREATE TABLE keyed (\
+                inline_unique TEXT COLLATE NOCASE UNIQUE,\
+                a TEXT COLLATE RTRIM,\
+                b TEXT,\
+                PRIMARY KEY (a COLLATE RTRIM DESC, b ASC),\
+                UNIQUE (a COLLATE BINARY DESC, b ASC)\
+            )",
+        )
+        .expect("bounded key terms should parse");
+        let declarations = parsed.key_declarations();
+        assert!(declarations.iter().any(|declaration| {
+            declaration.kind == KeyKind::Unique
+                && declaration.terms.len() == 1
+                && declaration.terms[0].column == "inline_unique"
+                && declaration.terms[0].explicit_collation.is_none()
+        }));
+        assert!(declarations.iter().any(|declaration| {
+            declaration.kind == KeyKind::PrimaryKey
+                && declaration.terms[0].column == "a"
+                && declaration.terms[0].explicit_collation.as_deref() == Some("RTRIM")
+                && declaration.terms[0].descending
+                && !declaration.terms[1].descending
+        }));
+        assert!(declarations.iter().any(|declaration| {
+            declaration.kind == KeyKind::Unique
+                && declaration.terms.len() == 2
+                && declaration.terms[0].explicit_collation.as_deref() == Some("BINARY")
+                && declaration.terms[0].descending
+        }));
+
+        let index = parse_create_index(
+            "CREATE UNIQUE INDEX \"WHERE\" ON main.keyed(a COLLATE RTRIM DESC, b ASC)",
+        )
+        .expect("quoted index names must not be parsed as SQL keywords");
+        assert_eq!(index.name, "WHERE");
+        assert_eq!(index.target_table, "keyed");
+        assert!(index.unique);
+        assert!(index.keys[0].descending);
+        assert_eq!(index.keys[0].explicit_collation.as_deref(), Some("RTRIM"));
+        assert!(
+            parse_create_index("CREATE INDEX indexed ON keyed(a) WHERE a IS NOT NULL").is_err(),
+            "partial index tails must consume completely and reject"
+        );
     }
 
     #[test]
