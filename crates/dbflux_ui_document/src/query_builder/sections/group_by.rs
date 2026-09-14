@@ -12,7 +12,8 @@ pub fn render_group_by(
     panel: &mut QueryBuilderPanel,
     cx: &mut Context<QueryBuilderPanel>,
 ) -> impl IntoElement {
-    use crate::query_builder::panel::{AGG_FN_ORDER, agg_fn_display};
+    use crate::labels::agg_fn_display;
+    use crate::query_builder::panel::AGG_FN_ORDER;
     use dbflux_components::controls::{Button, Input, completion_input_keys_wrapper};
     use dbflux_components::tokens::{Heights, Radii};
     use dbflux_core::AggFn;
@@ -32,7 +33,9 @@ pub fn render_group_by(
         div()
             .text_sm()
             .text_color(cx.theme().muted_foreground)
-            .child(SharedString::from("Group by columns")),
+            .child(SharedString::from(dbflux_i18n::t!(
+                "document.query_builder.group_by.heading"
+            ))),
     );
 
     for (i, _row) in group_by_rows.iter().enumerate() {
@@ -66,19 +69,24 @@ pub fn render_group_by(
 
     let source_alias = panel.current_spec.source.alias.clone();
     container = container.child(
-        Button::new("qb-gb-add", "+ Group-by column")
-            .ghost()
-            .small()
-            .on_click(cx.listener(move |this, _event, _window, cx| {
-                this.add_group_by_column(source_alias.clone(), String::new(), cx);
-            })),
+        Button::new(
+            "qb-gb-add",
+            dbflux_i18n::t!("document.query_builder.group_by.add_column"),
+        )
+        .ghost()
+        .small()
+        .on_click(cx.listener(move |this, _event, _window, cx| {
+            this.add_group_by_column(source_alias.clone(), String::new(), cx);
+        })),
     );
 
     container = container.child(
         div()
             .text_sm()
             .text_color(cx.theme().muted_foreground)
-            .child(SharedString::from("Aggregates")),
+            .child(SharedString::from(dbflux_i18n::t!(
+                "document.query_builder.group_by.aggregates_heading"
+            ))),
     );
 
     for (i, row) in aggregate_rows.iter().enumerate() {
@@ -133,7 +141,9 @@ pub fn render_group_by(
                     Input::new(&alias_input)
                         .small()
                         .w_full()
-                        .placeholder("alias"),
+                        .placeholder(dbflux_i18n::t!(
+                            "document.query_builder.group_by.alias_placeholder"
+                        )),
                 ),
             );
         }
@@ -150,17 +160,21 @@ pub fn render_group_by(
         container = container.child(row_div);
     }
 
-    let agg_add_items: Vec<(&'static str, AggFn)> = AGG_FN_ORDER
+    let agg_add_items: Vec<(String, AggFn)> = AGG_FN_ORDER
         .iter()
         .map(|f| (agg_fn_display(*f), *f))
         .collect();
 
     let mut add_row = div().flex().flex_row().gap_1().flex_wrap();
     for (label, function) in agg_add_items {
+        let button_label = dbflux_i18n::t!(
+            "document.query_builder.group_by.add_aggregate",
+            function = label.clone()
+        );
         add_row = add_row.child(
             Button::new(
                 ElementId::Name(SharedString::from(format!("qb-agg-add-{}", label))),
-                format!("+ {label}"),
+                button_label,
             )
             .ghost()
             .small()

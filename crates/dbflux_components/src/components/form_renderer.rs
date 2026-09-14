@@ -190,7 +190,11 @@ pub fn validate_values(schema: &DriverFormDef, values: &FormValues) -> Vec<Strin
     warnings
 }
 
-pub fn is_field_enabled(field: &FormFieldDef, checkboxes: &HashMap<String, bool>) -> bool {
+pub fn is_field_enabled(
+    field: &FormFieldDef,
+    checkboxes: &HashMap<String, bool>,
+    field_values: &HashMap<String, String>,
+) -> bool {
     if let Some(checkbox_id) = &field.enabled_when_checked {
         let is_checked = checkboxes
             .get(checkbox_id.as_str())
@@ -211,5 +215,118 @@ pub fn is_field_enabled(field: &FormFieldDef, checkboxes: &HashMap<String, bool>
         }
     }
 
+    if let Some(gate) = &field.enabled_when_field_equals {
+        let current_value = field_values.get(gate.field.as_str()).map(String::as_str);
+        let matches = current_value
+            .map(|value| gate.values.iter().any(|expected| expected == value))
+            .unwrap_or(false);
+        if !matches {
+            return false;
+        }
+    }
+
     true
+}
+
+/// Reads the current selected value of every `Select` field owned by `state`,
+/// keyed by field id. Used by `is_field_enabled` callers that render through
+/// the generic `FormRendererState` (real `Dropdown` entities) to resolve
+/// `enabled_when_field_equals` gates against another field's live selection.
+pub fn select_values(state: &FormRendererState, cx: &App) -> HashMap<String, String> {
+    state
+        .dropdowns
+        .iter()
+        .filter_map(|(field_id, dropdown)| {
+            dropdown
+                .read(cx)
+                .selected_value()
+                .map(|value| (field_id.clone(), value.to_string()))
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    // NOTE: `use super::*` would also pull in `gpui::test` (re-exported via the
+    // file-level `use gpui::*`), shadowing the standard `#[test]` attribute.
+    // gpui's test macro expects a GPUI test-context signature and overflows
+    // the compiler's stack when applied to a plain sync unit-test function, so
+    // this module imports only the names it needs to keep `#[test]` bound to
+    // the standard library attribute.
+    use super::{FormFieldDef, FormFieldKind, HashMap, is_field_enabled};
+    use dbflux_core::{field, when_field_equals};
+
+    fn text_field(id: &str) -> FormFieldDef {
+        field(id, id, FormFieldKind::Text, "")
+    }
+
+    #[test]
+    fn field_equals_gate_disables_field_when_referenced_value_does_not_match() {
+        let gated_field = when_field_equals(
+            text_field("sentinel_master_name"),
+            "topology",
+            &["sentinel"],
+        );
+        let checkboxes = HashMap::new();
+        let mut values = HashMap::new();
+        values.insert("topology".to_string(), "standalone".to_string());
+
+        assert!(!is_field_enabled(&gated_field, &checkboxes, &values));
+    }
+
+    #[test]
+    fn field_equals_gate_enables_field_when_referenced_value_matches() {
+        let gated_field = when_field_equals(
+            text_field("additional_nodes"),
+            "topology",
+            &["cluster", "sentinel"],
+        );
+        let checkboxes = HashMap::new();
+        let mut values = HashMap::new();
+        values.insert("topology".to_string(), "cluster".to_string());
+
+        assert!(is_field_enabled(&gated_field, &checkboxes, &values));
+    }
+
+    #[test]
+    fn field_equals_gate_disables_field_when_referenced_value_is_missing() {
+        let gated_field = when_field_equals(
+            text_field("sentinel_master_name"),
+            "topology",
+            &["sentinel"],
+        );
+        let checkboxes = HashMap::new();
+        let values = HashMap::new();
+
+        assert!(!is_field_enabled(&gated_field, &checkboxes, &values));
+    }
+
+    #[test]
+    fn field_without_any_gate_is_always_enabled() {
+        let plain_field = text_field("host");
+        let checkboxes = HashMap::new();
+        let values = HashMap::new();
+
+        assert!(is_field_enabled(&plain_field, &checkboxes, &values));
+    }
+
+    #[test]
+    fn checkbox_gate_and_field_equals_gate_both_must_pass() {
+        let mut gated_field = when_field_equals(
+            text_field("sentinel_master_name"),
+            "topology",
+            &["sentinel"],
+        );
+        gated_field.enabled_when_checked = Some("use_advanced".to_string());
+
+        let mut checkboxes = HashMap::new();
+        checkboxes.insert("use_advanced".to_string(), true);
+        let mut values = HashMap::new();
+        values.insert("topology".to_string(), "sentinel".to_string());
+
+        assert!(is_field_enabled(&gated_field, &checkboxes, &values));
+
+        checkboxes.insert("use_advanced".to_string(), false);
+        assert!(!is_field_enabled(&gated_field, &checkboxes, &values));
+    }
 }

@@ -5,6 +5,7 @@ Thanks for considering a contribution. This guide explains how to file issues, o
 ## Quick Links
 
 - [Architecture overview](ARCHITECTURE.md)
+- [Driver authoring guide](docs/DRIVER_AUTHORING.md)
 - [Release process and branching model](docs/RELEASE.md)
 - [Audit event schema](docs/AUDIT.md)
 - [Driver RPC protocol](docs/DRIVER_RPC_PROTOCOL.md)
@@ -74,6 +75,8 @@ Scope is the affected area: a driver name (`postgres`, `mongodb`), `ui`, `mcp`, 
 4. Apply the labels that describe the change. See [Label Guide](#label-guide) below.
 5. Keep diffs reviewable. PRs over ~400 changed lines should be split into stacked/chained PRs unless the maintainer approves a `size:exception`.
 6. CI must pass (`tests.yml`, `style.yml`). Re-run locally before pushing if anything fails.
+7. A documentation change ships with its translations. When you edit a page under `docs/`, a driver README, or a root document the site renders (`ARCHITECTURE.md`, `CONTRIBUTING.md`, `SECURITY.md`, `TRADEMARK.md`, `PRIVACY.md`), apply the same change to every existing counterpart under `docs/es/` and `docs/zh_Hans/` in the same PR. A page with no counterpart yet needs none. See [Translations](docs/TRANSLATIONS.md).
+
 
 ### Commit messages are load-bearing
 
@@ -186,4 +189,4 @@ Do not file security issues publicly. Email the maintainer or use a private chan
 
 ## License
 
-By contributing you agree your contributions are licensed under the project's dual MIT / Apache-2.0 license.
+By contributing you agree your contributions are licensed under the project's dual MIT / Apache-2.0 license. The DBFlux name and logo are not part of that license; see [TRADEMARK.md](TRADEMARK.md).

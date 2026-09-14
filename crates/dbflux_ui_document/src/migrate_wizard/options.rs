@@ -65,7 +65,9 @@ impl OptionsPhase {
         let segment_size_input = cx.new(|cx| {
             InputState::new(window, cx)
                 .default_value(DEFAULT_SEGMENT_SIZE.to_string())
-                .placeholder("Segment / commit size")
+                .placeholder(dbflux_i18n::t!(
+                    "document.migrate_wizard.options.segment_size_placeholder"
+                ))
         });
 
         let mut phase = Self {
@@ -159,7 +161,9 @@ impl OptionsPhase {
             .flex()
             .flex_col()
             .gap(Spacing::XS)
-            .child(Text::label("Segment / commit size"))
+            .child(Text::label(dbflux_i18n::t!(
+                "document.migrate_wizard.options.segment_size_label"
+            )))
             .child(
                 div()
                     .w(SEGMENT_SIZE_INPUT_WIDTH)
@@ -167,8 +171,10 @@ impl OptionsPhase {
             )
             .when(self.segment_size_invalid, |parent| {
                 parent.child(
-                    Text::caption("Must be a whole number of 1 or more; kept the previous value.")
-                        .danger(),
+                    Text::caption(dbflux_i18n::t!(
+                        "document.migrate_wizard.options.segment_size_invalid"
+                    ))
+                    .danger(),
                 )
             })
     }
@@ -176,7 +182,9 @@ impl OptionsPhase {
     fn render_disable_ri(&self, cx: &mut Context<Self>) -> impl IntoElement {
         Checkbox::new("migrate-options-disable-ri")
             .checked(self.disable_referential_integrity_requested)
-            .label("Disable referential integrity during migration")
+            .label(dbflux_i18n::t!(
+                "document.migrate_wizard.options.disable_referential_integrity"
+            ))
             .on_click(cx.listener(|this, checked: &bool, _, cx| {
                 this.on_disable_ri_toggled(*checked, cx);
             }))

@@ -7,9 +7,11 @@ pub(super) fn compact_input_shell(child: impl IntoElement) -> Div {
 }
 
 pub(super) fn editor_panel_title(noun: &str, is_editing: bool) -> String {
-    let prefix = if is_editing { "Edit" } else { "New" };
-
-    format!("{} {}", prefix, noun)
+    if is_editing {
+        dbflux_i18n::t!("settings.editor_panel.title.edit", noun = noun)
+    } else {
+        dbflux_i18n::t!("settings.editor_panel.title.new", noun = noun)
+    }
 }
 
 pub(super) fn section_container(content: impl IntoElement) -> Div {
@@ -160,6 +162,18 @@ mod tests {
     fn editor_panel_title_uses_edit_prefix_when_updating() {
         assert_eq!(editor_panel_title("Proxy", true), "Edit Proxy");
         assert_eq!(editor_panel_title("SSH Tunnel", true), "Edit SSH Tunnel");
+    }
+
+    #[test]
+    fn editor_panel_title_uses_the_translated_catalog_templates() {
+        assert_eq!(
+            editor_panel_title("Proxy", false),
+            dbflux_i18n::t!("settings.editor_panel.title.new", noun = "Proxy")
+        );
+        assert_eq!(
+            editor_panel_title("Proxy", true),
+            dbflux_i18n::t!("settings.editor_panel.title.edit", noun = "Proxy")
+        );
     }
 
     #[test]

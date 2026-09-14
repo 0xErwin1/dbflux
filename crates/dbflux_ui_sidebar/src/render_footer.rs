@@ -11,7 +11,7 @@ impl Sidebar {
         let total_profiles = state.profiles().len();
         let idle_count = total_profiles.saturating_sub(connected_count);
 
-        let status_text = format!("{} connected · {} idle", connected_count, idle_count);
+        let status_text = crate::labels::footer_counts_label(connected_count, idle_count);
         let dot_variant = if connected_count > 0 {
             StatusDotVariant::Success
         } else {

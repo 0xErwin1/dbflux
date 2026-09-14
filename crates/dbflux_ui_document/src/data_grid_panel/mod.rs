@@ -8,6 +8,7 @@ mod query;
 mod render;
 pub mod row_inspector;
 mod utils;
+pub mod value_panel;
 
 use super::query_builder::completion::{
     CompletionMode, FkLink, SchemaCache, SchemaCompletionProvider,
@@ -354,6 +355,9 @@ struct TableContextMenu {
     submenu_selected_index: usize,
     /// Whether this is a document view context menu (different items shown).
     is_document_view: bool,
+    /// Whether this menu was opened by right-clicking a column header, which
+    /// scopes it to that column's ordering and filtering.
+    is_column_header: bool,
     doc_field_path: Option<Vec<String>>,
     doc_field_value: Option<dbflux_components::components::document_tree::NodeValue>,
     /// Driver-supplied row-level actions (e.g. Kill, Cancel). When non-empty,
@@ -364,7 +368,7 @@ struct TableContextMenu {
 
 /// A single item in the context menu.
 struct ContextMenuItem {
-    label: &'static str,
+    label: SharedString,
     action: Option<ContextMenuAction>,
     icon: Option<dbflux_components::icons::AppIcon>,
     is_separator: bool,
@@ -401,6 +405,9 @@ struct PendingActions {
     document_preview: Option<PendingDocumentPreview>,
     context_menu_focus: bool,
     mutation_modal: Option<crate::data_grid_panel::mutation_confirm::PendingMutationModal>,
+    /// Cell the value panel should open on. Deferred to render because
+    /// building the panel's code editor needs a `Window`.
+    value_panel: Option<value_panel::ValuePanelTarget>,
 }
 
 /// The rendered table widget and its in-memory sort state.
@@ -512,6 +519,9 @@ struct ChromeState {
     toolbar_in_chrome_row: bool,
     export_menu_open: bool,
     result_view_mode: ResultViewMode,
+    /// When `true`, the result area shows the active row as a vertical
+    /// name/value record instead of the grid.
+    record_mode: bool,
     derived_json: Option<String>,
     derived_text: Option<String>,
 }
@@ -522,6 +532,10 @@ struct ChromeState {
 /// an optional provider for row-level kill/cancel actions.
 struct InspectorState {
     row_inspector_content: Option<Entity<row_inspector::RowInspectorContent>>,
+
+    /// Whether row selection should keep driving the shared inspector rail,
+    /// including after switching to a different table tab.
+    follow_selection: bool,
 
     /// Last `(row, col)` opened in the row inspector. `Some` means the inspector
     /// is logically "on" for this panel — it should reappear when the panel's
@@ -537,6 +551,16 @@ struct InspectorState {
     /// for the first destructive action the provider returns, instead of the
     /// normal context menu.
     row_action_provider: Option<RowActionProvider>,
+
+    /// Value panel content. Kept alive across closes so the user's format and
+    /// word-wrap choices survive reopening.
+    value_panel: Option<Entity<value_panel::ValuePanelContent>>,
+
+    /// Whether the value panel currently owns the shared rail.
+    value_panel_open: bool,
+
+    /// Subscription to the value panel's save event.
+    _value_panel_subscription: Option<Subscription>,
 }
 
 /// Visual Query Builder cluster.
@@ -586,6 +610,10 @@ pub struct DataGridPanel {
     runner: DocumentTaskRunner,
     focus_handle: FocusHandle,
     panel_origin: Point<Pixels>,
+    /// A table-details fetch for the primary key is in flight. Until it
+    /// answers, the grid is read-only for want of a key it may well have, so
+    /// the "no primary key" banner waits rather than flashing on every open.
+    pk_details_pending: bool,
     view_config: super::data_view::DataViewConfig,
     context_menu: Option<TableContextMenu>,
     is_active_tab: bool,
@@ -715,6 +743,9 @@ impl DataGridPanel {
             }
         };
 
+        self.pk_details_pending = true;
+        cx.notify();
+
         let entity = cx.entity().clone();
         let app_state = self.app_state.clone();
 
@@ -731,10 +762,14 @@ impl DataGridPanel {
                         dbflux_ui_base::user_error::report_error(
                             dbflux_ui_base::user_error::UserFacingError::new(
                                 dbflux_ui_base::user_error::ErrorKind::Driver,
-                                format!("Failed to fetch table details for PK: {}", e),
+                                crate::labels::pk_details_fetch_failed_error(&e.to_string()),
                             ),
                             cx,
                         );
+                        entity.update(cx, |panel, cx| {
+                            panel.pk_details_pending = false;
+                            cx.notify();
+                        });
                         return;
                     }
                 };
@@ -768,6 +803,8 @@ impl DataGridPanel {
 
                 // Update panel with PK info and recompute editable binding.
                 entity.update(cx, |panel, cx| {
+                    panel.pk_details_pending = false;
+                    cx.notify();
                     if !pk_names.is_empty() {
                         panel.pk_columns = pk_names;
                     }
@@ -1057,7 +1094,7 @@ impl DataGridPanel {
                         dd.set_selected_index(Some(RefreshPolicy::Manual.index()), cx);
                     });
                     dbflux_ui_base::toast::Toast::warning(
-                        "Auto-refresh not available for query results",
+                        crate::labels::auto_refresh_unavailable_toast(),
                     )
                     .meta_right(dbflux_ui_base::toast::now_hms())
                     .push(cx);
@@ -1137,13 +1174,18 @@ impl DataGridPanel {
                 toolbar_in_chrome_row: false,
                 export_menu_open: false,
                 result_view_mode,
+                record_mode: false,
                 derived_json: None,
                 derived_text: None,
             },
             inspector: InspectorState {
                 row_inspector_content: None,
+                follow_selection: false,
                 inspector_row: None,
                 row_action_provider: None,
+                value_panel: None,
+                value_panel_open: false,
+                _value_panel_subscription: None,
             },
             builder: BuilderState {
                 fk_cache: FkLoadState::Loading,
@@ -1159,6 +1201,7 @@ impl DataGridPanel {
             runner,
             focus_handle,
             panel_origin: Point::default(),
+            pk_details_pending: false,
             view_config,
             context_menu: None,
             is_active_tab: true,
@@ -1247,7 +1290,8 @@ impl DataGridPanel {
         let bindings = shell.read(cx).active_bindings();
 
         let name_input = cx.new(|cx| {
-            dbflux_components::controls::InputState::new(window, cx).placeholder("Chart name")
+            dbflux_components::controls::InputState::new(window, cx)
+                .placeholder(dbflux_i18n::t!("document.data.grid.placeholder.chart_name"))
         });
 
         let sub = cx.subscribe_in(
@@ -1306,7 +1350,7 @@ impl DataGridPanel {
             } => {
                 let Some(profile_id) = profile_id else {
                     self.pending.toast = Some(dbflux_ui_base::toast::PendingToast {
-                        message: "Cannot save chart: query has no profile binding".into(),
+                        message: crate::labels::chart_save_no_profile_binding_error(),
                         is_error: true,
                     });
                     cx.notify();
@@ -1338,11 +1382,11 @@ impl DataGridPanel {
 
         self.pending.toast = Some(match persist_result {
             Ok(_) => dbflux_ui_base::toast::PendingToast {
-                message: format!("Chart \"{}\" saved", name),
+                message: crate::labels::chart_saved_toast(&name),
                 is_error: false,
             },
             Err(e) => dbflux_ui_base::toast::PendingToast {
-                message: format!("Failed to save chart \"{name}\": {e}"),
+                message: crate::labels::chart_save_failed_error(&name, &e.to_string()),
                 is_error: true,
             },
         });
@@ -1384,6 +1428,77 @@ impl DataGridPanel {
     /// Check if view mode toggle is available for the current source.
     pub fn can_toggle_view(&self) -> bool {
         super::data_view::DataViewMode::available_for(&self.source).len() > 1
+    }
+
+    pub fn record_mode(&self) -> bool {
+        self.chrome.record_mode
+    }
+
+    /// Switch the result area between the grid and the record view.
+    ///
+    /// The flag lives on the panel rather than only on `DataTableState`
+    /// because `rebuild_table` creates a fresh state on every refresh and
+    /// requery; `apply_record_mode` re-applies it there.
+    pub fn set_record_mode(&mut self, record_mode: bool, cx: &mut Context<Self>) {
+        if record_mode && !self.record_view_available() {
+            return;
+        }
+
+        if self.chrome.record_mode == record_mode {
+            return;
+        }
+
+        self.chrome.record_mode = record_mode;
+        self.apply_record_mode(cx);
+        cx.notify();
+    }
+
+    /// Whether the record view can be entered right now.
+    ///
+    /// It is a presentation of the data grid, so it exists only where the grid
+    /// itself is on screen: a result shown as JSON, text, raw bytes or a chart
+    /// has no grid to transpose, the document tree is not a grid, and a grouped
+    /// aggregate has no addressable source row. The status-bar toggle, the
+    /// keyboard command and `set_record_mode` all go through this one check so
+    /// none of them can flip a mode the user cannot see.
+    pub fn record_view_available(&self) -> bool {
+        self.grid_table.table_state.is_some()
+            && self.shows_table_content()
+            && !self.is_grouped_result()
+    }
+
+    /// Whether the result area renders the data grid, as opposed to a result
+    /// view, the document tree or the empty fallback.
+    fn shows_table_content(&self) -> bool {
+        let has_data = !self.result.rows.is_empty()
+            || self.result.text_body.is_some()
+            || self.result.raw_bytes.is_some();
+        let has_columns = !self.result.columns.is_empty();
+        let content_mode = render::content_mode_for_result(
+            self.uses_result_view(),
+            self.view_config.mode,
+            has_columns,
+            has_data,
+        );
+        matches!(content_mode, render::DataGridContentMode::Table)
+    }
+
+    /// Push the panel's record-mode flag onto the current `DataTableState`.
+    ///
+    /// This runs after every rebuild, so it is also where a result that cannot
+    /// be shown as a record clears the flag: a query that was in record mode
+    /// and comes back grouped would otherwise reapply the cached `true` around
+    /// the guard in `set_record_mode`, leaving the aggregate in a mode whose
+    /// toggle has just disappeared.
+    fn apply_record_mode(&mut self, cx: &mut Context<Self>) {
+        if self.chrome.record_mode && self.is_grouped_result() {
+            self.chrome.record_mode = false;
+        }
+
+        let record_mode = self.chrome.record_mode;
+        if let Some(table_state) = &self.grid_table.table_state {
+            table_state.update(cx, |state, cx| state.set_record_mode(record_mode, cx));
+        }
     }
 
     pub fn result_view_mode(&self) -> ResultViewMode {
@@ -1624,10 +1739,31 @@ impl DataGridPanel {
                     title: "Query Builder".into(),
                     content: view,
                 });
-            } else if let Some((row, col)) = self.inspector.inspector_row {
-                self.open_row_inspector(row, col, cx);
+            } else if self.inspector.value_panel_open {
+                // Re-read this grid's own cell. Reusing the cached content
+                // would leave the rail showing a value from the table the
+                // user just switched away from.
+                if !self.mount_value_panel_for_active_cell(cx) {
+                    cx.emit(DataGridEvent::CloseInspector);
+                }
+            } else if self.inspector.follow_selection {
+                let active = self
+                    .grid_table
+                    .table_state
+                    .as_ref()
+                    .and_then(|state| state.read(cx).selection().active);
+                if let Some(coord) = active {
+                    self.open_row_inspector(coord.row, coord.col, cx);
+                } else if let Some((row, col)) = self.inspector.inspector_row {
+                    self.open_row_inspector(row, col, cx);
+                }
+            } else {
+                // This tab owns nothing in the rail. Say so explicitly: the
+                // rail is global, so staying silent leaves the previous tab's
+                // content on screen.
+                cx.emit(DataGridEvent::CloseInspector);
             }
-        } else if self.builder.builder_panel.is_some() || self.inspector.inspector_row.is_some() {
+        } else if self.builder.builder_panel.is_some() || self.inspector.value_panel_open {
             // Hide the rail (without dropping cached state) so the next
             // active tab can take it over.
             cx.emit(DataGridEvent::CloseInspector);
@@ -1638,8 +1774,219 @@ impl DataGridPanel {
     /// explicitly (× button or ESC fallback). Drops the cached coordinates so
     /// the rail does not re-open on tab activation or refresh.
     pub fn clear_inspector_state(&mut self, _cx: &mut Context<Self>) {
+        self.inspector.follow_selection = false;
         self.inspector.inspector_row = None;
         self.inspector.row_inspector_content = None;
+        self.inspector.value_panel_open = false;
+        self.pending.value_panel = None;
+    }
+
+    /// Whether the value panel currently owns the shared inspector rail.
+    pub fn value_panel_is_open(&self) -> bool {
+        self.inspector.value_panel_open
+    }
+
+    /// Open the value panel on the active cell, or close it if already open.
+    pub fn toggle_value_panel(&mut self, cx: &mut Context<Self>) {
+        if self.inspector.value_panel_open {
+            self.close_value_panel(cx);
+            return;
+        }
+
+        let active = self
+            .grid_table
+            .table_state
+            .as_ref()
+            .and_then(|state| state.read(cx).selection().active);
+
+        if let Some(coord) = active {
+            self.request_value_panel(coord.row, coord.col, cx);
+        }
+    }
+
+    /// Queue the value panel to open on `(row, col)`.
+    ///
+    /// The builder and the row inspector share this rail, so taking it means
+    /// the row inspector must stop following the cursor — otherwise the two
+    /// would replace each other on every selection change.
+    pub(super) fn request_value_panel(&mut self, row: usize, col: usize, cx: &mut Context<Self>) {
+        let Some(target) = self.value_panel_target(row, col, cx) else {
+            return;
+        };
+
+        self.inspector.follow_selection = false;
+        self.inspector.inspector_row = None;
+        self.inspector.value_panel_open = true;
+        self.pending.value_panel = Some(target);
+        cx.notify();
+    }
+
+    /// Carry the value panel's open state onto this tab.
+    ///
+    /// Called when the tab becomes active. Opening re-reads *this* grid's
+    /// selection, so the rail shows the new table's cell instead of whatever
+    /// the previous tab left there.
+    pub fn set_value_panel_open(&mut self, open: bool, _cx: &mut Context<Self>) {
+        if open && self.builder.builder_panel.is_none() {
+            self.inspector.value_panel_open = true;
+        } else if !open {
+            self.inspector.value_panel_open = false;
+            self.pending.value_panel = None;
+        }
+    }
+
+    /// Point the value panel at the active cell of this grid.
+    ///
+    /// Returns false when there is nothing to show yet — a tab whose grid has
+    /// not loaded, or one with no selection.
+    fn mount_value_panel_for_active_cell(&mut self, cx: &mut Context<Self>) -> bool {
+        let active = self
+            .grid_table
+            .table_state
+            .as_ref()
+            .and_then(|state| state.read(cx).selection().active);
+
+        let Some(coord) = active else {
+            return false;
+        };
+
+        let Some(target) = self.value_panel_target(coord.row, coord.col, cx) else {
+            return false;
+        };
+
+        self.pending.value_panel = Some(target);
+        cx.notify();
+        true
+    }
+
+    /// The value panel when it is open and holds an unsaved edit.
+    pub(super) fn value_panel_pending_save(
+        &self,
+        cx: &App,
+    ) -> Option<Entity<value_panel::ValuePanelContent>> {
+        if !self.inspector.value_panel_open {
+            return None;
+        }
+
+        let panel = self.inspector.value_panel.as_ref()?;
+        panel.read(cx).is_modified(cx).then(|| panel.clone())
+    }
+
+    fn close_value_panel(&mut self, cx: &mut Context<Self>) {
+        self.inspector.value_panel_open = false;
+        self.pending.value_panel = None;
+        cx.emit(DataGridEvent::CloseInspector);
+        cx.notify();
+    }
+
+    /// Read the cell's current edit-buffer text and editability for the panel.
+    fn value_panel_target(
+        &self,
+        row: usize,
+        col: usize,
+        cx: &App,
+    ) -> Option<value_panel::ValuePanelTarget> {
+        use dbflux_components::components::data_table::model::{CellValue, VisualRowSource};
+
+        let table_state = self.grid_table.table_state.as_ref()?;
+        let state = table_state.read(cx);
+        let model = state.model();
+        let column = model.columns.get(col)?;
+
+        let edit_buffer = state.edit_buffer();
+        let null_cell = CellValue::null();
+
+        let value = match edit_buffer.compute_visual_order().get(row).copied()? {
+            VisualRowSource::Base(base_idx) => {
+                let base = model.cell(base_idx, col).unwrap_or(&null_cell);
+                edit_buffer.get_cell(base_idx, col, base).edit_text()
+            }
+            VisualRowSource::Insert(insert_idx) => edit_buffer
+                .get_pending_insert_by_idx(insert_idx)
+                .and_then(|data| data.get(col))
+                .map(|cell| cell.edit_text())
+                .unwrap_or_default(),
+        };
+
+        Some(value_panel::ValuePanelTarget {
+            row,
+            col,
+            column_name: column.title.to_string(),
+            value,
+            editable: state.is_editable() && !state.readonly_columns().contains(&col),
+        })
+    }
+
+    /// Mount or update the value panel. Called from render, where a `Window`
+    /// is available to build the editor.
+    pub(super) fn apply_pending_value_panel(
+        &mut self,
+        target: value_panel::ValuePanelTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use value_panel::{ValuePanelContent, ValuePanelSaveEvent};
+
+        let content = match &self.inspector.value_panel {
+            Some(existing) => {
+                existing.update(cx, |panel, cx| panel.open(target, window, cx));
+                existing.clone()
+            }
+            None => {
+                let content = cx.new(|cx| ValuePanelContent::new(target, window, cx));
+                self.inspector._value_panel_subscription = Some(cx.subscribe(
+                    &content,
+                    |this, _, event: &ValuePanelSaveEvent, cx| {
+                        // Save in the panel means "write this value to the
+                        // database", not "stage it": having to confirm again in
+                        // the toolbar after pressing Save reads as the panel
+                        // having done nothing. The commit goes through the
+                        // normal row-save path, so mutation policy, approval,
+                        // and the task list all still apply.
+                        this.write_cell_value(event.row, event.col, &event.value, cx);
+
+                        if let Some(table_state) = this.grid_table.table_state.clone() {
+                            table_state.update(cx, |state, cx| {
+                                state.request_save_row_at(event.row, cx);
+                            });
+                        }
+                    },
+                ));
+                self.inspector.value_panel = Some(content.clone());
+                content
+            }
+        };
+
+        cx.emit(DataGridEvent::OpenInspector {
+            title: SharedString::from(dbflux_i18n::t!("components.value_panel.title")),
+            content: AnyView::from(content),
+        });
+    }
+
+    /// Whether the panel may be re-pointed at `(row, col)`.
+    ///
+    /// An edited-but-unsaved panel stays pinned to its cell; following the
+    /// cursor there would throw the user's typing away without asking.
+    fn value_panel_can_follow(&self, row: usize, col: usize, cx: &App) -> bool {
+        let Some(panel) = self.inspector.value_panel.as_ref() else {
+            return true;
+        };
+
+        let panel = panel.read(cx);
+        !panel.is_modified(cx) && panel.target_cell() != (row, col)
+    }
+
+    /// Whether the grid currently renders as a single-row record view.
+    pub fn row_inspector_is_tracking(&self) -> bool {
+        self.inspector.follow_selection
+    }
+
+    pub fn set_row_inspector_tracking(&mut self, tracking: bool, cx: &mut Context<Self>) {
+        if tracking && self.builder.builder_panel.is_none() && !self.is_grouped_result() {
+            self.inspector.follow_selection = true;
+        } else if !tracking {
+            self.clear_inspector_state(cx);
+        }
     }
 
     pub fn refresh_policy(&self) -> RefreshPolicy {
@@ -1781,6 +2128,24 @@ impl DataGridPanel {
         // keeps following the same row position across refreshes.
         if let Some((row, col)) = self.inspector.inspector_row {
             self.open_row_inspector(row, col, cx);
+        }
+
+        // The panel's cached target came from the pre-refresh result, so
+        // re-read it rather than leaving a value the grid no longer holds.
+        // A tab that inherited an open panel but has never shown one yet has
+        // no cached cell, so it starts from the current selection instead.
+        if self.inspector.value_panel_open {
+            match self
+                .inspector
+                .value_panel
+                .as_ref()
+                .map(|panel| panel.read(cx).target_cell())
+            {
+                Some((row, col)) => self.request_value_panel(row, col, cx),
+                None => {
+                    self.mount_value_panel_for_active_cell(cx);
+                }
+            }
         }
 
         cx.notify();
@@ -1975,26 +2340,39 @@ impl DataGridPanel {
                         // When the row inspector is active, follow the user's
                         // cursor so click / arrow-key navigation updates the
                         // rail in place.
-                        if this.inspector.inspector_row.is_some()
+                        if this.inspector.follow_selection
                             && let Some(active) = selection.active
                         {
                             this.open_row_inspector(active.row, active.col, cx);
+                        }
+
+                        if this.inspector.value_panel_open
+                            && let Some(active) = selection.active
+                            && this.value_panel_can_follow(active.row, active.col, cx)
+                        {
+                            this.request_value_panel(active.row, active.col, cx);
                         }
                     }
                     DataTableEvent::SaveRowRequested(row_idx) => {
                         this.handle_save_row(*row_idx, cx);
                     }
-                    DataTableEvent::ContextMenuRequested { row, col, position } => {
+                    DataTableEvent::ContextMenuRequested {
+                        row,
+                        col,
+                        position,
+                        is_column_header,
+                    } => {
                         // Gather any driver-supplied row actions (e.g. Kill, Cancel).
                         // They are injected as extra menu items at the bottom rather
                         // than bypassing the context menu entirely.
-                        let row_actions =
-                            if let Some(provider) = this.inspector.row_action_provider.as_ref() {
-                                let metric_id = this.row_action_metric_id();
-                                provider(metric_id.as_deref().unwrap_or(""))
-                            } else {
-                                Vec::new()
-                            };
+                        let row_actions = if *is_column_header {
+                            Vec::new()
+                        } else if let Some(provider) = this.inspector.row_action_provider.as_ref() {
+                            let metric_id = this.row_action_metric_id();
+                            provider(metric_id.as_deref().unwrap_or(""))
+                        } else {
+                            Vec::new()
+                        };
 
                         this.context_menu = Some(TableContextMenu {
                             row: *row,
@@ -2007,6 +2385,7 @@ impl DataGridPanel {
                             selected_index: 0,
                             submenu_selected_index: 0,
                             is_document_view: false,
+                            is_column_header: *is_column_header,
                             doc_field_path: None,
                             doc_field_value: None,
                             row_actions,
@@ -2069,6 +2448,11 @@ impl DataGridPanel {
         self.grid_table.table_state = Some(table_state);
         self.grid_table.data_table = Some(data_table);
         self.grid_table.table_subscription = Some(subscription);
+
+        // Every rebuild — refresh, requery, sort, filter — creates a fresh
+        // DataTableState, so the panel's presentation flag has to be pushed
+        // back onto it here rather than at any one call site.
+        self.apply_record_mode(cx);
 
         // Build document tree for collections OR JSON-shaped query results
         let should_build_tree = self.source.is_collection()
@@ -2144,6 +2528,7 @@ impl DataGridPanel {
                         selected_index: 0,
                         submenu_selected_index: 0,
                         is_document_view: true,
+                        is_column_header: false,
                         doc_field_path: if field_path.is_empty() {
                             None
                         } else {
@@ -2301,14 +2686,7 @@ impl DataGridPanel {
     pub fn change_summary(&self, cx: &App) -> Option<String> {
         let (inserts, updates, deletes) = self.pending_edit_counts(cx);
 
-        if inserts == 0 && updates == 0 && deletes == 0 {
-            None
-        } else {
-            Some(format!(
-                "{} inserts · {} updates · {} deletes",
-                inserts, updates, deletes
-            ))
-        }
+        crate::labels::pending_edits_summary(inserts, updates, deletes)
     }
 
     // === Filter bar presentation helpers ===
@@ -2840,6 +3218,11 @@ impl DataGridPanel {
             }
             DataSource::QueryResult { .. } => return,
         };
+
+        // The builder and row inspector share one rail. Opening the builder
+        // intentionally ends row-follow mode so tab switches cannot replace
+        // the builder with a row snapshot.
+        self.clear_inspector_state(cx);
 
         let source_schema = source.schema.clone();
 
@@ -3558,15 +3941,17 @@ impl DataGridPanel {
                         p.loaded_id = Some(summary.id);
                     });
                 }
-                dbflux_ui_base::toast::Toast::success(format!("Saved as \"{}\"", name))
-                    .meta_right(dbflux_ui_base::toast::now_hms())
-                    .push(cx);
+                dbflux_ui_base::toast::Toast::success(crate::labels::saved_query_saved_as_toast(
+                    &name,
+                ))
+                .meta_right(dbflux_ui_base::toast::now_hms())
+                .push(cx);
             }
             Err(e) => {
                 dbflux_ui_base::user_error::report_error(
                     dbflux_ui_base::user_error::UserFacingError::new(
                         dbflux_ui_base::user_error::ErrorKind::Storage,
-                        format!("A saved query named \"{}\" already exists", name),
+                        crate::labels::saved_query_already_exists_error(&name),
                     )
                     .with_cause(e.to_string()),
                     cx,
@@ -3592,7 +3977,9 @@ impl DataGridPanel {
                 dbflux_ui_base::user_error::report_error(
                     dbflux_ui_base::user_error::UserFacingError::new(
                         dbflux_ui_base::user_error::ErrorKind::User,
-                        "Target connection not available",
+                        dbflux_i18n::t!(
+                            "document.data.saved_query.error.target_connection_unavailable"
+                        ),
                     ),
                     cx,
                 );
@@ -3618,15 +4005,17 @@ impl DataGridPanel {
 
         match result {
             Ok(_summary) => {
-                dbflux_ui_base::toast::Toast::success("Query imported successfully")
-                    .meta_right(dbflux_ui_base::toast::now_hms())
-                    .push(cx);
+                dbflux_ui_base::toast::Toast::success(dbflux_i18n::t!(
+                    "document.data.grid.toast.query_imported"
+                ))
+                .meta_right(dbflux_ui_base::toast::now_hms())
+                .push(cx);
             }
             Err(e) => {
                 dbflux_ui_base::user_error::report_error(
                     dbflux_ui_base::user_error::UserFacingError::new(
                         dbflux_ui_base::user_error::ErrorKind::User,
-                        "Import failed: source table not found on target connection",
+                        dbflux_i18n::t!("document.data.saved_query.error.import_failed"),
                     )
                     .with_cause(e.to_string()),
                     cx,
@@ -3669,14 +4058,18 @@ impl DataGridPanel {
             _ => return,
         };
 
-        let (policy, connection) = {
+        let (policy, read_only_reason, connection) = {
             let state = self.app_state.read(cx);
             let connected = match state.connections().get(&profile_id) {
                 Some(c) => c,
                 None => return,
             };
 
-            (connected.mutation_policy, Arc::clone(&connected.connection))
+            (
+                connected.mutation_policy,
+                connected.read_only_reason,
+                Arc::clone(&connected.connection),
+            )
         };
 
         // Gate on mutation policy — state borrow has been released above.
@@ -3685,7 +4078,7 @@ impl DataGridPanel {
                 dbflux_ui_base::user_error::report_error(
                     dbflux_ui_base::user_error::UserFacingError::new(
                         dbflux_ui_base::user_error::ErrorKind::User,
-                        "This connection is read-only. Mutations are not allowed.",
+                        crate::labels::mutation_read_only_error(read_only_reason),
                     ),
                     cx,
                 );
@@ -3713,14 +4106,18 @@ impl DataGridPanel {
                     });
                     match enqueue_result {
                         Ok(_) => {
-                            dbflux_ui_base::toast::Toast::info("Mutation queued for approval.")
-                                .push(cx);
+                            dbflux_ui_base::toast::Toast::info(dbflux_i18n::t!(
+                                "document.data.grid.toast.mutation_queued"
+                            ))
+                            .push(cx);
                         }
                         Err(e) => {
                             dbflux_ui_base::user_error::report_error(
                                 dbflux_ui_base::user_error::UserFacingError::new(
                                     dbflux_ui_base::user_error::ErrorKind::Driver,
-                                    format!("Failed to queue mutation for approval: {e}"),
+                                    crate::labels::mutation_approval_queue_failed_error(
+                                        &e.to_string(),
+                                    ),
                                 ),
                                 cx,
                             );
@@ -3734,7 +4131,7 @@ impl DataGridPanel {
                     dbflux_ui_base::user_error::report_error(
                         dbflux_ui_base::user_error::UserFacingError::new(
                             dbflux_ui_base::user_error::ErrorKind::User,
-                            "Mutations require approval for this connection. Enable the MCP feature to activate the approval workflow.",
+                            dbflux_i18n::t!("document.data.mutation.error.approval_requires_mcp"),
                         ),
                         cx,
                     );
@@ -3758,7 +4155,11 @@ impl DataGridPanel {
 
         // Fetch sample rows synchronously on background thread (2s deadline).
         let (sample_columns, sample_rows) =
-            crate::data_grid_panel::mutation_confirm::fetch_sample_rows(connection, &spec);
+            crate::data_grid_panel::mutation_confirm::fetch_sample_rows(
+                connection,
+                &spec,
+                |warning| dbflux_ui_base::user_error::report_error(warning, cx),
+            );
 
         let sample_rows_opt = if sample_rows.is_empty() {
             None
@@ -3818,7 +4219,7 @@ impl DataGridPanel {
                     dbflux_ui_base::user_error::report_error(
                         dbflux_ui_base::user_error::UserFacingError::new(
                             dbflux_ui_base::user_error::ErrorKind::Driver,
-                            "Connection not found — cannot execute mutation.",
+                            dbflux_i18n::t!("document.data.mutation.error.connection_not_found"),
                         ),
                         cx,
                     );
@@ -3855,13 +4256,16 @@ impl DataGridPanel {
             });
             match enqueue_result {
                 Ok(_) => {
-                    dbflux_ui_base::toast::Toast::info("Mutation queued for approval.").push(cx);
+                    dbflux_ui_base::toast::Toast::info(dbflux_i18n::t!(
+                        "document.data.grid.toast.mutation_queued"
+                    ))
+                    .push(cx);
                 }
                 Err(e) => {
                     dbflux_ui_base::user_error::report_error(
                         dbflux_ui_base::user_error::UserFacingError::new(
                             dbflux_ui_base::user_error::ErrorKind::Driver,
-                            format!("Failed to queue mutation for approval: {e}"),
+                            crate::labels::mutation_approval_queue_failed_error(&e.to_string()),
                         ),
                         cx,
                     );
@@ -3896,7 +4300,9 @@ impl DataGridPanel {
                 dbflux_ui_base::user_error::report_error(
                     dbflux_ui_base::user_error::UserFacingError::new(
                         dbflux_ui_base::user_error::ErrorKind::User,
-                        "Chunked mode requires a primary key — none found for this table.",
+                        dbflux_i18n::t!(
+                            "document.data.mutation.error.chunked_requires_primary_key"
+                        ),
                     ),
                     cx,
                 );
@@ -3949,19 +4355,18 @@ impl DataGridPanel {
                     if let Some(original) = reduced_from {
                         const FLOOR: u32 = 1_000;
                         if effective < FLOOR {
-                            dbflux_ui_base::toast::Toast::warning(format!(
-                                "Chunk size reduced from {} to {} — driver parameter limit \
-                                 forced the chunk floor below {FLOOR}. Processing will be \
-                                 slower than expected.",
-                                original, effective
-                            ))
+                            dbflux_ui_base::toast::Toast::warning(
+                                crate::labels::mutation_chunk_size_reduced_toast(
+                                    original, effective, FLOOR,
+                                ),
+                            )
                             .push(cx);
                         } else {
-                            dbflux_ui_base::toast::Toast::info(format!(
-                                "Chunk size adjusted from {} to {} to stay within driver \
-                                 parameter limits.",
-                                original, effective
-                            ))
+                            dbflux_ui_base::toast::Toast::info(
+                                crate::labels::mutation_chunk_size_adjusted_toast(
+                                    original, effective,
+                                ),
+                            )
                             .push(cx);
                         }
                         opts.chunk_size = effective;
@@ -3971,7 +4376,9 @@ impl DataGridPanel {
 
             let (task_id, cancel_handle) = self.runner.start_mutation(
                 dbflux_core::TaskKind::Query,
-                "Visual mutation (chunked)",
+                crate::labels::visual_mutation_task_label(
+                    crate::labels::VisualMutationTaskMode::Chunked,
+                ),
                 cx,
             );
 
@@ -4002,7 +4409,10 @@ impl DataGridPanel {
                         report_error_async(
                             UserFacingError::new(
                                 ErrorKind::Driver,
-                                format!("Chunked mutation on '{}' failed: {}", table_name, e),
+                                crate::labels::mutation_chunked_execution_failed_error(
+                                    &table_name,
+                                    &e.to_string(),
+                                ),
                             ),
                             cx,
                         );
@@ -4013,11 +4423,9 @@ impl DataGridPanel {
                                 grid.runner.complete_mutation(task_id, cx);
                             })
                             .ok();
-                            dbflux_ui_base::toast::Toast::success(format!(
-                                "Mutation completed: {} row{} affected",
-                                rows_affected,
-                                if rows_affected == 1 { "" } else { "s" }
-                            ))
+                            dbflux_ui_base::toast::Toast::success(
+                                crate::labels::mutation_execution_completed_toast(rows_affected),
+                            )
                             .push(cx);
                         })
                         .ok();
@@ -4028,11 +4436,9 @@ impl DataGridPanel {
                                 grid.runner.cancel_mutation(task_id, cx);
                             })
                             .ok();
-                            dbflux_ui_base::toast::Toast::info(format!(
-                                "Mutation cancelled after {} row{} processed",
-                                rows_affected,
-                                if rows_affected == 1 { "" } else { "s" }
-                            ))
+                            dbflux_ui_base::toast::Toast::info(
+                                crate::labels::mutation_execution_cancelled_toast(rows_affected),
+                            )
                             .push(cx);
                         })
                         .ok();
@@ -4048,7 +4454,10 @@ impl DataGridPanel {
                         report_error_async(
                             UserFacingError::new(
                                 ErrorKind::Driver,
-                                format!("Chunked mutation on '{}' failed: {}", table_name, error),
+                                crate::labels::mutation_chunked_execution_failed_error(
+                                    &table_name,
+                                    &error,
+                                ),
                             ),
                             cx,
                         );
@@ -4062,7 +4471,9 @@ impl DataGridPanel {
         ) {
             let (task_id, cancel_handle) = self.runner.start_mutation(
                 dbflux_core::TaskKind::Query,
-                "Visual mutation (direct)",
+                crate::labels::visual_mutation_task_label(
+                    crate::labels::VisualMutationTaskMode::Direct,
+                ),
                 cx,
             );
 
@@ -4092,7 +4503,10 @@ impl DataGridPanel {
                         report_error_async(
                             UserFacingError::new(
                                 ErrorKind::Driver,
-                                format!("Mutation on '{}' failed: {}", table_name, e),
+                                crate::labels::mutation_execution_failed_error(
+                                    &table_name,
+                                    &e.to_string(),
+                                ),
                             ),
                             cx,
                         );
@@ -4103,11 +4517,9 @@ impl DataGridPanel {
                                 grid.runner.complete_mutation(task_id, cx);
                             })
                             .ok();
-                            dbflux_ui_base::toast::Toast::success(format!(
-                                "Mutation completed: {} row{} affected",
-                                rows_affected,
-                                if rows_affected == 1 { "" } else { "s" }
-                            ))
+                            dbflux_ui_base::toast::Toast::success(
+                                crate::labels::mutation_execution_completed_toast(rows_affected),
+                            )
                             .push(cx);
                         })
                         .ok();
@@ -4118,11 +4530,9 @@ impl DataGridPanel {
                                 grid.runner.cancel_mutation(task_id, cx);
                             })
                             .ok();
-                            dbflux_ui_base::toast::Toast::info(format!(
-                                "Mutation cancelled after {} row{} processed",
-                                rows_affected,
-                                if rows_affected == 1 { "" } else { "s" }
-                            ))
+                            dbflux_ui_base::toast::Toast::info(
+                                crate::labels::mutation_execution_cancelled_toast(rows_affected),
+                            )
                             .push(cx);
                         })
                         .ok();
@@ -4138,7 +4548,7 @@ impl DataGridPanel {
                         report_error_async(
                             UserFacingError::new(
                                 ErrorKind::Driver,
-                                format!("Mutation on '{}' failed: {}", table_name, error),
+                                crate::labels::mutation_execution_failed_error(&table_name, &error),
                             ),
                             cx,
                         );
@@ -4149,7 +4559,9 @@ impl DataGridPanel {
         } else {
             let (task_id, cancel_handle) = self.runner.start_mutation(
                 dbflux_core::TaskKind::Query,
-                "Visual mutation (single transaction)",
+                crate::labels::visual_mutation_task_label(
+                    crate::labels::VisualMutationTaskMode::SingleTransaction,
+                ),
                 cx,
             );
 
@@ -4179,7 +4591,10 @@ impl DataGridPanel {
                         report_error_async(
                             UserFacingError::new(
                                 ErrorKind::Driver,
-                                format!("Mutation on '{}' failed: {}", table_name, e),
+                                crate::labels::mutation_execution_failed_error(
+                                    &table_name,
+                                    &e.to_string(),
+                                ),
                             ),
                             cx,
                         );
@@ -4190,11 +4605,9 @@ impl DataGridPanel {
                                 grid.runner.complete_mutation(task_id, cx);
                             })
                             .ok();
-                            dbflux_ui_base::toast::Toast::success(format!(
-                                "Mutation completed: {} row{} affected",
-                                rows_affected,
-                                if rows_affected == 1 { "" } else { "s" }
-                            ))
+                            dbflux_ui_base::toast::Toast::success(
+                                crate::labels::mutation_execution_completed_toast(rows_affected),
+                            )
                             .push(cx);
                         })
                         .ok();
@@ -4205,11 +4618,9 @@ impl DataGridPanel {
                                 grid.runner.cancel_mutation(task_id, cx);
                             })
                             .ok();
-                            dbflux_ui_base::toast::Toast::info(format!(
-                                "Mutation cancelled after {} row{} processed",
-                                rows_affected,
-                                if rows_affected == 1 { "" } else { "s" }
-                            ))
+                            dbflux_ui_base::toast::Toast::info(
+                                crate::labels::mutation_execution_cancelled_toast(rows_affected),
+                            )
                             .push(cx);
                         })
                         .ok();
@@ -4225,7 +4636,7 @@ impl DataGridPanel {
                         report_error_async(
                             UserFacingError::new(
                                 ErrorKind::Driver,
-                                format!("Mutation on '{}' failed: {}", table_name, error),
+                                crate::labels::mutation_execution_failed_error(&table_name, &error),
                             ),
                             cx,
                         );
@@ -5168,6 +5579,7 @@ mod tests {
                     connection: Arc::new(StubBuilderConnection { metadata }),
                     schema: None,
                     mutation_policy: dbflux_core::MutationPolicy::default(),
+                    read_only_reason: None,
                     database_schemas: Default::default(),
                     table_details: Default::default(),
                     collection_children: Default::default(),
@@ -5946,6 +6358,7 @@ mod tests {
                     connection: Arc::new(StubSqlConnection2),
                     schema: None,
                     mutation_policy: MutationPolicy::ApprovalRequired,
+                    read_only_reason: None,
                     database_schemas: Default::default(),
                     table_details: Default::default(),
                     collection_children: Default::default(),
@@ -6357,6 +6770,7 @@ mod tests {
                     },
                     schema: None,
                     mutation_policy: MutationPolicy::default(),
+                    read_only_reason: None,
                     database_schemas: Default::default(),
                     table_details: Default::default(),
                     collection_children: Default::default(),
@@ -6450,6 +6864,7 @@ mod tests {
                         sample_fields: None,
                         presentation: Default::default(),
                         child_items: None,
+                        storage_hints: None,
                     },
                 );
             });
@@ -6657,6 +7072,7 @@ mod tests {
                     connection,
                     schema: None,
                     mutation_policy: MutationPolicy::default(),
+                    read_only_reason: None,
                     database_schemas: Default::default(),
                     table_details: Default::default(),
                     collection_children: Default::default(),
@@ -6805,5 +7221,122 @@ mod tests {
             dbflux_core::Value::Text("bob".to_string()),
             "change must carry the new cell value"
         );
+    }
+
+    #[gpui::test]
+    fn grouped_result_after_rebuild_leaves_record_mode(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let panel_holder = Rc::new(RefCell::new(None));
+        let panel_handle = panel_holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let panel = cx.new(|cx| {
+                let source = DataSource::Table {
+                    profile_id: Uuid::nil(),
+                    database: Some("app".to_string()),
+                    table: TableRef::with_schema("public", "orders"),
+                    pagination: Pagination::default(),
+                    order_by: Vec::new(),
+                    total_rows: None,
+                };
+
+                let mut panel =
+                    DataGridPanel::new_internal(source, app_state.clone(), vec![], window, cx);
+                panel.set_result(zero_row_result(), cx);
+                panel
+            });
+
+            panel_handle.replace(Some(panel.clone()));
+            Root::new(panel, window, cx)
+        });
+
+        let panel = panel_holder
+            .borrow()
+            .clone()
+            .expect("panel should be created");
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                assert!(panel.record_view_available());
+                panel.set_record_mode(true, cx);
+                assert!(panel.record_mode());
+
+                // The next query comes back grouped. The aggregate has no row
+                // to transpose, so the rebuild must drop the mode instead of
+                // reapplying the cached flag around the guard.
+                panel.builder.current_visual_spec = Some(make_grouped_spec());
+                panel.rebuild_table(None, cx);
+
+                assert!(
+                    !panel.record_mode(),
+                    "a grouped result must leave record mode"
+                );
+                assert!(!panel.record_view_available());
+                let table_in_record_mode = panel
+                    .grid_table
+                    .table_state
+                    .as_ref()
+                    .expect("rebuild creates a table state")
+                    .read(cx)
+                    .record_mode();
+                assert!(
+                    !table_in_record_mode,
+                    "the fresh table state must not inherit record mode"
+                );
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn record_view_is_offered_only_while_the_grid_is_shown(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let panel_holder = Rc::new(RefCell::new(None));
+        let panel_handle = panel_holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let panel = cx.new(|cx| {
+                let source = DataSource::QueryResult {
+                    result: Arc::new(zero_row_result()),
+                    original_query: "SELECT id, name FROM users".to_string(),
+                    profile_id: None,
+                };
+
+                let mut panel =
+                    DataGridPanel::new_internal(source, app_state.clone(), vec![], window, cx);
+                panel.set_result(zero_row_result(), cx);
+                panel
+            });
+
+            panel_handle.replace(Some(panel.clone()));
+            Root::new(panel, window, cx)
+        });
+
+        let panel = panel_holder
+            .borrow()
+            .clone()
+            .expect("panel should be created");
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                assert!(panel.record_view_available());
+
+                // JSON, text and raw are result views without a grid, so the
+                // toggle is not offered and the command does nothing there.
+                panel.set_result_view_mode(super::ResultViewMode::Json, cx);
+                assert!(!panel.record_view_available());
+                panel.set_record_mode(true, cx);
+                assert!(
+                    !panel.record_mode(),
+                    "record mode must not switch on behind a result view"
+                );
+
+                panel.set_result_view_mode(super::ResultViewMode::Table, cx);
+                assert!(panel.record_view_available());
+            });
+        });
     }
 }

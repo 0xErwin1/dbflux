@@ -190,7 +190,7 @@ impl Sidebar {
 
         self.delete_confirm_modal = Some(DeleteConfirmState {
             item_id: anchor_id,
-            item_name: format!("{count} items"),
+            item_name: crate::labels::items_label(count),
             is_folder: false,
             object_type: None,
             is_ddl: false,

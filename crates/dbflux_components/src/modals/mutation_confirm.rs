@@ -151,7 +151,9 @@ impl Render for ModalMutationConfirm {
                     div()
                         .text_size(FontSizes::XS)
                         .text_color(theme.muted_foreground)
-                        .child("Sample preview unavailable"),
+                        .child(dbflux_i18n::t!(
+                            "modals.mutation_confirm.sample_unavailable"
+                        )),
                 );
             }
         }
@@ -162,26 +164,32 @@ impl Render for ModalMutationConfirm {
             .gap_2()
             .justify_end()
             .child(
-                Button::new("mutation-confirm-cancel", "Cancel")
-                    .variant(ButtonVariant::Default)
-                    .on_click(cx.listener(|this, _event, _window, cx| {
-                        this.visible = false;
-                        cx.emit(MutationConfirmOutcome::Cancelled);
-                        cx.notify();
-                    })),
+                Button::new(
+                    "mutation-confirm-cancel",
+                    dbflux_i18n::t!("modals.mutation_confirm.cancel"),
+                )
+                .variant(ButtonVariant::Default)
+                .on_click(cx.listener(|this, _event, _window, cx| {
+                    this.visible = false;
+                    cx.emit(MutationConfirmOutcome::Cancelled);
+                    cx.notify();
+                })),
             )
             .child(
-                Button::new("mutation-confirm-ok", "Confirm")
-                    .variant(ButtonVariant::Primary)
-                    .on_click(cx.listener(|this, _event, _window, cx| {
-                        this.visible = false;
-                        cx.emit(MutationConfirmOutcome::Confirmed);
-                        cx.notify();
-                    })),
+                Button::new(
+                    "mutation-confirm-ok",
+                    dbflux_i18n::t!("modals.mutation_confirm.confirm"),
+                )
+                .variant(ButtonVariant::Primary)
+                .on_click(cx.listener(|this, _event, _window, cx| {
+                    this.visible = false;
+                    cx.emit(MutationConfirmOutcome::Confirmed);
+                    cx.notify();
+                })),
             );
 
         ModalShell::new(
-            "Confirm mutation",
+            dbflux_i18n::t!("modals.mutation_confirm.title"),
             body.into_any_element(),
             footer.into_any_element(),
         )
@@ -231,8 +239,11 @@ pub struct ModalMutationConfirmHard {
 
 impl ModalMutationConfirmHard {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let confirm_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Type table name to confirm"));
+        let confirm_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(dbflux_i18n::t!(
+                "modals.mutation_confirm.type_to_confirm_placeholder"
+            ))
+        });
         Self {
             request: None,
             visible: false,
@@ -392,7 +403,9 @@ impl Render for ModalMutationConfirmHard {
                     div()
                         .text_size(FontSizes::XS)
                         .text_color(theme.muted_foreground)
-                        .child("Sample preview unavailable"),
+                        .child(dbflux_i18n::t!(
+                            "modals.mutation_confirm.sample_unavailable"
+                        )),
                 );
             }
         }
@@ -407,7 +420,9 @@ impl Render for ModalMutationConfirmHard {
                     div()
                         .text_size(FontSizes::XS)
                         .text_color(theme.muted_foreground)
-                        .child("Type the table name to confirm:"),
+                        .child(dbflux_i18n::t!(
+                            "modals.mutation_confirm.type_to_confirm_label"
+                        )),
                 )
                 .child(crate::controls::Input::new(&self.confirm_input)),
         );
@@ -417,7 +432,7 @@ impl Render for ModalMutationConfirmHard {
             body = body.child(
                 Checkbox::new("mutation-hard-opt-in")
                     .checked(opt_in_checked)
-                    .label("I understand this operation will modify data")
+                    .label(dbflux_i18n::t!("modals.mutation_confirm.opt_in_label"))
                     .on_click(cx.listener(|this, checked, _window, cx| {
                         this.opt_in_checked = *checked;
                         cx.notify();
@@ -431,35 +446,83 @@ impl Render for ModalMutationConfirmHard {
             .gap_2()
             .justify_end()
             .child(
-                Button::new("mutation-hard-cancel", "Cancel")
-                    .variant(ButtonVariant::Default)
-                    .on_click(cx.listener(|this, _event, _window, cx| {
-                        this.visible = false;
-                        cx.emit(MutationConfirmOutcome::Cancelled);
-                        cx.notify();
-                    })),
+                Button::new(
+                    "mutation-hard-cancel",
+                    dbflux_i18n::t!("modals.mutation_confirm.cancel"),
+                )
+                .variant(ButtonVariant::Default)
+                .on_click(cx.listener(|this, _event, _window, cx| {
+                    this.visible = false;
+                    cx.emit(MutationConfirmOutcome::Cancelled);
+                    cx.notify();
+                })),
             )
             .child(
-                Button::new("mutation-hard-confirm", "Confirm")
-                    .variant(ButtonVariant::Danger)
-                    .disabled(!confirm_enabled)
-                    .on_click(cx.listener(|this, _event, _window, cx| {
-                        if !this.confirm_enabled() {
-                            return;
-                        }
-                        this.visible = false;
-                        cx.emit(MutationConfirmOutcome::Confirmed);
-                        cx.notify();
-                    })),
+                Button::new(
+                    "mutation-hard-confirm",
+                    dbflux_i18n::t!("modals.mutation_confirm.confirm"),
+                )
+                .variant(ButtonVariant::Danger)
+                .disabled(!confirm_enabled)
+                .on_click(cx.listener(|this, _event, _window, cx| {
+                    if !this.confirm_enabled() {
+                        return;
+                    }
+                    this.visible = false;
+                    cx.emit(MutationConfirmOutcome::Confirmed);
+                    cx.notify();
+                })),
             );
 
         ModalShell::new(
-            "Confirm mutation",
+            dbflux_i18n::t!("modals.mutation_confirm.title"),
             body.into_any_element(),
             footer.into_any_element(),
         )
         .variant(ModalVariant::Danger)
         .width(px(560.0))
         .into_any_element()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests — catalog key resolution
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn mutation_confirm_keys_resolve_in_both_locales() {
+        let keys = [
+            "modals.mutation_confirm.title",
+            "modals.mutation_confirm.sample_unavailable",
+            "modals.mutation_confirm.type_to_confirm_label",
+            "modals.mutation_confirm.type_to_confirm_placeholder",
+            "modals.mutation_confirm.opt_in_label",
+            "modals.mutation_confirm.cancel",
+            "modals.mutation_confirm.confirm",
+        ];
+
+        for key in keys {
+            let en = dbflux_i18n::t!(key, locale = "en");
+            let es = dbflux_i18n::t!(key, locale = "es");
+            assert!(
+                !en.is_empty() && !en.starts_with("en."),
+                "en missing for {key}, got {en:?}"
+            );
+            assert!(
+                !es.is_empty() && !es.starts_with("es."),
+                "es missing for {key}, got {es:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn mutation_confirm_confirm_differs_between_locales() {
+        let en = dbflux_i18n::t!("modals.mutation_confirm.confirm", locale = "en");
+        let es = dbflux_i18n::t!("modals.mutation_confirm.confirm", locale = "es");
+        assert_eq!(en, "Confirm");
+        assert_eq!(es, "Confirmar");
+        assert_ne!(en, es);
     }
 }

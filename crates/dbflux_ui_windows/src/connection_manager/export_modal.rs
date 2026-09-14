@@ -47,14 +47,33 @@ pub enum ExportTarget {
 }
 
 impl ExportTarget {
-    /// Human label for the exported entity kind, used in the modal title and the
-    /// summary block.
+    /// Stable, English, ASCII label for the exported entity kind, used only to
+    /// derive the default export file name (e.g. "ssh-tunnel.toml"). This is a
+    /// slug, not user-visible copy, so it stays untranslated regardless of the
+    /// active locale.
     fn kind_label(self) -> &'static str {
         match self {
             ExportTarget::Connection(_) => "connection",
             ExportTarget::AuthProfile(_) => "auth profile",
             ExportTarget::SshTunnel(_) => "SSH tunnel",
             ExportTarget::Proxy(_) => "proxy",
+        }
+    }
+
+    /// Translated, user-visible label for the exported entity kind, used in the
+    /// modal title, the browse dialog title, and the success toast.
+    fn kind_display_label(self) -> String {
+        match self {
+            ExportTarget::Connection(_) => {
+                dbflux_i18n::t!("connection_manager.export.target.connection")
+            }
+            ExportTarget::AuthProfile(_) => {
+                dbflux_i18n::t!("connection_manager.export.target.auth_profile")
+            }
+            ExportTarget::SshTunnel(_) => {
+                dbflux_i18n::t!("connection_manager.export.target.ssh_tunnel")
+            }
+            ExportTarget::Proxy(_) => dbflux_i18n::t!("connection_manager.export.target.proxy"),
         }
     }
 }
@@ -164,13 +183,17 @@ impl ExportBundleModal {
     ) -> Self {
         let passphrase_input = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("Passphrase")
+                .placeholder(dbflux_i18n::t!(
+                    "connection_manager.import.field.passphrase"
+                ))
                 .masked(true)
         });
 
         let confirm_input = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("Confirm passphrase")
+                .placeholder(dbflux_i18n::t!(
+                    "connection_manager.export.field.confirm_passphrase"
+                ))
                 .masked(true)
         });
 
@@ -188,8 +211,11 @@ impl ExportBundleModal {
             }
         });
 
-        let output_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Path to output file\u{2026}"));
+        let output_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(dbflux_i18n::t!(
+                "connection_manager.export.placeholder.output_path"
+            ))
+        });
 
         let output_sub = cx.subscribe(&output_input, |this, _, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Change | InputEvent::Blur) {
@@ -534,15 +560,21 @@ impl ExportBundleModal {
             self.default_file_name.clone()
         };
 
-        let title = format!("Export {kind_label}");
+        let display_kind = self
+            .target
+            .map(ExportTarget::kind_display_label)
+            .unwrap_or_else(|| dbflux_i18n::t!("connection_manager.export.target.bundle"));
+        let title = crate::labels::export_title_with_kind(&display_kind);
+        let toml_filter_label = dbflux_i18n::t!("connection_manager.import.filter.toml");
+        let all_files_filter_label = dbflux_i18n::t!("connection_manager.import.filter.all");
 
         if dbflux_ui_base::file_dialog::is_native_file_dialog_available() {
             let this = cx.entity().clone();
             let task = cx.background_executor().spawn(async move {
                 rfd::FileDialog::new()
                     .set_title(title)
-                    .add_filter("TOML bundle", &["toml"])
-                    .add_filter("All files", &["*"])
+                    .add_filter(toml_filter_label, &["toml"])
+                    .add_filter(all_files_filter_label, &["*"])
                     .set_file_name(file_name)
                     .save_file()
             });
@@ -568,7 +600,9 @@ impl ExportBundleModal {
                     cx.notify();
                 }
                 Err(e) => {
-                    self.validation_error = Some(format!("Cannot determine output path: {e}"));
+                    self.validation_error = Some(
+                        crate::labels::export_error_cannot_determine_output_path(&e.to_string()),
+                    );
                     cx.notify();
                 }
             }
@@ -584,7 +618,9 @@ impl ExportBundleModal {
 
         let output_value = self.output_input.read(cx).value().trim().to_string();
         if output_value.is_empty() {
-            self.validation_error = Some("Choose an output file path.".to_string());
+            self.validation_error = Some(dbflux_i18n::t!(
+                "connection_manager.export.error.choose_output_path"
+            ));
             cx.notify();
             return;
         }
@@ -596,15 +632,17 @@ impl ExportBundleModal {
             let confirm = self.confirm_input.read(cx).value().to_string();
 
             if passphrase.is_empty() {
-                self.validation_error =
-                    Some("Enter a passphrase or enable force-plaintext mode.".to_string());
+                self.validation_error = Some(dbflux_i18n::t!(
+                    "connection_manager.export.error.passphrase_or_plaintext"
+                ));
                 cx.notify();
                 return;
             }
 
             if passphrase != confirm {
-                self.validation_error =
-                    Some("Passphrase and confirmation do not match.".to_string());
+                self.validation_error = Some(dbflux_i18n::t!(
+                    "connection_manager.export.error.passphrase_mismatch"
+                ));
                 cx.notify();
                 return;
             }
@@ -615,9 +653,9 @@ impl ExportBundleModal {
         let output_path = PathBuf::from(&output_value);
 
         let Some((inputs, drivers, secret_store)) = self.assemble_inputs(target, cx) else {
-            self.validation_error = Some(
-                "This profile can no longer be exported; it may have been removed.".to_string(),
-            );
+            self.validation_error = Some(dbflux_i18n::t!(
+                "connection_manager.export.error.target_removed"
+            ));
             cx.notify();
             return;
         };
@@ -661,7 +699,11 @@ impl ExportBundleModal {
                         &reader,
                     ) {
                         Ok(value) => value,
-                        Err(e) => return ExportResult::Failed(format!("Export failed: {e}")),
+                        Err(e) => {
+                            return ExportResult::Failed(crate::labels::export_error_failed(
+                                &e.to_string(),
+                            ));
+                        }
                     };
 
                     match std::fs::write(&output_path, &bytes) {
@@ -670,7 +712,9 @@ impl ExportBundleModal {
                             warnings: report.warnings,
                             required_ref_count: report.required_ref_count,
                         },
-                        Err(e) => ExportResult::Failed(format!("Failed to write export file: {e}")),
+                        Err(e) => ExportResult::Failed(crate::labels::export_error_write_failed(
+                            &e.to_string(),
+                        )),
                     }
                 })
                 .await;
@@ -682,12 +726,16 @@ impl ExportBundleModal {
                         ExportResult::Success { path, .. } => {
                             let kind = this
                                 .target
-                                .map(ExportTarget::kind_label)
-                                .unwrap_or("bundle");
-                            dbflux_ui_base::toast::Toast::success(format!(
-                                "Exported {kind} to {}",
-                                path.display()
-                            ))
+                                .map(ExportTarget::kind_display_label)
+                                .unwrap_or_else(|| {
+                                    dbflux_i18n::t!("connection_manager.export.target.bundle")
+                                });
+                            dbflux_ui_base::toast::Toast::success(
+                                crate::labels::export_toast_success(
+                                    &kind,
+                                    &path.display().to_string(),
+                                ),
+                            )
                             .push(cx);
                             this.close(cx);
                             cx.emit(ExportBundleModalEvent::Close);
@@ -891,10 +939,22 @@ fn auth_mode_from_id(id: &str) -> AuthExportMode {
 /// The four selectable auth-profile export modes, in display order.
 fn auth_mode_items() -> Vec<DropdownItem> {
     vec![
-        DropdownItem::with_value("Include values", AUTH_MODE_INCLUDE),
-        DropdownItem::with_value("Reference", AUTH_MODE_REFERENCE),
-        DropdownItem::with_value("Required on import", AUTH_MODE_REQUIRED),
-        DropdownItem::with_value("Exclude", AUTH_MODE_EXCLUDE),
+        DropdownItem::with_value(
+            dbflux_i18n::t!("connection_manager.export.auth_mode.include"),
+            AUTH_MODE_INCLUDE,
+        ),
+        DropdownItem::with_value(
+            dbflux_i18n::t!("connection_manager.export.auth_mode.reference"),
+            AUTH_MODE_REFERENCE,
+        ),
+        DropdownItem::with_value(
+            dbflux_i18n::t!("connection_manager.export.auth_mode.required_on_import"),
+            AUTH_MODE_REQUIRED,
+        ),
+        DropdownItem::with_value(
+            dbflux_i18n::t!("connection_manager.export.auth_mode.exclude"),
+            AUTH_MODE_EXCLUDE,
+        ),
     ]
 }
 
@@ -953,9 +1013,9 @@ impl Render for ExportBundleModal {
         });
 
         let export_label = if is_exporting {
-            "Exporting\u{2026}"
+            dbflux_i18n::t!("connection_manager.export.status.exporting")
         } else {
-            "Export"
+            dbflux_i18n::t!("connection_manager.export.action.export")
         };
         let on_export = cx.listener(|this, _: &gpui::ClickEvent, window, cx| {
             this.do_export(window, cx);
@@ -966,9 +1026,12 @@ impl Render for ExportBundleModal {
             .items_center()
             .gap(Spacing::SM)
             .child(
-                Button::new("export-conn-cancel", "Cancel")
-                    .ghost()
-                    .on_click(on_cancel),
+                Button::new(
+                    "export-conn-cancel",
+                    dbflux_i18n::t!("connection_manager.import.action.cancel"),
+                )
+                .ghost()
+                .on_click(on_cancel),
             )
             .child(
                 Button::new("export-conn-confirm", export_label)
@@ -980,8 +1043,8 @@ impl Render for ExportBundleModal {
         let close_for_x = cx.entity().clone();
 
         let title = match self.target {
-            Some(target) => format!("Export {}", target.kind_label()),
-            None => "Export".to_string(),
+            Some(target) => crate::labels::export_title_with_kind(&target.kind_display_label()),
+            None => dbflux_i18n::t!("connection_manager.export.title"),
         };
 
         ModalShell::new(title, body.into_any_element(), footer.into_any_element())
@@ -1011,14 +1074,16 @@ impl ExportBundleModal {
         let mut lines: Vec<String> = Vec::new();
         if is_connection {
             for auth in &summary.auth_profiles {
-                let suffix = if auth.locked { " (reference)" } else { "" };
-                lines.push(format!("Auth profile: {}{}", auth.name, suffix));
+                lines.push(crate::labels::export_summary_auth_profile_line(
+                    &auth.name,
+                    auth.locked,
+                ));
             }
             if let Some(proxy) = &summary.proxy_name {
-                lines.push(format!("Proxy: {proxy}"));
+                lines.push(crate::labels::export_summary_proxy_line(proxy));
             }
             if let Some(ssh) = &summary.ssh_name {
-                lines.push(format!("SSH tunnel: {ssh}"));
+                lines.push(crate::labels::export_summary_ssh_line(ssh));
             }
         }
 
@@ -1047,9 +1112,9 @@ impl ExportBundleModal {
         }
 
         let intro = if is_connection {
-            "This connection and its profiles will be exported."
+            dbflux_i18n::t!("connection_manager.export.hint.connection_scope")
         } else {
-            "This profile will be exported."
+            dbflux_i18n::t!("connection_manager.export.hint.profile_scope")
         };
 
         div()
@@ -1100,17 +1165,20 @@ impl ExportBundleModal {
             _ => (false, false),
         };
 
-        let mut col = div()
-            .flex()
-            .flex_col()
-            .gap(Spacing::SM)
-            .child(Text::body("Credentials").color(theme.muted_foreground));
+        let mut col = div().flex().flex_col().gap(Spacing::SM).child(
+            Text::body(dbflux_i18n::t!(
+                "connection_manager.export.field.credentials"
+            ))
+            .color(theme.muted_foreground),
+        );
 
         if show_conn_pw {
             col = col.child(
                 Checkbox::new("export-conn-pw")
                     .checked(conn_pw)
-                    .label("Include connection password")
+                    .label(dbflux_i18n::t!(
+                        "connection_manager.export.field.include_connection_password"
+                    ))
                     .on_click(cx.listener(|this, checked: &bool, _, cx| {
                         this.include_connection_password = *checked;
                         cx.notify();
@@ -1122,7 +1190,9 @@ impl ExportBundleModal {
             col = col.child(
                 Checkbox::new("export-proxy-creds")
                     .checked(proxy_creds)
-                    .label("Include proxy credentials")
+                    .label(dbflux_i18n::t!(
+                        "connection_manager.export.field.include_proxy_credentials"
+                    ))
                     .on_click(cx.listener(|this, checked: &bool, _, cx| {
                         this.include_proxy_credentials = *checked;
                         cx.notify();
@@ -1134,7 +1204,9 @@ impl ExportBundleModal {
             col = col.child(
                 Checkbox::new("export-ssh-pw")
                     .checked(ssh_pw)
-                    .label("Include SSH password")
+                    .label(dbflux_i18n::t!(
+                        "connection_manager.export.field.include_ssh_password"
+                    ))
                     .on_click(cx.listener(|this, checked: &bool, _, cx| {
                         this.include_ssh_password = *checked;
                         cx.notify();
@@ -1146,7 +1218,9 @@ impl ExportBundleModal {
             col = col.child(
                 Checkbox::new("export-embed-ssh-keys")
                     .checked(embed_keys && !force_plaintext)
-                    .label("Embed SSH private keys (requires encryption)")
+                    .label(dbflux_i18n::t!(
+                        "connection_manager.export.field.embed_ssh_keys"
+                    ))
                     .on_click(cx.listener(|this, checked: &bool, _, cx| {
                         if this.force_plaintext {
                             return;
@@ -1168,9 +1242,11 @@ impl ExportBundleModal {
         let auth = self.auth_profile.as_ref()?;
 
         let control: AnyElement = if auth.locked {
-            Text::body("Reference (AWS profile)")
-                .color(theme.muted_foreground)
-                .into_any_element()
+            Text::body(dbflux_i18n::t!(
+                "connection_manager.export.field.reference_aws_profile"
+            ))
+            .color(theme.muted_foreground)
+            .into_any_element()
         } else if let Some(dropdown) = self.auth_dropdown.as_ref() {
             dropdown.clone().into_any_element()
         } else {
@@ -1191,7 +1267,12 @@ impl ExportBundleModal {
                 .flex()
                 .flex_col()
                 .gap(Spacing::SM)
-                .child(Text::body("Auth profile export mode").color(theme.muted_foreground))
+                .child(
+                    Text::body(dbflux_i18n::t!(
+                        "connection_manager.export.field.auth_export_mode"
+                    ))
+                    .color(theme.muted_foreground),
+                )
                 .child(row)
                 .into_any_element(),
         )
@@ -1203,7 +1284,9 @@ impl ExportBundleModal {
 
         let toggle = Checkbox::new("export-force-plaintext")
             .checked(force_plaintext)
-            .label("Disable encryption (force plaintext)")
+            .label(dbflux_i18n::t!(
+                "connection_manager.export.field.disable_encryption"
+            ))
             .on_click(cx.listener(|this, checked: &bool, _, cx| {
                 this.force_plaintext = *checked;
                 if *checked {
@@ -1215,8 +1298,7 @@ impl ExportBundleModal {
         let inner = if force_plaintext {
             BannerBlock::new(
                 BannerVariant::Warning,
-                "Secrets will be written in cleartext. \
-                 Only use this if the output file is stored securely.",
+                dbflux_i18n::t!("connection_manager.export.hint.plaintext_warning"),
             )
             .into_any_element()
         } else {
@@ -1240,7 +1322,12 @@ impl ExportBundleModal {
                 .flex()
                 .flex_col()
                 .gap(Spacing::XS)
-                .child(Text::body("Passphrase").color(theme.muted_foreground))
+                .child(
+                    Text::body(dbflux_i18n::t!(
+                        "connection_manager.import.field.passphrase"
+                    ))
+                    .color(theme.muted_foreground),
+                )
                 .child(
                     div()
                         .flex()
@@ -1249,7 +1336,12 @@ impl ExportBundleModal {
                         .child(div().flex_1().child(Input::new(&self.passphrase_input)))
                         .child(toggle),
                 )
-                .child(Text::body("Confirm passphrase").color(theme.muted_foreground))
+                .child(
+                    Text::body(dbflux_i18n::t!(
+                        "connection_manager.export.field.confirm_passphrase"
+                    ))
+                    .color(theme.muted_foreground),
+                )
                 .child(Input::new(&self.confirm_input))
                 .into_any_element()
         };
@@ -1258,7 +1350,12 @@ impl ExportBundleModal {
             .flex()
             .flex_col()
             .gap(Spacing::SM)
-            .child(Text::body("Encryption").color(theme.muted_foreground))
+            .child(
+                Text::body(dbflux_i18n::t!(
+                    "connection_manager.export.field.encryption"
+                ))
+                .color(theme.muted_foreground),
+            )
             .child(toggle)
             .child(inner)
             .into_any_element()
@@ -1285,7 +1382,12 @@ impl ExportBundleModal {
             .flex()
             .flex_col()
             .gap(Spacing::XS)
-            .child(Text::body("Output file").color(theme.muted_foreground))
+            .child(
+                Text::body(dbflux_i18n::t!(
+                    "connection_manager.export.field.output_file"
+                ))
+                .color(theme.muted_foreground),
+            )
             .child(row)
             .into_any_element()
     }
@@ -1300,16 +1402,16 @@ impl ExportBundleModal {
             } => {
                 let mut body_lines: Vec<String> = Vec::new();
                 if *required_ref_count > 0 {
-                    body_lines.push(format!(
-                        "{required_ref_count} field(s) omitted — recipient must supply them on import."
+                    body_lines.push(crate::labels::export_result_omitted_fields(
+                        *required_ref_count,
                     ));
                 }
                 for w in warnings {
-                    body_lines.push(format!("Warning: {w}"));
+                    body_lines.push(crate::labels::export_result_warning_line(w));
                 }
                 let mut banner = BannerBlock::new(
                     BannerVariant::Success,
-                    format!("Exported to {}", path.display()),
+                    crate::labels::export_result_success_title(&path.display().to_string()),
                 );
                 if !body_lines.is_empty() {
                     banner = banner.with_body(body_lines.join("\n"));
@@ -1317,10 +1419,168 @@ impl ExportBundleModal {
                 Some(banner.into_any_element())
             }
             ExportResult::Failed(msg) => Some(
-                BannerBlock::new(BannerVariant::Danger, "Export failed")
-                    .with_body(msg.clone())
-                    .into_any_element(),
+                BannerBlock::new(
+                    BannerVariant::Danger,
+                    dbflux_i18n::t!("connection_manager.export.banner.failed"),
+                )
+                .with_body(msg.clone())
+                .into_any_element(),
             ),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// Every `connection_manager.export.*` key this modal resolves directly via
+    /// `dbflux_i18n::t!` or via `crate::labels` helpers, including plural
+    /// `.one`/`.many` variants, plus the `connection_manager.import.*` keys
+    /// reused verbatim (byte-identical English) instead of being duplicated.
+    const EXPORT_MODAL_KEYS: &[&str] = &[
+        "connection_manager.export.target.connection",
+        "connection_manager.export.target.auth_profile",
+        "connection_manager.export.target.ssh_tunnel",
+        "connection_manager.export.target.proxy",
+        "connection_manager.export.target.bundle",
+        "connection_manager.export.title",
+        "connection_manager.export.title_with_kind",
+        "connection_manager.export.placeholder.output_path",
+        "connection_manager.export.field.credentials",
+        "connection_manager.export.field.include_connection_password",
+        "connection_manager.export.field.include_proxy_credentials",
+        "connection_manager.export.field.include_ssh_password",
+        "connection_manager.export.field.embed_ssh_keys",
+        "connection_manager.export.field.auth_export_mode",
+        "connection_manager.export.field.reference_aws_profile",
+        "connection_manager.export.field.disable_encryption",
+        "connection_manager.export.field.confirm_passphrase",
+        "connection_manager.export.field.encryption",
+        "connection_manager.export.field.output_file",
+        "connection_manager.export.auth_mode.include",
+        "connection_manager.export.auth_mode.reference",
+        "connection_manager.export.auth_mode.required_on_import",
+        "connection_manager.export.auth_mode.exclude",
+        "connection_manager.export.hint.connection_scope",
+        "connection_manager.export.hint.profile_scope",
+        "connection_manager.export.hint.plaintext_warning",
+        "connection_manager.export.error.choose_output_path",
+        "connection_manager.export.error.passphrase_or_plaintext",
+        "connection_manager.export.error.passphrase_mismatch",
+        "connection_manager.export.error.target_removed",
+        "connection_manager.export.error.cannot_determine_output_path",
+        "connection_manager.export.error.failed",
+        "connection_manager.export.error.write_failed",
+        "connection_manager.export.summary.auth_profile_line",
+        "connection_manager.export.summary.auth_profile_line_reference",
+        "connection_manager.export.summary.proxy_line",
+        "connection_manager.export.summary.ssh_line",
+        "connection_manager.export.action.export",
+        "connection_manager.export.status.exporting",
+        "connection_manager.export.banner.failed",
+        "connection_manager.export.result.omitted_fields.one",
+        "connection_manager.export.result.omitted_fields.many",
+        "connection_manager.export.result.warning",
+        "connection_manager.export.result.success_title",
+        "connection_manager.export.toast.success",
+        // Reused verbatim from the import panel (S29) instead of duplicating.
+        "connection_manager.import.filter.toml",
+        "connection_manager.import.filter.all",
+        "connection_manager.import.action.cancel",
+        "connection_manager.import.field.passphrase",
+    ];
+
+    #[test]
+    fn export_modal_keys_resolve_in_both_locales() {
+        for locale in ["en", "es"] {
+            for key in EXPORT_MODAL_KEYS {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(
+                    !value.is_empty(),
+                    "key {key} resolved empty for locale {locale}"
+                );
+                assert_ne!(value, *key, "key {key} did not resolve for locale {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "key {key} fell back to the raw locale-qualified form for locale {locale}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn export_modal_keys_diverge_between_locales() {
+        // "proxy" and "Proxy" are the same proper noun kept identical in both
+        // locales, matching the convention already used elsewhere in this catalog.
+        const UNTRANSLATED: &[&str] = &[
+            "connection_manager.export.target.proxy",
+            "connection_manager.export.summary.proxy_line",
+        ];
+
+        for key in EXPORT_MODAL_KEYS {
+            if UNTRANSLATED.contains(key) {
+                continue;
+            }
+
+            let english = dbflux_i18n::t!(key, locale = "en");
+            let spanish = dbflux_i18n::t!(key, locale = "es");
+
+            assert_ne!(
+                english, spanish,
+                "key {key} did not diverge between locales"
+            );
+        }
+    }
+
+    #[test]
+    fn auth_mode_items_labels_are_exhaustive_over_the_enum() {
+        use dbflux_portability::AuthExportMode;
+
+        let items = super::auth_mode_items();
+        assert_eq!(items.len(), 4, "expected one dropdown item per export mode");
+
+        for mode in [
+            AuthExportMode::IncludeValues,
+            AuthExportMode::MappableReference,
+            AuthExportMode::RequiredOnImport,
+            AuthExportMode::Exclude,
+        ] {
+            let id = super::auth_mode_id(mode);
+            let found = items.iter().any(|item| item.value.as_ref() == id);
+            assert!(found, "no dropdown item for {mode:?} (id {id})");
+
+            let round_tripped = super::auth_mode_from_id(id);
+            assert_eq!(round_tripped, mode, "auth mode id {id} did not round-trip");
+        }
+    }
+
+    #[test]
+    fn kind_label_stays_stable_ascii_for_filename_derivation() {
+        use super::ExportTarget;
+        use uuid::Uuid;
+
+        let id = Uuid::nil();
+        assert_eq!(ExportTarget::Connection(id).kind_label(), "connection");
+        assert_eq!(ExportTarget::AuthProfile(id).kind_label(), "auth profile");
+        assert_eq!(ExportTarget::SshTunnel(id).kind_label(), "SSH tunnel");
+        assert_eq!(ExportTarget::Proxy(id).kind_label(), "proxy");
+    }
+
+    #[test]
+    fn kind_display_label_is_exhaustive_over_the_enum_and_locale_aware() {
+        use super::ExportTarget;
+        use uuid::Uuid;
+
+        let id = Uuid::nil();
+        for target in [
+            ExportTarget::Connection(id),
+            ExportTarget::AuthProfile(id),
+            ExportTarget::SshTunnel(id),
+            ExportTarget::Proxy(id),
+        ] {
+            let label = target.kind_display_label();
+            assert!(!label.is_empty(), "{target:?} resolved an empty label");
         }
     }
 }

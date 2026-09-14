@@ -168,6 +168,8 @@ refresh resumes automatically on reconnect without re-arming.
 | MongoDB | ✓ | ✓ | [README](../crates/dbflux_driver_mongodb/README.md) |
 | Redis | ✓ | ✓ | [README](../crates/dbflux_driver_redis/README.md) |
 | SQL Server | ✓ | ✓ | [README](../crates/dbflux_driver_mssql/README.md) |
+| ClickHouse | ✓ | ✓ | [README](../crates/dbflux_driver_clickhouse/README.md) |
+| InfluxDB (v2 only) | ✓ | ✓ | [README](../crates/dbflux_driver_influxdb/README.md) |
 
 Each driver README lists the concrete metrics, inspectors, and row actions it
 exposes; this document does not duplicate them.
@@ -214,12 +216,12 @@ to materialize it locally.
   `DefaultInstanceDashboard`, `InspectorRowAction`
 
 Drivers expose live server metrics (e.g. `pg.tps`,
-`mysql.queries_per_sec`) and tabular inspectors (e.g. `pg.activity`,
-`mysql.processlist`, `mongo.currentop`, `redis.client_list`) through a
-single catalog. Each driver also publishes a
-`DefaultInstanceDashboard` descriptor with a fixed 12-column layout —
-the workspace opens this descriptor as a **read-only Instance
-Overview** dashboard (dedup key
+`mysql.queries_per_sec`, `clickhouse.query`) and tabular inspectors
+(e.g. `pg.activity`, `mysql.processlist`, `mongo.currentop`,
+`redis.client_list`, `clickhouse.processes`) through a single catalog.
+Each driver also publishes a `DefaultInstanceDashboard` descriptor with
+a fixed 12-column layout — the workspace opens this descriptor as a
+**read-only Instance Overview** dashboard (dedup key
 `DocumentKey::InstanceOverview { profile_id }`). The "Save as
 editable" action clones the layout into a persisted dashboard owned
 by the user.
@@ -228,8 +230,9 @@ Inspector rows can declare `InspectorRowAction`s (e.g. *Terminate
 connection*). Action availability is gated by per-driver privilege
 probes (`pg_monitor` / `pg_signal_backend` for PostgreSQL, `PROCESS` /
 `CONNECTION_ADMIN` for MySQL, `killOp` for MongoDB, `CLIENT KILL` for
-Redis, `VIEW SERVER STATE` / `KILL` for SQL Server) so an
-under-privileged session never sees actions it could not execute.
+Redis, `VIEW SERVER STATE` / `KILL` for SQL Server, `KILL QUERY` for
+ClickHouse) so an under-privileged session never sees actions it could
+not execute.
 
 Every refresh timer (dashboard tick, chart standalone tick, inspector
 tick) checks `AppState::connections()` for the panel's profile and

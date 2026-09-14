@@ -74,6 +74,23 @@ mod tests {
     }
 
     #[test]
+    fn long_text_keeps_full_value_for_editing_and_clipboard_while_display_is_capped() {
+        let full_text = format!("[{}]", "1,".repeat(150));
+        assert!(full_text.len() > 200);
+
+        let cell = CellValue::text(&full_text);
+
+        assert!(matches!(&cell.kind, CellKind::Text(text) if text.as_ref() == full_text));
+        assert_eq!(cell.edit_text(), full_text);
+        assert_eq!(format_cell(&cell), full_text);
+
+        let display = cell.display_text();
+        assert_eq!(display.chars().count(), 201);
+        assert!(display.ends_with('…'));
+        assert_eq!(display.as_ref(), format!("{}…", &full_text[..200]));
+    }
+
+    #[test]
     fn test_escape_tsv() {
         assert_eq!(escape_tsv("hello\tworld"), "hello world");
         assert_eq!(escape_tsv("line1\nline2"), "line1 line2");

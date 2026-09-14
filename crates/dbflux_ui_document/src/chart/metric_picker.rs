@@ -62,7 +62,9 @@ pub const DEFAULT_STATISTIC_IDX: usize = 0;
 /// accepted period (1..=86400 seconds) or statistic (e.g. `p99`, `p99.9`,
 /// `trimmed_mean`) that does not appear in the preset list. The free-text
 /// value is run through `validate_period` / `validate_statistic` on commit.
-pub const CUSTOM_DROPDOWN_LABEL: &str = "Custom…";
+pub fn custom_dropdown_label() -> String {
+    crate::labels::metric_picker_custom_dropdown_label()
+}
 
 /// Dropdown index of the "Custom…" entry (last position).
 pub fn period_custom_index() -> usize {
@@ -169,13 +171,13 @@ impl MetricPickerState {
         let period_items = PERIOD_PRESETS
             .iter()
             .map(|(_, label)| DropdownItem::new(*label))
-            .chain(std::iter::once(DropdownItem::new(CUSTOM_DROPDOWN_LABEL)))
+            .chain(std::iter::once(DropdownItem::new(custom_dropdown_label())))
             .collect::<Vec<_>>();
 
         let statistic_items = STATISTIC_PRESETS
             .iter()
             .map(|s| DropdownItem::new(*s))
-            .chain(std::iter::once(DropdownItem::new(CUSTOM_DROPDOWN_LABEL)))
+            .chain(std::iter::once(DropdownItem::new(custom_dropdown_label())))
             .collect::<Vec<_>>();
 
         let period_dropdown = cx.new(|_cx| {
@@ -336,8 +338,9 @@ impl MetricPickerState {
 
         let task = match conn_result {
             None => {
-                self.dimensions_state =
-                    DimensionsState::Error("Connection not found or not active".to_string());
+                self.dimensions_state = DimensionsState::Error(dbflux_i18n::t!(
+                    "document.chart.metric_picker.dimensions.connection_not_found"
+                ));
                 return;
             }
             Some(conn) => {
@@ -376,9 +379,10 @@ impl MetricPickerState {
                                     picker.dimensions_state = DimensionsState::Error(e.to_string());
                                 }
                                 None => {
-                                    picker.dimensions_state = DimensionsState::Error(
-                                        "Connection does not support metric catalog".to_string(),
-                                    );
+                                    picker.dimensions_state =
+                                        DimensionsState::Error(dbflux_i18n::t!(
+                                            "document.chart.metric_picker.dimensions.catalog_unsupported"
+                                        ));
                                 }
                             }
                             picker.dimensions_task = None;
@@ -507,7 +511,9 @@ pub enum DimensionsState {
 /// Rejects only empty strings. The caller is responsible for trimming whitespace.
 pub fn validate_statistic(s: &str) -> Result<String, String> {
     if s.is_empty() {
-        return Err("statistic must not be empty".to_string());
+        return Err(dbflux_i18n::t!(
+            "document.chart.metric_picker.statistic.validation.empty"
+        ));
     }
     Ok(s.to_string())
 }
@@ -524,13 +530,17 @@ pub fn validate_statistic(s: &str) -> Result<String, String> {
 pub fn validate_period(s: &str) -> Result<u32, String> {
     let n: u32 = s
         .parse()
-        .map_err(|_| format!("period must be a number, got {:?}", s))?;
+        .map_err(|_| crate::labels::metric_picker_period_not_a_number_error(s))?;
 
     if n == 0 {
-        return Err("period must be at least 1 second".to_string());
+        return Err(dbflux_i18n::t!(
+            "document.chart.metric_picker.period.validation.too_low"
+        ));
     }
     if n > 86400 {
-        return Err("period must not exceed 86400 seconds (24 hours)".to_string());
+        return Err(dbflux_i18n::t!(
+            "document.chart.metric_picker.period.validation.too_high"
+        ));
     }
     Ok(n)
 }
@@ -600,15 +610,16 @@ mod tests {
     /// reveals the inline custom text input.
     #[test]
     fn custom_entry_is_last_for_period_dropdown() {
-        let labels: Vec<&str> = PERIOD_PRESETS
+        let custom_label = custom_dropdown_label();
+        let labels: Vec<String> = PERIOD_PRESETS
             .iter()
-            .map(|(_, l)| *l)
-            .chain(std::iter::once(CUSTOM_DROPDOWN_LABEL))
+            .map(|(_, l)| l.to_string())
+            .chain(std::iter::once(custom_label.clone()))
             .collect();
 
         assert_eq!(
-            labels.last().copied(),
-            Some(CUSTOM_DROPDOWN_LABEL),
+            labels.last().cloned(),
+            Some(custom_label),
             "Custom… must be the last entry in the period dropdown"
         );
         assert_eq!(
@@ -622,15 +633,16 @@ mod tests {
     /// dropdown items.
     #[test]
     fn custom_entry_is_last_for_statistic_dropdown() {
-        let labels: Vec<&str> = STATISTIC_PRESETS
+        let custom_label = custom_dropdown_label();
+        let labels: Vec<String> = STATISTIC_PRESETS
             .iter()
-            .copied()
-            .chain(std::iter::once(CUSTOM_DROPDOWN_LABEL))
+            .map(|s| s.to_string())
+            .chain(std::iter::once(custom_label.clone()))
             .collect();
 
         assert_eq!(
-            labels.last().copied(),
-            Some(CUSTOM_DROPDOWN_LABEL),
+            labels.last().cloned(),
+            Some(custom_label),
             "Custom… must be the last entry in the statistic dropdown"
         );
         assert_eq!(

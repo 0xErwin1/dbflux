@@ -33,6 +33,7 @@ use interprocess::local_socket::{
 use log::info;
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
+#[cfg(unix)]
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -387,6 +388,12 @@ fn run_gui() {
         let theme_setting = general_settings.theme;
         let style_setting = general_settings.style;
 
+        let language = dbflux_i18n::resolve(
+            Some(general_settings.language.as_str()),
+            dbflux_i18n::detect_system_locale().as_deref(),
+        );
+        dbflux_i18n::set_locale(language);
+
         // Set up the density global and apply the persisted theme+style so
         // radius tokens are correct from the very first frame.
         dbflux_ui::theme::init_with_settings(theme_setting, style_setting, cx);
@@ -547,14 +554,26 @@ async fn run_shutdown_sequence(app_state: Entity<AppStateEntity>, cx: &mut Async
     }
 
     info!("Shutdown phase: Closing connections...");
-    let close_result = cx.update(|cx| {
-        app_state.update(cx, |state, _| {
-            state.close_all_connections();
-        });
-    });
+    let close_result =
+        cx.update(|cx| app_state.update(cx, |state, _| state.close_all_connections()));
 
-    if close_result.is_err() {
-        log::error!("Failed to close connections during shutdown");
+    let teardown_handles = match close_result {
+        Ok(handles) => handles,
+        Err(error) => {
+            log::error!("Failed to schedule connection shutdown: {:?}", error);
+            Vec::new()
+        }
+    };
+    for teardown in teardown_handles {
+        let join_result = cx
+            .background_executor()
+            .spawn(async move { teardown.join() })
+            .await;
+        match join_result {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => log::error!("Connection cleanup failed during shutdown: {}", error),
+            Err(_) => log::error!("Connection cleanup thread panicked during shutdown"),
+        }
     }
 
     let conn_deadline = Instant::now() + CONNECTION_CLOSE_TIMEOUT;

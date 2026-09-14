@@ -1,0 +1,175 @@
+---
+import Icon from './Icon.astro';
+import { t } from '../i18n';
+import type { Locale } from '../i18n';
+
+interface Props {
+  locale: Locale;
+}
+
+const { locale } = Astro.props;
+
+const preferences = [
+  { value: 'system', label: t(locale, 'nav.theme_system'), icon: 'monitor' },
+  { value: 'light', label: t(locale, 'nav.theme_light'), icon: 'sun' },
+  { value: 'dark', label: t(locale, 'nav.theme_dark'), icon: 'moon' },
+  { value: 'mirage', label: t(locale, 'nav.theme_mirage'), icon: 'mirage' },
+] as const;
+---
+
+<div class="theme-picker" role="group" aria-label={t(locale, 'nav.theme')}>
+  {
+    preferences.map((preference) => (
+      <button
+        type="button"
+        class="theme-picker__button"
+        data-theme-preference={preference.value}
+        aria-label={preference.label}
+        aria-pressed="false"
+        data-tooltip={preference.label}
+      >
+        <Icon name={preference.icon} size={16} />
+      </button>
+    ))
+  }
+</div>
+
+<style>
+  .theme-picker {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+  }
+
+  .theme-picker__button {
+    position: relative;
+    display: grid;
+    width: 32px;
+    height: 32px;
+    place-items: center;
+    padding: 0;
+    background: transparent;
+    border: var(--bw) solid transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+  }
+
+  .theme-picker__button:hover,
+  .theme-picker__button[aria-pressed='true'] {
+    border-color: var(--border-interactive);
+    color: var(--text-strong);
+  }
+
+  .theme-picker__button[aria-pressed='true'] {
+    background: var(--raised);
+    color: var(--accent);
+  }
+
+  .theme-picker__button::after {
+    position: absolute;
+    z-index: var(--z-tooltip);
+    bottom: calc(100% + var(--s-2));
+    left: 50%;
+    width: max-content;
+    max-width: 12rem;
+    padding: var(--s-2) var(--s-3);
+    background: var(--text-strong);
+    color: var(--bg);
+    content: attr(data-tooltip);
+    font-family: var(--font-mono);
+    font-size: var(--fs-label);
+    opacity: 0;
+    pointer-events: none;
+    transform: translate(-50%, 2px);
+    transition:
+      opacity var(--t-instant) linear,
+      transform var(--t-instant) var(--ease-std);
+  }
+
+  .theme-picker__button:hover::after,
+  .theme-picker__button:focus-visible::after {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+
+  @media (max-width: 1050px) {
+    .theme-picker__button {
+      width: var(--tap-min);
+      height: var(--tap-min);
+    }
+  }
+
+  @media (max-width: 640px) {
+    .theme-picker__button:first-child::after {
+      left: 0;
+      transform: translate(0, 2px);
+    }
+
+    .theme-picker__button:last-child::after {
+      right: 0;
+      left: auto;
+      transform: translate(0, 2px);
+    }
+
+    .theme-picker__button:first-child:hover::after,
+    .theme-picker__button:first-child:focus-visible::after,
+    .theme-picker__button:last-child:hover::after,
+    .theme-picker__button:last-child:focus-visible::after {
+      transform: translate(0, 0);
+    }
+  }
+</style>
+
+<script>
+  import { normalizeThemePreference, resolveTheme } from '../lib/theme';
+
+  const storageKey = 'dbflux-theme';
+  const media = window.matchMedia('(prefers-color-scheme: dark)');
+  const buttons = Array.from(
+    document.querySelectorAll<HTMLButtonElement>('[data-theme-preference]'),
+  );
+
+  const storedPreference = () => {
+    try {
+      return normalizeThemePreference(window.localStorage.getItem(storageKey));
+    } catch {
+      return 'system';
+    }
+  };
+
+  const apply = (preference: string | null | undefined) => {
+    const normalized = normalizeThemePreference(preference);
+    const resolved = resolveTheme(normalized, media.matches);
+    const root = document.documentElement;
+
+    root.dataset.themePreference = normalized;
+    root.dataset.theme = resolved;
+    buttons.forEach((button) => {
+      button.setAttribute('aria-pressed', String(button.dataset.themePreference === normalized));
+    });
+    window.dispatchEvent(new CustomEvent('dbflux-theme-change'));
+  };
+
+  const persist = (preference: string | null | undefined) => {
+    const normalized = normalizeThemePreference(preference);
+
+    try {
+      window.localStorage.setItem(storageKey, normalized);
+    } catch {
+      // Theme changes still apply when storage is disabled or unavailable.
+    }
+
+    apply(normalized);
+  };
+
+  apply(storedPreference());
+  buttons.forEach((button) => {
+    button.addEventListener('click', () => persist(button.dataset.themePreference));
+  });
+  media.addEventListener('change', () => {
+    if (document.documentElement.dataset.themePreference === 'system') apply('system');
+  });
+  window.addEventListener('storage', (event) => {
+    if (event.key === storageKey) apply(event.newValue);
+  });
+</script>

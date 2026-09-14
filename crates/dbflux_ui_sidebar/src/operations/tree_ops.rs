@@ -351,7 +351,7 @@ impl Sidebar {
         Some(self.app_state.update(cx, |state, cx| {
             let task = state.start_task_for_target(
                 TaskKind::SchemaRefresh,
-                format!("Refreshing database: {}", database),
+                crate::labels::refreshing_database_task_label(database),
                 Some(task_target),
             );
             cx.emit(AppStateChanged);
@@ -428,7 +428,7 @@ impl Sidebar {
                     .insert(item_id.to_string(), root_expanded);
                 sidebar.expansion_overrides.extend(subtree_overrides);
                 sidebar.pending_toast = Some(PendingToast {
-                    message: format!("Failed to refresh database: {}", error),
+                    message: crate::labels::refresh_database_failed_label(&error),
                     is_error: true,
                 });
             }
@@ -474,7 +474,7 @@ impl Sidebar {
                     .insert(item_id.to_string(), root_expanded);
                 self.expansion_overrides.extend(subtree_overrides);
                 self.pending_toast = Some(PendingToast {
-                    message: format!("Failed to refresh database: {}", error),
+                    message: crate::labels::refresh_database_failed_label(&error),
                     is_error: true,
                 });
                 self.refresh_tree(cx);
@@ -493,7 +493,7 @@ impl Sidebar {
                 .insert(item_id.to_string(), root_expanded);
             self.expansion_overrides.extend(subtree_overrides);
             self.pending_toast = Some(PendingToast {
-                message: "Database refresh already pending".to_string(),
+                message: crate::labels::database_refresh_pending_label(),
                 is_error: true,
             });
             self.refresh_tree(cx);
@@ -570,7 +570,7 @@ impl Sidebar {
                     .insert(item_id.to_string(), root_expanded);
                 self.expansion_overrides.extend(subtree_overrides);
                 self.pending_toast = Some(PendingToast {
-                    message: format!("Failed to refresh database: {}", error),
+                    message: crate::labels::refresh_database_failed_label(&error),
                     is_error: true,
                 });
                 self.refresh_tree(cx);
@@ -589,7 +589,7 @@ impl Sidebar {
                 .insert(item_id.to_string(), root_expanded);
             self.expansion_overrides.extend(subtree_overrides);
             self.pending_toast = Some(PendingToast {
-                message: "Database refresh already pending".to_string(),
+                message: crate::labels::database_refresh_pending_label(),
                 is_error: true,
             });
             self.refresh_tree(cx);
@@ -682,7 +682,7 @@ impl Sidebar {
                 .insert(item_id.to_string(), root_expanded);
             self.expansion_overrides.extend(subtree_overrides);
             self.pending_toast = Some(PendingToast {
-                message: "Database refresh already pending".to_string(),
+                message: crate::labels::database_refresh_pending_label(),
                 is_error: true,
             });
             self.refresh_tree(cx);
@@ -834,7 +834,7 @@ impl Sidebar {
                 } else {
                     log::error!("Failed to load database schema: {}", e);
                     self.pending_toast = Some(PendingToast {
-                        message: format!("Failed to load schema: {}", e),
+                        message: crate::labels::load_schema_failed_label(&e),
                         is_error: true,
                     });
                 }
@@ -849,7 +849,7 @@ impl Sidebar {
                 state.finish_pending_operation(profile_id, Some(db_name));
             });
             self.pending_toast = Some(PendingToast {
-                message: "Too many background tasks running, please wait".to_string(),
+                message: crate::labels::background_task_limit_toast_label(),
                 is_error: true,
             });
             self.refresh_tree(cx);
@@ -858,8 +858,10 @@ impl Sidebar {
         }
 
         let (task_id, cancel_token) = self.app_state.update(cx, |state, cx| {
-            let result =
-                state.start_task(TaskKind::LoadSchema, format!("Loading schema: {}", db_name));
+            let result = state.start_task(
+                TaskKind::LoadSchema,
+                crate::labels::loading_database_schema_task_label(db_name),
+            );
             cx.emit(AppStateChanged);
             result
         });
@@ -902,7 +904,7 @@ impl Sidebar {
                         });
                         (
                             Some(PendingToast {
-                                message: format!("Failed to load schema: {}", e),
+                                message: crate::labels::load_schema_failed_label(e),
                                 is_error: true,
                             }),
                             true,
@@ -1004,7 +1006,7 @@ impl Sidebar {
                 state.finish_pending_operation(profile_id, Some(db_name));
             });
             self.pending_toast = Some(PendingToast {
-                message: "Too many background tasks running, please wait".to_string(),
+                message: crate::labels::background_task_limit_toast_label(),
                 is_error: true,
             });
             self.refresh_tree(cx);
@@ -1015,7 +1017,7 @@ impl Sidebar {
         let (task_id, cancel_token) = self.app_state.update(cx, |state, cx| {
             let result = state.start_task(
                 TaskKind::SwitchDatabase,
-                format!("Connecting to database: {}", db_name),
+                crate::labels::connecting_to_database_task_label(db_name),
             );
             cx.emit(AppStateChanged);
             result
@@ -1058,7 +1060,7 @@ impl Sidebar {
                             state.fail_task(task_id, e.clone());
                         });
                         Some(PendingToast {
-                            message: format!("Failed to connect to database: {}", e),
+                            message: crate::labels::connect_database_failed_label(e),
                             is_error: true,
                         })
                     }
@@ -1110,7 +1112,7 @@ impl Sidebar {
 
         if self.app_state.read(cx).is_background_task_limit_reached() {
             self.pending_toast = Some(PendingToast {
-                message: "Too many background tasks running, please wait".to_string(),
+                message: crate::labels::background_task_limit_toast_label(),
                 is_error: true,
             });
             self.refresh_tree(cx);
@@ -1123,7 +1125,7 @@ impl Sidebar {
             Ok(held_state) => held_state,
             Err(error) => {
                 self.pending_toast = Some(PendingToast {
-                    message: format!("Failed to refresh database: {}", error),
+                    message: crate::labels::refresh_database_failed_label(&error),
                     is_error: true,
                 });
                 self.refresh_tree(cx);
@@ -1176,7 +1178,7 @@ impl Sidebar {
 
         if self.app_state.read(cx).is_background_task_limit_reached() {
             self.pending_toast = Some(PendingToast {
-                message: "Too many background tasks running, please wait".to_string(),
+                message: crate::labels::background_task_limit_toast_label(),
                 is_error: true,
             });
             self.refresh_tree(cx);
@@ -1255,7 +1257,7 @@ impl Sidebar {
             }
 
             self.pending_toast = Some(PendingToast {
-                message: "Failed to prepare schema object refresh".to_string(),
+                message: crate::labels::prepare_schema_object_refresh_failed_label(),
                 is_error: true,
             });
             self.refresh_tree(cx);
@@ -1265,7 +1267,7 @@ impl Sidebar {
         let (task_id, cancel_token) = self.app_state.update(cx, |state, cx| {
             let task = state.start_task_for_target(
                 TaskKind::SchemaRefresh,
-                format!("Refreshing schema object: {}", parts.object_name),
+                crate::labels::refreshing_schema_object_task_label(&parts.object_name),
                 Some(refresh_target),
             );
             cx.emit(AppStateChanged);
@@ -1435,7 +1437,7 @@ impl Sidebar {
                             });
 
                             sidebar.pending_toast = Some(PendingToast {
-                                message: format!("Failed to refresh schema object: {}", error),
+                                message: crate::labels::refresh_schema_object_failed_label(&error),
                                 is_error: true,
                             });
                         }

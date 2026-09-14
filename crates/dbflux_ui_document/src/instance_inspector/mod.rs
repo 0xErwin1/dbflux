@@ -212,7 +212,9 @@ impl InspectorPanel {
         let conn = {
             let state = self.app_state.read(cx);
             let Some(connected) = state.connections().get(&profile_id) else {
-                self.last_error = Some("Connection not found".to_string());
+                self.last_error = Some(dbflux_i18n::t!(
+                    "document.instance_inspector.connection_not_found"
+                ));
                 self.state = DocumentState::Error;
                 cx.notify();
                 return;
@@ -220,7 +222,10 @@ impl InspectorPanel {
             match connected.resolve_connection_for_execution(None) {
                 Ok(c) => c,
                 Err(e) => {
-                    self.last_error = Some(format!("Connection error: {:?}", e));
+                    self.last_error = Some(dbflux_i18n::t!(
+                        "document.instance_inspector.connection_error",
+                        detail = format!("{e:?}")
+                    ));
                     self.state = DocumentState::Error;
                     cx.notify();
                     return;
@@ -231,7 +236,10 @@ impl InspectorPanel {
         let request = build_inspector_request(&self.metric_id);
         let (task_id, cancel_token) = self.runner.start_primary(
             dbflux_core::TaskKind::Query,
-            format!("Inspector: {}", self.metric_id),
+            dbflux_i18n::t!(
+                "document.instance_inspector.task_label",
+                metric_id = self.metric_id
+            ),
             cx,
         );
 
@@ -403,7 +411,7 @@ impl InspectorPanel {
             let Some(conn) = connection else {
                 let uf = UserFacingError::new(
                     ErrorKind::Driver,
-                    "Action cancelled — connection is no longer available. Reconnect and try again.",
+                    dbflux_i18n::t!("document.instance_inspector.action_unavailable"),
                 );
                 report_error_async(uf, cx);
                 return;
@@ -456,11 +464,10 @@ impl InspectorPanel {
             .pending_kill_confirm
             .as_ref()
             .map(|c| c.action_label.clone())
-            .unwrap_or_else(|| "Kill".to_string());
+            .unwrap_or_else(|| dbflux_i18n::t!("document.instance_inspector.kill_default_label"));
 
         let title = format!("{}?", action_label);
-        let description =
-            "This action will terminate the selected operation. It cannot be undone.".to_string();
+        let description = dbflux_i18n::t!("document.instance_inspector.kill_confirm_body");
 
         div()
             .id("kill-confirm-overlay")
@@ -517,7 +524,9 @@ impl InspectorPanel {
                                     .child(
                                         Icon::new(AppIcon::X).small().color(theme.muted_foreground),
                                     )
-                                    .child(Text::caption("Cancel")),
+                                    .child(Text::caption(dbflux_i18n::t!(
+                                        "document.instance_inspector.cancel"
+                                    ))),
                             )
                             .child(
                                 div()
@@ -537,7 +546,12 @@ impl InspectorPanel {
                                     .child(
                                         Icon::new(AppIcon::Delete).small().color(theme.background),
                                     )
-                                    .child(Text::caption("Confirm").color(theme.background)),
+                                    .child(
+                                        Text::caption(dbflux_i18n::t!(
+                                            "document.instance_inspector.confirm"
+                                        ))
+                                        .color(theme.background),
+                                    ),
                             ),
                     ),
             )
@@ -629,11 +643,11 @@ impl Render for InspectorPanel {
 
         // No result yet — show a loading or error placeholder.
         let msg = if let Some(err) = &self.last_error {
-            format!("Error: {err}")
+            dbflux_i18n::t!("document.instance_inspector.error_prefix", error = err)
         } else if self.state == DocumentState::Loading {
-            "Loading…".to_string()
+            dbflux_i18n::t!("document.instance_inspector.loading")
         } else {
-            "No data. Connect and click Refresh.".to_string()
+            dbflux_i18n::t!("document.instance_inspector.empty")
         };
 
         div()
@@ -685,8 +699,10 @@ pub(crate) fn kill_error_to_user_facing(
     metric_id: &str,
     err: &dbflux_core::DbError,
 ) -> UserFacingError {
-    UserFacingError::new(ErrorKind::Driver, err.to_string()).with_cause(format!(
-        "Action '{action_label}' on inspector '{metric_id}' failed"
+    UserFacingError::new(ErrorKind::Driver, err.to_string()).with_cause(dbflux_i18n::t!(
+        "document.instance_inspector.kill_failed_cause",
+        action_label = action_label,
+        metric_id = metric_id
     ))
 }
 

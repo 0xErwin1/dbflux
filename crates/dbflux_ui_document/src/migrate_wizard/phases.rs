@@ -27,14 +27,21 @@ pub enum WizardPhase {
 }
 
 impl WizardPhase {
-    /// The rail's display label for this phase.
-    pub fn label(self) -> &'static str {
+    /// The rail's display label for this phase, resolved through the
+    /// translation catalog. Exhaustive by construction so a new phase fails
+    /// this crate's build until its `document.migrate_wizard.rail.*` entry is
+    /// added here.
+    pub fn label(self) -> String {
         match self {
-            WizardPhase::SourceTarget => "Source & Target",
-            WizardPhase::TablesMapping => "Tables Mapping",
-            WizardPhase::Options => "Options",
-            WizardPhase::Confirm => "Confirm",
-            WizardPhase::Run => "Run",
+            WizardPhase::SourceTarget => {
+                dbflux_i18n::t!("document.migrate_wizard.rail.source_target")
+            }
+            WizardPhase::TablesMapping => {
+                dbflux_i18n::t!("document.migrate_wizard.rail.tables_mapping")
+            }
+            WizardPhase::Options => dbflux_i18n::t!("document.migrate_wizard.rail.options"),
+            WizardPhase::Confirm => dbflux_i18n::t!("document.migrate_wizard.rail.confirm"),
+            WizardPhase::Run => dbflux_i18n::t!("document.migrate_wizard.rail.run"),
         }
     }
 }
@@ -576,11 +583,70 @@ mod tests {
 
     #[test]
     fn phase_labels_cover_every_rail_entry() {
-        assert_eq!(WizardPhase::SourceTarget.label(), "Source & Target");
-        assert_eq!(WizardPhase::TablesMapping.label(), "Tables Mapping");
-        assert_eq!(WizardPhase::Options.label(), "Options");
-        assert_eq!(WizardPhase::Confirm.label(), "Confirm");
-        assert_eq!(WizardPhase::Run.label(), "Run");
+        assert_eq!(
+            WizardPhase::SourceTarget.label(),
+            dbflux_i18n::t!("document.migrate_wizard.rail.source_target")
+        );
+        assert_eq!(
+            WizardPhase::TablesMapping.label(),
+            dbflux_i18n::t!("document.migrate_wizard.rail.tables_mapping")
+        );
+        assert_eq!(
+            WizardPhase::Options.label(),
+            dbflux_i18n::t!("document.migrate_wizard.rail.options")
+        );
+        assert_eq!(
+            WizardPhase::Confirm.label(),
+            dbflux_i18n::t!("document.migrate_wizard.rail.confirm")
+        );
+        assert_eq!(
+            WizardPhase::Run.label(),
+            dbflux_i18n::t!("document.migrate_wizard.rail.run")
+        );
+    }
+
+    /// Every `document.migrate_wizard.rail.*` key resolves to a non-empty,
+    /// non-fallback value in both locales — exhaustive over every
+    /// `WizardPhase` variant (no wildcard arm in `label()`).
+    #[test]
+    fn phase_labels_resolve_in_both_locales() {
+        for phase in RAIL_PHASES {
+            for locale in ["en", "es"] {
+                let key = match phase {
+                    WizardPhase::SourceTarget => "document.migrate_wizard.rail.source_target",
+                    WizardPhase::TablesMapping => "document.migrate_wizard.rail.tables_mapping",
+                    WizardPhase::Options => "document.migrate_wizard.rail.options",
+                    WizardPhase::Confirm => "document.migrate_wizard.rail.confirm",
+                    WizardPhase::Run => "document.migrate_wizard.rail.run",
+                };
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+    }
+
+    /// Every rail phase label diverges between locales.
+    #[test]
+    fn phase_labels_differ_between_locales() {
+        for phase in RAIL_PHASES {
+            let key = match phase {
+                WizardPhase::SourceTarget => "document.migrate_wizard.rail.source_target",
+                WizardPhase::TablesMapping => "document.migrate_wizard.rail.tables_mapping",
+                WizardPhase::Options => "document.migrate_wizard.rail.options",
+                WizardPhase::Confirm => "document.migrate_wizard.rail.confirm",
+                WizardPhase::Run => "document.migrate_wizard.rail.run",
+            };
+            let en = dbflux_i18n::t!(key, locale = "en");
+            let es = dbflux_i18n::t!(key, locale = "es");
+            assert_ne!(en, es, "{key} must differ between en and es");
+        }
     }
 
     #[test]

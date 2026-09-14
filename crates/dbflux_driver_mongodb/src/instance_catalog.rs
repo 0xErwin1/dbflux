@@ -6,7 +6,7 @@ use bson::{Bson, Document};
 use dbflux_core::{
     ColumnKind, ColumnMeta, DbError, DefaultDashboardPanel, DefaultInstanceDashboard,
     DriverCapabilities, InstanceCatalog, InstanceInspectorDef, InstanceMetricDef,
-    InstanceMetricUnit, QueryResult, QueryResultShape, Row, Value,
+    InstanceMetricUnit, QueryResult, QueryResultShape, Row, Value, WritePrivilege,
 };
 use mongodb::sync::Client;
 
@@ -292,6 +292,38 @@ impl MongoInstanceCatalog {
         has_privilege_or_role(&doc, &["killop"], &["clusterManager", "root"])
     }
 
+    /// Best-effort probe of whether the current connection can perform
+    /// mutations against the server.
+    ///
+    /// Runs `connectionStatus` with `showPrivileges: true` against the admin
+    /// database to classify the authenticated user's privileges and roles,
+    /// then runs `hello` to check whether the target node is a writable
+    /// primary. A non-writable node (e.g. a directly-connected secondary)
+    /// always forces `ReadOnly`, overriding the role-based verdict, because
+    /// the server rejects writes there regardless of granted privileges.
+    /// Both commands are side-effect free. Any command error falls back to
+    /// `Unknown` (for `connectionStatus`) or is skipped and leaves the role
+    /// verdict unchanged (for `hello`).
+    pub(crate) fn probe_write_privilege(client: &Client) -> WritePrivilege {
+        let db = get_admin_db(client);
+
+        let role_verdict = match db
+            .run_command(bson::doc! { "connectionStatus": 1, "showPrivileges": true })
+            .run()
+        {
+            Ok(doc) => classify_write_privilege(&doc),
+            Err(_) => return WritePrivilege::Unknown,
+        };
+
+        if let Ok(hello_doc) = db.run_command(bson::doc! { "hello": 1 }).run()
+            && is_writable_primary(&hello_doc) == Some(false)
+        {
+            return WritePrivilege::ReadOnly;
+        }
+
+        role_verdict
+    }
+
     /// Extracts a numeric value from a BSON document at a dotted path.
     ///
     /// Traverses nested documents using `.`-separated path segments.
@@ -378,6 +410,120 @@ fn has_privilege_or_role(doc: &Document, actions: &[&str], roles: &[&str]) -> bo
     }
 
     false
+}
+
+/// Privilege actions that grant the ability to mutate data or the schema.
+const WRITE_PRIVILEGE_ACTIONS: &[&str] = &[
+    "insert",
+    "update",
+    "remove",
+    "findAndModify",
+    "createCollection",
+    "createIndex",
+    "dropCollection",
+    "dropIndex",
+    "dropDatabase",
+];
+
+/// Built-in role names that always imply write access, regardless of database.
+const WRITE_PRIVILEGE_ROLES: &[&str] = &["root", "clusterAdmin", "dbOwner", "restore"];
+
+/// Role name prefixes whose entire family implies write access
+/// (e.g. `readWrite`, `readWriteAnyDatabase`, `dbAdmin`, `dbAdminAnyDatabase`).
+const WRITE_PRIVILEGE_ROLE_PREFIXES: &[&str] = &["readWrite", "dbAdmin"];
+
+/// Privilege actions and roles that only ever imply read access. Used to
+/// distinguish a confirmed read-only user from one whose access could not be
+/// classified at all.
+const READ_PRIVILEGE_ACTIONS: &[&str] = &[
+    "find",
+    "listCollections",
+    "listIndexes",
+    "listDatabases",
+    "serverStatus",
+    "collStats",
+    "dbStats",
+];
+const READ_PRIVILEGE_ROLES: &[&str] = &["read", "readAnyDatabase", "clusterMonitor", "backup"];
+
+fn role_name_implies_write(role_name: &str) -> bool {
+    WRITE_PRIVILEGE_ROLES.contains(&role_name)
+        || WRITE_PRIVILEGE_ROLE_PREFIXES
+            .iter()
+            .any(|prefix| role_name.starts_with(prefix))
+}
+
+/// Classifies a `connectionStatus` (`showPrivileges: true`) response document
+/// into a [`WritePrivilege`] verdict.
+///
+/// Rules, checked in order:
+/// - No `authInfo` section at all → `Unknown` (malformed/unexpected response).
+/// - `authenticatedUsers` is present and empty → `Writable`: MongoDB has no
+///   auth enabled, which grants full unrestricted access.
+/// - Any privilege with a write action, or any role in [`WRITE_PRIVILEGE_ROLES`]
+///   / matching a [`WRITE_PRIVILEGE_ROLE_PREFIXES`] prefix → `Writable`.
+/// - Any privilege with a read-only action, or any role in
+///   [`READ_PRIVILEGE_ROLES`], with no write match above → `ReadOnly`.
+/// - Anything else (custom roles with no listed privileges, empty privilege
+///   and role lists on an authenticated user) → `Unknown`.
+fn classify_write_privilege(doc: &Document) -> WritePrivilege {
+    let auth_info = match doc.get("authInfo").and_then(|v| v.as_document()) {
+        Some(d) => d,
+        None => return WritePrivilege::Unknown,
+    };
+
+    if let Some(Bson::Array(users)) = auth_info.get("authenticatedUsers")
+        && users.is_empty()
+    {
+        return WritePrivilege::Writable;
+    }
+
+    let privileges = match auth_info.get("authenticatedUserPrivileges") {
+        Some(Bson::Array(privs)) => privs.as_slice(),
+        _ => &[],
+    };
+    let roles = match auth_info.get("authenticatedUserRoles") {
+        Some(Bson::Array(roles)) => roles.as_slice(),
+        _ => &[],
+    };
+
+    let role_names: Vec<&str> = roles
+        .iter()
+        .filter_map(|entry| entry.as_document())
+        .filter_map(|d| d.get("role").and_then(|v| v.as_str()))
+        .collect();
+
+    let has_write_privilege = privileges
+        .iter()
+        .any(|entry| bson_action_matches(entry, WRITE_PRIVILEGE_ACTIONS));
+    let has_write_role = role_names.iter().any(|r| role_name_implies_write(r));
+
+    if has_write_privilege || has_write_role {
+        return WritePrivilege::Writable;
+    }
+
+    let has_read_privilege = privileges
+        .iter()
+        .any(|entry| bson_action_matches(entry, READ_PRIVILEGE_ACTIONS));
+    let has_read_role = role_names.iter().any(|r| READ_PRIVILEGE_ROLES.contains(r));
+
+    if has_read_privilege || has_read_role {
+        return WritePrivilege::ReadOnly;
+    }
+
+    WritePrivilege::Unknown
+}
+
+/// Reads the writable-primary flag from a `hello` (or legacy `isMaster`)
+/// response document.
+///
+/// Returns `Some(false)` when the target node is confirmed not to be a
+/// writable primary (e.g. a directly-connected secondary), `Some(true)` when
+/// it is, and `None` when neither field is present.
+fn is_writable_primary(doc: &Document) -> Option<bool> {
+    doc.get("writablePrimary")
+        .and_then(|v| v.as_bool())
+        .or_else(|| doc.get("ismaster").and_then(|v| v.as_bool()))
 }
 
 fn now_epoch_ms() -> i64 {
@@ -912,5 +1058,109 @@ mod tests {
                 panel.metric_id
             );
         }
+    }
+
+    fn privilege_doc(actions: &[&str]) -> Document {
+        bson::doc! {
+            "actions": actions.iter().map(|a| Bson::String((*a).to_string())).collect::<Vec<_>>(),
+        }
+    }
+
+    fn role_doc(role: &str) -> Document {
+        bson::doc! { "role": role, "db": "admin" }
+    }
+
+    fn connection_status_doc(
+        authenticated_users: Option<Vec<Document>>,
+        privileges: Vec<Document>,
+        roles: Vec<&str>,
+    ) -> Document {
+        let mut auth_info = Document::new();
+        if let Some(users) = authenticated_users {
+            auth_info.insert("authenticatedUsers", users);
+        }
+        auth_info.insert("authenticatedUserPrivileges", privileges);
+        auth_info.insert(
+            "authenticatedUserRoles",
+            roles.into_iter().map(role_doc).collect::<Vec<_>>(),
+        );
+
+        bson::doc! { "authInfo": auth_info }
+    }
+
+    #[test]
+    fn classify_write_privilege_detects_writeful_privilege() {
+        let doc = connection_status_doc(
+            Some(vec![bson::doc! { "user": "app", "db": "app" }]),
+            vec![privilege_doc(&["find", "insert"])],
+            vec![],
+        );
+
+        assert_eq!(classify_write_privilege(&doc), WritePrivilege::Writable);
+    }
+
+    #[test]
+    fn classify_write_privilege_detects_write_implying_role() {
+        let doc = connection_status_doc(
+            Some(vec![bson::doc! { "user": "app", "db": "app" }]),
+            vec![],
+            vec!["readWrite"],
+        );
+
+        assert_eq!(classify_write_privilege(&doc), WritePrivilege::Writable);
+    }
+
+    #[test]
+    fn classify_write_privilege_treats_read_only_roles_as_read_only() {
+        let doc = connection_status_doc(
+            Some(vec![bson::doc! { "user": "readonly", "db": "app" }]),
+            vec![privilege_doc(&["find"])],
+            vec!["read", "clusterMonitor"],
+        );
+
+        assert_eq!(classify_write_privilege(&doc), WritePrivilege::ReadOnly);
+    }
+
+    #[test]
+    fn classify_write_privilege_treats_disabled_auth_as_writable() {
+        let doc = connection_status_doc(Some(vec![]), vec![], vec![]);
+
+        assert_eq!(classify_write_privilege(&doc), WritePrivilege::Writable);
+    }
+
+    #[test]
+    fn classify_write_privilege_is_unknown_for_unresolvable_custom_role() {
+        let doc = connection_status_doc(
+            Some(vec![bson::doc! { "user": "app", "db": "app" }]),
+            vec![],
+            vec!["myCustomRole"],
+        );
+
+        assert_eq!(classify_write_privilege(&doc), WritePrivilege::Unknown);
+    }
+
+    #[test]
+    fn classify_write_privilege_is_unknown_for_malformed_document() {
+        let doc = bson::doc! { "ok": 1.0 };
+
+        assert_eq!(classify_write_privilege(&doc), WritePrivilege::Unknown);
+    }
+
+    #[test]
+    fn is_writable_primary_reads_writable_primary_field() {
+        let doc = bson::doc! { "writablePrimary": false, "ismaster": true };
+        assert_eq!(is_writable_primary(&doc), Some(false));
+    }
+
+    #[test]
+    fn is_writable_primary_falls_back_to_legacy_ismaster_field() {
+        let doc = bson::doc! { "ismaster": false };
+        assert_eq!(is_writable_primary(&doc), Some(false));
+    }
+
+    #[test]
+    fn is_writable_primary_is_none_when_field_missing() {
+        let doc = bson::doc! { "ok": 1.0 };
+        assert_eq!(is_writable_primary(&doc), None);
     }
 }

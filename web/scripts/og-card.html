@@ -1,0 +1,163 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>DBFlux social card</title>
+<!--
+  Source for public/brand/og-card.jpg — the image every link preview of this
+  site shows. It is HTML rather than a drawing so it uses the site's own fonts
+  and tokens: a card hand-made in an image editor drifts from the brand the
+  first time a colour changes here.
+
+  Regenerate after editing it, with chromium and imagemagick on PATH:
+
+    chromium --headless --window-size=1200,630 --allow-file-access-from-files --screenshot=/tmp/og-card.png "file://$PWD/scripts/og-card.html"
+    magick /tmp/og-card.png -quality 86 -sampling-factor 4:4:4 -strip public/brand/og-card.jpg
+-->
+<style>
+  @font-face {
+    font-family: 'JetBrains Mono';
+    src: url('../public/fonts/jetbrains-mono-latin-wght-normal.woff2') format('woff2');
+    font-weight: 100 800;
+  }
+  @font-face {
+    font-family: 'IBM Plex Sans';
+    src: url('../public/fonts/ibm-plex-sans-latin-400-normal.woff2') format('woff2');
+    font-weight: 400;
+  }
+  @font-face {
+    font-family: 'IBM Plex Sans';
+    src: url('../public/fonts/ibm-plex-sans-latin-600-normal.woff2') format('woff2');
+    font-weight: 600;
+  }
+  * {
+    margin: 0;
+    box-sizing: border-box;
+  }
+  body {
+    width: 1200px;
+    height: 630px;
+    background: #0a0e14;
+    color: #b3b1ad;
+    font-family: 'IBM Plex Sans', sans-serif;
+    overflow: hidden;
+    position: relative;
+  }
+  .copy {
+    position: relative;
+    width: 700px;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    padding: 72px 0 72px 76px;
+  }
+  /* The window bleeds off the right edge: a card is a crop of the product, not
+     a diagram of it, and a whole screenshot at this size is unreadable anyway. */
+  .shot {
+    position: absolute;
+    top: 104px;
+    left: 664px;
+    width: 940px;
+    border: 1px solid #1f2430;
+    border-top-left-radius: 14px;
+    border-bottom-left-radius: 14px;
+    box-shadow: -30px 40px 90px rgba(0, 0, 0, 0.55);
+  }
+  /* The accent sweep the landing hero uses, so the card reads as the same surface. */
+  body::before {
+    content: '';
+    position: absolute;
+    inset: -40% 45% 30% -10%;
+    background: radial-gradient(closest-side, rgba(255, 180, 84, 0.16), transparent);
+  }
+  .row {
+    display: flex;
+    align-items: center;
+    gap: 28px;
+    position: relative;
+  }
+  .mark {
+    width: 112px;
+    height: 112px;
+  }
+  .name {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 76px;
+    font-weight: 700;
+    letter-spacing: -2px;
+    color: #ffb454;
+  }
+  h1 {
+    position: relative;
+    font-size: 54px;
+    line-height: 1.1;
+    font-weight: 600;
+    color: #e6e1cf;
+    letter-spacing: -1.5px;
+    max-width: 14ch;
+  }
+  .foot {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 24px;
+    color: #828d9d;
+  }
+  .dot {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: #5c6773;
+  }
+</style>
+<body>
+  <img class="shot" src="../public/img/app-hero.jpg" alt="" />
+  <div class="copy">
+    <div class="row">
+      <svg class="mark" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+        <defs>
+          <linearGradient id="bolt" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#FFC97A" />
+            <stop offset="100%" stop-color="#E69642" />
+          </linearGradient>
+        </defs>
+        <rect x="0" y="0" width="128" height="128" rx="26" ry="26" fill="#0A0E14" />
+        <circle cx="64" cy="64" r="42" fill="none" stroke="#FFB454" stroke-width="2.5" />
+        <g
+          stroke="#FFB454"
+          stroke-width="2.5"
+          fill="none"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <ellipse cx="64" cy="40" rx="20" ry="5.5" />
+          <path d="M44 40 V58" />
+          <path d="M84 40 V58" />
+          <path d="M44 58 a20 5.5 0 0 0 40 0" />
+          <path d="M44 58 V76" />
+          <path d="M84 58 V76" />
+          <path d="M44 76 a20 5.5 0 0 0 40 0" />
+          <path d="M44 76 V92" />
+          <path d="M84 76 V92" />
+          <path d="M44 92 a20 5.5 0 0 0 40 0" />
+        </g>
+        <path
+          d="M74 28 L48 66 L60 66 L54 100 L80 62 L68 62 Z"
+          fill="url(#bolt)"
+          stroke="#0A0E14"
+          stroke-width="2.5"
+          stroke-linejoin="round"
+        />
+      </svg>
+      <div class="name">dbflux</div>
+    </div>
+
+    <h1>Every database you run, in one keyboard-driven window.</h1>
+
+    <div class="foot">
+      <span>Rust</span><i class="dot"></i><span>GPUI</span><i class="dot"></i
+      ><span>dbflux.dev</span>
+    </div>
+  </div>
+</body>

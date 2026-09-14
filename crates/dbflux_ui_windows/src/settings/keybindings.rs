@@ -46,7 +46,7 @@ impl KeybindingsSection {
                     .iter()
                     .filter(|(chord, cmd, _)| {
                         let chord_str = chord.to_string().to_lowercase();
-                        let cmd_name = cmd.display_name().to_lowercase();
+                        let cmd_name = crate::labels::keybinding_command_name(cmd).to_lowercase();
                         chord_str.contains(&filter_text) || cmd_name.contains(&filter_text)
                     })
                     .cloned()
@@ -83,7 +83,7 @@ impl KeybindingsSection {
                     chord_groups
                         .entry(chord.clone())
                         .or_default()
-                        .push(cmd.display_name().to_string());
+                        .push(crate::labels::keybinding_command_name(cmd));
                 }
 
                 let mut emitted_conflict_for: std::collections::HashSet<KeyChord> =
@@ -102,7 +102,7 @@ impl KeybindingsSection {
                         && group.len() > 1
                         && !emitted_conflict_for.contains(chord)
                     {
-                        let current_name = cmd.display_name().to_string();
+                        let current_name = crate::labels::keybinding_command_name(cmd);
                         let others: Vec<String> = group
                             .iter()
                             .filter(|name| **name != current_name)
@@ -117,7 +117,7 @@ impl KeybindingsSection {
 
                     flat_items.push(KeybindingsListItem::Binding {
                         chord: chord.clone(),
-                        cmd_name: cmd.display_name().to_string(),
+                        cmd_name: crate::labels::keybinding_command_name(cmd),
                         is_inherited,
                         is_selected: is_binding_selected,
                         ctx_idx: idx,
@@ -131,6 +131,12 @@ impl KeybindingsSection {
             self.keybindings_scroll_handle.scroll_to_item(scroll_idx);
         }
 
+        // Hoisted once per render: shared across every row in the list below,
+        // rather than re-resolving the same static translation per row.
+        let inherited_label = dbflux_i18n::t!("settings.keybindings.inherited");
+        let conflict_body = dbflux_i18n::t!("settings.keybindings.conflict.body");
+        let conflict_unknown_other = dbflux_i18n::t!("settings.keybindings.conflict.unknown_other");
+
         div()
             .flex_1()
             .min_h_0()
@@ -138,8 +144,8 @@ impl KeybindingsSection {
             .flex_col()
             .overflow_hidden()
             .child(dbflux_components::composites::section_header(
-                "Keyboard Shortcuts",
-                "View all keyboard shortcuts by context",
+                dbflux_i18n::t!("settings.keybindings.title"),
+                dbflux_i18n::t!("settings.keybindings.subtitle"),
                 cx,
             ))
             .child(
@@ -181,8 +187,10 @@ impl KeybindingsSection {
                                 binding_count,
                             } => {
                                 let has_parent = context.parent().is_some();
-                                let parent_name =
-                                    context.parent().map(|p| p.display_name()).unwrap_or("");
+                                let parent_name = context
+                                    .parent()
+                                    .map(|p| crate::labels::keybinding_context_name(&p))
+                                    .unwrap_or_default();
 
                                 div()
                                     .id(SharedString::from(format!(
@@ -238,18 +246,23 @@ impl KeybindingsSection {
                                             .flex()
                                             .items_center()
                                             .gap_2()
-                                            .child(FieldLabel::new(context.display_name()))
+                                            .child(FieldLabel::new(
+                                                crate::labels::keybinding_context_name(&context),
+                                            ))
                                             .child(
-                                                Body::new(format!("({} bindings)", binding_count))
-                                                    .color(muted_foreground),
+                                                Body::new(
+                                                    crate::labels::keybindings_binding_count(
+                                                        binding_count,
+                                                    ),
+                                                )
+                                                .color(muted_foreground),
                                             ),
                                     )
                                     // Inherits info
                                     .when(has_parent, |d| {
-                                        d.child(MonoCaption::new(format!(
-                                            "inherits from {}",
-                                            parent_name
-                                        )))
+                                        d.child(MonoCaption::new(
+                                            crate::labels::keybindings_inherits_from(&parent_name),
+                                        ))
                                     })
                                     .into_any_element()
                             }
@@ -272,6 +285,7 @@ impl KeybindingsSection {
                                     muted_foreground,
                                     secondary,
                                     border,
+                                    &inherited_label,
                                     cx,
                                 )
                                 .into_any_element(),
@@ -279,8 +293,13 @@ impl KeybindingsSection {
                             KeybindingsListItem::ConflictWarning {
                                 chord,
                                 other_cmd_names,
-                            } => Self::render_conflict_warning(&chord, &other_cmd_names)
-                                .into_any_element(),
+                            } => Self::render_conflict_warning(
+                                &chord,
+                                &other_cmd_names,
+                                &conflict_body,
+                                &conflict_unknown_other,
+                            )
+                            .into_any_element(),
                         }
                     })),
             )
@@ -298,6 +317,7 @@ impl KeybindingsSection {
         muted_foreground: Hsla,
         secondary: Hsla,
         border: Hsla,
+        inherited_label: &str,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         div()
@@ -343,7 +363,7 @@ impl KeybindingsSection {
                         .py(px(2.0))
                         .rounded(Radii::SM)
                         .bg(secondary)
-                        .child(MonoCaption::new("inherited")),
+                        .child(MonoCaption::new(inherited_label.to_string())),
                 )
             })
     }
@@ -368,9 +388,14 @@ impl KeybindingsSection {
         parts
     }
 
-    fn render_conflict_warning(chord: &KeyChord, others: &[String]) -> impl IntoElement {
+    fn render_conflict_warning(
+        chord: &KeyChord,
+        others: &[String],
+        conflict_body: &str,
+        conflict_unknown_other: &str,
+    ) -> impl IntoElement {
         let other_list = if others.is_empty() {
-            "another binding".to_string()
+            conflict_unknown_other.to_string()
         } else {
             others.join(", ")
         };
@@ -378,9 +403,9 @@ impl KeybindingsSection {
         div().ml(px(28.0)).py_1().child(
             BannerBlock::new(
                 BannerVariant::Warning,
-                format!("Conflict: {} also bound to {}", chord, other_list),
+                crate::labels::keybindings_conflict_title(&chord.to_string(), &other_list),
             )
-            .with_body("Two or more commands share this chord in this context."),
+            .with_body(conflict_body.to_string()),
         )
     }
 
@@ -431,7 +456,8 @@ impl KeybindingsSection {
             bindings
                 .into_iter()
                 .filter(|(chord, cmd, _)| {
-                    Self::binding_matches_filter(chord, cmd.display_name(), filter)
+                    let cmd_name = crate::labels::keybinding_command_name(cmd);
+                    Self::binding_matches_filter(chord, &cmd_name, filter)
                 })
                 .collect()
         }
@@ -592,5 +618,77 @@ impl KeybindingsSection {
             }
         }
         flat_idx
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::labels::{
+        keybindings_binding_count, keybindings_conflict_title, keybindings_inherits_from,
+    };
+
+    const KEYBINDINGS_CATALOG_KEYS: &[&str] = &[
+        "settings.keybindings.title",
+        "settings.keybindings.subtitle",
+        "settings.keybindings.filter_placeholder",
+        "settings.keybindings.binding_count.one",
+        "settings.keybindings.binding_count.many",
+        "settings.keybindings.inherits_from",
+        "settings.keybindings.inherited",
+        "settings.keybindings.conflict.title",
+        "settings.keybindings.conflict.body",
+        "settings.keybindings.conflict.unknown_other",
+    ];
+
+    #[test]
+    fn settings_keybindings_keys_resolve_in_both_locales() {
+        for locale in ["en", "es"] {
+            for key in KEYBINDINGS_CATALOG_KEYS {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(
+                    !value.is_empty(),
+                    "key {key} resolved empty for locale {locale}"
+                );
+                assert_ne!(value, *key, "key {key} did not resolve for locale {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "key {key} fell back to the raw locale-qualified form for locale {locale}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn settings_keybindings_title_differs_between_locales() {
+        let english = dbflux_i18n::t!("settings.keybindings.title", locale = "en");
+        let spanish = dbflux_i18n::t!("settings.keybindings.title", locale = "es");
+
+        assert_eq!(english, "Keyboard Shortcuts");
+        assert_eq!(spanish, "Atajos de teclado");
+        assert_ne!(english, spanish);
+    }
+
+    #[test]
+    fn keybindings_binding_count_uses_singular_and_plural_forms() {
+        assert!(keybindings_binding_count(1).contains('1'));
+        assert!(keybindings_binding_count(3).contains('3'));
+        assert_ne!(keybindings_binding_count(1), keybindings_binding_count(3));
+    }
+
+    #[test]
+    fn keybindings_inherits_from_embeds_parent_context_name() {
+        let label = keybindings_inherits_from("Global");
+
+        assert!(label.contains("Global"));
+    }
+
+    #[test]
+    fn keybindings_conflict_title_embeds_chord_and_other_commands() {
+        let title = keybindings_conflict_title("ctrl-k", "Run Query");
+
+        assert!(title.contains("ctrl-k"));
+        assert!(title.contains("Run Query"));
     }
 }

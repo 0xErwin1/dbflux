@@ -49,15 +49,15 @@ impl NewKeyType {
         ]
     }
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            Self::String => "String",
-            Self::Hash => "Hash",
-            Self::List => "List",
-            Self::Set => "Set",
-            Self::SortedSet => "Sorted Set",
-            Self::Json => "JSON",
-            Self::Stream => "Stream",
+            Self::String => dbflux_i18n::t!("document.key_value.new_key.type.string"),
+            Self::Hash => dbflux_i18n::t!("document.key_value.new_key.type.hash"),
+            Self::List => dbflux_i18n::t!("document.key_value.new_key.type.list"),
+            Self::Set => dbflux_i18n::t!("document.key_value.new_key.type.set"),
+            Self::SortedSet => dbflux_i18n::t!("document.key_value.new_key.type.sorted_set"),
+            Self::Json => dbflux_i18n::t!("document.key_value.new_key.type.json"),
+            Self::Stream => dbflux_i18n::t!("document.key_value.new_key.type.stream"),
         }
     }
 }
@@ -153,12 +153,26 @@ impl NewKeyModal {
             Dropdown::new("new-key-type")
                 .items(items)
                 .selected_index(Some(0))
-                .placeholder("Select type")
+                .placeholder(dbflux_i18n::t!(
+                    "document.key_value.new_key.key_type.placeholder"
+                ))
         });
 
-        let key_name_input = cx.new(|cx| InputState::new(window, cx).placeholder("Enter Key Name"));
-        let ttl_input = cx.new(|cx| InputState::new(window, cx).placeholder("No limit"));
-        let value_input = cx.new(|cx| InputState::new(window, cx).placeholder("Enter Value"));
+        let key_name_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(dbflux_i18n::t!(
+                "document.key_value.new_key.key_name.placeholder"
+            ))
+        });
+        let ttl_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(dbflux_i18n::t!(
+                "document.key_value.new_key.ttl.placeholder"
+            ))
+        });
+        let value_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(dbflux_i18n::t!(
+                "document.key_value.new_key.value.placeholder"
+            ))
+        });
 
         let mut subscriptions = Vec::new();
 
@@ -291,14 +305,22 @@ impl NewKeyModal {
 
     fn add_value_row(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let field_placeholder = match self.selected_type {
-            NewKeyType::Hash | NewKeyType::Stream => "Enter Field",
-            NewKeyType::SortedSet => "Enter Member",
-            _ => "Enter Member",
+            NewKeyType::Hash | NewKeyType::Stream => {
+                dbflux_i18n::t!("document.key_value.new_key.field_placeholder")
+            }
+            NewKeyType::SortedSet => {
+                dbflux_i18n::t!("document.key_value.new_key.member_placeholder")
+            }
+            _ => dbflux_i18n::t!("document.key_value.new_key.member_placeholder"),
         };
         let value_placeholder = match self.selected_type {
-            NewKeyType::Hash | NewKeyType::Stream => "Enter Value",
-            NewKeyType::SortedSet => "Enter Score",
-            _ => "Enter Value",
+            NewKeyType::Hash | NewKeyType::Stream => {
+                dbflux_i18n::t!("document.key_value.new_key.value.placeholder")
+            }
+            NewKeyType::SortedSet => {
+                dbflux_i18n::t!("document.key_value.new_key.score_placeholder")
+            }
+            _ => dbflux_i18n::t!("document.key_value.new_key.value.placeholder"),
         };
 
         let field_input = cx.new(|cx| InputState::new(window, cx).placeholder(field_placeholder));
@@ -352,7 +374,9 @@ impl NewKeyModal {
     fn submit(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         let key_name = self.key_name_input.read(cx).value().trim().to_string();
         if key_name.is_empty() {
-            self.error_message = Some("Key name is required".to_string());
+            self.error_message = Some(dbflux_i18n::t!(
+                "document.key_value.new_key.error.key_name_required"
+            ));
             cx.notify();
             return;
         }
@@ -364,7 +388,9 @@ impl NewKeyModal {
             match ttl_text.parse::<u64>() {
                 Ok(v) => Some(v),
                 Err(_) => {
-                    self.error_message = Some("TTL must be a positive integer".to_string());
+                    self.error_message = Some(dbflux_i18n::t!(
+                        "document.key_value.new_key.error.ttl_invalid"
+                    ));
                     cx.notify();
                     return;
                 }
@@ -431,8 +457,9 @@ impl NewKeyModal {
                     .collect();
 
                 if fields.is_empty() {
-                    self.error_message =
-                        Some("Stream requires at least one field/value pair".to_string());
+                    self.error_message = Some(dbflux_i18n::t!(
+                        "document.key_value.new_key.error.stream_requires_field"
+                    ));
                     cx.notify();
                     return;
                 }
@@ -742,7 +769,9 @@ impl Render for NewKeyModal {
                         .flex()
                         .flex_col()
                         .gap(Spacing::XS)
-                        .child(Text::caption("Key Type*"))
+                        .child(Text::caption(dbflux_i18n::t!(
+                            "document.key_value.new_key.key_type.label"
+                        )))
                         .child(self.key_type_dropdown.clone()),
                 )
                 .child(
@@ -752,7 +781,9 @@ impl Render for NewKeyModal {
                         .flex()
                         .flex_col()
                         .gap(Spacing::XS)
-                        .child(Text::caption("TTL"))
+                        .child(Text::caption(dbflux_i18n::t!(
+                            "document.key_value.new_key.ttl.label"
+                        )))
                         .child(
                             focus_ring(show_ring && focus == ModalFocus::TTL, ring_color)
                                 .on_mouse_down(
@@ -773,7 +804,9 @@ impl Render for NewKeyModal {
                 .flex()
                 .flex_col()
                 .gap(Spacing::XS)
-                .child(Text::caption("Key Name*"))
+                .child(Text::caption(dbflux_i18n::t!(
+                    "document.key_value.new_key.key_name.label"
+                )))
                 .child(
                     focus_ring(show_ring && focus == ModalFocus::KeyName, ring_color)
                         .on_mouse_down(
@@ -898,7 +931,9 @@ impl Render for NewKeyModal {
                     .flex()
                     .flex_col()
                     .gap(Spacing::XS)
-                    .child(Text::caption("Value"))
+                    .child(Text::caption(dbflux_i18n::t!(
+                        "document.key_value.new_key.value.label"
+                    )))
                     .child(
                         focus_ring(show_ring && focus == ModalFocus::Value, ring_color)
                             .on_mouse_down(
@@ -915,7 +950,10 @@ impl Render for NewKeyModal {
         // -- Error message --------------------------------------------------
 
         if let Some(error) = &self.error_message {
-            body = body.child(Text::caption(format!("Error: {}", error)));
+            body = body.child(Text::caption(dbflux_i18n::t!(
+                "document.key_value.new_key.error.prefix",
+                error = error
+            )));
         }
 
         // -- Footer buttons -------------------------------------------------
@@ -932,7 +970,7 @@ impl Render for NewKeyModal {
                     focus_ring(cancel_focused, ring_color).child(
                         Button::new("new-key-cancel")
                             .small()
-                            .label("Cancel")
+                            .label(dbflux_i18n::t!("document.key_value.new_key.cancel"))
                             .with_variant(ButtonVariant::Ghost)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.close(cx);
@@ -943,7 +981,7 @@ impl Render for NewKeyModal {
                     focus_ring(create_focused, ring_color).child(
                         Button::new("new-key-create")
                             .small()
-                            .label("Create")
+                            .label(dbflux_i18n::t!("document.key_value.new_key.create"))
                             .with_variant(ButtonVariant::Primary)
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.submit(window, cx);
@@ -953,11 +991,80 @@ impl Render for NewKeyModal {
         );
 
         ModalFrame::new("new-key-modal", &self.focus_handle, close)
-            .title("New Key")
+            .title(dbflux_i18n::t!("document.key_value.new_key.title"))
             .icon(AppIcon::Plus)
             .width(px(600.0))
             .max_height(px(500.0))
             .child(body.into_any_element())
             .render(cx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::NewKeyType;
+
+    #[test]
+    fn new_key_type_label_covers_all_variants() {
+        for key_type in NewKeyType::all() {
+            let label = key_type.label();
+            assert!(!label.is_empty());
+        }
+    }
+
+    #[test]
+    fn new_key_modal_keys_resolve_in_both_locales() {
+        let keys = [
+            "document.key_value.new_key.title",
+            "document.key_value.new_key.key_type.label",
+            "document.key_value.new_key.key_type.placeholder",
+            "document.key_value.new_key.ttl.label",
+            "document.key_value.new_key.ttl.placeholder",
+            "document.key_value.new_key.key_name.label",
+            "document.key_value.new_key.key_name.placeholder",
+            "document.key_value.new_key.value.label",
+            "document.key_value.new_key.value.placeholder",
+            "document.key_value.new_key.field_placeholder",
+            "document.key_value.new_key.member_placeholder",
+            "document.key_value.new_key.score_placeholder",
+            "document.key_value.new_key.error.key_name_required",
+            "document.key_value.new_key.error.ttl_invalid",
+            "document.key_value.new_key.error.stream_requires_field",
+            "document.key_value.new_key.error.prefix",
+            "document.key_value.new_key.cancel",
+            "document.key_value.new_key.create",
+            "document.key_value.new_key.type.string",
+            "document.key_value.new_key.type.hash",
+            "document.key_value.new_key.type.list",
+            "document.key_value.new_key.type.set",
+            "document.key_value.new_key.type.sorted_set",
+            "document.key_value.new_key.type.json",
+            "document.key_value.new_key.type.stream",
+        ];
+
+        for key in keys {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn new_key_error_prefix_interpolates_error() {
+        let message = dbflux_i18n::t!(
+            "document.key_value.new_key.error.prefix",
+            locale = "en",
+            error = "Key name is required"
+        );
+
+        assert!(message.contains("Key name is required"));
     }
 }

@@ -1,4 +1,5 @@
 use super::*;
+use crate::ui::labels::documents_schema_diff_opened_message;
 
 impl Workspace {
     /// Opens (or focuses) the schema-diff & apply document for a connection or
@@ -39,7 +40,7 @@ impl Workspace {
         });
 
         self.set_focus(crate::keymap::FocusTarget::Document, window, cx);
-        Toast::info("Opened schema diff")
+        Toast::info(documents_schema_diff_opened_message())
             .meta_right(now_hms())
             .push(cx);
     }

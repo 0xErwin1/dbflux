@@ -55,6 +55,10 @@ impl Connection for CachedConnection {
         self.connection.execute(req)
     }
 
+    fn execution_session_factory(&self) -> Option<&dyn dbflux_core::ExecutionSessionFactory> {
+        self.connection.execution_session_factory()
+    }
+
     fn execute_with_handle(
         &self,
         req: &QueryRequest,
@@ -349,8 +353,15 @@ impl ConnectionCache {
     }
 
     /// Inserts or replaces the connection for `connection_id`.
-    pub fn insert(&mut self, connection_id: String, connection: Arc<CachedConnection>) {
-        self.inner.insert(connection_id, connection);
+    ///
+    /// The displaced handle is returned so callers can close factory-backed sessions after
+    /// releasing the cache lock.
+    pub fn insert(
+        &mut self,
+        connection_id: String,
+        connection: Arc<CachedConnection>,
+    ) -> Option<Arc<CachedConnection>> {
+        self.inner.insert(connection_id, connection)
     }
 
     /// Removes the connection for `connection_id` from the cache.
@@ -359,15 +370,26 @@ impl ConnectionCache {
         self.inner.remove(connection_id).is_some()
     }
 
+    /// Drains the base connection entry and all per-database variants.
+    ///
+    /// This transfers ownership to the caller rather than dropping driver handles while a cache
+    /// write lock is held; teardown can synchronously acquire that same lock.
+    pub fn drain_connection_variants(&mut self, connection_id: &str) -> Vec<Arc<CachedConnection>> {
+        let prefix = format!("{}:", connection_id);
+        let keys: Vec<String> = self
+            .inner
+            .keys()
+            .filter(|key| *key == connection_id || key.starts_with(&prefix))
+            .cloned()
+            .collect();
+        keys.into_iter()
+            .filter_map(|key| self.inner.remove(&key))
+            .collect()
+    }
+
     /// Removes the base connection entry and any per-database variants.
     pub fn remove_connection_variants(&mut self, connection_id: &str) -> usize {
-        let prefix = format!("{}:", connection_id);
-        let original_len = self.inner.len();
-
-        self.inner
-            .retain(|key, _| key != connection_id && !key.starts_with(&prefix));
-
-        original_len.saturating_sub(self.inner.len())
+        self.drain_connection_variants(connection_id).len()
     }
 }
 
@@ -412,5 +434,36 @@ mod tests {
             retrieved.connection().active_database(),
             Some("app".to_string())
         );
+    }
+
+    #[test]
+    fn insert_returns_displaced_handle_and_drain_removes_all_variants() {
+        let driver = FakeDriver::new(DbKind::Postgres);
+        let profile = ConnectionProfile::new("test", DbConfig::default_postgres());
+        let first = Arc::new(CachedConnection::new(
+            Arc::from(driver.connect(&profile).unwrap()),
+            None,
+        ));
+        let replacement = Arc::new(CachedConnection::new(
+            Arc::from(driver.connect(&profile).unwrap()),
+            None,
+        ));
+        let variant = Arc::new(CachedConnection::new(
+            Arc::from(driver.connect(&profile).unwrap()),
+            None,
+        ));
+        let id = profile.id.to_string();
+        let mut cache = ConnectionCache::new();
+        assert!(cache.insert(id.clone(), first.clone()).is_none());
+        cache.insert(format!("{id}:analytics"), variant.clone());
+        assert!(Arc::ptr_eq(
+            &cache.insert(id.clone(), replacement).unwrap(),
+            &first
+        ));
+
+        let drained = cache.drain_connection_variants(&id);
+        assert_eq!(drained.len(), 2);
+        assert!(cache.get(&id).is_none());
+        assert!(cache.get(&format!("{id}:analytics")).is_none());
     }
 }

@@ -1,0 +1,46 @@
+---
+/**
+ * The application's own mark, from `resources/branding/glyph.svg`.
+ *
+ * Traced verbatim rather than redrawn, so the site and the desktop client show
+ * the same logo. The strokes take `currentColor` so the mark follows the
+ * surrounding token instead of pinning the accent twice.
+ */
+interface Props {
+  size?: number;
+  class?: string;
+}
+
+const { size = 20, class: className } = Astro.props;
+---
+
+<svg
+  width={size}
+  height={size}
+  viewBox="0 0 128 128"
+  fill="none"
+  role="img"
+  aria-label="DBFlux"
+  class={className}
+>
+  <circle cx="64" cy="64" r="42" fill="none" stroke="currentColor" stroke-width="2.5"></circle>
+  <g
+    stroke="currentColor"
+    stroke-width="2.5"
+    fill="none"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  >
+    <ellipse cx="64" cy="40" rx="20" ry="5.5"></ellipse>
+    <path d="M44 40 V58"></path>
+    <path d="M84 40 V58"></path>
+    <path d="M44 58 a20 5.5 0 0 0 40 0"></path>
+    <path d="M44 58 V76"></path>
+    <path d="M84 58 V76"></path>
+    <path d="M44 76 a20 5.5 0 0 0 40 0"></path>
+    <path d="M44 76 V92"></path>
+    <path d="M84 76 V92"></path>
+    <path d="M44 92 a20 5.5 0 0 0 40 0"></path>
+  </g>
+  <path d="M74 28 L48 66 L60 66 L54 100 L80 62 L68 62 Z" fill="currentColor"></path>
+</svg>

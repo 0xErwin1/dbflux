@@ -1,4 +1,5 @@
 use super::*;
+use crate::ui::labels::settings_default_connection_name;
 
 impl Workspace {
     pub(in crate::ui::views::workspace) fn open_settings(&self, cx: &mut Context<Self>) {
@@ -45,8 +46,11 @@ impl Workspace {
             .read(cx)
             .active_connection()
             .map(|connected| connected.profile.name.clone())
-            .unwrap_or_else(|| "connection".to_string());
+            .unwrap_or_else(settings_default_connection_name);
 
+        // "Auth Provider" is the persisted default display name for a manually
+        // opened login (no specific provider is known yet); it is stored, not
+        // just displayed, so it stays in English like other persisted identities.
         self.login_modal.update(cx, |modal, cx| {
             modal.open_manual("Auth Provider", profile_name, None, window, cx);
         });

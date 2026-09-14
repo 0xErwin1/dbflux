@@ -155,7 +155,9 @@ impl QueryBuilderPanel {
 
             let alias_text = self.aggregate_rows[i].alias.clone();
             let alias_input = cx.new(|cx| {
-                let mut state = InputState::new(window, cx).placeholder("alias");
+                let mut state = InputState::new(window, cx).placeholder(dbflux_i18n::t!(
+                    "document.query_builder.group_by.alias_placeholder"
+                ));
                 state.set_value(&alias_text, window, cx);
                 state
             });
@@ -195,9 +197,9 @@ impl QueryBuilderPanel {
                 .collect();
 
             if !valid.contains(column) {
-                self.sort_validation_error = Some(format!(
-                    "\"{}\" is not in the GROUP BY columns or aggregate aliases",
-                    column
+                self.sort_validation_error = Some(dbflux_i18n::t!(
+                    "document.query_builder.sort.invalid_column",
+                    column = column
                 ));
                 cx.notify();
                 return;

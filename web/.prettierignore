@@ -1,0 +1,5 @@
+dist/
+.astro/
+.versions/
+public/fonts/
+pnpm-lock.yaml

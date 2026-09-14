@@ -28,3 +28,10 @@ pub const SORT_INDICATOR_ASC: &str = "↑";
 
 /// Sort indicator for descending sort.
 pub const SORT_INDICATOR_DESC: &str = "↓";
+
+/// Width of the name column in record mode.
+pub const RECORD_NAME_WIDTH: Pixels = px(220.0); // guardrail-allow: domain const, record-mode label column
+
+/// Minimum height of a record-mode field row. Values are single-line like the
+/// grid, so this mirrors `ROW_HEIGHT` with a little more breathing room.
+pub const RECORD_ROW_HEIGHT: Pixels = px(30.0); // guardrail-allow: domain const, record-mode row height

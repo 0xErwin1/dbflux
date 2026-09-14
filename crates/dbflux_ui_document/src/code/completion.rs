@@ -1984,6 +1984,7 @@ mod tests {
             sample_fields: Some(vec![field("pk"), field("sk")]),
             presentation: dbflux_core::CollectionPresentation::default(),
             child_items: None,
+            storage_hints: None,
         }
     }
 
@@ -2113,6 +2114,7 @@ mod tests {
             sample_fields: None,
             presentation: dbflux_core::CollectionPresentation::default(),
             child_items: None,
+            storage_hints: None,
         };
 
         let mut metadata = SqlCompletionMetadata::default();
@@ -2145,6 +2147,7 @@ mod tests {
             sample_fields: None,
             presentation: dbflux_core::CollectionPresentation::default(),
             child_items: None,
+            storage_hints: None,
         }
     }
 
@@ -2278,6 +2281,7 @@ mod tests {
             sample_fields: None,
             presentation: dbflux_core::CollectionPresentation::default(),
             child_items: None,
+            storage_hints: None,
         };
         let db2 = (
             "db2".to_string(),
@@ -2325,6 +2329,7 @@ mod tests {
             sample_fields: None,
             presentation: dbflux_core::CollectionPresentation::default(),
             child_items: None,
+            storage_hints: None,
         }
     }
 

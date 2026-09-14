@@ -3,8 +3,10 @@ use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 
 fn report_reveal_failure(error: std::io::Error, cx: &mut App) {
     report_error(
-        UserFacingError::new(ErrorKind::User, "Failed to reveal in file manager")
-            .with_cause(error.to_string()),
+        UserFacingError::new(
+            ErrorKind::User,
+            crate::labels::reveal_failed_label(&error.to_string()),
+        ),
         cx,
     );
 }
@@ -113,10 +115,13 @@ impl Sidebar {
         let app_state = self.app_state.clone();
         let sidebar = cx.entity().clone();
 
+        let title = crate::labels::import_script_dialog_title();
+        let filter_name = crate::labels::script_files_filter_label();
+
         let task = cx.background_executor().spawn(async move {
-            let mut dialog = rfd::FileDialog::new().set_title("Import Script");
+            let mut dialog = rfd::FileDialog::new().set_title(title.as_str());
             for ext in &extensions {
-                dialog = dialog.add_filter("Script files", &[ext]);
+                dialog = dialog.add_filter(filter_name.as_str(), &[ext]);
             }
             dialog.pick_file()
         });

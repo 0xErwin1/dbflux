@@ -82,7 +82,7 @@ impl Render for ShutdownOverlay {
         }
 
         let theme = cx.theme();
-        let message = phase.message();
+        let message = crate::ui::labels::shutdown_phase_label(phase);
 
         div()
             .id("shutdown-overlay")

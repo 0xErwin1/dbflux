@@ -1,0 +1,126 @@
+---
+/** Renders visible Mermaid blocks with the active site tokens. */
+---
+
+<style is:global>
+  .mermaid {
+    margin-block: var(--s-6);
+    padding: var(--s-6);
+    background: var(--panel);
+    border: var(--bw) solid var(--border);
+    overflow-x: auto;
+  }
+
+  /* Until a successful render replaces it, keep the authored source readable. */
+  .mermaid:not([data-processed]) {
+    font-family: var(--font-mono);
+    font-size: var(--fs-code);
+    color: var(--text-faint);
+    white-space: pre;
+  }
+
+  .mermaid svg {
+    max-width: 100%;
+    height: auto;
+    margin-inline: auto;
+  }
+</style>
+
+<script>
+  const blocks = Array.from(document.querySelectorAll<HTMLElement>('.mermaid'));
+
+  if (blocks.length > 0) {
+    const sources = new Map(blocks.map((block) => [block, block.textContent ?? '']));
+    const visible = new Set<HTMLElement>();
+    let revision = 0;
+    let renderId = 0;
+    let queued = false;
+    let renderer: Promise<typeof import('mermaid').default> | undefined;
+
+    const color = (name: string) =>
+      getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+    const loadMermaid = async () => {
+      renderer ??= import('mermaid').then(({ default: mermaid }) => mermaid);
+      return renderer;
+    };
+
+    const renderVisible = () => {
+      if (queued) return;
+      queued = true;
+      const requestedRevision = revision;
+
+      void (async () => {
+        const mermaid = await loadMermaid();
+
+        // Mermaid configuration is global, so one serialized pass owns both
+        // configuration and SVG commits. A later preference always wins.
+        mermaid.initialize({
+          startOnLoad: false,
+          securityLevel: 'strict',
+          fontFamily: '"JetBrains Mono", ui-monospace, monospace',
+          theme: 'base',
+          themeVariables: {
+            darkMode: document.documentElement.dataset.theme !== 'light',
+            background: color('--panel'),
+            primaryColor: color('--raised'),
+            primaryTextColor: color('--text-strong'),
+            primaryBorderColor: color('--border-interactive'),
+            secondaryColor: color('--bg'),
+            tertiaryColor: color('--bg'),
+            lineColor: color('--text-muted'),
+            textColor: color('--text'),
+            mainBkg: color('--raised'),
+            nodeBorder: color('--border-interactive'),
+            clusterBkg: color('--bg'),
+            clusterBorder: color('--border'),
+            edgeLabelBackground: color('--panel'),
+            fontSize: '13px',
+          },
+        });
+
+        for (const block of visible) {
+          const source = sources.get(block);
+          if (!source) continue;
+
+          try {
+            const { svg, bindFunctions } = await mermaid.render(
+              `dbflux-mermaid-${revision}-${renderId++}`,
+              source,
+            );
+            if (requestedRevision !== revision) return;
+
+            block.replaceChildren();
+            block.insertAdjacentHTML('afterbegin', svg);
+            bindFunctions?.(block);
+            block.dataset.processed = '';
+          } catch (error) {
+            // Preserve source on failure so an author can diagnose invalid syntax.
+            console.error('Unable to render Mermaid diagram.', error);
+          }
+        }
+      })()
+        .catch((error) => console.error('Unable to load Mermaid.', error))
+        .finally(() => {
+          queued = false;
+          if (requestedRevision !== revision) renderVisible();
+        });
+    };
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) visible.add(entry.target as HTMLElement);
+        });
+        renderVisible();
+      },
+      { rootMargin: '200px' },
+    );
+
+    blocks.forEach((block) => observer.observe(block));
+    window.addEventListener('dbflux-theme-change', () => {
+      revision += 1;
+      renderVisible();
+    });
+  }
+</script>

@@ -1975,7 +1975,7 @@ fn render_number_chart(view: &ChartView, cx: &mut Context<ChartView>) -> impl In
             .items_center()
             .justify_center()
             .text_color(chart_colors.label_fg)
-            .child("No data");
+            .child(dbflux_i18n::t!("chart.engine.no_data"));
     }
 
     div()
@@ -3643,6 +3643,15 @@ mod tests {
 
         let view = ChartView::build(&result, spec).expect("build with Pie kind must not fail");
         assert_eq!(view.kind(), crate::chart::spec::ChartKind::Pie);
+    }
+
+    #[test]
+    fn engine_no_data_key_resolves() {
+        let en = dbflux_i18n::t!("chart.engine.no_data", locale = "en");
+        let es = dbflux_i18n::t!("chart.engine.no_data", locale = "es");
+        assert_eq!(en, "No data");
+        assert_eq!(es, "Sin datos");
+        assert_ne!(en, es);
     }
 
     // ---------------------------------------------------------------------------

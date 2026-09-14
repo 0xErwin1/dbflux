@@ -1,0 +1,20 @@
+---
+import Base from '../layouts/Base.astro';
+import About from '../components/About.astro';
+import { DOCS_AT_ROOT, SITE_ORIGIN } from '../data/site';
+import { t } from '../i18n';
+
+const locale = 'en' as const;
+---
+
+<Base
+  title={t(locale, 'about.page_title')}
+  description={t(locale, 'about.page_description')}
+  current="about"
+  noindex={DOCS_AT_ROOT}
+  canonicalPath={DOCS_AT_ROOT ? `${SITE_ORIGIN}/about/` : undefined}
+  locale={locale}
+  translated
+>
+  <About locale={locale} />
+</Base>

@@ -19,6 +19,7 @@ const CATEGORY_ORDER: &[DatabaseCategory] = &[
     DatabaseCategory::TimeSeries,
     DatabaseCategory::Graph,
     DatabaseCategory::LogStream,
+    DatabaseCategory::ObjectStorage,
 ];
 
 /// Target column count for the card grid. Cards visually wrap, but the
@@ -94,9 +95,15 @@ impl ConnectionManagerWindow {
                             .size(Heights::ICON_MD)
                             .color(muted),
                     )
-                    .child(Text::heading("New Connection").font_size(FontSizes::LG))
+                    .child(
+                        Text::heading(dbflux_i18n::t!("connection_manager.driver_select.title"))
+                            .font_size(FontSizes::LG),
+                    )
                     .child(div().text_size(FontSizes::SM).text_color(muted).child("·"))
-                    .child(Text::muted("choose a database type").font_size(FontSizes::SM)),
+                    .child(
+                        Text::muted(dbflux_i18n::t!("connection_manager.driver_select.subtitle"))
+                            .font_size(FontSizes::SM),
+                    ),
             )
             .child(
                 div()
@@ -156,14 +163,11 @@ impl ConnectionManagerWindow {
         }
 
         if !rendered_any {
-            body = body.child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .py_8()
-                    .child(Text::muted("No drivers match your filter")),
-            );
+            body = body.child(div().flex().items_center().justify_center().py_8().child(
+                Text::muted(dbflux_i18n::t!(
+                    "connection_manager.driver_select.empty_state"
+                )),
+            ));
         }
 
         body
@@ -202,7 +206,7 @@ impl ConnectionManagerWindow {
                 this.select_driver(&driver_id_click, window, cx);
             }))
             .child(
-                Icon::new(AppIcon::from_icon(driver.icon))
+                Icon::new(AppIcon::for_driver(driver.icon, driver.category))
                     .size(px(32.0))
                     .color(theme.foreground),
             )
@@ -233,8 +237,8 @@ impl ConnectionManagerWindow {
         let theme = cx.theme();
         let cta_label = focused_driver
             .as_ref()
-            .map(|d| format!("Configure {}", d.name))
-            .unwrap_or_else(|| "Configure".to_string());
+            .map(|d| crate::labels::driver_select_configure(&d.name))
+            .unwrap_or_else(|| dbflux_i18n::t!("connection_manager.driver_select.configure"));
         let cta_id = focused_driver
             .as_ref()
             .map(|d| d.id.clone())
@@ -258,19 +262,35 @@ impl ConnectionManagerWindow {
                     .items_center()
                     .gap_2()
                     .child(
-                        Button::new("cm-driver-import", "Import from file\u{2026}")
-                            .small()
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.open_import(window, cx);
-                            })),
+                        Button::new(
+                            "cm-driver-import",
+                            dbflux_i18n::t!("connection_manager.driver_select.import_from_file"),
+                        )
+                        .small()
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.open_import(window, cx);
+                        })),
                     )
                     .child(
-                        Button::new("cm-driver-cancel", "Cancel")
-                            .small()
-                            .on_click(cx.listener(|_, _, window, cx| {
-                                cx.emit(DismissEvent);
-                                window.remove_window();
-                            })),
+                        Button::new(
+                            "cm-driver-import-external",
+                            dbflux_i18n::t!("connection_manager.driver_select.import_from_client"),
+                        )
+                        .small()
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.open_import_external(window, cx);
+                        })),
+                    )
+                    .child(
+                        Button::new(
+                            "cm-driver-cancel",
+                            dbflux_i18n::t!("connection_manager.driver_select.cancel"),
+                        )
+                        .small()
+                        .on_click(cx.listener(|_, _, window, cx| {
+                            cx.emit(DismissEvent);
+                            window.remove_window();
+                        })),
                     )
                     .child({
                         let mut cta = Button::new("cm-driver-configure", cta_label)
@@ -413,5 +433,50 @@ pub(super) fn move_grid_focus(visible_count: usize, current: usize, dir: GridDir
                 cur % GRID_COLUMNS
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod category_order_tests {
+    use dbflux_core::{DatabaseCategory, Icon};
+
+    use super::DriverInfo;
+    use super::visible_drivers;
+
+    fn driver_of(category: DatabaseCategory) -> DriverInfo {
+        DriverInfo {
+            id: "test".to_string(),
+            icon: Icon::Database,
+            name: "Test".to_string(),
+            description: String::new(),
+            category,
+            default_port: None,
+            uri_scheme: "test".to_string(),
+        }
+    }
+
+    /// A driver whose category is missing from `CATEGORY_ORDER` silently
+    /// disappears from the picker, so every `DatabaseCategory` variant must
+    /// be listed there.
+    #[test]
+    fn visible_drivers_never_drops_a_category() {
+        let categories = [
+            DatabaseCategory::Relational,
+            DatabaseCategory::Document,
+            DatabaseCategory::KeyValue,
+            DatabaseCategory::Graph,
+            DatabaseCategory::TimeSeries,
+            DatabaseCategory::WideColumn,
+            DatabaseCategory::LogStream,
+            DatabaseCategory::ObjectStorage,
+        ];
+
+        let drivers: Vec<DriverInfo> = categories.iter().map(|c| driver_of(*c)).collect();
+
+        assert_eq!(
+            visible_drivers(&drivers, "").len(),
+            drivers.len(),
+            "a DatabaseCategory variant is missing from CATEGORY_ORDER"
+        );
     }
 }

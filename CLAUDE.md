@@ -14,16 +14,16 @@ For the branching model, version rules, tag flow, and release procedure, use `do
 
 ```bash
 cargo check --workspace              # Fast type checking
-cargo build -p dbflux --features sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,aws  # Debug build
-cargo build -p dbflux --features sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,aws --release  # Release build
-cargo run -p dbflux --features sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,aws    # Run app
+cargo build -p dbflux --features sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,redshift,s3,aws  # Debug build
+cargo build -p dbflux --features sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,redshift,s3,aws --release  # Release build
+cargo run -p dbflux --features sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,redshift,s3,aws    # Run app
 
 # MCP server (AI integration) - included by default
 cargo build -p dbflux  # MCP included in default features
 ./target/debug/dbflux mcp --client-id test-client
 
 # Build without MCP support (smaller binary, no AI integration)
-cargo build -p dbflux --no-default-features --features sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,lua,aws
+cargo build -p dbflux --no-default-features --features sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,redshift,s3,lua,aws
 
 cargo fmt --all                      # Format
 cargo clippy --workspace -- -D warnings  # Lint
@@ -274,9 +274,9 @@ Architecture details live in `ARCHITECTURE.md`. This file only keeps the agent-f
 
 The UI layer is split into six crates (see `ARCHITECTURE.md` § Layered crate map for the full diagram):
 
-- `dbflux_components` — domain-free leaf: theme, tokens, icons, primitives, composites, controls, data_table, document_tree, result_panel, chart engine, modals. No `dbflux_app` dependency.
+- `dbflux_components` — domain-free leaf: theme, tokens, icons, primitives, composites, controls, data_table, document_tree, result_panel, chart engine, modals. No `dbflux_app` dependency. May depend on `dbflux_i18n` for translated UI copy; `dbflux_i18n` has no `dbflux_*` dependencies.
 - `dbflux_ui_base` — AppStateEntity, events, keymap helpers, toast, modal_frame, platform detection, sql_preview_modal, sso_wizard.
-- `dbflux_ui_document` — tab/pane system, all document types (CodeDocument, DataDocument, ChartDocument, KeyValueDocument, AuditDocument), data_grid_panel, governance view.
+- `dbflux_ui_document` — tab/pane system, all document types (CodeDocument, DataDocument, ChartDocument, KeyValueDocument, AuditDocument, BucketsTableDocument, ObjectBrowserDocument, ObjectEditorDocument), data_grid_panel, governance view.
 - `dbflux_ui_sidebar` — connections + scripts sidebar tree.
 - `dbflux_ui_windows` — settings window and connection manager window.
 - `dbflux_ui` — thin integrator (~11.5k LOC): workspace, status_bar, tasks_panel, dock, remaining overlays (command_palette, login_modal, shutdown_overlay), keymap glue, assets, ipc_server. Re-exports moved subsystems via `pub use` shims at the old module paths so internal call-sites still compile against `crate::ui::...`.
@@ -379,11 +379,12 @@ Key abstractions for UI adaptation:
 5. Implement `ErrorFormatter` for driver-specific error messages
 6. Implement `QueryGenerator` when the driver can generate native mutation/read templates for UI previews, copy-as-query, or MCP previews
 7. Implement `LanguageService` when the driver speaks a non-SQL dialect (e.g. `TSqlLanguageService` lives in `dbflux_driver_mssql`). SQL drivers can reuse `SqlLanguageService` from `dbflux_core`.
-8. Add feature flag in `crates/dbflux/Cargo.toml` (binary) and `crates/dbflux_app/Cargo.toml`. No UI crate gains a per-driver feature flag.
+8. Add feature flag in `crates/dbflux/Cargo.toml` (binary) and `crates/dbflux_app/Cargo.toml`. No UI crate gains a per-driver feature flag. The feature MUST also be added to `default` in `crates/dbflux/Cargo.toml` — release builds ship default features, so a driver left out of `default` silently ships disabled.
 9. Register in `AppState::new()` under `#[cfg(feature = "name")]`
-10. **Set `ColumnMeta::kind` on every column** using the `ColumnKind` enum (Timestamp, Float, Integer, Text, Unknown). The chart engine uses `ColumnKind` exclusively — it never inspects `type_name` strings or driver identifiers. Columns with `kind = Unknown` are excluded from chart auto-detection. Use `ColumnKind::Timestamp` for time columns, `ColumnKind::Float`/`Integer` for numeric columns, and `ColumnKind::Text` for string columns.
-11. Optional: implement `DashboardSource` and/or `DashboardImporter` and advertise `DriverCapabilities::DASHBOARD_SYNC` / `DASHBOARD_IMPORT` to let the UI browse/import upstream dashboards (see `docs/DASHBOARDS.md`).
-12. Optional: implement `InstanceCatalog` (`dbflux_core/src/connection/instance_catalog.rs`) and advertise `DriverCapabilities::INSTANCE_METRICS` (time-series) and/or `INSTANCE_INSPECTOR` (tabular snapshots). The catalog exposes metrics, inspectors, a `DefaultInstanceDashboard` descriptor for the read-only Instance Overview, and optional `InspectorRowAction`s gated by per-driver privilege probes. See `docs/DASHBOARDS.md` § Instance metrics and inspectors.
+10. Register the driver's `live_integration` test suite as its own step in `.github/workflows/tests.yml`'s Driver Live Integration job — it enumerates suites explicitly, so a new driver's Docker-backed tests do not run in CI until added there.
+11. **Set `ColumnMeta::kind` on every column** using the `ColumnKind` enum (Timestamp, Float, Integer, Text, Unknown). The chart engine uses `ColumnKind` exclusively — it never inspects `type_name` strings or driver identifiers. Columns with `kind = Unknown` are excluded from chart auto-detection. Use `ColumnKind::Timestamp` for time columns, `ColumnKind::Float`/`Integer` for numeric columns, and `ColumnKind::Text` for string columns.
+12. Optional: implement `DashboardSource` and/or `DashboardImporter` and advertise `DriverCapabilities::DASHBOARD_SYNC` / `DASHBOARD_IMPORT` to let the UI browse/import upstream dashboards (see `docs/DASHBOARDS.md`).
+13. Optional: implement `InstanceCatalog` (`dbflux_core/src/connection/instance_catalog.rs`) and advertise `DriverCapabilities::INSTANCE_METRICS` (time-series) and/or `INSTANCE_INSPECTOR` (tabular snapshots). The catalog exposes metrics, inspectors, a `DefaultInstanceDashboard` descriptor for the read-only Instance Overview, and optional `InspectorRowAction`s gated by per-driver privilege probes. See `docs/DASHBOARDS.md` § Instance metrics and inspectors.
 
 For external RPC-backed drivers, keep discovery/adaptation in `dbflux_app::rpc_services` rather than adding a parallel bootstrap path.
 
@@ -394,6 +395,13 @@ Drivers declare their capabilities via `DriverMetadata`:
 - `DatabaseCategory`: Relational, Document, KeyValue, Graph, TimeSeries, WideColumn
 - `QueryLanguage`: SQL, MongoQuery, RedisCommands, Cypher, etc. (determines editor syntax highlighting and placeholder)
 - `DriverCapabilities`: bitflags for features (PAGINATION, TRANSACTIONS, NESTED_DOCUMENTS, etc.)
+
+### Documentation translations
+
+- `docs/es/` and `docs/zh_Hans/` mirror `docs/`, the driver READMEs, and the root documents the site renders (`ARCHITECTURE.md`, `CONTRIBUTING.md`, `SECURITY.md`, `TRADEMARK.md`, `PRIVACY.md`).
+- Any edit to one of those English pages must be applied to every counterpart that already exists under `docs/es/` and `docs/zh_Hans/`, in the same change. Do not leave a translation for a follow-up.
+- A page with no counterpart yet needs none; the site serves the English body with a notice.
+- Keep headings, relative links, and ```mermaid fences aligned with the English page, because the site pairs pages by structure. See `docs/TRANSLATIONS.md`.
 
 ### Driver README documentation
 
@@ -408,7 +416,7 @@ Documents are open-tab entities managed through a closure-erasing shell. The pol
 1. **Shell**: `PaneHandle` (`crates/dbflux_ui_document/src/pane.rs`) wraps the typed `Entity<T>` with `Box<dyn Fn>` closures for 22 operations (render, focus, dispatch_command, meta_snapshot, dedup, subscribe, etc.). `PaneHandle` is `!Clone`. Each document provides `XxxDocument::into_pane(entity, cx) -> PaneHandle` in its own `pane.rs`.
 2. **Tab**: `Tab::Pane(Box<PaneHandle>)` (`crates/dbflux_ui_document/src/tab_manager.rs`) — `#[non_exhaustive]` single-variant enum for forward-compat.
 3. **Event**: documents emit `DocumentEvent` directly (`crates/dbflux_ui_document/src/handle.rs`, 29 LOC). No per-document event enums.
-4. **Dedup**: `DocumentKey` enum (`crates/dbflux_ui_document/src/dedup.rs`) — variants `Table`, `Collection`, `File`, `KeyValueDb`, `Chart`, `Audit`, `EventStream`, `Routine`, `MetricChart`, `Dashboard`, `InstanceMetric`, `InstanceInspector`, `InstanceOverview`. Find existing tabs via `tab_manager.find_by_key(&DocumentKey::Table { ... }, cx)`. No `is_*` methods.
+4. **Dedup**: `DocumentKey` enum (`crates/dbflux_ui_document/src/dedup.rs`) — variants `Table`, `Collection`, `File`, `KeyValueDb`, `Chart`, `Audit`, `EventStream`, `Routine`, `MetricChart`, `Dashboard`, `InstanceMetric`, `InstanceInspector`, `InstanceOverview`, `ObjectStoreBucketsRoot`, `ObjectBrowser`, `ObjectEditor`. Find existing tabs via `tab_manager.find_by_key(&DocumentKey::Table { ... }, cx)`. No `is_*` methods.
 5. **Chrome**: `ResultPanel` + `ViewHandle` (`dbflux_components::result_panel`) is the universal chrome host for data-result views. View entities expose `into_view_handle(entity, cx) -> ViewHandle` whose `toolbar_segments` closure returns `ToolbarSegment`s positioned `Left | Center | Right` with `index`. Filter bars, axis bars, range chips all become segments — the chrome row uses `flex_wrap` so segments wrap when narrow.
 6. **Scripts**: Lua/Python/Bash use `CodeDocument` and execute as scripts, not DB queries; script output streams into `crates/dbflux_ui_document/src/code/live_output.rs`.
 7. **Focus**: Documents receive `FocusTarget::Document` and manage internal focus via their own `FocusHandle`.
@@ -492,7 +500,7 @@ MCP authentication is process-identity only: presenting `--client-id` is the sol
   - `DashboardSource` (`dbflux_core/src/connection/dashboard_source.rs`) — lists upstream dashboards; gated by `DriverCapabilities::DASHBOARD_SYNC`.
   - `DashboardImporter` (`dbflux_core/src/connection/dashboard_import.rs`) — parses upstream JSON into `WidgetImportSpec`s; gated by `DriverCapabilities::DASHBOARD_IMPORT`.
   - `InstanceCatalog` (`dbflux_core/src/connection/instance_catalog.rs`) — exposes per-driver metrics, inspectors, default-dashboard descriptor, and row actions; gated by `DriverCapabilities::INSTANCE_METRICS` / `INSTANCE_INSPECTOR`.
-  - CloudWatch is the reference implementation for `DashboardSource` / `DashboardImporter`. PostgreSQL, MySQL/MariaDB, MongoDB, Redis, and SQL Server are the reference implementations for `InstanceCatalog`.
+  - CloudWatch is the reference implementation for `DashboardSource` / `DashboardImporter`. PostgreSQL, MySQL/MariaDB, MongoDB, Redis, SQL Server, ClickHouse, and InfluxDB (v2 only) are the reference implementations for `InstanceCatalog`.
 - Remote dashboard listings are session-scoped via `RemoteDashboardCache` (`crates/dbflux_app/src/remote_dashboard_cache.rs`); they do not persist across restart.
 
 Full reference: `docs/DASHBOARDS.md`.
@@ -531,6 +539,82 @@ A `pub use dbflux_ui_base::platform::*` shim remains at `crates/dbflux_ui/src/pl
 - Read channel identity through the accessors — `app_id()`, `display_name()`, `db_file_name()` — never branch on the raw version string and never hardcode `dbflux` / `dbflux-nightly` identifiers. Nightly returns a distinct `app_id` and DB file so it coexists with stable; `Rc` shares stable's identity.
 - The channel-aware DB path lives in `crates/dbflux_storage/src/paths.rs` (`dbflux_db_path`); nightly can opt into the stable DB via `set_nightly_shares_stable_db` / `nightly_shares_stable_db`.
 - Brand assets live under `resources/branding/{stable,nightly}/` (served per channel in `crates/dbflux_ui/src/assets.rs`). Packaging and Nix files substitute channel placeholders. The release/nightly flow is documented in `docs/RELEASE.md`.
+
+## Website
+
+The site lives in `web/` and is an Astro static build. It is not a crate: `cargo` excludes it, and
+the Rust workflows skip changes confined to it or to markdown.
+
+**It renders the repository's own documentation.** `docs/*.md`, the driver READMEs,
+`ARCHITECTURE.md` and `CONTRIBUTING.md` are read straight out of git at build time. There is no
+second copy, so a behaviour change and the paragraph describing it belong in the same commit, and
+editing a document is all that is needed to change the site.
+
+**It publishes several versions.** `web/versions.json` lists them; each entry is a git ref, and the
+product version shown for it is read from that ref's `Cargo.toml` rather than typed. The first
+entry is the current release and is served unprefixed at `/docs/`; the rest are served under their
+id (`/v0.6/docs/`, `/nightly/docs/`) and keep those URLs. Granularity is the minor series, not the
+patch, because a release branch takes cherry-picked fixes only.
+
+Rules that matter when touching documentation:
+
+- Write markdown that reads correctly on GitHub. Relative links between documents and labels that
+  name a file are rewritten to site routes at build time, so `[Settings](SETTINGS.md)` works in
+  both places.
+- Diagrams go in ```mermaid fences. They render as diagrams on the site; ASCII art does not.
+- Adding a document to `docs/` gives it a page automatically. Its place in the reading order is
+  declared in `web/src/data/nav.ts`; unlisted documents still get a page and appear under "Not yet
+  filed" on the documentation index.
+- Never send a reader to the repository for something the site renders. Link to the page.
+
+```bash
+cd web
+pnpm install
+pnpm dev          # local server
+pnpm build        # static output in web/dist
+pnpm check        # types — this is a real gate, not decoration
+pnpm format       # prettier
+```
+
+### Where the documentation is served
+
+`DOCS_MODE` decides, and it has three values:
+
+| Value | What it builds | Documentation URL |
+|---|---|---|
+| `embedded` (default) | everything, one origin | `/docs/usage/` |
+| `site` | landing pages only | `https://docs.dbflux.dev/usage/` |
+| `docs` | the documentation, at the root of its own host | `/usage/` |
+
+Local development uses the default, so `pnpm dev` still brings up the whole site
+with one command. A split deployment is two builds of this same source:
+
+```bash
+pnpm build:site   # DOCS_MODE=site
+pnpm build:docs   # DOCS_MODE=docs
+```
+
+Override `SITE_ORIGIN` and `DOCS_ORIGIN` if the hostnames change. Nothing else
+in the source knows a URL: pages link through `docsUrl()` and `siteUrl()`, which
+is what lets one variable move an entire section of the site.
+
+Neither host serves a page that belongs to the other. A split build writes a
+Cloudflare `_redirects` file (`web/src/integrations/host-redirects.ts`) so every
+`/docs/...` URL the site once published answers `301` to the documentation host,
+and `/about/` on the documentation host answers `301` back. A moved page must
+answer with a status code rather than a 200 carrying a meta refresh: a 200 at a
+URL that moved reads, to a crawler or an agent, as a site still being
+rearranged.
+
+`web/scripts/check-links.mjs` runs in CI after the build and fails on an internal link that points
+at a page which is not built. Versions differ, so a link that resolves in nightly may not resolve
+in an older release.
+
+Two caches will mislead you. Astro keeps rendered markdown in `web/.astro` **and**
+`web/node_modules/.astro`, so a change to the markdown pipeline can appear to do nothing — use
+`pnpm clean`. And `astro dev` and `astro preview` are daemons that outlive the shell and silently
+redirect to an existing instance instead of starting a new one, so a stale server can serve an old
+build long after a rebuild; use `pnpm stop`.
 
 ## Common Pitfalls
 

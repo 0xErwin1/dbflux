@@ -39,7 +39,10 @@ pub struct ModalCreateDashboard {
 
 impl ModalCreateDashboard {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let name_input = cx.new(|cx| InputState::new(window, cx).placeholder("Dashboard name"));
+        let name_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(dbflux_i18n::t!("modals.create_dashboard.name_label"))
+        });
 
         Self {
             request: None,
@@ -97,7 +100,9 @@ impl ModalCreateDashboard {
         let name = self.name_input.read(cx).value().trim().to_string();
 
         if name.is_empty() {
-            self.validation_error = Some("Name cannot be empty".to_string());
+            self.validation_error = Some(dbflux_i18n::t!(
+                "modals.create_dashboard.validation.empty_name"
+            ));
             cx.notify();
             return;
         }
@@ -129,7 +134,10 @@ impl Render for ModalCreateDashboard {
             .flex()
             .flex_col()
             .gap(Spacing::SM)
-            .child(Text::label("Dashboard name").into_any_element())
+            .child(
+                Text::label(dbflux_i18n::t!("modals.create_dashboard.name_label"))
+                    .into_any_element(),
+            )
             .child(Input::new(&self.name_input))
             .when_some(validation_error, |el, err| {
                 el.child(div().text_sm().child(Text::body(err).into_any_element()))
@@ -147,15 +155,24 @@ impl Render for ModalCreateDashboard {
             .flex()
             .items_center()
             .gap(Spacing::SM)
-            .child(Button::new("create-dashboard-cancel", "Cancel").on_click(on_cancel))
             .child(
-                Button::new("create-dashboard-confirm", "Create")
-                    .primary()
-                    .on_click(on_confirm),
+                Button::new(
+                    "create-dashboard-cancel",
+                    dbflux_i18n::t!("modals.create_dashboard.cancel"),
+                )
+                .on_click(on_cancel),
+            )
+            .child(
+                Button::new(
+                    "create-dashboard-confirm",
+                    dbflux_i18n::t!("modals.create_dashboard.confirm"),
+                )
+                .primary()
+                .on_click(on_confirm),
             );
 
         ModalShell::new(
-            "New dashboard",
+            dbflux_i18n::t!("modals.create_dashboard.title"),
             body.into_any_element(),
             footer.into_any_element(),
         )
@@ -218,5 +235,36 @@ mod tests {
             }
             _ => panic!("Expected Confirmed variant"),
         }
+    }
+
+    const CREATE_DASHBOARD_KEYS: &[&str] = &[
+        "modals.create_dashboard.name_label",
+        "modals.create_dashboard.title",
+        "modals.create_dashboard.validation.empty_name",
+        "modals.create_dashboard.cancel",
+        "modals.create_dashboard.confirm",
+    ];
+
+    #[test]
+    fn create_dashboard_catalog_keys_resolve() {
+        for key in CREATE_DASHBOARD_KEYS {
+            let english = dbflux_i18n::t!(key);
+            let spanish = dbflux_i18n::t!(key, locale = "es");
+
+            assert!(!english.is_empty(), "empty English translation for {key}");
+            assert_ne!(english, *key, "missing English translation for {key}");
+            assert!(!spanish.is_empty(), "empty Spanish translation for {key}");
+            assert_ne!(spanish, *key, "missing Spanish translation for {key}");
+        }
+    }
+
+    #[test]
+    fn create_dashboard_title_differs_between_locales() {
+        let english = dbflux_i18n::t!("modals.create_dashboard.title", locale = "en");
+        let spanish = dbflux_i18n::t!("modals.create_dashboard.title", locale = "es");
+
+        assert_eq!(english, "New dashboard");
+        assert_eq!(spanish, "Nuevo dashboard");
+        assert_ne!(english, spanish);
     }
 }

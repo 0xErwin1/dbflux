@@ -31,7 +31,9 @@ pub enum ProxyProtocol {
 
 enum ProxiedStream {
     Plain(TcpStream),
-    Tls(TlsStream<TcpStream>),
+    // Boxed because a schannel-backed TlsStream is far larger than a bare
+    // TcpStream, which makes every ProxiedStream pay the TLS size on Windows.
+    Tls(Box<TlsStream<TcpStream>>),
 }
 
 impl ProxiedStream {
@@ -298,7 +300,7 @@ fn open_https_connect_stream(
     })?;
 
     let tls_stream = perform_connect_handshake(tls_stream, config, remote_host, remote_port)?;
-    Ok(ProxiedStream::Tls(tls_stream))
+    Ok(ProxiedStream::Tls(Box::new(tls_stream)))
 }
 
 fn perform_connect_handshake<S: Read + Write>(

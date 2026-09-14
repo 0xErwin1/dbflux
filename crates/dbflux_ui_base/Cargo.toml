@@ -17,6 +17,7 @@ dbflux_app.workspace = true
 dbflux_storage.workspace = true
 dbflux_components.workspace = true
 dbflux_core.workspace = true
+dbflux_i18n.workspace = true
 dbflux_mcp = { workspace = true, optional = true }
 dbflux_aws = { workspace = true, optional = true }
 tracing.workspace = true
@@ -34,6 +35,7 @@ serde_json.workspace = true
 
 [features]
 default = []
+test-support = []
 mcp = ["dbflux_mcp", "dbflux_app/mcp"]
 lua = ["dbflux_app/lua"]
 aws = ["dbflux_aws", "dbflux_app/aws"]

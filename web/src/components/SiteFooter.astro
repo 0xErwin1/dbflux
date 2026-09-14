@@ -1,0 +1,244 @@
+---
+import BrandMark from './BrandMark.astro';
+import LanguagePicker from './LanguagePicker.astro';
+import ThemePicker from './ThemePicker.astro';
+import { REPO } from '../data/nav';
+import { docsUrl, siteUrl } from '../data/site';
+import { localeFromPathname, t } from '../i18n';
+import type { Locale } from '../i18n';
+
+interface Props {
+  locale?: Locale;
+  showLanguagePicker?: boolean;
+}
+
+const { locale = localeFromPathname(Astro.url.pathname), showLanguagePicker = true } = Astro.props;
+
+const COLUMNS = [
+  {
+    title: t(locale, 'footer.product'),
+    links: [
+      { href: `${siteUrl('', locale)}#features`, label: t(locale, 'footer.features') },
+      { href: `${siteUrl('', locale)}#drivers`, label: t(locale, 'footer.drivers') },
+      { href: `${REPO}/releases`, label: t(locale, 'footer.releases') },
+    ],
+  },
+  {
+    title: t(locale, 'footer.docs'),
+    links: [
+      { href: docsUrl('usage', '', locale), label: t(locale, 'footer.usage') },
+      { href: docsUrl('connections', '', locale), label: t(locale, 'footer.connecting') },
+      { href: docsUrl('mcp_ai_integration', '', locale), label: t(locale, 'footer.mcp') },
+    ],
+  },
+  {
+    title: t(locale, 'footer.project'),
+    links: [
+      { href: siteUrl('about/', locale), label: t(locale, 'footer.about') },
+      { href: docsUrl('contributing', '', locale), label: t(locale, 'footer.contributing') },
+      { href: REPO, label: t(locale, 'footer.source') },
+      { href: docsUrl('trademark', '', locale), label: t(locale, 'footer.trademark') },
+      { href: docsUrl('privacy', '', locale), label: t(locale, 'footer.privacy') },
+    ],
+  },
+] as const;
+---
+
+<footer class="foot">
+  <div class="foot__inner shell">
+    <div class="foot__top">
+      <div class="foot__brand">
+        <span class="foot__mark">
+          <BrandMark size={26} />
+          <span>DBFlux</span>
+        </span>
+        <p>{t(locale, 'footer.tagline')}</p>
+      </div>
+
+      <div class="foot__cols">
+        {
+          COLUMNS.map((column) => (
+            <div class="foot__col">
+              <p class="foot__title">{column.title}</p>
+              {column.links.map((link) => (
+                <a href={link.href}>{link.label}</a>
+              ))}
+            </div>
+          ))
+        }
+      </div>
+    </div>
+
+    <div class="foot__bottom">
+      <p class="foot__license">{t(locale, 'footer.license')}</p>
+      <div
+        class="foot__utilities"
+        role="group"
+        aria-label={showLanguagePicker
+          ? `${t(locale, 'nav.language')} / ${t(locale, 'nav.theme')}`
+          : t(locale, 'nav.theme')}
+      >
+        {showLanguagePicker && <LanguagePicker locale={locale} placement="up-end" />}
+        <ThemePicker locale={locale} />
+      </div>
+    </div>
+  </div>
+</footer>
+
+<style>
+  .foot {
+    border-top: var(--bw) solid var(--border);
+    margin-top: var(--s-9);
+  }
+
+  .foot__inner {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-7);
+    padding-block: var(--s-7);
+  }
+
+  .foot__top,
+  .foot__bottom {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--s-8);
+  }
+
+  .foot__bottom {
+    align-items: center;
+    border-top: var(--bw) solid var(--border);
+    padding-top: var(--s-5);
+  }
+
+  .foot__brand {
+    max-width: 320px;
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-3);
+  }
+
+  .foot__mark {
+    display: flex;
+    align-items: center;
+    gap: var(--s-3);
+    font-family: var(--font-mono);
+    font-size: var(--fs-body);
+    font-weight: 700;
+    color: var(--text-strong);
+  }
+
+  .foot__mark :global(svg) {
+    color: var(--accent);
+  }
+
+  .foot__brand p {
+    margin: 0;
+    font-size: var(--fs-small);
+    color: var(--text-muted);
+    line-height: 1.65;
+  }
+
+  .foot__license {
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: var(--fs-small);
+    color: var(--text-muted);
+  }
+
+  .foot__cols {
+    display: flex;
+    flex: 0 1 auto;
+    align-content: flex-start;
+    gap: var(--s-8);
+  }
+
+  .foot__utilities {
+    display: flex;
+    flex: 0 0 auto;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: var(--s-2);
+  }
+
+  .foot__utilities :global(.lang) {
+    display: flex;
+    align-items: center;
+    border-right: var(--bw) solid var(--border);
+    padding-right: var(--s-2);
+  }
+
+  .foot__utilities :global(.lang__button) {
+    min-height: var(--tap-min);
+    padding-inline: var(--s-3);
+  }
+
+  .foot__col {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-3);
+  }
+
+  .foot__title {
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: var(--fs-label);
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+
+  .foot__col a {
+    font-family: var(--font-mono);
+    font-size: var(--fs-small);
+    color: var(--text);
+    transition: color var(--t-instant) linear;
+  }
+
+  .foot__col a:hover {
+    color: var(--accent);
+    text-decoration: none;
+  }
+
+  @media (max-width: 900px) {
+    .foot__top {
+      flex-direction: column;
+    }
+
+    .foot__cols {
+      flex-wrap: wrap;
+      gap: var(--s-6) var(--s-7);
+    }
+
+    .foot__bottom {
+      flex-wrap: wrap;
+    }
+
+    .foot__utilities {
+      justify-content: flex-start;
+    }
+  }
+
+  @media (max-width: 420px) {
+    .foot__bottom {
+      align-items: flex-start;
+      flex-direction: column;
+      gap: var(--s-4);
+    }
+
+    .foot__utilities {
+      display: grid;
+      grid-template-columns: 1fr;
+      justify-items: start;
+    }
+
+    .foot__utilities :global(.lang) {
+      border-right: 0;
+      border-bottom: var(--bw) solid var(--border);
+      padding-right: 0;
+      padding-bottom: var(--s-2);
+    }
+  }
+</style>

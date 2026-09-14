@@ -148,6 +148,7 @@ fn read_and_explain_query_paths_return_expected_semantics() {
             query_language: QueryLanguage::Sql,
             query: "SELECT id, email FROM users".to_string(),
         },
+        None,
         &read_engine,
     )
     .expect("read query should pass policy and execute");
@@ -165,6 +166,7 @@ fn read_and_explain_query_paths_return_expected_semantics() {
             query_language: QueryLanguage::Sql,
             query: "EXPLAIN SELECT id FROM users".to_string(),
         },
+        None,
         &explain_engine,
     )
     .expect("explain query should pass policy and execute");

@@ -127,7 +127,7 @@ impl IntegrationHarness {
                         .to_string(),
                 };
 
-                let response = handle_query_tool(&request, &self.read_engine)?;
+                let response = handle_query_tool(&request, None, &self.read_engine)?;
                 Ok(ToolCallResponse::Query(response))
             }
             _ => Err("unsupported tool in integration harness".into()),

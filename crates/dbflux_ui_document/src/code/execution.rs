@@ -37,9 +37,9 @@ fn evaluate_dangerous_with_effective_settings(
     use dbflux_core::DangerousQueryKind::*;
 
     if !allow_redis_flush && matches!(kind, RedisFlushAll | RedisFlushDb) {
-        return dbflux_core::DangerousAction::Block(
-            "FLUSHALL / FLUSHDB is disabled in settings".to_string(),
-        );
+        return dbflux_core::DangerousAction::Block(dbflux_i18n::t!(
+            "document.code.execution.toast.redis_flush_disabled"
+        ));
     }
 
     if !effective.confirm_dangerous {
@@ -162,9 +162,11 @@ impl CodeDocument {
 
     pub fn run_selected_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(query) = self.selected_query(window, cx) else {
-            Toast::warning("Select query text to run")
-                .meta_right(now_hms())
-                .push(cx);
+            Toast::warning(dbflux_i18n::t!(
+                "document.code.execution.toast.select_query"
+            ))
+            .meta_right(now_hms())
+            .push(cx);
             return;
         };
 
@@ -207,7 +209,7 @@ impl CodeDocument {
     /// Returns `None` for a single statement or a driver that cannot execute
     /// batches, in which case no confirmation is shown.
     fn script_statement_count(&self, query: &str, cx: &Context<Self>) -> Option<usize> {
-        let count = self.editor.query_language.statement_count(query);
+        let count = self.effective_language().statement_count(query);
         if count <= 1 {
             return None;
         }
@@ -246,7 +248,7 @@ impl CodeDocument {
         cx: &mut Context<Self>,
     ) {
         if query.trim().is_empty() {
-            Toast::warning("Enter a query to run")
+            Toast::warning(dbflux_i18n::t!("document.code.execution.toast.enter_query"))
                 .meta_right(now_hms())
                 .push(cx);
             return;
@@ -319,7 +321,9 @@ impl CodeDocument {
                 ValidationResult::Valid => {}
                 ValidationResult::SyntaxError(diag) => {
                     let msg = match diag.hint {
-                        Some(ref hint) => format!("{}\nHint: {}", diag.message, hint),
+                        Some(ref hint) => {
+                            crate::labels::syntax_error_with_hint(&diag.message, hint)
+                        }
                         None => diag.message,
                     };
                     let toast_msg = msg.to_string();
@@ -355,7 +359,7 @@ impl CodeDocument {
                 }
                 Err(message) => {
                     self.source.exec_ctx.source = None;
-                    let toast_msg = message.to_string();
+                    let toast_msg = crate::labels::source_window_error_message(message);
                     Toast::error(toast_msg.clone())
                         .meta_right(now_hms())
                         .action(copy_action(toast_msg))
@@ -533,9 +537,10 @@ impl CodeDocument {
         cx: &mut Context<Self>,
     ) {
         let Some(conn_id) = self.connection_id else {
-            Toast::error("No active connection")
+            let msg = dbflux_i18n::t!("document.code.execution.toast.no_active_connection");
+            Toast::error(msg.clone())
                 .meta_right(now_hms())
-                .action(copy_action("No active connection"))
+                .action(copy_action(msg))
                 .push(cx);
             return;
         };
@@ -543,9 +548,10 @@ impl CodeDocument {
         let (connection, active_database, task_target) = {
             let connections = self.app_state.read(cx).connections();
             let Some(connected) = connections.get(&conn_id) else {
-                Toast::error("Connection not found")
+                let msg = dbflux_i18n::t!("document.code.execution.toast.connection_not_found");
+                Toast::error(msg.clone())
                     .meta_right(now_hms())
-                    .action(copy_action("Connection not found"))
+                    .action(copy_action(msg))
                     .push(cx);
                 return;
             };
@@ -566,7 +572,10 @@ impl CodeDocument {
                 Err(dbflux_core::ConnectionResolutionError::PendingDatabaseConnection {
                     database,
                 }) => {
-                    let msg = format!("Connecting to database '{}', please wait...", database);
+                    let msg = dbflux_i18n::t!(
+                        "document.code.execution.toast.connecting",
+                        database = database
+                    );
                     Toast::error(msg.clone())
                         .meta_right(now_hms())
                         .action(copy_action(msg))
@@ -576,6 +585,10 @@ impl CodeDocument {
             }
         };
 
+        self.execution_session_context = Some(ExecutionSessionContext {
+            root: connection.clone(),
+            database: active_database.clone(),
+        });
         self.clear_live_output();
         self.result_tabs.run_in_new_tab = in_new_tab;
 
@@ -602,18 +615,48 @@ impl CodeDocument {
         self.execution.active_query_task = Some(ActiveQueryTask {
             task_id,
             target: task_target.clone(),
+            uses_isolated_session: connection.execution_session_factory().is_some(),
         });
 
         self.state = DocumentState::Executing;
         cx.emit(DocumentEvent::ExecutionStarted);
         cx.notify();
 
-        let request = query_request_for_execution(
+        let session_database = active_database.clone();
+        let mut request = query_request_for_execution(
             query.clone(),
             active_database,
             &self.source.exec_ctx,
-            self.editor.query_language.clone(),
+            self.effective_language().clone(),
         );
+
+        // Governance ceiling for a driver-dispatched multi-statement script
+        // (see `QueryRequest::confirmed_ceiling`). Reusing `detect_dangerous`
+        // here — rather than threading the earlier `run_query_text` call's
+        // result through `pending` — keeps this a pure re-derivation from
+        // the query text and connection, with no extra state to go stale.
+        // Any dangerous kind reaching this point was already either
+        // confirmed by the user or explicitly allowed by settings, so it is
+        // safe to raise the ceiling; an absent dangerous kind leaves the
+        // ceiling `None`, which the driver defaults to the restrictive
+        // `Read`. This never branches on a concrete driver id — the
+        // downstream driver decides whether the ceiling even applies to it.
+        let confirmed_ceiling = self.connection_id.and_then(|conn_id| {
+            self.app_state
+                .read(cx)
+                .connections()
+                .get(&conn_id)
+                .and_then(|connected| {
+                    connected
+                        .connection
+                        .language_service()
+                        .detect_dangerous(&query)
+                })
+        });
+        if confirmed_ceiling.is_some() {
+            request =
+                request.with_confirmed_ceiling(dbflux_core::ExecutionClassification::Destructive);
+        }
 
         // Capture audit_service, task_target, and started_at before spawning so we can emit
         // audit events even if the document is closed before the deferred task runs.
@@ -631,19 +674,51 @@ impl CodeDocument {
             .map(|c| c.profile.driver_id())
             .unwrap_or_default();
 
+        let session_binding = self.execution_session.clone();
+        let session_generation = session_binding.current_generation();
         let task = cx.background_executor().spawn({
             let connection = connection.clone();
-            async move { connection.execute(&request) }
+            let session_binding = session_binding.clone();
+            async move { session_binding.execute(connection, session_database, &request) }
         });
 
         cx.spawn(async move |this, cx| {
-            let result = task.await;
+            let session_execution = task.await;
+            let session_isolated = session_execution.isolated;
+            let mut result = session_execution.result;
 
-            if cancel_token.is_cancelled() {
+            if let Ok(query_result) = result.as_mut() {
+                crate::result_warnings::handoff_sql_editor_result(query_result, |warning| {
+                    dbflux_ui_base::user_error::report_error_async(warning, cx)
+                });
+            }
+
+            if cancel_token.is_cancelled() && session_isolated {
+                // Local task cancellation does not cancel the remote isolated session. Wait for
+                // the completed operation, then retire only that session in the background.
+                let cleanup_binding = session_binding.clone();
+                let cleanup = cx
+                    .background_executor()
+                    .spawn(async move {
+                        let generation = cleanup_binding.invalidate();
+                        cleanup_binding.close_invalidated(generation)
+                    })
+                    .await;
+                if let Err(error) = cleanup {
+                    dbflux_ui_base::user_error::report_error_async(
+                        dbflux_ui_base::user_error::UserFacingError::new(
+                            dbflux_ui_base::user_error::ErrorKind::Driver,
+                            "Could not confirm cleanup of the cancelled isolated query",
+                        )
+                        .with_cause(error.to_string()),
+                        cx,
+                    );
+                }
+            } else if cancel_token.is_cancelled() {
                 log::info!("Query was cancelled, discarding result");
 
                 if let Err(error) = connection.cleanup_after_cancel() {
-                    log::warn!("Cleanup after cancel failed: {}", error);
+                    log::warn!("Cleanup after cancel failed: {error}");
                 }
 
                 let inner_result = this.update(cx, |doc, cx| {
@@ -655,21 +730,13 @@ impl CodeDocument {
                         cx,
                     );
                 });
-                // Fallback fires if the entity is gone (this.update failed). If this.update
-                // succeeded, the entity is alive and process_pending_result will emit via the
-                // normal path — no second probe needed. This avoids both double-logging and
-                // the overhead of a separate cx.update call.
                 if inner_result.is_err() {
-                    // Entity is gone; process_pending_result won't run. Emit via fallback so the event
-                    // is not silently dropped.
                     let ts_ms = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .map(|d| d.as_millis() as i64)
                         .unwrap_or(0);
                     let duration_ms = started_at.elapsed().as_millis() as i64;
-
                     let details_json = serde_json::json!({ "query": query }).to_string();
-
                     let mut event = EventRecord::new(
                         ts_ms,
                         EventSeverity::Warn,
@@ -687,14 +754,21 @@ impl CodeDocument {
                     event.source_id = EventSourceId::Local;
                     event.actor_type = EventActorType::User;
                     event.duration_ms = Some(duration_ms);
-                    if let Err(e) = audit_service.record(event) {
+                    if let Err(error) = audit_service.record(event) {
                         log::warn!(
-                            "Failed to emit cancelled query audit event via fallback: {}",
-                            e
+                            "Failed to emit cancelled query audit event via fallback: {error}"
                         );
                     }
                 }
+                return;
+            }
 
+            if !cancel_token.is_cancelled()
+                && !session_binding.is_current_generation(session_generation)
+            {
+                let _ = this.update(cx, |doc, cx| {
+                    doc.discard_stale_query(task_id, exec_id, cx);
+                });
                 return;
             }
 
@@ -909,9 +983,118 @@ impl CodeDocument {
         );
     }
 
+    fn discard_stale_query(
+        &mut self,
+        task_id: dbflux_core::TaskId,
+        exec_id: Uuid,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(record) = self
+            .execution
+            .execution_history
+            .iter_mut()
+            .find(|record| record.id == exec_id)
+        {
+            record.finished_at = Some(Instant::now());
+            record.error = Some("Execution result discarded after context changed".to_string());
+        }
+        if self
+            .execution
+            .active_query_task
+            .as_ref()
+            .is_some_and(|task| task.task_id == task_id)
+        {
+            self.runner.clear_primary(task_id);
+            self.execution.active_query_task = None;
+            self.state = DocumentState::Clean;
+            cx.emit(DocumentEvent::ExecutionFinished);
+            cx.emit(DocumentEvent::MetaChanged);
+            cx.notify();
+        }
+    }
+
     pub(super) fn cancel_dangerous_query(&mut self, cx: &mut Context<Self>) {
         self.pending.dangerous_query = None;
         cx.notify();
+    }
+
+    /// Fans a script run's dispatch ledger (`metadata_extra["script_operations"]`,
+    /// a JSON array shaped by `dbflux_js`/the driver — see
+    /// `ScriptLedgerEntry`) into one `EventRecord` per entry, all sharing
+    /// `correlation_id`. Keyed on the generic field name only; no driver-id
+    /// branching.
+    fn emit_script_operation_events(
+        &self,
+        cx: &Context<Self>,
+        correlation_id: Uuid,
+        ledger: &[serde_json::Value],
+    ) {
+        let Some(conn_id) = self.connection_id else {
+            return;
+        };
+        let Some((database_name, driver_id)) = self
+            .app_state
+            .read(cx)
+            .connections()
+            .get(&conn_id)
+            .map(|c| {
+                let db = self
+                    .source
+                    .exec_ctx
+                    .database
+                    .clone()
+                    .or(c.active_database.clone());
+                (db.unwrap_or_default(), c.profile.driver_id())
+            })
+        else {
+            return;
+        };
+
+        let audit_service = self.app_state.read(cx).audit_service().clone();
+        let ts_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+
+        for entry in ledger {
+            let failed = entry.get("outcome").and_then(|v| v.as_str()) == Some("failed");
+            let outcome = if failed {
+                EventOutcome::Failure
+            } else {
+                EventOutcome::Success
+            };
+            let action = if failed {
+                audit_actions::QUERY_EXECUTE_FAILED
+            } else {
+                audit_actions::QUERY_EXECUTE
+            };
+            let severity = if failed {
+                EventSeverity::Error
+            } else {
+                EventSeverity::Info
+            };
+            let method = entry.get("method").and_then(|v| v.as_str()).unwrap_or("");
+
+            let mut event = EventRecord::new(ts_ms, severity, EventCategory::Query, outcome)
+                .with_typed_action(action)
+                .with_summary(format!("Script operation .{method}()"))
+                .with_connection_context(
+                    conn_id.to_string(),
+                    database_name.clone(),
+                    driver_id.clone(),
+                )
+                .with_origin(EventOrigin::local())
+                .with_correlation_id(correlation_id.to_string())
+                .with_details_json(entry.to_string());
+
+            if let Some(message) = entry.get("message").and_then(|v| v.as_str()) {
+                event.error_message = Some(message.to_string());
+            }
+
+            if let Err(e) = audit_service.record(event) {
+                log::warn!("Failed to emit script operation audit event: {}", e);
+            }
+        }
     }
 
     /// Process pending query selected from history modal (called from render).
@@ -957,9 +1140,11 @@ impl CodeDocument {
             self.refresh.refresh_dropdown.update(cx, |dd, cx| {
                 dd.set_selected_index(Some(dbflux_core::RefreshPolicy::Manual.index()), cx);
             });
-            Toast::warning("Auto-refresh blocked: query modifies data")
-                .meta_right(now_hms())
-                .push(cx);
+            Toast::warning(dbflux_i18n::t!(
+                "document.code.execution.toast.auto_refresh_blocked"
+            ))
+            .meta_right(now_hms())
+            .push(cx);
             return;
         }
 
@@ -1098,6 +1283,40 @@ impl CodeDocument {
                         metadata_extra.as_ref(),
                     );
                 }
+
+                // A driver-dispatched multi-statement script (currently only
+                // MongoDB's JS engine) carries its own dispatch ledger under
+                // the generic `script_operations`/`script_failure` keys.
+                // Fan the ledger into one audit row per dispatched operation
+                // sharing this run's correlation id, and route a mid-script
+                // failure through the same seam every other user-facing
+                // driver failure uses. This is the ONLY catch site for
+                // `script_failure` — the driver never toasts and the engine
+                // never reports.
+                if let Some(extra) = metadata_extra.as_ref() {
+                    if let Some(script_operations) =
+                        extra.get("script_operations").and_then(|v| v.as_array())
+                    {
+                        self.emit_script_operation_events(cx, pending.exec_id, script_operations);
+                    }
+
+                    if let Some(failure) = extra.get("script_failure") {
+                        let message = failure
+                            .get("message")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("script execution failed")
+                            .to_string();
+
+                        self.state = DocumentState::Error;
+                        dbflux_ui_base::user_error::report_error(
+                            dbflux_ui_base::user_error::UserFacingError::from_formatted(
+                                dbflux_ui_base::user_error::ErrorKind::Driver,
+                                dbflux_core::FormattedError::new(message),
+                            ),
+                            cx,
+                        );
+                    }
+                }
             }
             Err(e) => {
                 self.runner.fail_primary(pending.task_id, e.to_string(), cx);
@@ -1107,9 +1326,9 @@ impl CodeDocument {
                 self.state = DocumentState::Error;
 
                 let title: SharedString = if is_script {
-                    "Script failed".into()
+                    dbflux_i18n::t!("document.code.execution.result_title.script_failed").into()
                 } else {
-                    "Query failed".into()
+                    dbflux_i18n::t!("document.code.execution.result_title.query_failed").into()
                 };
                 let now = dbflux_core::chrono::Local::now()
                     .format("%H:%M:%S")
@@ -1141,13 +1360,16 @@ impl CodeDocument {
                 };
 
                 toast = toast.action(
-                    dbflux_ui_base::toast::ToastAction::new("copy-error", "Copy error")
-                        .primary()
-                        .on_click(move |cx: &mut App| {
-                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(
-                                copy_payload.clone(),
-                            ));
-                        }),
+                    dbflux_ui_base::toast::ToastAction::new(
+                        "copy-error",
+                        dbflux_i18n::t!("document.code.execution.copy_error"),
+                    )
+                    .primary()
+                    .on_click(move |cx: &mut App| {
+                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                            copy_payload.clone(),
+                        ));
+                    }),
                 );
                 toast.push(cx);
                 let _ = window;
@@ -1269,7 +1491,10 @@ impl CodeDocument {
     ) {
         self.result_tabs.result_tab_counter += 1;
         let tab_id = Uuid::new_v4();
-        let title = format!("Result {}", self.result_tabs.result_tab_counter);
+        let title = dbflux_i18n::t!(
+            "document.code.execution.result_tab_title",
+            index = self.result_tabs.result_tab_counter
+        );
 
         let app_state = self.app_state.clone();
         let grid = cx.new(|cx| {
@@ -1370,9 +1595,11 @@ impl CodeDocument {
             }
 
             if let Some(task) = self.execution.active_query_task.as_ref() {
-                self.app_state
-                    .read(cx)
-                    .cancel_query_for_target(&task.target);
+                if !task.uses_isolated_session {
+                    self.app_state
+                        .read(cx)
+                        .cancel_query_for_target(&task.target);
+                }
             } else if let Some(conn_id) = self.connection_id
                 && let Some(connected) = self.app_state.read(cx).connections().get(&conn_id)
             {
@@ -1434,17 +1661,21 @@ impl CodeDocument {
     /// The result appears in the same Results panel as a regular query.
     pub fn run_explain(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.supports_connection_context() {
-            Toast::warning("Explain is not available for scripts")
-                .meta_right(now_hms())
-                .push(cx);
+            Toast::warning(dbflux_i18n::t!(
+                "document.code.execution.toast.explain_unavailable"
+            ))
+            .meta_right(now_hms())
+            .push(cx);
             return;
         }
 
         let base_query = self.selected_or_full_query(window, cx);
         if base_query.trim().is_empty() {
-            Toast::warning("Enter a query to explain")
-                .meta_right(now_hms())
-                .push(cx);
+            Toast::warning(dbflux_i18n::t!(
+                "document.code.execution.toast.enter_query_to_explain"
+            ))
+            .meta_right(now_hms())
+            .push(cx);
             return;
         }
 
@@ -1513,13 +1744,15 @@ impl CodeDocument {
 
         let content = self.editor.input_state.read(cx).value().to_string();
         if content.trim().is_empty() {
-            Toast::warning("Enter script content to run")
-                .meta_right(now_hms())
-                .push(cx);
+            Toast::warning(dbflux_i18n::t!(
+                "document.code.execution.toast.enter_script_content"
+            ))
+            .meta_right(now_hms())
+            .push(cx);
             return;
         }
 
-        let kind = match &self.editor.query_language {
+        let kind = match self.effective_language() {
             QueryLanguage::Lua => HookKind::Lua {
                 source: ScriptSource::Inline {
                     content: content.clone(),
@@ -1566,7 +1799,8 @@ impl CodeDocument {
             phase: None,
         };
 
-        let description = format!("Run {} script", self.editor.query_language.display_name());
+        let description =
+            crate::labels::run_script_task_label(self.effective_language().display_name());
         let (output_sender, output_receiver) = dbflux_core::output_channel();
         let (task_id, cancel_token) =
             self.runner
@@ -2293,5 +2527,75 @@ mod tests {
             "SELECT 2",
             "stored query must be preserved across the put-back"
         );
+    }
+
+    #[test]
+    fn execution_toast_keys_resolve_in_both_locales() {
+        let keys = [
+            "document.code.execution.toast.select_query",
+            "document.code.execution.toast.enter_query",
+            "document.code.execution.toast.no_active_connection",
+            "document.code.execution.toast.connection_not_found",
+            "document.code.execution.toast.auto_refresh_blocked",
+            "document.code.execution.toast.explain_unavailable",
+            "document.code.execution.toast.enter_query_to_explain",
+            "document.code.execution.toast.enter_script_content",
+            "document.code.execution.toast.write_query_first",
+            "document.code.execution.toast.connecting",
+            "document.code.execution.toast.redis_flush_disabled",
+            "document.code.execution.result_title.query_failed",
+            "document.code.execution.result_title.script_failed",
+            "document.code.execution.copy_error",
+        ];
+
+        for key in keys {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn execution_connecting_toast_interpolates_database_name() {
+        let en = dbflux_i18n::t!(
+            "document.code.execution.toast.connecting",
+            locale = "en",
+            database = "logs"
+        );
+
+        assert_eq!(en, "Connecting to database 'logs', please wait...");
+    }
+
+    #[test]
+    fn execution_result_tab_title_interpolates_index() {
+        let en = dbflux_i18n::t!(
+            "document.code.execution.result_tab_title",
+            locale = "en",
+            index = 3
+        );
+
+        assert_eq!(en, "Result 3");
+    }
+
+    #[test]
+    fn execution_result_titles_differ_between_locales() {
+        let en = dbflux_i18n::t!(
+            "document.code.execution.result_title.query_failed",
+            locale = "en"
+        );
+        let es = dbflux_i18n::t!(
+            "document.code.execution.result_title.query_failed",
+            locale = "es"
+        );
+
+        assert_ne!(en, es);
     }
 }

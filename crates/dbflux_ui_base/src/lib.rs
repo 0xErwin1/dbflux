@@ -14,6 +14,7 @@ pub mod hook_phase_runner;
 pub mod keymap;
 pub mod modal_frame;
 pub mod modals;
+pub mod open_external;
 pub mod platform;
 pub mod saved_chart_manager;
 pub mod saved_query_manager;

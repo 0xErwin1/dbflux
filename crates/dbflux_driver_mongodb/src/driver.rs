@@ -31,6 +31,7 @@ use dbflux_core::{
     field_use_uri, sanitize_uri, ssh_tab, when_checked, when_unchecked, with_default,
 };
 use dbflux_ssh::SshTunnel;
+use mongodb::options::ClientOptions;
 use mongodb::sync::{Client, Database};
 use uuid::Uuid;
 
@@ -113,7 +114,8 @@ pub static MONGODB_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverM
             | DriverCapabilities::INDEXES.bits()
             | DriverCapabilities::INSTANCE_METRICS.bits()
             | DriverCapabilities::INSTANCE_INSPECTOR.bits()
-            | DriverCapabilities::CHART_AUTHORING.bits(),
+            | DriverCapabilities::CHART_AUTHORING.bits()
+            | DriverCapabilities::SCRIPT_EXECUTION.bits(),
     ),
     default_port: Some(27017),
     uri_scheme: "mongodb".into(),
@@ -279,6 +281,7 @@ impl DbDriver for MongoDriver {
                             enabled_when_checked: None,
                             enabled_when_unchecked: None,
                             disabled_when_field_set: None,
+                            enabled_when_field_equals: None,
                             help: None,
                         },
                         FormFieldDef {
@@ -291,6 +294,7 @@ impl DbDriver for MongoDriver {
                             enabled_when_checked: None,
                             enabled_when_unchecked: None,
                             disabled_when_field_set: None,
+                            enabled_when_field_equals: None,
                             help: None,
                         },
                     ],
@@ -634,8 +638,13 @@ impl MongoDriver {
 
         log::info!("Connecting to MongoDB with URI");
 
+        let mut options = ClientOptions::parse(&uri)
+            .run()
+            .map_err(|e| format_mongo_uri_error(&e, base_uri))?;
+        apply_default_app_name(&mut options);
+
         let client =
-            Client::with_uri_str(&uri).map_err(|e| format_mongo_uri_error(&e, base_uri))?;
+            Client::with_options(options).map_err(|e| format_mongo_uri_error(&e, base_uri))?;
 
         client
             .list_database_names()
@@ -673,7 +682,13 @@ impl MongoDriver {
 
         log::info!("Connecting to MongoDB at {}:{}", host, port);
 
-        let client = Client::with_uri_str(&uri).map_err(|e| format_mongo_error(&e, host, port))?;
+        let mut options = ClientOptions::parse(&uri)
+            .run()
+            .map_err(|e| format_mongo_error(&e, host, port))?;
+        apply_default_app_name(&mut options);
+
+        let client =
+            Client::with_options(options).map_err(|e| format_mongo_error(&e, host, port))?;
 
         client
             .list_database_names()
@@ -1141,33 +1156,65 @@ fn inject_credentials_into_uri(
     user: Option<&str>,
     password: Option<&str>,
 ) -> String {
-    let user_val = user.unwrap_or("");
+    let (prefix, rest) = if let Some(rest) = base_uri.strip_prefix("mongodb://") {
+        ("mongodb://", rest)
+    } else if let Some(rest) = base_uri.strip_prefix("mongodb+srv://") {
+        ("mongodb+srv://", rest)
+    } else {
+        return base_uri.to_string();
+    };
 
-    // Do not inject when there is no username — injecting ":password@" produces
-    // a malformed authority and would silently use the stored password against
-    // a URI that was never intended to carry credentials.
-    if user_val.is_empty() {
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let authority = &rest[..authority_end];
+    if let Some(at_pos) = authority.rfind('@') {
+        let userinfo = &authority[..at_pos];
+        let password_separator = if let Some((_, password)) = userinfo.split_once(':') {
+            if !password.is_empty() {
+                return base_uri.to_string();
+            }
+            ""
+        } else {
+            ":"
+        };
+
+        if !userinfo.is_empty()
+            && let Some(password) = password
+        {
+            return format!(
+                "{}{}{}{}{}",
+                prefix,
+                &rest[..at_pos],
+                password_separator,
+                urlencoding::encode(password),
+                &rest[at_pos..]
+            );
+        }
+
         return base_uri.to_string();
     }
 
-    if base_uri.contains('@') {
-        base_uri.to_string()
-    } else if let Some(rest) = base_uri.strip_prefix("mongodb://") {
-        format!(
-            "mongodb://{}:{}@{}",
-            urlencoding::encode(user_val),
-            urlencoding::encode(password.unwrap_or("")),
-            rest
-        )
-    } else if let Some(rest) = base_uri.strip_prefix("mongodb+srv://") {
-        format!(
-            "mongodb+srv://{}:{}@{}",
-            urlencoding::encode(user_val),
-            urlencoding::encode(password.unwrap_or("")),
-            rest
-        )
-    } else {
-        base_uri.to_string()
+    let user = user.unwrap_or("");
+    // Do not inject when there is no username — injecting ":password@" produces
+    // a malformed authority and would silently use the stored password against
+    // a URI that was never intended to carry credentials.
+    if user.is_empty() {
+        return base_uri.to_string();
+    }
+
+    format!(
+        "{}{}:{}@{}",
+        prefix,
+        urlencoding::encode(user),
+        urlencoding::encode(password.unwrap_or("")),
+        rest
+    )
+}
+
+/// Fills in a default `appName` when the URI did not already set one via `appName=`,
+/// so a user-supplied value always wins over ours.
+fn apply_default_app_name(options: &mut ClientOptions) {
+    if options.app_name.is_none() {
+        options.app_name = Some(dbflux_core::client_identity().to_string());
     }
 }
 
@@ -1243,7 +1290,7 @@ fn format_mongo_error(e: &mongodb::error::Error, host: &str, port: u16) -> DbErr
     formatted.into_connection_error()
 }
 
-fn format_mongo_query_error(e: &mongodb::error::Error) -> DbError {
+pub(crate) fn format_mongo_query_error(e: &mongodb::error::Error) -> DbError {
     let formatted = MONGO_ERROR_FORMATTER.format_query_error(e);
     let message = formatted.to_display_string();
     log::error!("MongoDB query failed: {}", message);
@@ -1780,6 +1827,246 @@ fn schema_listing_columns() -> Vec<ColumnMeta> {
     ]
 }
 
+impl MongoConnection {
+    /// Runs `req.sql` as a mongosh-style multi-statement script through
+    /// `dbflux_js::run`, then folds the run outcome into one `QueryResult`:
+    /// the first dispatched statement becomes the primary result, later
+    /// statements become `additional_results`, `print()` output surfaces in
+    /// `text_body`, and the dispatch ledger / any mid-script failure are
+    /// serialized into `metadata_extra` under `script_operations` /
+    /// `script_failure` for `execution.rs`'s audit fan-out to consume.
+    ///
+    /// `req.confirmed_ceiling` is the governance ceiling authorised by the
+    /// caller (the editor's one-time confirmation, or the MCP policy
+    /// decision); `None` defaults to `Read` — an omitted ceiling refuses a
+    /// destructive op, it never permits one (see
+    /// `QueryRequest::confirmed_ceiling`'s invariant).
+    fn execute_script(
+        &self,
+        req: &QueryRequest,
+        client: &Client,
+        start: Instant,
+    ) -> Result<QueryResult, DbError> {
+        let db_name = req
+            .database
+            .as_ref()
+            .or(self.default_database.as_ref())
+            .ok_or_else(|| DbError::query_failed("No database specified".to_string()))?;
+        let db = client.database(db_name);
+
+        let host = crate::script_host::MongoScriptHost::new(client, &db, self.cancelled.clone());
+        let ceiling = req
+            .confirmed_ceiling
+            .unwrap_or(dbflux_core::ExecutionClassification::Read);
+
+        let config = dbflux_js::ScriptRunConfig {
+            source: req.sql.clone(),
+            ceiling,
+            cancel_token: dbflux_core::CancelToken::new(),
+        };
+
+        let outcome =
+            dbflux_js::run(config, &host).map_err(|e| DbError::query_failed(e.to_string()))?;
+
+        let query_time = start.elapsed();
+
+        log::debug!(
+            "[SCRIPT] Completed in {:.2}ms, {} statement(s) dispatched",
+            query_time.as_secs_f64() * 1000.0,
+            outcome.ledger.len()
+        );
+
+        let mut statement_results: Vec<QueryResult> = outcome
+            .statements
+            .iter()
+            .map(|stmt| {
+                let internal = documents_to_json_result(&stmt.documents);
+                let mut qr = QueryResult::json(internal.columns, internal.rows, query_time);
+                let mut metadata_extra = HashMap::new();
+                metadata_extra.insert(
+                    "script_statement_index".to_string(),
+                    serde_json::json!(stmt.index),
+                );
+                qr.metadata_extra = Some(metadata_extra);
+                qr
+            })
+            .collect();
+
+        let mut primary = if statement_results.is_empty() {
+            QueryResult::json(Vec::new(), Vec::new(), query_time)
+        } else {
+            statement_results.remove(0)
+        };
+
+        if !outcome.print_output.is_empty() {
+            primary.text_body = Some(outcome.print_output.clone());
+        }
+
+        for extra in statement_results {
+            primary.push_additional_result(extra);
+        }
+
+        let mut metadata_extra = primary.metadata_extra.take().unwrap_or_default();
+        metadata_extra.insert(
+            "script_operations".to_string(),
+            serde_json::Value::Array(script_ledger_to_json(&outcome.ledger)),
+        );
+        if let Some(failure) = &outcome.failure {
+            metadata_extra.insert(
+                "script_failure".to_string(),
+                serde_json::json!({ "index": failure.index, "message": failure.message }),
+            );
+        }
+        primary.metadata_extra = Some(metadata_extra);
+
+        Ok(primary)
+    }
+}
+
+/// Serializes the engine's dispatch ledger into the JSON shape
+/// `execution.rs` fans into one audit `EventRecord` per entry.
+fn script_ledger_to_json(ledger: &[dbflux_js::ScriptLedgerEntry]) -> Vec<serde_json::Value> {
+    ledger
+        .iter()
+        .map(|entry| {
+            let target = match &entry.target {
+                dbflux_core::ScriptTarget::Database => serde_json::json!({ "kind": "database" }),
+                dbflux_core::ScriptTarget::Container(name) => {
+                    serde_json::json!({ "kind": "container", "name": name })
+                }
+            };
+            let (outcome, message) = match &entry.outcome {
+                dbflux_js::ScriptLedgerOutcome::Success => ("success", None),
+                dbflux_js::ScriptLedgerOutcome::Failed { message } => {
+                    ("failed", Some(message.clone()))
+                }
+            };
+
+            serde_json::json!({
+                "index": entry.index,
+                "target": target,
+                "method": entry.method,
+                "classification": entry.classification,
+                "outcome": outcome,
+                "message": message,
+                "counts": {
+                    "matched": entry.counts.matched,
+                    "modified": entry.counts.modified,
+                    "inserted": entry.counts.inserted,
+                    "deleted": entry.counts.deleted,
+                    "upserted": entry.counts.upserted,
+                },
+            })
+        })
+        .collect()
+}
+
+/// Converts one statement's JSON documents into the tabular shape the UI's
+/// JSON grid renders, mirroring `documents_to_result`'s BSON path but keyed
+/// on `serde_json::Value`. Documents that are JSON objects get one column
+/// per union key (`_id` first, matching the BSON path); a non-object result
+/// (a scalar `count`, a collection-name string) gets a single `value`
+/// column instead.
+fn documents_to_json_result(documents: &[serde_json::Value]) -> QueryResultInternal {
+    if documents.is_empty() {
+        return QueryResultInternal {
+            columns: Vec::new(),
+            rows: Vec::new(),
+            affected_rows: None,
+        };
+    }
+
+    let all_objects = documents.iter().all(serde_json::Value::is_object);
+
+    if !all_objects {
+        let rows: Vec<Row> = documents
+            .iter()
+            .map(|doc| vec![json_to_value(doc)])
+            .collect();
+        return QueryResultInternal {
+            columns: vec![ColumnMeta {
+                name: "value".to_string(),
+                type_name: "JSON".to_string(),
+                kind: ColumnKind::Unknown,
+                nullable: true,
+                is_primary_key: false,
+            }],
+            rows,
+            affected_rows: None,
+        };
+    }
+
+    let mut field_names: Vec<String> = Vec::new();
+    let mut seen_fields: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for doc in documents {
+        if let Some(obj) = doc.as_object() {
+            for key in obj.keys() {
+                if seen_fields.insert(key.clone()) {
+                    field_names.push(key.clone());
+                }
+            }
+        }
+    }
+    if let Some(pos) = field_names.iter().position(|k| k == "_id") {
+        field_names.remove(pos);
+        field_names.insert(0, "_id".to_string());
+    }
+
+    let columns: Vec<ColumnMeta> = field_names
+        .iter()
+        .map(|name| ColumnMeta {
+            name: name.clone(),
+            type_name: "JSON".to_string(),
+            kind: ColumnKind::Unknown,
+            nullable: true,
+            is_primary_key: name == "_id",
+        })
+        .collect();
+
+    let rows: Vec<Row> = documents
+        .iter()
+        .map(|doc| {
+            field_names
+                .iter()
+                .map(|field| doc.get(field).map(json_to_value).unwrap_or(Value::Null))
+                .collect()
+        })
+        .collect();
+
+    QueryResultInternal {
+        columns,
+        rows,
+        affected_rows: None,
+    }
+}
+
+/// Converts a `serde_json::Value` (already relaxed-extJSON-shaped by
+/// `script_host`) into the core `Value` the UI's grid renders.
+fn json_to_value(value: &serde_json::Value) -> Value {
+    match value {
+        serde_json::Value::Null => Value::Null,
+        serde_json::Value::Bool(b) => Value::Bool(*b),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Value::Int(i)
+            } else if let Some(f) = n.as_f64() {
+                Value::Float(f)
+            } else {
+                Value::Text(n.to_string())
+            }
+        }
+        serde_json::Value::String(s) => Value::Text(s.clone()),
+        serde_json::Value::Array(arr) => Value::Array(arr.iter().map(json_to_value).collect()),
+        serde_json::Value::Object(obj) => {
+            let map: BTreeMap<String, Value> = obj
+                .iter()
+                .map(|(k, v)| (k.clone(), json_to_value(v)))
+                .collect();
+            Value::Document(map)
+        }
+    }
+}
+
 impl Connection for MongoConnection {
     fn metadata(&self) -> &DriverMetadata {
         &MONGODB_METADATA
@@ -1803,6 +2090,14 @@ impl Connection for MongoConnection {
     fn close(&mut self) -> Result<(), DbError> {
         // MongoDB sync client doesn't require explicit close
         Ok(())
+    }
+
+    fn probe_write_privilege(&self) -> dbflux_core::WritePrivilege {
+        let Ok(client_guard) = self.client.lock() else {
+            return dbflux_core::WritePrivilege::Unknown;
+        };
+
+        crate::instance_catalog::MongoInstanceCatalog::probe_write_privilege(&client_guard)
     }
 
     fn instance_catalog(&self) -> Option<Box<dyn InstanceCatalog>> {
@@ -1854,11 +2149,7 @@ impl Connection for MongoConnection {
 
         let start = Instant::now();
 
-        let sql_preview = if req.sql.len() > 80 {
-            format!("{}...", &req.sql[..80])
-        } else {
-            req.sql.clone()
-        };
+        let sql_preview = dbflux_core::truncate_string_safe(&req.sql, 80);
         log::debug!(
             "[QUERY] Executing (id={}): {}",
             query_id,
@@ -1870,30 +2161,43 @@ impl Connection for MongoConnection {
             .lock()
             .map_err(|e| DbError::query_failed(format!("Lock error: {}", e)))?;
 
-        let query: MongoQuery = crate::query_parser::parse_query(&req.sql)?;
+        // A `db.`-shell buffer that parses as exactly one statement takes the
+        // stage-1 path unchanged. `parse_query` itself is what tells the two
+        // shapes apart: a genuine JS construct (`looks_like_javascript`) or
+        // unparsed trailing content after the first statement (a second
+        // `db.` call) both surface as `SCRIPT_UNSUPPORTED_MESSAGE` — the
+        // exact signal that this buffer belongs to the multi-statement
+        // script engine instead of a parse failure to report.
+        match crate::query_parser::parse_query(&req.sql) {
+            Ok(query) => {
+                let db_name = query
+                    .database
+                    .as_ref()
+                    .or(req.database.as_ref())
+                    .or(self.default_database.as_ref())
+                    .ok_or_else(|| DbError::query_failed("No database specified".to_string()))?;
 
-        let db_name = query
-            .database
-            .as_ref()
-            .or(req.database.as_ref())
-            .or(self.default_database.as_ref())
-            .ok_or_else(|| DbError::query_failed("No database specified".to_string()))?;
+                let db = client.database(db_name);
 
-        let db = client.database(db_name);
+                let result = execute_mongo_query(&client, &db, &query, self.cancelled.clone())?;
 
-        let result = execute_mongo_query(&client, &db, &query, self.cancelled.clone())?;
+                let query_time = start.elapsed();
 
-        let query_time = start.elapsed();
+                log::debug!(
+                    "[QUERY] Completed in {:.2}ms, {} documents",
+                    query_time.as_secs_f64() * 1000.0,
+                    result.rows.len()
+                );
 
-        log::debug!(
-            "[QUERY] Completed in {:.2}ms, {} documents",
-            query_time.as_secs_f64() * 1000.0,
-            result.rows.len()
-        );
-
-        let mut qr = QueryResult::json(result.columns, result.rows, query_time);
-        qr.affected_rows = result.affected_rows;
-        Ok(qr)
+                let mut qr = QueryResult::json(result.columns, result.rows, query_time);
+                qr.affected_rows = result.affected_rows;
+                Ok(qr)
+            }
+            Err(e) if e.to_string() == crate::query_parser::SCRIPT_UNSUPPORTED_MESSAGE => {
+                self.execute_script(req, &client, start)
+            }
+            Err(e) => Err(e),
+        }
     }
 
     fn cancel(&self, handle: &QueryHandle) -> Result<(), DbError> {
@@ -2030,6 +2334,7 @@ impl Connection for MongoConnection {
                     sample_fields: None,
                     presentation: dbflux_core::CollectionPresentation::DataGrid,
                     child_items: None,
+                    storage_hints: None,
                 }
             })
             .collect();
@@ -2159,6 +2464,7 @@ impl Connection for MongoConnection {
             sample_fields: Some(sample_fields),
             presentation: dbflux_core::CollectionPresentation::DataGrid,
             child_items: None,
+            storage_hints: None,
         })
     }
 
@@ -3755,6 +4061,88 @@ mod tests {
     };
 
     #[test]
+    fn mongodb_metadata_declares_script_execution_capability() {
+        assert!(
+            MONGODB_METADATA
+                .capabilities
+                .contains(DriverCapabilities::SCRIPT_EXECUTION)
+        );
+    }
+
+    // ==================== T9: script-result JSON conversion ====================
+
+    #[test]
+    fn documents_to_json_result_builds_columns_from_object_union_with_id_first() {
+        let documents = vec![
+            serde_json::json!({"name": "a", "_id": {"$oid": "507f1f77bcf86cd799439011"}}),
+            serde_json::json!({"_id": {"$oid": "507f1f77bcf86cd799439012"}, "active": true}),
+        ];
+
+        let internal = documents_to_json_result(&documents);
+
+        let names: Vec<&str> = internal.columns.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names[0], "_id", "_id must be first");
+        assert!(names.contains(&"name"));
+        assert!(names.contains(&"active"));
+        assert_eq!(internal.rows.len(), 2);
+    }
+
+    #[test]
+    fn documents_to_json_result_on_scalars_uses_a_single_value_column() {
+        let documents = vec![serde_json::json!(3), serde_json::json!("collection_a")];
+        let internal = documents_to_json_result(&documents);
+
+        assert_eq!(internal.columns.len(), 1);
+        assert_eq!(internal.columns[0].name, "value");
+        assert_eq!(internal.rows.len(), 2);
+    }
+
+    #[test]
+    fn documents_to_json_result_on_empty_input_is_empty() {
+        let internal = documents_to_json_result(&[]);
+        assert!(internal.columns.is_empty());
+        assert!(internal.rows.is_empty());
+    }
+
+    #[test]
+    fn script_ledger_to_json_carries_target_method_classification_and_outcome() {
+        let ledger = vec![
+            dbflux_js::ScriptLedgerEntry {
+                index: 0,
+                target: dbflux_core::ScriptTarget::Container("users".to_string()),
+                method: "deleteMany".to_string(),
+                classification: Some(dbflux_core::ExecutionClassification::Destructive),
+                outcome: dbflux_js::ScriptLedgerOutcome::Success,
+                counts: dbflux_core::ScriptOperationCounts {
+                    deleted: Some(3),
+                    ..Default::default()
+                },
+            },
+            dbflux_js::ScriptLedgerEntry {
+                index: 1,
+                target: dbflux_core::ScriptTarget::Database,
+                method: "dropDatabase".to_string(),
+                classification: Some(dbflux_core::ExecutionClassification::Destructive),
+                outcome: dbflux_js::ScriptLedgerOutcome::Failed {
+                    message: "boom".to_string(),
+                },
+                counts: dbflux_core::ScriptOperationCounts::default(),
+            },
+        ];
+
+        let json = script_ledger_to_json(&ledger);
+        assert_eq!(json.len(), 2);
+        assert_eq!(json[0]["target"]["kind"], "container");
+        assert_eq!(json[0]["target"]["name"], "users");
+        assert_eq!(json[0]["method"], "deleteMany");
+        assert_eq!(json[0]["outcome"], "success");
+        assert_eq!(json[0]["counts"]["deleted"], 3);
+        assert_eq!(json[1]["target"]["kind"], "database");
+        assert_eq!(json[1]["outcome"], "failed");
+        assert_eq!(json[1]["message"], "boom");
+    }
+
+    #[test]
     fn schema_listing_column_kinds() {
         let columns = schema_listing_columns();
 
@@ -4209,6 +4597,53 @@ mod tests {
     }
 
     #[test]
+    fn inject_credentials_fills_password_for_username_only_uri_authority() {
+        let srv = inject_credentials_into_uri(
+            "mongodb+srv://user@cluster.mongodb.net/mydb",
+            Some("separate-user"),
+            Some("secret"),
+        );
+        assert_eq!(srv, "mongodb+srv://user:secret@cluster.mongodb.net/mydb");
+
+        let standard = inject_credentials_into_uri(
+            "mongodb://encoded%40user:@localhost:27017/admin",
+            Some("separate-user"),
+            Some("p@ss word"),
+        );
+        assert_eq!(
+            standard,
+            "mongodb://encoded%40user:p%40ss%20word@localhost:27017/admin"
+        );
+
+        let complete = inject_credentials_into_uri(
+            "mongodb://existing:creds@localhost:27017/admin",
+            Some("separate-user"),
+            Some("secret"),
+        );
+        assert_eq!(complete, "mongodb://existing:creds@localhost:27017/admin");
+
+        let without_password = inject_credentials_into_uri(
+            "mongodb+srv://user@cluster.mongodb.net/mydb",
+            Some("separate-user"),
+            None,
+        );
+        assert_eq!(
+            without_password,
+            "mongodb+srv://user@cluster.mongodb.net/mydb"
+        );
+
+        let query_at = inject_credentials_into_uri(
+            "mongodb://localhost:27017/admin?tag=user@example.com",
+            Some("alice"),
+            Some("secret"),
+        );
+        assert_eq!(
+            query_at,
+            "mongodb://alice:secret@localhost:27017/admin?tag=user@example.com"
+        );
+    }
+
+    #[test]
     fn inject_credentials_adds_only_when_absent() {
         let injected = inject_credentials_into_uri(
             "mongodb://localhost:27017/admin",
@@ -4223,6 +4658,31 @@ mod tests {
             Some("pw"),
         );
         assert_eq!(untouched, "mongodb://existing:creds@localhost:27017/admin");
+    }
+
+    #[test]
+    fn apply_default_app_name_keeps_user_supplied_app_name() {
+        let mut options = ClientOptions::parse("mongodb://localhost:27017/?appName=custom")
+            .run()
+            .expect("parsing a plain URI must not require a network round trip");
+
+        apply_default_app_name(&mut options);
+
+        assert_eq!(options.app_name.as_deref(), Some("custom"));
+    }
+
+    #[test]
+    fn apply_default_app_name_fills_missing_app_name() {
+        let mut options = ClientOptions::parse("mongodb://localhost:27017")
+            .run()
+            .expect("parsing a plain URI must not require a network round trip");
+
+        apply_default_app_name(&mut options);
+
+        assert_eq!(
+            options.app_name.as_deref(),
+            Some(dbflux_core::client_identity())
+        );
     }
 
     #[test]

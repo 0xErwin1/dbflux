@@ -69,8 +69,10 @@ impl QueryBuilderPanel {
                         BuilderMode::Select => "SELECT",
                     })
                     .unwrap_or("UPDATE");
-                self.sql_preview =
-                    format!("-- {kind_label}: configure assignments / filter to preview SQL");
+                self.sql_preview = dbflux_i18n::t!(
+                    "document.query_builder.mutation.preview_placeholder",
+                    kind = kind_label
+                );
             }
         } else {
             let spec = self.current_spec.clone();
@@ -137,8 +139,10 @@ impl QueryBuilderPanel {
             .unwrap_or(0);
 
         for i in 0..count {
-            let col_placeholder = "column";
-            let val_placeholder = "value";
+            let col_placeholder =
+                dbflux_i18n::t!("document.query_builder.assignments.column_placeholder");
+            let val_placeholder =
+                dbflux_i18n::t!("document.query_builder.assignments.value_placeholder");
 
             let col_name = self
                 .mutation_state

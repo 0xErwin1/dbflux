@@ -1,5 +1,6 @@
 pub(crate) mod error;
 pub(crate) mod error_formatter;
+pub(crate) mod execution_session;
 pub(crate) mod log_err;
 pub(crate) mod shutdown;
 pub(crate) mod task;
@@ -11,15 +12,19 @@ pub use error_formatter::{
     ConnectionErrorFormatter, DefaultErrorFormatter, ErrorLocation, FormattedError,
     QueryErrorFormatter, sanitize_uri,
 };
+pub use execution_session::ExecutionSessionScope;
 pub use log_err::LogErr;
 pub use shutdown::{ShutdownCoordinator, ShutdownPhase};
 pub use task::{
     CancelToken, TaskId, TaskKind, TaskManager, TaskSlot, TaskSnapshot, TaskStatus, TaskTarget,
 };
 pub use traits::{
-    CodeGenScope, CodeGeneratorInfo, Connection, ConnectionExt, ConnectionOverrides, DbDriver,
-    DocumentConnection, EventStreamTarget, KeyValueApi, KeyValueConnection, NoopCancelHandle,
-    QueryCancelHandle, RelationalConnection, SchemaDropTarget, SchemaFeatures,
-    SchemaLoadingStrategy, SchemaObjectKind, SourceContextSpec, SourceQueryMode,
+    BucketCreateOptions, BucketCreateOutcome, BucketDetails, BucketEncryption, BucketInfo,
+    BucketSizeEstimate, CodeGenScope, CodeGeneratorInfo, Connection, ConnectionExt,
+    ConnectionOverrides, DbDriver, DeletePrefixOutcome, DocumentConnection, EventStreamTarget,
+    ExecutionSession, ExecutionSessionFactory, KeyValueApi, KeyValueConnection, NoopCancelHandle,
+    ObjectListingPage, ObjectMetadata, ObjectStoreConnection, ObjectSummary, ObjectVersionSummary,
+    PresignMethod, QueryCancelHandle, RelationalConnection, SchemaDropTarget, SchemaFeatures,
+    SchemaLoadingStrategy, SchemaObjectKind, SourceContextSpec, SourceQueryMode, VersioningStatus,
 };
 pub use value::Value;

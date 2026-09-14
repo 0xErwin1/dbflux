@@ -1,7 +1,57 @@
 use crate::{ExecutionContext, QueryLanguage, Value};
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeSet, HashMap};
 use std::time::Duration;
 use uuid::Uuid;
+
+pub const UNSUPPORTED_TYPES_METADATA_KEY: &str = "unsupported_types";
+
+pub(crate) fn encode_unsupported_types(
+    metadata: &mut Option<HashMap<String, serde_json::Value>>,
+    type_names: impl IntoIterator<Item = String>,
+) {
+    let type_names = type_names
+        .into_iter()
+        .filter(|type_name| !type_name.is_empty())
+        .collect::<BTreeSet<_>>();
+
+    if type_names.is_empty() {
+        return;
+    }
+
+    metadata.get_or_insert_with(HashMap::new).insert(
+        UNSUPPORTED_TYPES_METADATA_KEY.to_string(),
+        serde_json::Value::Array(
+            type_names
+                .into_iter()
+                .map(serde_json::Value::String)
+                .collect(),
+        ),
+    );
+}
+
+pub(crate) fn take_unsupported_types(
+    metadata: &mut Option<HashMap<String, serde_json::Value>>,
+) -> Vec<String> {
+    let value = metadata
+        .as_mut()
+        .and_then(|metadata| metadata.remove(UNSUPPORTED_TYPES_METADATA_KEY));
+
+    if metadata.as_ref().is_some_and(HashMap::is_empty) {
+        *metadata = None;
+    }
+
+    match value {
+        Some(serde_json::Value::Array(values)) => values
+            .into_iter()
+            .filter_map(|value| value.as_str().map(ToOwned::to_owned))
+            .filter(|type_name| !type_name.is_empty())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect(),
+        _ => Vec::new(),
+    }
+}
 
 // -- Query Result Shape --
 
@@ -71,6 +121,20 @@ pub struct QueryRequest {
     /// Full per-document execution context for drivers that need more than
     /// the compatibility `database` field.
     pub execution_context: Option<ExecutionContext>,
+
+    /// Governance ceiling authorised for this execution.
+    ///
+    /// Set by the caller that obtained authorisation — the editor's one-time
+    /// dangerous-query confirmation, or the MCP policy decision. `None` means
+    /// nothing was authorised and is treated as the restrictive default; it
+    /// is never an escape hatch.
+    ///
+    /// INVARIANT: never populated from parsed document content. No file-header
+    /// annotation maps to it, and `QueryRequest` deliberately does not derive
+    /// `Deserialize` — every instance is constructed in Rust by code that just
+    /// performed the authorisation, so this field cannot be built from
+    /// untrusted bytes.
+    pub confirmed_ceiling: Option<crate::ExecutionClassification>,
 }
 
 impl QueryRequest {
@@ -79,6 +143,13 @@ impl QueryRequest {
             sql: sql.into(),
             ..Default::default()
         }
+    }
+
+    /// Sets the governance ceiling authorised for this execution. See
+    /// [`QueryRequest::confirmed_ceiling`] for the security invariant.
+    pub fn with_confirmed_ceiling(mut self, ceiling: crate::ExecutionClassification) -> Self {
+        self.confirmed_ceiling = Some(ceiling);
+        self
     }
 
     pub fn with_limit(mut self, limit: u32) -> Self {
@@ -298,6 +369,14 @@ impl QueryResult {
         }
     }
 
+    pub fn set_unsupported_types(&mut self, type_names: impl IntoIterator<Item = String>) {
+        encode_unsupported_types(&mut self.metadata_extra, type_names);
+    }
+
+    pub fn take_unsupported_types(&mut self) -> Vec<String> {
+        take_unsupported_types(&mut self.metadata_extra)
+    }
+
     pub fn row_count(&self) -> usize {
         self.rows.len()
     }
@@ -478,5 +557,39 @@ mod tests {
             .map(|r| r.columns[0].name.clone())
             .collect();
         assert_eq!(labels, vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn unsupported_types_are_sorted_and_deduplicated() {
+        let mut result = QueryResult::empty();
+        result.set_unsupported_types([
+            "varbit".to_string(),
+            "vector".to_string(),
+            "varbit".to_string(),
+            String::new(),
+        ]);
+
+        assert_eq!(result.take_unsupported_types(), vec!["varbit", "vector"]);
+    }
+
+    #[test]
+    fn unsupported_types_remove_malformed_metadata_without_reporting() {
+        let mut result = QueryResult::empty();
+        result.metadata_extra = Some(HashMap::from([(
+            UNSUPPORTED_TYPES_METADATA_KEY.to_string(),
+            serde_json::json!({ "type": "vector" }),
+        )]));
+
+        assert!(result.take_unsupported_types().is_empty());
+        assert!(result.metadata_extra.is_none());
+    }
+
+    #[test]
+    fn taking_unsupported_types_is_idempotent() {
+        let mut result = QueryResult::empty();
+        result.set_unsupported_types(["vector".to_string()]);
+
+        assert_eq!(result.take_unsupported_types(), vec!["vector"]);
+        assert!(result.take_unsupported_types().is_empty());
     }
 }

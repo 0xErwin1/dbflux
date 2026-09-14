@@ -1,5 +1,6 @@
 use gpui::{AnyElement, Context, ElementId, Entity, IntoElement, SharedString, div};
 
+use crate::labels::{bool_op_label, comparator_label};
 use crate::query_builder::panel::{FILTER_DEPTH_CAP, FilterTarget, QueryBuilderPanel};
 use dbflux_components::controls::{Dropdown, InputState};
 
@@ -77,9 +78,10 @@ pub fn render_filters_for_target(
             .flex_col()
             .gap_1()
             .when(filter_depth >= FILTER_DEPTH_CAP, |this| {
-                this.child(div().text_sm().child(SharedString::from(
-                    "Maximum filter nesting depth reached (6 levels)",
-                )))
+                this.child(div().text_sm().child(SharedString::from(dbflux_i18n::t!(
+                    "document.query_builder.filters.max_depth",
+                    depth = FILTER_DEPTH_CAP
+                ))))
             });
 
     match tree {
@@ -94,13 +96,19 @@ pub fn render_filters_for_target(
                         div()
                             .flex_1()
                             .text_sm()
-                            .child(SharedString::from("No filters")),
+                            .child(SharedString::from(dbflux_i18n::t!(
+                                "document.query_builder.filters.no_filters"
+                            ))),
                     )
                     .child(
-                        Button::new(add_pred_id, "+ Filter")
-                            .ghost()
-                            .small()
-                            .on_click(cx.listener(move |this, _event, _window, cx| {
+                        Button::new(
+                            add_pred_id,
+                            dbflux_i18n::t!("document.query_builder.filters.add_filter"),
+                        )
+                        .ghost()
+                        .small()
+                        .on_click(cx.listener(
+                            move |this, _event, _window, cx| {
                                 this.add_predicate_for(
                                     target,
                                     vec![],
@@ -108,15 +116,21 @@ pub fn render_filters_for_target(
                                     "",
                                     cx,
                                 );
-                            })),
+                            },
+                        )),
                     )
                     .child(
-                        Button::new(add_group_id, "+ Sub-group")
-                            .ghost()
-                            .small()
-                            .on_click(cx.listener(move |this, _event, _window, cx| {
+                        Button::new(
+                            add_group_id,
+                            dbflux_i18n::t!("document.query_builder.filters.add_subgroup"),
+                        )
+                        .ghost()
+                        .small()
+                        .on_click(cx.listener(
+                            move |this, _event, _window, cx| {
                                 this.add_group_for(target, vec![], cx);
-                            })),
+                            },
+                        )),
                     ),
             );
         }
@@ -201,10 +215,7 @@ fn render_filter_group(
     use gpui::SharedString;
     use gpui::prelude::*;
 
-    let op_label = match op {
-        dbflux_core::BoolOp::And => "AND",
-        dbflux_core::BoolOp::Or => "OR",
-    };
+    let op_label = bool_op_label(op);
 
     let prefix = match target {
         FilterTarget::Where => "qb-grp",
@@ -238,7 +249,7 @@ fn render_filter_group(
             .child(
                 Button::new(
                     path_id(&format!("{}-add-pred", prefix), &path_for_add_pred),
-                    "+ Filter",
+                    dbflux_i18n::t!("document.query_builder.filters.add_filter"),
                 )
                 .ghost()
                 .small()
@@ -256,7 +267,7 @@ fn render_filter_group(
             .child(
                 Button::new(
                     path_id(&format!("{}-add-grp", prefix), &path_for_add_group),
-                    "+ Sub-group",
+                    dbflux_i18n::t!("document.query_builder.filters.add_subgroup"),
                 )
                 .ghost()
                 .small()
@@ -395,21 +406,4 @@ fn path_id(prefix: &str, path: &[usize]) -> ElementId {
         .collect::<Vec<_>>()
         .join("-");
     ElementId::Name(SharedString::from(key))
-}
-
-fn comparator_label(cmp: dbflux_core::Comparator) -> &'static str {
-    use dbflux_core::Comparator;
-    match cmp {
-        Comparator::Eq => "=",
-        Comparator::Neq => "≠",
-        Comparator::Gt => ">",
-        Comparator::Lt => "<",
-        Comparator::Gte => "≥",
-        Comparator::Lte => "≤",
-        Comparator::Like => "LIKE",
-        Comparator::ILike => "ILIKE",
-        Comparator::In => "IN",
-        Comparator::IsNull => "IS NULL",
-        Comparator::IsNotNull => "IS NOT NULL",
-    }
 }

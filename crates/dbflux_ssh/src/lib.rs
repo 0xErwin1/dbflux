@@ -14,6 +14,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD_NO_PAD;
+#[cfg(windows)]
+use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{DbError, SshAuthMethod, SshTunnelConfig};
 use dbflux_tunnel_core::{ForwardingConnection, Tunnel, TunnelConnector, adaptive_sleep};
 use sha2::{Digest, Sha256};
@@ -582,7 +584,7 @@ fn authenticate_with_key(
             if passphrase.is_some() { "yes" } else { "no" }
         );
 
-        let result = session.userauth_pubkey_file(user, None, path, passphrase);
+        let result = authenticate_with_key_file(session, user, path, passphrase);
 
         match result {
             Ok(()) if session.authenticated() => {
@@ -596,10 +598,9 @@ fn authenticate_with_key(
                 );
                 last_error = Some(format!("Key {} not accepted by server", path.display()));
             }
-            Err(e) => {
-                let err_msg = format!("{}", e);
-                log::info!("[SSH] Key {} failed: {}", path.display(), err_msg);
-                last_error = Some(err_msg);
+            Err(error) => {
+                log::info!("[SSH] Key {} failed: {}", path.display(), error);
+                last_error = Some(error);
             }
         }
     }
@@ -609,6 +610,38 @@ fn authenticate_with_key(
         "SSH key authentication failed: {}",
         error_detail
     )))
+}
+
+#[cfg(windows)]
+fn authenticate_with_key_file(
+    session: &Session,
+    user: &str,
+    path: &Path,
+    passphrase: Option<&str>,
+) -> Result<(), String> {
+    let private_key = SecretString::from(std::fs::read_to_string(path).map_err(|error| {
+        format!(
+            "Failed to read SSH private key {}: {}",
+            path.display(),
+            error
+        )
+    })?);
+
+    session
+        .userauth_pubkey_memory(user, None, private_key.expose_secret(), passphrase)
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(not(windows))]
+fn authenticate_with_key_file(
+    session: &Session,
+    user: &str,
+    path: &Path,
+    passphrase: Option<&str>,
+) -> Result<(), String> {
+    session
+        .userauth_pubkey_file(user, None, path, passphrase)
+        .map_err(|error| error.to_string())
 }
 
 // ---------------------------------------------------------------------------

@@ -73,7 +73,7 @@ pub fn timestamp_from_date_time(
     mode: TimestampDisplayMode,
 ) -> Result<i64, String> {
     let time = NaiveTime::from_hms_opt(hour, minute, 0)
-        .ok_or_else(|| "Time selection is invalid".to_string())?;
+        .ok_or_else(|| dbflux_i18n::t!("common.time_range.error.invalid_selection"))?;
     let naive = NaiveDateTime::new(date, time);
 
     let timestamp = match mode {
@@ -81,7 +81,7 @@ pub fn timestamp_from_date_time(
         TimestampDisplayMode::Local => Local
             .from_local_datetime(&naive)
             .single()
-            .ok_or_else(|| "Local time is ambiguous or invalid".to_string())?
+            .ok_or_else(|| dbflux_i18n::t!("common.time_range.error.ambiguous_local"))?
             .timestamp_millis(),
     };
 
@@ -102,12 +102,12 @@ pub fn validate_custom_range_parts(
     mode: TimestampDisplayMode,
 ) -> Result<(i64, i64), String> {
     let start_ms = timestamp_from_date_time(start_date, start_hour, start_minute, mode)
-        .map_err(|error| format!("Invalid start time: {error}"))?;
+        .map_err(|error| dbflux_i18n::t!("common.time_range.error.invalid_start", error = error))?;
     let end_ms = timestamp_from_date_time(end_date, end_hour, end_minute, mode)
-        .map_err(|error| format!("Invalid end time: {error}"))?;
+        .map_err(|error| dbflux_i18n::t!("common.time_range.error.invalid_end", error = error))?;
 
     if start_ms > end_ms {
-        return Err("Start time must be before end time".to_string());
+        return Err(dbflux_i18n::t!("common.time_range.error.start_after_end"));
     }
 
     Ok((start_ms, end_ms))
@@ -162,7 +162,34 @@ mod tests {
 
         assert_eq!(
             result,
-            Err("Start time must be before end time".to_string())
+            Err(dbflux_i18n::t!("common.time_range.error.start_after_end"))
         );
+    }
+
+    #[test]
+    fn time_range_error_keys_resolve_in_both_locales() {
+        let keys = [
+            "common.time_range.error.invalid_selection",
+            "common.time_range.error.ambiguous_local",
+            "common.time_range.error.invalid_start",
+            "common.time_range.error.invalid_end",
+            "common.time_range.error.start_after_end",
+            "common.time_range.error.no_date_range",
+            "common.time_range.error.incomplete_time_selection",
+        ];
+
+        for key in keys {
+            let en = dbflux_i18n::t!(key, locale = "en");
+            let es = dbflux_i18n::t!(key, locale = "es");
+            assert!(!en.is_empty() && en != key, "en missing for {key}");
+            assert!(!es.is_empty() && es != key, "es missing for {key}");
+        }
+    }
+
+    #[test]
+    fn time_range_start_after_end_diverges_between_locales() {
+        let en = dbflux_i18n::t!("common.time_range.error.start_after_end", locale = "en");
+        let es = dbflux_i18n::t!("common.time_range.error.start_after_end", locale = "es");
+        assert_ne!(en, es);
     }
 }

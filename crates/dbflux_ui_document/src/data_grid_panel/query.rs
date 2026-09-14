@@ -96,15 +96,17 @@ impl DataGridPanel {
         let limit_str = limit_value.trim();
         let pagination = match limit_str.parse::<u32>() {
             Ok(0) => {
-                Toast::warning("Limit must be greater than 0")
-                    .meta_right(now_hms())
-                    .push(cx);
+                Toast::warning(dbflux_i18n::t!(
+                    "document.data.grid.error.limit_must_be_positive"
+                ))
+                .meta_right(now_hms())
+                .push(cx);
                 pagination
             }
             Ok(limit) if limit != pagination.limit() => pagination.with_limit(limit).reset_offset(),
             Ok(_) => pagination,
             Err(_) if !limit_str.is_empty() => {
-                Toast::warning("Invalid limit value")
+                Toast::warning(dbflux_i18n::t!("document.data.grid.error.invalid_limit"))
                     .meta_right(now_hms())
                     .push(cx);
                 pagination
@@ -163,9 +165,10 @@ impl DataGridPanel {
         let conn = {
             let state = self.app_state.read(cx);
             let Some(connected) = state.connections().get(&profile_id) else {
-                Toast::error("Connection not found")
+                let message = dbflux_i18n::t!("document.data.grid.error.connection_not_found");
+                Toast::error(message.clone())
                     .meta_right(now_hms())
-                    .action(copy_action("Connection not found"))
+                    .action(copy_action(message))
                     .push(cx);
                 return;
             };
@@ -235,7 +238,13 @@ impl DataGridPanel {
             .spawn(async move { conn.browse_table(&browse_request) });
 
         cx.spawn(async move |_this, cx| {
-            let result = task.await;
+            let mut result = task.await;
+
+            if let Ok(query_result) = result.as_mut() {
+                crate::result_warnings::handoff_table_browse_result(query_result, |warning| {
+                    dbflux_ui_base::user_error::report_error_async(warning, cx)
+                });
+            }
 
             if let Err(error) = cx.update(|cx| {
                 if cancel_token.is_cancelled() {
@@ -246,7 +255,7 @@ impl DataGridPanel {
                     return;
                 }
 
-                match &result {
+                match result {
                     Ok(query_result) => {
                         info!(
                             "Query returned {} rows in {:?}",
@@ -262,7 +271,7 @@ impl DataGridPanel {
                                 pagination_for_spawn,
                                 order_by_for_spawn,
                                 total_rows,
-                                query_result.clone(),
+                                query_result,
                                 cx,
                             );
                         });
@@ -274,7 +283,7 @@ impl DataGridPanel {
                             panel.runner.fail_primary(task_id, e.to_string(), cx);
                             panel.refresh.state = GridState::Error;
                             panel.pending.toast = Some(PendingToast {
-                                message: format!("Query failed: {}", e),
+                                message: crate::labels::query_failed_error(&e.to_string()),
                                 is_error: true,
                             });
                             cx.notify();
@@ -316,9 +325,10 @@ impl DataGridPanel {
         let conn = {
             let state = self.app_state.read(cx);
             let Some(connected) = state.connections().get(&profile_id) else {
-                Toast::error("Connection not found")
+                let message = dbflux_i18n::t!("document.data.grid.error.connection_not_found");
+                Toast::error(message.clone())
                     .meta_right(now_hms())
-                    .action(copy_action("Connection not found"))
+                    .action(copy_action(message))
                     .push(cx);
                 return;
             };
@@ -372,7 +382,13 @@ impl DataGridPanel {
             .spawn(async move { conn.execute(&request) });
 
         cx.spawn(async move |_this, cx| {
-            let result = task.await;
+            let mut result = task.await;
+
+            if let Ok(query_result) = result.as_mut() {
+                crate::result_warnings::handoff_visual_query_result(query_result, |warning| {
+                    dbflux_ui_base::user_error::report_error_async(warning, cx)
+                });
+            }
 
             if let Err(error) = cx.update(|cx| {
                 if cancel_token.is_cancelled() {
@@ -424,7 +440,7 @@ impl DataGridPanel {
                             panel.runner.fail_primary(task_id, e.to_string(), cx);
                             panel.refresh.state = GridState::Error;
                             panel.pending.toast = Some(PendingToast {
-                                message: format!("Query failed: {}", e),
+                                message: crate::labels::query_failed_error(&e.to_string()),
                                 is_error: true,
                             });
                             cx.notify();
@@ -454,15 +470,17 @@ impl DataGridPanel {
         let limit_str = limit_value.trim();
         let pagination = match limit_str.parse::<u32>() {
             Ok(0) => {
-                Toast::warning("Limit must be greater than 0")
-                    .meta_right(now_hms())
-                    .push(cx);
+                Toast::warning(dbflux_i18n::t!(
+                    "document.data.grid.error.limit_must_be_positive"
+                ))
+                .meta_right(now_hms())
+                .push(cx);
                 pagination
             }
             Ok(limit) if limit != pagination.limit() => pagination.with_limit(limit).reset_offset(),
             Ok(_) => pagination,
             Err(_) if !limit_str.is_empty() => {
-                Toast::warning("Invalid limit value")
+                Toast::warning(dbflux_i18n::t!("document.data.grid.error.invalid_limit"))
                     .meta_right(now_hms())
                     .push(cx);
                 pagination
@@ -475,9 +493,10 @@ impl DataGridPanel {
             match state.connections().get(&profile_id) {
                 Some(c) => Some(c.connection.clone()),
                 None => {
-                    Toast::error("Connection not found")
+                    let message = dbflux_i18n::t!("document.data.grid.error.connection_not_found");
+                    Toast::error(message.clone())
                         .meta_right(now_hms())
-                        .action(copy_action("Connection not found"))
+                        .action(copy_action(message))
                         .push(cx);
                     return;
                 }
@@ -485,9 +504,10 @@ impl DataGridPanel {
         };
 
         let Some(conn) = conn else {
-            Toast::error("Connection not available")
+            let message = dbflux_i18n::t!("document.data.grid.error.connection_not_available");
+            Toast::error(message.clone())
                 .meta_right(now_hms())
-                .action(copy_action("Connection not available"))
+                .action(copy_action(message))
                 .push(cx);
             return;
         };
@@ -501,10 +521,14 @@ impl DataGridPanel {
                 Ok(v) => Some(v),
                 Err(e) => {
                     let toast_body = e.to_string();
-                    Toast::error("Invalid JSON filter")
+                    let title = dbflux_i18n::t!("document.data.grid.error.invalid_json_filter");
+                    Toast::error(title.clone())
                         .meta_right(now_hms())
                         .body(toast_body.clone())
-                        .action(copy_action(format!("Invalid JSON filter: {}", toast_body)))
+                        .action(copy_action(crate::labels::error_with_detail_clipboard(
+                            &title,
+                            &toast_body,
+                        )))
                         .push(cx);
                     return;
                 }
@@ -549,7 +573,13 @@ impl DataGridPanel {
             .spawn(async move { conn.browse_collection(&browse_request) });
 
         cx.spawn(async move |_this, cx| {
-            let result = task.await;
+            let mut result = task.await;
+
+            if let Ok(query_result) = result.as_mut() {
+                crate::result_warnings::handoff_collection_browse_result(query_result, |warning| {
+                    dbflux_ui_base::user_error::report_error_async(warning, cx)
+                });
+            }
 
             if let Err(error) = cx.update(|cx| {
                 if cancel_token.is_cancelled() {
@@ -560,7 +590,7 @@ impl DataGridPanel {
                     return;
                 }
 
-                match &result {
+                match result {
                     Ok(query_result) => {
                         info!(
                             "Collection query returned {} documents in {:?}",
@@ -575,7 +605,7 @@ impl DataGridPanel {
                                 collection_for_spawn,
                                 pagination_for_spawn,
                                 total_docs,
-                                query_result.clone(),
+                                query_result,
                                 cx,
                             );
                         });
@@ -587,7 +617,7 @@ impl DataGridPanel {
                             panel.runner.fail_primary(task_id, e.to_string(), cx);
                             panel.refresh.state = GridState::Error;
                             panel.pending.toast = Some(PendingToast {
-                                message: format!("Query failed: {}", e),
+                                message: crate::labels::query_failed_error(&e.to_string()),
                                 is_error: true,
                             });
                             cx.notify();

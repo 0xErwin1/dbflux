@@ -166,6 +166,11 @@ impl MigrationRegistry {
         registry.register(mod_021_general_settings_schema_snapshot_retention::MigrationImpl);
         registry.register(mod_022_hook_kind_json::MigrationImpl);
         registry.register(mod_023_profile_hook_interpreter::MigrationImpl);
+        registry.register(mod_024_s3_config_columns::MigrationImpl);
+        registry.register(mod_025_general_settings_object_preview_limit::MigrationImpl);
+        registry.register(mod_026_general_settings_language::MigrationImpl);
+        registry.register(mod_027_general_settings_key_value_size_limit::MigrationImpl);
+        registry.register(mod_028_redis_topology_columns::MigrationImpl);
         registry
     }
 
@@ -372,6 +377,11 @@ mod mod_020_sch_schema_snapshots;
 mod mod_021_general_settings_schema_snapshot_retention;
 mod mod_022_hook_kind_json;
 mod mod_023_profile_hook_interpreter;
+mod mod_024_s3_config_columns;
+mod mod_025_general_settings_object_preview_limit;
+mod mod_026_general_settings_language;
+mod mod_027_general_settings_key_value_size_limit;
+mod mod_028_redis_topology_columns;
 
 pub use mod_001_initial::MigrationImpl;
 pub use mod_002_audit_extended::MigrationImpl as MigrationImplAuditExtended;
@@ -1020,6 +1030,11 @@ mod tests {
             "021_general_settings_schema_snapshot_retention",
             "022_hook_kind_json",
             "023_profile_hook_interpreter",
+            "024_s3_config_columns",
+            "025_general_settings_object_preview_limit",
+            "026_general_settings_language",
+            "027_general_settings_key_value_size_limit",
+            "028_redis_topology_columns",
         ];
 
         let pending = registry.get_pending(&conn).unwrap();

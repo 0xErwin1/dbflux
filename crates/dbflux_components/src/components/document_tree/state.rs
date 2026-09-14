@@ -121,7 +121,7 @@ impl DocumentTreeState {
             let doc_value = Self::extract_document_value(row, &result.columns);
 
             let node_id = NodeId::root(row_idx);
-            let key = format!("Document {}", row_idx);
+            let key = document_label(row_idx);
             let node_value = NodeValue::from_value(&doc_value);
 
             self.raw_documents.push(doc_value);
@@ -923,6 +923,11 @@ impl Focusable for DocumentTreeState {
     }
 }
 
+/// Build the root-node label for a document at the given row index.
+fn document_label(index: usize) -> String {
+    dbflux_i18n::t!("document_tree.document_label", index = index)
+}
+
 fn should_expand_scalar_value(value: &Value) -> bool {
     match value {
         Value::Text(text) => text.contains('\n') || text.len() > 100,
@@ -1044,7 +1049,10 @@ fn value_to_json(value: &Value) -> serde_json::Value {
 
 #[cfg(test)]
 mod tests {
-    use super::{DocumentTreeState, set_value_at_path, should_expand_scalar_value, value_to_json};
+    use super::{
+        DocumentTreeState, document_label, set_value_at_path, should_expand_scalar_value,
+        value_to_json,
+    };
     use dbflux_core::{ColumnKind, ColumnMeta, Value};
     use std::collections::BTreeMap;
 
@@ -1129,6 +1137,16 @@ mod tests {
             value_to_json(&Value::Unsupported("xml".to_string())),
             serde_json::json!({"$unsupported":"xml"})
         );
+    }
+
+    #[test]
+    fn document_label_interpolates_index() {
+        let label = document_label(3);
+        assert_eq!(
+            label,
+            dbflux_i18n::t!("document_tree.document_label", index = 3)
+        );
+        assert!(label.contains('3'));
     }
 
     #[test]

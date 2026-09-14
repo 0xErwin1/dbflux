@@ -1,0 +1,28 @@
+---
+import Base from '../../layouts/Base.astro';
+import About from '../../components/About.astro';
+import { DOCS_AT_ROOT, SITE_ORIGIN } from '../../data/site';
+import { DEFAULT_LOCALE, LOCALES, t } from '../../i18n';
+import type { Locale } from '../../i18n';
+
+export function getStaticPaths() {
+  return LOCALES.filter((locale) => locale !== DEFAULT_LOCALE).map((locale) => ({
+    params: { locale },
+    props: { locale },
+  }));
+}
+
+const { locale } = Astro.props as { locale: Locale };
+---
+
+<Base
+  title={t(locale, 'about.page_title')}
+  description={t(locale, 'about.page_description')}
+  current="about"
+  noindex={DOCS_AT_ROOT}
+  canonicalPath={DOCS_AT_ROOT ? `${SITE_ORIGIN}/${locale}/about/` : undefined}
+  locale={locale}
+  translated
+>
+  <About locale={locale} />
+</Base>

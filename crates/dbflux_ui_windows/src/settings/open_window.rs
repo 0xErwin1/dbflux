@@ -47,7 +47,7 @@ pub fn open_or_focus_settings<S>(
     let mut options = WindowOptions {
         app_id: Some(dbflux_core::ReleaseChannel::current().app_id().into()),
         titlebar: Some(TitlebarOptions {
-            title: Some("Settings".into()),
+            title: Some(dbflux_i18n::t!("connection_manager.tab.settings").into()),
             ..Default::default()
         }),
         window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -84,5 +84,20 @@ pub fn open_or_focus_settings<S>(
         cx.notify();
     }) {
         log::warn!("Failed to activate settings window: {:?}", e);
+    }
+}
+
+#[cfg(test)]
+mod window_title_i18n_tests {
+    #[test]
+    fn settings_window_title_key_resolves_in_both_locales() {
+        for locale in ["en", "es"] {
+            let value = dbflux_i18n::t!("connection_manager.tab.settings", locale = locale);
+
+            assert!(
+                !value.is_empty(),
+                "connection_manager.tab.settings resolved empty for locale {locale}"
+            );
+        }
     }
 }

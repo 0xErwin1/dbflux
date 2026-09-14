@@ -20,13 +20,18 @@ pub enum ExportPhase {
 }
 
 impl ExportPhase {
-    /// The rail's display label for this phase.
-    pub fn label(self) -> &'static str {
+    /// The rail's display label for this phase, resolved through the
+    /// translation catalog. Exhaustive by construction so a new phase fails
+    /// this crate's build until its `document.export_wizard.rail.*` entry is
+    /// added here.
+    pub fn label(self) -> String {
         match self {
-            ExportPhase::Tables => "Tables",
-            ExportPhase::FormatOptions => "Format & Options",
-            ExportPhase::Confirm => "Confirm",
-            ExportPhase::Run => "Run",
+            ExportPhase::Tables => dbflux_i18n::t!("document.export_wizard.rail.tables"),
+            ExportPhase::FormatOptions => {
+                dbflux_i18n::t!("document.export_wizard.rail.format_options")
+            }
+            ExportPhase::Confirm => dbflux_i18n::t!("document.export_wizard.rail.confirm"),
+            ExportPhase::Run => dbflux_i18n::t!("document.export_wizard.rail.run"),
         }
     }
 }
@@ -128,10 +133,74 @@ mod tests {
 
     #[test]
     fn phase_labels_cover_every_rail_entry() {
-        assert_eq!(ExportPhase::Tables.label(), "Tables");
-        assert_eq!(ExportPhase::FormatOptions.label(), "Format & Options");
-        assert_eq!(ExportPhase::Confirm.label(), "Confirm");
-        assert_eq!(ExportPhase::Run.label(), "Run");
+        assert_eq!(
+            ExportPhase::Tables.label(),
+            dbflux_i18n::t!("document.export_wizard.rail.tables")
+        );
+        assert_eq!(
+            ExportPhase::FormatOptions.label(),
+            dbflux_i18n::t!("document.export_wizard.rail.format_options")
+        );
+        assert_eq!(
+            ExportPhase::Confirm.label(),
+            dbflux_i18n::t!("document.export_wizard.rail.confirm")
+        );
+        assert_eq!(
+            ExportPhase::Run.label(),
+            dbflux_i18n::t!("document.export_wizard.rail.run")
+        );
+    }
+
+    /// Every `document.export_wizard.rail.*` key resolves to a non-empty,
+    /// non-fallback value in both locales — exhaustive over every
+    /// `ExportPhase` variant (no wildcard arm in `label()`).
+    #[test]
+    fn phase_labels_resolve_in_both_locales() {
+        for phase in RAIL_PHASES {
+            for locale in ["en", "es"] {
+                let key = match phase {
+                    ExportPhase::Tables => "document.export_wizard.rail.tables",
+                    ExportPhase::FormatOptions => "document.export_wizard.rail.format_options",
+                    ExportPhase::Confirm => "document.export_wizard.rail.confirm",
+                    ExportPhase::Run => "document.export_wizard.rail.run",
+                };
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+    }
+
+    /// Every rail phase label diverges between locales.
+    #[test]
+    fn phase_labels_differ_between_locales() {
+        for phase in RAIL_PHASES {
+            let en = dbflux_i18n::t!(
+                match phase {
+                    ExportPhase::Tables => "document.export_wizard.rail.tables",
+                    ExportPhase::FormatOptions => "document.export_wizard.rail.format_options",
+                    ExportPhase::Confirm => "document.export_wizard.rail.confirm",
+                    ExportPhase::Run => "document.export_wizard.rail.run",
+                },
+                locale = "en"
+            );
+            let es = dbflux_i18n::t!(
+                match phase {
+                    ExportPhase::Tables => "document.export_wizard.rail.tables",
+                    ExportPhase::FormatOptions => "document.export_wizard.rail.format_options",
+                    ExportPhase::Confirm => "document.export_wizard.rail.confirm",
+                    ExportPhase::Run => "document.export_wizard.rail.run",
+                },
+                locale = "es"
+            );
+            assert_ne!(en, es, "{phase:?} rail label must differ between en and es");
+        }
     }
 
     #[test]

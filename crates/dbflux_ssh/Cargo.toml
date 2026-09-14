@@ -20,8 +20,16 @@ base64 = { workspace = true }
 dirs = { workspace = true }
 log = "0.4"
 sha2 = { workspace = true }
-ssh2 = "0.9"
 uuid = { workspace = true }
+
+[target.'cfg(not(windows))'.dependencies]
+ssh2 = "0.9"
+
+# libssh2's WinCNG backend offers only legacy Diffie-Hellman KEX methods,
+# which current OpenSSH servers reject. The OpenSSL backend provides the
+# Curve25519/ECDH methods needed for a modern SSH handshake.
+[target.'cfg(windows)'.dependencies]
+ssh2 = { version = "0.9", features = ["openssl-on-win32", "vendored-openssl"] }
 
 [dev-dependencies]
 tempfile = "3"

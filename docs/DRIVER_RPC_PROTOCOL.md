@@ -63,7 +63,6 @@ Notes:
 
 - `socket_id` is required.
 - `kind` supports `driver` and `auth_provider`.
-- `kind` supports `driver` and `auth_provider`.
 - `command` is optional.
   - If `command` is omitted and `args` is empty, DBFlux expects the service to already be running.
   - For `driver`, if `command` is omitted and `args` is non-empty, DBFlux launches `dbflux-driver-host`.
@@ -89,6 +88,7 @@ DriverRequestBody::Hello(DriverHelloRequest {
         ProtocolVersion::new(1, 0),
         ProtocolVersion::new(1, 1),
         ProtocolVersion::new(1, 2),
+        ProtocolVersion::new(1, 3),
     ],
     requested_capabilities: vec![
         DriverCapability::Cancellation,
@@ -154,6 +154,18 @@ Allowed categories: `Connection`, `Query`, `System`. All other categories are si
 
 The host overrides identity fields (`actor_type` → `ExternalDriver`, `actor_id`, `source_id`, `driver_id`, `correlation_id`) and the connection context from `AppState`, and truncates `details_json` to the configured limit. Rate limiting is shared with auth providers: 100 events per 60 seconds per `socket_id`; overflow events are dropped without erroring the session. Peers that negotiate below v1.2 or omit the capability remain silent. See [Audit § external audit emission](AUDIT.md) for the full sanitization contract.
 
+### Key-value read size gate (v1.3+)
+
+`KeyGetRequest` carries `max_value_bytes: Option<u64>`, an optional upper bound on the value bytes a `KvGetKey` call may transfer. `None` means unbounded, which is also what a peer negotiating below v1.3 gets: the field is additive and defaults to `None` when absent from the wire payload, so older drivers and hosts keep fetching the full value.
+
+`KeyGetResult` carries `load_state: KeyLoadState`, reporting whether `value` is the complete payload:
+
+- `Loaded` — the full value was fetched. Default when the field is absent from the wire payload.
+- `Truncated { returned_bytes, total_bytes }` — only part of the value was fetched (for example a driver-side item cap on a collection type); `total_bytes` is the full size when the driver knows it.
+- `TooLarge { size_bytes, limit_bytes }` — the value was not fetched because it exceeds `max_value_bytes`; `value` is empty.
+
+Both fields are plain, `#[serde(default)]` struct fields on existing request/response types, not a new capability flag: no `Hello` negotiation gates them, and a driver ignoring `max_value_bytes` simply always returns `Loaded`.
+
 ## Auth-provider RPC contract
 
 The active auth-provider RPC API family is `auth_provider_rpc` at `1.3`.
@@ -189,14 +201,14 @@ The v1.3 `Hello` response additionally carries `audit_emit_opt_in` (`bool`). Set
 
 Supported request / response flow:
 
-| Request | Response | Purpose |
-|---|---|---|
-| `Hello` | `Hello` | protocol negotiation + provider identity |
-| `ValidateSession` | `SessionState` | validate cached auth state |
-| `Login` | `LoginUrlProgress?` + `LoginResult` | optional verification URL + terminal login result |
-| `ResolveCredentials` | `Credentials` | resolve runtime credential fields |
-| `FetchDynamicOptions` | `DynamicOptions` | resolve dynamic dropdown options for a `DynamicSelect` form field (v1.2+) |
-| (any request) | `EmitAuditEvent` (intermediate) | audit event emission (v1.3+) |
+| Request → Response | Purpose |
+|---|---|
+| `Hello` → `Hello` | protocol negotiation + provider identity |
+| `ValidateSession` → `SessionState` | validate cached auth state |
+| `Login` → `LoginUrlProgress?` + `LoginResult` | optional verification URL + terminal login result |
+| `ResolveCredentials` → `Credentials` | resolve runtime credential fields |
+| `FetchDynamicOptions` → `DynamicOptions` | resolve dynamic dropdown options for a `DynamicSelect` form field (v1.2+) |
+| (any request) → `EmitAuditEvent` (intermediate) | audit event emission (v1.3+) |
 
 Notes:
 
@@ -248,15 +260,15 @@ The service should parse `profile_json`, expect `DbConfig::External`, and valida
 
 ## Request/response overview
 
-| Request | Response | Purpose |
-|---|---|---|
-| `Hello` | `Hello` | protocol negotiation + driver identity |
-| `OpenSession` | `SessionOpened` | open connection/session |
-| `CloseSession` | `SessionClosed` | close session |
-| `Ping` | `Pong` | liveness |
-| `Execute` | `ExecuteResult` | query execution |
-| `Schema` | `Schema` | schema snapshot |
-| `ListDatabases` | `Databases` | database list |
+| Request → Response | Purpose |
+|---|---|
+| `Hello` → `Hello` | protocol negotiation + driver identity |
+| `OpenSession` → `SessionOpened` | open connection/session |
+| `CloseSession` → `SessionClosed` | close session |
+| `Ping` → `Pong` | liveness |
+| `Execute` → `ExecuteResult` | query execution |
+| `Schema` → `Schema` | schema snapshot |
+| `ListDatabases` → `Databases` | database list |
 
 The protocol also supports browse, CRUD, key-value, and code generation operations. See `crates/dbflux_ipc/src/driver_protocol.rs` for the full enum set.
 

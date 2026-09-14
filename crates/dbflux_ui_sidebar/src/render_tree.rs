@@ -35,7 +35,7 @@ fn sidebar_tree_label(
 pub(super) struct TreeRenderParams {
     pub connections: Vec<Uuid>,
     pub active_id: Option<Uuid>,
-    pub profile_icons: HashMap<Uuid, dbflux_core::Icon>,
+    pub profile_icons: HashMap<Uuid, AppIcon>,
     pub active_databases: HashMap<Uuid, String>,
     pub sidebar_entity: Entity<Sidebar>,
     pub multi_selection: HashSet<String>,
@@ -99,7 +99,10 @@ pub(super) fn render_tree_item(
                         .size(Spacing::MD)
                         .color(theme.muted_foreground),
                 )
-                .child(Text::caption("Loading…").color(theme.muted_foreground)),
+                .child(
+                    Text::caption(dbflux_i18n::t!("sidebar.tree.status.loading"))
+                        .color(theme.muted_foreground),
+                ),
         );
     }
 
@@ -241,7 +244,7 @@ pub(super) fn render_tree_item(
             indent_per_level,
             Heights::ROW,
             params.line_color,
-            true,
+            false,
         )
     } else {
         div()
@@ -1032,6 +1035,7 @@ pub(crate) fn icon_for_node_kind(
         SchemaNodeKind::InstanceInspectorsFolder => Some(AppIcon::Server),
         SchemaNodeKind::InstanceInspectorLeaf => Some(AppIcon::Server),
         SchemaNodeKind::InstanceOverviewLeaf => Some(AppIcon::Layers),
+        SchemaNodeKind::Bucket => Some(AppIcon::Box),
         _ => None,
     }
 }
@@ -1039,7 +1043,7 @@ pub(crate) fn icon_for_node_kind(
 fn resolve_node_icon(
     node_kind: SchemaNodeKind,
     parsed_id: &Option<SchemaNodeId>,
-    profile_icons: &HashMap<Uuid, dbflux_core::Icon>,
+    profile_icons: &HashMap<Uuid, AppIcon>,
     is_connected: bool,
     theme: &gpui_component::Theme,
     params: &TreeRenderParams,
@@ -1052,8 +1056,7 @@ fn resolve_node_icon(
             let icon = parsed_id
                 .as_ref()
                 .and_then(|n| n.profile_id())
-                .and_then(|id| profile_icons.get(&id).copied())
-                .map(AppIcon::from_icon);
+                .and_then(|id| profile_icons.get(&id).copied());
 
             let color = if is_connected {
                 params.color_green
@@ -1151,6 +1154,7 @@ fn resolve_node_icon(
         }
         SchemaNodeKind::InstanceInspectorLeaf => (Some(AppIcon::Server), "", params.color_teal),
         SchemaNodeKind::InstanceOverviewLeaf => (Some(AppIcon::Layers), "", params.color_orange),
+        SchemaNodeKind::Bucket => (Some(AppIcon::Box), "", params.color_teal),
         _ => (None, "", theme.muted_foreground),
     }
 }

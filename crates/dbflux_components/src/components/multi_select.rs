@@ -37,7 +37,7 @@ impl MultiSelect {
             items: Vec::new(),
             selected_indices: Vec::new(),
             open: false,
-            placeholder: "Select…".into(),
+            placeholder: dbflux_i18n::t!("controls.multi_select.placeholder").into(),
             menu_scroll_handle: ScrollHandle::new(),
             bare: false,
         }
@@ -156,7 +156,12 @@ impl MultiSelect {
         if labels.len() <= 3 {
             labels.join(", ").into()
         } else {
-            format!("{}, +{} more", labels[..2].join(", "), labels.len() - 2).into()
+            format!(
+                "{}, {}",
+                labels[..2].join(", "),
+                more_label(labels.len() - 2)
+            )
+            .into()
         }
     }
 
@@ -215,7 +220,9 @@ impl MultiSelect {
                             this.clear_selection(cx);
                         }),
                     )
-                    .child(Text::caption("Clear all")),
+                    .child(Text::caption(dbflux_i18n::t!(
+                        "controls.multi_select.clear_all"
+                    ))),
             )
         });
 
@@ -308,3 +315,54 @@ impl Render for MultiSelect {
 }
 
 impl EventEmitter<MultiSelectChanged> for MultiSelect {}
+
+/// Label for the "+N more" trigger suffix shown when more than three items
+/// are selected.
+///
+/// Uses the singular catalog bucket only for exactly one extra item; every
+/// other count uses the plural bucket.
+fn more_label(extra: usize) -> String {
+    if extra == 1 {
+        dbflux_i18n::t!("controls.multi_select.more.one", count = extra)
+    } else {
+        dbflux_i18n::t!("controls.multi_select.more.many", count = extra)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::more_label;
+
+    #[test]
+    fn multi_select_keys_resolve_in_both_locales() {
+        let keys = [
+            "controls.multi_select.placeholder",
+            "controls.multi_select.clear_all",
+            "controls.multi_select.more.one",
+            "controls.multi_select.more.many",
+        ];
+
+        for key in keys {
+            let en = dbflux_i18n::t!(key, locale = "en");
+            let es = dbflux_i18n::t!(key, locale = "es");
+            assert!(!en.is_empty() && en != key, "en missing for {key}");
+            assert!(!es.is_empty() && es != key, "es missing for {key}");
+        }
+    }
+
+    #[test]
+    fn more_label_uses_plural_buckets() {
+        let one = more_label(1);
+        assert_eq!(
+            one,
+            dbflux_i18n::t!("controls.multi_select.more.one", count = 1)
+        );
+
+        let many = more_label(3);
+        assert!(many.contains('3'));
+        assert_eq!(
+            many,
+            dbflux_i18n::t!("controls.multi_select.more.many", count = 3)
+        );
+    }
+}

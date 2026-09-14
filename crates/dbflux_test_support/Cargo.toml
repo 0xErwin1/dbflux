@@ -23,6 +23,7 @@ dbflux_driver_mssql.workspace = true
 dbflux_driver_mysql.workspace = true
 dbflux_driver_postgres.workspace = true
 dbflux_driver_redis.workspace = true
+dbflux_driver_redshift.workspace = true
 dbflux_driver_sqlite.workspace = true
 testcontainers = { version = "0.27", features = ["blocking"] }
 interprocess.workspace = true

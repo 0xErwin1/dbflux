@@ -160,18 +160,25 @@ pub fn report_error(err: UserFacingError, cx: &mut App) {
     }
 
     let id_for_action = err.correlation_id;
-    let view_in_audit =
-        ToastAction::new("view-in-audit", "View in Audit").on_click(move |cx: &mut App| {
-            if let Some(g) = cx.try_global::<AppStateGlobal>() {
-                let entity = g.entity.clone();
-                entity.update(cx, |s, cx| s.request_open_audit(Some(id_for_action), cx));
-            }
-        });
+    let view_in_audit = ToastAction::new(
+        "view-in-audit",
+        dbflux_i18n::t!("errors.action.view_in_audit"),
+    )
+    .on_click(move |cx: &mut App| {
+        if let Some(g) = cx.try_global::<AppStateGlobal>() {
+            let entity = g.entity.clone();
+            entity.update(cx, |s, cx| s.request_open_audit(Some(id_for_action), cx));
+        }
+    });
 
     toast = toast
         .meta_right(now_hms())
-        .details(format!("Correlation: {id_str}"))
-        .action(copy_action(format!("{summary}\nCorrelation: {id_str}")))
+        .details(dbflux_i18n::t!("errors.correlation.detail", id = id_str))
+        .action(copy_action(dbflux_i18n::t!(
+            "errors.correlation.clipboard",
+            summary = summary,
+            id = id_str
+        )))
         .action(view_in_audit);
 
     toast.push(cx);
@@ -263,5 +270,37 @@ mod tests {
         assert_eq!(ErrorKind::Driver.as_str(), "driver");
         assert_eq!(ErrorKind::User.as_str(), "user");
         assert_eq!(ErrorKind::Config.as_str(), "config");
+    }
+}
+
+#[cfg(test)]
+mod i18n_tests {
+    const USER_ERROR_KEYS: &[&str] = &[
+        "errors.action.view_in_audit",
+        "errors.correlation.detail",
+        "errors.correlation.clipboard",
+    ];
+
+    #[test]
+    fn user_error_catalog_keys_resolve() {
+        for key in USER_ERROR_KEYS {
+            let english = dbflux_i18n::t!(key);
+            let spanish = dbflux_i18n::t!(key, locale = "es");
+
+            assert!(!english.is_empty(), "empty English translation for {key}");
+            assert_ne!(english, *key, "missing English translation for {key}");
+            assert!(!spanish.is_empty(), "empty Spanish translation for {key}");
+            assert_ne!(spanish, *key, "missing Spanish translation for {key}");
+        }
+    }
+
+    #[test]
+    fn correlation_clipboard_ends_with_correlation_detail() {
+        let clipboard =
+            dbflux_i18n::t!("errors.correlation.clipboard", summary = "boom", id = "ID");
+        let detail = dbflux_i18n::t!("errors.correlation.detail", id = "ID");
+
+        assert!(clipboard.starts_with("boom\n"));
+        assert!(clipboard.ends_with(&detail));
     }
 }

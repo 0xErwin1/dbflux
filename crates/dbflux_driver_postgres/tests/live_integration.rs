@@ -49,6 +49,28 @@ fn connect_postgres(
     Ok((connection, driver))
 }
 
+fn assert_text_array_matches_server_text(decoded: &Value, server_text: &Value) {
+    let Value::Array(values) = decoded else {
+        panic!("expected decoded text array, got {decoded:?}");
+    };
+    let Value::Text(server_text) = server_text else {
+        panic!("expected server canonical array text, got {server_text:?}");
+    };
+
+    let decoded_text: Vec<Option<String>> = values
+        .iter()
+        .map(|value| match value {
+            Value::Text(text) => Some(text.clone()),
+            Value::Null => None,
+            other => panic!("expected array text or NULL, got {other:?}"),
+        })
+        .collect();
+    let canonical_text: Vec<Option<String>> =
+        serde_json::from_str(server_text).expect("server array text must be JSON");
+
+    assert_eq!(decoded_text, canonical_text);
+}
+
 // ---------------------------------------------------------------------------
 // Basic connectivity
 // ---------------------------------------------------------------------------
@@ -248,6 +270,165 @@ fn postgres_crud_operations() -> Result<(), DbError> {
             .execute(&QueryRequest::new("SELECT * FROM crud_test"))?
             .rows;
         assert!(rows.is_empty());
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon and the pinned pgvector PostgreSQL 16 image"]
+fn postgres_pgvector_text_matches_server_output_and_crud_returning() -> Result<(), DbError> {
+    containers::with_pgvector_postgres_16_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+
+        connection.execute(&QueryRequest::new("CREATE EXTENSION vector"))?;
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE pgvector_display (
+                id INTEGER PRIMARY KEY,
+                vector_value vector,
+                halfvec_value halfvec,
+                sparsevec_value sparsevec,
+                vector_values vector[],
+                halfvec_values halfvec[],
+                sparsevec_values sparsevec[]
+            )",
+        ))?;
+        connection.execute(&QueryRequest::new(
+            "INSERT INTO pgvector_display VALUES (
+                1,
+                '[1e-6,1e20,-1e-6,-1e20]',
+                '[1.5,-2.25]',
+                '{1:1e-6,4:-1e20}/4',
+                ARRAY['[1e-6,1e20,-1e-6,-1e20]'::vector, NULL, '[2,3]'::vector],
+                ARRAY['[1.5,-2.25]'::halfvec, NULL, '[3,4]'::halfvec],
+                ARRAY['{1:1e-6,4:-1e20}/4'::sparsevec, NULL, '{2:3}/4'::sparsevec]
+            )",
+        ))?;
+
+        let result = connection.execute(&QueryRequest::new(
+            "SELECT
+                vector_value, vector_value::text,
+                halfvec_value, halfvec_value::text,
+                sparsevec_value, sparsevec_value::text,
+                vector_values, array_to_json(vector_values)::text,
+                halfvec_values, array_to_json(halfvec_values)::text,
+                sparsevec_values, array_to_json(sparsevec_values)::text,
+                NULL::vector, NULL::vector[]
+             FROM pgvector_display",
+        ))?;
+        let row = &result.rows[0];
+
+        for (value_index, text_index) in [(0, 1), (2, 3), (4, 5)] {
+            assert_eq!(row[value_index], row[text_index]);
+        }
+        assert_text_array_matches_server_text(&row[6], &row[7]);
+        assert_text_array_matches_server_text(&row[8], &row[9]);
+        assert_text_array_matches_server_text(&row[10], &row[11]);
+        assert_eq!(row[12], Value::Null);
+        assert_eq!(row[13], Value::Null);
+
+        let inserted = connection.insert_row(&RowInsert::with_typed_assignments(
+            "pgvector_display".to_string(),
+            Some("public".to_string()),
+            vec![
+                ColumnAssignment::new("id", Value::Int(2)),
+                ColumnAssignment::typed(
+                    "vector_value",
+                    Value::Text("[1e-6,1e20,-1e-6,-1e20]".to_string()),
+                    "vector",
+                ),
+            ],
+        ))?;
+        let inserted_value = inserted.returning_row.as_ref().and_then(|row| row.get(1));
+        let server_value = connection
+            .execute(&QueryRequest::new(
+                "SELECT vector_value::text FROM pgvector_display WHERE id = 2",
+            ))?
+            .rows[0][0]
+            .clone();
+        assert_eq!(inserted_value, Some(&server_value));
+
+        let updated = connection.update_row(&RowPatch::with_typed_changes(
+            RecordIdentity::composite(vec!["id".to_string()], vec![Value::Int(2)]),
+            "pgvector_display".to_string(),
+            Some("public".to_string()),
+            vec![ColumnAssignment::typed(
+                "vector_value",
+                Value::Text("[2,3]".to_string()),
+                "vector",
+            )],
+        ))?;
+        let updated_value = updated.returning_row.as_ref().and_then(|row| row.get(1));
+        let server_value = connection
+            .execute(&QueryRequest::new(
+                "SELECT vector_value::text FROM pgvector_display WHERE id = 2",
+            ))?
+            .rows[0][0]
+            .clone();
+        assert_eq!(updated_value, Some(&server_value));
+
+        let deleted = connection.delete_row(&RowDelete::new(
+            RecordIdentity::composite(vec!["id".to_string()], vec![Value::Int(2)]),
+            "pgvector_display".to_string(),
+            Some("public".to_string()),
+        ))?;
+        assert_eq!(
+            deleted.returning_row.as_ref().and_then(|row| row.get(1)),
+            Some(&server_value)
+        );
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_text_search_text_matches_server_output() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE text_search_display (
+                id INTEGER PRIMARY KEY,
+                vector_value tsvector,
+                query_value tsquery,
+                vector_values tsvector[]
+            )",
+        ))?;
+        connection.execute(&QueryRequest::new(
+            "INSERT INTO text_search_display VALUES (
+                1,
+                setweight(to_tsvector('english', 'The quick brown fox'), 'A')
+                    || to_tsvector('english', 'jumps over it''s lazy dog'),
+                tsquery_phrase(
+                    to_tsquery('simple', 'fat:AB') || to_tsquery('simple', 'cat'),
+                    !! tsquery_phrase(
+                        to_tsquery('simple', 'rat'),
+                        to_tsquery('simple', 'dog')
+                    ),
+                    3
+                ) && to_tsquery('simple', 'bird:*'),
+                ARRAY[to_tsvector('english', 'first row'), NULL]
+            )",
+        ))?;
+
+        let result = connection.execute(&QueryRequest::new(
+            "SELECT
+                vector_value, vector_value::text,
+                query_value, query_value::text,
+                vector_values, array_to_json(vector_values)::text,
+                ''::tsvector, ''::tsvector::text,
+                NULL::tsvector, NULL::tsquery
+             FROM text_search_display",
+        ))?;
+        let row = &result.rows[0];
+
+        for (value_index, text_index) in [(0, 1), (2, 3), (6, 7)] {
+            assert_eq!(row[value_index], row[text_index]);
+        }
+        assert_text_array_matches_server_text(&row[4], &row[5]);
+        assert_eq!(row[8], Value::Null);
+        assert_eq!(row[9], Value::Null);
 
         Ok(())
     })

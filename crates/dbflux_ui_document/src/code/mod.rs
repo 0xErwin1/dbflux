@@ -10,7 +10,8 @@ use dbflux_components::common::time_range::state::TimeRange;
 use dbflux_components::common::time_range::view::{TimeRangeChanged, TimeRangePanel};
 use dbflux_components::components::multi_select::{MultiSelect, MultiSelectChanged};
 use dbflux_components::controls::{
-    Button, CompletionProvider, GpuiInput as Input, InputEvent, InputPosition, InputState, Rope,
+    Button, CodeActionProvider, CompletionProvider, GpuiInput as Input, InputEvent, InputPosition,
+    InputState, Rope, RopeExt,
 };
 use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChanged};
 use dbflux_components::icons::AppIcon;
@@ -54,17 +55,21 @@ use std::sync::Arc;
 use std::time::Instant;
 use uuid::Uuid;
 
+mod code_actions;
 mod completion;
 mod context_bar;
 mod diagnostics;
 mod execution;
+mod execution_session;
 mod file_ops;
 mod focus;
 mod live_output;
 pub mod pane;
 mod render;
 
+use code_actions::SqlCodeActionProvider;
 use completion::QueryCompletionProvider;
+use execution_session::ExecutionSessionBinding;
 use live_output::LiveOutputState;
 
 /// A single result tab within the CodeDocument.
@@ -139,6 +144,8 @@ fn build_source_window_context(
     let requires_targets = query_mode.as_deref() != Some("sql");
 
     if requires_targets && targets.is_empty() {
+        // This is a stable token, not display text: `labels::source_window_error_message`
+        // maps it to the translated catalog entry at the toast display site.
         return Err("Select at least one source");
     }
 
@@ -228,6 +235,23 @@ pub(super) struct SourceContext {
     pub(super) _context_subscriptions: Vec<Subscription>,
 }
 
+/// How a document's editor language is bound over its lifetime.
+///
+/// A scratch query tab follows its connection: retargeting the connection
+/// dropdown from a relational profile to a document one has to re-derive
+/// highlighting, time-macro substitution, and dangerous-query classification,
+/// because `connection_id` alone already decides which driver executes the text.
+/// A document whose language came from somewhere the connection cannot speak
+/// for — a file extension, an in-process script language, a read-only routine
+/// body — keeps it instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum LanguageBinding {
+    /// Re-derive the language from whichever connection the tab is bound to.
+    FollowsConnection,
+    /// Keep the document's own language regardless of the bound connection.
+    Pinned,
+}
+
 /// Text editor entity, file-backing metadata, language mode, and diagnostic debounce.
 ///
 /// Groups the `InputState` entity and its subscription together with the fields
@@ -261,7 +285,17 @@ pub(super) struct EditorState {
     pub(super) completion_query_generation: Rc<Cell<u64>>,
     /// Value of `completion_query_generation` at the previous `Change` event.
     pub(super) last_completion_generation: u64,
+    /// The language this document declares for itself: derived from the active
+    /// connection at construction, from a file extension, or passed explicitly.
+    /// Read it through `CodeDocument::effective_language()` rather than
+    /// directly — an unpinned document resolves to its bound connection's
+    /// language instead.
     pub(super) query_language: QueryLanguage,
+    pub(super) language_binding: LanguageBinding,
+    /// Cached `resolve_effective_language` result, refreshed alongside
+    /// `cached_supports_connection_context` whenever the effective language can
+    /// change (construction, connection change, query-mode switch).
+    pub(super) cached_effective_language: QueryLanguage,
 }
 
 /// Auto-save-to-disk machinery and saved-label UI feedback.
@@ -336,6 +370,11 @@ pub(super) struct PendingActions {
     error: Option<String>,
 }
 
+struct ExecutionSessionContext {
+    root: Arc<dyn dbflux_core::Connection>,
+    database: Option<String>,
+}
+
 pub struct CodeDocument {
     // Identity
     id: DocumentId,
@@ -361,6 +400,8 @@ pub struct CodeDocument {
 
     // Query execution state and result tabs.
     execution: Execution,
+    execution_session: Arc<ExecutionSessionBinding>,
+    execution_session_context: Option<ExecutionSessionContext>,
     result_tabs: ResultTabs,
 
     // History modal, refresh timer, and schema drift modal.
@@ -403,6 +444,7 @@ struct PendingQueryResult {
 pub(super) struct ActiveQueryTask {
     task_id: dbflux_core::TaskId,
     target: TaskTarget,
+    uses_isolated_session: bool,
 }
 
 /// Pending dangerous query confirmation.
@@ -533,6 +575,17 @@ impl CodeDocument {
             Self::resolve_editor_profile(&app_state, connection_id, &query_language, cx);
         let editor_mode = editor_profile.editor_mode.clone();
         let placeholder = editor_profile.placeholder.clone();
+
+        // An in-process script language (Lua/Python/Bash) is pinned on sight: no
+        // connection can turn a script buffer into a query buffer. Every other
+        // language starts out following the bound connection; `with_path` and
+        // `with_read_only` pin it afterwards for the documents whose language
+        // came from a file extension or a routine body.
+        let language_binding = if query_language.supports_connection_context() {
+            LanguageBinding::FollowsConnection
+        } else {
+            LanguageBinding::Pinned
+        };
 
         let input_state = cx.new(|cx| {
             InputState::new(window, cx)
@@ -738,9 +791,11 @@ impl CodeDocument {
                     this.refresh.refresh_dropdown.update(cx, |dd, cx| {
                         dd.set_selected_index(Some(RefreshPolicy::Manual.index()), cx);
                     });
-                    Toast::warning("Auto-refresh blocked: query modifies data")
-                        .meta_right(now_hms())
-                        .push(cx);
+                    Toast::warning(dbflux_i18n::t!(
+                        "document.code.execution.toast.auto_refresh_blocked"
+                    ))
+                    .meta_right(now_hms())
+                    .push(cx);
                     return;
                 }
 
@@ -792,9 +847,16 @@ impl CodeDocument {
                 completion_query_generation.clone(),
             ));
 
+        let code_action_provider: Rc<dyn CodeActionProvider> = Rc::new(SqlCodeActionProvider::new(
+            app_state.clone(),
+            connection_id,
+            exec_ctx.database.clone(),
+        ));
+
         input_state.update(cx, |state, _cx| {
             state.lsp.completion_provider =
                 supports_connection_context.then_some(completion_provider.clone());
+            state.lsp.code_action_providers = vec![code_action_provider.clone()];
         });
 
         let (connection_dropdown, conn_sub) =
@@ -805,7 +867,7 @@ impl CodeDocument {
             Self::create_schema_dropdown(&app_state, &exec_ctx, window, cx);
         let source_query_mode_dropdown = cx.new(|_cx| {
             Dropdown::new("ctx-source-query-mode")
-                .placeholder("Syntax")
+                .placeholder(dbflux_i18n::t!("document.code.context_bar.fallback.syntax"))
                 .toolbar_style(true)
         });
         // bare() suppresses the trigger's own border/background because the
@@ -813,7 +875,9 @@ impl CodeDocument {
         let source_targets = cx.new(|_cx| {
             MultiSelect::new("ctx-source-targets")
                 .bare()
-                .placeholder("Sources")
+                .placeholder(dbflux_i18n::t!(
+                    "document.code.context_bar.fallback.sources"
+                ))
         });
         let source_start_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("2026-04-24T00:00:00Z"));
@@ -858,6 +922,7 @@ impl CodeDocument {
             },
         );
         let app_state_sub = cx.subscribe(&app_state, |this, _, _: &AppStateChanged, cx| {
+            this.invalidate_execution_session_if_context_changed(cx);
             this.sync_context_dropdowns(cx);
             this.try_fetch_pending_routine_definition(cx);
         });
@@ -889,6 +954,8 @@ impl CodeDocument {
                 last_change_length: 0,
                 completion_query_generation,
                 last_completion_generation: 0,
+                cached_effective_language: query_language.clone(),
+                language_binding,
                 query_language,
             },
             source: SourceContext {
@@ -921,6 +988,8 @@ impl CodeDocument {
                 _live_output_drain: None,
                 active_query_task: None,
             },
+            execution_session: ExecutionSessionBinding::new(),
+            execution_session_context: None,
             result_tabs: ResultTabs {
                 result_tabs: Vec::new(),
                 active_result_index: None,
@@ -986,9 +1055,11 @@ impl CodeDocument {
     /// surfaces a toast instead of emitting so the user gets feedback.
     pub fn emit_chart_this_query(&mut self, cx: &mut Context<Self>) {
         let Some(query) = self.current_query_text(cx) else {
-            Toast::warning("Write a query first to open it in a chart")
-                .meta_right(now_hms())
-                .push(cx);
+            Toast::warning(dbflux_i18n::t!(
+                "document.code.execution.toast.write_query_first"
+            ))
+            .meta_right(now_hms())
+            .push(cx);
             return;
         };
 
@@ -1071,8 +1142,13 @@ impl CodeDocument {
     }
 
     /// Attach a file path (used after opening or "Save As").
+    ///
+    /// This pins the language: the file's extension chose it, so retargeting the
+    /// document at another connection must not override it.
     pub fn with_path(mut self, path: PathBuf) -> Self {
         self.editor.path = Some(path);
+        self.editor.language_binding = LanguageBinding::Pinned;
+        self.editor.cached_effective_language = self.editor.query_language.clone();
         self
     }
 
@@ -1082,12 +1158,18 @@ impl CodeDocument {
     pub fn with_read_only(mut self, cx: &mut Context<Self>) -> Self {
         self.read_only = true;
 
+        // A read-only document shows a fixed body (a routine definition), not a
+        // buffer the user retargets at another connection.
+        self.editor.language_binding = LanguageBinding::Pinned;
+        self.editor.cached_effective_language = self.editor.query_language.clone();
+
         // Disable the LSP completion provider so no autocomplete popup fires
         // when the user focuses or types (which would otherwise happen because
         // the Input component receives key events before the disabled guard
         // blocks the actual text insertion).
         self.editor.input_state.update(cx, |state, _cx| {
             state.lsp.completion_provider = None;
+            state.lsp.code_action_providers = Vec::new();
         });
 
         self
@@ -1185,6 +1267,7 @@ impl CodeDocument {
 
     /// Set the execution context (e.g. parsed from file header).
     pub fn with_exec_ctx(mut self, ctx: ExecutionContext, cx: &mut Context<Self>) -> Self {
+        self.invalidate_execution_session(cx);
         self.pending.source_input_values = ctx
             .source
             .as_ref()
@@ -1193,6 +1276,57 @@ impl CodeDocument {
         self.source.exec_ctx = ctx;
         self.sync_context_dropdowns(cx);
         self
+    }
+
+    fn invalidate_execution_session_if_context_changed(&mut self, cx: &mut Context<Self>) {
+        let Some(bound) = self.execution_session_context.as_ref() else {
+            return;
+        };
+
+        let current = self.connection_id.and_then(|connection_id| {
+            let app_state = self.app_state.read(cx);
+            let connected = app_state.connections().get(&connection_id)?;
+            let database = self
+                .source
+                .exec_ctx
+                .database
+                .clone()
+                .or_else(|| connected.active_database.clone());
+            connected
+                .resolve_connection_for_execution(database.as_deref())
+                .ok()
+                .map(|root| (root, database))
+        });
+        let unchanged = current.is_some_and(|(root, database)| {
+            database == bound.database && Arc::ptr_eq(&bound.root, &root)
+        });
+
+        if !unchanged {
+            self.invalidate_execution_session(cx);
+        }
+    }
+
+    /// Invalidates before detached background cleanup; no document entity is retained.
+    pub(super) fn invalidate_execution_session(&mut self, cx: &mut Context<Self>) {
+        self.execution_session_context = None;
+        let generation = self.execution_session.invalidate();
+        let binding = self.execution_session.clone();
+        let cleanup = cx
+            .background_executor()
+            .spawn(async move { binding.close_invalidated(generation) });
+        cx.spawn(async move |_this, cx| {
+            if let Err(error) = cleanup.await {
+                dbflux_ui_base::user_error::report_error_async(
+                    dbflux_ui_base::user_error::UserFacingError::new(
+                        dbflux_ui_base::user_error::ErrorKind::Driver,
+                        "Could not confirm cleanup of the editor execution session",
+                    )
+                    .with_cause(error.to_string()),
+                    cx,
+                );
+            }
+        })
+        .detach();
     }
 
     // === File backing ===
@@ -1207,7 +1341,18 @@ impl CodeDocument {
 
     #[allow(dead_code)]
     pub fn query_language(&self) -> QueryLanguage {
-        self.editor.query_language.clone()
+        self.effective_language().clone()
+    }
+
+    /// The language this editor currently presents and classifies with.
+    ///
+    /// This is the cached `resolve_effective_language` result, so for an
+    /// unpinned document it tracks the bound connection. Every consumer that
+    /// drives user-visible or governance behaviour — highlighting, time-macro
+    /// substitution, statement counting, dangerous-query classification — must
+    /// read this rather than `editor.query_language`.
+    pub(super) fn effective_language(&self) -> &QueryLanguage {
+        &self.editor.cached_effective_language
     }
 
     /// Returns true if the editor content is empty or whitespace-only.
@@ -1252,10 +1397,11 @@ impl CodeDocument {
 
     pub fn title(&self) -> String {
         if let Some(path) = &self.editor.path {
+            let untitled = dbflux_i18n::t!("document.code.title.untitled");
             let name = path
                 .file_name()
                 .and_then(|n| n.to_str())
-                .unwrap_or("Untitled");
+                .unwrap_or(untitled.as_str());
 
             if self.editor.is_dirty {
                 format!("{}*", name)
@@ -1709,8 +1855,120 @@ impl CodeDocument {
 impl EventEmitter<DocumentEvent> for CodeDocument {}
 
 #[cfg(test)]
+mod language_binding_tests {
+    use super::{CodeDocument, LanguageBinding};
+    use dbflux_components::theme;
+    use dbflux_core::QueryLanguage;
+    use dbflux_storage::bootstrap::StorageRuntime;
+    use dbflux_ui_base::AppStateEntity;
+    use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
+    use gpui::{AppContext, TestAppContext};
+    use gpui_component::Root;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    fn isolated_test_app_state(cx: &mut TestAppContext) -> gpui::Entity<AppStateEntity> {
+        cx.update(|cx| {
+            cx.new(|_| {
+                let storage_runtime =
+                    StorageRuntime::in_memory().expect("isolated storage runtime");
+                AppStateEntity::new_with_storage_runtime(storage_runtime)
+                    .expect("test storage setup")
+            })
+        })
+    }
+
+    fn init_test_runtime(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        cx.update(theme::init);
+        cx.update(|cx| {
+            let host = cx.new(|_| ToastHost::new());
+            cx.set_global(ToastGlobal { host });
+        });
+    }
+
+    /// Build a document and report the language binding it ended up with.
+    ///
+    /// `customize` runs the builder steps under test (`with_path`,
+    /// `with_read_only`, or nothing at all).
+    fn binding_for(
+        cx: &mut TestAppContext,
+        language: QueryLanguage,
+        customize: impl Fn(CodeDocument, &mut gpui::Context<CodeDocument>) -> CodeDocument + 'static,
+    ) -> LanguageBinding {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let doc_holder: Rc<RefCell<Option<gpui::Entity<CodeDocument>>>> =
+            Rc::new(RefCell::new(None));
+        let doc_ref = doc_holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let doc = cx.new(|cx| {
+                let document = CodeDocument::new_with_language(
+                    app_state.clone(),
+                    None,
+                    language.clone(),
+                    window,
+                    cx,
+                );
+                customize(document, cx)
+            });
+            doc_ref.replace(Some(doc.clone()));
+            Root::new(doc, window, cx)
+        });
+
+        let doc = doc_holder.borrow().clone().expect("doc should be created");
+
+        window.update(|_, app| doc.read(app).editor.language_binding)
+    }
+
+    /// A plain scratch query tab must follow its connection, so retargeting the
+    /// connection dropdown re-derives the language.
+    #[gpui::test]
+    fn a_scratch_query_tab_follows_its_connection(cx: &mut TestAppContext) {
+        assert_eq!(
+            binding_for(cx, QueryLanguage::Sql, |doc, _cx| doc),
+            LanguageBinding::FollowsConnection
+        );
+    }
+
+    /// An in-process script language is pinned at construction: no connection
+    /// can turn a Lua buffer into a query buffer.
+    #[gpui::test]
+    fn a_script_language_is_pinned_on_sight(cx: &mut TestAppContext) {
+        assert_eq!(
+            binding_for(cx, QueryLanguage::Lua, |doc, _cx| doc),
+            LanguageBinding::Pinned
+        );
+    }
+
+    /// A file's extension chose its language, so attaching a path pins it.
+    #[gpui::test]
+    fn attaching_a_file_path_pins_the_language(cx: &mut TestAppContext) {
+        assert_eq!(
+            binding_for(cx, QueryLanguage::Sql, |doc, _cx| doc
+                .with_path(std::path::PathBuf::from("/tmp/report.sql"))),
+            LanguageBinding::Pinned
+        );
+    }
+
+    /// A read-only document shows a fixed routine body, not a buffer the user
+    /// retargets at another connection.
+    #[gpui::test]
+    fn a_read_only_document_pins_its_language(cx: &mut TestAppContext) {
+        assert_eq!(
+            binding_for(cx, QueryLanguage::Sql, |doc, cx| doc.with_read_only(cx)),
+            LanguageBinding::Pinned
+        );
+    }
+}
+
+#[cfg(test)]
 mod tests {
-    use super::{CodeDocument, diff_stats_from_pair, source_input_values_from_context};
+    use super::{
+        CodeDocument, LanguageBinding, diff_stats_from_pair, source_input_values_from_context,
+    };
     use dbflux_components::theme;
     use dbflux_core::{ExecutionSourceContext, QueryLanguage};
     use dbflux_storage::bootstrap::StorageRuntime;
@@ -1914,5 +2172,29 @@ mod tests {
 
         assert_eq!(values.0, "2024-01-01T00:00:00Z");
         assert_eq!(values.1, "2024-01-01T01:00:00Z");
+    }
+
+    #[test]
+    fn code_title_untitled_key_resolves_in_both_locales() {
+        for locale in ["en", "es"] {
+            let key = "document.code.title.untitled";
+            let value = dbflux_i18n::t!(key, locale = locale);
+
+            assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+            assert_ne!(value, key, "{key} resolved to its own key in {locale}");
+            assert_ne!(
+                value,
+                format!("{locale}.{key}"),
+                "{key} missing from {locale} catalog"
+            );
+        }
+    }
+
+    #[test]
+    fn code_title_untitled_differs_between_locales() {
+        let en = dbflux_i18n::t!("document.code.title.untitled", locale = "en");
+        let es = dbflux_i18n::t!("document.code.title.untitled", locale = "es");
+
+        assert_ne!(en, es);
     }
 }

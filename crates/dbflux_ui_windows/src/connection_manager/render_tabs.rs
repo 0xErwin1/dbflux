@@ -1,15 +1,21 @@
 use dbflux_components::components::form_renderer;
 use dbflux_components::controls::Input;
 use dbflux_components::icons::AppIcon;
+#[cfg(feature = "mcp")]
+use dbflux_components::primitives::Label;
 use dbflux_components::primitives::{
-    FilePicker, Icon as AppIconElement, Label, SegmentedControl, SegmentedItem, Text,
+    FilePicker, Icon as AppIconElement, SegmentedControl, SegmentedItem, Text,
 };
+#[cfg(feature = "mcp")]
+use dbflux_components::tokens::Spacing;
 use dbflux_components::tokens::{Radii, Widths};
 use dbflux_core::FormFieldKind;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::checkbox::Checkbox;
+#[cfg(feature = "mcp")]
+use gpui_component::scroll::ScrollableElement;
 
 use dbflux_components::typography::SubSectionLabel;
 
@@ -28,7 +34,7 @@ impl ConnectionManagerWindow {
             .border_color(border_color)
             .child(self.render_tab_trigger(
                 "tab-main",
-                "Main",
+                dbflux_i18n::t!("connection_manager.tab.main"),
                 AppIcon::Plug,
                 ActiveTab::Main,
                 active_tab == ActiveTab::Main,
@@ -37,7 +43,7 @@ impl ConnectionManagerWindow {
             .when(show_access_tab, |d| {
                 d.child(self.render_tab_trigger(
                     "tab-access",
-                    "Access",
+                    dbflux_i18n::t!("access.tab_label"),
                     AppIcon::FingerprintPattern,
                     ActiveTab::Access,
                     active_tab == ActiveTab::Access,
@@ -46,7 +52,7 @@ impl ConnectionManagerWindow {
             })
             .child(self.render_tab_trigger(
                 "tab-settings",
-                "Settings",
+                dbflux_i18n::t!("connection_manager.tab.settings"),
                 AppIcon::Settings,
                 ActiveTab::Settings,
                 active_tab == ActiveTab::Settings,
@@ -54,7 +60,7 @@ impl ConnectionManagerWindow {
             ))
             .child(self.render_tab_trigger(
                 "tab-mcp",
-                "MCP",
+                dbflux_i18n::t!("connection_manager.tab.mcp"),
                 AppIcon::Lock,
                 ActiveTab::Mcp,
                 active_tab == ActiveTab::Mcp,
@@ -65,7 +71,7 @@ impl ConnectionManagerWindow {
     fn render_tab_trigger(
         &self,
         id: &'static str,
-        label: &'static str,
+        label: impl Into<SharedString>,
         icon: AppIcon,
         tab: ActiveTab,
         is_active: bool,
@@ -146,7 +152,7 @@ impl ConnectionManagerWindow {
             let form_values = self.collect_form_values(driver.form_definition(), cx);
             let secret_label = driver
                 .secret_field_label(&form_values)
-                .unwrap_or_else(|| "Password".to_string());
+                .unwrap_or_else(|| dbflux_i18n::t!("connection_manager.placeholder.password"));
 
             let password_field = self.render_password_field(
                 show_focus,
@@ -204,13 +210,21 @@ impl ConnectionManagerWindow {
             .child(ssl_control)
             .child(div().flex_1());
 
-        let ssl_row = Self::field_row_cm("SSL mode", false, ssl_control_row, None::<&str>, cx);
+        let ssl_row = Self::field_row_cm(
+            dbflux_i18n::t!("connection_manager.field.ssl_mode"),
+            false,
+            ssl_control_row,
+            None::<&str>,
+            cx,
+        );
 
         let mut section = div()
             .flex()
             .flex_col()
             .gap_2()
-            .child(SubSectionLabel::new("TRANSPORT"))
+            .child(SubSectionLabel::new(dbflux_i18n::t!(
+                "connection_manager.section.transport"
+            )))
             .child(ssl_row);
 
         // Cert path inputs — shown only when the driver declares ssl_cert_fields and the
@@ -223,7 +237,7 @@ impl ConnectionManagerWindow {
 
                 if mode_requires_root {
                     let ca_row = self.render_ssl_cert_picker_row(
-                        "CA certificate",
+                        dbflux_i18n::t!("connection_manager.field.ca_certificate"),
                         super::SslCertSlot::CaCert,
                         cx,
                     );
@@ -236,12 +250,12 @@ impl ConnectionManagerWindow {
 
                     if mode_is_cert_active {
                         let cert_row = self.render_ssl_cert_picker_row(
-                            "Client cert",
+                            dbflux_i18n::t!("connection_manager.field.client_cert"),
                             super::SslCertSlot::ClientCert,
                             cx,
                         );
                         let key_row = self.render_ssl_cert_picker_row(
-                            "Client key",
+                            dbflux_i18n::t!("connection_manager.field.client_key"),
                             super::SslCertSlot::ClientKey,
                             cx,
                         );
@@ -260,7 +274,7 @@ impl ConnectionManagerWindow {
     /// Backspace clears the selection.
     fn render_ssl_cert_picker_row(
         &self,
-        label: &'static str,
+        label: impl Into<SharedString>,
         slot: super::SslCertSlot,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -327,8 +341,12 @@ impl ConnectionManagerWindow {
 
         // --- Global Overrides Section ---
         let policy_label = match effective.refresh_policy {
-            dbflux_core::RefreshPolicySetting::Manual => "Manual",
-            dbflux_core::RefreshPolicySetting::Interval => "Interval",
+            dbflux_core::RefreshPolicySetting::Manual => {
+                dbflux_i18n::t!("settings.general.refresh_policy.option.manual")
+            }
+            dbflux_core::RefreshPolicySetting::Interval => {
+                dbflux_i18n::t!("settings.general.refresh_policy.option.interval")
+            }
         };
 
         let override_rows = div()
@@ -341,7 +359,9 @@ impl ConnectionManagerWindow {
                     .items_center()
                     .gap_3()
                     .child(div().w(px(200.0)))
-                    .child(div().w(px(160.0)).child(Text::caption("Override Value"))),
+                    .child(div().w(px(160.0)).child(Text::caption(dbflux_i18n::t!(
+                        "settings.general.override_value_header"
+                    )))),
             )
             // Refresh policy row
             .child(
@@ -368,7 +388,9 @@ impl ConnectionManagerWindow {
                                 cx.notify();
                             })),
                     )
-                    .child(div().w(px(180.0)).text_sm().child("Refresh policy"))
+                    .child(div().w(px(180.0)).text_sm().child(dbflux_i18n::t!(
+                        "connection_manager.overrides.refresh_policy"
+                    )))
                     .child(
                         div()
                             .min_w(px(160.0))
@@ -390,7 +412,9 @@ impl ConnectionManagerWindow {
                                 )
                             }),
                     )
-                    .child(Text::caption(format!("Default: {}", policy_label))),
+                    .child(Text::caption(crate::labels::override_default_caption(
+                        &policy_label,
+                    ))),
             )
             // Refresh interval row
             .child(
@@ -417,7 +441,9 @@ impl ConnectionManagerWindow {
                                 cx.notify();
                             })),
                     )
-                    .child(div().w(px(180.0)).text_sm().child("Refresh interval (s)"))
+                    .child(div().w(px(180.0)).text_sm().child(dbflux_i18n::t!(
+                        "connection_manager.overrides.refresh_interval"
+                    )))
                     .child(
                         div()
                             .w(px(100.0))
@@ -432,10 +458,11 @@ impl ConnectionManagerWindow {
                                     .disabled(!self.settings_tab.conn_override_refresh_interval),
                             ),
                     )
-                    .child(Text::caption(format!(
-                        "Default: {}s",
-                        effective.refresh_interval_secs
-                    ))),
+                    .child(Text::caption(
+                        crate::labels::override_default_seconds_caption(
+                            effective.refresh_interval_secs,
+                        ),
+                    )),
             )
             // Confirm dangerous queries
             .child(
@@ -454,24 +481,20 @@ impl ConnectionManagerWindow {
                         |d| d.border_color(gpui::transparent_black()),
                     )
                     .p(px(2.0))
-                    .child(
-                        div()
-                            .w(px(200.0))
-                            .text_sm()
-                            .child("Confirm dangerous queries"),
-                    )
+                    .child(div().w(px(200.0)).text_sm().child(dbflux_i18n::t!(
+                        "connection_manager.overrides.confirm_dangerous"
+                    )))
                     .child(
                         div()
                             .min_w(px(160.0))
                             .child(self.settings_tab.conn_confirm_dangerous_dropdown.clone()),
                     )
-                    .child(Text::caption(format!(
-                        "Default: {}",
-                        if effective.confirm_dangerous {
-                            "On"
+                    .child(Text::caption(crate::labels::override_default_caption(
+                        &if effective.confirm_dangerous {
+                            dbflux_i18n::t!("connection_manager.overrides.on")
                         } else {
-                            "Off"
-                        }
+                            dbflux_i18n::t!("connection_manager.overrides.off")
+                        },
                     ))),
             )
             // Requires WHERE clause
@@ -491,19 +514,20 @@ impl ConnectionManagerWindow {
                         |d| d.border_color(gpui::transparent_black()),
                     )
                     .p(px(2.0))
-                    .child(div().w(px(200.0)).text_sm().child("Requires WHERE clause"))
+                    .child(div().w(px(200.0)).text_sm().child(dbflux_i18n::t!(
+                        "connection_manager.overrides.requires_where"
+                    )))
                     .child(
                         div()
                             .min_w(px(160.0))
                             .child(self.settings_tab.conn_requires_where_dropdown.clone()),
                     )
-                    .child(Text::caption(format!(
-                        "Default: {}",
-                        if effective.requires_where {
-                            "On"
+                    .child(Text::caption(crate::labels::override_default_caption(
+                        &if effective.requires_where {
+                            dbflux_i18n::t!("connection_manager.overrides.on")
                         } else {
-                            "Off"
-                        }
+                            dbflux_i18n::t!("connection_manager.overrides.off")
+                        },
                     ))),
             )
             // Requires preview
@@ -523,32 +547,41 @@ impl ConnectionManagerWindow {
                         |d| d.border_color(gpui::transparent_black()),
                     )
                     .p(px(2.0))
-                    .child(div().w(px(200.0)).text_sm().child("Requires preview"))
+                    .child(div().w(px(200.0)).text_sm().child(dbflux_i18n::t!(
+                        "connection_manager.overrides.requires_preview"
+                    )))
                     .child(
                         div()
                             .min_w(px(160.0))
                             .child(self.settings_tab.conn_requires_preview_dropdown.clone()),
                     )
-                    .child(Text::caption(format!(
-                        "Default: {}",
-                        if effective.requires_preview {
-                            "On"
+                    .child(Text::caption(crate::labels::override_default_caption(
+                        &if effective.requires_preview {
+                            dbflux_i18n::t!("connection_manager.overrides.on")
                         } else {
-                            "Off"
-                        }
+                            dbflux_i18n::t!("connection_manager.overrides.off")
+                        },
                     ))),
             );
 
         sections.push(
-            self.render_section("Connection Overrides", override_rows, &theme)
-                .into_any_element(),
+            self.render_section(
+                dbflux_i18n::t!("connection_manager.connection_overrides_title").as_str(),
+                override_rows,
+                &theme,
+            )
+            .into_any_element(),
         );
 
         let hooks_rows = self.render_hooks_rows(muted, cx);
 
         sections.push(
-            self.render_section("Connection Hooks", hooks_rows, &theme)
-                .into_any_element(),
+            self.render_section(
+                dbflux_i18n::t!("connection_manager.connection_hooks_title").as_str(),
+                hooks_rows,
+                &theme,
+            )
+            .into_any_element(),
         );
 
         // --- Driver Schema Section ---
@@ -571,6 +604,7 @@ impl ConnectionManagerWindow {
                         let enabled = form_renderer::is_field_enabled(
                             field,
                             &self.settings_tab.conn_form_state.checkboxes,
+                            &form_renderer::select_values(&self.settings_tab.conn_form_state, cx),
                         );
 
                         match &field.kind {
@@ -586,8 +620,16 @@ impl ConnectionManagerWindow {
                                 let default_val = effective
                                     .driver_values
                                     .get(&field.id)
-                                    .map(|v| if v == "true" { "On" } else { "Off" })
-                                    .unwrap_or("Off");
+                                    .map(|v| {
+                                        if v == "true" {
+                                            dbflux_i18n::t!("connection_manager.overrides.on")
+                                        } else {
+                                            dbflux_i18n::t!("connection_manager.overrides.off")
+                                        }
+                                    })
+                                    .unwrap_or_else(|| {
+                                        dbflux_i18n::t!("connection_manager.overrides.off")
+                                    });
 
                                 Some(
                                     div()
@@ -622,7 +664,9 @@ impl ConnectionManagerWindow {
                                                 },
                                             )),
                                         )
-                                        .child(Text::caption(format!("Default: {}", default_val)))
+                                        .child(Text::caption(
+                                            crate::labels::override_default_caption(&default_val),
+                                        ))
                                         .into_any_element(),
                                 )
                             }
@@ -659,10 +703,11 @@ impl ConnectionManagerWindow {
                                                 .items_center()
                                                 .gap_2()
                                                 .child(div().text_sm().child(field.label.clone()))
-                                                .child(Text::caption(format!(
-                                                    "Default: {}",
-                                                    default_val
-                                                ))),
+                                                .child(Text::caption(
+                                                    crate::labels::override_default_caption(
+                                                        &default_val,
+                                                    ),
+                                                )),
                                         )
                                         .child(div().w(Widths::CM_FORM_DROPDOWN).child(dropdown))
                                         .into_any_element(),
@@ -700,10 +745,11 @@ impl ConnectionManagerWindow {
                                                 .items_center()
                                                 .gap_2()
                                                 .child(div().text_sm().child(field.label.clone()))
-                                                .child(Text::caption(format!(
-                                                    "Default: {}",
-                                                    default_val
-                                                ))),
+                                                .child(Text::caption(
+                                                    crate::labels::override_default_caption(
+                                                        &default_val,
+                                                    ),
+                                                )),
                                         )
                                         .child(Input::new(&input).small().disabled(!enabled))
                                         .into_any_element(),
@@ -714,125 +760,509 @@ impl ConnectionManagerWindow {
             );
 
             sections.push(
-                self.render_section("Driver Settings", schema_fields, &theme)
-                    .into_any_element(),
+                self.render_section(
+                    &dbflux_i18n::t!("connection_manager.driver_settings_title"),
+                    schema_fields,
+                    &theme,
+                )
+                .into_any_element(),
             );
         }
 
         if sections.len() == 1 {
-            sections.push(Text::muted("This driver has no custom settings.").into_any_element());
+            sections.push(
+                Text::muted(dbflux_i18n::t!(
+                    "connection_manager.driver_no_custom_settings"
+                ))
+                .into_any_element(),
+            );
         }
 
         sections
     }
 
+    fn render_mcp_enabled_checkbox(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(
+                Checkbox::new("conn-mcp-enabled")
+                    .checked(self.mcp_tab.conn_mcp_enabled)
+                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                        this.mcp_tab.conn_mcp_enabled = *checked;
+                        cx.notify();
+                    })),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .child(dbflux_i18n::t!("connection_manager.enable_mcp")),
+            )
+    }
+
+    #[cfg(feature = "mcp")]
     pub(super) fn render_mcp_tab(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let theme = cx.theme().clone();
         let enabled = self.mcp_tab.conn_mcp_enabled;
         let opacity = if enabled { 1.0 } else { 0.5 };
 
-        let actor_label = self
-            .mcp_tab
-            .conn_mcp_actor_dropdown
+        let clients = self
+            .app_state
             .read(cx)
-            .selected_label()
-            .map(|l| l.to_string())
+            .list_mcp_trusted_clients()
             .unwrap_or_default();
-        let role_label = self
-            .mcp_tab
-            .conn_mcp_role_dropdown
+        let roles = self.app_state.read(cx).list_mcp_roles().unwrap_or_default();
+        let policies = self
+            .app_state
             .read(cx)
-            .selected_value()
-            .filter(|v| !v.is_empty())
-            .map(|v| v.to_string())
-            .unwrap_or_else(|| "none".to_string());
-        let policy_label = self
-            .mcp_tab
-            .conn_mcp_policy_dropdown
-            .read(cx)
-            .selected_value()
-            .filter(|v| !v.is_empty())
-            .map(|v| v.to_string())
-            .unwrap_or_else(|| "none".to_string());
+            .list_mcp_policies()
+            .unwrap_or_default();
 
-        let preview_text = if !enabled {
-            "MCP disabled for this connection".to_string()
-        } else if actor_label.is_empty() {
-            "MCP enabled — select a trusted client to bind".to_string()
-        } else {
-            format!(
-                "Actor '{}' | role: {} | policy: {}",
-                actor_label, role_label, policy_label
-            )
+        let filter_query = self
+            .mcp_tab
+            .conn_mcp_client_filter_input
+            .read(cx)
+            .value()
+            .to_string();
+        let filtered_clients = super::mcp_bindings::filter_clients(&clients, &filter_query);
+
+        let bindings = self.mcp_tab.bindings.clone();
+        let selected_actor_id = self.mcp_tab.selected_actor_id.clone();
+
+        let known_actor_ids: Vec<String> = clients.iter().map(|c| c.id.clone()).collect();
+        let orphan_count = super::mcp_bindings::orphan_binding_count(&bindings, &known_actor_ids);
+
+        let ids: Vec<String> = filtered_clients.iter().map(|c| c.id.clone()).collect();
+        let items: Vec<dbflux_components::composites::MasterDetailItem> = filtered_clients
+            .iter()
+            .map(|client| {
+                let has_binding = bindings.iter().any(|b| b.actor_id == client.id);
+                let is_selected = selected_actor_id.as_deref() == Some(client.id.as_str());
+
+                dbflux_components::composites::MasterDetailItem {
+                    id: SharedString::from(client.id.clone()),
+                    label: SharedString::from(client.name.clone()),
+                    detail: Some(SharedString::from(client.id.clone())),
+                    badge: Some(if has_binding {
+                        (
+                            SharedString::from(dbflux_i18n::t!(
+                                "connection_manager.mcp_badge_granted"
+                            )),
+                            dbflux_components::composites::BadgeTone::Success,
+                        )
+                    } else {
+                        (
+                            SharedString::from(dbflux_i18n::t!(
+                                "connection_manager.mcp_badge_no_access"
+                            )),
+                            dbflux_components::composites::BadgeTone::Neutral,
+                        )
+                    }),
+                    selected: is_selected,
+                    focused: false,
+                }
+            })
+            .collect();
+
+        let list_config = dbflux_components::composites::MasterDetailListConfig {
+            id: SharedString::from("connection-mcp-clients-list"),
+            width: Widths::CONNECTION_MCP_LIST_PANEL,
+            new_action: None,
+            secondary_action: None,
+            empty_message: Some(SharedString::from(dbflux_i18n::t!(
+                "connection_manager.mcp_empty_clients"
+            ))),
         };
 
-        let content = div()
+        let entity = cx.entity();
+        let list = dbflux_components::composites::render_master_detail_list(
+            &list_config,
+            &items,
+            &self.mcp_tab.conn_mcp_client_list_scroll_handle,
+            move |index: usize, window: &mut Window, cx: &mut App| {
+                let Some(id) = ids.get(index).cloned() else {
+                    return;
+                };
+                entity.update(cx, |this, cx| this.select_mcp_client(id, window, cx));
+            },
+            |_kind, _window, _cx| {},
+            cx,
+        );
+
+        let list_column = div()
+            .flex()
+            .flex_col()
+            .h_full()
+            .opacity(opacity)
+            .child(
+                div()
+                    .p(Spacing::SM)
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, window, cx| {
+                            this.begin_inline_editor_interaction(cx);
+                            this.mcp_tab
+                                .conn_mcp_client_filter_input
+                                .update(cx, |state, cx| state.focus(window, cx));
+                        }),
+                    )
+                    .child(Input::new(&self.mcp_tab.conn_mcp_client_filter_input)),
+            )
+            .child(div().flex_1().min_h_0().child(list));
+
+        let detail = self.render_mcp_client_detail(
+            selected_actor_id.as_deref(),
+            &bindings,
+            &roles,
+            &policies,
+            opacity,
+            cx,
+        );
+
+        let split = div()
+            .flex()
+            .h(px(340.0))
+            .overflow_hidden()
+            .child(list_column)
+            .child(detail);
+
+        let mut content = div()
             .flex()
             .flex_col()
             .gap_3()
+            .child(self.render_mcp_enabled_checkbox(cx))
+            .child(split);
+
+        if orphan_count > 0 {
+            content = content.child(Text::caption(crate::labels::mcp_orphan_bindings_caption(
+                orphan_count,
+            )));
+        }
+
+        vec![
+            self.render_section(
+                &dbflux_i18n::t!("connection_manager.mcp_governance_title"),
+                content,
+                &theme,
+            )
+            .into_any_element(),
+        ]
+    }
+
+    #[cfg(feature = "mcp")]
+    fn render_mcp_client_detail(
+        &self,
+        selected_actor_id: Option<&str>,
+        bindings: &[dbflux_core::ConnectionMcpPolicyBinding],
+        roles: &[dbflux_mcp::PolicyRoleDto],
+        policies: &[dbflux_mcp::ToolPolicyDto],
+        opacity: f32,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let Some(actor_id) = selected_actor_id else {
+            return div()
+                .flex_1()
+                .h_full()
+                .p(Spacing::SM)
+                .opacity(opacity)
+                .child(Text::caption(dbflux_i18n::t!(
+                    "connection_manager.mcp_select_client"
+                )))
+                .into_any_element();
+        };
+
+        let binding = bindings.iter().find(|b| b.actor_id == actor_id).cloned();
+        let has_binding = binding.is_some();
+        let actor_id_for_checkbox = actor_id.to_string();
+
+        let mut column = div()
+            .id("connection-mcp-client-detail")
+            .flex_1()
+            .h_full()
+            .track_scroll(&self.mcp_tab.conn_mcp_detail_scroll_handle)
+            .overflow_y_scrollbar()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .p(Spacing::SM)
+            .opacity(opacity)
             .child(
                 div()
                     .flex()
                     .items_center()
                     .gap_2()
-                    .child(Checkbox::new("conn-mcp-enabled").checked(enabled).on_click(
-                        cx.listener(|this, checked: &bool, _, cx| {
-                            this.mcp_tab.conn_mcp_enabled = *checked;
-                            cx.notify();
-                        }),
-                    ))
-                    .child(div().text_sm().child("Enable MCP for this connection")),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .opacity(opacity)
-                    .child(Label::new("Trusted Client (Actor)"))
-                    .child(Text::caption(
-                        "AI agent identity — configure in Settings → MCP",
-                    ))
-                    .child(self.mcp_tab.conn_mcp_actor_dropdown.clone()),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .opacity(opacity)
-                    .child(Label::new("Role"))
-                    .child(Text::caption(
-                        "Configure roles in Settings \u{2192} MCP \u{2192} Roles",
-                    ))
-                    .child(self.mcp_tab.conn_mcp_role_dropdown.clone())
-                    .child(Text::caption("Additional roles (optional)"))
-                    .child(self.mcp_tab.conn_mcp_role_multi_select.clone()),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .opacity(opacity)
-                    .child(Text::label("Policy"))
-                    .child(Text::caption(
-                        "Configure policies in Settings \u{2192} MCP \u{2192} Policies",
-                    ))
-                    .child(self.mcp_tab.conn_mcp_policy_dropdown.clone())
-                    .child(Text::caption("Additional policies (optional)"))
-                    .child(self.mcp_tab.conn_mcp_policy_multi_select.clone()),
-            )
-            .child(Text::caption("Scope/policy assignment preview").into_any_element())
-            .child(Text::body(preview_text));
+                    .child(
+                        Checkbox::new("conn-mcp-client-allowed")
+                            .checked(has_binding)
+                            .on_click(cx.listener(move |this, checked: &bool, window, cx| {
+                                this.set_mcp_client_allowed(
+                                    actor_id_for_checkbox.clone(),
+                                    *checked,
+                                    window,
+                                    cx,
+                                );
+                            })),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .child(dbflux_i18n::t!("connection_manager.mcp_allow_client")),
+                    ),
+            );
+
+        column = if let Some(binding) = &binding {
+            let effective = super::mcp_bindings::effective_permissions(binding, roles, policies);
+            let tools_text = if effective.tools.is_empty() {
+                dbflux_i18n::t!("connection_manager.mcp_effective_none")
+            } else {
+                effective.tools.join(", ")
+            };
+            let classes_text = if effective.classes.is_empty() {
+                dbflux_i18n::t!("connection_manager.mcp_effective_none")
+            } else {
+                effective.classes.join(", ")
+            };
+
+            column
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(Label::new(dbflux_i18n::t!("connection_manager.role_label")))
+                        .child(Text::caption(dbflux_i18n::t!(
+                            "connection_manager.mcp_role_hint"
+                        )))
+                        .child(self.mcp_tab.conn_mcp_role_dropdown.clone())
+                        .child(Text::caption(dbflux_i18n::t!(
+                            "connection_manager.additional_roles_optional"
+                        )))
+                        .child(self.mcp_tab.conn_mcp_role_multi_select.clone()),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(Text::label(dbflux_i18n::t!(
+                            "connection_manager.policy_label"
+                        )))
+                        .child(Text::caption(dbflux_i18n::t!(
+                            "connection_manager.mcp_policy_hint"
+                        )))
+                        .child(self.mcp_tab.conn_mcp_policy_dropdown.clone())
+                        .child(Text::caption(dbflux_i18n::t!(
+                            "connection_manager.additional_policies_optional"
+                        )))
+                        .child(self.mcp_tab.conn_mcp_policy_multi_select.clone()),
+                )
+                .child(Text::caption(crate::labels::mcp_effective_tools_line(
+                    &tools_text,
+                )))
+                .child(Text::caption(crate::labels::mcp_effective_classes_line(
+                    &classes_text,
+                )))
+        } else {
+            column.child(Text::caption(dbflux_i18n::t!(
+                "connection_manager.mcp_client_denied"
+            )))
+        };
+
+        column.into_any_element()
+    }
+
+    #[cfg(not(feature = "mcp"))]
+    pub(super) fn render_mcp_tab(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let theme = cx.theme().clone();
+
+        let content = div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(self.render_mcp_enabled_checkbox(cx))
+            .child(Text::caption(dbflux_i18n::t!(
+                "connection_manager.mcp_not_compiled"
+            )));
 
         vec![
-            self.render_section("MCP Governance", content, &theme)
-                .into_any_element(),
+            self.render_section(
+                &dbflux_i18n::t!("connection_manager.mcp_governance_title"),
+                content,
+                &theme,
+            )
+            .into_any_element(),
         ]
     }
 }
 
 // The `file_picker_label` helper and its tests moved to
 // `dbflux_components::primitives::file_picker` together with the `FilePicker`
+
+#[cfg(test)]
+mod connection_overrides_i18n_tests {
+    const CONNECTION_OVERRIDES_KEYS: &[&str] = &[
+        "connection_manager.connection_overrides_title",
+        "connection_manager.connection_hooks_title",
+        "connection_manager.overrides.on",
+        "connection_manager.overrides.off",
+        "connection_manager.placeholder.extra_hook_ids",
+        "connection_manager.placeholder.use_connection_auth_profile",
+        "settings.general.override_value_header",
+    ];
+
+    #[test]
+    fn connection_overrides_keys_resolve_in_both_locales() {
+        for locale in ["en", "es"] {
+            for key in CONNECTION_OVERRIDES_KEYS {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(
+                    !value.is_empty(),
+                    "key {key} resolved empty for locale {locale}"
+                );
+                assert_ne!(value, *key, "key {key} did not resolve for locale {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "key {key} fell back to the raw locale-qualified form for locale {locale}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn connection_overrides_title_differs_between_locales() {
+        let en = dbflux_i18n::t!(
+            "connection_manager.connection_overrides_title",
+            locale = "en"
+        );
+        let es = dbflux_i18n::t!(
+            "connection_manager.connection_overrides_title",
+            locale = "es"
+        );
+
+        assert_ne!(
+            en, es,
+            "connection_manager.connection_overrides_title should differ between en and es"
+        );
+    }
+
+    #[test]
+    fn connection_overrides_keep_their_own_row_labels() {
+        assert_eq!(
+            dbflux_i18n::t!("connection_manager.overrides.refresh_policy", locale = "en"),
+            "Refresh policy"
+        );
+        assert_eq!(
+            dbflux_i18n::t!(
+                "connection_manager.overrides.refresh_interval",
+                locale = "en"
+            ),
+            "Refresh interval (s)"
+        );
+        assert_eq!(
+            dbflux_i18n::t!(
+                "connection_manager.overrides.confirm_dangerous",
+                locale = "en"
+            ),
+            "Confirm dangerous queries"
+        );
+        assert_eq!(
+            dbflux_i18n::t!("connection_manager.overrides.requires_where", locale = "en"),
+            "Requires WHERE clause"
+        );
+        assert_eq!(
+            dbflux_i18n::t!(
+                "connection_manager.overrides.requires_preview",
+                locale = "en"
+            ),
+            "Requires preview"
+        );
+        assert_ne!(
+            dbflux_i18n::t!("connection_manager.overrides.requires_where", locale = "en"),
+            dbflux_i18n::t!("connection_manager.overrides.requires_where", locale = "es")
+        );
+    }
+
+    #[test]
+    fn overrides_on_off_have_expected_english_text() {
+        assert_eq!(
+            dbflux_i18n::t!("connection_manager.overrides.on", locale = "en"),
+            "On"
+        );
+        assert_eq!(
+            dbflux_i18n::t!("connection_manager.overrides.off", locale = "en"),
+            "Off"
+        );
+    }
+}
+
+#[cfg(test)]
+mod driver_settings_and_mcp_governance_i18n_tests {
+    const DRIVER_SETTINGS_AND_MCP_KEYS: &[&str] = &[
+        "connection_manager.driver_settings_title",
+        "connection_manager.driver_no_custom_settings",
+        "connection_manager.mcp_disabled",
+        "connection_manager.enable_mcp",
+        "connection_manager.role_label",
+        "connection_manager.additional_roles_optional",
+        "connection_manager.policy_label",
+        "connection_manager.additional_policies_optional",
+        "connection_manager.mcp_governance_title",
+        "connection_manager.mcp_role_hint",
+        "connection_manager.mcp_policy_hint",
+        "connection_manager.mcp_not_compiled",
+        "connection_manager.placeholder.filter_trusted_clients",
+        "connection_manager.mcp_badge_granted",
+        "connection_manager.mcp_badge_no_access",
+        "connection_manager.mcp_empty_clients",
+        "connection_manager.mcp_allow_client",
+        "connection_manager.mcp_client_denied",
+        "connection_manager.mcp_select_client",
+        "connection_manager.mcp_effective_tools",
+        "connection_manager.mcp_effective_classes",
+        "connection_manager.mcp_effective_none",
+        "connection_manager.mcp_orphan_bindings.one",
+        "connection_manager.mcp_orphan_bindings.many",
+    ];
+
+    #[test]
+    fn driver_settings_and_mcp_governance_keys_resolve_in_both_locales() {
+        for locale in ["en", "es"] {
+            for key in DRIVER_SETTINGS_AND_MCP_KEYS {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(
+                    !value.is_empty(),
+                    "key {key} resolved empty for locale {locale}"
+                );
+                assert_ne!(value, *key, "key {key} did not resolve for locale {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "key {key} fell back to the raw locale-qualified form for locale {locale}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn connection_manager_mcp_governance_title_differs_between_locales() {
+        let en = dbflux_i18n::t!("connection_manager.mcp_governance_title", locale = "en");
+        let es = dbflux_i18n::t!("connection_manager.mcp_governance_title", locale = "es");
+
+        assert_ne!(
+            en, es,
+            "connection_manager.mcp_governance_title should differ between en and es"
+        );
+    }
+
+    #[test]
+    fn connection_manager_driver_settings_title_exact_english_value() {
+        let en = dbflux_i18n::t!("connection_manager.driver_settings_title", locale = "en");
+
+        assert_eq!(en, "Driver Settings");
+    }
+}
 // primitive itself.

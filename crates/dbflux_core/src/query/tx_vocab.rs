@@ -52,8 +52,8 @@ impl TransactionVocab {
     /// Returns the transaction vocabulary for a given SQL database kind.
     ///
     /// Returns `None` for driver kinds that do not speak SQL (MongoDB, Redis,
-    /// DynamoDB, CloudWatchLogs, InfluxDB). The mutation gate upstream already
-    /// blocks non-SQL drivers; this provides typed defense-in-depth.
+    /// DynamoDB, CloudWatchLogs, InfluxDB, S3). The mutation gate upstream
+    /// already blocks non-SQL drivers; this provides typed defense-in-depth.
     ///
     /// Callers should retrieve this once per execution run and cache it.
     pub fn for_kind(kind: DbKind) -> Option<Self> {
@@ -88,7 +88,7 @@ impl TransactionVocab {
                     "SET SESSION innodb_lock_wait_timeout = DEFAULT",
                 ),
             }),
-            DbKind::SQLite => Some(Self {
+            DbKind::SQLite | DbKind::Turso => Some(Self {
                 begin: "BEGIN IMMEDIATE",
                 commit: "COMMIT",
                 rollback: "ROLLBACK",
@@ -111,11 +111,16 @@ impl TransactionVocab {
                 autocommit_lock_timeout_template: Some("SET LOCK_TIMEOUT {ms}"),
                 autocommit_lock_timeout_reset_sql: Some("SET LOCK_TIMEOUT -1"),
             }),
+            // Redshift v1 is read-only: mutations are rejected at the connection seam,
+            // so no transaction vocabulary is needed.
             DbKind::MongoDB
             | DbKind::Redis
             | DbKind::DynamoDB
             | DbKind::CloudWatchLogs
-            | DbKind::InfluxDB => None,
+            | DbKind::InfluxDB
+            | DbKind::Redshift
+            | DbKind::S3
+            | DbKind::ClickHouse => None,
         }
     }
 
@@ -232,5 +237,16 @@ mod tests {
             !vocab.lock_timeout_before_begin,
             "MSSQL lock_timeout must be emitted INSIDE the transaction"
         );
+    }
+
+    #[test]
+    fn turso_uses_sqlite_transaction_vocabulary_without_lock_timeout() {
+        let vocab = TransactionVocab::for_kind(DbKind::Turso).expect("turso vocabulary");
+
+        assert_eq!(vocab.begin, "BEGIN IMMEDIATE");
+        assert_eq!(vocab.commit, "COMMIT");
+        assert_eq!(vocab.rollback, "ROLLBACK");
+        assert!(vocab.lock_timeout_sql(1_000).is_none());
+        assert!(vocab.autocommit_lock_timeout_sql(1_000).is_none());
     }
 }

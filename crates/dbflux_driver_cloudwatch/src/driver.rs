@@ -2,13 +2,13 @@ use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use aws_config::{BehaviorVersion, Region};
+use aws_config::{AppName, BehaviorVersion, Region};
 use aws_sdk_cloudwatch::config::Builder as CloudWatchMetricsConfigBuilder;
 use aws_sdk_cloudwatch::error::ProvideErrorMetadata as CloudWatchProvideErrorMetadata;
 use aws_sdk_cloudwatch::primitives::DateTime as MetricsDateTime;
 use aws_sdk_cloudwatch::types::{Dimension, Metric, MetricDataQuery, MetricStat};
 use aws_sdk_cloudwatchlogs::Client;
-use aws_sdk_cloudwatchlogs::config::Builder as CloudWatchConfigBuilder;
+use aws_sdk_cloudwatchlogs::config::{Builder as CloudWatchConfigBuilder, Credentials};
 use aws_sdk_cloudwatchlogs::error::ProvideErrorMetadata as CloudWatchLogsProvideErrorMetadata;
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
@@ -21,11 +21,12 @@ use dbflux_core::{
     FormFieldKind, FormSection, FormTab, FormValues, FormattedError, Icon, MetricCatalog,
     MetricQuerySeries, QueryLanguage, QueryRequest, QueryResult, SchemaFeatures,
     SchemaLoadingStrategy, SchemaSnapshot, SourceContextSpec, SourceQueryMode, TableInfo,
-    TransferFamily, ValidationResult, Value, field, field_required,
+    TransferFamily, Value, field, field_required,
 };
 
 use crate::dashboard_import::CloudWatchDashboardImporter;
 use crate::dashboard_source::{CloudWatchDashboardSource, RealCloudWatchDashboardApi};
+use crate::language_service::CloudWatchLanguageService;
 use crate::metric_catalog::{CloudWatchMetricCatalog, RealCloudWatchClient};
 
 pub static CLOUDWATCH_METADATA: LazyLock<DriverMetadata> = LazyLock::new(|| DriverMetadata {
@@ -124,8 +125,6 @@ struct CloudWatchConnection {
     /// Dashboard source — always present; returns `Some` from `dashboard_source()`.
     dashboard_source_impl: CloudWatchDashboardSource,
 }
-
-struct CloudWatchLanguageService;
 
 impl CloudWatchDriver {
     pub fn new() -> Self {
@@ -655,6 +654,7 @@ impl Connection for CloudWatchConnection {
             sample_fields: None,
             presentation: CollectionPresentation::EventStream,
             child_items: None,
+            storage_hints: None,
         })
     }
 
@@ -978,16 +978,6 @@ impl CloudWatchConnection {
     }
 }
 
-impl dbflux_core::LanguageService for CloudWatchLanguageService {
-    fn validate(&self, _query: &str) -> ValidationResult {
-        ValidationResult::Valid
-    }
-
-    fn detect_dangerous(&self, _query: &str) -> Option<dbflux_core::DangerousQueryKind> {
-        None
-    }
-}
-
 /// Classify a CloudWatch Insights column name to a semantic `ColumnKind` using
 /// name-based rules only. Known annotation fields are authoritative: timestamp
 /// fields map to Timestamp, message/stream/log fields map to Text. All other
@@ -1166,6 +1156,11 @@ fn build_clients(
     let mut loader =
         aws_config::defaults(BehaviorVersion::latest()).region(Region::new(config.region.clone()));
 
+    match AppName::new(dbflux_core::client_identity_token()) {
+        Ok(app_name) => loader = loader.app_name(app_name),
+        Err(error) => log::warn!("failed to set AWS SDK app name: {error}"),
+    }
+
     if let Some(profile) = &config.profile {
         loader = loader.profile_name(profile);
     }
@@ -1184,12 +1179,47 @@ fn build_clients(
     if let Some(endpoint) = &config.endpoint {
         logs_builder = logs_builder.endpoint_url(endpoint);
         metrics_builder = metrics_builder.endpoint_url(endpoint);
+
+        // A local emulator (e.g. LocalStack) has no real IAM identity to
+        // resolve, so the default credential chain fails before a request is
+        // ever sent. Fall back to static dummy credentials the way the
+        // DynamoDB driver does for dynamodb-local, unless the caller already
+        // selected a named profile or exported real environment credentials.
+        if endpoint_looks_local(endpoint)
+            && config.profile.is_none()
+            && !has_environment_credentials()
+        {
+            let credentials =
+                Credentials::new("test", "test", None, None, "dbflux-cloudwatch-local");
+            logs_builder = logs_builder.credentials_provider(credentials.clone());
+            metrics_builder = metrics_builder.credentials_provider(credentials);
+        }
     }
 
     let logs_client = Client::from_conf(logs_builder.build());
     let metrics_client = aws_sdk_cloudwatch::Client::from_conf(metrics_builder.build());
 
     Ok((logs_client, metrics_client))
+}
+
+fn endpoint_looks_local(endpoint: &str) -> bool {
+    let without_scheme = endpoint
+        .strip_prefix("http://")
+        .or_else(|| endpoint.strip_prefix("https://"))
+        .unwrap_or(endpoint);
+
+    let host_with_port = without_scheme.split('/').next().unwrap_or_default();
+    let host = host_with_port.split(':').next().unwrap_or_default();
+
+    host.eq_ignore_ascii_case("localhost")
+        || host == "127.0.0.1"
+        || host == "::1"
+        || host == "[::1]"
+}
+
+fn has_environment_credentials() -> bool {
+    std::env::var_os("AWS_ACCESS_KEY_ID").is_some()
+        && std::env::var_os("AWS_SECRET_ACCESS_KEY").is_some()
 }
 
 /// Guard: reject period_s == 0 before any network I/O.
@@ -1818,15 +1848,19 @@ fn fetch_log_stream_page(
 #[cfg(test)]
 mod tests {
     use super::{
-        CLOUDWATCH_FORM, CLOUDWATCH_METADATA, CloudWatchCollectionFilter, CloudWatchDriver,
-        CloudWatchProfileConfig, classify_cw, cloudwatch_column_kind, cwli_column_kind,
-        cwli_field_value, metric_data_output_to_multi_series_result,
+        CLOUDWATCH_FORM, CLOUDWATCH_METADATA, CloudWatchCollectionFilter, CloudWatchConnection,
+        CloudWatchDriver, CloudWatchProfileConfig, build_clients, classify_cw,
+        cloudwatch_column_kind, cwli_column_kind, cwli_field_value,
+        metric_data_output_to_multi_series_result,
     };
+    use crate::dashboard_import::CloudWatchDashboardImporter;
+    use crate::dashboard_source::{CloudWatchDashboardSource, RealCloudWatchDashboardApi};
+    use crate::metric_catalog::{CloudWatchMetricCatalog, RealCloudWatchClient};
     use aws_sdk_cloudwatch::operation::get_metric_data::GetMetricDataOutput;
     use aws_sdk_cloudwatch::primitives::DateTime;
     use aws_sdk_cloudwatch::types::MetricDataResult;
     use dbflux_core::{
-        ColumnKind, DbConfig, DbDriver, DriverCapabilities, FormFieldKind, FormValues,
+        ColumnKind, Connection, DbConfig, DbDriver, DriverCapabilities, FormFieldKind, FormValues,
         MetricQuerySeries, Value,
     };
     use std::collections::HashMap;
@@ -2428,5 +2462,35 @@ mod tests {
             !no_config_case.message.is_empty(),
             "Unknown error without config must produce a non-empty message"
         );
+    }
+
+    // CloudWatch Logs Insights, PPL, and OpenSearch SQL are all read-only query
+    // surfaces with no mutation/DDL shape to preview, so `query_generator()` stays
+    // at the trait default. This pins that decision against a future accidental
+    // override.
+    #[test]
+    fn connection_has_no_query_generator() {
+        let config = CloudWatchProfileConfig {
+            region: "us-east-1".to_string(),
+            profile: None,
+            endpoint: None,
+        };
+        let (client, metrics_client) =
+            build_clients(&config).expect("client construction is local and requires no network");
+
+        let connection = CloudWatchConnection {
+            client,
+            metrics_client: metrics_client.clone(),
+            config,
+            metric_catalog_impl: CloudWatchMetricCatalog::new(Box::new(RealCloudWatchClient::new(
+                metrics_client.clone(),
+            ))),
+            dashboard_importer_impl: CloudWatchDashboardImporter,
+            dashboard_source_impl: CloudWatchDashboardSource::new(Box::new(
+                RealCloudWatchDashboardApi::new(metrics_client),
+            )),
+        };
+
+        assert!(Connection::query_generator(&connection).is_none());
     }
 }

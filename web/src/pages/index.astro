@@ -1,0 +1,42 @@
+---
+import { getCollection } from 'astro:content';
+import Base from '../layouts/Base.astro';
+import DocsLayout from '../layouts/DocsLayout.astro';
+import DocsIndex from '../components/DocsIndex.astro';
+import Landing from '../components/Landing.astro';
+import { docRoutePolicy, pathsForVersion } from '../data/docs';
+import { CURRENT } from '../data/versions';
+import { DOCS_AT_ROOT } from '../data/site';
+
+/**
+ * The root is whatever this build is for: the landing page normally, and the
+ * documentation index when the documentation has an origin of its own.
+ */
+const docs = await getCollection('docs');
+const available = DOCS_AT_ROOT ? pathsForVersion(docs, CURRENT.id) : [];
+const policy = docRoutePolicy(docs, CURRENT.id, undefined, 'en', true);
+---
+
+{
+  DOCS_AT_ROOT ? (
+    <DocsLayout
+      version={CURRENT}
+      available={available}
+      title="Documentation"
+      description="Guides for installing, connecting, querying, charting and governing DBFlux."
+      translated
+      policy={policy}
+    >
+      <DocsIndex versionId={CURRENT.id} available={available} />
+    </DocsLayout>
+  ) : (
+    <Base
+      title="DBFlux — a keyboard-first database client"
+      description="An extensible, keyboard-first data platform for Postgres, MySQL, SQL Server, MongoDB, Redis, DynamoDB and more. Open source, built in Rust on GPUI."
+      current="home"
+      translated
+    >
+      <Landing />
+    </Base>
+  )
+}

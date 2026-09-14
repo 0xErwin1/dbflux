@@ -6,11 +6,11 @@ This document is the human-facing reference. The automated `dbflux-release` skil
 
 ## Channels
 
-| Channel     | Source branch   | Tag pattern             | GitHub release kind | Built by          |
-|-------------|-----------------|-------------------------|---------------------|-------------------|
-| **nightly** | `main` HEAD     | `nightly` (rolling)     | prerelease          | Cron — daily      |
-| **rc**      | `release/vX.Y`  | `vX.Y.Z-rc.N`           | prerelease          | Tag push          |
-| **stable**  | `release/vX.Y`  | `vX.Y.Z`                | published           | Tag push          |
+| Channel (source branch)     | Tag pattern         | GitHub release                    |
+|-----------------------------|---------------------|-----------------------------------|
+| **nightly** (`main` HEAD)   | `nightly` (rolling) | prerelease, built by a daily cron |
+| **rc** (`release/vX.Y`)     | `vX.Y.Z-rc.N`       | prerelease, built on tag push     |
+| **stable** (`release/vX.Y`) | `vX.Y.Z`            | published, built on tag push      |
 
 The `-dev.N` channel is **retired**. Nightly replaces it. Old `-dev.N` tags remain on GitHub but no new ones are created.
 
@@ -55,11 +55,11 @@ git push origin vX.Y.Z[-suffix.N]
 
 The release workflow (`.github/workflows/release.yml`) classifies tags automatically:
 
-| Tag pattern    | Allowed source branch | GitHub release kind |
-|----------------|-----------------------|---------------------|
-| `vX.Y.Z-rc.N`  | `release/vX.Y`        | prerelease          |
-| `vX.Y.Z`       | `release/vX.Y`        | stable (published)  |
-| anything else  | (safety net)          | draft               |
+| Tag pattern (allowed source branch) | GitHub release kind |
+|-------------------------------------|---------------------|
+| `vX.Y.Z-rc.N` from `release/vX.Y`   | prerelease          |
+| `vX.Y.Z` from `release/vX.Y`        | stable (published)  |
+| anything else (safety net)          | draft               |
 
 ## Versioning Rules
 
@@ -89,6 +89,69 @@ The manifest version is `X.(Y+1).0-dev.0`, where `X.Y` is the minor currently be
 4. When clean, bump the release branch from `v0.7.0-rc.N` to `v0.7.0`. Tag `v0.7.0`. git-cliff renders the full unreleased range (since `v0.6.0`) as the stable release notes.
 5. `main` is already on `0.8.0-dev.0` — no further bump needed after stable.
 6. Patches (`v0.7.1`, `v0.7.2`, …) come from the same release branch via cherry-picks from `main`.
+
+## Artifact Identity and Signing
+
+Three separate things carry the "who built this" signal, and they do not
+overlap:
+
+| Layer | What it covers | Secret | When missing |
+|-------|----------------|--------|--------------|
+| GPG detached signature (`.asc`) and `.sha256` | The downloaded file | `GPG_PRIVATE_KEY`, `GPG_PASSPHRASE` | Build fails. Every release is signed. |
+| Build provenance attestation | The workflow run and commit that produced the artifact | none (keyless OIDC) | Always on. |
+| macOS code signature on the `.app` | The application identity the keychain and Gatekeeper look at | `MACOS_CERTIFICATE_P12`, `MACOS_CERTIFICATE_PASSWORD` | Bundle is signed ad-hoc with a warning. |
+
+Neither the Windows executable nor the installer is Authenticode-signed, so
+SmartScreen warns on first run. That needs a certificate from a CA and is
+tracked separately.
+
+### macOS code signing
+
+macOS ties a keychain grant to the signature of the application that asked
+for it. An ad-hoc signature changes with every build, so without a stable
+identity each update makes the user re-enter their login password before
+DBFlux may read the saved database passwords again. Signing every release
+with one certificate makes that prompt appear once.
+
+A self-signed certificate is enough for the keychain. It does **not** satisfy
+Gatekeeper: the app stays "unidentified" on first launch until the project
+has a paid Developer ID certificate and notarisation, which the same two
+secrets would carry.
+
+Create the certificate once, on any machine with OpenSSL:
+
+```bash
+scripts/macos-signing-cert.sh ~/secure/dbflux-signing
+```
+
+The script prints the two repository secrets to set. Keep the `.p12` and its
+password somewhere durable: issuing a new certificate later means every user
+re-authorises the keychain once more. The certificate is valid for ten years.
+
+The bundle is signed in `build.yml` before the DMG is created. The job imports
+the certificate into a temporary keychain, trusts it for code signing on the
+runner, signs, verifies with `codesign --verify --deep --strict`, and deletes
+the keychain.
+
+### Windows executable identity
+
+`crates/dbflux/build.rs` embeds the channel icon and a `VERSIONINFO` block
+into `dbflux.exe` at build time, so Explorer, the taskbar, and the Open With
+dialog show the DBFlux icon and Properties shows the product name and version.
+The icons are committed under `packaging/icons/` (`dbflux.ico`,
+`dbflux-nightly.ico`), and the same files feed the portable zip and the
+installer shortcuts. Regenerate them from `resources/branding/<channel>/`
+when the artwork changes:
+
+```bash
+magick -background none resources/branding/stable/mark.svg -resize 256x256 256.png
+# ... 128, 64 from mark.svg; 48, 32, 16 from mark-small.svg
+magick 16.png 32.png 48.png 64.png 128.png 256.png packaging/icons/dbflux.ico
+```
+
+The macOS `.icns` files beside them (`dbflux.icns`, `dbflux-nightly.icns`)
+are built the same way with `png2icns` from `libicns`, adding 512 and 1024 px
+sizes, and land in the bundle as `AppIcon.icns`.
 
 ## Cut Procedure: `main` → `release/vX.Y`
 
@@ -224,11 +287,11 @@ git log --grep='cherry picked from' release/vX.Y
 
 ## Downstream Channels
 
-| Tag kind        | GitHub Release | AUR         | Nix flake (this repo)                         | nixpkgs (future) |
-|-----------------|----------------|-------------|-----------------------------------------------|------------------|
-| nightly         | prerelease     | skip        | auto-pinned — `#dbflux-nightly` on nightly ref | skip            |
-| `-rc.N`         | prerelease     | skip        | bump release branch's + main's `release-info` | skip             |
-| Stable `vX.Y.Z` | published      | bump + push | bump release branch's + main's `release-info` | bump + PR        |
+| Tag kind (GitHub Release)   | AUR         | Nix flake (this repo)                         | nixpkgs (future) |
+|-----------------------------|-------------|-----------------------------------------------|------------------|
+| nightly (prerelease)        | skip        | auto-pinned — `#dbflux-nightly` on nightly ref | skip            |
+| `-rc.N` (prerelease)        | skip        | bump release branch's + main's `release-info` | skip             |
+| Stable `vX.Y.Z` (published) | bump + push | bump release branch's + main's `release-info` | bump + PR        |
 
 ### AUR
 

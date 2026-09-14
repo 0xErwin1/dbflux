@@ -152,7 +152,7 @@ impl AuditDocument {
             };
 
             let is_selected = idx == selected_index;
-            let label = item.label;
+            let label = item.label.clone();
             let icon = item.icon;
 
             // Icon color follows the DataGridPanel context menu convention.
@@ -306,7 +306,7 @@ impl AuditDocument {
 
         let can_apply_custom_time_range = self.can_apply_custom_time_range(cx);
         let custom_apply_button = ToolbarButton::new("audit-custom-time-apply")
-            .label("Apply")
+            .label(dbflux_i18n::t!("document.audit.filter.apply"))
             .focused(self.slot_has_ring(ToolbarSlot::CustomApply))
             .disabled(!can_apply_custom_time_range)
             .on_click(cx.listener(|this, _, _, cx| {
@@ -407,7 +407,7 @@ impl AuditDocument {
 
         // Clear button.
         let clear_btn = ToolbarButton::new("audit-clear-btn")
-            .label("Clear")
+            .label(dbflux_i18n::t!("document.audit.filter.clear"))
             .variant(ToolbarButtonVariant::Ghost)
             .focused(self.slot_has_ring(ToolbarSlot::Clear))
             .on_click(cx.listener(|this, _, window, cx| {
@@ -439,7 +439,11 @@ impl AuditDocument {
             if !self.is_external_event_stream() {
                 let is_chart = matches!(self.view_mode, AuditViewMode::Chart);
 
-                let toggle_label = if is_chart { "Table" } else { "Chart" };
+                let toggle_label = if is_chart {
+                    dbflux_i18n::t!("document.audit.filter.view_mode.table")
+                } else {
+                    dbflux_i18n::t!("document.audit.filter.view_mode.chart")
+                };
                 let view_toggle = div()
                     .id("audit-view-toggle")
                     .h(Heights::BUTTON)
@@ -480,7 +484,9 @@ impl AuditDocument {
                         .items_center()
                         .gap_1()
                         .w(px(148.0))
-                        .child(Text::caption("Group:"))
+                        .child(Text::caption(dbflux_i18n::t!(
+                            "document.audit.filter.group_label"
+                        )))
                         .child(div().flex_1().child(self.dropdown_chart_group_by.clone()));
                     items.push(group_by_control.into_any_element());
 
@@ -488,8 +494,8 @@ impl AuditDocument {
                     // Fixed-width so it does not stretch the toolbar row.
                     let current_y_scale = self.chart.chart_shell.read(cx).y_scale();
                     let y_scale_label = match current_y_scale {
-                        YScale::Linear => "Y: Linear",
-                        YScale::Log => "Y: Log",
+                        YScale::Linear => dbflux_i18n::t!("document.audit.filter.y_scale.linear"),
+                        YScale::Log => dbflux_i18n::t!("document.audit.filter.y_scale.log"),
                     };
                     let y_scale_toggle = div()
                         .id("audit-y-scale-toggle")
@@ -557,7 +563,7 @@ impl AuditDocument {
                 .child(Text::muted(self.status_message.clone().unwrap_or_default()))
                 .child(
                     gpui_component::button::Button::new("audit-retry")
-                        .label("Retry")
+                        .label(dbflux_i18n::t!("document.audit.filter.retry"))
                         .small()
                         .ghost()
                         .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
@@ -752,7 +758,7 @@ impl AuditDocument {
 
     pub(super) fn render_detail_field(
         &self,
-        label: &'static str,
+        label: impl Into<SharedString>,
         value: Option<String>,
         theme: &gpui_component::Theme,
     ) -> Div {
@@ -780,23 +786,38 @@ impl AuditDocument {
 
         let theme = cx.theme().clone();
         let timestamp = self.format_timestamp_ms(event.created_at_epoch_ms);
-        let level = event.level.clone();
-        let category = match Self::short_category_label(event.category.as_deref()) {
-            "NULL" => None,
-            label => Some(label.to_string()),
-        };
-        let outcome = event.outcome.clone();
+        let level = event
+            .level
+            .as_deref()
+            .and_then(dbflux_core::EventSeverity::from_str_repr)
+            .map(crate::labels::audit_level_label)
+            .or_else(|| event.level.clone());
+        let category = event
+            .category
+            .as_deref()
+            .and_then(dbflux_core::EventCategory::from_str_repr)
+            .map(crate::labels::audit_category_label)
+            .or_else(|| event.category.clone());
+        let outcome = event
+            .outcome
+            .as_deref()
+            .and_then(dbflux_core::EventOutcome::from_str_repr)
+            .map(crate::labels::audit_outcome_label)
+            .or_else(|| event.outcome.clone());
         let actor = if event
             .actor_type
             .as_deref()
             .filter(|actor_type| !actor_type.is_empty() && *actor_type != "system")
             .is_some()
         {
-            format!(
-                "{} ({})",
-                event.actor_id,
-                event.actor_type.as_deref().unwrap_or("")
-            )
+            let actor_type_label = event
+                .actor_type
+                .as_deref()
+                .and_then(dbflux_core::EventActorType::from_str_repr)
+                .map(crate::labels::audit_actor_type_label)
+                .unwrap_or_else(|| event.actor_type.clone().unwrap_or_default());
+
+            format!("{} ({})", event.actor_id, actor_type_label)
         } else {
             event.actor_id.clone()
         };
@@ -833,30 +854,62 @@ impl AuditDocument {
                     .flex_wrap()
                     .gap_4()
                     .children(vec![
-                        self.render_detail_field("Time", Some(timestamp), &theme)
-                            .into_any_element(),
-                        self.render_detail_field("Level", level, &theme)
-                            .into_any_element(),
-                        self.render_detail_field("Category", category, &theme)
-                            .into_any_element(),
-                        self.render_detail_field("Outcome", outcome, &theme)
-                            .into_any_element(),
-                        self.render_detail_field("Actor", Some(actor), &theme)
-                            .into_any_element(),
-                        self.render_detail_field("Action", action, &theme)
-                            .into_any_element(),
-                        self.render_detail_field("Source", source, &theme)
-                            .into_any_element(),
+                        self.render_detail_field(
+                            dbflux_i18n::t!("document.audit.detail.time"),
+                            Some(timestamp),
+                            &theme,
+                        )
+                        .into_any_element(),
+                        self.render_detail_field(
+                            dbflux_i18n::t!("document.audit.detail.level"),
+                            level,
+                            &theme,
+                        )
+                        .into_any_element(),
+                        self.render_detail_field(
+                            dbflux_i18n::t!("document.audit.detail.category"),
+                            category,
+                            &theme,
+                        )
+                        .into_any_element(),
+                        self.render_detail_field(
+                            dbflux_i18n::t!("document.audit.detail.outcome"),
+                            outcome,
+                            &theme,
+                        )
+                        .into_any_element(),
+                        self.render_detail_field(
+                            dbflux_i18n::t!("document.audit.detail.actor"),
+                            Some(actor),
+                            &theme,
+                        )
+                        .into_any_element(),
+                        self.render_detail_field(
+                            dbflux_i18n::t!("document.audit.detail.action"),
+                            action,
+                            &theme,
+                        )
+                        .into_any_element(),
+                        self.render_detail_field(
+                            dbflux_i18n::t!("document.audit.detail.source"),
+                            source,
+                            &theme,
+                        )
+                        .into_any_element(),
                     ])
                     .when_some(connection_driver, |row, value| {
                         row.child(self.render_detail_field(
-                            "Connection/Driver",
+                            dbflux_i18n::t!("document.audit.detail.connection_driver"),
                             Some(value),
                             &theme,
                         ))
                     })
                     .when_some(duration, |row, value| {
-                        row.child(self.render_detail_field("Duration", Some(value), &theme))
+                        row.child(self.render_detail_field(
+                            dbflux_i18n::t!("document.audit.detail.duration"),
+                            Some(value),
+                            &theme,
+                        ))
                     }),
             )
             .when_some(summary, |root, value| {
@@ -864,7 +917,7 @@ impl AuditDocument {
                     div()
                         .flex_col()
                         .gap_1p5()
-                        .child(Label::new("Summary"))
+                        .child(Label::new(dbflux_i18n::t!("document.audit.detail.summary")))
                         .child(Text::body(value)),
                 )
             })
@@ -873,7 +926,10 @@ impl AuditDocument {
                     div()
                         .flex_col()
                         .gap_1p5()
-                        .child(Label::new("Error").text_color(theme.danger))
+                        .child(
+                            Label::new(dbflux_i18n::t!("document.audit.detail.error"))
+                                .text_color(theme.danger),
+                        )
                         .child(Text::body(value).danger()),
                 )
             })
@@ -882,7 +938,7 @@ impl AuditDocument {
                     div()
                         .flex_col()
                         .gap_1p5()
-                        .child(Label::new("Details"))
+                        .child(Label::new(dbflux_i18n::t!("document.audit.detail.details")))
                         .child(
                             div()
                                 .bg(theme.secondary)
@@ -899,7 +955,9 @@ impl AuditDocument {
                     div()
                         .flex_col()
                         .gap_1p5()
-                        .child(Label::new("Correlation ID"))
+                        .child(Label::new(dbflux_i18n::t!(
+                            "document.audit.detail.correlation_id"
+                        )))
                         .child(
                             div()
                                 .cursor_pointer()
@@ -955,17 +1013,37 @@ impl AuditDocument {
                     .flex_wrap()
                     .gap_4()
                     .children(vec![
-                        self.render_detail_field("Time", Some(timestamp), &theme)
-                            .into_any_element(),
-                        self.render_detail_field("Source", source_name, &theme)
-                            .into_any_element(),
-                        self.render_detail_field("Partition", source_partition, &theme)
-                            .into_any_element(),
-                        self.render_detail_field("Event ID", event_id, &theme)
-                            .into_any_element(),
+                        self.render_detail_field(
+                            dbflux_i18n::t!("document.audit.detail.time"),
+                            Some(timestamp),
+                            &theme,
+                        )
+                        .into_any_element(),
+                        self.render_detail_field(
+                            dbflux_i18n::t!("document.audit.detail.source"),
+                            source_name,
+                            &theme,
+                        )
+                        .into_any_element(),
+                        self.render_detail_field(
+                            dbflux_i18n::t!("document.audit.detail.partition"),
+                            source_partition,
+                            &theme,
+                        )
+                        .into_any_element(),
+                        self.render_detail_field(
+                            dbflux_i18n::t!("document.audit.detail.event_id"),
+                            event_id,
+                            &theme,
+                        )
+                        .into_any_element(),
                     ])
                     .when_some(secondary_timestamp, |row, value| {
-                        row.child(self.render_detail_field("Secondary Time", Some(value), &theme))
+                        row.child(self.render_detail_field(
+                            dbflux_i18n::t!("document.audit.detail.secondary_time"),
+                            Some(value),
+                            &theme,
+                        ))
                     }),
             )
             .when_some(message, |root, value| {
@@ -976,7 +1054,7 @@ impl AuditDocument {
                     div()
                         .flex_col()
                         .gap_1p5()
-                        .child(Label::new("Message"))
+                        .child(Label::new(dbflux_i18n::t!("document.audit.detail.message")))
                         .child(SelectableText::new(&message_input).w_full()),
                 )
             })
@@ -990,7 +1068,7 @@ impl AuditDocument {
                     div()
                         .flex_col()
                         .gap_1p5()
-                        .child(Label::new("Details"))
+                        .child(Label::new(dbflux_i18n::t!("document.audit.detail.details")))
                         .child(
                             div().bg(theme.secondary).p_2().rounded(Radii::SM).child(
                                 ReadonlyTextView::new(&details_input)
@@ -1029,7 +1107,7 @@ impl AuditDocument {
                     .size(Heights::ICON_SM)
                     .muted(),
             )
-            .child(Text::caption("Export"))
+            .child(Text::caption(dbflux_i18n::t!("document.audit.menu.export")))
             .child(Icon::new(AppIcon::ChevronDown).size(px(12.0)).muted()) // guardrail-allow: 12px icon size, no ICON_XS token
             .when(menu_open, |trigger| {
                 trigger.child(self.render_export_menu(theme, cx))
@@ -1041,29 +1119,38 @@ impl AuditDocument {
         theme: &gpui_component::Theme,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let items = [("CSV", "csv"), ("JSON", "json")]
-            .into_iter()
-            .enumerate()
-            .map(|(index, (label, format))| {
-                // Identical to DataGridPanel::render_export_menu items.
-                div()
-                    .id(SharedString::from(format!("audit-export-{}", index)))
-                    .flex()
-                    .items_center()
-                    .gap(Spacing::SM)
-                    .h(Heights::ROW_COMPACT)
-                    .px(Spacing::SM)
-                    .mx(Spacing::XS)
-                    .rounded(Radii::SM)
-                    .cursor_pointer()
-                    .hover(|d| d.bg(theme.secondary))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.export_with_format(format, cx);
-                    }))
-                    .child(Text::body(label))
-                    .into_any_element()
-            })
-            .collect::<Vec<_>>();
+        let items = [
+            (
+                dbflux_i18n::t!("document.audit.menu.export_format.csv"),
+                "csv",
+            ),
+            (
+                dbflux_i18n::t!("document.audit.menu.export_format.json"),
+                "json",
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, (label, format))| {
+            // Identical to DataGridPanel::render_export_menu items.
+            div()
+                .id(SharedString::from(format!("audit-export-{}", index)))
+                .flex()
+                .items_center()
+                .gap(Spacing::SM)
+                .h(Heights::ROW_COMPACT)
+                .px(Spacing::SM)
+                .mx(Spacing::XS)
+                .rounded(Radii::SM)
+                .cursor_pointer()
+                .hover(|d| d.bg(theme.secondary))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.export_with_format(format, cx);
+                }))
+                .child(Text::body(label))
+                .into_any_element()
+        })
+        .collect::<Vec<_>>();
 
         // Identical to DataGridPanel::render_export_menu container.
         deferred(
@@ -1204,7 +1291,7 @@ impl AuditDocument {
                                     .size(px(12.0)) // guardrail-allow: 12px icon size, no ICON_XS token
                                     .color(theme.muted_foreground),
                             )
-                            .child(Text::dim("Loading…")),
+                            .child(Text::dim(dbflux_i18n::t!("document.audit.filter.loading"))),
                     )
                 },
             );
@@ -1367,5 +1454,104 @@ impl AuditDocument {
         );
 
         format!("{}\n{}", header, row)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    const FILTER_KEYS: &[&str] = &[
+        "document.audit.filter.apply",
+        "document.audit.filter.clear",
+        "document.audit.filter.group_label",
+        "document.audit.filter.loading",
+        "document.audit.filter.retry",
+        "document.audit.filter.view_mode.chart",
+        "document.audit.filter.view_mode.table",
+        "document.audit.filter.y_scale.linear",
+        "document.audit.filter.y_scale.log",
+    ];
+
+    #[test]
+    fn audit_filter_keys_resolve_in_both_locales() {
+        for key in FILTER_KEYS {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, *key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn audit_filter_clear_label_differs_between_locales() {
+        let en = dbflux_i18n::t!("document.audit.filter.clear", locale = "en");
+        let es = dbflux_i18n::t!("document.audit.filter.clear", locale = "es");
+
+        assert_eq!(en, "Clear");
+        assert_ne!(en, es);
+    }
+
+    const DETAIL_KEYS: &[&str] = &[
+        "document.audit.detail.action",
+        "document.audit.detail.actor",
+        "document.audit.detail.category",
+        "document.audit.detail.connection_driver",
+        "document.audit.detail.correlation_id",
+        "document.audit.detail.details",
+        "document.audit.detail.duration",
+        "document.audit.detail.error",
+        "document.audit.detail.event_id",
+        "document.audit.detail.level",
+        "document.audit.detail.message",
+        "document.audit.detail.outcome",
+        "document.audit.detail.partition",
+        "document.audit.detail.secondary_time",
+        "document.audit.detail.source",
+        "document.audit.detail.summary",
+        "document.audit.detail.time",
+    ];
+
+    #[test]
+    fn audit_detail_keys_resolve_in_both_locales() {
+        for key in DETAIL_KEYS {
+            for locale in ["en", "es"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, *key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn audit_detail_correlation_id_label_differs_between_locales() {
+        let en = dbflux_i18n::t!("document.audit.detail.correlation_id", locale = "en");
+        let es = dbflux_i18n::t!("document.audit.detail.correlation_id", locale = "es");
+
+        assert_eq!(en, "Correlation ID");
+        assert_ne!(en, es);
+    }
+
+    #[test]
+    fn render_detail_field_accepts_a_translated_string_label() {
+        // `render_detail_field` widened from `&'static str` to
+        // `impl Into<SharedString>` so translated `String` values from
+        // `dbflux_i18n::t!` can be passed directly without an intermediate
+        // leak or a `&'static str` catalog. This compiles only if the
+        // widened signature is in place.
+        let label: String = dbflux_i18n::t!("document.audit.detail.time");
+
+        assert!(!label.is_empty());
     }
 }

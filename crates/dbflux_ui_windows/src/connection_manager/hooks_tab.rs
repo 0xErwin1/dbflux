@@ -112,13 +112,18 @@ impl ConnectionManagerWindow {
             .flex()
             .flex_col()
             .gap_3()
-            .child(Text::caption("Select reusable hooks configured in Settings -> Hooks"))
+            .child(Text::caption(dbflux_i18n::t!("hooks.tab.intro")))
             .child(
                 div()
                     .flex()
                     .items_center()
                     .gap_3()
-                    .child(div().w(px(160.0)).text_sm().child("Pre-connect hook"))
+                    .child(
+                        div()
+                            .w(px(160.0))
+                            .text_sm()
+                            .child(dbflux_i18n::t!("hooks.phase.pre_connect_hook")),
+                    )
                     .child(
                         div()
                             .w(Widths::CM_FORM_DROPDOWN)
@@ -130,14 +135,21 @@ impl ConnectionManagerWindow {
                     .flex()
                     .items_center()
                     .gap_3()
-                    .child(div().w(px(160.0)).child(Text::caption("Extra pre-connect"))),
+                    .child(div().w(px(160.0)).child(Text::caption(dbflux_i18n::t!(
+                        "hooks.phase.extra_pre_connect"
+                    )))),
             )
             .child(
                 div()
                     .flex()
                     .items_center()
                     .gap_3()
-                    .child(div().w(px(160.0)).text_sm().child("Post-connect hook"))
+                    .child(
+                        div()
+                            .w(px(160.0))
+                            .text_sm()
+                            .child(dbflux_i18n::t!("hooks.phase.post_connect_hook")),
+                    )
                     .child(
                         div()
                             .w(Widths::CM_FORM_DROPDOWN)
@@ -149,14 +161,21 @@ impl ConnectionManagerWindow {
                     .flex()
                     .items_center()
                     .gap_3()
-                    .child(div().w(px(160.0)).child(Text::caption("Extra post-connect"))),
+                    .child(div().w(px(160.0)).child(Text::caption(dbflux_i18n::t!(
+                        "hooks.phase.extra_post_connect"
+                    )))),
             )
             .child(
                 div()
                     .flex()
                     .items_center()
                     .gap_3()
-                    .child(div().w(px(160.0)).text_sm().child("Pre-disconnect hook"))
+                    .child(
+                        div()
+                            .w(px(160.0))
+                            .text_sm()
+                            .child(dbflux_i18n::t!("hooks.phase.pre_disconnect_hook")),
+                    )
                     .child(
                         div()
                             .w(Widths::CM_FORM_DROPDOWN)
@@ -168,14 +187,21 @@ impl ConnectionManagerWindow {
                     .flex()
                     .items_center()
                     .gap_3()
-                    .child(div().w(px(160.0)).child(Text::caption("Extra pre-disconnect"))),
+                    .child(div().w(px(160.0)).child(Text::caption(dbflux_i18n::t!(
+                        "hooks.phase.extra_pre_disconnect"
+                    )))),
             )
             .child(
                 div()
                     .flex()
                     .items_center()
                     .gap_3()
-                    .child(div().w(px(160.0)).text_sm().child("Post-disconnect hook"))
+                    .child(
+                        div()
+                            .w(px(160.0))
+                            .text_sm()
+                            .child(dbflux_i18n::t!("hooks.phase.post_disconnect_hook")),
+                    )
                     .child(
                         div()
                             .w(Widths::CM_FORM_DROPDOWN)
@@ -187,7 +213,9 @@ impl ConnectionManagerWindow {
                     .flex()
                     .items_center()
                     .gap_3()
-                    .child(div().w(px(160.0)).child(Text::caption("Extra post-disconnect"))),
+                    .child(div().w(px(160.0)).child(Text::caption(dbflux_i18n::t!(
+                        "hooks.phase.extra_post_disconnect"
+                    )))),
             )
             .when(show_process_run_warning, |this| {
                 let theme = cx.theme();
@@ -199,10 +227,65 @@ impl ConnectionManagerWindow {
                         .bg(theme.warning.opacity(0.1))
                         .p_2()
                         .child(
-                            Text::caption("Selected hook enables Lua process.run and can execute external programs with your user permissions")
+                            Text::caption(dbflux_i18n::t!("hooks.tab.lua_process_run_note"))
                                 .warning(),
                         ),
                 )
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    const HOOKS_TAB_KEYS: &[&str] = &[
+        "hooks.tab.intro",
+        "hooks.tab.lua_process_run_note",
+        "hooks.phase.pre_connect_hook",
+        "hooks.phase.extra_pre_connect",
+        "hooks.phase.post_connect_hook",
+        "hooks.phase.extra_post_connect",
+        "hooks.phase.pre_disconnect_hook",
+        "hooks.phase.extra_pre_disconnect",
+        "hooks.phase.post_disconnect_hook",
+        "hooks.phase.extra_post_disconnect",
+    ];
+
+    #[test]
+    fn hooks_tab_keys_resolve_in_both_locales() {
+        for locale in ["en", "es"] {
+            for key in HOOKS_TAB_KEYS {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(
+                    !value.is_empty(),
+                    "key {key} resolved empty for locale {locale}"
+                );
+                assert_ne!(value, *key, "key {key} did not resolve for locale {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "key {key} fell back to the raw locale-qualified form for locale {locale}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn hooks_tab_intro_differs_between_locales() {
+        let en = dbflux_i18n::t!("hooks.tab.intro", locale = "en");
+        let es = dbflux_i18n::t!("hooks.tab.intro", locale = "es");
+
+        assert_ne!(en, es, "hooks.tab.intro should differ between en and es");
+    }
+
+    #[test]
+    fn hooks_tab_reuses_settings_phase_keys() {
+        let value = dbflux_i18n::t!("hooks.phase.pre_connect_hook", locale = "en");
+
+        assert_eq!(
+            value, "Pre-connect hook",
+            "the connection manager hooks tab must resolve the same hooks.phase.* \
+             keys the settings hooks section already defines, not a duplicate key set"
+        );
     }
 }

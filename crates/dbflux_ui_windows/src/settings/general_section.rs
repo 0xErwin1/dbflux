@@ -12,6 +12,7 @@ use gpui::*;
 pub(super) enum GeneralFormRow {
     Theme,
     Style,
+    Language,
     RestoreSession,
     ReopenConnections,
     DefaultFocus,
@@ -25,6 +26,8 @@ pub(super) enum GeneralFormRow {
     ConfirmDangerous,
     RequiresWhere,
     RequiresPreview,
+    ObjectPreviewLimit,
+    KeyValueSizeLimit,
     ShareStableDb,
     SaveButton,
 }
@@ -39,12 +42,15 @@ pub(super) struct GeneralSection {
     pub(super) gen_share_stable_db: bool,
     pub(super) dropdown_theme: Entity<Dropdown>,
     pub(super) dropdown_style: Entity<Dropdown>,
+    pub(super) dropdown_language: Entity<Dropdown>,
     pub(super) dropdown_default_focus: Entity<Dropdown>,
     pub(super) dropdown_refresh_policy: Entity<Dropdown>,
     pub(super) input_max_history: Entity<InputState>,
     pub(super) input_auto_save: Entity<InputState>,
     pub(super) input_refresh_interval: Entity<InputState>,
     pub(super) input_max_bg_tasks: Entity<InputState>,
+    pub(super) input_object_preview_limit: Entity<InputState>,
+    pub(super) input_key_value_size_limit: Entity<InputState>,
     pub(super) content_focused: bool,
     pub(super) switching_input: bool,
     _subscriptions: Vec<Subscription>,
@@ -61,34 +67,45 @@ impl GeneralSection {
         let settings = app_state.read(cx).general_settings().clone();
         let theme_index = Self::theme_index(settings.theme);
         let style_index = Self::style_index(settings.style);
+        let language_index = Self::language_index(&settings.language);
         let startup_focus_index = Self::startup_focus_index(settings.default_focus_on_startup);
         let refresh_policy_index = Self::refresh_policy_index(settings.default_refresh_policy);
         let max_history = settings.max_history_entries.to_string();
         let auto_save_interval = settings.auto_save_interval_ms.to_string();
         let refresh_interval = settings.default_refresh_interval_secs.to_string();
         let max_background_tasks = settings.max_concurrent_background_tasks.to_string();
+        let object_preview_limit = settings.object_preview_size_limit_mib.to_string();
+        let key_value_size_limit = settings.key_value_size_limit_mib.to_string();
 
         let dropdown_theme = cx.new(move |_cx| {
             Dropdown::new("general-theme")
-                .placeholder("Theme")
+                .placeholder(dbflux_i18n::t!("settings.general.theme.label"))
                 .items(Self::theme_items())
                 .selected_index(Some(theme_index))
         });
         let dropdown_style = cx.new(move |_cx| {
             Dropdown::new("general-style")
-                .placeholder("Style")
+                .placeholder(dbflux_i18n::t!("settings.general.style.label"))
                 .items(Self::style_items())
                 .selected_index(Some(style_index))
         });
+        let dropdown_language = cx.new(move |_cx| {
+            Dropdown::new("general-language")
+                .placeholder(dbflux_i18n::t!("settings.general.language.label"))
+                .items(Self::language_items())
+                .selected_index(Some(language_index))
+        });
         let dropdown_default_focus = cx.new(move |_cx| {
             Dropdown::new("general-default-focus")
-                .placeholder("Default focus")
+                .placeholder(dbflux_i18n::t!("settings.general.default_focus.label"))
                 .items(Self::startup_focus_items())
                 .selected_index(Some(startup_focus_index))
         });
         let dropdown_refresh_policy = cx.new(move |_cx| {
             Dropdown::new("general-refresh-policy")
-                .placeholder("Refresh policy")
+                .placeholder(dbflux_i18n::t!(
+                    "settings.general.placeholder.refresh_policy"
+                ))
                 .items(Self::refresh_policy_items())
                 .selected_index(Some(refresh_policy_index))
         });
@@ -114,6 +131,18 @@ impl GeneralSection {
                 .default_value(max_background_tasks.clone())
         });
 
+        let input_object_preview_limit = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("10")
+                .default_value(object_preview_limit.clone())
+        });
+
+        let input_key_value_size_limit = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("10")
+                .default_value(key_value_size_limit.clone())
+        });
+
         let theme_subscription = cx.subscribe(
             &dropdown_theme,
             |this, _, event: &DropdownSelectionChanged, cx| {
@@ -126,6 +155,14 @@ impl GeneralSection {
             &dropdown_style,
             |this, _, event: &DropdownSelectionChanged, cx| {
                 this.gen_settings.style = Self::style_for_index(event.index);
+                cx.notify();
+            },
+        );
+
+        let language_subscription = cx.subscribe(
+            &dropdown_language,
+            |this, _, event: &DropdownSelectionChanged, cx| {
+                this.gen_settings.language = Self::language_for_index(event.index).to_string();
                 cx.notify();
             },
         );
@@ -193,6 +230,32 @@ impl GeneralSection {
                 }
             });
 
+        let blur_object_preview_limit = cx.subscribe(
+            &input_object_preview_limit,
+            |this, _, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::Blur) {
+                    if this.switching_input {
+                        this.switching_input = false;
+                        return;
+                    }
+                    cx.emit(SectionFocusEvent::RequestFocusReturn);
+                }
+            },
+        );
+
+        let blur_key_value_size_limit = cx.subscribe(
+            &input_key_value_size_limit,
+            |this, _, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::Blur) {
+                    if this.switching_input {
+                        this.switching_input = false;
+                        return;
+                    }
+                    cx.emit(SectionFocusEvent::RequestFocusReturn);
+                }
+            },
+        );
+
         Self {
             app_state,
             gen_settings: settings,
@@ -201,23 +264,29 @@ impl GeneralSection {
             gen_share_stable_db: dbflux_storage::paths::nightly_shares_stable_db(),
             dropdown_theme,
             dropdown_style,
+            dropdown_language,
             dropdown_default_focus,
             dropdown_refresh_policy,
             input_max_history,
             input_auto_save,
             input_refresh_interval,
             input_max_bg_tasks,
+            input_object_preview_limit,
+            input_key_value_size_limit,
             content_focused: false,
             switching_input: false,
             _subscriptions: vec![
                 theme_subscription,
                 style_subscription,
+                language_subscription,
                 focus_subscription,
                 refresh_policy_subscription,
                 blur_max_history,
                 blur_auto_save,
                 blur_refresh_interval,
                 blur_max_bg_tasks,
+                blur_object_preview_limit,
+                blur_key_value_size_limit,
             ],
         }
     }
@@ -237,12 +306,38 @@ impl GeneralSection {
         ]
     }
 
+    fn language_items() -> Vec<DropdownItem> {
+        std::iter::once(DropdownItem::new(dbflux_i18n::t!(
+            "settings.general.language.option.system"
+        )))
+        .chain(
+            dbflux_i18n::Language::available()
+                .iter()
+                .map(|language| DropdownItem::new(language.native_name())),
+        )
+        .collect()
+    }
+
     fn startup_focus_items() -> Vec<DropdownItem> {
-        vec![DropdownItem::new("Sidebar"), DropdownItem::new("Last Tab")]
+        vec![
+            DropdownItem::new(dbflux_i18n::t!(
+                "settings.general.default_focus.option.sidebar"
+            )),
+            DropdownItem::new(dbflux_i18n::t!(
+                "settings.general.default_focus.option.last_tab"
+            )),
+        ]
     }
 
     fn refresh_policy_items() -> Vec<DropdownItem> {
-        vec![DropdownItem::new("Manual"), DropdownItem::new("Interval")]
+        vec![
+            DropdownItem::new(dbflux_i18n::t!(
+                "settings.general.refresh_policy.option.manual"
+            )),
+            DropdownItem::new(dbflux_i18n::t!(
+                "settings.general.refresh_policy.option.interval"
+            )),
+        ]
     }
 
     fn theme_index(theme: ThemeSetting) -> usize {
@@ -273,6 +368,30 @@ impl GeneralSection {
             1 => AppStyle::Compact,
             _ => AppStyle::Default,
         }
+    }
+
+    fn language_index(persisted: &str) -> usize {
+        match dbflux_i18n::LanguagePreference::from_storage_str(persisted) {
+            dbflux_i18n::LanguagePreference::System => 0,
+            dbflux_i18n::LanguagePreference::Explicit(language) => {
+                dbflux_i18n::Language::available()
+                    .iter()
+                    .position(|available| *available == language)
+                    .map(|position| position + 1)
+                    .unwrap_or(0)
+            }
+        }
+    }
+
+    fn language_for_index(index: usize) -> &'static str {
+        let preference = match index
+            .checked_sub(1)
+            .and_then(|position| dbflux_i18n::Language::available().get(position).copied())
+        {
+            Some(language) => dbflux_i18n::LanguagePreference::Explicit(language),
+            None => dbflux_i18n::LanguagePreference::System,
+        };
+        preference.as_storage_str()
     }
 
     fn startup_focus_index(focus: StartupFocus) -> usize {
@@ -395,5 +514,83 @@ mod tests {
         assert_eq!(GeneralSection::style_for_index(1), AppStyle::Compact);
         // Out-of-range falls back to Default
         assert_eq!(GeneralSection::style_for_index(99), AppStyle::Default);
+    }
+
+    #[test]
+    fn language_dropdown_orders_system_then_english_then_deterministic_remainder() {
+        let labels: Vec<_> = GeneralSection::language_items()
+            .into_iter()
+            .map(|item| item.label)
+            .collect();
+        let available = dbflux_i18n::Language::available();
+
+        assert_eq!(labels.len(), available.len() + 1);
+        assert_eq!(labels.first().map(|label| label.as_ref()), Some("System"));
+        assert_eq!(labels.get(1).map(|label| label.as_ref()), Some("English"));
+
+        let storage_ids: Vec<_> = available
+            .iter()
+            .skip(1)
+            .map(|language| language.as_storage_str())
+            .collect();
+        let mut sorted_storage_ids = storage_ids.clone();
+        sorted_storage_ids.sort_unstable();
+        assert_eq!(storage_ids, sorted_storage_ids);
+
+        for (label, language) in labels.iter().skip(1).zip(available) {
+            assert_eq!(label, &language.native_name());
+        }
+    }
+
+    #[test]
+    fn language_index_and_reverse_mapping_round_trip_every_available_locale() {
+        assert_eq!(GeneralSection::language_index(""), 0);
+        assert_eq!(GeneralSection::language_for_index(0), "");
+
+        let available = dbflux_i18n::Language::available();
+        for (position, language) in available.iter().enumerate() {
+            let index = position + 1;
+            let storage_id = language.as_storage_str();
+            assert_eq!(GeneralSection::language_index(storage_id), index);
+            assert_eq!(GeneralSection::language_for_index(index), storage_id);
+        }
+
+        assert_eq!(GeneralSection::language_index("de"), 0);
+        assert_eq!(GeneralSection::language_for_index(available.len() + 1), "");
+    }
+
+    #[test]
+    fn dropdown_placeholders_reuse_or_extend_settings_general_catalog_keys() {
+        assert_eq!(dbflux_i18n::t!("settings.general.theme.label"), "Theme");
+        assert_eq!(dbflux_i18n::t!("settings.general.style.label"), "Style");
+        assert_eq!(
+            dbflux_i18n::t!("settings.general.language.label"),
+            "Language"
+        );
+        assert_eq!(
+            dbflux_i18n::t!("settings.general.default_focus.label"),
+            "Default focus"
+        );
+        assert_eq!(
+            dbflux_i18n::t!("settings.general.placeholder.refresh_policy"),
+            "Refresh policy"
+        );
+
+        for locale in ["en", "es"] {
+            let value = dbflux_i18n::t!(
+                "settings.general.placeholder.refresh_policy",
+                locale = locale
+            );
+
+            assert!(
+                !value.is_empty(),
+                "settings.general.placeholder.refresh_policy resolved empty for locale {locale}"
+            );
+            assert_ne!(
+                value,
+                format!("{locale}.settings.general.placeholder.refresh_policy"),
+                "settings.general.placeholder.refresh_policy fell back to the raw key for locale {locale}"
+            );
+        }
     }
 }

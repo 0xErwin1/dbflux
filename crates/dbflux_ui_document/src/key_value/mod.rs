@@ -1,6 +1,7 @@
 mod commands;
 mod context_menu;
 mod copy_command;
+pub(super) mod decode;
 mod document_view;
 mod mutations;
 mod pagination;
@@ -67,6 +68,20 @@ pub struct KeyValueDocument {
     selected_index: Option<usize>,
     selected_value: Option<KeyGetResult>,
     last_error: Option<String>,
+
+    // Size gate + payload decoder (issue #354)
+    /// One-shot override for the next `reload_selected_value` call: fetches
+    /// the value unbounded instead of applying the configured size limit.
+    /// Consumed (reset to `false`) as soon as that fetch starts.
+    kv_load_anyway: bool,
+    kv_encoding_choice: decode::KvEncodingChoice,
+    kv_decode_outcome: Option<dbflux_core::DecodeOutcome>,
+    /// Bumped every time the selected value or the encoding choice changes,
+    /// so a background decode that finishes after the user has moved on
+    /// never overwrites a newer result.
+    kv_decode_generation: u64,
+    kv_encoding_dropdown: Entity<Dropdown>,
+    _kv_encoding_dropdown_subscription: Subscription,
 
     // Cursor-based pagination
     current_page: u64,
@@ -167,9 +182,16 @@ impl KeyValueDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let filter_input = cx.new(|cx| InputState::new(window, cx).placeholder("Filter keys..."));
-        let members_filter_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Filter members..."));
+        let filter_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(dbflux_i18n::t!(
+                "document.key_value.render.filter.keys_placeholder"
+            ))
+        });
+        let members_filter_input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(dbflux_i18n::t!(
+                "document.key_value.render.filter.members_placeholder"
+            ))
+        });
         let mut subscriptions = Vec::new();
 
         subscriptions.push(cx.subscribe_in(
@@ -236,6 +258,27 @@ impl KeyValueDocument {
             },
         ));
 
+        let kv_encoding_dropdown = cx.new(|_cx| {
+            let items = decode::encoding_choice_labels()
+                .into_iter()
+                .map(DropdownItem::new)
+                .collect();
+
+            Dropdown::new("kv-encoding-choice")
+                .items(items)
+                .selected_index(Some(decode::index_for_choice(
+                    decode::KvEncodingChoice::default(),
+                )))
+                .compact_trigger(true)
+        });
+
+        let kv_encoding_dropdown_subscription = cx.subscribe(
+            &kv_encoding_dropdown,
+            |this, _, event: &DropdownSelectionChanged, cx| {
+                this.set_kv_encoding_choice(decode::choice_for_index(event.index), cx);
+            },
+        );
+
         let mut doc = Self {
             id: DocumentId::new(),
             title: format!("Redis {}", database),
@@ -263,6 +306,12 @@ impl KeyValueDocument {
             selected_index: None,
             selected_value: None,
             last_error: None,
+            kv_load_anyway: false,
+            kv_encoding_choice: decode::KvEncodingChoice::default(),
+            kv_decode_outcome: None,
+            kv_decode_generation: 0,
+            kv_encoding_dropdown,
+            _kv_encoding_dropdown_subscription: kv_encoding_dropdown_subscription,
             current_page: 1,
             current_cursor: None,
             next_cursor: None,
@@ -377,15 +426,15 @@ impl KeyValueDocument {
         match entry.ttl_seconds {
             None | Some(-1) => {
                 self.ttl_state = TtlState::NoLimit;
-                self.ttl_display = "No limit".into();
+                self.ttl_display = dbflux_i18n::t!("document.key_value.render.ttl.no_limit");
             }
             Some(-2) => {
                 self.ttl_state = TtlState::Missing;
-                self.ttl_display = "Missing".into();
+                self.ttl_display = dbflux_i18n::t!("document.key_value.render.ttl.missing");
             }
             Some(0) => {
                 self.ttl_state = TtlState::Expired;
-                self.ttl_display = "Expired".into();
+                self.ttl_display = dbflux_i18n::t!("document.key_value.render.ttl.expired");
             }
             Some(secs) if secs > 0 => {
                 let deadline = Instant::now() + Duration::from_secs(secs as u64);
@@ -395,7 +444,7 @@ impl KeyValueDocument {
             }
             _ => {
                 self.ttl_state = TtlState::NoLimit;
-                self.ttl_display = "No limit".into();
+                self.ttl_display = dbflux_i18n::t!("document.key_value.render.ttl.no_limit");
             }
         }
     }
@@ -415,7 +464,7 @@ impl KeyValueDocument {
 
         if remaining.is_zero() {
             self.ttl_state = TtlState::Expired;
-            self.ttl_display = "Expired".into();
+            self.ttl_display = dbflux_i18n::t!("document.key_value.render.ttl.expired");
             self._ttl_countdown_timer = None;
         } else {
             self.ttl_display = format!("{}s", remaining.as_secs());

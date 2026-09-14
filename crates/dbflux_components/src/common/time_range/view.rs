@@ -357,11 +357,11 @@ impl TimeRangePanel {
     pub fn apply_custom_range(&mut self, cx: &mut Context<Self>) -> Result<(i64, i64), String> {
         let (start_date, end_date) = self
             .custom_date_range(cx)
-            .ok_or_else(|| "No date range selected".to_string())?;
+            .ok_or_else(|| dbflux_i18n::t!("common.time_range.error.no_date_range"))?;
 
         let (start_hour, start_minute, end_hour, end_minute) = self
             .custom_time_parts(cx)
-            .ok_or_else(|| "Incomplete time selection".to_string())?;
+            .ok_or_else(|| dbflux_i18n::t!("common.time_range.error.incomplete_time_selection"))?;
 
         let (start_ms, end_ms) = validate_custom_range_parts(
             start_date,

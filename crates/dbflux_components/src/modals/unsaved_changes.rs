@@ -88,6 +88,18 @@ impl ModalUnsavedChanges {
     }
 }
 
+/// Label for the "Save selected" button, with the selected count interpolated.
+///
+/// Uses the singular catalog bucket only for exactly one selected document;
+/// every other count, including zero, uses the plural bucket.
+fn save_selected_label(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!("modals.unsaved_changes.save_selected.one", count = count)
+    } else {
+        dbflux_i18n::t!("modals.unsaved_changes.save_selected.many", count = count)
+    }
+}
+
 impl EventEmitter<UnsavedChangesOutcome> for ModalUnsavedChanges {}
 
 impl Render for ModalUnsavedChanges {
@@ -174,12 +186,7 @@ impl Render for ModalUnsavedChanges {
             .flex()
             .flex_col()
             .gap(Spacing::MD)
-            .child(
-                Text::body(
-                    "You have unsaved changes in the following documents. What would you like to do?",
-                )
-                .into_any_element(),
-            )
+            .child(Text::body(dbflux_i18n::t!("modals.unsaved_changes.prompt")).into_any_element())
             .child(rows);
 
         let on_discard = cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
@@ -192,7 +199,7 @@ impl Render for ModalUnsavedChanges {
             this.close(cx);
         });
 
-        let save_label = format!("Save selected ({})", selected_count);
+        let save_label = save_selected_label(selected_count);
         let save_disabled = selected_count == 0;
 
         let on_save = cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
@@ -207,14 +214,14 @@ impl Render for ModalUnsavedChanges {
             .gap(Spacing::SM)
             .child(
                 Button::new("unsaved-discard")
-                    .label("Don't save")
+                    .label(dbflux_i18n::t!("modals.unsaved_changes.dont_save"))
                     .ghost()
                     .on_click(on_discard),
             )
             .child(div().flex_1())
             .child(
                 Button::new("unsaved-cancel")
-                    .label("Cancel")
+                    .label(dbflux_i18n::t!("modals.unsaved_changes.cancel"))
                     .on_click(on_cancel),
             )
             .child(if save_disabled {
@@ -242,7 +249,7 @@ impl Render for ModalUnsavedChanges {
             });
 
         ModalShell::new(
-            "Unsaved changes",
+            dbflux_i18n::t!("modals.unsaved_changes.title"),
             body.into_any_element(),
             footer.into_any_element(),
         )
@@ -330,5 +337,58 @@ mod tests {
         assert!(!modal.selected[&a]);
         *modal.selected.entry(a).or_insert(false) ^= true;
         assert!(modal.selected[&a]);
+    }
+
+    #[test]
+    fn unsaved_changes_keys_resolve_in_both_locales() {
+        let keys = [
+            "modals.unsaved_changes.title",
+            "modals.unsaved_changes.prompt",
+            "modals.unsaved_changes.save_selected.one",
+            "modals.unsaved_changes.save_selected.many",
+            "modals.unsaved_changes.dont_save",
+            "modals.unsaved_changes.cancel",
+        ];
+
+        for key in keys {
+            let en = dbflux_i18n::t!(key, locale = "en");
+            let es = dbflux_i18n::t!(key, locale = "es");
+            assert!(!en.is_empty() && en != key, "en missing for {key}");
+            assert!(!es.is_empty() && es != key, "es missing for {key}");
+        }
+    }
+
+    #[test]
+    fn unsaved_changes_dont_save_diverges_between_locales() {
+        let en = dbflux_i18n::t!("modals.unsaved_changes.dont_save", locale = "en");
+        let es = dbflux_i18n::t!("modals.unsaved_changes.dont_save", locale = "es");
+        assert_ne!(en, es);
+    }
+
+    #[test]
+    fn save_selected_label_uses_singular_bucket_for_one() {
+        let label = save_selected_label(1);
+        assert!(label.contains('1'));
+        assert_eq!(
+            label,
+            dbflux_i18n::t!("modals.unsaved_changes.save_selected.one", count = 1)
+        );
+    }
+
+    #[test]
+    fn save_selected_label_uses_plural_bucket_for_zero_and_many() {
+        let zero = save_selected_label(0);
+        assert!(zero.contains('0'));
+        assert_eq!(
+            zero,
+            dbflux_i18n::t!("modals.unsaved_changes.save_selected.many", count = 0)
+        );
+
+        let many = save_selected_label(2);
+        assert!(many.contains('2'));
+        assert_eq!(
+            many,
+            dbflux_i18n::t!("modals.unsaved_changes.save_selected.many", count = 2)
+        );
     }
 }

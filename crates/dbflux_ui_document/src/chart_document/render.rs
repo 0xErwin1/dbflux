@@ -180,52 +180,60 @@ impl Render for ChartDocument {
 
         // -- Name prompt modal overlay --
         let show_name_prompt = self.name_prompt.is_some();
-        let name_prompt_element = show_name_prompt.then(|| {
-            let theme = cx.theme().clone();
-            let input = self.name_prompt.as_ref().unwrap().input.clone();
+        let name_prompt_element =
+            show_name_prompt.then(|| {
+                let theme = cx.theme().clone();
+                let input = self.name_prompt.as_ref().unwrap().input.clone();
 
-            div()
-                .absolute()
-                .inset_0()
-                .flex()
-                .items_center()
-                .justify_center()
-                .bg(theme.background.opacity(0.6))
-                .child(
-                    div()
-                        .bg(theme.secondary)
-                        .border_1()
-                        .border_color(theme.border)
-                        .p(Spacing::LG)
-                        .w(px(360.0))
-                        .flex()
-                        .flex_col()
-                        .gap(Spacing::MD)
-                        .child(Text::label("Save chart"))
-                        .child(Input::new(&input).placeholder("Chart name"))
-                        .child(
-                            div()
-                                .flex()
-                                .flex_row()
-                                .gap(Spacing::SM)
-                                .justify_end()
-                                .child(Button::new("cancel-save").label("Cancel").small().on_click(
-                                    cx.listener(|this, _, _window, cx| {
-                                        this.cancel_save(cx);
-                                    }),
-                                ))
-                                .child(
-                                    Button::new("confirm-save")
-                                        .label("Save")
-                                        .small()
-                                        .with_variant(ButtonVariant::Primary)
-                                        .on_click(cx.listener(|this, _, _window, cx| {
-                                            this.confirm_save(cx);
-                                        })),
-                                ),
-                        ),
-                )
-        });
+                div()
+                    .absolute()
+                    .inset_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .bg(theme.background.opacity(0.6))
+                    .child(
+                        div()
+                            .bg(theme.secondary)
+                            .border_1()
+                            .border_color(theme.border)
+                            .p(Spacing::LG)
+                            .w(px(360.0))
+                            .flex()
+                            .flex_col()
+                            .gap(Spacing::MD)
+                            .child(Text::label(dbflux_i18n::t!(
+                                "document.chart.toolbar.save_chart"
+                            )))
+                            .child(Input::new(&input).placeholder(dbflux_i18n::t!(
+                                "document.chart.shell.name_placeholder"
+                            )))
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_row()
+                                    .gap(Spacing::SM)
+                                    .justify_end()
+                                    .child(
+                                        Button::new("cancel-save")
+                                            .label(dbflux_i18n::t!("document.chart.shell.cancel"))
+                                            .small()
+                                            .on_click(cx.listener(|this, _, _window, cx| {
+                                                this.cancel_save(cx);
+                                            })),
+                                    )
+                                    .child(
+                                        Button::new("confirm-save")
+                                            .label(dbflux_i18n::t!("document.chart.shell.save"))
+                                            .small()
+                                            .with_variant(ButtonVariant::Primary)
+                                            .on_click(cx.listener(|this, _, _window, cx| {
+                                                this.confirm_save(cx);
+                                            })),
+                                    ),
+                            ),
+                    )
+            });
 
         // Outer container: tracks focus, hosts ResultPanel and the name-prompt
         // overlay as a sibling (not inside the chrome row).
@@ -267,21 +275,27 @@ impl ChartDocument {
             // For self-executing sources (MetricSource) the copy is tailored to
             // metric charts; for query/empty sources the generic copy is shown.
             let is_metric = self.data_source.is_self_executing();
-            let msg = match &chart_detection {
+            let msg: String = match &chart_detection {
                 Some(ChartDetection::EmptyResult) | None => {
                     if is_metric {
                         if self.exec_state == ExecState::Running {
-                            "Loading metric data…"
+                            dbflux_i18n::t!("document.chart.shell.degraded.loading_metric")
                         } else {
-                            "No data points for the selected window."
+                            dbflux_i18n::t!("document.chart.shell.degraded.no_data_points")
                         }
                     } else {
-                        "Run the query to populate the chart."
+                        dbflux_i18n::t!("document.chart.shell.degraded.run_query")
                     }
                 }
-                Some(ChartDetection::NoTimeColumn) => "No time column detected in result.",
-                Some(ChartDetection::NoNumericSeries) => "No numeric series detected in result.",
-                Some(ChartDetection::Ok { .. }) => "Chart build failed.",
+                Some(ChartDetection::NoTimeColumn) => {
+                    dbflux_i18n::t!("document.chart.shell.degraded.no_time_column")
+                }
+                Some(ChartDetection::NoNumericSeries) => {
+                    dbflux_i18n::t!("document.chart.shell.degraded.no_numeric_series")
+                }
+                Some(ChartDetection::Ok { .. }) => {
+                    dbflux_i18n::t!("document.chart.shell.degraded.build_failed")
+                }
             };
             div()
                 .size_full()
@@ -349,7 +363,11 @@ impl ChartDocument {
                     if let Some(doc) = weak_self_for_png.upgrade() {
                         doc.update(cx, |this, _cx| {
                             this.pending_toast = Some(PendingToast {
-                                message: format!("PNG export coming in v0.7 — {}", now_hms()),
+                                message: format!(
+                                    "{} — {}",
+                                    dbflux_i18n::t!("document.chart.toast.png_export_coming"),
+                                    now_hms()
+                                ),
                                 is_error: false,
                             });
                         });
@@ -493,7 +511,9 @@ impl ChartDocument {
                                 })
                         })
                         .when(!can_apply, |d| d.opacity(0.45))
-                        .child(Text::caption("Apply"));
+                        .child(Text::caption(dbflux_i18n::t!(
+                            "document.chart.shell.custom_range.apply"
+                        )));
 
                     // Outer band: full-width chrome (border, bg, padding) plus
                     // flex_wrap so the picker row + Apply can wrap on narrow
@@ -692,7 +712,7 @@ impl ChartDocument {
             (cv, fi)
         };
 
-        let placeholder = |msg: &'static str| -> AnyElement {
+        let placeholder = |msg: String| -> AnyElement {
             div()
                 .p_2()
                 .text_size(FontSizes::XS)
@@ -703,7 +723,9 @@ impl ChartDocument {
 
         let Some(chart_view) = chart_view_opt else {
             return Some(self.wrap_stats_rail_chrome(
-                placeholder("Rebuilding chart…"),
+                placeholder(dbflux_i18n::t!(
+                    "document.chart.shell.stats_rail.rebuilding"
+                )),
                 theme,
                 &chart_colors,
             ));
@@ -724,7 +746,7 @@ impl ChartDocument {
 
         let Some(stats) = stats_opt else {
             return Some(self.wrap_stats_rail_chrome(
-                placeholder("No stats available for this series."),
+                placeholder(dbflux_i18n::t!("document.chart.shell.stats_rail.no_stats")),
                 theme,
                 &chart_colors,
             ));
@@ -775,7 +797,9 @@ impl ChartDocument {
                 .text_size(px(11.0))
                 .text_color(theme.muted_foreground)
                 .italic()
-                .child("unavailable")
+                .child(dbflux_i18n::t!(
+                    "document.chart.shell.stats_rail.unavailable"
+                ))
                 .into_any_element()
         };
 
@@ -808,7 +832,10 @@ impl ChartDocument {
                     .flex()
                     .flex_col()
                     .gap(px(2.0))
-                    .child(dock_header("Stats", &chart_colors))
+                    .child(dock_header(
+                        &dbflux_i18n::t!("document.chart.toolbar.stats"),
+                        &chart_colors,
+                    ))
                     .child(dock_kv_row("min", cyan_val(stats.min), &chart_colors))
                     .child(dock_kv_row("max", cyan_val(stats.max), &chart_colors))
                     .child(dock_kv_row("avg", cyan_val(stats.avg), &chart_colors))
@@ -824,12 +851,27 @@ impl ChartDocument {
                     .flex()
                     .flex_col()
                     .gap(px(2.0))
-                    .child(dock_header("Window", &chart_colors))
-                    .child(dock_kv_row("start", str_val(start_label), &chart_colors))
-                    .child(dock_kv_row("end", str_val(end_label), &chart_colors))
-                    .child(dock_kv_row("span", str_val(span_label), &chart_colors))
+                    .child(dock_header(
+                        &dbflux_i18n::t!("document.chart.shell.stats_rail.window_title"),
+                        &chart_colors,
+                    ))
                     .child(dock_kv_row(
-                        "points",
+                        &dbflux_i18n::t!("document.chart.shell.stats_rail.window.start"),
+                        str_val(start_label),
+                        &chart_colors,
+                    ))
+                    .child(dock_kv_row(
+                        &dbflux_i18n::t!("document.chart.shell.stats_rail.window.end"),
+                        str_val(end_label),
+                        &chart_colors,
+                    ))
+                    .child(dock_kv_row(
+                        &dbflux_i18n::t!("document.chart.shell.stats_rail.window.span"),
+                        str_val(span_label),
+                        &chart_colors,
+                    ))
+                    .child(dock_kv_row(
+                        &dbflux_i18n::t!("document.chart.shell.stats_rail.window.points"),
                         str_val(format!("{}", points_count)),
                         &chart_colors,
                     )),
@@ -841,7 +883,10 @@ impl ChartDocument {
                     .flex()
                     .flex_col()
                     .gap(px(2.0))
-                    .child(dock_header("Source", &chart_colors))
+                    .child(dock_header(
+                        &dbflux_i18n::t!("document.chart.shell.stats_rail.source_title"),
+                        &chart_colors,
+                    ))
                     .child(dock_kv_row("measurement", unavail_val(), &chart_colors))
                     .child(dock_kv_row("field", unavail_val(), &chart_colors))
                     .child(dock_kv_row("host", unavail_val(), &chart_colors))
@@ -879,7 +924,7 @@ impl ChartDocument {
                     .text_size(px(10.0))
                     .text_color(muted_fg)
                     .font_weight(FontWeight::BOLD)
-                    .child("STATS"),
+                    .child(dbflux_i18n::t!("document.chart.toolbar.stats").to_uppercase()),
             )
             .child(
                 div()

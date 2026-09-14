@@ -1,4 +1,8 @@
 use super::*;
+use crate::ui::labels::{
+    documents_default_title, documents_new_query_name, documents_save_session_failed_message,
+    documents_write_initial_script_failed_message,
+};
 
 impl Workspace {
     /// Creates a new SQL query tab backed by a script file.
@@ -19,7 +23,7 @@ impl Workspace {
 
         let script_path = self.app_state.update(cx, |state, cx| {
             let dir = state.scripts_directory_mut()?;
-            let name = dir.next_available_name("Query", extension);
+            let name = dir.next_available_name(&documents_new_query_name(), extension);
             let path = dir.create_file(None, &name, extension).ok();
             if path.is_some() {
                 cx.emit(AppStateChanged);
@@ -33,8 +37,8 @@ impl Workspace {
                 let title = path
                     .file_name()
                     .and_then(|n| n.to_str())
-                    .unwrap_or("Query")
-                    .to_string();
+                    .map(str::to_string)
+                    .unwrap_or_else(documents_new_query_name);
                 doc = doc.with_title(title).with_path(path);
             }
             doc
@@ -71,7 +75,7 @@ impl Workspace {
 
         let script_path = self.app_state.update(cx, |state, cx| {
             let dir = state.scripts_directory_mut()?;
-            let name = dir.next_available_name("Query", extension);
+            let name = dir.next_available_name(&documents_new_query_name(), extension);
             let path = dir.create_file(None, &name, extension).ok();
             if path.is_some() {
                 cx.emit(AppStateChanged);
@@ -85,8 +89,8 @@ impl Workspace {
                 let title = path
                     .file_name()
                     .and_then(|n| n.to_str())
-                    .unwrap_or("Query")
-                    .to_string();
+                    .map(str::to_string)
+                    .unwrap_or_else(documents_new_query_name);
                 doc = doc.with_title(title).with_path(path.clone());
             }
             doc.set_content(&sql, window, cx);
@@ -104,7 +108,7 @@ impl Workspace {
                 report_error(
                     UserFacingError::new(
                         ErrorKind::Storage,
-                        format!("Failed to write initial script content: {e}"),
+                        documents_write_initial_script_failed_message(e),
                     ),
                     cx,
                 );
@@ -164,7 +168,7 @@ impl Workspace {
 
         if let Err(e) = repo.save_workspace_session(&manifest) {
             report_error(
-                UserFacingError::new(ErrorKind::Storage, "Failed to save session manifest")
+                UserFacingError::new(ErrorKind::Storage, documents_save_session_failed_message())
                     .with_cause(format!("{e}")),
                 cx,
             );
@@ -363,8 +367,8 @@ impl Workspace {
                     .as_ref()
                     .and_then(|p| p.file_name())
                     .and_then(|n| n.to_str())
-                    .unwrap_or("Untitled")
-                    .to_string()
+                    .map(str::to_string)
+                    .unwrap_or_else(documents_default_title)
             };
 
             let doc = cx.new(|cx| {

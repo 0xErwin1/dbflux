@@ -46,7 +46,9 @@ impl QueryBuilderPanel {
                 };
 
                 let to_table_state = cx.new(|cx| {
-                    let mut state = InputState::new(window, cx).placeholder("table");
+                    let mut state = InputState::new(window, cx).placeholder(dbflux_i18n::t!(
+                        "document.query_builder.joins.table_placeholder"
+                    ));
                     state.set_value(&to_table_val, window, cx);
                     state
                 });

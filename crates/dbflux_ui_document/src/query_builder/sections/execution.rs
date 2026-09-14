@@ -4,31 +4,9 @@ use gpui_component::ActiveTheme;
 use dbflux_components::controls::{Button, ButtonVariant, Input};
 use dbflux_components::tokens::{FontSizes, Spacing};
 
-use crate::data_grid_panel::mutation_executor::{CountState, CountUnknownReason, ExecutionMode};
+use crate::data_grid_panel::mutation_executor::ExecutionMode;
+use crate::labels::{execution_count_state_label, execution_mode_label};
 use crate::query_builder::panel::QueryBuilderPanel;
-
-/// Returns a human-readable label for a `CountState`.
-fn count_label(state: &CountState) -> String {
-    match state {
-        CountState::Counting => "Counting rows\u{2026}".to_string(),
-        CountState::Done(n) => format!("{} rows estimated", n),
-        CountState::Unknown { reason } => match reason {
-            CountUnknownReason::TimedOut => {
-                "Row count timed out — chunked mode recommended".to_string()
-            }
-            CountUnknownReason::Failed(msg) => format!("Row count failed: {}", msg),
-        },
-    }
-}
-
-/// Returns the display label for an `ExecutionMode`.
-fn mode_label(mode: ExecutionMode) -> &'static str {
-    match mode {
-        ExecutionMode::SingleTransaction => "Single TX",
-        ExecutionMode::ChunkedTransaction => "Chunked TX",
-        ExecutionMode::DirectAutocommit => "Direct",
-    }
-}
 
 /// Renders the execution mode section.
 ///
@@ -50,7 +28,7 @@ pub fn render_execution(
         None => return div().into_any_element(),
     };
 
-    let count_text = count_label(&count_state);
+    let count_text = execution_count_state_label(&count_state);
 
     let modes = [
         ExecutionMode::SingleTransaction,
@@ -62,7 +40,9 @@ pub fn render_execution(
         div()
             .text_size(FontSizes::SM)
             .text_color(theme.muted_foreground)
-            .child("Mode:"),
+            .child(dbflux_i18n::t!(
+                "document.query_builder.execution.mode_label"
+            )),
     );
 
     for mode in modes {
@@ -73,7 +53,7 @@ pub fn render_execution(
             ButtonVariant::Default
         };
         mode_row = mode_row.child(
-            Button::new(("qb-exec-mode", mode as usize), mode_label(mode))
+            Button::new(("qb-exec-mode", mode as usize), execution_mode_label(mode))
                 .variant(variant)
                 .on_click(cx.listener(move |this, _event, _window, cx| {
                     if let Some(state) = this.mutation_state.as_mut() {
@@ -101,7 +81,9 @@ pub fn render_execution(
             div()
                 .text_size(FontSizes::SM)
                 .text_color(chunk_label_color)
-                .child("Chunk size:"),
+                .child(dbflux_i18n::t!(
+                    "document.query_builder.execution.chunk_size_label"
+                )),
         )
         .child(div().w(gpui::px(100.0)).child(
             // guardrail-allow: explicit pixel width for input field
@@ -138,14 +120,18 @@ pub fn render_execution(
             div()
                 .text_size(FontSizes::SM)
                 .text_color(lock_label_color)
-                .child("Lock timeout (ms):"),
+                .child(dbflux_i18n::t!(
+                    "document.query_builder.execution.lock_timeout_label"
+                )),
         )
         .child(div().w(gpui::px(100.0)).child(
             // guardrail-allow: explicit pixel width for input field
             if let Some(lt_state) = panel.exec_lock_timeout_input.as_ref().cloned() {
                 div().child(
                     Input::new(&lt_state)
-                        .placeholder("none")
+                        .placeholder(dbflux_i18n::t!(
+                            "document.query_builder.execution.lock_timeout_none"
+                        ))
                         .disabled(!lock_enabled),
                 )
             } else {
@@ -153,7 +139,9 @@ pub fn render_execution(
                     div()
                         .text_size(FontSizes::SM)
                         .text_color(theme.muted_foreground)
-                        .child("none"),
+                        .child(dbflux_i18n::t!(
+                            "document.query_builder.execution.lock_timeout_none"
+                        )),
                 )
             },
         ));

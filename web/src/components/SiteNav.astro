@@ -1,0 +1,365 @@
+---
+import Icon from './Icon.astro';
+import BrandMark from './BrandMark.astro';
+import { REPO } from '../data/nav';
+import { docsUrl, siteUrl } from '../data/site';
+import { localeFromPathname, t } from '../i18n';
+import type { Locale } from '../i18n';
+
+interface Props {
+  current?: 'home' | 'docs' | 'about';
+  locale?: Locale;
+}
+
+const { current, locale = localeFromPathname(Astro.url.pathname) } = Astro.props;
+
+const LINKS = [
+  { href: `${siteUrl('', locale)}#features`, label: t(locale, 'nav.features'), key: 'features' },
+  { href: `${siteUrl('', locale)}#drivers`, label: t(locale, 'nav.drivers'), key: 'drivers' },
+  { href: docsUrl('', '', locale), label: t(locale, 'nav.docs'), key: 'docs' },
+  { href: siteUrl('about/', locale), label: t(locale, 'nav.about'), key: 'about' },
+] as const;
+---
+
+<header class="nav" data-nav>
+  <div class="nav__inner">
+    <a class="nav__brand" href={siteUrl('', locale)}>
+      <BrandMark size={28} />
+      <span>DBFlux</span>
+    </a>
+
+    <nav class="nav__panel" id="nav-sheet" aria-label="Main" hidden>
+      <div class="nav__links">
+        {
+          LINKS.map((link) => (
+            <a
+              href={link.href}
+              class="nav__link"
+              aria-current={current === link.key ? 'page' : undefined}
+            >
+              {link.label}
+            </a>
+          ))
+        }
+      </div>
+    </nav>
+
+    <div class="nav__utilities">
+      <a
+        class="nav__github"
+        href={REPO}
+        rel="noopener"
+        aria-label={t(locale, 'nav.github')}
+        data-tooltip={t(locale, 'nav.github')}
+      >
+        <Icon name="github" size={18} />
+      </a>
+      <a class="btn btn--primary nav__cta" href={`${siteUrl('', locale)}#install`}>
+        {t(locale, 'nav.download')}
+      </a>
+    </div>
+
+    <div class="nav__actions">
+      <button
+        class="nav__toggle"
+        type="button"
+        data-nav-toggle
+        aria-expanded="false"
+        aria-controls="nav-sheet"
+      >
+        <span class="visually-hidden">{t(locale, 'nav.menu')}</span>
+        <Icon name="menu" size={20} />
+      </button>
+    </div>
+  </div>
+</header>
+
+<style>
+  .nav {
+    position: sticky;
+    top: 0;
+    z-index: var(--z-nav);
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: blur(8px);
+    border-bottom: var(--bw) solid var(--border);
+  }
+
+  .nav__inner {
+    display: flex;
+    align-items: center;
+    gap: var(--s-7);
+    max-width: var(--content-max);
+    min-height: var(--nav-h);
+    margin-inline: auto;
+    padding-inline: var(--s-8);
+  }
+
+  .nav__brand {
+    display: flex;
+    align-items: center;
+    gap: var(--s-3);
+    font-family: var(--font-mono);
+    font-size: 0.9375rem;
+    font-weight: 700;
+    color: var(--text-strong);
+  }
+
+  .nav__brand:hover {
+    text-decoration: none;
+  }
+
+  .nav__brand :global(svg) {
+    color: var(--accent);
+  }
+
+  .nav__panel {
+    display: flex;
+    flex: 1;
+    align-items: center;
+  }
+
+  .nav__links,
+  .nav__utilities,
+  .nav__actions {
+    display: flex;
+    align-items: center;
+  }
+
+  .nav__links {
+    gap: var(--s-6);
+  }
+
+  .nav__utilities {
+    gap: var(--s-4);
+  }
+
+  .nav__link {
+    position: relative;
+    font-family: var(--font-mono);
+    font-size: var(--fs-small);
+    color: var(--text);
+    padding-bottom: 3px;
+    transition: color var(--t-instant) linear;
+  }
+
+  .nav__link::after {
+    position: absolute;
+    right: 0;
+    bottom: -1px;
+    left: 0;
+    height: 1px;
+    background: var(--accent);
+    content: '';
+    transform: scaleX(0);
+    transform-origin: left;
+    transition: transform var(--t-quick) var(--ease-std);
+  }
+
+  .nav__link:hover {
+    color: var(--text-strong);
+    text-decoration: none;
+  }
+
+  .nav__link:hover::after,
+  .nav__link[aria-current='page']::after {
+    transform: scaleX(1);
+  }
+
+  .nav__link[aria-current='page'] {
+    color: var(--text-strong);
+  }
+
+  .nav__github {
+    position: relative;
+    display: grid;
+    width: 32px;
+    height: 32px;
+    place-items: center;
+    color: var(--text);
+  }
+
+  .nav__github:hover {
+    color: var(--text-strong);
+    text-decoration: none;
+  }
+
+  .nav__github::after {
+    position: absolute;
+    z-index: var(--z-tooltip);
+    bottom: calc(100% + var(--s-2));
+    left: 50%;
+    width: max-content;
+    max-width: 12rem;
+    padding: var(--s-2) var(--s-3);
+    background: var(--text-strong);
+    color: var(--bg);
+    content: attr(data-tooltip);
+    font-family: var(--font-mono);
+    font-size: var(--fs-label);
+    opacity: 0;
+    pointer-events: none;
+    transform: translate(-50%, 2px);
+    transition:
+      opacity var(--t-instant) linear,
+      transform var(--t-instant) var(--ease-std);
+  }
+
+  .nav__github:hover::after,
+  .nav__github:focus-visible::after {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+
+  .nav__cta {
+    padding: var(--s-2) var(--s-5);
+  }
+
+  .nav__toggle {
+    display: none;
+    width: var(--tap-min);
+    height: var(--tap-min);
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    background: none;
+    border: 0;
+    color: var(--text);
+    cursor: pointer;
+  }
+
+  .visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  @media (max-width: 1050px) {
+    .nav__inner {
+      flex-wrap: nowrap;
+      gap: 0;
+      padding-inline: var(--s-7);
+    }
+
+    .nav__panel {
+      display: none;
+      position: absolute;
+      top: 100%;
+      inset-inline: 0;
+      max-height: calc(100dvh - var(--nav-h));
+      overflow-y: auto;
+      background: var(--panel);
+      border-top: var(--bw) solid var(--border);
+    }
+
+    .nav__panel[data-open] {
+      display: flex;
+    }
+
+    .nav__links {
+      flex: 1;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 0;
+    }
+
+    .nav__links .nav__link {
+      display: flex;
+      align-items: center;
+      min-height: var(--tap-min);
+      padding: var(--s-5) var(--s-6);
+      border-bottom: var(--bw) solid var(--border);
+      font-size: var(--fs-body);
+    }
+
+    .nav__links .nav__link::after {
+      display: none;
+    }
+
+    .nav__links .nav__link:hover {
+      background: var(--raised);
+    }
+
+    .nav__utilities {
+      margin-left: auto;
+    }
+
+    .nav__github {
+      width: var(--tap-min);
+      height: var(--tap-min);
+    }
+
+    .nav__cta {
+      min-height: var(--tap-min);
+      padding-inline: var(--s-4);
+    }
+
+    .nav__toggle {
+      display: flex;
+    }
+  }
+
+  @media (min-width: 1051px) {
+    .nav__panel {
+      display: flex !important;
+    }
+  }
+
+  @media (max-width: 640px) {
+    .nav__inner {
+      padding-inline: var(--s-4);
+    }
+
+    .nav__github::after {
+      left: auto;
+      right: 0;
+      transform: translate(0, 2px);
+    }
+
+    .nav__github:hover::after,
+    .nav__github:focus-visible::after {
+      transform: translate(0, 0);
+    }
+  }
+</style>
+
+<script>
+  const breakpoint = window.matchMedia('(max-width: 1050px)');
+  const toggle = document.querySelector<HTMLButtonElement>('[data-nav-toggle]');
+  const panel = document.querySelector<HTMLElement>('#nav-sheet');
+
+  if (toggle && panel) {
+    const close = (returnFocus = false) => {
+      const panelHasFocus =
+        document.activeElement instanceof Node && panel.contains(document.activeElement);
+
+      panel.removeAttribute('data-open');
+      panel.hidden = breakpoint.matches;
+      toggle.setAttribute('aria-expanded', 'false');
+      if (returnFocus && panelHasFocus) toggle.focus();
+    };
+
+    const open = () => {
+      panel.hidden = false;
+      panel.setAttribute('data-open', '');
+      toggle.setAttribute('aria-expanded', 'true');
+    };
+
+    const resetForBreakpoint = () => {
+      close(true);
+      if (!breakpoint.matches) panel.hidden = false;
+    };
+
+    resetForBreakpoint();
+    toggle.addEventListener('click', () => {
+      if (panel.hasAttribute('data-open')) close();
+      else open();
+    });
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && panel.hasAttribute('data-open')) close(true);
+    });
+    breakpoint.addEventListener('change', resetForBreakpoint);
+  }
+</script>
