@@ -37,16 +37,19 @@ pub enum SchemaNodeId {
     },
     Schema {
         profile_id: Uuid,
+        database: Option<String>,
         name: String,
     },
 
     // Folder variants
     TablesFolder {
         profile_id: Uuid,
+        database: Option<String>,
         schema: String,
     },
     ViewsFolder {
         profile_id: Uuid,
+        database: Option<String>,
         schema: String,
     },
     TypesFolder {
@@ -689,14 +692,17 @@ mod tests {
         });
         roundtrip(SchemaNodeId::Schema {
             profile_id: uuid,
+            database: None,
             name: "public".into(),
         });
         roundtrip(SchemaNodeId::TablesFolder {
             profile_id: uuid,
+            database: None,
             schema: "public".into(),
         });
         roundtrip(SchemaNodeId::ViewsFolder {
             profile_id: uuid,
+            database: None,
             schema: "public".into(),
         });
         roundtrip(SchemaNodeId::TypesFolder {
@@ -925,6 +931,68 @@ mod tests {
             namespace: "AWS/EC2".into(),
             metric_name: "CPUUtilization".into(),
         });
+    }
+
+    #[test]
+    fn schema_and_folder_database_qualifiers_preserve_legacy_ids() {
+        let profile_id = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
+        let legacy_schema = SchemaNodeId::Schema {
+            profile_id,
+            database: None,
+            name: "dbo".into(),
+        };
+        let qualified_schema = SchemaNodeId::Schema {
+            profile_id,
+            database: Some("analytics".into()),
+            name: "dbo".into(),
+        };
+        let legacy_tables = SchemaNodeId::TablesFolder {
+            profile_id,
+            database: None,
+            schema: "dbo".into(),
+        };
+        let qualified_tables = SchemaNodeId::TablesFolder {
+            profile_id,
+            database: Some("analytics".into()),
+            schema: "dbo".into(),
+        };
+        let legacy_views = SchemaNodeId::ViewsFolder {
+            profile_id,
+            database: None,
+            schema: "dbo".into(),
+        };
+        let qualified_views = SchemaNodeId::ViewsFolder {
+            profile_id,
+            database: Some("analytics".into()),
+            schema: "dbo".into(),
+        };
+
+        assert_eq!(legacy_schema.to_string(), format!("S|{profile_id}|dbo"));
+        assert_eq!(
+            qualified_schema.to_string(),
+            format!("S|{profile_id}|dbo|analytics")
+        );
+        assert_eq!(legacy_tables.to_string(), format!("TF|{profile_id}|dbo"));
+        assert_eq!(
+            qualified_tables.to_string(),
+            format!("TF|{profile_id}|dbo|analytics")
+        );
+        assert_eq!(legacy_views.to_string(), format!("VF|{profile_id}|dbo"));
+        assert_eq!(
+            qualified_views.to_string(),
+            format!("VF|{profile_id}|dbo|analytics")
+        );
+
+        for id in [
+            legacy_schema,
+            qualified_schema,
+            legacy_tables,
+            qualified_tables,
+            legacy_views,
+            qualified_views,
+        ] {
+            roundtrip(id);
+        }
     }
 
     #[test]

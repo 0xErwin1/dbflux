@@ -2203,6 +2203,7 @@ mod tests {
                 .children(vec![TreeItem::new(
                     SchemaNodeId::TablesFolder {
                         profile_id: postgres_profile_id,
+                        database: None,
                         schema: "public".to_string(),
                     }
                     .to_string(),
@@ -2243,6 +2244,7 @@ mod tests {
                     TreeItem::new(
                         SchemaNodeId::TablesFolder {
                             profile_id: postgres_profile_id,
+                            database: None,
                             schema: "public".to_string(),
                         }
                         .to_string(),
