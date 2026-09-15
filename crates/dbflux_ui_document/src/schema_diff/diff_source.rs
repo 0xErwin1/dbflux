@@ -10,7 +10,8 @@ use std::collections::HashMap;
 
 use dbflux_core::{
     CodeGenerator, DbSchemaInfo, DdlRejection, ExecutionClassification, RiskedChange, SchemaChange,
-    TableInfo, TableRef, classify_table_added, classify_table_removed,
+    TableAlterRequest, TableInfo, TableRef, classify_table_added, classify_table_removed,
+    normalize_selected_table_alter,
 };
 use uuid::Uuid;
 
@@ -156,6 +157,52 @@ impl PartitionedChanges {
     }
 }
 
+/// The execution route for the selected changes of one modified table.
+///
+/// A planner opt-in is deliberately the only eligibility signal. Drivers with
+/// no planner retain their generated-SQL behavior, while a selected rebuild
+/// candidate is normalized as one table-wide request before it can be prepared.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SelectedTableAlterRoute {
+    Legacy,
+    Managed(TableAlterRequest),
+}
+
+/// Selects the driver-managed route for altered or dropped columns when the
+/// connection opted in with a table-alter planner.
+///
+/// The normalizer receives every selected change for the table, not only the
+/// rebuild candidates. Consequently, an add, index, or constraint selected
+/// alongside a managed candidate rejects the complete table rather than
+/// allowing an executable prefix. Pure legacy work remains on the SQL route.
+pub fn select_table_alter_route(
+    table: TableRef,
+    selected: &[RiskedChange],
+    has_table_alter_planner: bool,
+) -> Result<SelectedTableAlterRoute, String> {
+    let has_managed_candidate = selected.iter().any(|risked| {
+        matches!(
+            risked.change,
+            SchemaChange::ColumnRemoved(_)
+                | SchemaChange::ColumnTypeChanged { .. }
+                | SchemaChange::NullabilityChanged { .. }
+                | SchemaChange::DefaultChanged { .. }
+        )
+    });
+
+    if !has_table_alter_planner || !has_managed_candidate {
+        return Ok(SelectedTableAlterRoute::Legacy);
+    }
+
+    let selected_changes = selected
+        .iter()
+        .map(|risked| risked.change.clone())
+        .collect::<Vec<_>>();
+    normalize_selected_table_alter(table, &selected_changes)
+        .map(SelectedTableAlterRoute::Managed)
+        .map_err(|error| error.reason)
+}
+
 /// Splits `changes` for one table into the set the driver can generate DDL for
 /// and the set it rejects, by probing each change through the same
 /// `CodeGenerator` mapping the apply path uses.
@@ -164,6 +211,41 @@ impl PartitionedChanges {
 /// `applicable` half is ever handed to `DdlApplyExecutor`, and every rejection
 /// (constraint changes, SQLite rebuild-only column changes, index ops a driver
 /// cannot express) lands in `unsupported` with its reason preserved.
+pub fn partition_table_changes_for_route(
+    table: &TableRef,
+    changes: &[RiskedChange],
+    code_generator: &dyn CodeGenerator,
+    has_table_alter_planner: bool,
+) -> PartitionedChanges {
+    let mut partitioned = PartitionedChanges::default();
+    for risked in changes {
+        if has_table_alter_planner && is_managed_table_alter_candidate(&risked.change) {
+            partitioned.applicable.push(risked.clone());
+            continue;
+        }
+        match build_statements_for_change(table, &risked.change, code_generator) {
+            Ok(_) => partitioned.applicable.push(risked.clone()),
+            Err(rejection) => partitioned.unsupported.push(UnsupportedChange {
+                change: risked.change.clone(),
+                risk: risked.risk,
+                reason: rejection.reason,
+                followup: rejection.followup.map(str::to_string),
+            }),
+        }
+    }
+    partitioned
+}
+
+fn is_managed_table_alter_candidate(change: &SchemaChange) -> bool {
+    matches!(
+        change,
+        SchemaChange::ColumnRemoved(_)
+            | SchemaChange::ColumnTypeChanged { .. }
+            | SchemaChange::NullabilityChanged { .. }
+            | SchemaChange::DefaultChanged { .. }
+    )
+}
+
 pub fn partition_table_changes(
     table: &TableRef,
     changes: &[RiskedChange],
@@ -351,7 +433,138 @@ mod tests {
         }
     }
 
+    // -- Managed table-alter selection ----------------------------------------
+
+    #[test]
+    fn planner_opt_in_routes_selected_alter_to_a_normalized_managed_request() {
+        let selected = vec![
+            risked(
+                SchemaChange::ColumnTypeChanged {
+                    before: column("status"),
+                    after: ColumnSnapshot {
+                        type_name: "integer".to_string(),
+                        ..column("status")
+                    },
+                },
+                ExecutionClassification::Admin,
+            ),
+            risked(
+                SchemaChange::DefaultChanged {
+                    column: "status".to_string(),
+                    before: Some("'draft'".to_string()),
+                    after: None,
+                },
+                ExecutionClassification::Admin,
+            ),
+        ];
+
+        let route = select_table_alter_route(table(), &selected, true).unwrap();
+
+        let SelectedTableAlterRoute::Managed(request) = route else {
+            panic!("planner opt-in must select the managed route");
+        };
+        assert_eq!(request.operations.len(), 1);
+        assert_eq!(request.expected_before.len(), 1);
+        assert_eq!(
+            request.expected_before[0].default,
+            Some(Some("'draft'".to_string()))
+        );
+        assert!(matches!(
+            request.operations[0],
+            dbflux_core::TableAlterOperation::AlterColumn {
+                default: Some(dbflux_core::OwnedDefaultSpec::Drop),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn managed_default_set_preserves_an_absent_expected_default() {
+        let selected = vec![risked(
+            SchemaChange::DefaultChanged {
+                column: "status".to_string(),
+                before: None,
+                after: Some("NULL".to_string()),
+            },
+            ExecutionClassification::Admin,
+        )];
+
+        let route = select_table_alter_route(table(), &selected, true).unwrap();
+
+        let SelectedTableAlterRoute::Managed(request) = route else {
+            panic!("planner opt-in must select the managed route");
+        };
+        assert_eq!(request.expected_before[0].default, Some(None));
+        assert!(matches!(
+            request.operations[0],
+            dbflux_core::TableAlterOperation::AlterColumn {
+                default: Some(dbflux_core::OwnedDefaultSpec::Set(ref value)),
+                ..
+            } if value == "NULL"
+        ));
+    }
+
+    #[test]
+    fn managed_candidate_mixed_with_legacy_work_rejects_the_whole_table() {
+        let selected = vec![
+            risked(
+                SchemaChange::ColumnRemoved(column("legacy")),
+                ExecutionClassification::AdminDestructive,
+            ),
+            risked(
+                SchemaChange::ColumnAdded(column("new_column")),
+                ExecutionClassification::AdminSafe,
+            ),
+        ];
+
+        let error = select_table_alter_route(table(), &selected, true)
+            .expect_err("a managed candidate cannot execute a legacy prefix");
+
+        assert!(error.contains("adding column"));
+    }
+
+    #[test]
+    fn no_planner_or_pure_legacy_selection_retains_the_legacy_route() {
+        let alter = vec![risked(
+            SchemaChange::ColumnRemoved(column("legacy")),
+            ExecutionClassification::AdminDestructive,
+        )];
+        assert!(matches!(
+            select_table_alter_route(table(), &alter, false),
+            Ok(SelectedTableAlterRoute::Legacy)
+        ));
+
+        let add = vec![risked(
+            SchemaChange::ColumnAdded(column("new_column")),
+            ExecutionClassification::AdminSafe,
+        )];
+        assert!(matches!(
+            select_table_alter_route(table(), &add, true),
+            Ok(SelectedTableAlterRoute::Legacy)
+        ));
+    }
+
     // -- Partitioning ----------------------------------------------------------
+
+    #[test]
+    fn managed_candidates_remain_selectable_when_legacy_generation_rejects_them() {
+        let changes = vec![risked(
+            SchemaChange::ColumnTypeChanged {
+                before: column("id"),
+                after: ColumnSnapshot {
+                    type_name: "bigint".to_string(),
+                    ..column("id")
+                },
+            },
+            ExecutionClassification::Admin,
+        )];
+
+        let partitioned =
+            partition_table_changes_for_route(&table(), &changes, &RebuildRejectingGenerator, true);
+
+        assert_eq!(partitioned.applicable.len(), 1);
+        assert!(partitioned.unsupported.is_empty());
+    }
 
     #[test]
     fn applicable_column_changes_are_kept_applicable() {

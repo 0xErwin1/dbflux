@@ -1959,6 +1959,8 @@ document:
       preview_ddl: 预览 DDL
     apply:
       read_only: 此连接为只读，不允许执行 Schema 更改。
+      read_only_profile: 此连接的配置文件设置为只读。不允许执行 Schema 更改。
+      read_only_server: 服务器拒绝了此连接的变更操作。不允许执行 Schema 更改。
     change:
       column_added: "添加列 %{name} %{type_name}"
       column_removed: "删除列 %{name}"
@@ -1979,6 +1981,8 @@ document:
       schema_not_loaded: "%{database} 的 Schema 尚未加载。请先在侧边栏展开该数据库，然后再次执行计算差异。"
     status:
       computing: 正在计算差异…
+      preparing: 正在准备不可变应用预览…
+      preview_warning: 警告
       empty: 两个 Schema 之间未发现差异。
       idle: 选择一个来源并执行计算差异以查看 Schema 更改。
       unsupported: 不支持
@@ -1997,6 +2001,8 @@ document:
       connection_unavailable: 目标连接不再可用。
       ddl_build_failed: "无法构建 DDL：%{error}"
       read_only: 此连接为只读，不允许执行 Schema 更改。
+      read_only_profile: 此连接的配置文件设置为只读。不允许执行 Schema 更改。
+      read_only_server: 服务器拒绝了此连接的变更操作。不允许执行 Schema 更改。
       reference_connection_disconnected: 所选的参照连接未连接。
       reference_not_picked: 请选择要对比的参照数据库或连接。
       select_at_least_one: 请先至少选择一项更改。

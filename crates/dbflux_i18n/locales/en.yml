@@ -2068,6 +2068,8 @@ document:
       schema_not_loaded: "The schema for \"%{database}\" is not loaded yet. Expand that database in the sidebar first, then run Compute Diff again."
     status:
       computing: "Computing diff…"
+      preparing: "Preparing immutable apply preview…"
+      preview_warning: Warning
       empty: No differences found between the two schemas.
       idle: Pick a source and run Compute Diff to see schema changes.
       unsupported: Unsupported

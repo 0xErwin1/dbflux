@@ -7,6 +7,8 @@ use dbflux_core::{
     TransactionVocab,
 };
 
+use super::diff_source::{SelectedTableAlterRoute, select_table_alter_route};
+
 /// Text explaining why DDL apply is refused for a read-only connection,
 /// differentiated by why it is read-only. Shared with the `read_only` toast
 /// in `view.rs::run_apply` so the two refusal paths never drift.
@@ -54,6 +56,8 @@ pub enum DdlApplyOutcome {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExecutorError {
     Generation(String),
+    Policy(String),
+    Execution(String),
     Transaction(String),
     /// A statement failed AND the subsequent ROLLBACK also failed, so the
     /// transaction was NOT cleanly rolled back and the database is left in an
@@ -70,6 +74,8 @@ impl std::fmt::Display for ExecutorError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Generation(msg) => write!(f, "DDL generation failed: {}", msg),
+            Self::Policy(msg) => write!(f, "DDL preparation refused: {}", msg),
+            Self::Execution(msg) => write!(f, "DDL execution failed: {}", msg),
             Self::Transaction(msg) => write!(f, "transaction error: {}", msg),
             Self::RollbackFailed {
                 context,
@@ -273,15 +279,151 @@ fn build_all_statements(
 }
 
 /// Dependencies injected into `DdlApplyExecutor`.
+#[derive(Clone)]
 pub struct DdlApplyDeps {
     pub connection: Arc<dyn Connection>,
     pub event_sink: Option<Arc<dyn EventSink>>,
+    pub connection_id: String,
+    pub driver_id: String,
     pub policy: MutationPolicy,
     /// Set when `policy` is `MutationPolicy::ReadOnly`, explaining whether the
     /// profile itself or the server enforced it. Mirrors
     /// `ConnectedProfile::read_only_reason` — drives the reason-aware refusal
     /// message in `apply()`.
     pub read_only_reason: Option<ReadOnlyReason>,
+}
+
+/// A prepared, consumable table operation whose SQL or driver plan is frozen.
+///
+/// Construct all selected tables with [`DdlApplyExecutor::prepare_all`] before
+/// executing any of them. Legacy statements are generated once at preparation;
+/// driver-managed plans are single-use objects owned by the connection.
+pub struct FrozenDdlApply {
+    table: TableRef,
+    deps: DdlApplyDeps,
+    execution: FrozenTableExecution,
+}
+
+enum FrozenTableExecution {
+    Managed(Box<dyn dbflux_core::PreparedTableAlter>),
+    Legacy(Vec<String>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrozenApplyRunOutcome {
+    pub statements_applied: usize,
+    pub tables_applied: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FrozenApplyFailure {
+    pub failed_table: TableRef,
+    pub tables_applied: usize,
+    pub statements_applied: usize,
+    pub error: ExecutorError,
+}
+
+impl FrozenDdlApply {
+    pub fn table(&self) -> &TableRef {
+        &self.table
+    }
+
+    pub fn preview_warnings(&self) -> Vec<String> {
+        match &self.execution {
+            FrozenTableExecution::Managed(plan) => plan.preview().warnings.clone(),
+            FrozenTableExecution::Legacy(_) => Vec::new(),
+        }
+    }
+
+    pub fn preview_statements(&self) -> Vec<String> {
+        match &self.execution {
+            FrozenTableExecution::Managed(plan) => plan.preview().statements.clone(),
+            FrozenTableExecution::Legacy(statements) => statements.clone(),
+        }
+    }
+
+    /// Executes the already-prepared table work exactly once.
+    pub fn execute(self) -> Result<DdlApplyOutcome, ExecutorError> {
+        match self.deps.policy {
+            MutationPolicy::ApprovalRequired => return Ok(DdlApplyOutcome::Deferred),
+            MutationPolicy::ReadOnly => {
+                return Ok(DdlApplyOutcome::Blocked {
+                    reason: read_only_message(self.deps.read_only_reason),
+                });
+            }
+            MutationPolicy::Allowed => {}
+        }
+
+        let executor = DdlApplyExecutor {
+            table: self.table,
+            changes: Vec::new(),
+            table_action: None,
+            deps: self.deps,
+        };
+        match self.execution {
+            FrozenTableExecution::Managed(plan) => executor.apply_managed(plan),
+            FrozenTableExecution::Legacy(statements) => executor.apply_frozen_legacy(&statements),
+        }
+    }
+
+    /// Executes frozen tables in order, retaining only work known to have
+    /// committed when a later table fails. A transactional or driver-managed
+    /// failure contributes no uncertain statement count.
+    pub fn execute_all(
+        tables: Vec<FrozenDdlApply>,
+    ) -> Result<FrozenApplyRunOutcome, FrozenApplyFailure> {
+        let mut statements_applied = 0;
+        let mut tables_applied = 0;
+
+        for table in tables {
+            let table_ref = table.table.clone();
+            match table.execute() {
+                Ok(DdlApplyOutcome::Success {
+                    statements_executed,
+                    ..
+                }) => {
+                    statements_applied += statements_executed;
+                    tables_applied += 1;
+                }
+                Ok(DdlApplyOutcome::PartialFailure {
+                    statements_executed,
+                    error,
+                    ..
+                }) => {
+                    statements_applied += statements_executed;
+                    return Err(FrozenApplyFailure {
+                        failed_table: table_ref,
+                        tables_applied,
+                        statements_applied,
+                        error: ExecutorError::Execution(error),
+                    });
+                }
+                Ok(DdlApplyOutcome::Deferred) | Ok(DdlApplyOutcome::Blocked { .. }) => {
+                    return Err(FrozenApplyFailure {
+                        failed_table: table_ref,
+                        tables_applied,
+                        statements_applied,
+                        error: ExecutorError::Execution(
+                            "frozen table execution was not authorized".to_string(),
+                        ),
+                    });
+                }
+                Err(error) => {
+                    return Err(FrozenApplyFailure {
+                        failed_table: table_ref,
+                        tables_applied,
+                        statements_applied,
+                        error,
+                    });
+                }
+            }
+        }
+
+        Ok(FrozenApplyRunOutcome {
+            statements_applied,
+            tables_applied,
+        })
+    }
 }
 
 /// Plain (non-GPUI) struct that applies the DDL for a reviewed schema diff.
@@ -316,20 +458,77 @@ impl DdlApplyExecutor {
         self
     }
 
-    /// Builds the full ordered DDL statement list without executing anything.
-    ///
-    /// This is the read-only feed for the preview surface: it runs the same
-    /// generation seams the apply path uses, so the preview shows the exact
-    /// statements that would run, but it never touches the connection and
-    /// never mutates any database. A change the driver cannot express fails
-    /// generation here exactly as it would on apply.
-    pub fn preview_statements(&self) -> Result<Vec<String>, ExecutorError> {
-        build_all_statements(
-            &self.table,
+    /// Prepares a table's selected work into a consumable managed plan or a
+    /// captured legacy statement list. Preparation is read-only, and callers
+    /// must prepare every selected table before executing the first one.
+    pub fn prepare(&self) -> Result<FrozenDdlApply, ExecutorError> {
+        self.ensure_preparation_allowed()?;
+        let route = select_table_alter_route(
+            self.table.clone(),
             &self.changes,
-            self.table_action.as_ref(),
-            self.deps.connection.as_ref(),
+            self.deps.connection.table_alter_planner().is_some(),
         )
+        .map_err(ExecutorError::Generation)?;
+
+        let execution = match route {
+            SelectedTableAlterRoute::Managed(request) => {
+                if self.table_action.is_some() {
+                    return Err(ExecutorError::Generation(
+                        "table-level actions cannot be mixed with a managed table alteration"
+                            .to_string(),
+                    ));
+                }
+                let planner = self.deps.connection.table_alter_planner().ok_or_else(|| {
+                    ExecutorError::Generation(
+                        "managed table alteration planner disappeared during preparation"
+                            .to_string(),
+                    )
+                })?;
+                let prepared = planner.prepare(&request).map_err(|error| {
+                    ExecutorError::Generation(format!("managed table alteration rejected: {error}"))
+                })?;
+                FrozenTableExecution::Managed(prepared)
+            }
+            SelectedTableAlterRoute::Legacy => FrozenTableExecution::Legacy(build_all_statements(
+                &self.table,
+                &self.changes,
+                self.table_action.as_ref(),
+                self.deps.connection.as_ref(),
+            )?),
+        };
+
+        Ok(FrozenDdlApply {
+            table: self.table.clone(),
+            deps: self.deps.clone(),
+            execution,
+        })
+    }
+
+    /// Prepares all selected tables before any execution may begin.
+    pub fn prepare_all(
+        executors: Vec<DdlApplyExecutor>,
+    ) -> Result<Vec<FrozenDdlApply>, ExecutorError> {
+        for executor in &executors {
+            executor.ensure_preparation_allowed()?;
+        }
+        executors.iter().map(Self::prepare).collect()
+    }
+
+    /// Builds the frozen preview for this table without executing it.
+    fn ensure_preparation_allowed(&self) -> Result<(), ExecutorError> {
+        match self.deps.policy {
+            MutationPolicy::Allowed => Ok(()),
+            MutationPolicy::ReadOnly => Err(ExecutorError::Policy(read_only_message(
+                self.deps.read_only_reason,
+            ))),
+            MutationPolicy::ApprovalRequired => Err(ExecutorError::Policy(
+                "schema changes require approval before preparation".to_string(),
+            )),
+        }
+    }
+
+    pub fn preview_statements(&self) -> Result<Vec<String>, ExecutorError> {
+        Ok(self.prepare()?.preview_statements())
     }
 
     /// Applies the executor's changes, gated by governance and dispatched to
@@ -352,13 +551,12 @@ impl DdlApplyExecutor {
             MutationPolicy::Allowed => {}
         }
 
-        let statements = build_all_statements(
-            &self.table,
-            &self.changes,
-            self.table_action.as_ref(),
-            self.deps.connection.as_ref(),
-        )?;
+        self.prepare()?.execute()
+    }
 
+    /// Executes captured legacy statements with the existing transaction and
+    /// audit semantics. The input is never regenerated after confirmation.
+    fn apply_frozen_legacy(&self, statements: &[String]) -> Result<DdlApplyOutcome, ExecutorError> {
         if statements.is_empty() {
             return Ok(DdlApplyOutcome::Success {
                 statements_executed: 0,
@@ -367,7 +565,6 @@ impl DdlApplyExecutor {
         }
 
         let run_id = uuid::Uuid::new_v4().to_string();
-
         let pending_event = EventRecord::new(
             Self::now_ms(),
             EventSeverity::Info,
@@ -384,9 +581,46 @@ impl DdlApplyExecutor {
         self.emit_event(pending_event);
 
         if self.deps.connection.supports_transactional_ddl() {
-            self.apply_transactional(&statements, &run_id)
+            self.apply_transactional(statements, &run_id)
         } else {
-            self.apply_non_atomic(&statements, &run_id)
+            self.apply_non_atomic(statements, &run_id)
+        }
+    }
+
+    /// Executes a single-use driver-owned plan directly. The driver owns its
+    /// lifecycle, so this deliberately adds no outer SQL transaction.
+    fn apply_managed(
+        &self,
+        plan: Box<dyn dbflux_core::PreparedTableAlter>,
+    ) -> Result<DdlApplyOutcome, ExecutorError> {
+        let run_id = uuid::Uuid::new_v4().to_string();
+        let pending_event = EventRecord::new(
+            Self::now_ms(),
+            EventSeverity::Info,
+            EventCategory::Query,
+            EventOutcome::Pending,
+        )
+        .with_action("schema_diff.apply")
+        .with_summary(format!(
+            "apply driver-managed table alteration to {}",
+            self.table.name
+        ))
+        .with_correlation_id(run_id.clone());
+        self.emit_event(pending_event);
+
+        match plan.execute() {
+            Ok(outcome) => {
+                self.emit_success_event(&run_id, outcome.statement_count, outcome.table_atomic);
+                Ok(DdlApplyOutcome::Success {
+                    statements_executed: outcome.statement_count,
+                    atomic: outcome.table_atomic,
+                })
+            }
+            Err(error) => {
+                let error = error.to_string();
+                self.emit_failure_event(&run_id, &error);
+                Err(ExecutorError::Execution(error))
+            }
         }
     }
 
@@ -510,7 +744,9 @@ impl DdlApplyExecutor {
         }
     }
 
-    fn emit_event(&self, event: EventRecord) {
+    fn emit_event(&self, mut event: EventRecord) {
+        event.connection_id = Some(self.deps.connection_id.clone());
+        event.driver_id = Some(self.deps.driver_id.clone());
         if let Some(sink) = &self.deps.event_sink
             && let Err(e) = sink.record(event)
         {
@@ -547,6 +783,7 @@ impl DdlApplyExecutor {
             "DDL apply to {} stopped after {} statement(s) (non-atomic, not rolled back): {}",
             self.table.name, statements_executed, error
         ))
+        .with_error("ddl_apply_partial_failure", error)
         .with_correlation_id(run_id.to_string());
         self.emit_event(event);
     }
@@ -563,6 +800,7 @@ impl DdlApplyExecutor {
             "DDL apply to {} failed: {}",
             self.table.name, error
         ))
+        .with_error("ddl_apply_failed", error)
         .with_correlation_id(run_id.to_string());
         self.emit_event(event);
     }
@@ -580,6 +818,10 @@ impl DdlApplyExecutor {
              transaction not rolled back, schema state uncertain",
             self.table.name, error, rollback_error
         ))
+        .with_error(
+            "ddl_apply_rollback_failed",
+            format!("{error}; rollback failed: {rollback_error}"),
+        )
         .with_correlation_id(run_id.to_string());
         self.emit_event(event);
     }
@@ -929,7 +1171,9 @@ mod tests {
     // DdlApplyExecutor — end-to-end apply() tests
     // -----------------------------------------------------------------
 
-    struct RecordingCodeGenerator;
+    struct RecordingCodeGenerator {
+        generate_add_calls: Arc<Mutex<usize>>,
+    }
 
     impl CodeGenerator for RecordingCodeGenerator {
         fn capabilities(&self) -> dbflux_core::CodeGenCapabilities {
@@ -940,6 +1184,7 @@ mod tests {
             &self,
             request: &AddColumnRequest,
         ) -> Result<Vec<String>, DdlRejection> {
+            *self.generate_add_calls.lock().unwrap() += 1;
             Ok(vec![format!(
                 "ALTER TABLE {} ADD COLUMN {} {}",
                 request.table_name, request.column_name, request.type_name
@@ -952,19 +1197,73 @@ mod tests {
         meta: dbflux_core::DriverMetadata,
         transactional_ddl: bool,
         code_generator: RecordingCodeGenerator,
-        calls: Mutex<Vec<String>>,
+        generation_calls: Arc<Mutex<usize>>,
+        calls: Arc<Mutex<Vec<String>>>,
+        managed_planner: Option<FakeTableAlterPlanner>,
         fail_on_sql_containing: Option<&'static str>,
         fail_rollback: bool,
         supports_table_ddl: bool,
     }
 
+    struct FakeTableAlterPlanner {
+        calls: Arc<Mutex<Vec<String>>>,
+    }
+
+    struct FakePreparedTableAlter {
+        calls: Arc<Mutex<Vec<String>>>,
+        preview: dbflux_core::TableAlterPreview,
+    }
+
+    impl dbflux_core::TableAlterPlanner for FakeTableAlterPlanner {
+        fn prepare(
+            &self,
+            request: &dbflux_core::TableAlterRequest,
+        ) -> Result<Box<dyn dbflux_core::PreparedTableAlter>, DbError> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("PREPARE {}", request.table.name));
+            Ok(Box::new(FakePreparedTableAlter {
+                calls: Arc::clone(&self.calls),
+                preview: dbflux_core::TableAlterPreview {
+                    route: dbflux_core::TableAlterRoute::Rebuild,
+                    statements: vec![format!("managed {}", request.table.name)],
+                    warnings: Vec::new(),
+                    table_atomic: true,
+                    driver_managed: true,
+                },
+            }))
+        }
+    }
+
+    impl dbflux_core::PreparedTableAlter for FakePreparedTableAlter {
+        fn preview(&self) -> &dbflux_core::TableAlterPreview {
+            &self.preview
+        }
+
+        fn execute(self: Box<Self>) -> Result<dbflux_core::TableAlterOutcome, DbError> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push("MANAGED EXECUTE".to_string());
+            Ok(dbflux_core::TableAlterOutcome {
+                statement_count: 1,
+                table_atomic: true,
+            })
+        }
+    }
+
     impl FakeConnection {
         fn new(kind: DbKind, transactional_ddl: bool) -> Arc<Self> {
-            Self::build(kind, transactional_ddl, None, false, true)
+            Self::build(kind, transactional_ddl, None, false, true, false)
+        }
+
+        fn with_managed_planner(kind: DbKind, transactional_ddl: bool) -> Arc<Self> {
+            Self::build(kind, transactional_ddl, None, false, true, true)
         }
 
         fn with_failure(kind: DbKind, transactional_ddl: bool, fail_on: &'static str) -> Arc<Self> {
-            Self::build(kind, transactional_ddl, Some(fail_on), false, true)
+            Self::build(kind, transactional_ddl, Some(fail_on), false, true, false)
         }
 
         /// A connection whose `fail_on` statement fails AND whose subsequent
@@ -974,11 +1273,11 @@ mod tests {
             transactional_ddl: bool,
             fail_on: &'static str,
         ) -> Arc<Self> {
-            Self::build(kind, transactional_ddl, Some(fail_on), true, true)
+            Self::build(kind, transactional_ddl, Some(fail_on), true, true, false)
         }
 
         fn without_table_ddl_support(kind: DbKind, transactional_ddl: bool) -> Arc<Self> {
-            Self::build(kind, transactional_ddl, None, false, false)
+            Self::build(kind, transactional_ddl, None, false, false, false)
         }
 
         fn build(
@@ -987,6 +1286,7 @@ mod tests {
             fail_on_sql_containing: Option<&'static str>,
             fail_rollback: bool,
             supports_table_ddl: bool,
+            has_managed_planner: bool,
         ) -> Arc<Self> {
             let meta = DriverMetadataBuilder::new(
                 "test",
@@ -996,12 +1296,18 @@ mod tests {
             )
             .capabilities(DriverCapabilities::TRANSACTIONS)
             .build();
+            let calls = Arc::new(Mutex::new(Vec::new()));
+            let generation_calls = Arc::new(Mutex::new(0));
             Arc::new(Self {
                 db_kind: kind,
                 meta,
                 transactional_ddl,
-                code_generator: RecordingCodeGenerator,
-                calls: Mutex::new(Vec::new()),
+                code_generator: RecordingCodeGenerator {
+                    generate_add_calls: Arc::clone(&generation_calls),
+                },
+                generation_calls,
+                calls: Arc::clone(&calls),
+                managed_planner: has_managed_planner.then(|| FakeTableAlterPlanner { calls }),
                 fail_on_sql_containing,
                 fail_rollback,
                 supports_table_ddl,
@@ -1010,6 +1316,10 @@ mod tests {
 
         fn recorded_calls(&self) -> Vec<String> {
             self.calls.lock().unwrap().clone()
+        }
+
+        fn generated_add_count(&self) -> usize {
+            *self.generation_calls.lock().unwrap()
         }
     }
 
@@ -1020,6 +1330,12 @@ mod tests {
 
         fn ping(&self) -> Result<(), DbError> {
             Ok(())
+        }
+
+        fn table_alter_planner(&self) -> Option<&dyn dbflux_core::TableAlterPlanner> {
+            self.managed_planner
+                .as_ref()
+                .map(|planner| planner as &dyn dbflux_core::TableAlterPlanner)
         }
 
         fn close(&mut self) -> Result<(), DbError> {
@@ -1134,12 +1450,242 @@ mod tests {
     }
 
     fn deps(connection: Arc<FakeConnection>, sink: Option<Arc<FakeEventSink>>) -> DdlApplyDeps {
+        let driver_id = connection.metadata().id.clone();
         DdlApplyDeps {
             connection: connection as Arc<dyn Connection>,
             event_sink: sink.map(|s| s as Arc<dyn EventSink>),
+            connection_id: "profile-test".to_string(),
+            driver_id,
             policy: MutationPolicy::Allowed,
             read_only_reason: None,
         }
+    }
+
+    #[test]
+    fn managed_planner_runs_an_alter_the_legacy_generator_rejects() {
+        let conn = FakeConnection::with_managed_planner(DbKind::SQLite, true);
+        let conn_ref = Arc::clone(&conn);
+        let changes = vec![risked(
+            SchemaChange::ColumnTypeChanged {
+                before: column("id", "integer", false, None),
+                after: column("id", "bigint", false, None),
+            },
+            ExecutionClassification::Admin,
+        )];
+        let executor = DdlApplyExecutor::new(users_table(), changes, deps(conn, None));
+
+        let outcome = executor
+            .apply()
+            .expect("managed planner must handle the alter");
+
+        assert_eq!(
+            outcome,
+            DdlApplyOutcome::Success {
+                statements_executed: 1,
+                atomic: true,
+            }
+        );
+        assert_eq!(
+            conn_ref.recorded_calls(),
+            vec!["PREPARE users", "MANAGED EXECUTE"],
+            "managed execution must not add an outer SQL transaction"
+        );
+    }
+
+    #[test]
+    fn managed_and_legacy_selection_rejects_before_prepare_or_execute() {
+        let conn = FakeConnection::with_managed_planner(DbKind::SQLite, true);
+        let conn_ref = Arc::clone(&conn);
+        let changes = vec![
+            risked(
+                SchemaChange::ColumnTypeChanged {
+                    before: column("id", "integer", false, None),
+                    after: column("id", "bigint", false, None),
+                },
+                ExecutionClassification::Admin,
+            ),
+            add_column_change("email"),
+        ];
+        let executor = DdlApplyExecutor::new(users_table(), changes, deps(conn, None));
+
+        match executor.prepare() {
+            Err(ExecutorError::Generation(error)) => assert!(error.contains("adding column")),
+            _ => panic!("expected whole-table mixed-selection rejection"),
+        }
+        assert!(conn_ref.recorded_calls().is_empty());
+    }
+
+    #[test]
+    fn planner_none_retains_legacy_rejection_for_an_alter() {
+        let conn = FakeConnection::new(DbKind::SQLite, true);
+        let conn_ref = Arc::clone(&conn);
+        let changes = vec![risked(
+            SchemaChange::ColumnTypeChanged {
+                before: column("id", "integer", false, None),
+                after: column("id", "bigint", false, None),
+            },
+            ExecutionClassification::Admin,
+        )];
+        let executor = DdlApplyExecutor::new(users_table(), changes, deps(conn, None));
+
+        assert!(matches!(
+            executor.prepare(),
+            Err(ExecutorError::Generation(_))
+        ));
+        assert!(conn_ref.recorded_calls().is_empty());
+    }
+
+    #[test]
+    fn pure_legacy_work_uses_frozen_sql_even_when_a_planner_is_available() {
+        let conn = FakeConnection::with_managed_planner(DbKind::Postgres, true);
+        let conn_ref = Arc::clone(&conn);
+        let executor = DdlApplyExecutor::new(
+            users_table(),
+            vec![add_column_change("email")],
+            deps(conn, None),
+        );
+
+        let frozen = executor.prepare().unwrap();
+        assert_eq!(
+            frozen.preview_statements(),
+            vec!["ALTER TABLE users ADD COLUMN email text"]
+        );
+        assert!(conn_ref.recorded_calls().is_empty());
+        assert_eq!(conn_ref.generated_add_count(), 1);
+
+        let outcome = frozen.execute().unwrap();
+        assert_eq!(
+            conn_ref.generated_add_count(),
+            1,
+            "execution must use the confirmed frozen SQL rather than regenerate it"
+        );
+        assert_eq!(
+            outcome,
+            DdlApplyOutcome::Success {
+                statements_executed: 1,
+                atomic: true,
+            }
+        );
+        assert_eq!(
+            conn_ref.recorded_calls(),
+            vec!["BEGIN", "ALTER TABLE users ADD COLUMN email text", "COMMIT"]
+        );
+    }
+
+    #[test]
+    fn all_tables_prepare_before_the_first_managed_execute() {
+        let conn = FakeConnection::with_managed_planner(DbKind::SQLite, true);
+        let conn_ref = Arc::clone(&conn);
+        let changes = |_name: &str| {
+            vec![risked(
+                SchemaChange::ColumnTypeChanged {
+                    before: column("id", "integer", false, None),
+                    after: column("id", "bigint", false, None),
+                },
+                ExecutionClassification::Admin,
+            )]
+        };
+        let orders = TableRef {
+            schema: Some("public".to_string()),
+            name: "orders".to_string(),
+        };
+        let frozen = DdlApplyExecutor::prepare_all(vec![
+            DdlApplyExecutor::new(
+                users_table(),
+                changes("users"),
+                deps(Arc::clone(&conn), None),
+            ),
+            DdlApplyExecutor::new(orders, changes("orders"), deps(conn, None)),
+        ])
+        .unwrap();
+
+        assert_eq!(
+            conn_ref.recorded_calls(),
+            vec!["PREPARE users", "PREPARE orders"]
+        );
+        let outcome = FrozenDdlApply::execute_all(frozen).unwrap();
+        assert_eq!(
+            outcome,
+            FrozenApplyRunOutcome {
+                statements_applied: 2,
+                tables_applied: 2,
+            }
+        );
+        assert_eq!(
+            conn_ref.recorded_calls(),
+            vec![
+                "PREPARE users",
+                "PREPARE orders",
+                "MANAGED EXECUTE",
+                "MANAGED EXECUTE",
+            ]
+        );
+    }
+
+    #[test]
+    fn later_transactional_failure_keeps_prior_committed_counts_only() {
+        let conn = FakeConnection::with_failure(DbKind::Postgres, true, "age");
+        let conn_ref = Arc::clone(&conn);
+        let frozen = DdlApplyExecutor::prepare_all(vec![
+            DdlApplyExecutor::new(
+                users_table(),
+                vec![add_column_change("email")],
+                deps(Arc::clone(&conn), None),
+            ),
+            DdlApplyExecutor::new(
+                TableRef {
+                    schema: Some("public".to_string()),
+                    name: "orders".to_string(),
+                },
+                vec![add_column_change("age")],
+                deps(conn, None),
+            ),
+        ])
+        .unwrap();
+
+        let failure = FrozenDdlApply::execute_all(frozen).unwrap_err();
+        assert_eq!(failure.tables_applied, 1);
+        assert_eq!(failure.statements_applied, 1);
+        assert_eq!(failure.failed_table.name, "orders");
+        assert!(matches!(failure.error, ExecutorError::Transaction(_)));
+        assert_eq!(
+            conn_ref.recorded_calls(),
+            vec![
+                "BEGIN",
+                "ALTER TABLE users ADD COLUMN email text",
+                "COMMIT",
+                "BEGIN",
+                "ALTER TABLE orders ADD COLUMN age text",
+                "ROLLBACK",
+            ]
+        );
+    }
+
+    #[test]
+    fn later_non_atomic_failure_counts_only_known_autocommits() {
+        let conn = FakeConnection::with_failure(DbKind::MySQL, false, "age");
+        let frozen = DdlApplyExecutor::prepare_all(vec![
+            DdlApplyExecutor::new(
+                users_table(),
+                vec![add_column_change("email")],
+                deps(Arc::clone(&conn), None),
+            ),
+            DdlApplyExecutor::new(
+                TableRef {
+                    schema: Some("public".to_string()),
+                    name: "orders".to_string(),
+                },
+                vec![add_column_change("email"), add_column_change("age")],
+                deps(conn, None),
+            ),
+        ])
+        .unwrap();
+
+        let failure = FrozenDdlApply::execute_all(frozen).unwrap_err();
+        assert_eq!(failure.tables_applied, 1);
+        assert_eq!(failure.statements_applied, 2);
+        assert_eq!(failure.failed_table.name, "orders");
+        assert!(matches!(failure.error, ExecutorError::Execution(_)));
     }
 
     // 3.6 — atomic success (BEGIN / DDL / DDL / COMMIT)
@@ -1257,6 +1803,24 @@ mod tests {
     }
 
     #[test]
+    fn restricted_policy_rejects_preparation_before_generator_or_planner() {
+        for policy in [MutationPolicy::ReadOnly, MutationPolicy::ApprovalRequired] {
+            let connection = FakeConnection::new(DbKind::Postgres, true);
+            let mut restricted_deps = deps(Arc::clone(&connection), None);
+            restricted_deps.policy = policy;
+            let executor = DdlApplyExecutor::new(
+                users_table(),
+                vec![add_column_change("email")],
+                restricted_deps,
+            );
+
+            assert!(executor.prepare().is_err());
+            assert_eq!(connection.generated_add_count(), 0);
+            assert!(connection.recorded_calls().is_empty());
+        }
+    }
+
+    #[test]
     fn read_only_blocks_without_touching_connection() {
         let conn = FakeConnection::new(DbKind::Postgres, true);
         let conn_ref = Arc::clone(&conn);
@@ -1321,6 +1885,114 @@ mod tests {
                 reason: dbflux_i18n::t!("document.schema_diff.apply.read_only"),
             }
         );
+    }
+
+    // 3.5 — audit: Pending -> Success with a shared correlation id
+    #[test]
+    fn executor_persists_query_audit_events_with_connection_and_driver_context() {
+        let audit_path = dbflux_audit::temp_sqlite_path(&format!(
+            "dbflux-schema-diff-apply-audit-{}.sqlite",
+            uuid::Uuid::new_v4()
+        ));
+        let audit_service = dbflux_audit::AuditService::new_sqlite(&audit_path)
+            .expect("test-owned audit database should initialize");
+        let conn = FakeConnection::new(DbKind::Postgres, true);
+        let mut executor_deps = deps(conn, None);
+        executor_deps.event_sink = Some(Arc::new(audit_service.clone()));
+        let executor = DdlApplyExecutor::new(
+            users_table(),
+            vec![add_column_change("email")],
+            executor_deps,
+        );
+
+        executor.apply().expect("DDL apply should succeed");
+
+        let events = audit_service
+            .query_extended(&Default::default())
+            .expect("executor audit events should be queryable");
+        assert_eq!(events.len(), 2);
+        assert!(
+            events
+                .iter()
+                .any(|event| event.outcome.as_deref() == Some("pending"))
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| event.outcome.as_deref() == Some("success"))
+        );
+        assert!(events.iter().all(|event| {
+            event.connection_id.as_deref() == Some("profile-test")
+                && event.driver_id.as_deref() == Some("test")
+        }));
+    }
+
+    #[test]
+    fn executor_persists_failure_context_and_error_details() {
+        let audit_path = dbflux_audit::temp_sqlite_path(&format!(
+            "dbflux-schema-diff-apply-audit-failure-{}.sqlite",
+            uuid::Uuid::new_v4()
+        ));
+        let audit_service = dbflux_audit::AuditService::new_sqlite(&audit_path)
+            .expect("test-owned audit database should initialize");
+        let conn = FakeConnection::with_failure(DbKind::Postgres, true, "email");
+        let mut executor_deps = deps(conn, None);
+        executor_deps.event_sink = Some(Arc::new(audit_service.clone()));
+        let executor = DdlApplyExecutor::new(
+            users_table(),
+            vec![add_column_change("email")],
+            executor_deps,
+        );
+
+        assert!(matches!(
+            executor.apply(),
+            Err(ExecutorError::Transaction(_))
+        ));
+
+        let events = audit_service
+            .query_extended(&Default::default())
+            .expect("executor failure audit events should be queryable");
+        let failure = events
+            .iter()
+            .find(|event| event.outcome.as_deref() == Some("failure"))
+            .expect("a failed execution should be persisted");
+        assert_eq!(failure.connection_id.as_deref(), Some("profile-test"));
+        assert_eq!(failure.driver_id.as_deref(), Some("test"));
+        assert_eq!(failure.error_code.as_deref(), Some("ddl_apply_failed"));
+        assert_eq!(failure.error_message.as_deref(), Some("simulated failure"));
+    }
+
+    #[test]
+    fn blocked_or_deferred_execution_does_not_persist_a_query_event() {
+        for policy in [MutationPolicy::ReadOnly, MutationPolicy::ApprovalRequired] {
+            let audit_path = dbflux_audit::temp_sqlite_path(&format!(
+                "dbflux-schema-diff-apply-audit-policy-{}.sqlite",
+                uuid::Uuid::new_v4()
+            ));
+            let audit_service = dbflux_audit::AuditService::new_sqlite(&audit_path)
+                .expect("test-owned audit database should initialize");
+            let conn = FakeConnection::new(DbKind::Postgres, true);
+            let mut executor_deps = deps(conn, None);
+            executor_deps.policy = policy;
+            executor_deps.event_sink = Some(Arc::new(audit_service.clone()));
+            let executor = DdlApplyExecutor::new(
+                users_table(),
+                vec![add_column_change("email")],
+                executor_deps,
+            );
+
+            assert!(matches!(
+                executor.apply(),
+                Ok(DdlApplyOutcome::Blocked { .. }) | Ok(DdlApplyOutcome::Deferred)
+            ));
+            assert!(
+                audit_service
+                    .query_extended(&Default::default())
+                    .expect("policy outcome audit events should be queryable")
+                    .is_empty(),
+                "{policy:?} must not create an execution event"
+            );
+        }
     }
 
     // 3.5 — audit: Pending -> Success with a shared correlation id
