@@ -1475,7 +1475,7 @@ impl SchemaDiffDocument {
                             remaining = remaining
                         ),
                     ),
-                    &cx,
+                    cx,
                 );
             }
             cx.update(|cx| {

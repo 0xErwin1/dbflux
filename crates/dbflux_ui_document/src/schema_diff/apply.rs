@@ -320,7 +320,7 @@ pub struct FrozenApplyFailure {
     pub failed_table: TableRef,
     pub tables_applied: usize,
     pub statements_applied: usize,
-    pub error: ExecutorError,
+    pub error: Box<ExecutorError>,
 }
 
 impl FrozenDdlApply {
@@ -395,7 +395,7 @@ impl FrozenDdlApply {
                         failed_table: table_ref,
                         tables_applied,
                         statements_applied,
-                        error: ExecutorError::Execution(error),
+                        error: Box::new(ExecutorError::Execution(error)),
                     });
                 }
                 Ok(DdlApplyOutcome::Deferred) | Ok(DdlApplyOutcome::Blocked { .. }) => {
@@ -403,9 +403,9 @@ impl FrozenDdlApply {
                         failed_table: table_ref,
                         tables_applied,
                         statements_applied,
-                        error: ExecutorError::Execution(
+                        error: Box::new(ExecutorError::Execution(
                             "frozen table execution was not authorized".to_string(),
-                        ),
+                        )),
                     });
                 }
                 Err(error) => {
@@ -413,7 +413,7 @@ impl FrozenDdlApply {
                         failed_table: table_ref,
                         tables_applied,
                         statements_applied,
-                        error,
+                        error: Box::new(error),
                     });
                 }
             }
@@ -1647,7 +1647,7 @@ mod tests {
         assert_eq!(failure.tables_applied, 1);
         assert_eq!(failure.statements_applied, 1);
         assert_eq!(failure.failed_table.name, "orders");
-        assert!(matches!(failure.error, ExecutorError::Transaction(_)));
+        assert!(matches!(*failure.error, ExecutorError::Transaction(_)));
         assert_eq!(
             conn_ref.recorded_calls(),
             vec![
@@ -1685,7 +1685,7 @@ mod tests {
         assert_eq!(failure.tables_applied, 1);
         assert_eq!(failure.statements_applied, 2);
         assert_eq!(failure.failed_table.name, "orders");
-        assert!(matches!(failure.error, ExecutorError::Execution(_)));
+        assert!(matches!(*failure.error, ExecutorError::Execution(_)));
     }
 
     // 3.6 — atomic success (BEGIN / DDL / DDL / COMMIT)

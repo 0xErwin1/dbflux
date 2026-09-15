@@ -653,9 +653,10 @@ fn rebuild_identity(
         && declarations.iter().any(|declaration| {
             declaration.kind == KeyKind::PrimaryKey
                 && declaration.terms.len() == 1
-                && declaration.terms[0]
-                    .column
-                    .eq_ignore_ascii_case(&column.name)
+                && declaration
+                    .terms
+                    .first()
+                    .is_some_and(|term| term.column.eq_ignore_ascii_case(&column.name))
                 && integer_primary_key_is_rowid_alias(declaration, parsed, columns)
         })
     {
@@ -1150,6 +1151,8 @@ fn selected_rebuild_changes(
     }
 }
 
+type ForeignKeyReference = (String, String, String, Option<String>);
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RebuildObservation {
     source_sql: String,
@@ -1161,7 +1164,7 @@ struct RebuildObservation {
     columns: Vec<TableColumnCapture>,
     table_metadata: Vec<TableMetadataCapture>,
     indexes: Vec<IndexCapture>,
-    foreign_keys: Vec<(String, String, String, Option<String>)>,
+    foreign_keys: Vec<ForeignKeyReference>,
     foreign_key_metadata: Vec<ForeignKeyCapture>,
     foreign_key_violation: Option<String>,
 }
@@ -1888,10 +1891,10 @@ impl Drop for RebuildTransactionGuard<'_> {
             return;
         }
         log::error!("SQLite rebuild transaction guard dropped without explicit finish");
-        if !self.state.is_autocommit() {
-            if let Err(error) = self.state.execute_batch("ROLLBACK") {
-                log::error!("SQLite rebuild transaction guard drop rollback failed: {error}");
-            }
+        if !self.state.is_autocommit()
+            && let Err(error) = self.state.execute_batch("ROLLBACK")
+        {
+            log::error!("SQLite rebuild transaction guard drop rollback failed: {error}");
         }
         if self.state.is_autocommit() {
             if let Err(error) = self.state.execute_batch(&format!(
@@ -1991,18 +1994,11 @@ fn rebuild_guard_setup_failure(
             }
         }
     }
-    let restore = if !state.is_autocommit() {
-        Err(rusqlite::Error::InvalidQuery)
-    } else if {
-        #[cfg(test)]
-        {
-            RebuildTransactionGuard::faulted(faults, RebuildGuardFault::RestoreSet)
-        }
-        #[cfg(not(test))]
-        {
-            false
-        }
-    } {
+    #[cfg(test)]
+    let restore_faulted = RebuildTransactionGuard::faulted(faults, RebuildGuardFault::RestoreSet);
+    #[cfg(not(test))]
+    let restore_faulted = false;
+    let restore = if !state.is_autocommit() || restore_faulted {
         Err(rusqlite::Error::InvalidQuery)
     } else {
         state.execute_batch(&format!("PRAGMA foreign_keys = {original_foreign_keys}"))
@@ -2263,13 +2259,13 @@ fn compare_rebuild_rows(
         quote_identifier(&capture.replacement),
         quote_identifier(&capture.copy.identity),
     );
-    return compare_exact_row_streams(
+    compare_exact_row_streams(
         connection,
         &source_sql,
         &replacement_sql,
         capture.copy.source_projection.len(),
         cancelled,
-    );
+    )
 }
 
 fn compare_exact_row_streams(
@@ -2738,7 +2734,7 @@ fn validate_rebuild_final_observation(
         &capture.final_expected_facts.selected_changes,
     )?;
     validate_parsed_table_metadata(table, &final_table, &final_observation.columns)?;
-    validate_prepared_final_facts(table, capture, &final_observation, &final_table)?;
+    validate_prepared_final_facts(table, capture, final_observation, &final_table)?;
     let final_indexes = final_observation
         .indexes
         .iter()
@@ -3426,10 +3422,10 @@ fn capture_foreign_key_violation(
 fn capture_all_foreign_keys(
     connection: &RusqliteConnection,
     tables: &[&str],
-) -> Result<Vec<(String, String, String, Option<String>)>, DbError> {
+) -> Result<Vec<ForeignKeyReference>, DbError> {
     let mut foreign_keys = Vec::new();
     for table in tables {
-        for (referenced, from, to) in foreign_keys_for_table(connection, &table)? {
+        for (referenced, from, to) in foreign_keys_for_table(connection, table)? {
             foreign_keys.push(((*table).to_string(), referenced, from, to));
         }
     }
@@ -3630,7 +3626,7 @@ fn capture_all_foreign_key_metadata(
         let mut statement = connection
             .prepare(&format!(
                 "PRAGMA main.foreign_key_list({})",
-                quote_identifier(&child_table)
+                quote_identifier(child_table)
             ))
             .map_err(|error| {
                 DbError::query_failed(format!(
@@ -3834,7 +3830,7 @@ fn validate_parsed_foreign_keys(
                 .iter()
                 .enumerate()
                 .find(|(position, relationship)| {
-                    !consumed[*position]
+                    consumed.get(*position).is_some_and(|consumed| !consumed)
                         && relationship
                             .parent_table
                             .eq_ignore_ascii_case(&parsed_foreign_key.parent_table)
@@ -3869,7 +3865,11 @@ fn validate_parsed_foreign_keys(
                 "SQLite rebuild catalog proof cannot resolve foreign key intent for main.{table}"
             )));
         };
-        consumed[position] = true;
+        *consumed.get_mut(position).ok_or_else(|| {
+            DbError::NotSupported(format!(
+                "SQLite rebuild catalog proof cannot resolve foreign key intent for main.{table}"
+            ))
+        })? = true;
     }
     if consumed.iter().any(|consumed| !consumed) {
         return Err(DbError::NotSupported(format!(

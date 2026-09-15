@@ -151,19 +151,22 @@ pub(super) fn parse_create_table(source: &str) -> Result<CreateTable, String> {
     }
 
     let first_name = cursor.identifier()?;
-    let mut table_name_span = cursor.tokens[cursor.index - 1].span.clone();
+    let mut table_name_span = cursor.previous_token()?.span.clone();
     if cursor.symbol('.') {
         if !first_name.eq_ignore_ascii_case("main") {
             return Err("rebuild supports the main schema only".to_string());
         }
         cursor.next();
         cursor.identifier()?;
-        table_name_span = cursor.tokens[cursor.index - 1].span.clone();
+        table_name_span = cursor.previous_token()?.span.clone();
     }
     cursor.punctuation('(')?;
     let body_start = cursor.index;
     let body_end = find_matching_parenthesis(&tokens, body_start)?;
-    let elements = split_elements(&tokens[body_start..body_end])?;
+    let body_tokens = tokens
+        .get(body_start..body_end)
+        .ok_or_else(|| "CREATE TABLE has an invalid parenthesized body".to_string())?;
+    let elements = split_elements(body_tokens)?;
     if elements.is_empty() {
         return Err("CREATE TABLE must retain at least one column".to_string());
     }
@@ -172,24 +175,37 @@ pub(super) fn parse_create_table(source: &str) -> Result<CreateTable, String> {
     let mut constraints = Vec::new();
     let mut key_declarations = Vec::new();
     for (element_index, element) in elements.iter().enumerate() {
-        let element_tokens = &tokens[body_start + element.start..body_start + element.end];
+        let element_start = body_start
+            .checked_add(element.start)
+            .ok_or_else(|| "CREATE TABLE element position overflowed".to_string())?;
+        let element_end = body_start
+            .checked_add(element.end)
+            .ok_or_else(|| "CREATE TABLE element position overflowed".to_string())?;
+        let element_tokens = tokens
+            .get(element_start..element_end)
+            .ok_or_else(|| "CREATE TABLE contains an invalid element range".to_string())?;
         if element_tokens.is_empty() {
             return Err("CREATE TABLE contains an empty definition".to_string());
         }
         if starts_table_constraint(source, element_tokens) {
             let constraint = parse_table_constraint(source, element_tokens)?;
+            let source_order = element_tokens
+                .first()
+                .ok_or_else(|| "CREATE TABLE constraint requires a token".to_string())?
+                .span
+                .start;
             match &constraint {
                 TableConstraint::PrimaryKey(terms) => key_declarations.push(KeyDeclaration {
                     kind: KeyKind::PrimaryKey,
                     origin: KeyDeclarationOrigin::Table,
                     terms: terms.clone(),
-                    source_order: element_tokens[0].span.start,
+                    source_order,
                 }),
                 TableConstraint::Unique(terms) => key_declarations.push(KeyDeclaration {
                     kind: KeyKind::Unique,
                     origin: KeyDeclarationOrigin::Table,
                     terms: terms.clone(),
-                    source_order: element_tokens[0].span.start,
+                    source_order,
                 }),
                 TableConstraint::ForeignKey(_) => {}
             }
@@ -199,7 +215,13 @@ pub(super) fn parse_create_table(source: &str) -> Result<CreateTable, String> {
             key_declarations.append(&mut column.key_declarations);
             column.removal_span = if element_index == 0 {
                 if let Some(next) = elements.get(element_index + 1) {
-                    column.definition_span.start..tokens[body_start + next.start].span.start
+                    let next_start = body_start
+                        .checked_add(next.start)
+                        .ok_or_else(|| "CREATE TABLE element position overflowed".to_string())?;
+                    let next_token = tokens
+                        .get(next_start)
+                        .ok_or_else(|| "CREATE TABLE has an invalid next element".to_string())?;
+                    column.definition_span.start..next_token.span.start
                 } else {
                     column.definition_span.clone()
                 }
@@ -222,7 +244,10 @@ pub(super) fn parse_create_table(source: &str) -> Result<CreateTable, String> {
         .map(|column| column.name.to_ascii_lowercase())
         .collect::<Vec<_>>();
     names.sort();
-    if names.windows(2).any(|names| names[0] == names[1]) {
+    if names
+        .windows(2)
+        .any(|names| matches!(names, [first, second] if first == second))
+    {
         return Err("CREATE TABLE contains duplicate column names".to_string());
     }
     let table_primary_keys = constraints
@@ -251,7 +276,9 @@ pub(super) fn parse_create_table(source: &str) -> Result<CreateTable, String> {
         }
     }
 
-    cursor.index = body_end + 1;
+    cursor.index = body_end
+        .checked_add(1)
+        .ok_or_else(|| "CREATE TABLE parenthesis position overflowed".to_string())?;
     if cursor.symbol(';') {
         cursor.next();
     }
@@ -390,7 +417,9 @@ impl CreateTable {
 
         replacements.sort_by_key(|(range, _)| range.start);
         for pair in replacements.windows(2) {
-            if pair[0].0.end > pair[1].0.start {
+            if let [left, right] = pair
+                && left.0.end > right.0.start
+            {
                 return Err(
                     "selected changes overlap in the bounded CREATE TABLE source".to_string(),
                 );
@@ -434,7 +463,10 @@ impl CreateTable {
                 .iter()
                 .position(|column| column.name.eq_ignore_ascii_case(name))
                 .ok_or_else(|| format!("selected column {name:?} is not in CREATE TABLE"))?;
-            selected[position] = true;
+            *selected
+                .get_mut(position)
+                .ok_or_else(|| "selected column position is outside CREATE TABLE".to_string())? =
+                true;
         }
         if selected.iter().all(|selected| *selected) {
             return Err("rebuild must retain at least one stored column".to_string());
@@ -442,23 +474,44 @@ impl CreateTable {
 
         let mut removals = Vec::new();
         let mut start = 0;
-        while start < selected.len() {
-            if !selected[start] {
+        while let Some(is_selected) = selected.get(start) {
+            if !is_selected {
                 start += 1;
                 continue;
             }
             let mut end = start;
-            while end + 1 < selected.len() && selected[end + 1] {
+            while end
+                .checked_add(1)
+                .and_then(|next| selected.get(next))
+                .copied()
+                == Some(true)
+            {
                 end += 1;
             }
+            let start_column = parsed
+                .columns
+                .get(start)
+                .ok_or_else(|| "selected column position is outside CREATE TABLE".to_string())?;
+            let end_column = parsed
+                .columns
+                .get(end)
+                .ok_or_else(|| "selected column position is outside CREATE TABLE".to_string())?;
             let removal = if start == 0 {
-                parsed.columns[start].definition_span.start
-                    ..parsed.columns[end + 1].definition_span.start
+                let next_column = parsed
+                    .columns
+                    .get(
+                        end.checked_add(1)
+                            .ok_or_else(|| "selected column position overflowed".to_string())?,
+                    )
+                    .ok_or_else(|| "rebuild cannot remove every stored column".to_string())?;
+                start_column.definition_span.start..next_column.definition_span.start
             } else {
-                parsed.columns[start].removal_span.start..parsed.columns[end].definition_span.end
+                start_column.removal_span.start..end_column.definition_span.end
             };
             removals.push(removal);
-            start = end + 1;
+            start = end
+                .checked_add(1)
+                .ok_or_else(|| "selected column position overflowed".to_string())?;
         }
 
         let mut without_drops = parsed.source.clone();
@@ -523,7 +576,7 @@ impl CreateTable {
 fn parse_column(source: &str, tokens: &[Token]) -> Result<Column, String> {
     let mut cursor = Cursor::new(source, tokens);
     let name = cursor.identifier()?;
-    let name_end = cursor.previous_end();
+    let name_end = cursor.previous_end()?;
     let mut type_span = None;
     let mut not_null_span = None;
     let mut default_span = None;
@@ -544,10 +597,9 @@ fn parse_column(source: &str, tokens: &[Token]) -> Result<Column, String> {
             .span
             .start;
         parse_type(&mut cursor)?;
-        type_span = Some(start..cursor.previous_end());
-        first_clause_start = cursor
-            .peek()
-            .map_or(cursor.previous_end(), |token| token.span.start);
+        let type_end = cursor.previous_end()?;
+        type_span = Some(start..type_end);
+        first_clause_start = cursor.peek().map_or(type_end, |token| token.span.start);
     }
 
     while !cursor.is_finished() {
@@ -574,7 +626,7 @@ fn parse_column(source: &str, tokens: &[Token]) -> Result<Column, String> {
             }
             cursor.keyword("NOT")?;
             cursor.keyword("NULL")?;
-            not_null_span = Some(named_start..cursor.previous_end());
+            not_null_span = Some(named_start..cursor.previous_end()?);
         } else if cursor.peek_keyword("NULL") {
             return Err(
                 "explicit NULL clauses are outside the bounded rebuild grammar".to_string(),
@@ -590,8 +642,9 @@ fn parse_column(source: &str, tokens: &[Token]) -> Result<Column, String> {
                 .span
                 .start;
             parse_default_atom(&mut cursor)?;
-            default_atom_span = Some(atom_start..cursor.previous_end());
-            default_span = Some(named_start..cursor.previous_end());
+            let default_end = cursor.previous_end()?;
+            default_atom_span = Some(atom_start..default_end);
+            default_span = Some(named_start..default_end);
         } else if cursor.peek_keyword("COLLATE") {
             cursor.keyword("COLLATE")?;
             collation = parse_builtin_collation(&mut cursor, "rebuild supports only")?;
@@ -821,7 +874,7 @@ fn parse_numeric_default(cursor: &mut Cursor<'_>) -> Result<(), String> {
     if !has_digits_before_dot && !has_digits_after_dot {
         return Err("DEFAULT numeric literal requires digits".to_string());
     }
-    let mantissa_end = cursor.previous_end();
+    let mantissa_end = cursor.previous_end()?;
     if let Some(exponent) = cursor.peek() {
         let exponent_text = exponent.text(cursor.source);
         if exponent.span.start == mantissa_end
@@ -837,7 +890,7 @@ fn parse_numeric_default(cursor: &mut Cursor<'_>) -> Result<(), String> {
             }
 
             cursor.next();
-            let mut exponent_end = cursor.previous_end();
+            let mut exponent_end = cursor.previous_end()?;
             if cursor.symbol('+') || cursor.symbol('-') {
                 let sign = cursor
                     .peek()
@@ -846,7 +899,7 @@ fn parse_numeric_default(cursor: &mut Cursor<'_>) -> Result<(), String> {
                     return Err("DEFAULT exponent requires digits".to_string());
                 }
                 cursor.next();
-                exponent_end = cursor.previous_end();
+                exponent_end = cursor.previous_end()?;
             }
             cursor
                 .peek()
@@ -890,7 +943,7 @@ fn parse_references(cursor: &mut Cursor<'_>) -> Result<ForeignKeyFacts, String> 
         on_update,
         on_delete,
         deferrable,
-        declaration_span: declaration_start..cursor.previous_end(),
+        declaration_span: declaration_start..cursor.previous_end()?,
     })
 }
 
@@ -1164,7 +1217,12 @@ fn split_elements(tokens: &[Token]) -> Result<Vec<Range<usize>>, String> {
 
 fn expand_leading_space(source: &str, range: Range<usize>) -> Range<usize> {
     let mut start = range.start;
-    while start > 0 && source.as_bytes()[start - 1].is_ascii_whitespace() {
+    while start > 0
+        && source
+            .as_bytes()
+            .get(start - 1)
+            .is_some_and(|byte| byte.is_ascii_whitespace())
+    {
         start -= 1;
     }
     start..range.end
@@ -1174,13 +1232,12 @@ fn tokenize(source: &str) -> Result<Vec<Token>, String> {
     let bytes = source.as_bytes();
     let mut tokens = Vec::new();
     let mut index = 0;
-    while index < bytes.len() {
-        let byte = bytes[index];
+    while let Some(&byte) = bytes.get(index) {
         if byte.is_ascii_whitespace() {
             index += 1;
-        } else if byte == b'-' && bytes.get(index + 1) == Some(&b'-') {
-            return Err("comments are outside the bounded rebuild grammar".to_string());
-        } else if byte == b'/' && bytes.get(index + 1) == Some(&b'*') {
+        } else if (byte == b'-' && bytes.get(index + 1) == Some(&b'-'))
+            || (byte == b'/' && bytes.get(index + 1) == Some(&b'*'))
+        {
             return Err("comments are outside the bounded rebuild grammar".to_string());
         } else if matches!(byte, b'\'' | b'"' | b'`' | b'[') {
             let (end, kind) = quoted_token(source, index)?;
@@ -1192,7 +1249,7 @@ fn tokenize(source: &str) -> Result<Vec<Token>, String> {
         } else if byte.is_ascii_digit() {
             let start = index;
             index += 1;
-            while index < bytes.len() && bytes[index].is_ascii_digit() {
+            while bytes.get(index).is_some_and(|byte| byte.is_ascii_digit()) {
                 index += 1;
             }
             tokens.push(Token {
@@ -1202,8 +1259,9 @@ fn tokenize(source: &str) -> Result<Vec<Token>, String> {
         } else if byte.is_ascii_alphabetic() || byte == b'_' {
             let start = index;
             index += 1;
-            while index < bytes.len()
-                && (bytes[index].is_ascii_alphanumeric() || bytes[index] == b'_')
+            while bytes
+                .get(index)
+                .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
             {
                 index += 1;
             }
@@ -1226,11 +1284,11 @@ fn tokenize(source: &str) -> Result<Vec<Token>, String> {
 
 fn quoted_token(source: &str, start: usize) -> Result<(usize, TokenKind), String> {
     let bytes = source.as_bytes();
-    let (quote, kind) = match bytes[start] {
-        b'\'' => return read_quoted(source, start, b'\'', TokenKind::String),
-        b'"' => (b'"', TokenKind::QuotedIdentifier),
-        b'`' => (b'`', TokenKind::QuotedIdentifier),
-        b'[' => (b']', TokenKind::QuotedIdentifier),
+    let (quote, kind) = match bytes.get(start) {
+        Some(b'\'') => return read_quoted(source, start, b'\'', TokenKind::String),
+        Some(b'"') => (b'"', TokenKind::QuotedIdentifier),
+        Some(b'`') => (b'`', TokenKind::QuotedIdentifier),
+        Some(b'[') => (b']', TokenKind::QuotedIdentifier),
         _ => return Err("unsupported quoted token".to_string()),
     };
     read_quoted(source, start, quote, kind)
@@ -1244,8 +1302,8 @@ fn read_quoted(
 ) -> Result<(usize, TokenKind), String> {
     let bytes = source.as_bytes();
     let mut index = start + 1;
-    while index < bytes.len() {
-        if bytes[index] == quote {
+    while let Some(&byte) = bytes.get(index) {
+        if byte == quote {
             if quote != b']' && bytes.get(index + 1) == Some(&quote) {
                 index += 2;
             } else {
@@ -1309,12 +1367,15 @@ impl<'a> Cursor<'a> {
         token
     }
 
-    fn previous_end(&self) -> usize {
-        self.tokens[self.index - 1].span.end
+    fn previous_end(&self) -> Result<usize, String> {
+        Ok(self.previous_token()?.span.end)
     }
 
-    fn previous_text(&self) -> &str {
-        self.tokens[self.index - 1].text(self.source)
+    fn previous_token(&self) -> Result<&Token, String> {
+        self.index
+            .checked_sub(1)
+            .and_then(|index| self.tokens.get(index))
+            .ok_or_else(|| "cursor has no previously consumed token".to_string())
     }
 
     fn is_finished(&self) -> bool {
