@@ -74,6 +74,22 @@ impl ModalUnsavedChanges {
         self.selected.values().filter(|&&v| v).count()
     }
 
+    /// Resolve the modal as if "Save selected" was clicked: emit the checked
+    /// ids and close. The keyboard path (ConfirmModal keymap) uses this so
+    /// Enter resolves the modal through the same outcome handler as a mouse
+    /// click.
+    pub fn confirm(&mut self, cx: &mut Context<Self>) {
+        let ids = self.selected_ids();
+        cx.emit(UnsavedChangesOutcome::SaveSelected(ids));
+        self.close(cx);
+    }
+
+    /// Resolve the modal as if the cancel button was clicked.
+    pub fn cancel(&mut self, cx: &mut Context<Self>) {
+        cx.emit(UnsavedChangesOutcome::Cancelled);
+        self.close(cx);
+    }
+
     fn toggle(&mut self, id: DocumentId, cx: &mut Context<Self>) {
         let entry = self.selected.entry(id).or_insert(false);
         *entry = !*entry;
