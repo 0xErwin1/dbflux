@@ -61,12 +61,28 @@ impl RedshiftErrorFormatter {
     /// server-rejected startup formats as just "db error" — so the server's
     /// message (via `as_db_error`) or the underlying cause chain has to be
     /// appended explicitly.
+    ///
+    /// Verbatim copy of `PostgresErrorFormatter::flatten_error` — `dbflux_core`
+    /// cannot own it because it does not depend on `postgres`; keep the two
+    /// in sync.
     fn flatten_error(error: &postgres::Error) -> String {
         use std::error::Error as _;
 
         if let Some(db_error) = error.as_db_error() {
-            let mut text = db_error.to_string();
-            text.push_str(&format!(" (SQLSTATE {})", db_error.code().code()));
+            let mut text = format!(
+                "{}: {} (SQLSTATE {})",
+                db_error.severity(),
+                db_error.message(),
+                db_error.code().code()
+            );
+            if let Some(detail) = db_error.detail() {
+                text.push_str("\nDETAIL: ");
+                text.push_str(detail);
+            }
+            if let Some(hint) = db_error.hint() {
+                text.push_str("\nHINT: ");
+                text.push_str(hint);
+            }
             return text;
         }
 

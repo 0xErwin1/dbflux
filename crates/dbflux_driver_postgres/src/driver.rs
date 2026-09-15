@@ -1011,12 +1011,15 @@ struct PostgresConnectParams<'a> {
 ///
 /// libpq requires values containing whitespace to be enclosed in single
 /// quotes; inside quotes both a backslash and a single quote must be
-/// backslash-escaped. Values are also quoted when they contain a quote or a
-/// backslash even without whitespace, which is always safe to parse.
+/// backslash-escaped. Empty values are quoted as `''` for the same reason:
+/// an unquoted empty value makes libpq swallow the next `key=value` pair.
+/// Values are also quoted when they contain a quote or a backslash even
+/// without whitespace, which is always safe to parse.
 fn escape_keyword_value(value: &str) -> String {
-    if value
-        .chars()
-        .any(|c| c.is_whitespace() || c == '\'' || c == '\\')
+    if value.is_empty()
+        || value
+            .chars()
+            .any(|c| c.is_whitespace() || c == '\'' || c == '\\')
     {
         format!("'{}'", value.replace('\\', "\\\\").replace('\'', "\\'"))
     } else {
@@ -4474,12 +4477,27 @@ impl PostgresErrorFormatter {
     /// server-rejected startup formats as just "db error" — so the server's
     /// message (via `as_db_error`) or the underlying cause chain has to be
     /// appended explicitly.
+    ///
+    /// `RedshiftErrorFormatter::flatten_error` is a verbatim copy of this
+    /// helper; keep the two in sync.
     fn flatten_error(error: &postgres::Error) -> String {
         use std::error::Error as _;
 
         if let Some(db_error) = error.as_db_error() {
-            let mut text = db_error.to_string();
-            text.push_str(&format!(" (SQLSTATE {})", db_error.code().code()));
+            let mut text = format!(
+                "{}: {} (SQLSTATE {})",
+                db_error.severity(),
+                db_error.message(),
+                db_error.code().code()
+            );
+            if let Some(detail) = db_error.detail() {
+                text.push_str("\nDETAIL: ");
+                text.push_str(detail);
+            }
+            if let Some(hint) = db_error.hint() {
+                text.push_str("\nHINT: ");
+                text.push_str(hint);
+            }
             return text;
         }
 
@@ -5286,11 +5304,12 @@ mod tests {
         text_search_array_values_to_value, unsupported_type_names, with_client_identity,
     };
     use dbflux_core::{
-        AddColumnRequest, AlterColumnRequest, CodeGenerator, ColumnAssignment, CreateTableSpec,
-        CreateTypeRequest, DatabaseCategory, DbConfig, DbDriver, DbError, DdlRejection,
-        DefaultSpec, DropColumnRequest, FormValues, MutationRequest, QueryLanguage, RowInsert,
-        SemanticRequest, SqlDialect, SqlMutationGenerator, SqlQueryBuilder, TableBrowseRequest,
-        TableRef, TransferFamily, TypeAttributeDefinition, TypeDefinition, Value, WhereOperator,
+        AddColumnRequest, AlterColumnRequest, CodeGenerator, ColumnAssignment, ConnectionProfile,
+        CreateTableSpec, CreateTypeRequest, DatabaseCategory, DbConfig, DbDriver, DbError,
+        DdlRejection, DefaultSpec, DropColumnRequest, FormValues, MutationRequest, QueryLanguage,
+        RowInsert, SemanticRequest, SqlDialect, SqlMutationGenerator, SqlQueryBuilder,
+        TableBrowseRequest, TableRef, TransferFamily, TypeAttributeDefinition, TypeDefinition,
+        Value, WhereOperator,
     };
     use postgres::types::{FromSql, Kind, Type};
     use std::str::FromStr;
@@ -5854,6 +5873,18 @@ mod tests {
     }
 
     #[test]
+    fn keyword_conn_string_quotes_empty_values_so_pairs_survive_parsing() {
+        let conn_string = build_keyword_conn_string("", 5432, "", Some("secret"), "testdb");
+        let config = postgres::Config::from_str(&conn_string)
+            .expect("keyword string with empty host and user should parse");
+
+        assert!(conn_string.contains("host=''"));
+        assert!(conn_string.contains("user=''"));
+        assert_eq!(config.get_user(), Some(""));
+        assert_eq!(config.get_dbname(), Some("testdb"));
+    }
+
+    #[test]
     fn connection_error_message_includes_flattened_server_text() {
         let message = PostgresErrorFormatter::format_connection_message(
             "FATAL: database \"testuser\" does not exist (SQLSTATE 3D000)",
@@ -5873,6 +5904,45 @@ mod tests {
         let flattened = PostgresErrorFormatter::flatten_error(&error);
 
         assert_eq!(flattened, "timeout waiting for server");
+    }
+
+    #[test]
+    fn connection_error_carries_io_cause_for_a_closed_port() {
+        // Bind and drop a listener to get a guaranteed-closed local port: the
+        // io cause ("Connection refused") must reach the user-facing message
+        // instead of the opaque kind text.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind an ephemeral port");
+        let closed_port = listener.local_addr().expect("bound address").port();
+        drop(listener);
+
+        let driver = PostgresDriver::new();
+        let profile = ConnectionProfile::new(
+            "closed-port",
+            DbConfig::Postgres {
+                use_uri: false,
+                uri: None,
+                host: "127.0.0.1".to_string(),
+                port: closed_port,
+                user: "testuser".to_string(),
+                database: "testdb".to_string(),
+                ssl_mode: Some("disable".to_string()),
+                ssl_root_cert_path: None,
+                ssl_client_cert_path: None,
+                ssl_client_key_path: None,
+                ssh_tunnel: None,
+                ssh_tunnel_profile_id: None,
+            },
+        );
+
+        let Err(DbError::ConnectionFailed(formatted)) = driver.connect(&profile) else {
+            panic!("expected ConnectionFailed for a closed port");
+        };
+
+        let message = formatted.to_display_string();
+        assert!(
+            message.contains("Connection refused"),
+            "message should carry the io cause: {message}"
+        );
     }
 
     #[test]
