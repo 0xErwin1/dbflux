@@ -2,6 +2,7 @@
 mod syntax;
 
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use dbflux_core::{
@@ -14,17 +15,22 @@ use self::syntax::{
     ColumnChange, CreateTable, DefaultChange, KeyDeclaration, KeyDeclarationOrigin, KeyKind,
     KeyTerm, TableConstraint, parse_create_index, parse_create_table,
 };
+use rusqlite::types::ValueRef;
 use rusqlite::{Connection as RusqliteConnection, OptionalExtension};
 
 use crate::driver::SqliteConnectionState;
 
 pub(crate) struct SqliteTableAlterPlanner {
     state: Arc<Mutex<SqliteConnectionState>>,
+    cancelled: Arc<AtomicBool>,
 }
 
 impl SqliteTableAlterPlanner {
-    pub(crate) fn new(state: Arc<Mutex<SqliteConnectionState>>) -> Self {
-        Self { state }
+    pub(crate) fn new(
+        state: Arc<Mutex<SqliteConnectionState>>,
+        cancelled: Arc<AtomicBool>,
+    ) -> Self {
+        Self { state, cancelled }
     }
 }
 
@@ -53,7 +59,13 @@ impl TableAlterPlanner for SqliteTableAlterPlanner {
                         .to_string(),
                 ));
             }
-            return prepare_rebuild_plan(&state, self.state.clone(), request, rebuild_changes);
+            return prepare_rebuild_plan(
+                &state,
+                self.state.clone(),
+                self.cancelled.clone(),
+                request,
+                rebuild_changes,
+            );
         }
         let columns = selected_native_drop_columns(&request.operations)?;
         if !sqlite_drop_column_supported() {
@@ -67,6 +79,7 @@ impl TableAlterPlanner for SqliteTableAlterPlanner {
             return prepare_rebuild_plan(
                 &state,
                 self.state.clone(),
+                self.cancelled.clone(),
                 request,
                 RebuildChanges {
                     alterations: Vec::new(),
@@ -272,9 +285,22 @@ fn selected_native_drop_columns(
 fn prepare_rebuild_plan(
     connection: &RusqliteConnection,
     state: Arc<Mutex<SqliteConnectionState>>,
+    cancelled: Arc<AtomicBool>,
     request: &TableAlterRequest,
     changes: RebuildChanges,
 ) -> Result<Box<dyn PreparedTableAlter>, DbError> {
+    Ok(prepare_rebuild_plan_typed(
+        connection, state, cancelled, request, changes,
+    )?)
+}
+
+fn prepare_rebuild_plan_typed(
+    connection: &RusqliteConnection,
+    state: Arc<Mutex<SqliteConnectionState>>,
+    cancelled: Arc<AtomicBool>,
+    request: &TableAlterRequest,
+    changes: RebuildChanges,
+) -> Result<Box<RebuildPlan>, DbError> {
     let table = &request.table.name;
     let observation = capture_rebuild_observation(connection, table)?;
     #[cfg(test)]
@@ -394,22 +420,27 @@ fn prepare_rebuild_plan(
         .collect::<Vec<_>>();
     let capture = RebuildCapture {
         observation,
-        retained_columns: retained,
-        identity,
+        prepared_create_sql: rebuilt_sql,
+        final_expected_facts: RebuildExpectedFacts {
+            selected_changes: changes,
+            retained_columns: retained.clone(),
+            identity: identity.clone(),
+            explicit_index_sql: exact_index_sql.clone(),
+            foreign_key_intent: resolved_foreign_keys.clone(),
+        },
         replacement,
         copy,
-        exact_index_sql,
-        foreign_key_intent: resolved_foreign_keys,
     };
     Ok(Box::new(RebuildPlan {
         state,
+        cancelled,
         capture,
         preview: TableAlterPreview {
             route: TableAlterRoute::Rebuild,
             statements,
             warnings: vec![
                 "NOT EXECUTABLE: driver-managed illustrative lifecycle intent only; do not submit preview statements as apply SQL.".to_string(),
-                "Data is not validated or copied by preparation; exact streamed ValueRef comparison and execution are unavailable until Unit5 installs the lifecycle.".to_string(),
+                "Preparation remains read-only; driver-managed execution validates and copies data with exact streamed ValueRef comparison.".to_string(),
             ],
             table_atomic: true,
             driver_managed: true,
@@ -544,7 +575,7 @@ fn obsolete_prepare_rebuild_plan_body(
             statements,
             warnings: vec![
                 "Driver-managed atomic table plan; preview statements are illustrative and are not executable apply SQL.".to_string(),
-                "Existing data compatibility is not validated by preparation; rebuild execution lifecycle is not installed.".to_string(),
+                "Preparation remains read-only; driver-managed execution validates existing data compatibility.".to_string(),
             ],
             table_atomic: true,
             driver_managed: true,
@@ -1048,7 +1079,7 @@ fn capture_index_metadata(
     Ok(indexes)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct RebuildChanges {
     alterations: Vec<ColumnChange>,
     drops: Vec<String>,
@@ -1433,19 +1464,611 @@ fn lifecycle_preview_statements(
     statements
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct RebuildCapture {
-    observation: RebuildObservation,
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RebuildGuardStage {
+    SavingForeignKeys,
+    DisablingForeignKeys,
+    Beginning,
+    Active,
+    Committing,
+    RollingBack,
+    RestoringForeignKeys,
+    Finished,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CommitCertainty {
+    NotAttempted,
+    RolledBack,
+    ConfirmedCommitted,
+    Uncertain,
+}
+
+#[allow(dead_code)]
+#[derive(Default)]
+struct RebuildGuardFailures {
+    primary: Option<DbError>,
+    rollback: Option<String>,
+    restoration: Option<String>,
+}
+
+#[allow(dead_code)]
+impl RebuildGuardFailures {
+    fn has_cleanup_failure(&self) -> bool {
+        self.rollback.is_some() || self.restoration.is_some()
+    }
+
+    fn details(&self, stage: RebuildGuardStage, certainty: CommitCertainty) -> String {
+        let mut details = vec![format!("stage={stage:?}; commit_certainty={certainty:?}")];
+        if let Some(primary) = &self.primary {
+            details.push(format!("primary failure: {primary}"));
+        }
+        if let Some(rollback) = &self.rollback {
+            details.push(format!("rollback failure: {rollback}"));
+        }
+        if let Some(restoration) = &self.restoration {
+            details.push(format!("foreign-key restoration failure: {restoration}"));
+        }
+        details.join("; ")
+    }
+}
+
+#[cfg(test)]
+#[derive(Default)]
+struct RebuildGuardFaults {
+    fail_disable_set: bool,
+    fail_disable_readback: bool,
+    fail_begin: bool,
+    fail_commit_while_active: bool,
+    fail_commit_after_commit: bool,
+    fail_rollback: bool,
+    fail_restore_set: bool,
+    fail_restore_readback: bool,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Copy)]
+enum RebuildGuardFault {
+    DisableSet,
+    DisableReadback,
+    Begin,
+    CommitWhileActive,
+    CommitAfterCommit,
+    Rollback,
+    RestoreSet,
+    RestoreReadback,
+}
+
+/// Private transaction and foreign-key cleanup boundary for a later rebuild executor.
+/// It deliberately has no public execution wiring.
+#[allow(dead_code)]
+struct RebuildTransactionGuard<'state> {
+    state: &'state mut SqliteConnectionState,
+    original_foreign_keys: i64,
+    stage: RebuildGuardStage,
+    certainty: CommitCertainty,
+    failures: RebuildGuardFailures,
+    finished: bool,
+    #[cfg(test)]
+    faults: RebuildGuardFaults,
+}
+
+#[allow(dead_code)]
+impl<'state> RebuildTransactionGuard<'state> {
+    fn begin(state: &'state mut SqliteConnectionState) -> Result<Self, DbError> {
+        Self::begin_inner(
+            state,
+            #[cfg(test)]
+            rebuild_guard_faults_for_current_thread(),
+        )
+    }
+
+    #[cfg(test)]
+    fn begin_with_faults(
+        state: &'state mut SqliteConnectionState,
+        faults: RebuildGuardFaults,
+    ) -> Result<Self, DbError> {
+        Self::begin_inner(state, faults)
+    }
+
+    fn begin_inner(
+        state: &'state mut SqliteConnectionState,
+        #[cfg(test)] faults: RebuildGuardFaults,
+    ) -> Result<Self, DbError> {
+        if !state.is_autocommit() {
+            return Err(rebuild_guard_caller_owned_transaction_error());
+        }
+        let original_foreign_keys = read_foreign_keys(state)
+            .map_err(|error| rebuild_guard_sqlite_error("save foreign_keys", &error))?;
+        let disable = if Self::faulted(
+            #[cfg(test)]
+            &faults,
+            RebuildGuardFault::DisableSet,
+        ) {
+            Err(rusqlite::Error::InvalidQuery)
+        } else {
+            state.execute_batch("PRAGMA foreign_keys = OFF")
+        };
+        if let Err(error) = disable {
+            return Err(rebuild_guard_sqlite_error("disable foreign_keys", &error));
+        }
+        let disabled = if Self::faulted(
+            #[cfg(test)]
+            &faults,
+            RebuildGuardFault::DisableReadback,
+        ) {
+            Err(rusqlite::Error::InvalidQuery)
+        } else {
+            read_foreign_keys(state)
+        };
+        if let Err(error) = disabled {
+            return Err(rebuild_guard_setup_failure(
+                state,
+                original_foreign_keys,
+                "verify disabled foreign_keys",
+                error,
+                #[cfg(test)]
+                &faults,
+            ));
+        }
+        if let Ok(value) = disabled
+            && value != 0
+        {
+            return Err(rebuild_guard_setup_failure(
+                state,
+                original_foreign_keys,
+                "verify disabled foreign_keys",
+                rusqlite::Error::InvalidQuery,
+                #[cfg(test)]
+                &faults,
+            ));
+        }
+        let begin = if Self::faulted(
+            #[cfg(test)]
+            &faults,
+            RebuildGuardFault::Begin,
+        ) {
+            Err(rusqlite::Error::InvalidQuery)
+        } else {
+            state.execute_batch("BEGIN IMMEDIATE")
+        };
+        if let Err(error) = begin {
+            return Err(rebuild_guard_setup_failure(
+                state,
+                original_foreign_keys,
+                "begin immediate transaction",
+                error,
+                #[cfg(test)]
+                &faults,
+            ));
+        }
+        Ok(Self {
+            state,
+            original_foreign_keys,
+            stage: RebuildGuardStage::Active,
+            certainty: CommitCertainty::NotAttempted,
+            failures: RebuildGuardFailures::default(),
+            finished: false,
+            #[cfg(test)]
+            faults,
+        })
+    }
+
+    #[cfg(test)]
+    fn faulted(faults: &RebuildGuardFaults, fault: RebuildGuardFault) -> bool {
+        match fault {
+            RebuildGuardFault::DisableSet => faults.fail_disable_set,
+            RebuildGuardFault::DisableReadback => faults.fail_disable_readback,
+            RebuildGuardFault::Begin => faults.fail_begin,
+            RebuildGuardFault::CommitWhileActive => faults.fail_commit_while_active,
+            RebuildGuardFault::CommitAfterCommit => faults.fail_commit_after_commit,
+            RebuildGuardFault::Rollback => faults.fail_rollback,
+            RebuildGuardFault::RestoreSet => faults.fail_restore_set,
+            RebuildGuardFault::RestoreReadback => faults.fail_restore_readback,
+        }
+    }
+
+    #[cfg(not(test))]
+    fn faulted(_fault: RebuildGuardFault) -> bool {
+        false
+    }
+
+    fn connection(&self) -> &RusqliteConnection {
+        self.state
+    }
+
+    fn finish<T>(mut self, result: Result<T, DbError>) -> Result<T, DbError> {
+        let result = match result {
+            Ok(value) => self.commit().map(|()| value),
+            Err(primary) => {
+                self.failures.primary = Some(primary);
+                self.rollback_after_failure();
+                Err(())
+            }
+        };
+        self.restore_foreign_keys();
+        self.finished = true;
+        self.stage = RebuildGuardStage::Finished;
+
+        match result {
+            Ok(value)
+                if self.certainty == CommitCertainty::ConfirmedCommitted
+                    && !self.failures.has_cleanup_failure() =>
+            {
+                Ok(value)
+            }
+            Ok(_) | Err(()) => Err(self.finish_error()),
+        }
+    }
+
+    fn commit(&mut self) -> Result<(), ()> {
+        self.stage = RebuildGuardStage::Committing;
+        let commit = if self.has_fault(
+            #[cfg(test)]
+            RebuildGuardFault::CommitWhileActive,
+        ) {
+            Err(rusqlite::Error::InvalidQuery)
+        } else {
+            self.state.execute_batch("COMMIT")
+        };
+        if let Err(error) = commit {
+            self.failures.primary = Some(rebuild_guard_sqlite_error("commit", &error));
+            if self.state.is_autocommit() {
+                self.certainty = CommitCertainty::Uncertain;
+            } else {
+                self.rollback_after_failure();
+            }
+            return Err(());
+        }
+        if self.has_fault(
+            #[cfg(test)]
+            RebuildGuardFault::CommitAfterCommit,
+        ) {
+            self.failures.primary = Some(rebuild_guard_sqlite_error(
+                "commit returned an injected transport error after SQLite completed COMMIT",
+                &rusqlite::Error::InvalidQuery,
+            ));
+            self.certainty = CommitCertainty::Uncertain;
+            return Err(());
+        }
+        if self.state.is_autocommit() {
+            self.certainty = CommitCertainty::ConfirmedCommitted;
+            Ok(())
+        } else {
+            self.certainty = CommitCertainty::Uncertain;
+            Err(())
+        }
+    }
+
+    fn rollback_after_failure(&mut self) {
+        self.stage = RebuildGuardStage::RollingBack;
+        if self.state.is_autocommit() {
+            self.certainty = CommitCertainty::RolledBack;
+            return;
+        }
+        let rollback = if self.has_fault(
+            #[cfg(test)]
+            RebuildGuardFault::Rollback,
+        ) {
+            Err(rusqlite::Error::InvalidQuery)
+        } else {
+            self.state.execute_batch("ROLLBACK")
+        };
+        match rollback {
+            Ok(()) if self.state.is_autocommit() => {
+                self.certainty = CommitCertainty::RolledBack;
+            }
+            Ok(()) => {
+                self.failures.rollback =
+                    Some("SQLite rollback did not restore autocommit".to_string());
+                self.certainty = CommitCertainty::Uncertain;
+            }
+            Err(error) => {
+                self.failures.rollback = Some(sqlite_error_detail(&error));
+                self.certainty = if self.state.is_autocommit() {
+                    CommitCertainty::RolledBack
+                } else {
+                    CommitCertainty::Uncertain
+                };
+            }
+        }
+    }
+
+    fn restore_foreign_keys(&mut self) {
+        self.stage = RebuildGuardStage::RestoringForeignKeys;
+        if !self.state.is_autocommit() {
+            self.failures.restoration = Some(
+                "foreign_keys restoration was skipped because the transaction remains active"
+                    .to_string(),
+            );
+            self.certainty = CommitCertainty::Uncertain;
+            self.quarantine("transaction state is uncertain during foreign-key restoration");
+            return;
+        }
+        let restore = if self.has_fault(
+            #[cfg(test)]
+            RebuildGuardFault::RestoreSet,
+        ) {
+            Err(rusqlite::Error::InvalidQuery)
+        } else {
+            self.state.execute_batch(&format!(
+                "PRAGMA foreign_keys = {}",
+                self.original_foreign_keys
+            ))
+        };
+        if let Err(error) = restore {
+            self.failures.restoration =
+                Some(format!("set foreign_keys: {}", sqlite_error_detail(&error)));
+            self.quarantine("foreign_keys restoration failed");
+            return;
+        }
+        let restored = if self.has_fault(
+            #[cfg(test)]
+            RebuildGuardFault::RestoreReadback,
+        ) {
+            Err(rusqlite::Error::InvalidQuery)
+        } else {
+            read_foreign_keys(self.state)
+        };
+        match restored {
+            Ok(value) if value == self.original_foreign_keys => {}
+            Ok(value) => {
+                self.failures.restoration = Some(format!(
+                    "foreign_keys readback was {value}, expected {}",
+                    self.original_foreign_keys
+                ));
+                self.quarantine("foreign_keys restoration readback disagreed");
+            }
+            Err(error) => {
+                self.failures.restoration = Some(format!(
+                    "read foreign_keys: {}",
+                    sqlite_error_detail(&error)
+                ));
+                self.quarantine("foreign_keys restoration readback failed");
+            }
+        }
+    }
+
+    fn has_fault(&self, #[cfg(test)] fault: RebuildGuardFault) -> bool {
+        #[cfg(test)]
+        {
+            Self::faulted(&self.faults, fault)
+        }
+        #[cfg(not(test))]
+        {
+            false
+        }
+    }
+
+    fn quarantine(&mut self, reason: &str) {
+        self.state.mark_unusable(reason);
+    }
+
+    fn finish_error(&mut self) -> DbError {
+        if self.certainty == CommitCertainty::Uncertain || self.failures.restoration.is_some() {
+            self.quarantine("rebuild transaction cleanup did not establish a reusable connection");
+        }
+        if !self.failures.has_cleanup_failure()
+            && self.certainty == CommitCertainty::RolledBack
+            && let Some(primary) = self.failures.primary.take()
+        {
+            return primary;
+        }
+        let mut formatted =
+            FormattedError::new("SQLite rebuild transaction did not complete safely")
+                .with_detail(self.failures.details(self.stage, self.certainty))
+                .with_location(dbflux_core::ErrorLocation {
+                    schema: Some("main".to_string()),
+                    table: None,
+                    column: None,
+                    constraint: None,
+                })
+                .with_hint(
+                    "Reconnect and inspect the database before retrying the table alteration",
+                )
+                .with_retriable(false);
+        if let Some(code) = self
+            .failures
+            .primary
+            .as_ref()
+            .and_then(DbError::formatted)
+            .and_then(|primary| primary.code.as_deref())
+        {
+            formatted = formatted.with_code(code);
+        }
+        DbError::QueryFailed(formatted)
+    }
+}
+
+impl Drop for RebuildTransactionGuard<'_> {
+    fn drop(&mut self) {
+        if self.finished {
+            return;
+        }
+        log::error!("SQLite rebuild transaction guard dropped without explicit finish");
+        if !self.state.is_autocommit() {
+            if let Err(error) = self.state.execute_batch("ROLLBACK") {
+                log::error!("SQLite rebuild transaction guard drop rollback failed: {error}");
+            }
+        }
+        if self.state.is_autocommit() {
+            if let Err(error) = self.state.execute_batch(&format!(
+                "PRAGMA foreign_keys = {}",
+                self.original_foreign_keys
+            )) {
+                log::error!(
+                    "SQLite rebuild transaction guard drop foreign-key restoration failed: {error}"
+                );
+            }
+        } else {
+            log::error!("SQLite rebuild transaction guard drop left an active transaction");
+        }
+        self.state
+            .mark_unusable("rebuild transaction guard dropped without explicit completion");
+    }
+}
+
+#[allow(dead_code)]
+fn read_foreign_keys(connection: &RusqliteConnection) -> Result<i64, rusqlite::Error> {
+    connection.query_row("PRAGMA foreign_keys", [], |row| row.get(0))
+}
+
+#[allow(dead_code)]
+fn sqlite_error_detail(error: &rusqlite::Error) -> String {
+    match error {
+        rusqlite::Error::SqliteFailure(code, detail) => format!(
+            "SQLite {:?} (extended code {}): {}",
+            code.code,
+            code.extended_code,
+            detail.as_deref().unwrap_or("no SQLite detail")
+        ),
+        _ => error.to_string(),
+    }
+}
+
+#[allow(dead_code)]
+fn rebuild_guard_caller_owned_transaction_error() -> DbError {
+    DbError::QueryFailed(
+        FormattedError::new("SQLite rebuild transaction requires an autocommit connection")
+            .with_detail(
+                "caller-owned transaction is active; no foreign-key settings or transaction cleanup were attempted",
+            )
+            .with_location(dbflux_core::ErrorLocation {
+                schema: Some("main".to_string()),
+                table: None,
+                column: None,
+                constraint: None,
+            })
+            .with_hint("Finish or roll back the caller transaction before retrying")
+            .with_retriable(false),
+    )
+}
+
+#[allow(dead_code)]
+fn rebuild_guard_sqlite_error(action: &str, error: &rusqlite::Error) -> DbError {
+    let mut formatted = FormattedError::new("SQLite rebuild transaction setup failed")
+        .with_detail(format!("{action}: {}", sqlite_error_detail(error)))
+        .with_location(dbflux_core::ErrorLocation {
+            schema: Some("main".to_string()),
+            table: None,
+            column: None,
+            constraint: None,
+        })
+        .with_hint("Inspect the SQLite connection state before retrying")
+        .with_retriable(false);
+    if let rusqlite::Error::SqliteFailure(code, _) = error {
+        formatted = formatted.with_code(format!("{}", code.extended_code));
+    }
+    DbError::QueryFailed(formatted)
+}
+
+#[allow(dead_code)]
+fn rebuild_guard_setup_failure(
+    state: &mut SqliteConnectionState,
+    original_foreign_keys: i64,
+    action: &str,
+    error: rusqlite::Error,
+    #[cfg(test)] faults: &RebuildGuardFaults,
+) -> DbError {
+    let mut details = vec![format!("{action}: {}", sqlite_error_detail(&error))];
+    if !state.is_autocommit() {
+        match state.execute_batch("ROLLBACK") {
+            Ok(()) if state.is_autocommit() => {}
+            Ok(()) => {
+                details.push("setup rollback did not restore autocommit".to_string());
+                state.mark_unusable("setup cleanup left an active transaction");
+            }
+            Err(rollback_error) => {
+                details.push(format!(
+                    "setup rollback: {}",
+                    sqlite_error_detail(&rollback_error)
+                ));
+                if !state.is_autocommit() {
+                    state.mark_unusable("setup cleanup rollback failed");
+                }
+            }
+        }
+    }
+    let restore = if !state.is_autocommit() {
+        Err(rusqlite::Error::InvalidQuery)
+    } else if {
+        #[cfg(test)]
+        {
+            RebuildTransactionGuard::faulted(faults, RebuildGuardFault::RestoreSet)
+        }
+        #[cfg(not(test))]
+        {
+            false
+        }
+    } {
+        Err(rusqlite::Error::InvalidQuery)
+    } else {
+        state.execute_batch(&format!("PRAGMA foreign_keys = {original_foreign_keys}"))
+    };
+    if let Err(restore_error) = restore {
+        details.push(format!(
+            "foreign_keys restoration: {}",
+            sqlite_error_detail(&restore_error)
+        ));
+        state.mark_unusable("setup cleanup could not restore foreign_keys");
+    } else {
+        let readback = read_foreign_keys(state);
+        match readback {
+            Ok(value) if value == original_foreign_keys => {}
+            Ok(value) => {
+                details.push(format!(
+                    "foreign_keys restoration readback was {value}, expected {original_foreign_keys}"
+                ));
+                state.mark_unusable("setup cleanup foreign_keys readback disagreed");
+            }
+            Err(readback_error) => {
+                details.push(format!(
+                    "foreign_keys restoration readback: {}",
+                    sqlite_error_detail(&readback_error)
+                ));
+                state.mark_unusable("setup cleanup could not read foreign_keys");
+            }
+        }
+    }
+    let mut formatted = FormattedError::new("SQLite rebuild transaction setup failed")
+        .with_detail(details.join("; "))
+        .with_location(dbflux_core::ErrorLocation {
+            schema: Some("main".to_string()),
+            table: None,
+            column: None,
+            constraint: None,
+        })
+        .with_hint("Reconnect and inspect the SQLite connection state before retrying")
+        .with_retriable(false);
+    if let rusqlite::Error::SqliteFailure(code, _) = error {
+        formatted = formatted.with_code(code.extended_code.to_string());
+    }
+    DbError::QueryFailed(formatted)
+}
+
+#[derive(Debug, Clone)]
+struct RebuildExpectedFacts {
+    selected_changes: RebuildChanges,
     retained_columns: Vec<String>,
     identity: String,
+    explicit_index_sql: Vec<String>,
+    foreign_key_intent: Vec<ResolvedForeignKeyRelationship>,
+}
+
+#[derive(Debug, Clone)]
+struct RebuildCapture {
+    observation: RebuildObservation,
+    prepared_create_sql: String,
+    final_expected_facts: RebuildExpectedFacts,
     replacement: String,
     copy: RebuildCopyIntent,
-    exact_index_sql: Vec<String>,
-    foreign_key_intent: Vec<ResolvedForeignKeyRelationship>,
 }
 
 struct RebuildPlan {
     state: Arc<Mutex<SqliteConnectionState>>,
+    cancelled: Arc<AtomicBool>,
     capture: RebuildCapture,
     preview: TableAlterPreview,
 }
@@ -1456,13 +2079,763 @@ impl PreparedTableAlter for RebuildPlan {
     }
 
     fn execute(self: Box<Self>) -> Result<TableAlterOutcome, DbError> {
-        let _state = &self.state;
-        let _capture = &self.capture;
-        Err(DbError::NotSupported(
-            "SQLite rebuild execution lifecycle is not installed; this read-only plan did not change schema, data, or connection settings"
-                .to_string(),
-        ))
+        self.execute_guarded()
     }
+}
+
+impl RebuildPlan {
+    fn execute_guarded(self: Box<Self>) -> Result<TableAlterOutcome, DbError> {
+        let mut state = SqliteConnectionState::lock_checked(&self.state)?;
+        if !state.is_autocommit() {
+            return Err(rebuild_guard_caller_owned_transaction_error());
+        }
+        let settings = capture_native_connection_settings(&state)?;
+        if settings != self.capture.observation.settings {
+            return Err(DbError::NotSupported(
+                "SQLite rebuild plan connection settings changed; refresh the preview".to_string(),
+            ));
+        }
+        revalidate_rebuild_plan(&state, &self.capture)?;
+
+        // This operation exclusively owns the shared connection from this point until cleanup.
+        self.cancelled.store(false, Ordering::SeqCst);
+        #[cfg(test)]
+        if let Some((_, hook)) = BEFORE_REBUILD_WRITE_LOCK
+            .lock()
+            .expect("rebuild write-lock test hook mutex should not be poisoned")
+            .take_if(|(thread_id, _)| *thread_id == std::thread::current().id())
+        {
+            hook();
+        }
+        let guard = RebuildTransactionGuard::begin(&mut state)?;
+        let result = execute_rebuild(&guard, &self.capture, &self.cancelled);
+        guard.finish(result)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RebuildExecutionStage {
+    Create,
+    Copy,
+    Compare,
+    Drop,
+    Rename,
+    Index,
+    FinalValidation,
+    Precommit,
+}
+
+fn execute_rebuild(
+    guard: &RebuildTransactionGuard<'_>,
+    capture: &RebuildCapture,
+    cancelled: &AtomicBool,
+) -> Result<TableAlterOutcome, DbError> {
+    let connection = guard.connection();
+    check_rebuild_cancelled(cancelled, "before rebuild validation")?;
+    revalidate_rebuild_plan(connection, capture)?;
+    check_rebuild_cancelled(cancelled, "before replacement creation")?;
+    connection
+        .execute_batch(&capture.prepared_create_sql)
+        .map_err(|error| rebuild_sqlite_execution_error("create replacement table", &error))?;
+    inject_rebuild_execution_fault(connection, RebuildExecutionStage::Create)?;
+    check_rebuild_cancelled(cancelled, "before data copy")?;
+
+    let table = rebuild_table_name(capture)?;
+    let projection = capture.copy.quoted_projection();
+    connection
+        .execute_batch(&format!(
+            "INSERT INTO main.{} ({projection}) SELECT {projection} FROM main.{}",
+            quote_identifier(&capture.replacement),
+            quote_identifier(table),
+        ))
+        .map_err(|error| rebuild_sqlite_execution_error("copy retained rows", &error))?;
+    inject_rebuild_execution_fault(connection, RebuildExecutionStage::Copy)?;
+    compare_rebuild_rows(connection, capture, cancelled)?;
+    inject_rebuild_execution_fault(connection, RebuildExecutionStage::Compare)?;
+    check_rebuild_cancelled(cancelled, "before source drop")?;
+    connection
+        .execute_batch(&format!("DROP TABLE main.{}", quote_identifier(table)))
+        .map_err(|error| rebuild_sqlite_execution_error("drop source table", &error))?;
+    inject_rebuild_execution_fault(connection, RebuildExecutionStage::Drop)?;
+    check_rebuild_cancelled(cancelled, "before replacement rename")?;
+    connection
+        .execute_batch(&format!(
+            "ALTER TABLE main.{} RENAME TO {}",
+            quote_identifier(&capture.replacement),
+            quote_identifier(table),
+        ))
+        .map_err(|error| rebuild_sqlite_execution_error("rename replacement table", &error))?;
+    inject_rebuild_execution_fault(connection, RebuildExecutionStage::Rename)?;
+    for index_sql in &capture.final_expected_facts.explicit_index_sql {
+        check_rebuild_cancelled(cancelled, "before index restoration")?;
+        connection
+            .execute_batch(index_sql)
+            .map_err(|error| rebuild_sqlite_execution_error("restore explicit index", &error))?;
+        inject_rebuild_execution_fault(connection, RebuildExecutionStage::Index)?;
+    }
+    validate_rebuild_final_state(connection, capture)?;
+    inject_rebuild_execution_fault(connection, RebuildExecutionStage::FinalValidation)?;
+    check_rebuild_cancelled(cancelled, "immediately before commit")?;
+    inject_rebuild_execution_fault(connection, RebuildExecutionStage::Precommit)?;
+    Ok(TableAlterOutcome {
+        statement_count: 4 + capture.final_expected_facts.explicit_index_sql.len(),
+        table_atomic: true,
+    })
+}
+
+fn inject_rebuild_execution_fault(
+    connection: &RusqliteConnection,
+    stage: RebuildExecutionStage,
+) -> Result<(), DbError> {
+    #[cfg(not(test))]
+    let _ = (connection, stage);
+    #[cfg(test)]
+    {
+        let mut fault = REBUILD_EXECUTION_FAULT
+            .lock()
+            .expect("rebuild execution fault mutex should not be poisoned");
+        if fault.as_ref().is_some_and(|(thread_id, selected)| {
+            *thread_id == std::thread::current().id() && *selected == stage
+        }) {
+            *fault = None;
+            return Err(rebuild_execution_error(&format!(
+                "injected rebuild execution fault at {stage:?}"
+            )));
+        }
+    }
+    #[cfg(test)]
+    run_rebuild_stage_hook(connection, stage)?;
+    Ok(())
+}
+
+fn rebuild_table_name(capture: &RebuildCapture) -> Result<&str, DbError> {
+    capture
+        .observation
+        .catalog
+        .iter()
+        .find(|entry| {
+            entry.object_type == "table"
+                && entry.sql.as_deref() == Some(&capture.observation.source_sql)
+        })
+        .map(|entry| entry.name.as_str())
+        .ok_or_else(|| {
+            rebuild_execution_error("prepared rebuild source table is no longer identifiable")
+        })
+}
+
+fn revalidate_rebuild_plan(
+    connection: &RusqliteConnection,
+    capture: &RebuildCapture,
+) -> Result<(), DbError> {
+    let mut current = capture_rebuild_observation(connection, rebuild_table_name(capture)?)?;
+    // The guard is the sole owner of this intentional connection-setting transition.
+    current.settings.foreign_keys = capture.observation.settings.foreign_keys;
+    if current != capture.observation {
+        return Err(DbError::NotSupported(
+            "SQLite rebuild plan is stale or its private replacement name now collides; refresh the preview"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn check_rebuild_cancelled(cancelled: &AtomicBool, _stage: &str) -> Result<(), DbError> {
+    if cancelled.load(Ordering::SeqCst) {
+        return Err(DbError::Cancelled);
+    }
+    Ok(())
+}
+
+fn compare_rebuild_rows(
+    connection: &RusqliteConnection,
+    capture: &RebuildCapture,
+    cancelled: &AtomicBool,
+) -> Result<(), DbError> {
+    let table = rebuild_table_name(capture)?;
+    let projection = capture.copy.quoted_projection();
+    let source_sql = format!(
+        "SELECT {projection} FROM main.{} ORDER BY {}",
+        quote_identifier(table),
+        quote_identifier(&capture.copy.identity),
+    );
+    let replacement_sql = format!(
+        "SELECT {projection} FROM main.{} ORDER BY {}",
+        quote_identifier(&capture.replacement),
+        quote_identifier(&capture.copy.identity),
+    );
+    return compare_exact_row_streams(
+        connection,
+        &source_sql,
+        &replacement_sql,
+        capture.copy.source_projection.len(),
+        cancelled,
+    );
+}
+
+fn compare_exact_row_streams(
+    connection: &RusqliteConnection,
+    source_sql: &str,
+    replacement_sql: &str,
+    column_count: usize,
+    cancelled: &AtomicBool,
+) -> Result<(), DbError> {
+    let mut source_statement = connection
+        .prepare(source_sql)
+        .map_err(|error| rebuild_sqlite_execution_error("prepare source comparison", &error))?;
+    let mut replacement_statement = match connection.prepare(replacement_sql) {
+        Ok(statement) => statement,
+        Err(error) => {
+            let primary = Err(rebuild_sqlite_execution_error(
+                "prepare replacement comparison",
+                &error,
+            ));
+            let source_finalization = finalize_comparison_statement(source_statement, true);
+            return finish_comparison_result(primary, source_finalization, Ok(()));
+        }
+    };
+    let primary = (|| -> Result<(), DbError> {
+        let mut source_rows = source_statement
+            .query([])
+            .map_err(|error| rebuild_sqlite_execution_error("read source comparison", &error))?;
+        let mut replacement_rows = replacement_statement.query([]).map_err(|error| {
+            rebuild_sqlite_execution_error("read replacement comparison", &error)
+        })?;
+        let mut row_number = 0_u64;
+        loop {
+            check_rebuild_cancelled(cancelled, "while comparing copied rows")?;
+            let source = source_rows.next().map_err(|error| {
+                rebuild_sqlite_execution_error("advance source comparison", &error)
+            })?;
+            let replacement = replacement_rows.next().map_err(|error| {
+                rebuild_sqlite_execution_error("advance replacement comparison", &error)
+            })?;
+            match (source, replacement) {
+                (None, None) => return Ok(()),
+                (Some(_), None) | (None, Some(_)) => {
+                    return Err(rebuild_execution_error(
+                        "SQLite rebuild row count changed during exact copy comparison",
+                    ));
+                }
+                (Some(source), Some(replacement)) => {
+                    for column in 0..column_count {
+                        let source = source.get_ref(column).map_err(|error| {
+                            rebuild_sqlite_execution_error("read source value", &error)
+                        })?;
+                        let replacement = replacement.get_ref(column).map_err(|error| {
+                            rebuild_sqlite_execution_error("read replacement value", &error)
+                        })?;
+                        if !sqlite_value_refs_equal(source, replacement) {
+                            return Err(rebuild_execution_error(&format!(
+                                "SQLite rebuild exact copy comparison differed at row {row_number}, column {column}"
+                            )));
+                        }
+                    }
+                    row_number += 1;
+                    #[cfg(test)]
+                    cancel_comparison_after_row(row_number, cancelled);
+                }
+            }
+        }
+    })();
+    let source_finalization = finalize_comparison_statement(source_statement, true);
+    let replacement_finalization = finalize_comparison_statement(replacement_statement, false);
+    finish_comparison_result(primary, source_finalization, replacement_finalization)
+}
+
+fn finalize_comparison_statement(
+    statement: rusqlite::Statement<'_>,
+    _source: bool,
+) -> Result<(), rusqlite::Error> {
+    let result = statement.finalize();
+    #[cfg(test)]
+    if comparison_finalize_fault(_source) {
+        return Err(rusqlite::Error::InvalidQuery);
+    }
+    result
+}
+
+#[cfg(test)]
+fn cancel_comparison_after_row(row_number: u64, cancelled: &AtomicBool) {
+    if row_number != 1 {
+        return;
+    }
+    let mut hook = COMPARISON_CANCEL_AFTER_ROW
+        .lock()
+        .expect("comparison cancellation hook mutex should not be poisoned");
+    if hook
+        .as_ref()
+        .is_some_and(|(thread_id, _)| *thread_id == std::thread::current().id())
+    {
+        if let Some((_, cancellation)) = hook.take() {
+            cancellation.store(true, Ordering::SeqCst);
+        }
+    }
+    let _cancelled = cancelled;
+}
+
+#[cfg(test)]
+fn comparison_finalize_fault(source: bool) -> bool {
+    let mut guard = COMPARISON_FINALIZE_FAULTS
+        .lock()
+        .expect("comparison finalization fault hook mutex should not be poisoned");
+    let Some((thread_id, faults)) = guard.as_mut() else {
+        return false;
+    };
+    if *thread_id != std::thread::current().id() {
+        return false;
+    }
+    let failed = if source {
+        std::mem::take(&mut faults.source)
+    } else {
+        std::mem::take(&mut faults.replacement)
+    };
+    if !faults.source && !faults.replacement {
+        *guard = None;
+    }
+    failed
+}
+
+fn finish_comparison_result(
+    primary: Result<(), DbError>,
+    source_finalization: Result<(), rusqlite::Error>,
+    replacement_finalization: Result<(), rusqlite::Error>,
+) -> Result<(), DbError> {
+    if source_finalization.is_ok() && replacement_finalization.is_ok() {
+        return primary;
+    }
+    let mut details = Vec::new();
+    if let Err(primary) = &primary {
+        details.push(format!("primary comparison failure: {primary}"));
+    }
+    if let Err(error) = &source_finalization {
+        details.push(format!(
+            "source statement finalization: {}",
+            sqlite_error_detail(error)
+        ));
+    }
+    if let Err(error) = &replacement_finalization {
+        details.push(format!(
+            "replacement statement finalization: {}",
+            sqlite_error_detail(error)
+        ));
+    }
+    let mut formatted = FormattedError::new("SQLite rebuild comparison cleanup failed")
+        .with_detail(details.join("; "))
+        .with_location(dbflux_core::ErrorLocation {
+            schema: Some("main".to_string()),
+            table: None,
+            column: None,
+            constraint: None,
+        })
+        .with_retriable(false);
+    if let Some(code) = primary
+        .as_ref()
+        .err()
+        .and_then(DbError::formatted)
+        .and_then(|formatted| formatted.code.as_deref())
+    {
+        formatted = formatted.with_code(code);
+    } else if let Some(code) = source_finalization
+        .as_ref()
+        .err()
+        .and_then(sqlite_extended_code)
+        .or_else(|| {
+            replacement_finalization
+                .as_ref()
+                .err()
+                .and_then(sqlite_extended_code)
+        })
+    {
+        formatted = formatted.with_code(code);
+    }
+    Err(DbError::QueryFailed(formatted))
+}
+
+fn sqlite_extended_code(error: &rusqlite::Error) -> Option<String> {
+    match error {
+        rusqlite::Error::SqliteFailure(code, _) => Some(code.extended_code.to_string()),
+        _ => None,
+    }
+}
+
+fn sqlite_value_refs_equal(left: ValueRef<'_>, right: ValueRef<'_>) -> bool {
+    match (left, right) {
+        (ValueRef::Null, ValueRef::Null) => true,
+        (ValueRef::Integer(left), ValueRef::Integer(right)) => left == right,
+        (ValueRef::Real(left), ValueRef::Real(right)) => left.to_bits() == right.to_bits(),
+        (ValueRef::Text(left), ValueRef::Text(right)) => left == right,
+        (ValueRef::Blob(left), ValueRef::Blob(right)) => left == right,
+        _ => false,
+    }
+}
+
+fn validate_single_integrity_text_row(
+    connection: &RusqliteConnection,
+    sql: &str,
+) -> Result<(), DbError> {
+    let mut statement = connection
+        .prepare(sql)
+        .map_err(|error| rebuild_sqlite_execution_error("prepare integrity_check", &error))?;
+    let primary = (|| -> Result<(), DbError> {
+        if statement.column_count() != 1 {
+            return Err(rebuild_execution_error(
+                "SQLite rebuild integrity_check must return exactly one column",
+            ));
+        }
+        let mut rows = statement
+            .query([])
+            .map_err(|error| rebuild_sqlite_execution_error("run integrity_check", &error))?;
+        let row = rows
+            .next()
+            .map_err(|error| rebuild_sqlite_execution_error("read integrity_check", &error))?
+            .ok_or_else(|| {
+                rebuild_execution_error("SQLite rebuild integrity_check returned no rows")
+            })?;
+        if !matches!(
+            row.get_ref(0)
+                .map_err(|error| rebuild_sqlite_execution_error("read integrity_check", &error))?,
+            ValueRef::Text(value) if value == b"ok"
+        ) {
+            return Err(rebuild_execution_error(
+                "SQLite rebuild integrity_check did not return exactly raw TEXT ok",
+            ));
+        }
+        if rows
+            .next()
+            .map_err(|error| rebuild_sqlite_execution_error("read integrity_check", &error))?
+            .is_some()
+        {
+            return Err(rebuild_execution_error(
+                "SQLite rebuild integrity_check returned more than one row",
+            ));
+        }
+        Ok(())
+    })();
+    finish_integrity_result(primary, finalize_integrity_statement(statement))
+}
+
+fn finalize_integrity_statement(statement: rusqlite::Statement<'_>) -> Result<(), rusqlite::Error> {
+    let result = statement.finalize();
+    #[cfg(test)]
+    if let Some(code) = INTEGRITY_FINALIZE_FAULT
+        .lock()
+        .expect("integrity finalization fault mutex should not be poisoned")
+        .take_if(|(thread_id, _)| *thread_id == std::thread::current().id())
+        .map(|(_, code)| code)
+    {
+        return Err(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(code),
+            Some("injected integrity finalization failure".to_string()),
+        ));
+    }
+    result
+}
+
+fn finish_integrity_result(
+    primary: Result<(), DbError>,
+    finalization: Result<(), rusqlite::Error>,
+) -> Result<(), DbError> {
+    match (primary, finalization) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Ok(()), Err(error)) => Err(rebuild_sqlite_execution_error(
+            "finalize integrity_check",
+            &error,
+        )),
+        (Err(primary), Ok(())) => Err(primary),
+        (Err(primary), Err(error)) => {
+            let mut formatted =
+                FormattedError::new("SQLite rebuild integrity_check cleanup failed")
+                    .with_detail(format!(
+                        "primary integrity_check failure: {primary}; statement finalization: {}",
+                        sqlite_error_detail(&error)
+                    ))
+                    .with_location(dbflux_core::ErrorLocation {
+                        schema: Some("main".to_string()),
+                        table: None,
+                        column: None,
+                        constraint: None,
+                    })
+                    .with_retriable(false);
+            if let Some(code) = primary
+                .formatted()
+                .and_then(|formatted| formatted.code.as_deref())
+            {
+                formatted = formatted.with_code(code);
+            } else if let Some(code) = sqlite_extended_code(&error) {
+                formatted = formatted.with_code(code);
+            }
+            Err(DbError::QueryFailed(formatted))
+        }
+    }
+}
+
+fn validate_final_index_capture(
+    expected: &[IndexCapture],
+    actual: &[IndexCapture],
+) -> Result<(), DbError> {
+    if actual.len() < expected.len() {
+        return Err(rebuild_execution_error(
+            "SQLite rebuild expected index is absent from the final observation",
+        ));
+    }
+    if actual.len() > expected.len() {
+        return Err(rebuild_execution_error(
+            "SQLite rebuild final observation contains an extra index",
+        ));
+    }
+    for (expected, actual) in expected.iter().zip(actual) {
+        if expected.name != actual.name {
+            return Err(rebuild_execution_error(
+                "SQLite rebuild index name or order differs from the prepared expectation",
+            ));
+        }
+        if expected.unique != actual.unique {
+            return Err(rebuild_execution_error(
+                "SQLite rebuild index uniqueness differs from the prepared expectation",
+            ));
+        }
+        if expected.origin != actual.origin {
+            return Err(rebuild_execution_error(
+                "SQLite rebuild index origin differs from the prepared expectation",
+            ));
+        }
+        if expected.sql != actual.sql {
+            return Err(rebuild_execution_error(
+                "SQLite rebuild index SQL differs from the prepared expectation",
+            ));
+        }
+        if expected.keys.len() != actual.keys.len() {
+            return Err(rebuild_execution_error(
+                "SQLite rebuild index key membership differs from the prepared expectation",
+            ));
+        }
+        for (expected_key, actual_key) in expected.keys.iter().zip(&actual.keys) {
+            if expected_key.sequence != actual_key.sequence {
+                return Err(rebuild_execution_error(
+                    "SQLite rebuild index key order differs from the prepared expectation",
+                ));
+            }
+            if expected_key.column != actual_key.column {
+                return Err(rebuild_execution_error(
+                    "SQLite rebuild index key column differs from the prepared expectation",
+                ));
+            }
+            if expected_key.descending != actual_key.descending {
+                return Err(rebuild_execution_error(
+                    "SQLite rebuild index key direction differs from the prepared expectation",
+                ));
+            }
+            if expected_key.collation != actual_key.collation {
+                return Err(rebuild_execution_error(
+                    "SQLite rebuild index key collation differs from the prepared expectation",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_final_connection_settings(
+    expected: &NativeConnectionSettings,
+    actual: &NativeConnectionSettings,
+) -> Result<(), DbError> {
+    for (name, expected, actual) in [
+        ("foreign_keys", 0, actual.foreign_keys),
+        (
+            "writable_schema",
+            expected.writable_schema,
+            actual.writable_schema,
+        ),
+        (
+            "legacy_alter_table",
+            expected.legacy_alter_table,
+            actual.legacy_alter_table,
+        ),
+        (
+            "ignore_check_constraints",
+            expected.ignore_check_constraints,
+            actual.ignore_check_constraints,
+        ),
+        (
+            "defer_foreign_keys",
+            expected.defer_foreign_keys,
+            actual.defer_foreign_keys,
+        ),
+    ] {
+        if expected != actual {
+            return Err(rebuild_execution_error(&format!(
+                "SQLite rebuild changed protected connection setting {name}",
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_prepared_final_facts(
+    table: &str,
+    capture: &RebuildCapture,
+    final_observation: &RebuildObservation,
+    final_table: &CreateTable,
+) -> Result<(), DbError> {
+    let actual_retained = final_table
+        .column_names()
+        .filter(|column| !column.eq_ignore_ascii_case(&capture.final_expected_facts.identity))
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if actual_retained != capture.final_expected_facts.retained_columns {
+        return Err(rebuild_execution_error(
+            "SQLite rebuild retained column names or order differ from the prepared expectation",
+        ));
+    }
+    let metadata = final_observation
+        .table_metadata
+        .iter()
+        .find(|metadata| metadata.name.eq_ignore_ascii_case(table))
+        .ok_or_else(|| {
+            rebuild_execution_error("SQLite rebuild cannot find final table metadata")
+        })?;
+    let identity = rebuild_identity(
+        table,
+        &final_observation.columns,
+        final_table,
+        &metadata.rowid_aliases,
+    )?;
+    if identity != capture.final_expected_facts.identity {
+        return Err(rebuild_execution_error(
+            "SQLite rebuild identity differs from the prepared expectation",
+        ));
+    }
+    validate_final_index_capture(&capture.observation.indexes, &final_observation.indexes)?;
+    validate_rebuild_index_metadata(
+        table,
+        final_table,
+        &final_observation.columns,
+        &final_observation.indexes,
+    )?;
+    validate_final_connection_settings(&capture.observation.settings, &final_observation.settings)
+}
+
+fn validate_rebuild_final_observation(
+    capture: &RebuildCapture,
+    final_observation: &RebuildObservation,
+) -> Result<(), DbError> {
+    let table = rebuild_table_name(capture)?;
+    if final_observation.foreign_key_violation.is_some() {
+        return Err(rebuild_execution_error(
+            "SQLite rebuild foreign_key_check found a violation",
+        ));
+    }
+    let source = parse_create_table(&capture.observation.source_sql).map_err(|reason| {
+        rebuild_execution_error(&format!("could not parse prepared source SQL: {reason}"))
+    })?;
+    let final_table = parse_create_table(&final_observation.source_sql).map_err(|reason| {
+        rebuild_execution_error(&format!("could not parse final replacement SQL: {reason}"))
+    })?;
+    validate_rebuild_semantic_delta(
+        table,
+        &source,
+        &final_table,
+        &capture.final_expected_facts.selected_changes,
+    )?;
+    validate_parsed_table_metadata(table, &final_table, &final_observation.columns)?;
+    validate_prepared_final_facts(table, capture, &final_observation, &final_table)?;
+    let final_indexes = final_observation
+        .indexes
+        .iter()
+        .filter_map(|index| index.sql.clone())
+        .collect::<Vec<_>>();
+    if final_indexes != capture.final_expected_facts.explicit_index_sql {
+        return Err(rebuild_execution_error(
+            "SQLite rebuild did not restore the prepared explicit indexes",
+        ));
+    }
+    let relationships = resolve_foreign_key_relationships(
+        table,
+        &final_observation.table_metadata,
+        &final_observation.foreign_key_metadata,
+    )?;
+    if relationships != capture.final_expected_facts.foreign_key_intent {
+        return Err(rebuild_execution_error(
+            "SQLite rebuild foreign-key metadata differs from the prepared intent",
+        ));
+    }
+    if final_observation.catalog.iter().any(|entry| {
+        entry.name.eq_ignore_ascii_case(&capture.replacement)
+            || entry.table_name.eq_ignore_ascii_case(&capture.replacement)
+    }) {
+        return Err(rebuild_execution_error(
+            "SQLite rebuild leaked its private replacement object",
+        ));
+    }
+    let unaffected_before = capture.observation.catalog.iter().filter(|entry| {
+        !entry.name.eq_ignore_ascii_case(table) && !entry.table_name.eq_ignore_ascii_case(table)
+    });
+    let unaffected_after = final_observation.catalog.iter().filter(|entry| {
+        !entry.name.eq_ignore_ascii_case(table) && !entry.table_name.eq_ignore_ascii_case(table)
+    });
+    if !unaffected_before.eq(unaffected_after) {
+        return Err(rebuild_execution_error(
+            "SQLite rebuild changed non-target main catalog metadata",
+        ));
+    }
+    if final_observation.temp_catalog != capture.observation.temp_catalog {
+        return Err(rebuild_execution_error(
+            "SQLite rebuild changed non-target temp catalog metadata",
+        ));
+    }
+    if final_observation.databases != capture.observation.databases {
+        return Err(rebuild_execution_error(
+            "SQLite rebuild changed database list metadata",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_rebuild_final_state(
+    connection: &RusqliteConnection,
+    capture: &RebuildCapture,
+) -> Result<(), DbError> {
+    let table = rebuild_table_name(capture)?;
+    let final_observation = capture_rebuild_observation_once(connection, table)?;
+    validate_rebuild_final_observation(capture, &final_observation)?;
+    validate_single_integrity_text_row(connection, "PRAGMA main.integrity_check")
+}
+
+fn rebuild_execution_error(message: &str) -> DbError {
+    DbError::QueryFailed(
+        FormattedError::new("SQLite rebuild execution failed")
+            .with_detail(message)
+            .with_location(dbflux_core::ErrorLocation {
+                schema: Some("main".to_string()),
+                table: None,
+                column: None,
+                constraint: None,
+            })
+            .with_retriable(false),
+    )
+}
+
+fn rebuild_sqlite_execution_error(action: &str, error: &rusqlite::Error) -> DbError {
+    if matches!(
+        error,
+        rusqlite::Error::SqliteFailure(code, _)
+            if code.code == rusqlite::ErrorCode::OperationInterrupted
+    ) {
+        return DbError::Cancelled;
+    }
+    let mut formatted = FormattedError::new("SQLite rebuild execution failed")
+        .with_detail(format!("{action}: {}", sqlite_error_detail(error)))
+        .with_location(dbflux_core::ErrorLocation {
+            schema: Some("main".to_string()),
+            table: None,
+            column: None,
+            constraint: None,
+        })
+        .with_retriable(false);
+    if let rusqlite::Error::SqliteFailure(code, _) = error {
+        formatted = formatted.with_code(code.extended_code.to_string());
+    }
+    DbError::QueryFailed(formatted)
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -2836,6 +4209,10 @@ static BEFORE_NATIVE_DROP_BEGIN: Mutex<Option<(std::thread::ThreadId, Box<dyn Fn
     Mutex::new(None);
 
 #[cfg(test)]
+static BEFORE_REBUILD_WRITE_LOCK: Mutex<Option<(std::thread::ThreadId, Box<dyn FnOnce() + Send>)>> =
+    Mutex::new(None);
+
+#[cfg(test)]
 static SQLITE_ENGINE_VERSION_OVERRIDE: Mutex<Option<(std::thread::ThreadId, i32)>> =
     Mutex::new(None);
 
@@ -2845,21 +4222,1208 @@ static BEFORE_NATIVE_CAPTURE_SECOND_READ: Mutex<
 > = Mutex::new(None);
 
 #[cfg(test)]
+#[derive(Default)]
+struct ComparisonFinalizeFaults {
+    source: bool,
+    replacement: bool,
+}
+
+#[cfg(test)]
+static COMPARISON_FINALIZE_FAULTS: Mutex<
+    Option<(std::thread::ThreadId, ComparisonFinalizeFaults)>,
+> = Mutex::new(None);
+
+#[cfg(test)]
+static COMPARISON_CANCEL_AFTER_ROW: Mutex<Option<(std::thread::ThreadId, Arc<AtomicBool>)>> =
+    Mutex::new(None);
+
+#[cfg(test)]
+static INTEGRITY_FINALIZE_FAULT: Mutex<Option<(std::thread::ThreadId, i32)>> = Mutex::new(None);
+
+#[cfg(test)]
+static REBUILD_EXECUTION_FAULT: Mutex<Option<(std::thread::ThreadId, RebuildExecutionStage)>> =
+    Mutex::new(None);
+
+#[cfg(test)]
+static REBUILD_STAGE_HOOK: Mutex<
+    Option<(
+        std::thread::ThreadId,
+        RebuildExecutionStage,
+        Box<dyn FnOnce(&RusqliteConnection) -> Result<(), rusqlite::Error> + Send>,
+    )>,
+> = Mutex::new(None);
+
+#[cfg(test)]
+static REBUILD_GUARD_FAULTS: Mutex<Option<(std::thread::ThreadId, RebuildGuardFaults)>> =
+    Mutex::new(None);
+
+#[cfg(test)]
+fn run_rebuild_stage_hook(
+    connection: &RusqliteConnection,
+    stage: RebuildExecutionStage,
+) -> Result<(), DbError> {
+    let hook = REBUILD_STAGE_HOOK
+        .lock()
+        .expect("rebuild stage hook mutex should not be poisoned")
+        .take_if(|(thread_id, selected, _)| {
+            *thread_id == std::thread::current().id() && *selected == stage
+        });
+    if let Some((_, _, hook)) = hook {
+        hook(connection).map_err(|error| {
+            rebuild_sqlite_execution_error("run rebuild test stage hook", &error)
+        })?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+fn rebuild_guard_faults_for_current_thread() -> RebuildGuardFaults {
+    REBUILD_GUARD_FAULTS
+        .lock()
+        .expect("rebuild guard fault mutex should not be poisoned")
+        .take_if(|(thread_id, _)| *thread_id == std::thread::current().id())
+        .map(|(_, faults)| faults)
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
 
     use rusqlite::Connection as RusqliteConnection;
 
     use super::{
         AFTER_REBUILD_OBSERVATION_CAPTURE, BEFORE_NATIVE_CAPTURE_SECOND_READ,
-        BEFORE_NATIVE_DROP_BEGIN, BEFORE_REBUILD_CAPTURE_SECOND_READ, ForeignKeyCapture,
-        REBUILD_TEST_HOOK_LOCK, SQLITE_ENGINE_VERSION_OVERRIDE, TableColumnCapture,
-        TableMetadataCapture, resolve_foreign_key_relationships,
+        BEFORE_NATIVE_DROP_BEGIN, BEFORE_REBUILD_CAPTURE_SECOND_READ, BEFORE_REBUILD_WRITE_LOCK,
+        ForeignKeyCapture, REBUILD_TEST_HOOK_LOCK, SQLITE_ENGINE_VERSION_OVERRIDE,
+        TableColumnCapture, TableMetadataCapture, resolve_foreign_key_relationships,
     };
     use crate::driver::{SqliteConnection, SqliteConnectionState};
     use dbflux_core::{
-        Connection, TableAlterExpectedColumn, TableAlterOperation, TableAlterRequest, TableRef,
+        Connection, DbError, PreparedTableAlter, TableAlterExpectedColumn, TableAlterOperation,
+        TableAlterRequest, TableRef,
     };
+
+    #[test]
+    fn rebuild_cancellation_is_typed_before_any_cleanup_is_needed() {
+        let cancelled = AtomicBool::new(false);
+        cancelled.store(true, Ordering::SeqCst);
+        assert!(matches!(
+            super::check_rebuild_cancelled(&cancelled, "during exact comparison"),
+            Err(DbError::Cancelled)
+        ));
+        assert!(matches!(
+            super::compare_exact_row_streams(
+                &RusqliteConnection::open_in_memory().expect("in-memory SQLite should open"),
+                "SELECT 1",
+                "SELECT 1",
+                1,
+                &cancelled,
+            ),
+            Err(DbError::Cancelled)
+        ));
+    }
+
+    fn prepare_rebuild_plan_for_test(
+        state: Arc<Mutex<SqliteConnectionState>>,
+        request: &TableAlterRequest,
+    ) -> Result<Box<super::RebuildPlan>, DbError> {
+        prepare_rebuild_plan_with_cancellation_for_test(
+            state,
+            request,
+            Arc::new(AtomicBool::new(false)),
+        )
+    }
+
+    fn prepare_rebuild_plan_with_cancellation_for_test(
+        state: Arc<Mutex<SqliteConnectionState>>,
+        request: &TableAlterRequest,
+        cancelled: Arc<AtomicBool>,
+    ) -> Result<Box<super::RebuildPlan>, DbError> {
+        let changes = super::selected_rebuild_changes(&request.operations)?
+            .expect("test request must select the rebuild route");
+        let state_guard = SqliteConnectionState::lock_checked(&state)?;
+        super::prepare_rebuild_plan_typed(&state_guard, state.clone(), cancelled, request, changes)
+    }
+
+    fn clear_rebuild_test_faults() {
+        *super::REBUILD_EXECUTION_FAULT
+            .lock()
+            .expect("execution fault mutex should not be poisoned") = None;
+        *super::REBUILD_STAGE_HOOK
+            .lock()
+            .expect("stage hook mutex should not be poisoned") = None;
+        *super::REBUILD_GUARD_FAULTS
+            .lock()
+            .expect("guard fault mutex should not be poisoned") = None;
+        *super::COMPARISON_CANCEL_AFTER_ROW
+            .lock()
+            .expect("comparison cancellation hook mutex should not be poisoned") = None;
+        *super::COMPARISON_FINALIZE_FAULTS
+            .lock()
+            .expect("comparison finalization fault mutex should not be poisoned") = None;
+    }
+
+    #[test]
+    fn rebuild_execution_faults_use_the_private_plan_entry_and_roll_back_every_precommit_stage() {
+        let _hook_lock = super::REBUILD_TEST_HOOK_LOCK
+            .lock()
+            .expect("rebuild hook lock should not be poisoned");
+        for stage in [
+            super::RebuildExecutionStage::Create,
+            super::RebuildExecutionStage::Copy,
+            super::RebuildExecutionStage::Compare,
+            super::RebuildExecutionStage::Drop,
+            super::RebuildExecutionStage::Rename,
+            super::RebuildExecutionStage::Index,
+            super::RebuildExecutionStage::FinalValidation,
+            super::RebuildExecutionStage::Precommit,
+        ] {
+            let state = Arc::new(Mutex::new(SqliteConnectionState::new(
+                RusqliteConnection::open_in_memory().expect("fixture SQLite should open"),
+            )));
+            state
+                .lock()
+                .expect("state mutex should not be poisoned")
+                .execute_batch(
+                    "PRAGMA foreign_keys = ON; \
+                     CREATE TABLE parent (id INTEGER PRIMARY KEY); \
+                     CREATE TABLE target (id INTEGER PRIMARY KEY, payload TEXT NOT NULL, retained TEXT, obsolete TEXT, parent_id INTEGER REFERENCES parent(id)); \
+                     CREATE INDEX target_retained ON target(retained DESC); \
+                     INSERT INTO parent VALUES (1); \
+                     INSERT INTO target VALUES (-7, 'raw', 'keep', 'remove', 1)",
+                )
+                .expect("fixture should be created");
+            let request = TableAlterRequest {
+                table: TableRef::new("target"),
+                operations: vec![
+                    TableAlterOperation::AlterColumn {
+                        name: "payload".to_string(),
+                        new_type: Some("VARCHAR(16)".to_string()),
+                        nullable: Some(false),
+                        default: None,
+                    },
+                    TableAlterOperation::DropColumn {
+                        name: "obsolete".to_string(),
+                    },
+                ],
+                expected_before: Vec::new(),
+            };
+            let plan = prepare_rebuild_plan_for_test(state.clone(), &request)
+                .expect("fixture plan should prepare");
+            *super::REBUILD_EXECUTION_FAULT
+                .lock()
+                .expect("execution fault mutex should not be poisoned") =
+                Some((std::thread::current().id(), stage));
+            let execution = plan.execute_guarded();
+            clear_rebuild_test_faults();
+            let error = execution.expect_err("one-shot stage fault must fail the private executor");
+            assert!(
+                error
+                    .to_string()
+                    .contains("injected rebuild execution fault")
+            );
+            let state = state.lock().expect("state mutex should not be poisoned");
+            assert!(state.is_autocommit(), "{stage:?} must finish rollback");
+            assert_eq!(
+                state
+                    .query_row("PRAGMA foreign_keys", [], |row| row.get::<_, i64>(0))
+                    .expect("foreign keys should be readable"),
+                1,
+                "{stage:?} must restore foreign keys"
+            );
+            assert_eq!(
+                state.query_row(
+                    "SELECT id || ':' || payload || ':' || retained || ':' || obsolete FROM target",
+                    [],
+                    |row| row.get::<_, String>(0),
+                ).expect("original row should remain"),
+                "-7:raw:keep:remove",
+                "{stage:?} must retain original rows"
+            );
+            assert_eq!(
+                state.query_row(
+                    "SELECT sql FROM main.sqlite_master WHERE type = 'index' AND name = 'target_retained'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                ).expect("original index should remain"),
+                "CREATE INDEX target_retained ON target(retained DESC)",
+                "{stage:?} must retain original indexes"
+            );
+            assert_eq!(
+                state.query_row(
+                    "SELECT COUNT(*) FROM main.sqlite_master WHERE name LIKE '__dbflux_rebuild_%'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                ).expect("private catalog should be readable"),
+                0,
+                "{stage:?} must not leak its replacement table"
+            );
+        }
+    }
+
+    #[test]
+    fn rebuild_plan_integrates_commit_rollback_and_foreign_key_restore_faults() {
+        let _hook_lock = super::REBUILD_TEST_HOOK_LOCK
+            .lock()
+            .expect("rebuild hook lock should not be poisoned");
+        let make_plan = || {
+            let state = Arc::new(Mutex::new(SqliteConnectionState::new(
+                RusqliteConnection::open_in_memory().expect("fixture SQLite should open"),
+            )));
+            state
+                .lock()
+                .expect("state mutex should not be poisoned")
+                .execute_batch(
+                    "PRAGMA foreign_keys = ON; \
+                     CREATE TABLE target (id INTEGER PRIMARY KEY, payload TEXT, obsolete TEXT); \
+                     INSERT INTO target VALUES (-7, 'raw', 'remove')",
+                )
+                .expect("fixture should be created");
+            let request = TableAlterRequest {
+                table: TableRef::new("target"),
+                operations: vec![
+                    TableAlterOperation::AlterColumn {
+                        name: "payload".to_string(),
+                        new_type: Some("VARCHAR(16)".to_string()),
+                        nullable: None,
+                        default: None,
+                    },
+                    TableAlterOperation::DropColumn {
+                        name: "obsolete".to_string(),
+                    },
+                ],
+                expected_before: Vec::new(),
+            };
+            let plan = prepare_rebuild_plan_for_test(state.clone(), &request)
+                .expect("fixture plan should prepare");
+            (state, plan)
+        };
+
+        let assert_quarantined = |state: &Arc<Mutex<SqliteConnectionState>>, reason: &str| {
+            let checked_alias = state.clone();
+            let interrupt_handle = state
+                .lock()
+                .expect("state mutex should not be poisoned")
+                .interrupt_handle();
+            assert!(
+                SqliteConnectionState::lock_checked(state).is_err(),
+                "{reason}"
+            );
+            assert!(
+                SqliteConnectionState::lock_checked(&checked_alias).is_err(),
+                "every checked alias must observe the failure-caused quarantine"
+            );
+            assert!(
+                prepare_rebuild_plan_for_test(checked_alias, &rebuild_alter_and_drop_request())
+                    .is_err(),
+                "a second prepared plan must reject the quarantined connection"
+            );
+            interrupt_handle.interrupt();
+        };
+
+        let (state, plan) = make_plan();
+        *super::REBUILD_GUARD_FAULTS
+            .lock()
+            .expect("guard fault mutex should not be poisoned") = Some((
+            std::thread::current().id(),
+            super::RebuildGuardFaults {
+                fail_commit_while_active: true,
+                ..Default::default()
+            },
+        ));
+        let execution = plan.execute_guarded();
+        clear_rebuild_test_faults();
+        assert!(execution.is_err());
+        let state_guard = state.lock().expect("state mutex should not be poisoned");
+        assert!(state_guard.is_autocommit());
+        assert_eq!(
+            state_guard
+                .query_row("SELECT payload || ':' || obsolete FROM target", [], |row| {
+                    row.get::<_, String>(0)
+                })
+                .expect("rollback must retain original row"),
+            "raw:remove"
+        );
+        drop(state_guard);
+        assert!(SqliteConnectionState::lock_checked(&state).is_ok());
+
+        let (state, plan) = make_plan();
+        *super::REBUILD_GUARD_FAULTS
+            .lock()
+            .expect("guard fault mutex should not be poisoned") = Some((
+            std::thread::current().id(),
+            super::RebuildGuardFaults {
+                fail_commit_after_commit: true,
+                ..Default::default()
+            },
+        ));
+        let execution = plan.execute_guarded();
+        clear_rebuild_test_faults();
+        let error = execution.expect_err("post-commit error is uncertain, not success");
+        assert!(error.to_string().contains("Uncertain"));
+        assert_eq!(
+            state
+                .lock()
+                .expect("state mutex should not be poisoned")
+                .query_row(
+                    "SELECT COUNT(*) FROM pragma_table_info('target') WHERE name = 'obsolete'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .expect("committed schema should remain inspectable"),
+            0,
+            "post-commit transport uncertainty is distinct from rollback"
+        );
+        assert_quarantined(
+            &state,
+            "post-commit uncertainty must quarantine the connection",
+        );
+
+        let (state, plan) = make_plan();
+        *super::REBUILD_GUARD_FAULTS
+            .lock()
+            .expect("guard fault mutex should not be poisoned") = Some((
+            std::thread::current().id(),
+            super::RebuildGuardFaults {
+                fail_restore_readback: true,
+                ..Default::default()
+            },
+        ));
+        let execution = plan.execute_guarded();
+        clear_rebuild_test_faults();
+        let error = execution.expect_err("committed-but-restore-failed is not success");
+        assert!(
+            error
+                .to_string()
+                .contains("foreign-key restoration failure")
+        );
+        assert_eq!(
+            state
+                .lock()
+                .expect("state mutex should not be poisoned")
+                .query_row(
+                    "SELECT COUNT(*) FROM pragma_table_info('target') WHERE name = 'obsolete'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .expect("committed schema should remain inspectable"),
+            0,
+            "committed-but-cleanup-failed must remain distinct from rollback"
+        );
+        assert_quarantined(
+            &state,
+            "foreign-key restoration failure must quarantine the connection",
+        );
+
+        let (state, plan) = make_plan();
+        *super::REBUILD_EXECUTION_FAULT
+            .lock()
+            .expect("execution fault mutex should not be poisoned") = Some((
+            std::thread::current().id(),
+            super::RebuildExecutionStage::Create,
+        ));
+        *super::REBUILD_GUARD_FAULTS
+            .lock()
+            .expect("guard fault mutex should not be poisoned") = Some((
+            std::thread::current().id(),
+            super::RebuildGuardFaults {
+                fail_rollback: true,
+                ..Default::default()
+            },
+        ));
+        let execution = plan.execute_guarded();
+        clear_rebuild_test_faults();
+        assert!(execution.is_err());
+        assert_quarantined(
+            &state,
+            "rollback uncertainty must quarantine the connection",
+        );
+    }
+
+    #[test]
+    fn sqlite_interrupt_is_a_typed_clean_cancellation() {
+        let interruption = rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_INTERRUPT),
+            Some("interrupted by SQLite".to_string()),
+        );
+        assert!(matches!(
+            super::rebuild_sqlite_execution_error("advance source comparison", &interruption),
+            DbError::Cancelled
+        ));
+    }
+
+    #[test]
+    fn sqlite_ffi_progress_handler_interrupts_an_actual_comparison_query() {
+        unsafe extern "C" fn interrupt_progress(_: *mut std::ffi::c_void) -> std::ffi::c_int {
+            1
+        }
+
+        let connection =
+            RusqliteConnection::open_in_memory().expect("in-memory SQLite should open");
+        // SAFETY: this test owns the connection; the callback is non-capturing and is
+        // unregistered before the connection is reused or dropped.
+        unsafe {
+            rusqlite::ffi::sqlite3_progress_handler(
+                connection.handle(),
+                1,
+                Some(interrupt_progress),
+                std::ptr::null_mut(),
+            );
+        }
+        let result = super::compare_exact_row_streams(
+            &connection,
+            "SELECT 1 UNION ALL SELECT 2",
+            "SELECT 1 UNION ALL SELECT 2",
+            1,
+            &AtomicBool::new(false),
+        );
+        // SAFETY: unregisters the test-only callback from the same owned connection.
+        unsafe {
+            rusqlite::ffi::sqlite3_progress_handler(
+                connection.handle(),
+                0,
+                None,
+                std::ptr::null_mut(),
+            );
+        }
+        assert!(matches!(result, Err(DbError::Cancelled)));
+    }
+
+    #[test]
+    fn exact_streamed_comparison_cancels_midstream_and_still_finalizes_readers() {
+        let _hook_lock = super::REBUILD_TEST_HOOK_LOCK
+            .lock()
+            .expect("rebuild hook lock should not be poisoned");
+        let cancelled = Arc::new(AtomicBool::new(false));
+        *super::COMPARISON_CANCEL_AFTER_ROW
+            .lock()
+            .expect("comparison cancellation hook should not be poisoned") =
+            Some((std::thread::current().id(), cancelled.clone()));
+        let connection =
+            RusqliteConnection::open_in_memory().expect("in-memory SQLite should open");
+        assert!(matches!(
+            super::compare_exact_row_streams(
+                &connection,
+                "SELECT 1 UNION ALL SELECT 2",
+                "SELECT 1 UNION ALL SELECT 2",
+                1,
+                &cancelled,
+            ),
+            Err(DbError::Cancelled)
+        ));
+        connection
+            .execute_batch(
+                "CREATE TABLE finalization_proof(value INTEGER); DROP TABLE finalization_proof",
+            )
+            .expect("midstream cancellation must finalize both readers before later DDL");
+    }
+
+    #[test]
+    fn exact_streamed_comparison_preserves_raw_values_and_rejects_mismatches() {
+        let connection =
+            RusqliteConnection::open_in_memory().expect("in-memory SQLite should open");
+        connection
+            .execute_batch(
+                "CREATE TABLE source (id INTEGER PRIMARY KEY, null_value, integer_value, real_value, text_value, blob_value); \
+                 CREATE TABLE replacement (id INTEGER PRIMARY KEY, null_value, integer_value, real_value, text_value, blob_value); \
+                 INSERT INTO source VALUES (-7, NULL, 9223372036854775807, -0.0, CAST(X'80004E554C' AS TEXT), X'00FF00'); \
+                 INSERT INTO source VALUES (42, NULL, -9223372036854775807, 1.5, CAST(X'410042' AS TEXT), X''); \
+                 INSERT INTO replacement VALUES (-7, NULL, 9223372036854775807, -0.0, CAST(X'80004E554C' AS TEXT), X'00FF00'); \
+                 INSERT INTO replacement VALUES (42, NULL, -9223372036854775807, 1.5, CAST(X'410042' AS TEXT), X'');",
+            )
+            .expect("raw comparison fixture should be created");
+        let cancelled = AtomicBool::new(false);
+        super::compare_exact_row_streams(
+            &connection,
+            "SELECT id, null_value, integer_value, real_value, text_value, blob_value FROM source ORDER BY id",
+            "SELECT id, null_value, integer_value, real_value, text_value, blob_value FROM replacement ORDER BY id",
+            6,
+            &cancelled,
+        )
+        .expect("ordered multirow NULL, INTEGER, REAL, raw TEXT, and BLOB values should compare exactly");
+        connection
+            .execute_batch("DROP TABLE source")
+            .expect("comparison statements must finalize before a destructive operation");
+
+        for (label, source, replacement, columns) in [
+            ("row count", "SELECT 1", "SELECT 1 WHERE 0", 1),
+            ("identity", "SELECT -7", "SELECT 42", 1),
+            ("NULL", "SELECT NULL", "SELECT 'NULL'", 1),
+            ("storage class", "SELECT 1", "SELECT '1'", 1),
+            (
+                "exact i64",
+                "SELECT 9223372036854775807",
+                "SELECT 9223372036854775806",
+                1,
+            ),
+            ("REAL bits", "SELECT -0.0", "SELECT 0.0", 1),
+            ("raw BLOB bytes", "SELECT X'00FF00'", "SELECT X'00FE00'", 1),
+            (
+                "raw invalid UTF-8",
+                "SELECT CAST(X'80' AS TEXT)",
+                "SELECT CAST(X'81' AS TEXT)",
+                1,
+            ),
+            ("coercion", "SELECT CAST(X'31' AS TEXT)", "SELECT 1", 1),
+        ] {
+            assert!(
+                super::compare_exact_row_streams(
+                    &connection,
+                    source,
+                    replacement,
+                    columns,
+                    &cancelled
+                )
+                .is_err(),
+                "{label} mismatch must be rejected without SQL coercion"
+            );
+        }
+        assert!(
+            !super::sqlite_value_refs_equal(
+                rusqlite::types::ValueRef::Real(-0.0),
+                rusqlite::types::ValueRef::Real(0.0),
+            ),
+            "REAL comparison must use IEEE bits rather than numeric equality"
+        );
+    }
+
+    #[test]
+    fn integrity_reader_accepts_actual_pragma_and_rejects_non_exact_rows() {
+        let connection =
+            RusqliteConnection::open_in_memory().expect("in-memory SQLite should open");
+        super::validate_single_integrity_text_row(&connection, "PRAGMA main.integrity_check")
+            .expect("actual integrity_check must return raw TEXT ok");
+        for (label, sql) in [
+            ("no rows", "SELECT 'ok' WHERE 0"),
+            ("extra rows", "SELECT 'ok' UNION ALL SELECT 'unexpected'"),
+            ("BLOB ok", "SELECT X'6F6B'"),
+            ("NULL", "SELECT NULL"),
+            ("wrong text", "SELECT 'okay'"),
+            ("invalid UTF-8 text", "SELECT CAST(X'80' AS TEXT)"),
+            ("NUL text", "SELECT CAST(X'6F006B' AS TEXT)"),
+            ("INTEGER", "SELECT 1"),
+            ("REAL", "SELECT 1.5"),
+            ("multiple columns", "SELECT 'ok', 'extra'"),
+        ] {
+            assert!(
+                super::validate_single_integrity_text_row(&connection, sql).is_err(),
+                "integrity reader must reject {label}"
+            );
+        }
+    }
+
+    #[test]
+    fn integrity_reader_finalization_preserves_structured_code_precedence_and_cancellation() {
+        let _hook_lock = super::REBUILD_TEST_HOOK_LOCK
+            .lock()
+            .expect("rebuild hook lock should not be poisoned");
+        let connection =
+            RusqliteConnection::open_in_memory().expect("in-memory SQLite should open");
+        *super::INTEGRITY_FINALIZE_FAULT
+            .lock()
+            .expect("integrity finalization fault mutex should not be poisoned") =
+            Some((std::thread::current().id(), rusqlite::ffi::SQLITE_BUSY));
+        let finalization_only =
+            super::validate_single_integrity_text_row(&connection, "SELECT 'ok'")
+                .expect_err("injected finalization fault must fail an otherwise valid result");
+        assert_eq!(
+            finalization_only
+                .formatted()
+                .and_then(|formatted| formatted.code.as_deref()),
+            Some("5")
+        );
+
+        *super::INTEGRITY_FINALIZE_FAULT
+            .lock()
+            .expect("integrity finalization fault mutex should not be poisoned") =
+            Some((std::thread::current().id(), rusqlite::ffi::SQLITE_BUSY));
+        let primary_and_finalization =
+            super::validate_single_integrity_text_row(&connection, "SELECT X'6F6B'")
+                .expect_err("invalid primary result plus finalization fault must compose");
+        let details = primary_and_finalization
+            .formatted()
+            .and_then(|formatted| formatted.detail.as_deref())
+            .unwrap_or_default();
+        assert!(details.contains("primary integrity_check failure"));
+        assert!(details.contains("statement finalization"));
+        assert_eq!(
+            primary_and_finalization
+                .formatted()
+                .and_then(|formatted| formatted.code.as_deref()),
+            Some("5")
+        );
+
+        let constraint = rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CONSTRAINT),
+            Some("primary constraint".to_string()),
+        );
+        let busy = rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_BUSY),
+            Some("finalization busy".to_string()),
+        );
+        let primary_code = super::finish_integrity_result(
+            Err(super::rebuild_sqlite_execution_error(
+                "primary",
+                &constraint,
+            )),
+            Err(busy),
+        )
+        .expect_err("primary and finalization errors must compose");
+        assert_eq!(
+            primary_code
+                .formatted()
+                .and_then(|formatted| formatted.code.as_deref()),
+            Some("19")
+        );
+        let cancellation = super::finish_integrity_result(
+            Err(DbError::Cancelled),
+            Err(rusqlite::Error::InvalidQuery),
+        )
+        .expect_err("cleanup failure must not return bare cancellation");
+        assert!(!matches!(cancellation, DbError::Cancelled));
+    }
+
+    #[test]
+    fn replacement_prepare_failure_still_observes_source_finalization() {
+        let _hook_lock = super::REBUILD_TEST_HOOK_LOCK
+            .lock()
+            .expect("rebuild hook lock should not be poisoned");
+        *super::COMPARISON_FINALIZE_FAULTS
+            .lock()
+            .expect("finalize fault hook should not be poisoned") = Some((
+            std::thread::current().id(),
+            super::ComparisonFinalizeFaults {
+                source: true,
+                replacement: false,
+            },
+        ));
+        let connection =
+            RusqliteConnection::open_in_memory().expect("in-memory SQLite should open");
+        let error = super::compare_exact_row_streams(
+            &connection,
+            "SELECT 1",
+            "SELECT FROM",
+            1,
+            &AtomicBool::new(false),
+        )
+        .expect_err("replacement prepare and source finalization failures must compose");
+        let detail = error
+            .formatted()
+            .and_then(|formatted| formatted.detail.as_deref())
+            .unwrap_or_default();
+        assert!(detail.contains("prepare replacement comparison"));
+        assert!(detail.contains("source statement finalization"));
+    }
+
+    #[test]
+    fn comparison_cleanup_uses_the_first_available_sqlite_code() {
+        let replacement = rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_BUSY),
+            Some("replacement finalize busy".to_string()),
+        );
+        let error = super::finish_comparison_result(
+            Err(DbError::query_failed("primary without SQLite code")),
+            Err(rusqlite::Error::InvalidQuery),
+            Err(replacement),
+        )
+        .expect_err("cleanup failures must remain composite");
+        let formatted = error.formatted().expect("composite must remain structured");
+        assert_eq!(formatted.code.as_deref(), Some("5"));
+        let detail = formatted.detail.as_deref().unwrap_or_default();
+        assert!(detail.contains("source statement finalization"));
+        assert!(detail.contains("replacement statement finalization"));
+
+        let cancellation = super::finish_comparison_result(
+            Err(DbError::Cancelled),
+            Err(rusqlite::Error::InvalidQuery),
+            Ok(()),
+        )
+        .expect_err("cleanup failure must not return bare cancellation");
+        assert!(!matches!(cancellation, DbError::Cancelled));
+    }
+
+    #[test]
+    fn comparison_finalization_failures_are_reported_after_both_readers_close() {
+        let _hook_lock = super::REBUILD_TEST_HOOK_LOCK
+            .lock()
+            .expect("rebuild hook lock should not be poisoned");
+        *super::COMPARISON_FINALIZE_FAULTS
+            .lock()
+            .expect("finalize fault hook should not be poisoned") = Some((
+            std::thread::current().id(),
+            super::ComparisonFinalizeFaults {
+                source: true,
+                replacement: true,
+            },
+        ));
+        let connection =
+            RusqliteConnection::open_in_memory().expect("in-memory SQLite should open");
+        let cancelled = AtomicBool::new(false);
+        let error =
+            super::compare_exact_row_streams(&connection, "SELECT 1", "SELECT 1", 1, &cancelled)
+                .expect_err("both result-bearing statement finalization failures must be surfaced");
+        let detail = error
+            .formatted()
+            .and_then(|formatted| formatted.detail.as_deref())
+            .unwrap_or_default();
+        assert!(detail.contains("source statement finalization"));
+        assert!(detail.contains("replacement statement finalization"));
+    }
+
+    #[test]
+    fn rebuild_transaction_guard_commits_mutation_and_restores_foreign_keys() {
+        let mut state = SqliteConnectionState::new(
+            RusqliteConnection::open_in_memory().expect("in-memory SQLite should open"),
+        );
+        state
+            .execute_batch("PRAGMA foreign_keys = ON; CREATE TABLE sample (value INTEGER)")
+            .expect("fixture should be created");
+
+        let guard = super::RebuildTransactionGuard::begin(&mut state)
+            .expect("guard should begin its private transaction");
+        guard
+            .connection()
+            .execute("INSERT INTO sample VALUES (7)", [])
+            .expect("guarded test mutation should succeed");
+        assert_eq!(guard.finish(Ok(1_u64)).expect("cleanup should succeed"), 1);
+        assert!(state.is_autocommit());
+        assert_eq!(
+            state
+                .query_row("PRAGMA foreign_keys", [], |row| row.get::<_, i64>(0))
+                .expect("foreign key setting should be readable"),
+            1
+        );
+        assert_eq!(
+            state
+                .query_row("SELECT value FROM sample", [], |row| row.get::<_, i64>(0))
+                .expect("committed mutation should be readable"),
+            7
+        );
+    }
+
+    #[test]
+    fn rebuild_transaction_guard_restores_foreign_keys_when_initially_on_or_off() {
+        for foreign_keys in [0_i64, 1] {
+            let mut state = SqliteConnectionState::new(
+                RusqliteConnection::open_in_memory().expect("in-memory SQLite should open"),
+            );
+            state
+                .execute_batch(&format!(
+                    "PRAGMA foreign_keys = {foreign_keys}; CREATE TABLE sample (value INTEGER)"
+                ))
+                .expect("fixture should be created");
+            let guard =
+                super::RebuildTransactionGuard::begin(&mut state).expect("guard should begin");
+            guard
+                .connection()
+                .execute("INSERT INTO sample VALUES (7)", [])
+                .expect("mutation should succeed");
+            assert_eq!(guard.finish(Ok(1_u64)).expect("cleanup should succeed"), 1);
+            assert!(state.is_autocommit());
+            assert_eq!(
+                state
+                    .query_row("PRAGMA foreign_keys", [], |row| row.get::<_, i64>(0))
+                    .expect("foreign keys should be readable"),
+                foreign_keys
+            );
+        }
+    }
+
+    #[test]
+    fn rebuild_transaction_guard_rejects_caller_owned_transactions_without_cleanup() {
+        for foreign_keys in [0_i64, 1] {
+            let shared = Arc::new(Mutex::new(SqliteConnectionState::new(
+                RusqliteConnection::open_in_memory().expect("in-memory SQLite should open"),
+            )));
+            let mut state = shared.lock().expect("state mutex should not be poisoned");
+            state
+                .execute_batch(&format!(
+                    "PRAGMA foreign_keys = {foreign_keys}; CREATE TABLE sample (value INTEGER); \
+                     BEGIN; INSERT INTO sample VALUES (7)"
+                ))
+                .expect("caller transaction fixture should be created");
+
+            let error = match super::RebuildTransactionGuard::begin(&mut state) {
+                Ok(_) => panic!("guard must reject a caller-owned transaction"),
+                Err(error) => error,
+            };
+            assert!(error.to_string().contains("caller-owned transaction"));
+            assert!(
+                !state.is_autocommit(),
+                "caller transaction must remain active"
+            );
+            assert_eq!(
+                state
+                    .query_row("PRAGMA foreign_keys", [], |row| row.get::<_, i64>(0))
+                    .expect("foreign key setting should remain readable"),
+                foreign_keys,
+                "guard must not assign the foreign-key setting"
+            );
+            assert_eq!(
+                state
+                    .query_row("SELECT value FROM sample", [], |row| row.get::<_, i64>(0))
+                    .expect("caller mutation must remain visible"),
+                7,
+                "guard must not roll back caller work"
+            );
+            drop(state);
+            assert!(
+                SqliteConnectionState::lock_checked(&shared).is_ok(),
+                "rejection must not quarantine the caller connection"
+            );
+
+            shared
+                .lock()
+                .expect("state mutex should not be poisoned")
+                .execute_batch("ROLLBACK")
+                .expect("fixture must clean up its caller transaction");
+        }
+    }
+
+    #[test]
+    fn rebuild_transaction_guard_preserves_sqlite_codes_through_cleanup_composites() {
+        let directory = tempfile::tempdir().expect("test directory should be created");
+        let database_path = directory.path().join("guard-setup-busy.sqlite");
+        let blocker = RusqliteConnection::open(&database_path).expect("blocker should open");
+        let mut state = SqliteConnectionState::new(
+            RusqliteConnection::open(&database_path).expect("guard connection should open"),
+        );
+        state
+            .execute_batch(
+                "PRAGMA foreign_keys = ON; CREATE TABLE sample (value INTEGER PRIMARY KEY)",
+            )
+            .expect("fixture should be created");
+        blocker
+            .execute_batch("BEGIN IMMEDIATE")
+            .expect("blocker should own the write lock");
+
+        let error = match super::RebuildTransactionGuard::begin(&mut state) {
+            Ok(_) => panic!("busy setup must fail"),
+            Err(error) => error,
+        };
+        let formatted = error
+            .formatted()
+            .expect("setup error must remain formatted");
+        assert_eq!(formatted.code.as_deref(), Some("5"));
+        assert!(!formatted.retriable);
+        assert!(
+            formatted
+                .detail
+                .as_deref()
+                .unwrap_or_default()
+                .contains("begin immediate transaction")
+        );
+        blocker
+            .execute_batch("ROLLBACK")
+            .expect("blocker transaction should clean up");
+
+        let guard = super::RebuildTransactionGuard::begin_with_faults(
+            &mut state,
+            super::RebuildGuardFaults {
+                fail_restore_readback: true,
+                ..Default::default()
+            },
+        )
+        .expect("guard should begin");
+        guard
+            .connection()
+            .execute("INSERT INTO sample VALUES (1)", [])
+            .expect("first insert should succeed");
+        let constraint = guard
+            .connection()
+            .execute("INSERT INTO sample VALUES (1)", [])
+            .expect_err("duplicate primary key must fail");
+        let expected_code = match &constraint {
+            rusqlite::Error::SqliteFailure(code, _) => code.extended_code.to_string(),
+            other => panic!("expected a SQLite constraint error, got {other:?}"),
+        };
+        let error = guard
+            .finish(Err::<(), _>(super::rebuild_guard_sqlite_error(
+                "insert duplicate primary key",
+                &constraint,
+            )))
+            .expect_err("cleanup composite must retain the primary error metadata");
+        let formatted = error
+            .formatted()
+            .expect("cleanup composite must remain formatted");
+        assert_eq!(formatted.code.as_deref(), Some(expected_code.as_str()));
+        assert!(!formatted.retriable);
+        let detail = formatted.detail.as_deref().unwrap_or_default();
+        assert!(detail.contains("primary failure"));
+        assert!(detail.contains("foreign-key restoration failure"));
+    }
+
+    #[test]
+    fn rebuild_transaction_guard_rolls_back_primary_and_automatic_rollback_failures() {
+        let mut state = SqliteConnectionState::new(
+            RusqliteConnection::open_in_memory().expect("in-memory SQLite should open"),
+        );
+        state
+            .execute_batch(
+                "PRAGMA foreign_keys = ON; CREATE TABLE sample (value INTEGER PRIMARY KEY)",
+            )
+            .expect("fixture should be created");
+        let guard = super::RebuildTransactionGuard::begin(&mut state).expect("guard should begin");
+        guard
+            .connection()
+            .execute("INSERT INTO sample VALUES (7)", [])
+            .expect("mutation should succeed");
+        let primary = DbError::query_failed("primary test failure");
+        assert!(
+            guard
+                .finish(Err::<(), _>(primary))
+                .unwrap_err()
+                .to_string()
+                .contains("primary test failure")
+        );
+        assert_eq!(
+            state
+                .query_row("SELECT COUNT(*) FROM sample", [], |row| row
+                    .get::<_, i64>(0))
+                .expect("count should work"),
+            0
+        );
+
+        let guard = super::RebuildTransactionGuard::begin(&mut state).expect("guard should begin");
+        guard
+            .connection()
+            .execute("INSERT INTO sample VALUES (1)", [])
+            .expect("first mutation should succeed");
+        let automatic = guard
+            .connection()
+            .execute("INSERT OR ROLLBACK INTO sample VALUES (1)", [])
+            .expect_err("SQLite must roll back this transaction");
+        assert!(guard.connection().is_autocommit());
+        let error = guard
+            .finish(Err::<(), _>(super::rebuild_guard_sqlite_error(
+                "automatic rollback",
+                &automatic,
+            )))
+            .unwrap_err();
+        assert!(!error.to_string().contains("no transaction"));
+        assert_eq!(
+            state
+                .query_row("SELECT COUNT(*) FROM sample", [], |row| row
+                    .get::<_, i64>(0))
+                .expect("count should work"),
+            0
+        );
+        assert_eq!(
+            state
+                .query_row("PRAGMA foreign_keys", [], |row| row.get::<_, i64>(0))
+                .expect("foreign keys should be readable"),
+            1
+        );
+    }
+
+    #[test]
+    fn rebuild_transaction_guard_distinguishes_commit_error_certainty_and_quarantines() {
+        let shared = Arc::new(Mutex::new(SqliteConnectionState::new(
+            RusqliteConnection::open_in_memory().expect("in-memory SQLite should open"),
+        )));
+        let mut state = shared.lock().expect("state mutex should not be poisoned");
+        state
+            .execute_batch("PRAGMA foreign_keys = ON; CREATE TABLE sample (value INTEGER)")
+            .expect("fixture should be created");
+        let guard = super::RebuildTransactionGuard::begin_with_faults(
+            &mut state,
+            super::RebuildGuardFaults {
+                fail_commit_while_active: true,
+                ..Default::default()
+            },
+        )
+        .expect("guard should begin");
+        guard
+            .connection()
+            .execute("INSERT INTO sample VALUES (7)", [])
+            .expect("mutation should succeed");
+        assert!(
+            guard
+                .finish(Ok(()))
+                .unwrap_err()
+                .to_string()
+                .contains("commit")
+        );
+        assert!(state.is_autocommit());
+        assert_eq!(
+            state
+                .query_row("SELECT COUNT(*) FROM sample", [], |row| row
+                    .get::<_, i64>(0))
+                .expect("count should work"),
+            0
+        );
+        drop(state);
+        assert!(
+            SqliteConnectionState::lock_checked(&shared).is_ok(),
+            "verified rollback must not quarantine"
+        );
+
+        let mut state = shared.lock().expect("state mutex should not be poisoned");
+        let guard = super::RebuildTransactionGuard::begin_with_faults(
+            &mut state,
+            super::RebuildGuardFaults {
+                fail_commit_after_commit: true,
+                ..Default::default()
+            },
+        )
+        .expect("guard should begin");
+        guard
+            .connection()
+            .execute("INSERT INTO sample VALUES (9)", [])
+            .expect("mutation should succeed");
+        let error = guard
+            .finish(Ok(()))
+            .expect_err("commit return error after SQLite commit is uncertain");
+        assert!(error.to_string().contains("Uncertain"));
+        assert_eq!(
+            state
+                .query_row("SELECT COUNT(*) FROM sample", [], |row| row
+                    .get::<_, i64>(0))
+                .expect("count should work"),
+            1
+        );
+        drop(state);
+        assert!(
+            SqliteConnectionState::lock_checked(&shared).is_err(),
+            "uncertain commit must quarantine aliases"
+        );
+    }
+
+    #[test]
+    fn rebuild_transaction_guard_reports_cleanup_failures_after_commit_or_cancellation() {
+        let shared = Arc::new(Mutex::new(SqliteConnectionState::new(
+            RusqliteConnection::open_in_memory().expect("in-memory SQLite should open"),
+        )));
+        let mut state = shared.lock().expect("state mutex should not be poisoned");
+        state
+            .execute_batch("PRAGMA foreign_keys = ON; CREATE TABLE sample (value INTEGER)")
+            .expect("fixture should be created");
+        let guard = super::RebuildTransactionGuard::begin_with_faults(
+            &mut state,
+            super::RebuildGuardFaults {
+                fail_restore_readback: true,
+                ..Default::default()
+            },
+        )
+        .expect("guard should begin");
+        guard
+            .connection()
+            .execute("INSERT INTO sample VALUES (7)", [])
+            .expect("mutation should succeed");
+        let error = guard
+            .finish(Ok(()))
+            .expect_err("confirmed commit cleanup failure must be surfaced");
+        assert!(error.to_string().contains("ConfirmedCommitted"));
+        assert!(
+            error
+                .to_string()
+                .contains("foreign-key restoration failure")
+        );
+        assert_eq!(
+            state
+                .query_row("SELECT COUNT(*) FROM sample", [], |row| row
+                    .get::<_, i64>(0))
+                .expect("committed value should work"),
+            1
+        );
+        drop(state);
+        assert!(SqliteConnectionState::lock_checked(&shared).is_err());
+
+        let shared = Arc::new(Mutex::new(SqliteConnectionState::new(
+            RusqliteConnection::open_in_memory().expect("in-memory SQLite should open"),
+        )));
+        let mut state = shared.lock().expect("state mutex should not be poisoned");
+        state
+            .execute_batch("PRAGMA foreign_keys = ON; CREATE TABLE sample (value INTEGER)")
+            .expect("fixture should be created");
+        let guard = super::RebuildTransactionGuard::begin_with_faults(
+            &mut state,
+            super::RebuildGuardFaults {
+                fail_rollback: true,
+                fail_restore_set: true,
+                ..Default::default()
+            },
+        )
+        .expect("guard should begin");
+        let error = guard
+            .finish(Err::<(), _>(DbError::Cancelled))
+            .expect_err("cleanup failures must not return bare cancellation");
+        assert!(error.to_string().contains("rollback failure"));
+        assert!(
+            error
+                .to_string()
+                .contains("foreign-key restoration failure")
+        );
+        assert!(
+            !state.is_autocommit(),
+            "an injected rollback failure must leave the guard transaction active"
+        );
+        drop(state);
+        assert!(
+            SqliteConnectionState::lock_checked(&shared).is_err(),
+            "uncertain cancellation cleanup must quarantine all aliases"
+        );
+    }
+
+    #[test]
+    fn rebuild_transaction_guard_setup_cleanup_and_drop_fail_closed() {
+        let shared = Arc::new(Mutex::new(SqliteConnectionState::new(
+            RusqliteConnection::open_in_memory().expect("in-memory SQLite should open"),
+        )));
+        let mut state = shared.lock().expect("state mutex should not be poisoned");
+        state
+            .execute_batch("PRAGMA foreign_keys = ON; CREATE TABLE sample (value INTEGER)")
+            .expect("fixture should be created");
+        assert!(
+            super::RebuildTransactionGuard::begin_with_faults(
+                &mut state,
+                super::RebuildGuardFaults {
+                    fail_disable_readback: true,
+                    ..Default::default()
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            super::RebuildTransactionGuard::begin_with_faults(
+                &mut state,
+                super::RebuildGuardFaults {
+                    fail_begin: true,
+                    ..Default::default()
+                }
+            )
+            .is_err()
+        );
+        assert_eq!(
+            state
+                .query_row("PRAGMA foreign_keys", [], |row| row.get::<_, i64>(0))
+                .expect("setup cleanup must restore FK"),
+            1
+        );
+        {
+            let guard = super::RebuildTransactionGuard::begin(&mut state)
+                .expect("drop fixture should begin");
+            guard
+                .connection()
+                .execute("INSERT INTO sample VALUES (7)", [])
+                .expect("mutation should succeed");
+        }
+        assert!(state.is_autocommit());
+        assert_eq!(
+            state
+                .query_row("SELECT COUNT(*) FROM sample", [], |row| row
+                    .get::<_, i64>(0))
+                .expect("drop rollback should work"),
+            0
+        );
+        drop(state);
+        assert!(
+            SqliteConnectionState::lock_checked(&shared).is_err(),
+            "unfinished guard drop must quarantine aliases"
+        );
+    }
 
     #[test]
     fn rebuild_copy_intent_keeps_exact_projections_and_declares_all_typed_comparisons() {
@@ -3063,6 +5627,324 @@ mod tests {
             })
             .expect("older SQLite pure drop should prepare a conservative rebuild");
         assert_eq!(plan.preview().route, dbflux_core::TableAlterRoute::Rebuild);
+    }
+
+    fn file_rebuild_fixture(
+        file_name: &str,
+        setup: &str,
+    ) -> (
+        std::path::PathBuf,
+        std::path::PathBuf,
+        Arc<Mutex<SqliteConnectionState>>,
+        super::NativeConnectionSettings,
+    ) {
+        let directory = tempfile::tempdir().expect("test directory should be created");
+        let database_path = directory.path().join(file_name);
+        let state = Arc::new(Mutex::new(SqliteConnectionState::new(
+            RusqliteConnection::open(&database_path)
+                .expect("primary SQLite connection should open"),
+        )));
+        state
+            .lock()
+            .expect("primary state mutex should not be poisoned")
+            .execute_batch(setup)
+            .expect("two-connection fixture should be created");
+        let settings = {
+            let state_guard = state
+                .lock()
+                .expect("primary state mutex should not be poisoned");
+            super::capture_native_connection_settings(&state_guard)
+                .expect("fixture connection settings should be readable")
+        };
+        let retained_path = directory.keep();
+        (retained_path, database_path, state, settings)
+    }
+
+    fn rebuild_alter_and_drop_request() -> TableAlterRequest {
+        TableAlterRequest {
+            table: TableRef::new("target"),
+            operations: vec![
+                TableAlterOperation::AlterColumn {
+                    name: "payload".to_string(),
+                    new_type: Some("VARCHAR(16)".to_string()),
+                    nullable: None,
+                    default: None,
+                },
+                TableAlterOperation::DropColumn {
+                    name: "obsolete".to_string(),
+                },
+            ],
+            expected_before: Vec::new(),
+        }
+    }
+
+    fn install_before_rebuild_write_lock_hook(hook: Box<dyn FnOnce() + Send>) {
+        *BEFORE_REBUILD_WRITE_LOCK
+            .lock()
+            .expect("write-lock hook mutex should not be poisoned") =
+            Some((std::thread::current().id(), hook));
+    }
+
+    fn clear_before_rebuild_write_lock_hook() {
+        *BEFORE_REBUILD_WRITE_LOCK
+            .lock()
+            .expect("write-lock hook mutex should not be poisoned") = None;
+    }
+
+    fn assert_rebuild_boundary(
+        state: &Arc<Mutex<SqliteConnectionState>>,
+        settings_before: &super::NativeConnectionSettings,
+        private_object_count: i64,
+    ) {
+        let state_guard = state
+            .lock()
+            .expect("primary state mutex should not be poisoned");
+        assert!(
+            state_guard.is_autocommit(),
+            "execution must restore autocommit"
+        );
+        assert_eq!(
+            super::capture_native_connection_settings(&state_guard)
+                .expect("connection settings should remain readable"),
+            settings_before.clone(),
+            "execution must preserve every protected connection setting"
+        );
+        assert_eq!(
+            state_guard
+                .query_row(
+                    "SELECT COUNT(*) FROM main.sqlite_master WHERE name LIKE '__dbflux_rebuild_%'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .expect("private catalog should be readable"),
+            private_object_count,
+            "the expected private catalog boundary must be retained"
+        );
+        drop(state_guard);
+        assert!(
+            SqliteConnectionState::lock_checked(state).is_ok(),
+            "execution must leave the primary connection usable"
+        );
+    }
+
+    #[test]
+    fn execute_guarded_rebuild_rejects_schema_change_in_preflight_to_write_lock_gap() {
+        let _hook_lock = REBUILD_TEST_HOOK_LOCK
+            .lock()
+            .expect("rebuild test hook mutex should not be poisoned");
+        let (_directory, database_path, state, settings_before) = file_rebuild_fixture(
+            "rebuild-write-lock-schema-race.db",
+            "PRAGMA foreign_keys = ON; \
+             CREATE TABLE target (id INTEGER PRIMARY KEY, payload TEXT, retained TEXT, obsolete TEXT, parent_id INTEGER REFERENCES parent(id)); \
+             CREATE TABLE parent (id INTEGER PRIMARY KEY); \
+             INSERT INTO parent VALUES (1); \
+             INSERT INTO target VALUES (7, 'prepared', 'before-gap', 'remove', 1)",
+        );
+        let request = rebuild_alter_and_drop_request();
+        let plan = prepare_rebuild_plan_for_test(state.clone(), &request)
+            .expect("private rebuild plan should prepare before the external change");
+        let competing_path = database_path.clone();
+        install_before_rebuild_write_lock_hook(Box::new(move || {
+            RusqliteConnection::open(competing_path)
+                .expect("external SQLite connection should open")
+                .execute_batch(
+                    "ALTER TABLE target ADD COLUMN external_change TEXT DEFAULT 'committed'; \
+                     UPDATE target SET retained = 'externally-committed' WHERE id = 7",
+                )
+                .expect("external schema change should commit in the preflight-to-lock gap");
+        }));
+
+        let execution = plan.execute_guarded();
+        clear_before_rebuild_write_lock_hook();
+        let error =
+            execution.expect_err("under-lock freshness must reject the external schema change");
+        assert!(
+            error.to_string().contains("stale"),
+            "the error must identify stale under-lock state: {error}"
+        );
+
+        {
+            let state_guard = state
+                .lock()
+                .expect("primary state mutex should not be poisoned");
+            assert_eq!(
+                state_guard
+                    .query_row(
+                        "SELECT obsolete || ':' || external_change || ':' || retained FROM target WHERE id = 7",
+                        [],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .expect("external committed row should remain readable"),
+                "remove:committed:externally-committed",
+                "rejection must preserve both source data and the committed external change"
+            );
+            assert_eq!(
+                state_guard
+                    .query_row(
+                        "SELECT COUNT(*) FROM pragma_table_info('target') WHERE name = 'obsolete'",
+                        [],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .expect("source schema should be readable"),
+                1,
+                "stale rejection must not mutate the selected source schema"
+            );
+        }
+        assert_rebuild_boundary(&state, &settings_before, 0);
+    }
+
+    #[test]
+    fn execute_guarded_rebuild_preserves_external_private_replacement_name_created_before_lock() {
+        let _hook_lock = REBUILD_TEST_HOOK_LOCK
+            .lock()
+            .expect("rebuild test hook mutex should not be poisoned");
+        let (_directory, database_path, state, settings_before) = file_rebuild_fixture(
+            "rebuild-write-lock-name-race.db",
+            "PRAGMA foreign_keys = ON; \
+             CREATE TABLE target (id INTEGER PRIMARY KEY, payload TEXT, retained TEXT, obsolete TEXT); \
+             INSERT INTO target VALUES (7, 'prepared', 'before-gap', 'remove')",
+        );
+        let request = rebuild_alter_and_drop_request();
+        let plan = prepare_rebuild_plan_for_test(state.clone(), &request)
+            .expect("private rebuild plan should prepare before the replacement-name collision");
+        let competing_path = database_path.clone();
+        install_before_rebuild_write_lock_hook(Box::new(move || {
+            RusqliteConnection::open(competing_path)
+                .expect("external SQLite connection should open")
+                .execute_batch(
+                    "CREATE TABLE __dbflux_rebuild_target (id INTEGER PRIMARY KEY, external_payload TEXT); \
+                     INSERT INTO __dbflux_rebuild_target VALUES (91, 'externally-owned')",
+                )
+                .expect("external replacement-name object should commit in the preflight-to-lock gap");
+        }));
+
+        let execution = plan.execute_guarded();
+        clear_before_rebuild_write_lock_hook();
+        let error =
+            execution.expect_err("under-lock collision check must reject the external object");
+        assert!(
+            error
+                .to_string()
+                .contains("private replacement name now collides"),
+            "the error must identify the externally-created private name: {error}"
+        );
+
+        {
+            let state_guard = state
+                .lock()
+                .expect("primary state mutex should not be poisoned");
+            assert_eq!(
+                state_guard
+                    .query_row(
+                        "SELECT id || ':' || external_payload FROM __dbflux_rebuild_target",
+                        [],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .expect("external replacement object should remain readable"),
+                "91:externally-owned",
+                "rejection must not destroy externally-owned replacement data"
+            );
+            assert_eq!(
+                state_guard
+                    .query_row(
+                        "SELECT obsolete || ':' || retained FROM target WHERE id = 7",
+                        [],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .expect("source table should remain readable"),
+                "remove:before-gap",
+                "collision rejection must not mutate the source table"
+            );
+        }
+        assert_rebuild_boundary(&state, &settings_before, 1);
+    }
+
+    #[test]
+    fn public_rebuild_copies_rows_committed_after_preparation() {
+        let (_directory, database_path, state, settings_before) = file_rebuild_fixture(
+            "rebuild-fresh-data.db",
+            "PRAGMA foreign_keys = ON; \
+             CREATE TABLE parent (id INTEGER PRIMARY KEY); \
+             CREATE TABLE target (id INTEGER PRIMARY KEY, payload TEXT, retained TEXT, obsolete TEXT, parent_id INTEGER REFERENCES parent(id)); \
+             CREATE INDEX target_retained ON target(retained); \
+             INSERT INTO parent VALUES (1); \
+             INSERT INTO target VALUES (7, 'prepared', 'before-update', 'remove', 1)",
+        );
+        let request = rebuild_alter_and_drop_request();
+        let public_plan = prepare_rebuild_plan_for_test(state.clone(), &request)
+            .expect("public rebuild plan should prepare before the external data commit");
+        RusqliteConnection::open(&database_path)
+            .expect("external SQLite connection should open")
+            .execute_batch(
+                "UPDATE target SET payload = 'externally-updated', retained = 'after-update' WHERE id = 7; \
+                 INSERT INTO target VALUES (19, 'externally-inserted', 'after-insert', 'remove', 1)",
+            )
+            .expect("external data changes should commit without a schema change");
+
+        let outcome = public_plan
+            .execute()
+            .expect("public executor must copy data committed after preparation");
+        assert_eq!(outcome.statement_count, 5);
+        let state_guard = state
+            .lock()
+            .expect("primary state mutex should not be poisoned");
+        let mut statement = state_guard
+            .prepare("SELECT id, payload, retained, parent_id FROM target ORDER BY id")
+            .expect("rebuilt rows should be queryable");
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            })
+            .expect("rebuilt rows should decode")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("rebuilt row iteration should succeed");
+        assert_eq!(
+            rows,
+            vec![
+                (
+                    7,
+                    "externally-updated".to_string(),
+                    "after-update".to_string(),
+                    1
+                ),
+                (
+                    19,
+                    "externally-inserted".to_string(),
+                    "after-insert".to_string(),
+                    1
+                ),
+            ],
+            "private execution must copy fresh external values and identities, not prepared data"
+        );
+        assert_eq!(
+            state_guard
+                .query_row(
+                    "SELECT COUNT(*) FROM pragma_table_info('target') WHERE name = 'obsolete'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .expect("rebuilt schema should be readable"),
+            0,
+            "private execution must apply the requested rebuild mutation"
+        );
+        assert_eq!(
+            state_guard
+                .query_row(
+                    "SELECT sql FROM main.sqlite_master WHERE type = 'index' AND name = 'target_retained'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .expect("explicit index should be restored"),
+            "CREATE INDEX target_retained ON target(retained)"
+        );
+        drop(statement);
+        drop(state_guard);
+        assert_rebuild_boundary(&state, &settings_before, 0);
     }
 
     #[test]
@@ -4058,6 +6940,1030 @@ mod tests {
             error.to_string().contains("semantic proof"),
             "the rejection must identify the semantic proof: {error}"
         );
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    enum RawRebuildValue {
+        Null,
+        Integer(i64),
+        Real(u64),
+        Text(Vec<u8>),
+        Blob(Vec<u8>),
+    }
+
+    fn raw_rebuild_rows(connection: &RusqliteConnection, sql: &str) -> Vec<Vec<RawRebuildValue>> {
+        let mut statement = connection
+            .prepare(sql)
+            .expect("raw rebuild snapshot query should prepare");
+        let column_count = statement.column_count();
+        let mut rows = statement
+            .query([])
+            .expect("raw rebuild snapshot query should execute");
+        let mut snapshot = Vec::new();
+        while let Some(row) = rows.next().expect("raw rebuild snapshot should advance") {
+            let values = (0..column_count)
+                .map(|column| {
+                    match row
+                        .get_ref(column)
+                        .expect("raw rebuild snapshot value should decode")
+                    {
+                        rusqlite::types::ValueRef::Null => RawRebuildValue::Null,
+                        rusqlite::types::ValueRef::Integer(value) => {
+                            RawRebuildValue::Integer(value)
+                        }
+                        rusqlite::types::ValueRef::Real(value) => {
+                            RawRebuildValue::Real(value.to_bits())
+                        }
+                        rusqlite::types::ValueRef::Text(value) => {
+                            RawRebuildValue::Text(value.to_vec())
+                        }
+                        rusqlite::types::ValueRef::Blob(value) => {
+                            RawRebuildValue::Blob(value.to_vec())
+                        }
+                    }
+                })
+                .collect();
+            snapshot.push(values);
+        }
+        snapshot
+    }
+
+    fn rebuild_schema_snapshot(connection: &RusqliteConnection) -> Vec<Vec<RawRebuildValue>> {
+        raw_rebuild_rows(
+            connection,
+            "SELECT type, name, tbl_name, sql FROM main.sqlite_master \
+                 WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name",
+        )
+    }
+
+    #[test]
+    fn rebuild_plan_executes_private_lifecycle_and_restores_foreign_keys() {
+        let state = Arc::new(Mutex::new(SqliteConnectionState::new(
+            RusqliteConnection::open_in_memory().expect("in-memory SQLite should open"),
+        )));
+        state
+                .lock()
+                .expect("state mutex should not be poisoned")
+                .execute_batch(
+                    "PRAGMA foreign_keys = ON; \
+                     CREATE TABLE parent (id INTEGER PRIMARY KEY); \
+                     CREATE TABLE target (id INTEGER PRIMARY KEY, payload TEXT NOT NULL, retained TEXT, obsolete TEXT, parent_id INTEGER REFERENCES parent(id)); \
+                     CREATE INDEX target_retained ON target(retained); \
+                     INSERT INTO parent VALUES (1); \
+                     INSERT INTO target VALUES (-7, 'raw payload', 'keep', 'remove', 1)",
+                )
+                .expect("rebuild fixture should be created");
+        let request = TableAlterRequest {
+            table: TableRef::new("target"),
+            operations: vec![
+                TableAlterOperation::AlterColumn {
+                    name: "payload".to_string(),
+                    new_type: Some("VARCHAR(16)".to_string()),
+                    nullable: Some(false),
+                    default: Some(dbflux_core::OwnedDefaultSpec::Set("'future'".to_string())),
+                },
+                TableAlterOperation::DropColumn {
+                    name: "obsolete".to_string(),
+                },
+            ],
+            expected_before: Vec::new(),
+        };
+        let plan = prepare_rebuild_plan_for_test(state.clone(), &request)
+            .expect("rebuild plan should prepare without mutation");
+
+        let outcome = plan
+            .execute_guarded()
+            .expect("private rebuild execution should commit its lifecycle");
+        assert_eq!(outcome.statement_count, 5);
+        let state = state.lock().expect("state mutex should not be poisoned");
+        assert!(state.is_autocommit());
+        assert_eq!(
+            state
+                .query_row("PRAGMA foreign_keys", [], |row| row.get::<_, i64>(0))
+                .expect("foreign key setting should be readable"),
+            1
+        );
+        assert_eq!(
+            state
+                .query_row("SELECT id FROM target", [], |row| row.get::<_, i64>(0))
+                .expect("rebuilt identity should be retained"),
+            -7
+        );
+        assert_eq!(
+            state
+                .query_row(
+                    "SELECT COUNT(*) FROM pragma_table_info('target') WHERE name = 'obsolete'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .expect("rebuilt columns should be readable"),
+            0
+        );
+        assert_eq!(
+                state
+                    .query_row(
+                        "SELECT sql FROM main.sqlite_master WHERE type = 'index' AND name = 'target_retained'",
+                        [],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .expect("explicit index should be restored"),
+                "CREATE INDEX target_retained ON target(retained)"
+            );
+    }
+
+    #[test]
+    fn public_rebuild_preserves_raw_values_for_integer_primary_key_and_hidden_rowid() {
+        for (label, create_target, insert_target, identity) in [
+            (
+                "INTEGER PRIMARY KEY",
+                "CREATE TABLE target (id INTEGER PRIMARY KEY, payload TEXT NOT NULL, nullable_value TEXT, integer_value INTEGER, real_value REAL, text_value TEXT, blob_value BLOB, retained TEXT, obsolete TEXT, parent_id INTEGER REFERENCES parent(id))",
+                "INSERT INTO target VALUES (-19, CAST(X'80' AS TEXT), NULL, -9223372036854775807, -0.0, CAST(X'6F006B' AS TEXT), X'00FF', 'keep-negative', 'remove-negative', 1); INSERT INTO target VALUES (73, 'ordinary', 'nullable', 17, 1.5, 'ordinary text', X'1020', 'keep-sparse', 'remove-sparse', 1)",
+                "id",
+            ),
+            (
+                "hidden rowid",
+                "CREATE TABLE target (payload TEXT NOT NULL, nullable_value TEXT, integer_value INTEGER, real_value REAL, text_value TEXT, blob_value BLOB, retained TEXT, obsolete TEXT, parent_id INTEGER REFERENCES parent(id))",
+                "INSERT INTO target(rowid, payload, nullable_value, integer_value, real_value, text_value, blob_value, retained, obsolete, parent_id) VALUES (-19, CAST(X'80' AS TEXT), NULL, -9223372036854775807, -0.0, CAST(X'6F006B' AS TEXT), X'00FF', 'keep-negative', 'remove-negative', 1); INSERT INTO target(rowid, payload, nullable_value, integer_value, real_value, text_value, blob_value, retained, obsolete, parent_id) VALUES (73, 'ordinary', 'nullable', 17, 1.5, 'ordinary text', X'1020', 'keep-sparse', 'remove-sparse', 1)",
+                "rowid",
+            ),
+        ] {
+            let state = Arc::new(Mutex::new(SqliteConnectionState::new(
+                RusqliteConnection::open_in_memory().expect("fixture SQLite should open"),
+            )));
+            state.lock().expect("state mutex should not be poisoned").execute_batch(&format!(
+                    "PRAGMA foreign_keys = ON; CREATE TABLE parent (id INTEGER PRIMARY KEY); {create_target}; CREATE INDEX target_retained_desc ON target(retained DESC); INSERT INTO parent VALUES (1); {insert_target}",
+                )).expect("rich rebuild fixture should be created");
+            let request = TableAlterRequest {
+                table: TableRef::new("target"),
+                operations: vec![
+                    TableAlterOperation::AlterColumn {
+                        name: "payload".to_string(),
+                        new_type: Some("VARCHAR(16)".to_string()),
+                        nullable: Some(false),
+                        default: Some(dbflux_core::OwnedDefaultSpec::Set("'future'".to_string())),
+                    },
+                    TableAlterOperation::DropColumn {
+                        name: "obsolete".to_string(),
+                    },
+                ],
+                expected_before: Vec::new(),
+            };
+            let query = format!(
+                "SELECT {identity}, payload, nullable_value, integer_value, real_value, text_value, blob_value, retained, parent_id FROM target ORDER BY {identity}"
+            );
+            let (raw_before, index_before, foreign_keys_before, settings_before) = {
+                let state = state.lock().expect("state mutex should not be poisoned");
+                (
+                    raw_rebuild_rows(&state, &query),
+                    raw_rebuild_rows(
+                        &state,
+                        "SELECT sql FROM main.sqlite_master WHERE type = 'index' AND name = 'target_retained_desc'",
+                    ),
+                    raw_rebuild_rows(
+                        &state,
+                        "SELECT id, seq, \"table\", \"from\", \"to\", on_update, on_delete, match FROM pragma_foreign_key_list('target') ORDER BY id, seq",
+                    ),
+                    super::capture_native_connection_settings(&state)
+                        .expect("protected settings should be captured"),
+                )
+            };
+            assert!(
+                raw_before
+                    .iter()
+                    .flatten()
+                    .any(|value| matches!(value, RawRebuildValue::Null))
+            );
+            assert!(
+                raw_before
+                    .iter()
+                    .flatten()
+                    .any(|value| matches!(value, RawRebuildValue::Integer(-9223372036854775807)))
+            );
+            assert!(raw_before.iter().flatten().any(
+                |value| matches!(value, RawRebuildValue::Real(bits) if *bits == 1.5_f64.to_bits())
+            ));
+            assert!(
+                raw_before
+                    .iter()
+                    .flatten()
+                    .any(|value| matches!(value, RawRebuildValue::Text(bytes) if bytes == b"\x80"))
+            );
+            assert!(
+                raw_before
+                    .iter()
+                    .flatten()
+                    .any(|value| matches!(value, RawRebuildValue::Text(bytes) if bytes == b"o\0k"))
+            );
+            assert!(
+                raw_before.iter().flatten().any(
+                    |value| matches!(value, RawRebuildValue::Blob(bytes) if bytes == b"\0\xff")
+                )
+            );
+
+            prepare_rebuild_plan_for_test(state.clone(), &request)
+                .expect("public execution fixture should prepare")
+                .execute()
+                .unwrap_or_else(|error| panic!("{label} public rebuild should succeed: {error}"));
+
+            let state = state.lock().expect("state mutex should not be poisoned");
+            assert!(state.is_autocommit(), "{label} must restore autocommit");
+            assert_eq!(
+                state
+                    .query_row("PRAGMA foreign_keys", [], |row| row.get::<_, i64>(0))
+                    .expect("foreign key setting should be readable"),
+                1
+            );
+            assert_eq!(
+                super::capture_native_connection_settings(&state)
+                    .expect("protected settings should remain readable"),
+                settings_before,
+                "successful rebuild must restore every protected connection setting"
+            );
+            assert_eq!(
+                raw_rebuild_rows(&state, &query),
+                raw_before,
+                "{label} must retain raw source values"
+            );
+            assert_eq!(
+                raw_rebuild_rows(
+                    &state,
+                    "SELECT sql FROM main.sqlite_master WHERE type = 'index' AND name = 'target_retained_desc'"
+                ),
+                index_before,
+                "{label} must restore the exact explicit index"
+            );
+            assert_eq!(
+                raw_rebuild_rows(
+                    &state,
+                    "SELECT id, seq, \"table\", \"from\", \"to\", on_update, on_delete, match FROM pragma_foreign_key_list('target') ORDER BY id, seq"
+                ),
+                foreign_keys_before,
+                "{label} must preserve foreign-key metadata"
+            );
+            let final_columns = raw_rebuild_rows(
+                &state,
+                "SELECT name, type, \"notnull\", dflt_value, pk, hidden FROM pragma_table_xinfo('target') ORDER BY cid",
+            );
+            assert!(final_columns.iter().any(|column| {
+                column
+                    == &vec![
+                        RawRebuildValue::Text(b"payload".to_vec()),
+                        RawRebuildValue::Text(b"VARCHAR(16)".to_vec()),
+                        RawRebuildValue::Integer(1),
+                        RawRebuildValue::Text(b"'future'".to_vec()),
+                        RawRebuildValue::Integer(0),
+                        RawRebuildValue::Integer(0),
+                    ]
+            }));
+            assert!(
+                final_columns.iter().all(|column| {
+                    !matches!(column.first(), Some(RawRebuildValue::Text(name)) if name == b"obsolete")
+                }),
+                "final column metadata must remove only the selected column"
+            );
+            assert_eq!(
+                state
+                    .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+                        row.get::<_, i64>(0)
+                    })
+                    .expect("foreign key check should be readable"),
+                0
+            );
+            state.execute_batch(&format!(
+                    "INSERT INTO target ({identity}, nullable_value, integer_value, real_value, text_value, blob_value, retained, parent_id) VALUES (1001, NULL, 0, 0.0, 'new', X'01', 'future row', 1)"
+                )).expect("future row should receive the new default");
+            assert_eq!(
+                raw_rebuild_rows(
+                    &state,
+                    &format!("SELECT payload FROM target WHERE {identity} = 1001")
+                ),
+                vec![vec![RawRebuildValue::Text(b"future".to_vec())]],
+                "{label} default must affect only future inserts"
+            );
+        }
+    }
+
+    fn assert_guarded_rollback(
+        state: &Arc<Mutex<SqliteConnectionState>>,
+        schema_before: Vec<Vec<RawRebuildValue>>,
+        rows_before: Vec<Vec<RawRebuildValue>>,
+        settings_before: super::NativeConnectionSettings,
+    ) {
+        let state_guard = state.lock().expect("state mutex should not be poisoned");
+        assert!(state_guard.is_autocommit());
+        assert_eq!(rebuild_schema_snapshot(&state_guard), schema_before);
+        assert_eq!(
+            raw_rebuild_rows(
+                &state_guard,
+                "SELECT id, payload, retained, obsolete, parent_id FROM target"
+            ),
+            rows_before
+        );
+        assert_eq!(
+            super::capture_native_connection_settings(&state_guard)
+                .expect("connection settings should remain readable"),
+            settings_before
+        );
+        assert_eq!(
+            state_guard
+                .query_row(
+                    "SELECT COUNT(*) FROM main.sqlite_master WHERE name LIKE '__dbflux_rebuild_%'",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .expect("private catalog should be readable"),
+            0
+        );
+        drop(state_guard);
+        assert!(SqliteConnectionState::lock_checked(state).is_ok());
+    }
+
+    #[test]
+    fn execute_guarded_rebuild_rejects_incompatible_affinity_and_rolls_back() {
+        let state = Arc::new(Mutex::new(SqliteConnectionState::new(
+            RusqliteConnection::open_in_memory().expect("fixture SQLite should open"),
+        )));
+        state.lock().expect("state mutex should not be poisoned").execute_batch(
+                "PRAGMA foreign_keys = ON; CREATE TABLE parent (id INTEGER PRIMARY KEY); CREATE TABLE target (id INTEGER PRIMARY KEY, payload TEXT, retained TEXT, obsolete TEXT, parent_id INTEGER REFERENCES parent(id)); CREATE INDEX target_retained_desc ON target(retained DESC); INSERT INTO parent VALUES (1); INSERT INTO target VALUES (-7, '0007', 'keep', 'remove', 1)",
+            ).expect("affinity fixture should be created");
+        let request = TableAlterRequest {
+            table: TableRef::new("target"),
+            operations: vec![
+                TableAlterOperation::AlterColumn {
+                    name: "payload".to_string(),
+                    new_type: Some("INTEGER".to_string()),
+                    nullable: None,
+                    default: None,
+                },
+                TableAlterOperation::DropColumn {
+                    name: "obsolete".to_string(),
+                },
+            ],
+            expected_before: Vec::new(),
+        };
+        let (schema_before, rows_before, settings_before) = {
+            let state = state.lock().expect("state mutex should not be poisoned");
+            (
+                rebuild_schema_snapshot(&state),
+                raw_rebuild_rows(
+                    &state,
+                    "SELECT id, payload, retained, obsolete, parent_id FROM target",
+                ),
+                super::capture_native_connection_settings(&state)
+                    .expect("connection settings should be captured"),
+            )
+        };
+        let error = prepare_rebuild_plan_for_test(state.clone(), &request)
+            .expect("affinity plan should prepare")
+            .execute_guarded()
+            .expect_err("TEXT storage must not be silently coerced to INTEGER");
+        assert!(matches!(error, DbError::QueryFailed(_)));
+        assert!(error.to_string().contains("exact copy comparison differed"));
+        assert_guarded_rollback(&state, schema_before, rows_before, settings_before);
+    }
+
+    #[test]
+    fn execute_guarded_rebuild_rejects_existing_null_for_not_null_and_rolls_back() {
+        let state = Arc::new(Mutex::new(SqliteConnectionState::new(
+            RusqliteConnection::open_in_memory().expect("fixture SQLite should open"),
+        )));
+        state.lock().expect("state mutex should not be poisoned").execute_batch(
+                "PRAGMA foreign_keys = ON; CREATE TABLE parent (id INTEGER PRIMARY KEY); CREATE TABLE target (id INTEGER PRIMARY KEY, payload TEXT, retained TEXT, obsolete TEXT, parent_id INTEGER REFERENCES parent(id)); CREATE INDEX target_retained_desc ON target(retained DESC); INSERT INTO parent VALUES (1); INSERT INTO target VALUES (-7, NULL, 'keep', 'remove', 1)",
+            ).expect("not-null fixture should be created");
+        let request = TableAlterRequest {
+            table: TableRef::new("target"),
+            operations: vec![
+                TableAlterOperation::AlterColumn {
+                    name: "payload".to_string(),
+                    new_type: None,
+                    nullable: Some(false),
+                    default: None,
+                },
+                TableAlterOperation::DropColumn {
+                    name: "obsolete".to_string(),
+                },
+            ],
+            expected_before: Vec::new(),
+        };
+        let (schema_before, rows_before, settings_before) = {
+            let state = state.lock().expect("state mutex should not be poisoned");
+            (
+                rebuild_schema_snapshot(&state),
+                raw_rebuild_rows(
+                    &state,
+                    "SELECT id, payload, retained, obsolete, parent_id FROM target",
+                ),
+                super::capture_native_connection_settings(&state)
+                    .expect("connection settings should be captured"),
+            )
+        };
+        let error = prepare_rebuild_plan_for_test(state.clone(), &request)
+            .expect("not-null plan should prepare")
+            .execute_guarded()
+            .expect_err("existing NULL must not receive a backfill or coercion");
+        assert_eq!(
+            error
+                .formatted()
+                .and_then(|formatted| formatted.code.as_deref()),
+            Some("1299"),
+            "copy failure must preserve SQLite SQLITE_CONSTRAINT_NOTNULL"
+        );
+        assert_guarded_rollback(&state, schema_before, rows_before, settings_before);
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct FailedRebuildBoundary {
+        main_catalog: Vec<Vec<RawRebuildValue>>,
+        target_rows: Vec<Vec<RawRebuildValue>>,
+        parent_rows: Vec<Vec<RawRebuildValue>>,
+        temp_catalog: Vec<Vec<RawRebuildValue>>,
+        sentinel_rows: Vec<Vec<RawRebuildValue>>,
+        settings: super::NativeConnectionSettings,
+    }
+
+    fn capture_failed_rebuild_boundary(state: &SqliteConnectionState) -> FailedRebuildBoundary {
+        FailedRebuildBoundary {
+            main_catalog: rebuild_schema_snapshot(state),
+            target_rows: raw_rebuild_rows(
+                state,
+                "SELECT id, payload, retained, obsolete, parent_id FROM target ORDER BY id",
+            ),
+            parent_rows: raw_rebuild_rows(state, "SELECT id, label FROM parent ORDER BY id"),
+            temp_catalog: raw_rebuild_rows(
+                state,
+                "SELECT type, name, tbl_name, sql FROM temp.sqlite_temp_master ORDER BY type, name",
+            ),
+            sentinel_rows: raw_rebuild_rows(state, "SELECT value FROM sentinel ORDER BY value"),
+            settings: super::capture_native_connection_settings(state)
+                .expect("failed rebuild settings should be readable"),
+        }
+    }
+
+    fn assert_failed_rebuild_boundary(
+        state: &Arc<Mutex<SqliteConnectionState>>,
+        boundary: &FailedRebuildBoundary,
+    ) {
+        let state_guard = state.lock().expect("state mutex should not be poisoned");
+        assert!(
+            state_guard.is_autocommit(),
+            "failure must complete rollback"
+        );
+        assert_eq!(&capture_failed_rebuild_boundary(&state_guard), boundary);
+        assert_eq!(
+            state_guard
+                .query_row(
+                    "SELECT COUNT(*) FROM main.sqlite_master WHERE name LIKE '__dbflux_rebuild_%'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .expect("private catalog should be readable"),
+            0,
+            "failure must not retain a replacement object",
+        );
+        state_guard
+            .execute_batch("INSERT INTO sentinel VALUES ('subsequent-write')")
+            .expect("a clean rollback must leave a subsequent write usable");
+        drop(state_guard);
+        assert!(SqliteConnectionState::lock_checked(state).is_ok());
+    }
+
+    fn lifecycle_rebuild_fixture() -> (
+        Arc<Mutex<SqliteConnectionState>>,
+        TableAlterRequest,
+        FailedRebuildBoundary,
+    ) {
+        let state = Arc::new(Mutex::new(SqliteConnectionState::new(
+            RusqliteConnection::open_in_memory().expect("fixture SQLite should open"),
+        )));
+        state
+            .lock()
+            .expect("state mutex should not be poisoned")
+            .execute_batch(
+                "PRAGMA foreign_keys = ON; \
+                 CREATE TABLE parent (id INTEGER PRIMARY KEY, label TEXT NOT NULL); \
+                 CREATE TABLE target (id INTEGER PRIMARY KEY, payload TEXT NOT NULL, retained TEXT, obsolete TEXT, parent_id INTEGER REFERENCES parent(id)); \
+                 CREATE INDEX target_retained ON target(retained DESC); \
+                 CREATE TABLE sentinel (value TEXT NOT NULL); \
+                 CREATE TEMP TABLE temp_sentinel (value TEXT NOT NULL); \
+                 INSERT INTO parent VALUES (1, 'parent-before'); \
+                 INSERT INTO target VALUES (-7, 'first', 'keep-first', 'remove-first', 1); \
+                 INSERT INTO target VALUES (9, 'second', 'keep-second', 'remove-second', 1); \
+                 INSERT INTO sentinel VALUES ('before'); \
+                 INSERT INTO temp_sentinel VALUES ('temp-before')",
+            )
+            .expect("lifecycle fixture should be created");
+        let request = rebuild_alter_and_drop_request();
+        let boundary = {
+            let state_guard = state.lock().expect("state mutex should not be poisoned");
+            capture_failed_rebuild_boundary(&state_guard)
+        };
+        (state, request, boundary)
+    }
+
+    #[test]
+    fn execute_guarded_rebuild_cancellation_is_bare_only_after_verified_rollback() {
+        let _hook_lock = REBUILD_TEST_HOOK_LOCK
+            .lock()
+            .expect("rebuild hook lock should not be poisoned");
+        let (state, request, boundary) = lifecycle_rebuild_fixture();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let plan = prepare_rebuild_plan_with_cancellation_for_test(
+            state.clone(),
+            &request,
+            cancelled.clone(),
+        )
+        .expect("cancellation fixture should prepare");
+        *super::COMPARISON_CANCEL_AFTER_ROW
+            .lock()
+            .expect("comparison cancellation hook mutex should not be poisoned") =
+            Some((std::thread::current().id(), cancelled));
+
+        let error = plan
+            .execute_guarded()
+            .expect_err("shared cancellation must stop the private lifecycle");
+        clear_rebuild_test_faults();
+        assert!(matches!(error, DbError::Cancelled));
+        assert_failed_rebuild_boundary(&state, &boundary);
+    }
+
+    #[test]
+    fn execute_guarded_rebuild_composes_cancellation_with_cleanup_failures_and_quarantines_aliases()
+    {
+        let _hook_lock = REBUILD_TEST_HOOK_LOCK
+            .lock()
+            .expect("rebuild hook lock should not be poisoned");
+        let (state, request, _) = lifecycle_rebuild_fixture();
+        let checked_alias = state.clone();
+        let interrupt_handle = state
+            .lock()
+            .expect("state mutex should not be poisoned")
+            .interrupt_handle();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let plan = prepare_rebuild_plan_with_cancellation_for_test(
+            state.clone(),
+            &request,
+            cancelled.clone(),
+        )
+        .expect("cancellation fixture should prepare");
+        *super::COMPARISON_CANCEL_AFTER_ROW
+            .lock()
+            .expect("comparison cancellation hook mutex should not be poisoned") =
+            Some((std::thread::current().id(), cancelled));
+        *super::REBUILD_GUARD_FAULTS
+            .lock()
+            .expect("guard fault mutex should not be poisoned") = Some((
+            std::thread::current().id(),
+            super::RebuildGuardFaults {
+                fail_rollback: true,
+                fail_restore_readback: true,
+                ..Default::default()
+            },
+        ));
+
+        let error = plan
+            .execute_guarded()
+            .expect_err("cleanup uncertainty must compose with cancellation");
+        clear_rebuild_test_faults();
+        assert!(matches!(error, DbError::QueryFailed(_)));
+        let detail = error
+            .formatted()
+            .and_then(|formatted| formatted.detail.as_deref())
+            .expect("composite failure must preserve structured cleanup evidence");
+        assert!(
+            detail.contains("primary failure") && detail.to_ascii_lowercase().contains("cancel"),
+            "composite failure must retain the cancellation primary: {detail}"
+        );
+        assert!(detail.contains("rollback failure"));
+        assert!(detail.contains("foreign-key restoration failure"));
+        assert!(SqliteConnectionState::lock_checked(&state).is_err());
+        assert!(SqliteConnectionState::lock_checked(&checked_alias).is_err());
+        interrupt_handle.interrupt();
+    }
+
+    #[test]
+    fn execute_guarded_rebuild_clears_a_stale_cancellation_only_after_it_owns_the_operation() {
+        let (state, request, _) = lifecycle_rebuild_fixture();
+        let cancelled = Arc::new(AtomicBool::new(true));
+        let stale_plan = prepare_rebuild_plan_with_cancellation_for_test(
+            state.clone(),
+            &request,
+            cancelled.clone(),
+        )
+        .expect("stale-cancellation fixture should prepare");
+        state
+            .lock()
+            .expect("state mutex should not be poisoned")
+            .execute_batch("PRAGMA foreign_keys = OFF")
+            .expect("fixture should make the prepared plan stale");
+        assert!(stale_plan.execute_guarded().is_err());
+        assert!(
+            cancelled.load(Ordering::SeqCst),
+            "a rejected preflight must not consume a cancellation owned by another operation"
+        );
+        state
+            .lock()
+            .expect("state mutex should not be poisoned")
+            .execute_batch("PRAGMA foreign_keys = ON")
+            .expect("fixture should restore the preflight setting");
+        prepare_rebuild_plan_with_cancellation_for_test(state, &request, cancelled.clone())
+            .expect("fresh plan should prepare")
+            .execute_guarded()
+            .expect("the operation that owns the connection may clear a stale cancellation");
+        assert!(!cancelled.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn execute_guarded_rebuild_finalization_faults_prevent_drop_and_preserve_failure_boundary() {
+        let _hook_lock = REBUILD_TEST_HOOK_LOCK
+            .lock()
+            .expect("rebuild hook lock should not be poisoned");
+        let (state, request, boundary) = lifecycle_rebuild_fixture();
+        *super::COMPARISON_FINALIZE_FAULTS
+            .lock()
+            .expect("comparison finalization fault mutex should not be poisoned") = Some((
+            std::thread::current().id(),
+            super::ComparisonFinalizeFaults {
+                source: true,
+                replacement: true,
+            },
+        ));
+        let error = prepare_rebuild_plan_for_test(state.clone(), &request)
+            .expect("finalization fixture should prepare")
+            .execute_guarded()
+            .expect_err("comparison finalization must prevent the destructive drop");
+        clear_rebuild_test_faults();
+        let detail = error
+            .formatted()
+            .and_then(|formatted| formatted.detail.as_deref())
+            .expect("comparison cleanup failure must preserve both finalization causes");
+        assert!(detail.contains("source statement finalization"));
+        assert!(detail.contains("replacement statement finalization"));
+        assert_failed_rebuild_boundary(&state, &boundary);
+    }
+
+    #[test]
+    fn execute_guarded_rebuild_recovers_after_sqlite_engine_automatically_rolls_back() {
+        let _hook_lock = REBUILD_TEST_HOOK_LOCK
+            .lock()
+            .expect("rebuild hook lock should not be poisoned");
+        let (state, request, _) = lifecycle_rebuild_fixture();
+        state
+            .lock()
+            .expect("state mutex should not be poisoned")
+            .execute_batch("CREATE UNIQUE INDEX target_retained_unique ON target(retained)")
+            .expect("fixture should have a uniqueness constraint for engine rollback");
+        let boundary = {
+            let state_guard = state.lock().expect("state mutex should not be poisoned");
+            capture_failed_rebuild_boundary(&state_guard)
+        };
+        *super::REBUILD_STAGE_HOOK
+            .lock()
+            .expect("stage hook mutex should not be poisoned") = Some((
+            std::thread::current().id(),
+            super::RebuildExecutionStage::Compare,
+            Box::new(|connection| {
+                connection.execute_batch(
+                    "INSERT OR ROLLBACK INTO target (id, payload, retained, obsolete, parent_id) \
+                     VALUES (31, 'engine-payload', 'keep-first', 'engine-drop', 1)",
+                )
+            }),
+        ));
+
+        let error = prepare_rebuild_plan_for_test(state.clone(), &request)
+            .expect("engine rollback fixture should prepare")
+            .execute_guarded()
+            .expect_err("SQLite conflict policy must end the transaction automatically");
+        clear_rebuild_test_faults();
+        assert!(matches!(error, DbError::QueryFailed(_)));
+        assert!(error.to_string().contains("run rebuild test stage hook"));
+        assert_failed_rebuild_boundary(&state, &boundary);
+    }
+
+    fn execute_final_observation_fixture(
+        create_target: &str,
+        insert_target: &str,
+    ) -> (super::RebuildCapture, super::RebuildObservation) {
+        let state = Arc::new(Mutex::new(SqliteConnectionState::new(
+            RusqliteConnection::open_in_memory().expect("in-memory SQLite should open"),
+        )));
+        state
+            .lock()
+            .expect("state mutex should not be poisoned")
+            .execute_batch(&format!(
+                "PRAGMA foreign_keys = ON; \
+                 CREATE TABLE parent (id INTEGER PRIMARY KEY); \
+                 {create_target}; \
+                 CREATE INDEX target_retained_desc ON target(retained DESC); \
+                 INSERT INTO parent VALUES (1); \
+                 {insert_target}",
+            ))
+            .expect("rebuild final-observation fixture should be created");
+        let request = TableAlterRequest {
+            table: TableRef::new("target"),
+            operations: vec![
+                TableAlterOperation::AlterColumn {
+                    name: "payload".to_string(),
+                    new_type: Some("VARCHAR(16)".to_string()),
+                    nullable: Some(false),
+                    default: None,
+                },
+                TableAlterOperation::DropColumn {
+                    name: "obsolete".to_string(),
+                },
+            ],
+            expected_before: Vec::new(),
+        };
+        let plan = prepare_rebuild_plan_for_test(state.clone(), &request)
+            .expect("private rebuild plan should prepare");
+        let capture = plan.capture.clone();
+        plan.execute_guarded()
+            .expect("private rebuild executor should reconstruct the fixture");
+        let state = state.lock().expect("state mutex should not be poisoned");
+        let observation = super::capture_rebuild_observation_once(&state, "target")
+            .expect("reconstructed table observation should be captured");
+        (capture, observation)
+    }
+
+    fn observe_during_finalization(
+        observation: &super::RebuildObservation,
+    ) -> super::RebuildObservation {
+        let mut observation = observation.clone();
+        observation.settings.foreign_keys = 0;
+        observation
+    }
+
+    #[test]
+    fn final_observation_validator_accepts_reconstructed_integer_primary_key_and_hidden_rowid() {
+        for (label, create_target, insert_target, identity) in [
+            (
+                "INTEGER PRIMARY KEY",
+                "CREATE TABLE target (id INTEGER PRIMARY KEY, payload TEXT NOT NULL, retained TEXT, obsolete TEXT, parent_id INTEGER REFERENCES parent(id), UNIQUE(retained, parent_id))",
+                "INSERT INTO target VALUES (-7, 'payload', 'retained', 'obsolete', 1)",
+                "id",
+            ),
+            (
+                "hidden rowid",
+                "CREATE TABLE target (payload TEXT NOT NULL, retained TEXT, obsolete TEXT, parent_id INTEGER REFERENCES parent(id), UNIQUE(retained, parent_id))",
+                "INSERT INTO target VALUES ('payload', 'retained', 'obsolete', 1)",
+                "rowid",
+            ),
+        ] {
+            let (capture, observation) =
+                execute_final_observation_fixture(create_target, insert_target);
+            assert!(observation.indexes.iter().any(|index| index.origin == "c"));
+            assert!(observation.indexes.iter().any(|index| index.origin == "u"));
+            assert_eq!(capture.final_expected_facts.identity, identity);
+            super::validate_rebuild_final_observation(
+                &capture,
+                &observe_during_finalization(&observation),
+            )
+            .unwrap_or_else(|error| panic!("{label} final observation must validate: {error}"));
+        }
+    }
+
+    #[test]
+    fn final_observation_validator_rejects_each_cloned_integrity_mutation() {
+        enum Mutation {
+            RetainedOrder,
+            RetainedMembership,
+            TableMetadataAbsent,
+            IndexAbsent,
+            IndexExtra,
+            IndexName,
+            IndexPartial,
+            IndexKeyMembership,
+            IndexKeyName,
+            IndexKeyOrder,
+            IndexDirection,
+            IndexCollation,
+            IndexUnique,
+            IndexOrigin,
+            IndexSql,
+            UnrequestedSemanticChange,
+            ForeignKeyIntent,
+            ForeignKeyViolation,
+            NonTargetMain,
+            NonTargetTemp,
+            DatabaseList,
+            PrivateNameLeak,
+            ForeignKeys,
+            WritableSchema,
+            LegacyAlterTable,
+            IgnoreCheckConstraints,
+            DeferForeignKeys,
+        }
+
+        let (capture, observation) = execute_final_observation_fixture(
+            "CREATE TABLE target (id INTEGER PRIMARY KEY, payload TEXT NOT NULL, retained TEXT, obsolete TEXT, parent_id INTEGER REFERENCES parent(id), UNIQUE(retained, parent_id))",
+            "INSERT INTO target VALUES (-7, 'payload', 'retained', 'obsolete', 1)",
+        );
+        let observation = observe_during_finalization(&observation);
+        for (label, mutation, expected) in [
+            (
+                "retained membership/order",
+                Mutation::RetainedOrder,
+                "semantic proof changed retained column order or names",
+            ),
+            (
+                "retained membership",
+                Mutation::RetainedMembership,
+                "semantic proof changed retained column order or names",
+            ),
+            (
+                "table metadata absence",
+                Mutation::TableMetadataAbsent,
+                "cannot find final table metadata",
+            ),
+            (
+                "index absent",
+                Mutation::IndexAbsent,
+                "expected index is absent",
+            ),
+            (
+                "index extra",
+                Mutation::IndexExtra,
+                "contains an extra index",
+            ),
+            ("index name", Mutation::IndexName, "index name or order"),
+            (
+                "index partial",
+                Mutation::IndexPartial,
+                "rejects partial index",
+            ),
+            (
+                "index key membership",
+                Mutation::IndexKeyMembership,
+                "index key membership",
+            ),
+            ("index key name", Mutation::IndexKeyName, "index key column"),
+            (
+                "index key order",
+                Mutation::IndexKeyOrder,
+                "index key order",
+            ),
+            (
+                "index direction",
+                Mutation::IndexDirection,
+                "index key direction",
+            ),
+            (
+                "index collation",
+                Mutation::IndexCollation,
+                "index key collation",
+            ),
+            ("index unique", Mutation::IndexUnique, "index uniqueness"),
+            ("index origin", Mutation::IndexOrigin, "index origin"),
+            ("index SQL", Mutation::IndexSql, "index SQL"),
+            (
+                "unrequested selected-column semantic change",
+                Mutation::UnrequestedSemanticChange,
+                "semantic proof changed unselected",
+            ),
+            (
+                "foreign key intent",
+                Mutation::ForeignKeyIntent,
+                "foreign-key metadata differs",
+            ),
+            (
+                "foreign key violation",
+                Mutation::ForeignKeyViolation,
+                "foreign_key_check found a violation",
+            ),
+            (
+                "non-target MAIN catalog",
+                Mutation::NonTargetMain,
+                "non-target main catalog",
+            ),
+            (
+                "non-target TEMP catalog",
+                Mutation::NonTargetTemp,
+                "non-target temp catalog",
+            ),
+            ("database list", Mutation::DatabaseList, "database list"),
+            (
+                "private name leak",
+                Mutation::PrivateNameLeak,
+                "private replacement object",
+            ),
+            ("foreign_keys", Mutation::ForeignKeys, "foreign_keys"),
+            (
+                "writable_schema",
+                Mutation::WritableSchema,
+                "writable_schema",
+            ),
+            (
+                "legacy_alter_table",
+                Mutation::LegacyAlterTable,
+                "legacy_alter_table",
+            ),
+            (
+                "ignore_check_constraints",
+                Mutation::IgnoreCheckConstraints,
+                "ignore_check_constraints",
+            ),
+            (
+                "defer_foreign_keys",
+                Mutation::DeferForeignKeys,
+                "defer_foreign_keys",
+            ),
+        ] {
+            let mut mutated = observation.clone();
+            match mutation {
+                Mutation::RetainedOrder => {
+                    mutated.source_sql = "CREATE TABLE target (id INTEGER PRIMARY KEY, retained TEXT, payload VARCHAR(16) NOT NULL, parent_id INTEGER REFERENCES parent(id), UNIQUE(retained, parent_id))".to_string();
+                }
+                Mutation::RetainedMembership => {
+                    mutated.source_sql = "CREATE TABLE target (id INTEGER PRIMARY KEY, payload VARCHAR(16) NOT NULL, replacement TEXT, parent_id INTEGER REFERENCES parent(id), UNIQUE(replacement, parent_id))".to_string();
+                }
+                Mutation::TableMetadataAbsent => mutated.table_metadata.clear(),
+                Mutation::IndexAbsent => {
+                    mutated.indexes.pop();
+                }
+                Mutation::IndexExtra => {
+                    let mut extra = mutated.indexes[0].clone();
+                    extra.name = "extra_index".to_string();
+                    mutated.indexes.push(extra);
+                }
+                Mutation::IndexName => mutated.indexes[0].name.push_str("_renamed"),
+                Mutation::IndexPartial => mutated.indexes[0].partial = true,
+                Mutation::IndexKeyMembership => {
+                    mutated.indexes[0].keys.pop();
+                }
+                Mutation::IndexKeyName => mutated.indexes[0].keys[0].column = "other".to_string(),
+                Mutation::IndexKeyOrder => mutated.indexes[0].keys[0].sequence += 1,
+                Mutation::IndexDirection => {
+                    mutated.indexes[0].keys[0].descending = !mutated.indexes[0].keys[0].descending;
+                }
+                Mutation::IndexCollation => {
+                    mutated.indexes[0].keys[0].collation = "NOCASE".to_string()
+                }
+                Mutation::IndexUnique => mutated.indexes[0].unique = !mutated.indexes[0].unique,
+                Mutation::IndexOrigin => mutated.indexes[0].origin = "pk".to_string(),
+                Mutation::IndexSql => {
+                    mutated.indexes[0].sql =
+                        Some("CREATE INDEX changed ON target(payload)".to_string());
+                }
+                Mutation::UnrequestedSemanticChange => {
+                    mutated.source_sql = "CREATE TABLE target (id INTEGER PRIMARY KEY, payload VARCHAR(16) NOT NULL, retained BLOB, parent_id INTEGER REFERENCES parent(id), UNIQUE(retained, parent_id))".to_string();
+                }
+                Mutation::ForeignKeyIntent => {
+                    mutated.foreign_key_metadata[0].on_delete = "CASCADE".to_string();
+                }
+                Mutation::ForeignKeyViolation => {
+                    mutated.foreign_key_violation = Some("target".to_string())
+                }
+                Mutation::NonTargetMain => {
+                    let parent = mutated
+                        .catalog
+                        .iter_mut()
+                        .find(|entry| entry.name == "parent")
+                        .expect("fixture must retain parent catalog entry");
+                    parent.sql = Some("CREATE TABLE parent (id TEXT)".to_string());
+                }
+                Mutation::NonTargetTemp => mutated.temp_catalog.push(super::CatalogEntry {
+                    object_type: "table".to_string(),
+                    name: "temp_extra".to_string(),
+                    table_name: "temp_extra".to_string(),
+                    sql: Some("CREATE TABLE temp_extra(value)".to_string()),
+                }),
+                Mutation::DatabaseList => mutated.databases[0].file_name.push_str("-changed"),
+                Mutation::PrivateNameLeak => mutated.catalog.push(super::CatalogEntry {
+                    object_type: "table".to_string(),
+                    name: capture.replacement.clone(),
+                    table_name: capture.replacement.clone(),
+                    sql: Some("CREATE TABLE leaked(value)".to_string()),
+                }),
+                Mutation::ForeignKeys => mutated.settings.foreign_keys = 1,
+                Mutation::WritableSchema => mutated.settings.writable_schema += 1,
+                Mutation::LegacyAlterTable => mutated.settings.legacy_alter_table += 1,
+                Mutation::IgnoreCheckConstraints => mutated.settings.ignore_check_constraints += 1,
+                Mutation::DeferForeignKeys => mutated.settings.defer_foreign_keys += 1,
+            }
+            let error = super::validate_rebuild_final_observation(&capture, &mutated)
+                .expect_err(&format!("{label} mutation must be rejected"));
+            assert!(
+                error.to_string().contains(expected),
+                "{label} must report its own assertion ({expected}), got: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn final_observation_validator_rejects_hidden_rowid_identity_mutation() {
+        let (capture, observation) = execute_final_observation_fixture(
+            "CREATE TABLE target (payload TEXT NOT NULL, retained TEXT, obsolete TEXT, parent_id INTEGER REFERENCES parent(id), UNIQUE(retained, parent_id))",
+            "INSERT INTO target VALUES ('payload', 'retained', 'obsolete', 1)",
+        );
+        let mut observation = observe_during_finalization(&observation);
+        observation
+            .table_metadata
+            .iter_mut()
+            .find(|metadata| metadata.name == "target")
+            .expect("fixture must contain target metadata")
+            .rowid_aliases = vec!["alternate_rowid".to_string()];
+        let error = super::validate_rebuild_final_observation(&capture, &observation)
+            .expect_err("hidden rowid identity mutation must be rejected");
+        assert!(error.to_string().contains("identity differs"));
     }
 
     #[test]

@@ -1698,17 +1698,13 @@ fn sqlite_rebuild_rejects_all_shadowed_rowid_aliases() -> Result<(), DbError> {
 }
 
 #[test]
-fn sqlite_rebuild_prepare_is_read_only_and_execute_is_explicitly_unavailable() -> Result<(), DbError>
+fn sqlite_rebuild_prepare_is_read_only_and_execute_applies_requested_delta() -> Result<(), DbError>
 {
     let (connection, _, _db_path) = connect_sqlite()?;
     connection.execute(&QueryRequest::new(
-        "CREATE TABLE people (
-            id INTEGER PRIMARY KEY,
-            legacy TEXT DEFAULT 'NULL',
-            retained TEXT NOT NULL DEFAULT ('keep')
-        );
-        INSERT INTO people (id, legacy, retained) VALUES (0, 'old', 'kept');
-        INSERT INTO people (id, legacy, retained) VALUES (-7, 'older', 'also kept')",
+        "PRAGMA foreign_keys = ON; \
+         CREATE TABLE people (id INTEGER PRIMARY KEY, legacy TEXT DEFAULT 'NULL', retained TEXT NOT NULL DEFAULT ('keep')); \
+         INSERT INTO people (id, legacy, retained) VALUES (0, 'old', 'kept'), (-7, 'older', 'also kept')",
     ))?;
     let schema_before = connection.execute(&QueryRequest::new(
         "SELECT sql FROM main.sqlite_master WHERE type = 'table' AND name = 'people'",
@@ -1717,7 +1713,7 @@ fn sqlite_rebuild_prepare_is_read_only_and_execute_is_explicitly_unavailable() -
         "SELECT id, legacy, retained FROM main.people ORDER BY id",
     ))?;
     let settings_before = connection.execute(&QueryRequest::new("PRAGMA foreign_keys"))?;
-
+    let before = rebuild_boundary_snapshot(&*connection, "people")?;
     let plan = connection
         .table_alter_planner()
         .expect("SQLite must opt into table alteration planning")
@@ -1736,7 +1732,6 @@ fn sqlite_rebuild_prepare_is_read_only_and_execute_is_explicitly_unavailable() -
                 default: Some(Some("'NULL'".to_string())),
             }],
         })?;
-
     assert_eq!(plan.preview().route, TableAlterRoute::Rebuild);
     assert!(plan.preview().driver_managed);
     assert!(plan.preview().table_atomic);
@@ -1764,21 +1759,33 @@ fn sqlite_rebuild_prepare_is_read_only_and_execute_is_explicitly_unavailable() -
             .rows,
         "rebuild preparation must not mutate populated source data"
     );
-
-    let error = plan
-        .execute()
-        .expect_err("the Unit4 rebuild plan must not install an executor");
-    assert!(
-        error.to_string().contains("lifecycle is not installed"),
-        "the unavailable executor must be explicit: {error}"
+    assert_eq!(
+        settings_before.rows,
+        connection
+            .execute(&QueryRequest::new("PRAGMA foreign_keys"))?
+            .rows,
+        "rebuild preparation must not mutate connection settings"
     );
     assert_eq!(
-        schema_before.rows,
+        before,
+        rebuild_boundary_snapshot(&*connection, "people")?,
+        "preparation must retain the complete people boundary"
+    );
+
+    plan.execute()?;
+
+    assert_eq!(
         connection
             .execute(&QueryRequest::new(
-                "SELECT sql FROM main.sqlite_master WHERE type = 'table' AND name = 'people'",
+                "SELECT type, \"notnull\", dflt_value FROM pragma_table_xinfo('people') WHERE name = 'legacy'",
             ))?
-            .rows
+            .rows,
+        vec![vec![
+            Value::Text("VARCHAR(32)".to_string()),
+            Value::Int(1),
+            Value::Text("NULL".to_string()),
+        ]],
+        "execution must apply only the requested legacy-column definition"
     );
     assert_eq!(
         rows_before.rows,
@@ -1786,13 +1793,15 @@ fn sqlite_rebuild_prepare_is_read_only_and_execute_is_explicitly_unavailable() -
             .execute(&QueryRequest::new(
                 "SELECT id, legacy, retained FROM main.people ORDER BY id",
             ))?
-            .rows
+            .rows,
+        "execution must preserve populated source rows exactly"
     );
     assert_eq!(
         settings_before.rows,
         connection
             .execute(&QueryRequest::new("PRAGMA foreign_keys"))?
-            .rows
+            .rows,
+        "execution must restore connection settings"
     );
     Ok(())
 }
@@ -2065,7 +2074,7 @@ fn sqlite_rebuild_preserves_mixed_foreign_key_declarations_and_related_table_met
 }
 
 #[test]
-fn sqlite_rebuild_preserves_foreign_key_timing_forms() -> Result<(), DbError> {
+fn sqlite_rebuild_executes_preserving_foreign_key_timing_forms() -> Result<(), DbError> {
     for (label, timing) in [
         ("omitted timing", ""),
         ("DEFERRABLE", " DEFERRABLE"),
@@ -2089,15 +2098,12 @@ fn sqlite_rebuild_preserves_foreign_key_timing_forms() -> Result<(), DbError> {
     ] {
         let (connection, _, _db_path) = connect_sqlite()?;
         connection.execute(&QueryRequest::new(format!(
-            "CREATE TABLE parent (id INTEGER PRIMARY KEY); \
-             CREATE TABLE child (\
-                 id INTEGER PRIMARY KEY,\
-                 parent_id INTEGER NOT NULL,\
-                 payload TEXT,\
-                 FOREIGN KEY (parent_id) REFERENCES parent(id){timing}\
-             ); \
-             INSERT INTO parent (id) VALUES (7); \
-             INSERT INTO child (id, parent_id, payload) VALUES (1, 7, 'kept')"
+            "PRAGMA foreign_keys = ON; \
+             CREATE TABLE parent (id INTEGER PRIMARY KEY); \
+             CREATE TABLE child (id INTEGER PRIMARY KEY, parent_id INTEGER NOT NULL, payload TEXT, \
+                FOREIGN KEY (parent_id) REFERENCES parent(id) {timing}); \
+             INSERT INTO parent VALUES (7); \
+             INSERT INTO child VALUES (1, 7, 'kept')"
         )))?;
         let violations = connection.execute(&QueryRequest::new("PRAGMA main.foreign_key_check"))?;
         assert!(
@@ -2107,7 +2113,7 @@ fn sqlite_rebuild_preserves_foreign_key_timing_forms() -> Result<(), DbError> {
         let schema_before = connection.execute(&QueryRequest::new(
             "SELECT sql FROM main.sqlite_master WHERE type = 'table' AND name = 'child'",
         ))?;
-
+        let before = rebuild_boundary_snapshot(&*connection, "child")?;
         let plan = connection
             .table_alter_planner()
             .expect("SQLite must opt into table alteration planning")
@@ -2121,19 +2127,17 @@ fn sqlite_rebuild_preserves_foreign_key_timing_forms() -> Result<(), DbError> {
                 }],
                 expected_before: Vec::new(),
             })?;
-
         assert_eq!(plan.preview().route, TableAlterRoute::Rebuild);
         assert!(
-            plan.preview()
-                .statements
-                .iter()
-                .any(|statement| statement.starts_with("CREATE TABLE")
+            plan.preview().statements.iter().any(|statement| {
+                statement.starts_with("CREATE TABLE")
                     && statement.contains("FOREIGN KEY (parent_id) REFERENCES parent(id)")
                     && if timing.is_empty() {
                         !statement.contains("DEFERRABLE")
                     } else {
                         statement.contains(timing)
-                    }),
+                    }
+            }),
             "rebuild preview must preserve {label} exactly"
         );
         assert_eq!(
@@ -2145,23 +2149,83 @@ fn sqlite_rebuild_preserves_foreign_key_timing_forms() -> Result<(), DbError> {
                 .rows,
             "preparation must remain read-only for {label}"
         );
-        let execute_error = plan
-            .execute()
-            .expect_err("rebuild execution remains explicitly unavailable");
-        assert!(
-            execute_error
-                .to_string()
-                .contains("lifecycle is not installed"),
-            "rejected execution must be explicit for {label}: {execute_error}"
+        assert_eq!(
+            before,
+            rebuild_boundary_snapshot(&*connection, "child")?,
+            "preparation must retain the complete {label} boundary"
+        );
+
+        plan.execute()?;
+
+        let schema = connection.execute(&QueryRequest::new(
+            "SELECT sql FROM main.sqlite_master WHERE type = 'table' AND name = 'child'",
+        ))?;
+        let expected_schema = format!(
+            "CREATE TABLE \"child\" (id INTEGER PRIMARY KEY, parent_id INTEGER NOT NULL, \
+             payload VARCHAR(9), FOREIGN KEY (parent_id) REFERENCES parent(id) {timing})"
         );
         assert_eq!(
-            schema_before.rows,
+            schema.rows,
+            vec![vec![Value::Text(expected_schema)]],
+            "execution must produce the exact requested schema for {label}"
+        );
+        assert_eq!(
             connection
                 .execute(&QueryRequest::new(
-                    "SELECT sql FROM main.sqlite_master WHERE type = 'table' AND name = 'child'",
+                    "SELECT group_concat(metadata, ';') FROM ( \
+                     SELECT printf('%d|%s|%s|%d|%s|%d|%d', cid, name, type, \"notnull\", \
+                     COALESCE(dflt_value, '<NULL>'), pk, hidden) AS metadata \
+                     FROM pragma_table_xinfo('child') ORDER BY cid)",
                 ))?
                 .rows,
-            "rejected execution must remain side-effect-free for {label}"
+            vec![vec![Value::Text(
+                "0|id|INTEGER|0|<NULL>|1|0;1|parent_id|INTEGER|1|<NULL>|0|0;2|payload|VARCHAR(9)|0|<NULL>|0|0".to_string(),
+            )]],
+            "execution must retain exact column metadata and the requested payload type for {label}"
+        );
+        assert!(
+            schema.rows[0][0]
+                .to_string()
+                .contains("FOREIGN KEY (parent_id) REFERENCES parent(id)"),
+            "execution must preserve the foreign-key relationship for {label}"
+        );
+        if timing.is_empty() {
+            assert!(
+                !schema.rows[0][0].to_string().contains("DEFERRABLE"),
+                "execution must preserve omitted timing for {label}"
+            );
+        } else {
+            assert!(
+                schema.rows[0][0].to_string().contains(timing),
+                "execution must preserve {label}"
+            );
+        }
+        assert_eq!(
+            connection
+                .execute(&QueryRequest::new(
+                    "SELECT id, parent_id, payload FROM main.child ORDER BY id",
+                ))?
+                .rows,
+            vec![vec![
+                Value::Int(1),
+                Value::Int(7),
+                Value::Text("kept".to_string()),
+            ]],
+            "execution must preserve rows for {label}"
+        );
+        assert_eq!(
+            before.foreign_keys,
+            connection
+                .execute(&QueryRequest::new("PRAGMA foreign_keys"))?
+                .rows,
+            "execution must restore the foreign-key setting for {label}"
+        );
+        assert!(
+            connection
+                .execute(&QueryRequest::new("PRAGMA main.foreign_key_check"))?
+                .rows
+                .is_empty(),
+            "execution must remain foreign-key clean for {label}"
         );
     }
     Ok(())
@@ -2176,7 +2240,7 @@ fn sqlite_rebuild_preview_declares_ordered_lifecycle_and_exact_streamed_comparis
          CREATE INDEX t_retained_desc ON t(retained DESC); \
          INSERT INTO t VALUES (1, 'payload', 'drop-a', 'drop-b', 'keep')",
     ))?;
-
+    let before = rebuild_boundary_snapshot(&*connection, "t")?;
     let plan = connection
         .table_alter_planner()
         .expect("SQLite must opt into table alteration planning")
@@ -2227,21 +2291,33 @@ fn sqlite_rebuild_preview_declares_ordered_lifecycle_and_exact_streamed_comparis
     let final_checks = position("verify final schema, explicit indexes, non-target catalog");
     let commit = position("COMMIT;");
     let restore_foreign_keys = position("after transaction ends, restore prior foreign_keys");
-
     assert!(statements[context].contains("private replacement-name availability"));
     assert!(statements[save_foreign_keys].contains("foreign_keys readback"));
     assert!(statements[under_lock].contains("freshness"));
     assert!(statements[under_lock].contains("baseline foreign-key cleanliness"));
     assert_eq!(
         statements[copy],
-        "INSERT INTO main.\"__dbflux_rebuild_t\" (\"id\", \"p\", \"retained\") \
-         SELECT \"id\", \"p\", \"retained\" FROM main.\"t\";",
-        "public copy must retain the ordered identity-plus-payload projection exactly"
+        "INSERT INTO main.\"__dbflux_rebuild_t\" (\"id\", \"p\", \"retained\") SELECT \"id\", \"p\", \"retained\" FROM main.\"t\";"
     );
     for forbidden in ["CAST(", "COALESCE(", "OR IGNORE", "OR REPLACE"] {
         assert!(
             !statements[copy].contains(forbidden),
             "public copy projection must not use {forbidden}"
+        );
+    }
+    assert!(statements[comparison].contains("ValueRef"));
+    for policy in [
+        "rowcount=true",
+        "integer identity=true",
+        "storage class=true",
+        "exact integer=true",
+        "REAL bits=true",
+        "TEXT/BLOB bytes=true",
+        "invalid UTF-8/NUL=true",
+    ] {
+        assert!(
+            statements[comparison].contains(policy),
+            "comparison must declare {policy}"
         );
     }
     assert!(statements[final_checks].contains("no private-name leak"));
@@ -2263,21 +2339,6 @@ fn sqlite_rebuild_preview_declares_ordered_lifecycle_and_exact_streamed_comparis
             && commit < restore_foreign_keys,
         "rebuild lifecycle intent must declare the complete ordered chain"
     );
-    assert!(statements[comparison].contains("ValueRef"));
-    for policy in [
-        "rowcount=true",
-        "integer identity=true",
-        "storage class=true",
-        "exact integer=true",
-        "REAL bits=true",
-        "TEXT/BLOB bytes=true",
-        "invalid UTF-8/NUL=true",
-    ] {
-        assert!(
-            statements[comparison].contains(policy),
-            "comparison must declare {policy}"
-        );
-    }
     let failure_intent = statements
         .iter()
         .find(|statement| statement.starts_with("INTENT FAILURE:"))
@@ -2298,23 +2359,74 @@ fn sqlite_rebuild_preview_declares_ordered_lifecycle_and_exact_streamed_comparis
     assert!(plan.preview().warnings.iter().any(|warning| {
         warning.contains("NOT EXECUTABLE") && warning.contains("illustrative lifecycle intent")
     }));
-    assert!(
-        plan.preview().warnings.iter().any(|warning| {
-            warning.contains("Data is not validated") && warning.contains("Unit5")
-        })
+    assert!(plan.preview().warnings.iter().any(|warning| {
+        warning.contains("Preparation remains read-only")
+            && warning.contains("exact streamed ValueRef comparison")
+    }));
+    assert_eq!(
+        before,
+        rebuild_boundary_snapshot(&*connection, "t")?,
+        "preparation must retain the complete boundary"
     );
-    assert!(
-        plan.execute()
-            .expect_err("Unit4 lifecycle must remain unavailable")
-            .to_string()
-            .contains("lifecycle is not installed")
+
+    plan.execute()?;
+
+    assert_eq!(
+        connection
+            .execute(&QueryRequest::new("SELECT id, p, retained FROM main.t"))?
+            .rows,
+        vec![vec![
+            Value::Int(1),
+            Value::Text("payload".to_string()),
+            Value::Text("keep".to_string())
+        ]],
+        "execution must preserve the retained projection"
+    );
+    assert_eq!(
+        connection
+            .execute(&QueryRequest::new(
+                "SELECT type, \"notnull\", dflt_value FROM pragma_table_xinfo('t') WHERE name = 'p'",
+            ))?
+            .rows,
+        vec![vec![
+            Value::Text("VARCHAR(9)".to_string()),
+            Value::Int(1),
+            Value::Text("NULL".to_string()),
+        ]],
+        "execution must apply the selected payload alteration"
+    );
+    assert_eq!(
+        connection
+            .execute(&QueryRequest::new(
+                "SELECT COUNT(*) FROM pragma_table_xinfo('t') WHERE name IN ('a', 'b')",
+            ))?
+            .rows,
+        vec![vec![Value::Int(0)]],
+        "execution must apply only the selected drops"
+    );
+    assert_eq!(
+        connection
+            .execute(&QueryRequest::new(
+                "SELECT sql FROM main.sqlite_master WHERE type = 'index' AND name = 't_retained_desc'",
+            ))?
+            .rows,
+        vec![vec![Value::Text(
+            "CREATE INDEX t_retained_desc ON t(retained DESC)".to_string(),
+        )]],
+        "execution must retain the unaffected explicit index"
+    );
+    assert_eq!(
+        before.foreign_keys,
+        connection
+            .execute(&QueryRequest::new("PRAGMA foreign_keys"))?
+            .rows,
+        "execution must restore the foreign-key setting"
     );
     Ok(())
 }
 
 #[test]
-fn sqlite_rebuild_prepare_and_unavailable_execute_preserve_complete_boundaries()
--> Result<(), DbError> {
+fn sqlite_rebuild_prepare_and_execute_preserve_complete_boundaries() -> Result<(), DbError> {
     for (label, foreign_keys, insert) in [
         ("empty-fk-on", "ON", ""),
         (
@@ -2332,20 +2444,14 @@ fn sqlite_rebuild_prepare_and_unavailable_execute_preserve_complete_boundaries()
         let (connection, _, _db_path) = connect_sqlite()?;
         connection.execute(&QueryRequest::new(format!(
             "PRAGMA foreign_keys = {foreign_keys}; \
-             CREATE TABLE t(\
-                id INTEGER PRIMARY KEY,\
-                legacy TEXT DEFAULT 'NULL',\
-                a TEXT,\
-                b TEXT,\
-                retained TEXT NOT NULL DEFAULT ('keep'),\
-                UNIQUE (id)\
-             ); \
+             CREATE TABLE t(id INTEGER PRIMARY KEY, legacy TEXT DEFAULT 'NULL', a TEXT, b TEXT, retained TEXT NOT NULL DEFAULT ('keep'), UNIQUE (id)); \
+             CREATE TABLE main_rebuild_boundary(marker TEXT); \
+             INSERT INTO main_rebuild_boundary VALUES ('main-sentinel'); \
              CREATE TEMP TABLE temp_rebuild_boundary(marker TEXT); \
              INSERT INTO temp_rebuild_boundary VALUES ('sentinel'); \
              {insert}"
         )))?;
         let before = rebuild_boundary_snapshot(&*connection, "t")?;
-
         let plan = connection
             .table_alter_planner()
             .expect("SQLite must opt into table alteration planning")
@@ -2385,16 +2491,144 @@ fn sqlite_rebuild_prepare_and_unavailable_execute_preserve_complete_boundaries()
             rebuild_boundary_snapshot(&*connection, "t")?,
             "prepare must retain the complete {label} boundary"
         );
-        assert!(
-            plan.execute()
-                .expect_err("Unit4 must not execute a rebuild")
-                .to_string()
-                .contains("lifecycle is not installed")
+
+        plan.execute()?;
+
+        let after = rebuild_boundary_snapshot(&*connection, "t")?;
+        let non_target_catalog = |catalog: &[Vec<Value>]| {
+            catalog
+                .iter()
+                .filter(|entry| !matches!(entry.get(2), Some(Value::Text(table)) if table == "t"))
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            non_target_catalog(&before.main_catalog),
+            non_target_catalog(&after.main_catalog),
+            "execution must preserve the complete unaffected MAIN catalog for {label}"
         );
         assert_eq!(
-            before,
-            rebuild_boundary_snapshot(&*connection, "t")?,
-            "unavailable execute must retain the complete {label} boundary"
+            before.temp_catalog, after.temp_catalog,
+            "execution must preserve the complete TEMP catalog for {label}"
+        );
+        assert_eq!(
+            before.databases, after.databases,
+            "execution must retain databases for {label}"
+        );
+        assert_eq!(
+            before.deferred_foreign_keys, after.deferred_foreign_keys,
+            "execution must retain deferred foreign-key settings for {label}"
+        );
+        assert_ne!(
+            before.main_schema_version, after.main_schema_version,
+            "the MAIN schema version must advance for the requested delta in {label}"
+        );
+        assert_eq!(
+            before.temp_schema_version, after.temp_schema_version,
+            "the TEMP schema version must not change for {label}"
+        );
+        assert_eq!(
+            connection
+                .execute(&QueryRequest::new(
+                    "SELECT group_concat(metadata, ';') FROM ( \
+                     SELECT printf('%d|%s|%s|%d|%s|%d|%d', cid, name, type, \"notnull\", \
+                     COALESCE(dflt_value, '<NULL>'), pk, hidden) AS metadata \
+                     FROM pragma_table_xinfo('t') ORDER BY cid)",
+                ))?
+                .rows,
+            vec![vec![Value::Text(
+                "0|id|INTEGER|0|<NULL>|1|0;1|legacy|VARCHAR(32)|1|NULL|0|0;2|retained|TEXT|1|'keep'|0|0".to_string(),
+            )]],
+            "execution must retain exact column definitions and apply only the requested target delta for {label}"
+        );
+        assert_eq!(
+            connection
+                .execute(&QueryRequest::new(
+                    "SELECT name, \"unique\", origin, partial FROM pragma_index_list('t') ORDER BY name",
+                ))?
+                .rows,
+            vec![vec![
+                Value::Text("sqlite_autoindex_t_1".to_string()),
+                Value::Int(1),
+                Value::Text("u".to_string()),
+                Value::Int(0),
+            ]],
+            "execution must retain UNIQUE index metadata for {label}"
+        );
+
+        assert_eq!(
+            connection
+                .execute(&QueryRequest::new(
+                    "SELECT type, \"notnull\", dflt_value FROM pragma_table_xinfo('t') WHERE name = 'legacy'",
+                ))?
+                .rows,
+            vec![vec![
+                Value::Text("VARCHAR(32)".to_string()),
+                Value::Int(1),
+                Value::Text("NULL".to_string()),
+            ]],
+            "execution must apply the selected alteration for {label}"
+        );
+        assert_eq!(
+            connection
+                .execute(&QueryRequest::new(
+                    "SELECT COUNT(*) FROM pragma_table_xinfo('t') WHERE name IN ('a', 'b')",
+                ))?
+                .rows,
+            vec![vec![Value::Int(0)]],
+            "execution must apply selected drops for {label}"
+        );
+        let expected_rows = if insert.is_empty() {
+            Vec::new()
+        } else {
+            vec![vec![
+                Value::Int(-7),
+                Value::Text("old".to_string()),
+                Value::Text("keep".to_string()),
+            ]]
+        };
+        assert_eq!(
+            connection
+                .execute(&QueryRequest::new(
+                    "SELECT id, legacy, retained FROM main.t",
+                ))?
+                .rows,
+            expected_rows,
+            "execution must preserve retained rows for {label}"
+        );
+        assert_eq!(
+            before.foreign_keys,
+            connection
+                .execute(&QueryRequest::new("PRAGMA foreign_keys"))?
+                .rows,
+            "execution must restore the foreign-key setting for {label}"
+        );
+        assert_eq!(
+            connection
+                .execute(&QueryRequest::new(
+                    "SELECT marker FROM main.main_rebuild_boundary",
+                ))?
+                .rows,
+            vec![vec![Value::Text("main-sentinel".to_string())]],
+            "execution must preserve the unaffected MAIN sentinel for {label}"
+        );
+        assert_eq!(
+            connection
+                .execute(&QueryRequest::new(
+                    "SELECT marker FROM temp.temp_rebuild_boundary",
+                ))?
+                .rows,
+            vec![vec![Value::Text("sentinel".to_string())]],
+            "execution must preserve the TEMP sentinel for {label}"
+        );
+        assert_eq!(
+            connection
+                .execute(&QueryRequest::new(
+                    "SELECT COUNT(*) FROM main.sqlite_master WHERE name = '__dbflux_rebuild_t'",
+                ))?
+                .rows,
+            vec![vec![Value::Int(0)]],
+            "execution must not leak its private replacement table for {label}"
         );
     }
     Ok(())
@@ -2478,6 +2712,153 @@ fn sqlite_native_drop_rolls_back_all_selected_columns_when_later_drop_is_rejecte
             .execute(&QueryRequest::new("PRAGMA foreign_keys"))?
             .rows,
         "native execution must leave connection settings unchanged on rollback"
+    );
+    Ok(())
+}
+
+#[test]
+fn sqlite_rebuild_executes_payload_alter_and_independent_drop_preserving_data_index_and_fk_state()
+-> Result<(), DbError> {
+    let (connection, _, _db_path) = connect_sqlite()?;
+    connection.execute(&QueryRequest::new(
+        "PRAGMA foreign_keys = ON;
+         CREATE TABLE target (
+            id INTEGER PRIMARY KEY,
+            payload TEXT NOT NULL,
+            retained TEXT NOT NULL,
+            obsolete TEXT
+         );
+         CREATE INDEX target_retained_index ON target(retained);
+         INSERT INTO target (id, payload, retained, obsolete) VALUES
+            (-7, 'first payload', 'first retained', 'remove first'),
+            (42, 'second payload', 'second retained', 'remove second')",
+    ))?;
+
+    let before = rebuild_boundary_snapshot(&*connection, "target")?;
+    let plan = connection
+        .table_alter_planner()
+        .expect("SQLite must opt into table alteration planning")
+        .prepare(&TableAlterRequest {
+            table: TableRef::new("target"),
+            operations: vec![
+                TableAlterOperation::AlterColumn {
+                    name: "payload".to_string(),
+                    new_type: Some("VARCHAR(64)".to_string()),
+                    nullable: Some(false),
+                    default: Some(OwnedDefaultSpec::Set("'future'".to_string())),
+                },
+                TableAlterOperation::DropColumn {
+                    name: "obsolete".to_string(),
+                },
+            ],
+            expected_before: Vec::new(),
+        })?;
+
+    assert_eq!(plan.preview().route, TableAlterRoute::Rebuild);
+    assert_eq!(
+        before,
+        rebuild_boundary_snapshot(&*connection, "target")?,
+        "prepare must preserve the complete populated foreign-key-on boundary"
+    );
+
+    plan.execute()?;
+
+    assert_eq!(
+        connection
+            .execute(&QueryRequest::new("PRAGMA main.table_xinfo('target')"))?
+            .rows,
+        vec![
+            vec![
+                Value::Int(0),
+                Value::Text("id".to_string()),
+                Value::Text("INTEGER".to_string()),
+                Value::Int(0),
+                Value::Null,
+                Value::Int(1),
+                Value::Int(0),
+            ],
+            vec![
+                Value::Int(1),
+                Value::Text("payload".to_string()),
+                Value::Text("VARCHAR(64)".to_string()),
+                Value::Int(1),
+                Value::Text("'future'".to_string()),
+                Value::Int(0),
+                Value::Int(0),
+            ],
+            vec![
+                Value::Int(2),
+                Value::Text("retained".to_string()),
+                Value::Text("TEXT".to_string()),
+                Value::Int(1),
+                Value::Null,
+                Value::Int(0),
+                Value::Int(0),
+            ],
+        ],
+        "rebuild must produce the exact final target schema"
+    );
+    assert_eq!(
+        connection
+            .execute(&QueryRequest::new(
+                "SELECT sql FROM main.sqlite_master \
+                 WHERE type = 'index' AND name = 'target_retained_index'",
+            ))?
+            .rows,
+        vec![vec![Value::Text(
+            "CREATE INDEX target_retained_index ON target(retained)".to_string()
+        )]],
+        "rebuild must restore the unaffected explicit index SQL"
+    );
+
+    connection.execute(&QueryRequest::new(
+        "INSERT INTO target (id, retained) VALUES (100, 'future retained')",
+    ))?;
+    assert_eq!(
+        connection
+            .execute(&QueryRequest::new(
+                "SELECT id, payload, retained FROM target ORDER BY id",
+            ))?
+            .rows,
+        vec![
+            vec![
+                Value::Int(-7),
+                Value::Text("first payload".to_string()),
+                Value::Text("first retained".to_string()),
+            ],
+            vec![
+                Value::Int(42),
+                Value::Text("second payload".to_string()),
+                Value::Text("second retained".to_string()),
+            ],
+            vec![
+                Value::Int(100),
+                Value::Text("future".to_string()),
+                Value::Text("future retained".to_string()),
+            ],
+        ],
+        "rebuild must preserve retained identities and values while applying the default only to future inserts"
+    );
+    assert_eq!(
+        before.foreign_keys,
+        connection
+            .execute(&QueryRequest::new("PRAGMA foreign_keys"))?
+            .rows,
+        "rebuild must restore the prior foreign_keys setting"
+    );
+    assert!(
+        connection
+            .execute(&QueryRequest::new("PRAGMA main.foreign_key_check"))?
+            .rows
+            .is_empty(),
+        "rebuild must leave foreign-key clean"
+    );
+    assert_eq!(
+        connection
+            .execute(&QueryRequest::new("PRAGMA main.integrity_check"))?
+            .rows,
+        vec![vec![Value::Text("ok".to_string())]],
+        "rebuild must leave integrity_check clean"
     );
     Ok(())
 }

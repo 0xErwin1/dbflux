@@ -1427,11 +1427,12 @@ impl SqliteConnection {
         interrupt_handle: InterruptHandle,
         path: PathBuf,
     ) -> Self {
+        let cancelled = Arc::new(AtomicBool::new(false));
         Self {
-            table_alter_planner: SqliteTableAlterPlanner::new(state.clone()),
+            table_alter_planner: SqliteTableAlterPlanner::new(state.clone(), cancelled.clone()),
             state,
             interrupt_handle,
-            cancelled: Arc::new(AtomicBool::new(false)),
+            cancelled,
             path,
         }
     }
