@@ -652,9 +652,9 @@ impl CodeDocument {
                     "script-confirm-cancel-btn",
                     dbflux_i18n::t!("document.code.script_confirm.cancel"),
                 )
-                .on_click(move |_, _, cx| {
+                .on_click(move |_, window, cx| {
                     entity_cancel.update(cx, |doc, cx| {
-                        doc.cancel_script_query(cx);
+                        doc.cancel_script_query(window, cx);
                     });
                 }),
             )
@@ -663,6 +663,7 @@ impl CodeDocument {
                     "script-confirm-run-btn",
                     dbflux_i18n::t!("document.code.script_confirm.run"),
                 )
+                .primary()
                 .on_click(move |_, window, cx| {
                     entity_run.update(cx, |doc, cx| {
                         doc.confirm_script_query(window, cx);
@@ -677,9 +678,9 @@ impl CodeDocument {
             footer,
         )
         .width(px(460.0))
-        .on_close(move |_, cx| {
+        .on_close(move |window, cx| {
             entity_close.update(cx, |doc, cx| {
-                doc.cancel_script_query(cx);
+                doc.cancel_script_query(window, cx);
             });
         })
     }
@@ -735,9 +736,9 @@ impl CodeDocument {
             "dangerous-cancel-btn",
             dbflux_i18n::t!("document.code.dangerous_query.cancel"),
         )
-        .on_click(move |_, _, cx| {
+        .on_click(move |_, window, cx| {
             entity_cancel.update(cx, |doc, cx| {
-                doc.cancel_dangerous_query(cx);
+                doc.cancel_dangerous_query(window, cx);
             });
         });
 
@@ -771,9 +772,9 @@ impl CodeDocument {
         ModalShell::new(title, body, footer)
             .width(px(460.0))
             .variant(ModalVariant::Danger)
-            .on_close(move |_, cx| {
+            .on_close(move |window, cx| {
                 entity_close.update(cx, |doc, cx| {
-                    doc.cancel_dangerous_query(cx);
+                    doc.cancel_dangerous_query(window, cx);
                 });
             })
     }

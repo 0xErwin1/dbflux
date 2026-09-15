@@ -525,16 +525,27 @@ impl Workspace {
                         for id in &ids {
                             this.tab_manager.update(cx, |mgr, cx| {
                                 if let Some(tab) = mgr.document(*id) {
+                                    // SaveQuery is the smart save: writes
+                                    // file-backed documents silently and only
+                                    // opens Save As for untitled ones.
                                     tab.dispatch_command(
-                                        crate::keymap::Command::SaveFileAs,
+                                        crate::keymap::Command::SaveQuery,
                                         window,
                                         cx,
                                     );
                                 }
                             });
                         }
+                        // The dialog interrupted a close; saving completes it.
+                        for id in &ids {
+                            this.close_tab(*id, window, cx);
+                        }
                     }
-                    UnsavedChangesOutcome::Cancelled => {}
+                    UnsavedChangesOutcome::Cancelled => {
+                        // The modal stole focus from the editor input when it
+                        // opened; give it back so typing continues seamlessly.
+                        this.set_focus(this.focus_target, window, cx);
+                    }
                 }
             },
         )

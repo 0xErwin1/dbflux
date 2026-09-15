@@ -1565,11 +1565,26 @@ impl CodeDocument {
         if self.pending.dangerous_query.is_some() {
             match cmd {
                 Command::Cancel => {
-                    self.cancel_dangerous_query(cx);
+                    self.cancel_dangerous_query(window, cx);
                     return true;
                 }
                 Command::Execute => {
                     self.confirm_dangerous_query(false, window, cx);
+                    return true;
+                }
+                _ => return false,
+            }
+        }
+
+        // Same for the multi-statement script confirmation.
+        if self.pending.script_confirm.is_some() {
+            match cmd {
+                Command::Cancel => {
+                    self.cancel_script_query(window, cx);
+                    return true;
+                }
+                Command::Execute => {
+                    self.confirm_script_query(window, cx);
                     return true;
                 }
                 _ => return false,
