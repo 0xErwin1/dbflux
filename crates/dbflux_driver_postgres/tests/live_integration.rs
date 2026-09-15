@@ -147,6 +147,96 @@ fn postgres_live_keyword_mode_connects_without_password() -> Result<(), DbError>
     })
 }
 
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_live_connection_error_carries_server_message() -> Result<(), DbError> {
+    containers::with_trust_postgres_port(|port| {
+        // tokio-postgres' Display names the error kind only ("db error"); the
+        // formatters must surface the server's own message and SQLSTATE code.
+        let driver = PostgresDriver::new();
+        let profile = ConnectionProfile::new(
+            "live-postgres-keyword-missing-db",
+            DbConfig::Postgres {
+                use_uri: false,
+                uri: None,
+                host: "127.0.0.1".to_string(),
+                port,
+                user: "testuser".to_string(),
+                database: "missing_db".to_string(),
+                ssl_mode: Some("disable".to_string()),
+                ssl_root_cert_path: None,
+                ssl_client_cert_path: None,
+                ssl_client_key_path: None,
+                ssh_tunnel: None,
+                ssh_tunnel_profile_id: None,
+            },
+        );
+
+        // The container reports readiness before its init restart, so early
+        // attempts can fail with transient io errors ("Connection reset by
+        // peer"). Only the server's rejection of the missing database ends
+        // the retry loop; every other failure goes back around.
+        containers::retry_db_operation(Duration::from_secs(30), || -> Result<(), DbError> {
+            match driver.connect(&profile) {
+                Err(DbError::ConnectionFailed(formatted)) => {
+                    let message = formatted.to_display_string();
+                    if message.contains("does not exist") && message.contains("3D000") {
+                        Ok(())
+                    } else {
+                        Err(DbError::ConnectionFailed(formatted))
+                    }
+                }
+                Err(other) => Err(other),
+                Ok(_) => panic!("connecting to a missing database unexpectedly succeeded"),
+            }
+        })?;
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires network access"]
+fn postgres_live_connection_error_carries_io_cause() -> Result<(), DbError> {
+    // No server needed: point the keyword path at a local port that is
+    // guaranteed to be closed and assert the io cause ("Connection refused")
+    // reaches the user-facing message instead of the opaque kind text.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind an ephemeral port");
+    let closed_port = listener.local_addr().expect("bound address").port();
+    drop(listener);
+
+    let driver = PostgresDriver::new();
+    let profile = ConnectionProfile::new(
+        "live-postgres-closed-port",
+        DbConfig::Postgres {
+            use_uri: false,
+            uri: None,
+            host: "127.0.0.1".to_string(),
+            port: closed_port,
+            user: "testuser".to_string(),
+            database: "testdb".to_string(),
+            ssl_mode: Some("disable".to_string()),
+            ssl_root_cert_path: None,
+            ssl_client_cert_path: None,
+            ssl_client_key_path: None,
+            ssh_tunnel: None,
+            ssh_tunnel_profile_id: None,
+        },
+    );
+
+    let Err(DbError::ConnectionFailed(formatted)) = driver.connect(&profile) else {
+        panic!("expected ConnectionFailed for a closed port");
+    };
+
+    let message = formatted.to_display_string();
+    assert!(
+        message.contains("Connection refused"),
+        "message should carry the io cause: {message}"
+    );
+
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Schema introspection
 // ---------------------------------------------------------------------------

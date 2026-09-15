@@ -4465,8 +4465,32 @@ impl PostgresErrorFormatter {
 
             formatted
         } else {
-            FormattedError::new(e.to_string())
+            FormattedError::new(Self::flatten_error(e))
         }
+    }
+
+    /// Flattens a `postgres::Error` into text the user-facing formatters can
+    /// match on. tokio-postgres' `Display` names only the error kind — a
+    /// server-rejected startup formats as just "db error" — so the server's
+    /// message (via `as_db_error`) or the underlying cause chain has to be
+    /// appended explicitly.
+    fn flatten_error(error: &postgres::Error) -> String {
+        use std::error::Error as _;
+
+        if let Some(db_error) = error.as_db_error() {
+            let mut text = db_error.to_string();
+            text.push_str(&format!(" (SQLSTATE {})", db_error.code().code()));
+            return text;
+        }
+
+        let mut text = error.to_string();
+        let mut cause = error.source();
+        while let Some(source) = cause {
+            text.push_str(": ");
+            text.push_str(&source.to_string());
+            cause = source.source();
+        }
+        text
     }
 
     fn format_connection_message(source: &str, host: &str, port: u16) -> String {
@@ -4523,7 +4547,10 @@ impl ConnectionErrorFormatter for PostgresErrorFormatter {
         host: &str,
         port: u16,
     ) -> FormattedError {
-        let source = error.to_string();
+        let source = error
+            .downcast_ref::<postgres::Error>()
+            .map(Self::flatten_error)
+            .unwrap_or_else(|| error.to_string());
         let message = Self::format_connection_message(&source, host, port);
         FormattedError::new(message)
     }
@@ -4533,7 +4560,10 @@ impl ConnectionErrorFormatter for PostgresErrorFormatter {
         error: &(dyn std::error::Error + 'static),
         sanitized_uri: &str,
     ) -> FormattedError {
-        let source = error.to_string();
+        let source = error
+            .downcast_ref::<postgres::Error>()
+            .map(Self::flatten_error)
+            .unwrap_or_else(|| error.to_string());
 
         let message = if source.contains("password authentication failed") {
             "Authentication failed. Check your username and password in the URI.".to_string()
@@ -5247,8 +5277,8 @@ fn get_schema_routines(
 mod tests {
     use super::{
         POSTGRES_DIALECT, PgTextSearchText, PgUriSslMode, PgVectorText, PostgresCodeGenerator,
-        PostgresDialect, PostgresDriver, TSQUERY_OP_AND, TSQUERY_OP_NOT, TSQUERY_OP_OR,
-        TSQUERY_OP_PHRASE, build_keyword_conn_string, decode_pgvector_halfvec,
+        PostgresDialect, PostgresDriver, PostgresErrorFormatter, TSQUERY_OP_AND, TSQUERY_OP_NOT,
+        TSQUERY_OP_OR, TSQUERY_OP_PHRASE, build_keyword_conn_string, decode_pgvector_halfvec,
         decode_pgvector_sparsevec, decode_pgvector_vector, decode_tsquery, decode_tsvector,
         format_pgvector_dense, format_pgvector_float4, format_pgvector_sparse,
         inject_password_into_pg_uri, parse_pg_uri_sslmode, pgvector_array_decode_to_value,
@@ -5821,6 +5851,28 @@ mod tests {
 
         assert_eq!(config.get_password(), Some("pa ss'wo\\rd".as_bytes()));
         assert_eq!(config.get_dbname(), Some("testdb"));
+    }
+
+    #[test]
+    fn connection_error_message_includes_flattened_server_text() {
+        let message = PostgresErrorFormatter::format_connection_message(
+            "FATAL: database \"testuser\" does not exist (SQLSTATE 3D000)",
+            "127.0.0.1",
+            5432,
+        );
+
+        assert!(message.starts_with("Database or user does not exist:"));
+        assert!(message.contains("FATAL: database \"testuser\" does not exist"));
+        assert!(message.contains("3D000"));
+    }
+
+    #[test]
+    fn flatten_error_keeps_display_for_non_db_errors() {
+        let error = postgres::Error::__private_api_timeout();
+
+        let flattened = PostgresErrorFormatter::flatten_error(&error);
+
+        assert_eq!(flattened, "timeout waiting for server");
     }
 
     #[test]
