@@ -69,7 +69,7 @@ La auto-detección se rige enteramente por el enum `ColumnKind` definido en
 | `Unknown`   | El driver no pudo clasificar esta columna. |
 
 Cada driver es responsable de fijar `ColumnMeta::kind` en cada columna que
-devuelve (ver las reglas de "Adding a New Driver" en `CLAUDE.md`). Las columnas
+devuelve (ver las reglas de "Adding a New Driver" en `AGENTS.md`). Las columnas
 que quedan como `Unknown` nunca se usan como ejes ni series de chart.
 
 ### Reglas de auto-detección
@@ -96,7 +96,7 @@ charts, y que inspecciona valores de `ColumnKind` — nunca strings de `type_nam
 ni identificadores de driver. La función `detect_chart_columns` solo lee
 `column.kind`; nunca lee `column.type_name`, `column.name`, ni ningún ID de
 driver. Esto mantiene el motor completamente desacoplado de drivers específicos,
-en línea con la regla de desacoplamiento driver/UI de `CLAUDE.md`: un driver
+en línea con la regla de desacoplamiento driver/UI de `AGENTS.md`: un driver
 hace que sus columnas sean graficables simplemente clasificándolas con el
 `ColumnKind` correcto.
 
