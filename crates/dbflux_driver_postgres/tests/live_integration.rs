@@ -100,6 +100,101 @@ fn postgres_live_connect_ping_query_and_schema() -> Result<(), DbError> {
     })
 }
 
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_live_keyword_mode_connects_without_password() -> Result<(), DbError> {
+    containers::with_trust_postgres_port(|port| {
+        // Regression: the keyword-mode connect string used to be built with a
+        // trailing empty `password=`, which libpq parses by consuming the next
+        // pair as the password value — `dbname=testdb` was lost and the server
+        // fell back to the default database (the user name), rejecting the
+        // connection with `database "testuser" does not exist`.
+        let driver = PostgresDriver::new();
+        let profile = ConnectionProfile::new(
+            "live-postgres-keyword-no-password",
+            DbConfig::Postgres {
+                use_uri: false,
+                uri: None,
+                host: "127.0.0.1".to_string(),
+                port,
+                user: "testuser".to_string(),
+                database: "testdb".to_string(),
+                ssl_mode: Some("prefer".to_string()),
+                ssl_root_cert_path: None,
+                ssl_client_cert_path: None,
+                ssl_client_key_path: None,
+                ssh_tunnel: None,
+                ssh_tunnel_profile_id: None,
+            },
+        );
+
+        let connection =
+            containers::retry_db_operation(Duration::from_secs(30), || -> Result<_, DbError> {
+                let connection = driver.connect(&profile)?;
+                connection.ping()?;
+                Ok(connection)
+            })?;
+
+        let databases = connection.list_databases()?;
+        assert!(
+            databases
+                .iter()
+                .any(|db| db.name == "testdb" && db.is_current),
+            "expected to be connected to 'testdb', got: {databases:?}"
+        );
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_live_connection_error_carries_server_message() -> Result<(), DbError> {
+    containers::with_trust_postgres_port(|port| {
+        // tokio-postgres' Display names the error kind only ("db error"); the
+        // formatters must surface the server's own message and SQLSTATE code.
+        let driver = PostgresDriver::new();
+        let profile = ConnectionProfile::new(
+            "live-postgres-keyword-missing-db",
+            DbConfig::Postgres {
+                use_uri: false,
+                uri: None,
+                host: "127.0.0.1".to_string(),
+                port,
+                user: "testuser".to_string(),
+                database: "missing_db".to_string(),
+                ssl_mode: Some("disable".to_string()),
+                ssl_root_cert_path: None,
+                ssl_client_cert_path: None,
+                ssl_client_key_path: None,
+                ssh_tunnel: None,
+                ssh_tunnel_profile_id: None,
+            },
+        );
+
+        // The container reports readiness before its init restart, so early
+        // attempts can fail with transient io errors ("Connection reset by
+        // peer"). Only the server's rejection of the missing database ends
+        // the retry loop; every other failure goes back around.
+        containers::retry_db_operation(Duration::from_secs(30), || -> Result<(), DbError> {
+            match driver.connect(&profile) {
+                Err(DbError::ConnectionFailed(formatted)) => {
+                    let message = formatted.to_display_string();
+                    if message.contains("does not exist") && message.contains("3D000") {
+                        Ok(())
+                    } else {
+                        Err(DbError::ConnectionFailed(formatted))
+                    }
+                }
+                Err(other) => Err(other),
+                Ok(_) => panic!("connecting to a missing database unexpectedly succeeded"),
+            }
+        })?;
+
+        Ok(())
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Schema introspection
 // ---------------------------------------------------------------------------
