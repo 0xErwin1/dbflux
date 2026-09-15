@@ -41,7 +41,7 @@ Base de datos embebida basada en archivos.
 
 ### DDL transaccional
 
-SQLite soporta **DDL transaccional** — todas las operaciones de DDL pueden
+SQLite soporta **DDL transaccional** — las operaciones manuales de DDL pueden
 envolverse en transacciones y revertirse con rollback:
 
 ```sql
@@ -51,54 +51,51 @@ ALTER TABLE users ADD COLUMN phone TEXT NULL;
 ROLLBACK;  -- Seguro de revertir si algo sale mal
 ```
 
-### Limitaciones de ALTER TABLE
+Las alteraciones administradas de tablas son diferentes: su planificador requiere
+una conexión en autocommit porque el driver controla la transacción por tabla.
 
-**CRÍTICO**: SQLite tiene soporte **muy limitado** de `ALTER TABLE`:
+### ALTER TABLE administrado
 
-**Operaciones soportadas**:
-- `ADD COLUMN` (solo al final de la tabla)
-- `RENAME COLUMN` (SQLite 3.25.0+)
-- `RENAME TABLE`
+Para una solicitud que solo contiene `DROP COLUMN`, DBFlux usa primero la ruta
+nativa `DROP COLUMN` de SQLite cuando la versión de SQLite enlazada la soporta.
+Los drops nativos conservan las reglas de aceptación de SQLite; no están
+limitados por la gramática de reconstrucción. DBFlux sigue verificando
+previamente las dependencias conocidas y SQLite vuelve a validar la solicitud al
+ejecutarse.
 
-**NO soportadas**:
-- `DROP COLUMN` (requiere recreación de la tabla)
-- `ALTER COLUMN` (el cambio de tipo requiere recreación de la tabla)
-- `ADD COLUMN` en medio de la tabla (requiere recreación de la tabla)
+Para cambios seleccionados de tipo, nulabilidad o valor predeterminado, y para
+un drop aislado cuando la versión de SQLite enlazada no dispone de `DROP COLUMN`
+nativo, DBFlux usa una reconstrucción conservadora de una tabla del esquema
+`main`. Una solicitud de reconstrucción también puede combinar esos cambios de
+columna con drops.
 
-### Patrón de recreación de tabla
+La reconstrucción copia las filas retenidas sin casts, conversión ni backfill.
+Preserva exactamente la identidad de fila comprobada y los valores almacenados;
+un valor predeterminado modificado solo se aplica a inserciones futuras. Por ello,
+hacer una columna obligatoria puede fallar si las filas existentes son
+incompatibles.
 
-Para operaciones de `ALTER TABLE` no soportadas, usa el patrón de recreación de
-tabla:
+La preparación es de solo lectura. La vista previa expuesta mediante la UI
+genérica y MCP es una descripción inmutable e ilustrativa del ciclo de vida, no
+SQL ejecutable para aplicar. El driver administra la tabla de reemplazo privada,
+la copia y comparación exacta, el reemplazo de la tabla origen, la restauración
+de índices explícitos comprobados y la validación final.
 
-```sql
-BEGIN;
+Cada reconstrucción es atómica para una única tabla. Ante un fallo, el driver
+verifica el rollback y la restauración de los ajustes de conexión. Los fallos de
+limpieza siguen siendo visibles; un estado de transacción incierto o un fallo al
+restaurar los ajustes pone la conexión en cuarentena hasta reconectarla. No existe
+atomicidad entre tablas.
 
--- 1. Crea una tabla nueva con el schema deseado
-CREATE TABLE users_new (
-  id INTEGER PRIMARY KEY,
-  email TEXT NOT NULL,
-  name TEXT,
-  -- columna phone eliminada, columna age agregada
-  age INTEGER
-);
+#### Alcance de la reconstrucción
 
--- 2. Copia los datos de la tabla vieja
-INSERT INTO users_new (id, email, name, age)
-  SELECT id, email, name, NULL FROM users;
-
--- 3. Elimina la tabla vieja
-DROP TABLE users;
-
--- 4. Renombra la tabla nueva
-ALTER TABLE users_new RENAME TO users;
-
-COMMIT;
-```
-
-**IMPORTANTE**: este patrón pierde:
-- Las referencias de foreign key desde otras tablas
-- Los triggers en la tabla original
-- Los índices en la tabla original (deben recrearse)
+La ruta de reconstrucción solo acepta formas de tabla que puede demostrar seguras
+en el esquema `main`. Rechaza, por ejemplo, constraints CHECK, columnas
+generadas, `AUTOINCREMENT`, `STRICT`, `WITHOUT ROWID`, vistas o triggers,
+índices de expresión o parciales, esquemas adjuntos y transacciones activas del
+llamador. Estos límites solo se aplican a las reconstrucciones: un drop nativo
+aislado que sea aplicable no se rechaza solo por estar fuera de la gramática de
+reconstrucción.
 
 ### Operaciones de índice
 
@@ -125,23 +122,17 @@ COMMIT;
 
 ### Limitaciones conocidas
 
-- Sin `DROP COLUMN` (requiere recreación de la tabla)
-- Sin `ALTER COLUMN` (requiere recreación de la tabla)
-- No se pueden agregar constraints a tablas existentes
+- El planificador administrado de alteración de tablas cambia tipos, nulabilidad, valores predeterminados y drops seleccionados; no agrega constraints a una tabla existente.
+- Las reconstrucciones se limitan deliberadamente a las formas de tabla comprobadas descritas antes.
 - Sin creación de índices concurrente (bloquea la base de datos)
 - Tipado dinámico (los tipos de columna son solo indicativos)
 
 ### Buenas prácticas
 
-1. **Usa transacciones** — el DDL es transaccional, envuelve siempre en
-   `BEGIN`/`COMMIT`
-2. **Planifica el schema con anticipación** — es difícil de modificar después
-3. **Usa el patrón de recreación de tabla** — para operaciones de `ALTER TABLE`
-   no soportadas
-4. **Recrea índices y triggers** — después de recrear la tabla
-5. **Prueba primero en una copia** — especialmente para el patrón de recreación
-   de tabla
-6. **Habilita foreign keys** — `PRAGMA foreign_keys = ON` antes de alterar el
-   schema
-7. **Usa VACUUM** — para liberar espacio en disco después de `DROP TABLE` o de
-   recrear una tabla
+1. **Usa transacciones para DDL manual** — las alteraciones administradas de tablas requieren autocommit.
+2. **Planifica el schema con anticipación** — es difícil de modificar después.
+3. **Revisa la vista previa de ALTER administrado** — es descriptiva; aplícala mediante DBFlux en lugar de ejecutar sus sentencias.
+4. **Planifica por separado las formas no admitidas** — la reconstrucción rechaza vistas, triggers y otras formas no comprobadas.
+5. **Prueba primero en una copia** — especialmente antes de una reconstrucción administrada.
+6. **Habilita foreign keys** — `PRAGMA foreign_keys = ON` antes de alterar el schema.
+7. **Usa VACUUM** — para liberar espacio en disco después de `DROP TABLE` o de recrear una tabla.
