@@ -8,7 +8,9 @@ pub use code_generation::{
     AddColumnRequest, AddEnumValueRequest, AddForeignKeyRequest, AlterColumnRequest,
     CodeGenCapabilities, CodeGenerator, CreateIndexRequest, CreateTypeRequest, DdlRejection,
     DefaultSpec, DropColumnRequest, DropForeignKeyRequest, DropIndexRequest, DropTypeRequest,
-    NoOpCodeGenerator, ReindexRequest, TypeAttributeDefinition, TypeDefinition,
+    NoOpCodeGenerator, OwnedDefaultSpec, PreparedTableAlter, ReindexRequest,
+    TableAlterExpectedColumn, TableAlterOperation, TableAlterOutcome, TableAlterPlanner,
+    TableAlterPreview, TableAlterRequest, TableAlterRoute, TypeAttributeDefinition, TypeDefinition,
     validate_ddl_fragment,
 };
 pub use dialect::{DefaultSqlDialect, PlaceholderStyle, SqlDialect};

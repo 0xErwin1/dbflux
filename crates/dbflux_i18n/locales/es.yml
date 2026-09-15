@@ -2068,6 +2068,8 @@ document:
       schema_not_loaded: "El esquema de \"%{database}\" aún no está cargado. Expande esa base de datos en la barra lateral primero y vuelve a ejecutar Calcular diferencia."
     status:
       computing: "Calculando diferencia…"
+      preparing: "Preparando una vista previa inmutable para aplicar…"
+      preview_warning: Advertencia
       empty: No se encontraron diferencias entre los dos esquemas.
       idle: Elige un origen y ejecuta Calcular diferencia para ver los cambios de esquema.
       unsupported: No compatible

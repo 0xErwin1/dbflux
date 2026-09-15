@@ -28,7 +28,7 @@
 
 ### 事务性 DDL
 
-SQLite 支持**事务性 DDL** —— 所有 DDL 操作都可以包在事务中并回滚：
+SQLite 支持**事务性 DDL** —— 手动 DDL 操作可以包在事务中并回滚：
 
 ```sql
 BEGIN;
@@ -37,53 +37,23 @@ ALTER TABLE users ADD COLUMN phone TEXT NULL;
 ROLLBACK;  -- 出现问题时可以安全回滚
 ```
 
-### ALTER TABLE 的限制
+托管表更改有所不同：其规划器要求使用自动提交连接，因为驱动程序负责每张表的事务。
 
-**重要**：SQLite 的 `ALTER TABLE` 支持**非常有限**：
+### 托管 ALTER TABLE
 
-**支持的操作**：
-- `ADD COLUMN`（只能在表末尾）
-- `RENAME COLUMN`（SQLite 3.25.0+）
-- `RENAME TABLE`
+对于纯 `DROP COLUMN` 请求，当链接的 SQLite 版本支持时，DBFlux 会优先使用 SQLite 原生的 `DROP COLUMN` 路径。原生删除保留 SQLite 自身的接受规则，不受重建语法限制。DBFlux 仍会预检已知依赖项，SQLite 也会在执行时再次验证请求。
 
-**不支持的操作**：
-- `DROP COLUMN`（需要重建表）
-- `ALTER COLUMN`（修改类型需要重建表）
-- 在表中间 `ADD COLUMN`（需要重建表）
+对于选定的类型、可空性或默认值变更，以及当链接的 SQLite 版本没有原生 `DROP COLUMN` 时的纯删除，DBFlux 会保守地重建 `main` schema 中的一张表。重建请求也可以将这些列变更与删除操作组合。
 
-### 重建表模式
+重建会复制保留的行，不进行强制类型转换、数据转换或回填。它会精确保留已验证的行标识和存储值；变更后的默认值仅适用于未来插入。因此，当现有行不兼容时，将列改为必填可能失败。
 
-对于不受支持的 `ALTER TABLE` 操作，请使用重建表模式：
+准备过程是只读的。通用 UI 和 MCP 中展示的预览是不可变、说明性的生命周期描述，不是可执行的应用 SQL。驱动程序负责私有替换表、复制和精确比较、源表替换、已验证显式索引的恢复以及最终验证。
 
-```sql
-BEGIN;
+每次重建仅对一张表具有原子性。发生故障时，驱动程序会验证回滚和连接设置的恢复。清理失败会保持可见；仅在事务状态不确定或无法恢复连接设置时，连接才会被隔离，直到重新连接。不存在跨表原子性。
 
--- 1. 按期望的 Schema 创建新表
-CREATE TABLE users_new (
-  id INTEGER PRIMARY KEY,
-  email TEXT NOT NULL,
-  name TEXT,
-  -- phone 列已删除，age 列已新增
-  age INTEGER
-);
+#### 重建范围
 
--- 2. 从旧表复制数据
-INSERT INTO users_new (id, email, name, age)
-  SELECT id, email, name, NULL FROM users;
-
--- 3. 删除旧表
-DROP TABLE users;
-
--- 4. 重命名新表
-ALTER TABLE users_new RENAME TO users;
-
-COMMIT;
-```
-
-**重要**：这种模式会丢失：
-- 其他表指向它的外键引用
-- 原表上的触发器
-- 原表上的索引（必须重建）
+重建路径仅接受能够证明在 `main` schema 中安全的表形态。例如，它会拒绝 CHECK 约束、生成列、`AUTOINCREMENT`、`STRICT`、`WITHOUT ROWID`、视图或触发器、表达式或部分索引、附加 schema，以及调用方拥有的活动事务。这些限制仅适用于重建：适用的原生纯删除不会仅因超出重建语法而被拒绝。
 
 ### 索引操作
 
@@ -109,18 +79,17 @@ COMMIT;
 
 ### 已知限制
 
-- 没有 `DROP COLUMN`（需要重建表）
-- 没有 `ALTER COLUMN`（需要重建表）
-- 无法为已有的表添加约束
-- 不能并发创建索引（会锁住数据库）
-- 动态类型（列类型只是建议性的）
+- 托管表更改规划器会变更选定的类型、可空性、默认值和删除操作；它不会向现有表添加约束。
+- 重建会严格限制为上文所述已验证的表形态。
+- 不能并发创建索引（会锁住数据库）。
+- 动态类型（列类型只是建议性的）。
 
 ### 最佳实践
 
-1. **使用事务** —— DDL 是事务性的，始终用 `BEGIN`/`COMMIT` 包起来
-2. **提前规划 Schema** —— 事后修改很困难
-3. **使用重建表模式** —— 用于不受支持的 `ALTER TABLE` 操作
-4. **重建索引与触发器** —— 在重建表之后
-5. **先在副本上测试** —— 尤其是重建表模式
-6. **启用外键** —— 修改 Schema 之前先执行 `PRAGMA foreign_keys = ON`
-7. **使用 VACUUM** —— 在 `DROP TABLE` 或重建表之后回收磁盘空间
+1. **对手动 DDL 使用事务** —— 托管表更改要求自动提交。
+2. **提前规划 Schema** —— 事后修改很困难。
+3. **检查托管 ALTER 预览** —— 它仅供说明；应通过 DBFlux 应用，而不是执行其中的语句。
+4. **单独规划不支持的表形态** —— 重建路径会拒绝视图、触发器和其他未经验证的形态。
+5. **先在副本上测试** —— 尤其是在托管重建之前。
+6. **启用外键** —— 修改 Schema 之前先执行 `PRAGMA foreign_keys = ON`。
+7. **使用 VACUUM** —— 在 `DROP TABLE` 或重建表之后回收磁盘空间。
