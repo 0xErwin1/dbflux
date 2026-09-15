@@ -19,7 +19,7 @@ license: MIT
 - The PR template does not define or require labels
 - This repository does not appear to use an `area:*` label convention; live GitHub labels are domain-based (`mcp`, `query`, `aws`, `ssh`, `proxy`, `driver`, `driver:<backend>`, plus `:bug` / `:feature` variants)
 - Do not assume issue-first enforcement, approval labels, or mandatory PR labels unless the user explicitly asks for them
-- Use project guidance from `AGENTS.md`, `ARCHITECTURE.md`, `CODE_STYLE.md`, and `CLAUDE.md`
+- Use project guidance from `AGENTS.md`, `ARCHITECTURE.md`, and `CODE_STYLE.md`
 
 ## Critical Patterns
 
@@ -92,4 +92,3 @@ gh pr create
 - `AGENTS.md`
 - `ARCHITECTURE.md`
 - `CODE_STYLE.md`
-- `CLAUDE.md`

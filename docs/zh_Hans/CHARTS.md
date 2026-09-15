@@ -46,7 +46,7 @@ DBFlux 可以将查询结果转换为图表。图表引擎完全不依赖特定�
 | `Text` | 文本/字符串列。 |
 | `Unknown` | 驱动程序无法对该列进行分类。 |
 
-每个驱动程序负责为其返回的每一列设置 `ColumnMeta::kind`（参见 `CLAUDE.md` 中的“新增驱动程序”规则）。保留为 `Unknown` 的列永远不会被用作图表的坐标轴或序列。
+每个驱动程序负责为其返回的每一列设置 `ColumnMeta::kind`（参见 `AGENTS.md` 中的“新增驱动程序”规则）。保留为 `Unknown` 的列永远不会被用作图表的坐标轴或序列。
 
 ### 自动检测规则
 
@@ -61,7 +61,7 @@ DBFlux 可以将查询结果转换为图表。图表引擎完全不依赖特定�
 
 ### 为何从不检查 `type_name` 与驱动程序标识符
 
-`detect.rs` 的模块级文档说明，检测模块是查询结果模型与图表引擎之间的边界，它检查的是 `ColumnKind` 值——而非 `type_name` 字符串或驱动程序标识符。`detect_chart_columns` 函数只读取 `column.kind`；它从不读取 `column.type_name`、`column.name` 或任何驱动程序 ID。这让引擎与具体驱动程序完全解耦，符合 `CLAUDE.md` 中“驱动程序/界面解耦”的规则：驱动程序只需用正确的 `ColumnKind` 对列进行分类，就能使其可用于绘制图表。
+`detect.rs` 的模块级文档说明，检测模块是查询结果模型与图表引擎之间的边界，它检查的是 `ColumnKind` 值——而非 `type_name` 字符串或驱动程序标识符。`detect_chart_columns` 函数只读取 `column.kind`；它从不读取 `column.type_name`、`column.name` 或任何驱动程序 ID。这让引擎与具体驱动程序完全解耦，符合 `AGENTS.md` 中“驱动程序/界面解耦”的规则：驱动程序只需用正确的 `ColumnKind` 对列进行分类，就能使其可用于绘制图表。
 
 由于 `Unknown` 既非 `Timestamp`，也非 `Float`/`Integer`，未分类的列既不能成为自动检测出的 X 轴，也不能成为自动检测出的序列。这是有意为之：它迫使驱动程序对列进行分类，而不是让引擎从类型字符串中猜测。
 

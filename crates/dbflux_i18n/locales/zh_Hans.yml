@@ -37,7 +37,7 @@ access:
   ssh_success: SSH 连接成功
   ssh_failed: SSH 连接失败
   save_as_tunnel: 保存为隧道
-  ssh_disabled_hint: 启用 SSH 隧道以配置经由堡垒主机的连接
+  ssh_disabled_hint: 启用 SSH 隧道以配置经由堡垒机的连接
 audit:
   toast:
     focus_existing_viewer: 正在聚焦已打开的审计查看器
@@ -52,10 +52,10 @@ chart:
     group: 分组
     aggregation:
       none: 无
-      sum: sum
-      avg: avg
-      min: min
-      max: max
+      sum: 求和
+      avg: 平均
+      min: 最小
+      max: 最大
   engine:
     no_data: 暂无数据
   point_inspector:
@@ -292,6 +292,7 @@ connection_manager:
     subtitle: 选择数据库类型
     empty_state: 没有符合筛选条件的驱动
     import_from_file: 从文件导入…
+    import_from_client: 从另一个客户端导入…
     cancel: 取消
     configure: 配置
     configure_named: "配置 %{name}"
@@ -460,6 +461,34 @@ connection_manager:
       load: 加载
       continue_: 继续
       import: 导入
+    source:
+      label: 导入来源
+      bundle: DBflux 捆绑包
+    external:
+      dialog:
+        open_title: 打开文件
+      filter:
+        primary: 连接文件
+        secondary: 凭据文件
+      field:
+        primary_file: 连接文件
+        secondary_file: 凭据文件（可选）
+      hint:
+        secondary_optional: 跳过此项可导入连接，但不包含其已保存的密码。
+      error:
+        choose_primary_file: 请选择要导入的文件。
+      review:
+        intro: 请查看此文件中找到的连接。取消勾选任何不想导入的连接。
+        skips_intro:
+          one: "%{count} 个条目无法导入："
+          many: "%{count} 个条目无法导入："
+      secret:
+        will_store: 密码将存储在系统密钥环中。
+        none: 源文件中未找到密码。
+      action:
+        import_selected:
+          one: "导入 %{count} 个连接"
+          many: "导入 %{count} 个连接"
 connections:
   window:
     manager_title: 连接管理器
@@ -1192,6 +1221,8 @@ document:
         bulk_delete_no_rows_identified: 无法删除：未能识别任何行
         bulk_delete_no_documents_identified: 无法删除：未能识别任何文档
         read_only_connection: 此连接为只读，不允许执行变更。
+        read_only_connection_profile: 此连接的配置文件设为只读，不允许执行变更。
+        read_only_connection_server: 服务器拒绝了此连接的变更操作，不允许执行变更。
         approval_queue_failed: "变更排队等待审批失败：%{error}"
         approval_requires_mcp: 此连接的变更需要审批。请启用 MCP 功能以激活审批工作流。
         connection_not_found: 未找到连接 — 无法执行变更。
@@ -1240,6 +1271,39 @@ document:
         references: 引用
         row: 行
       title: "行 %{row}"
+  dump_analysis:
+    title: "%{analyzer} — %{file}"
+    task: "正在分析 %{file}（%{analyzer}）"
+    multiple_analyzers_note: "多个已注册驱动都能读取此扩展名；已使用 %{analyzer} 进行分析。"
+    parsing:
+      title: 正在解析转储…
+      cancel: 取消
+      progress:
+        of_total: "已读取 %{read} / %{total}"
+        only: "已读取 %{read}"
+    cancelled:
+      title: 分析已取消
+    error:
+      io: "读取转储时发生 I/O 错误：%{message}"
+      format: "转储格式错误（偏移 %{offset}）：%{message}"
+      cancelled: 转储分析已取消。
+    done:
+      summary: "%{keys} 个键 · 序列化大小 %{bytes}"
+      size_caveat_heading: 为什么这与实时内存占用不同
+      largest_keys:
+        title: 最大的键
+        column:
+          key: 键
+          type: 类型
+          size: 序列化大小
+          expiry: 过期时间
+        no_expiry: 无过期时间
+      by_prefix:
+        title: 按前缀
+        column:
+          prefix: 前缀
+          count: 数量
+          size: 序列化大小
   export_wizard:
     title: 导出数据
     task:
@@ -1516,6 +1580,19 @@ document:
         no_limit: 无限制
         missing: 缺失
         expired: 已过期
+      gate:
+        too_large: "值大小为 %{size}，超过了 %{limit} 的预览上限"
+        load_anyway: 仍要加载
+        truncated: "部分值 — 已显示 %{returned}，共 %{total}"
+        truncated_unknown_total: "部分值 — 已显示 %{returned}"
+      decode:
+        failed: 解码失败
+        too_large: 解码后的输出过大
+        edit_locked: 切换到原始视图以编辑
+        kind:
+          text: 文本
+          bytes: 字节
+          image: 图像
   migrate_wizard:
     title: 迁移数据
     task:
@@ -1649,7 +1726,7 @@ document:
       created_toast: "已创建文件夹 %{uri}"
       hint: "创建为以 / 结尾的零字节键"
       location: "位于 %{uri}"
-      name_placeholder: folder-name
+      name_placeholder: 文件夹名称
       title: 新建文件夹
       error:
         consecutive_slashes: 文件夹名称不能包含连续斜杠。
@@ -1692,6 +1769,7 @@ document:
         leave_for: "返回 %{prefix}"
         close_preview: 关闭此预览
         delete: "删除 %{key}"
+        reinterpret: 更改此对象的解释方式
         rename: "重命名 %{key}"
       unsaved_summary: "%{key} 有未保存的编辑"
       toast:
@@ -1718,7 +1796,7 @@ document:
       archived: 此对象已归档，无法预览。请在您的 S3 控制台中恢复它以访问其内容。
       too_large: "此对象大小为 %{size}，超过了 %{limit} 的预览上限。请下载以查看其内容。"
     metadata:
-      content_type: Content-Type
+      content_type: 内容类型
       encryption: 加密
       etag: ETag
       key: 键
@@ -1759,9 +1837,17 @@ document:
         open: 打开
         presign: 预签名
       body:
+        decode_failed: "检测为 %{encoding}，但无法解码：%{reason}"
+        decode_too_large: "检测为 %{encoding}，但解码后超出 %{limit} 的预览上限。"
+        decoded_not_utf8: 解码后的字节不是有效的 UTF-8 文本。
+        decoded_read_only: 只读 — 切换到原始视图以编辑
+        encoding_auto: 自动
+        encoding_raw: 原始
         fit_to_width: 适应宽度
         image_decode_error: "无法解码图像：%{error}"
         image_header_error: "无法读取图像头：%{error}"
+        interpret_as: "解释为："
+        load_anyway: 仍要加载
         loading: 正在加载预览…
         loading_metadata: 正在加载元数据…
         svg_invalid_utf8: 此对象不是有效的 UTF-8，因此不能是 SVG。
@@ -1782,7 +1868,7 @@ document:
       cancel: 取消
       confirm: 重命名
       confirm_in_progress: 正在重命名…
-      name_placeholder: object-name
+      name_placeholder: 对象名称
       renamed_toast: "已重命名为 %{uri}"
       title: 重命名对象
       error:
@@ -1835,6 +1921,7 @@ document:
           many: "（%{count} 个上传失败）"
   object_editor:
     error:
+      decode_too_large: "此对象解码后超出 %{limit} 的预览上限。"
       not_text: 此对象不是文本，无法在应用内编辑。
     status:
       bucket_tooltip: 存储桶
@@ -1869,12 +1956,12 @@ document:
     columns:
       all_columns: 所有列（*）
     comparator:
-      eq: =
-      neq: ≠
-      gt: >
-      lt: <
-      gte: ≥
-      lte: ≤
+      eq: "="
+      neq: "≠"
+      gt: ">"
+      lt: "<"
+      gte: "≥"
+      lte: "≤"
       like: LIKE
       ilike: ILIKE
       in: IN
@@ -1941,8 +2028,8 @@ document:
       key_limited_hint: 此驱动的排序仅限于排序键。
       invalid_column: "%{column} 不在 GROUP BY 列或聚合别名中"
     status:
-      limit: Limit
-      offset: Offset
+      limit: 限制
+      offset: 偏移
       valid_lines:
         one: "有效 · %{count} 行"
         many: "有效 · %{count} 行"
@@ -1959,8 +2046,8 @@ document:
       preview_ddl: 预览 DDL
     apply:
       read_only: 此连接为只读，不允许执行 Schema 更改。
-      read_only_profile: 此连接的配置文件设置为只读。不允许执行 Schema 更改。
-      read_only_server: 服务器拒绝了此连接的变更操作。不允许执行 Schema 更改。
+      read_only_profile: 此连接的配置文件设为只读，不允许执行 Schema 更改。
+      read_only_server: 服务器拒绝了此连接的变更操作，不允许执行 Schema 更改。
     change:
       column_added: "添加列 %{name} %{type_name}"
       column_removed: "删除列 %{name}"
@@ -2001,8 +2088,8 @@ document:
       connection_unavailable: 目标连接不再可用。
       ddl_build_failed: "无法构建 DDL：%{error}"
       read_only: 此连接为只读，不允许执行 Schema 更改。
-      read_only_profile: 此连接的配置文件设置为只读。不允许执行 Schema 更改。
-      read_only_server: 服务器拒绝了此连接的变更操作。不允许执行 Schema 更改。
+      read_only_profile: 此连接的配置文件设为只读，不允许执行 Schema 更改。
+      read_only_server: 服务器拒绝了此连接的变更操作，不允许执行 Schema 更改。
       reference_connection_disconnected: 所选的参照连接未连接。
       reference_not_picked: 请选择要对比的参照数据库或连接。
       select_at_least_one: 请先至少选择一项更改。
@@ -2076,6 +2163,15 @@ documents:
   error:
     write_initial_script_failed: "写入初始脚本内容失败：%{error}"
     save_session_failed: 保存会话清单失败
+dump_analysis:
+  dialog:
+    title: 分析数据库转储…
+    filter:
+      dumps: 转储文件
+      all_files: 所有文件
+  error:
+    no_dialog: 此环境中没有可用的文件选择器。
+    unsupported_extension: "没有已注册的驱动能够分析扩展名为 .%{extension} 的文件。"
 errors:
   action:
     view_in_audit: 在审计中查看
@@ -2424,6 +2520,8 @@ palette:
       name: 打开图表…
     new_dashboard:
       name: 新建仪表盘…
+    analyze_dump_file:
+      name: 分析数据库转储…
   category:
     editor: 编辑器
     tabs: 标签页
@@ -2433,6 +2531,7 @@ palette:
     view: 视图
     charts: 图表
     dashboards: 仪表盘
+    tools: 工具
 scripts:
   dialog:
     title: 打开脚本
@@ -2522,6 +2621,13 @@ settings:
       error: 对象预览大小上限必须大于等于 1 MiB
     object_preview_hint:
       label: "超过此大小的对象绝不会下载用于预览；浏览器仅显示其元数据。"
+    key_value:
+      group: 键值预览
+    key_value_size_limit:
+      label: 键值预览大小上限（MiB）
+      error: 键值预览大小上限必须大于等于 1 MiB
+    key_value_size_limit_hint:
+      label: "超过此大小的值不会自动下载；请点击 仍要加载 获取完整值。"
     share_stable_db:
       label: 使用稳定数据库
       error: 更新共享数据库设置失败
@@ -2719,7 +2825,7 @@ settings:
       enabled: 已启用
       inherit_env: 继承父级环境
       on_failure: 失败时
-      preview_placeholder: <输入命令>
+      preview_placeholder: "<输入命令>"
     status:
       unsupported_platform: 此平台不支持
       script_missing: 脚本文件尚不存在
@@ -3115,7 +3221,7 @@ settings:
       no_proxy_list: 逗号分隔的绕过代理的主机 / CIDR
     auth:
       none: 无
-      basic: Basic
+      basic: 基本认证
     status:
       disabled_caption: 关
     error:
@@ -3500,6 +3606,13 @@ sso_wizard:
     profile_created: 已创建 AWS SSO 认证配置文件
 status_bar:
   disconnected: 已断开
+  read_only:
+    profile:
+      label: 只读（配置文件）
+      tooltip: 此连接的配置文件设为只读。
+    server:
+      label: 只读（服务器）
+      tooltip: 服务器拒绝了此连接的变更操作。
   tasks_label: 任务
   tasks_running:
     one: "1 个运行中"

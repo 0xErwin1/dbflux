@@ -53,6 +53,34 @@ where
     run(url)
 }
 
+/// Starts a throwaway PostgreSQL 16 container that authenticates with `trust`
+/// (no password at all) and returns its host port.
+///
+/// `POSTGRES_USER` doubles as the superuser name and the default database, so
+/// a deliberately different database name (`testdb`) makes a swallowed
+/// `dbname=` connection parameter observable instead of silently falling back
+/// to the user name.
+pub fn with_trust_postgres_port<T, E, F>(run: F) -> Result<T, E>
+where
+    F: FnOnce(u16) -> Result<T, E>,
+{
+    let image = hub_image("postgres", "16")
+        .with_exposed_port(ContainerPort::Tcp(5432))
+        .with_wait_for(WaitFor::message_on_stdout(
+            "database system is ready to accept connections",
+        ))
+        .with_env_var("POSTGRES_USER", "testuser")
+        .with_env_var("POSTGRES_DB", "testdb")
+        .with_env_var("POSTGRES_HOST_AUTH_METHOD", "trust");
+
+    let container = image.start().expect("failed to start postgres container");
+    let port = container
+        .get_host_port_ipv4(5432)
+        .expect("failed to get postgres host port");
+
+    run(port)
+}
+
 pub fn with_pgvector_postgres_16_url<T, E, F>(run: F) -> Result<T, E>
 where
     F: FnOnce(String) -> Result<T, E>,

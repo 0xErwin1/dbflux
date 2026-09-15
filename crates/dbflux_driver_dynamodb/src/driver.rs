@@ -3143,8 +3143,8 @@ fn items_to_query_result(
 /// Unlike `items_to_query_result`, no table key schema is available for a
 /// free-form PartiQL `SELECT`, so column order is derived purely from the
 /// sampled items and no column is marked as a primary key. Column kinds are
-/// still inferred from the sampled values (CLAUDE.md rule 10) so the chart
-/// engine can use them.
+/// still inferred from the sampled values (per the `ColumnMeta::kind` rule in
+/// AGENTS.md) so the chart engine can use them.
 fn partiql_items_to_query_result(
     items: &[HashMap<String, AttributeValue>],
     next_page_token: Option<String>,
