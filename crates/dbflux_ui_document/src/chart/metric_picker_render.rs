@@ -59,7 +59,7 @@ impl<'a> MetricPickerView<'a> {
         // Kick dimensions fetch on the first render where the picker is
         // visible. Gated on `pending_dimensions_fetch` so we don't spawn
         // futures unconditionally from inside the render pass (documented
-        // GPUI antipattern in CLAUDE.md). `ensure_dimensions_loaded` itself
+        // GPUI antipattern in AGENTS.md). `ensure_dimensions_loaded` itself
         // remains idempotent — the flag just prevents redundant calls.
         if self.state.pending_dimensions_fetch {
             self.state.pending_dimensions_fetch = false;
