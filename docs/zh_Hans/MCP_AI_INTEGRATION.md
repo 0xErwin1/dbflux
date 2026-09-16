@@ -204,7 +204,7 @@ Linux 上的典型默认值：
 | 路径 | 内容 |
 |---|---|
 | `~/.local/share/dbflux/dbflux.db` | 统一数据库：连接配置、认证、SSH 隧道、治理、审计事件、历史记录、会话、界面状态 |
-| `~/.local/share/dbflux/sessions/` | 用于自动保存与会话恢复的临时文件和影子文件 |
+| `~/.local/share/dbflux/sessions/` | 用于会话恢复与找回的临时文件和影子文件 |
 | `~/.local/share/dbflux/scripts/` | 用户编写的脚本目录 |
 
 `dbflux.db` 数据库按前缀包含所有领域表：

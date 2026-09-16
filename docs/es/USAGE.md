@@ -126,6 +126,24 @@ de queries de MongoDB, comandos de Redis, etc.) lo determina el driver de la
 conexión activa, que también controla el resaltado de sintaxis y el texto de
 placeholder.
 
+### Guardar y cerrar pestañas
+
+Una pestaña de query nueva (`Ctrl+n`) queda respaldada por un archivo real en tu
+carpeta de scripts, igual que un script abierto con `Ctrl+o`. Los editores
+abiertos se auto-guardan en ese archivo según el intervalo configurado, y
+`Ctrl+s` / **Save File As** usan la misma cola. El auto-guardado y el cierre
+nunca sobrescriben un archivo que cambió fuera de DBFlux: tu versión sigue en
+el editor y DBFlux informa de la escritura rechazada. `Ctrl+s` y **Save File As**
+son deliberados y escriben el archivo incluso entonces.
+
+Cerrar una pestaña con ediciones pendientes las guarda primero y después la
+cierra; si la escritura no puede aterrizar (por ejemplo, el archivo cambió
+fuera de DBFlux o es read-only), la pestaña queda abierta con tus cambios. Al
+salir, DBFlux guarda las ediciones pendientes de la misma forma antes de
+apagarse. Si la carpeta de scripts no pudo crearse al arrancar, las queries
+nuevas se conservan en el session store y **Save File As** se ofrece al
+cerrarlas.
+
 ### Ejecutar
 
 - `Ctrl+Enter` (`Cmd+Enter`) — **Run Query**.

@@ -403,7 +403,7 @@ crates/
       ssh_tunnel_manager.rs # SshTunnelManager
       item_manager.rs       # Generic ItemManager<T>, Identifiable, DefaultFilename traits
     src/storage/            # Persistence and state
-      session.rs            # Session persistence (scratch/shadow files, manifest)
+      session.rs            # Session manifest types and scratch/shadow path helpers
       history.rs            # History persistence
       saved_query.rs        # Saved queries persistence
       recent_files.rs       # Recent files tracking
@@ -573,7 +573,7 @@ User-triggered failures route through a single seam in `crates/dbflux_ui_base/sr
 
 1. **`Tab`** (`tab_manager.rs`) — `#[non_exhaustive]` enum with a single `Pane(Box<PaneHandle>)` variant. Kept as enum for forward-compatibility (e.g., future detachable pane variants). `TabManager` holds a `Vec<Tab>` plus MRU ordering.
 
-2. **`PaneHandle`** (`pane.rs`) — closure-erasing shell that replaces the old closed `DocumentHandle` enum. Each of the 22 operations (render, focus, dispatch_command, meta_snapshot, tab_title, can_close, connection_id, active_context, change_summary, refresh_policy, set_active_tab, set_refresh_policy, flush_auto_save, matches_dedup_key, subscribe, plus optional helpers) is a `Box<dyn Fn>` closure capturing the typed `Entity<T>`. `PaneHandle` is `!Clone`. Each document type provides `XxxDocument::into_pane(entity, cx) -> PaneHandle` in its own `pane.rs` file (all under `crates/dbflux_ui_document/src/`). Adding a new document type requires no changes to `workspace/mod.rs`, `tab_manager.rs`, `tab_bar.rs`, or `handle.rs`.
+2. **`PaneHandle`** (`pane.rs`) — closure-erasing shell that replaces the old closed `DocumentHandle` enum. Each operation (render, focus, dispatch_command, meta_snapshot, tab_title, can_close, connection_id, active_context, change_summary, refresh_policy, set_active_tab, set_refresh_policy, flush_auto_save, matches_dedup_key, subscribe, plus optional helpers such as `resolve_close`, `save_for_close`, `flush_for_shutdown`, and `is_file_backed_empty`) is a `Box<dyn Fn>` closure capturing the typed `Entity<T>`. `PaneHandle` is `!Clone`. Each document type provides `XxxDocument::into_pane(entity, cx) -> PaneHandle` in its own `pane.rs` file (all under `crates/dbflux_ui_document/src/`). Adding a new document type requires no changes to `workspace/mod.rs`, `tab_manager.rs`, `tab_bar.rs`, or `handle.rs`.
 
 3. **`DocumentKey`** (`dedup.rs`) — identity enum used for tab deduplication. Variants: `Table`, `Collection`, `File`, `KeyValueDb`, `Chart`, `Audit`, `EventStream`, `Routine`, `MetricChart`, `Dashboard`, `InstanceMetric`, `InstanceInspector`, `InstanceOverview`, `ObjectStoreBucketsRoot`, `ObjectBrowser`, `ObjectEditor`. Replaces the `is_*` methods on the old `DocumentHandle`. Call sites use `tab_manager.find_by_key(&DocumentKey::Table { ... }, cx)`.
 
@@ -609,8 +609,8 @@ User-triggered failures route through a single seam in `crates/dbflux_ui_base/sr
 
 - `KeyValueView` and `LogStreamView` are file-level boundary structs, not separate GPUI entities. GPUI's single-`Context<T>` borrow model makes cross-entity `impl Render` splits infeasible when 40+ `cx.listener()` closures in a document close over `Self`; splitting would require relocating all domain state to the view entity. The achieved boundary is file-level.
 - `DataView` trait (`data_view_trait.rs`) does not include a `render` method. The spec called for `render` on the trait, but `impl IntoElement` is not trait-object-safe and boxing to `AnyElement` conflicts with GPUI idioms. Rendering goes through `ViewHandle.render` instead.
-- Auto-save: tabs auto-save to scratch files (untitled) or shadow files (file-backed) on a 2-second debounce. Ctrl+S writes to the original file. Tabs close without warnings.
-- Session restore: `SessionStore` persists a manifest of open tabs to `~/.local/share/dbflux/sessions/`. On startup, all tabs are restored with conflict detection for externally modified files. Only code documents produce `CodeSessionTabSnapshot`; other document types are not session-persisted.
+- Auto-save and close: a file-backed code document auto-saves to its script file on the configured interval, through the same per-document write queue as Ctrl+S and Save As. Writes stage-then-replace (permissions preserved; a read-only target is refused), and an automatic write that would clobber a file changed outside dbflux is refused, leaving the buffer dirty (Ctrl+S and Save As are deliberate and do write). Every close route saves pending edits before the tab is removed — the tab stays open if the write cannot land — and quitting flushes them too, so the unsaved-changes dialog no longer applies to code documents. Untitled content auto-saves to scratch files, and unsaved edits keep a shadow copy in the sessions folder as a recovery net.
+- Session restore: the open-tabs manifest lives in `dbflux.db` (`st_sessions` / `st_session_tabs`, via `crates/dbflux_storage/src/repositories/state/sessions.rs`). The sessions folder (`~/.local/share/dbflux/sessions/`) holds the scratch/shadow artifacts used for restore and recovery. Only code documents produce `CodeSessionTabSnapshot`; other document types are not session-persisted.
 - Duplicate prevention: `tab_manager.find_by_key` checks `PaneHandle::matches_dedup_key` before opening a new tab, focusing the existing one if found.
 
 ### Visual Query Builder
@@ -784,7 +784,7 @@ See `docs/DASHBOARDS.md` for the full reference (including instance metrics and 
 
 **Secrets**: `SecretManager` uses `HasSecretRef` trait for keyring operations. Secrets are stored in the OS keyring, references stored in SQLite.
 
-**Session persistence**: Scratch/shadow files and session manifest in `~/.local/share/dbflux/sessions/` for tab restore on startup.
+**Session persistence**: the session manifest lives in `dbflux.db` (`st_sessions` / `st_session_tabs`); scratch/shadow files for tab restore stay in `~/.local/share/dbflux/sessions/`.
 
 **Execution context**: `crates/dbflux_core/src/connection/context.rs` tracks per-tab connection, database, schema, and generic driver-declared source context. The current generic source-window shape is `ExecutionSourceContext::CollectionWindow { targets, start_ms, end_ms }`. Only connection/database/schema annotations are serialized into saved file headers.
 
@@ -922,7 +922,7 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 
 ## Data Flow
 
-- Startup: `main` creates `AppState` and `Workspace`, restores the previous session (tabs from `session.json`), and opens the main window. If no tabs are restored, focus defaults to the sidebar (`crates/dbflux/src/main.rs`, `crates/dbflux_ui/src/ui/views/workspace/`).
+- Startup: `main` creates `AppState` and `Workspace`, restores the previous session (tabs from the session manifest in `dbflux.db`), and opens the main window. If no tabs are restored, focus defaults to the sidebar (`crates/dbflux/src/main.rs`, `crates/dbflux_ui/src/ui/views/workspace/`).
 - External driver bootstrap: at startup, DBFlux reads `cfg_services` from `~/.local/share/dbflux/dbflux.db`, probes each service, and only registers services that complete the RPC handshake (`Hello`) successfully.
 - Connect flow: `AppState::prepare_pipeline_input` builds a provider-agnostic pre-connect pipeline input. The pipeline runs auth/session validation, dynamic value resolution, and managed/direct access setup before driver connect + schema fetch. Supports form-based configuration, direct URI input, optional proxy/SSH, and managed access (`aws-ssm`). Connection hooks still run at each phase (PreConnect, PostConnect, PreDisconnect, PostDisconnect).
 - Query flow: `CodeDocument` submits database queries to a `Connection` implementation when the active `QueryLanguage` supports connection context. The query language (SQL/MongoDB/etc) is determined by driver metadata. Results are rendered in result tabs within the document. Dangerous queries (DELETE without WHERE, DROP, TRUNCATE) trigger confirmation dialogs (handled in `code/execution.rs`). When the driver advertises the `MULTI_STATEMENT` capability, a script containing several statements separated by `;` is executed as a batch, producing one result set per statement.
@@ -987,7 +987,7 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
   - `~/.config/dbflux/config.json` (legacy rpc_services only) → `cfg_services` with legacy rows defaulted to `service_kind='driver'`
   - Import is idempotent (tracked in `sys_legacy_imports`)
 - Session data (data dir):
-  - `sessions/` scratch and shadow files for auto-save (crates/dbflux_core/src/storage/session.rs).
+  - `sessions/` scratch and shadow files for editor auto-save and recovery (crates/dbflux_storage/src/artifacts.rs).
   - `scripts/` user scripts folder (crates/dbflux_core/src/config/scripts_directory.rs).
 - Secrets: passwords stored in OS keyring; references derived from profile IDs. `HasSecretRef` trait unifies SSH tunnel and proxy secret operations (crates/dbflux_core/src/storage/secrets.rs, crates/dbflux_core/src/storage/secret_manager.rs).
 

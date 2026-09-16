@@ -204,7 +204,7 @@ Typical Linux defaults:
 | Path | Contents |
 |------|----------|
 | `~/.local/share/dbflux/dbflux.db` | Unified database: profiles, auth, SSH tunnels, governance, audit events, history, sessions, UI state |
-| `~/.local/share/dbflux/sessions/` | Scratch and shadow files for auto-save session restore |
+| `~/.local/share/dbflux/sessions/` | Scratch and shadow files kept for session restore and recovery |
 | `~/.local/share/dbflux/scripts/` | User-authored scripts directory |
 
 The `dbflux.db` database contains all domain tables under prefixed schemas:

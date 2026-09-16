@@ -114,6 +114,22 @@ Open a new query tab with `Ctrl+n` (`Cmd+n` on macOS), or open a script file wit
 etc.) is determined by the active connection's driver, which also drives syntax
 highlighting and the placeholder text.
 
+### Saving and closing tabs
+
+A new query tab (`Ctrl+n`) is backed by a real file in your scripts folder, the
+same way a script opened with `Ctrl+o` is. Open editors auto-save to that file
+on the configured interval, and `Ctrl+s` / **Save File As** go through the same
+queue. Autosave and closing never overwrite a file that changed outside DBFlux:
+your version stays in the editor and DBFlux reports the refused write. `Ctrl+s`
+and **Save File As** are deliberate and write the file even then.
+
+Closing a tab with pending edits saves them first, then closes; if the write
+cannot land (for example, the file changed outside DBFlux or is read-only), the
+tab stays open with your changes. Quitting DBFlux saves pending edits the same
+way before it shuts down. If the scripts folder could not be created at startup,
+new queries are kept in the session store instead, and **Save File As** is
+offered when you close them.
+
 ### Executing
 
 - `Ctrl+Enter` (`Cmd+Enter`) — **Run Query**.
