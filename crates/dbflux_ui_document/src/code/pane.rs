@@ -144,6 +144,13 @@ impl CodeDocument {
             })
         });
 
+        // Populate optional helper: the interrupted-close save. The tab closes
+        // only when the document reports that the write landed.
+        handle.save_for_close = Some({
+            let e = entity.clone();
+            Box::new(move |w, cx| e.update(cx, |document, cx| document.save_for_close(w, cx)))
+        });
+
         // Populate optional helper: empty file-backed detection used by the
         // cleanup path in actions.rs that deletes empty script files on close.
         handle.is_file_backed_empty = Some({

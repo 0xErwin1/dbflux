@@ -159,6 +159,12 @@ impl ObjectBrowserDocument {
             Box::new(move |cx| e.read(cx).status_segments(cx))
         });
 
+        // The interrupted-close save: the tab closes only after the write lands.
+        pane.save_for_close = Some({
+            let e = entity.clone();
+            Box::new(move |_w, cx| e.update(cx, |d, cx| d.save_for_close(cx)))
+        });
+
         // Open-in-editor intent. `on_saved` points back at this browser so a
         // save in the standalone tab refreshes the metadata panel here when
         // the same object is still being previewed.

@@ -2431,6 +2431,9 @@ modals:
     save_selected:
       one: "Guardar seleccionado (%{count})"
       many: "Guardar seleccionados (%{count})"
+    cannot_save:
+      one: "Este documento no se puede guardar desde aquí: sus cambios se conservan y la pestaña permanece abierta"
+      many: "%{count} documentos no se pueden guardar desde aquí: sus cambios se conservan y las pestañas permanecen abiertas"
     dont_save: No guardar
     cancel: Cancelar
 palette:

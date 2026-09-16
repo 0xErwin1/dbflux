@@ -507,39 +507,47 @@ impl Workspace {
             |this, _, outcome: &crate::ui::overlays::modals::UnsavedChangesOutcome, window, cx| {
                 use crate::ui::overlays::modals::UnsavedChangesOutcome;
                 match outcome {
-                    UnsavedChangesOutcome::DiscardAll => {
-                        // Close all tabs without saving.
-                        let ids: Vec<_> = this
-                            .tab_manager
-                            .read(cx)
-                            .documents()
-                            .iter()
-                            .map(|d| d.id())
-                            .collect();
+                    UnsavedChangesOutcome::DiscardAll(ids) => {
+                        // Close the documents the dialog listed, nothing else:
+                        // every other tab keeps its changes.
                         for id in ids {
-                            this.close_tab(id, window, cx);
+                            this.close_tab(*id, window, cx);
                         }
+                        this.tab_manager
+                            .update(cx, |mgr, cx| mgr.focus_active(window, cx));
                     }
                     UnsavedChangesOutcome::SaveSelected(ids) => {
                         let ids = ids.clone();
+                        let mut unsaveable = 0;
                         for id in &ids {
-                            this.tab_manager.update(cx, |mgr, cx| {
-                                if let Some(tab) = mgr.document(*id) {
-                                    // SaveQuery is the smart save: writes
-                                    // file-backed documents silently and only
-                                    // opens Save As for untitled ones.
-                                    tab.dispatch_command(
-                                        crate::keymap::Command::SaveQuery,
-                                        window,
-                                        cx,
-                                    );
-                                }
+                            // `save_for_close` writes file-backed documents in
+                            // place and only opens Save As for untitled ones; it
+                            // reports back through `RequestClose` once the write
+                            // lands, so a dismissed dialog or a failed write
+                            // leaves the tab open with its changes.
+                            let started = this.tab_manager.update(cx, |mgr, cx| {
+                                mgr.document(*id)
+                                    .is_some_and(|tab| tab.save_for_close(window, cx))
                             });
+
+                            if !started {
+                                unsaveable += 1;
+                            }
                         }
-                        // The dialog interrupted a close; saving completes it.
-                        for id in &ids {
-                            this.close_tab(*id, window, cx);
+
+                        if unsaveable > 0 {
+                            Toast::warning(crate::ui::labels::unsaved_changes_cannot_save_message(
+                                unsaveable,
+                            ))
+                            .meta_right(now_hms())
+                            .push(cx);
                         }
+
+                        // The dialog took the keyboard, and the tabs it asked
+                        // to save stay open until their writes land. Give the
+                        // document its keyboard back instead of leaving the user
+                        // without one for the whole write.
+                        this.set_focus(this.focus_target, window, cx);
                     }
                     UnsavedChangesOutcome::Cancelled => {
                         // The modal stole focus from the editor input when it
@@ -1326,6 +1334,20 @@ impl Workspace {
                     TabManagerEvent::OpenEditorWithContent { sql, .. } => {
                         this.new_query_tab_with_content(sql.clone(), window, cx);
                     }
+                    TabManagerEvent::SaveFinished { id, succeeded } => {
+                        if !succeeded && this.tab_manager.read(cx).active_id() == Some(*id) {
+                            // Save As was dismissed or the write failed: the tab
+                            // keeps its changes and gets the keyboard back.
+                            this.set_focus(this.focus_target, window, cx);
+                        }
+                    }
+                    TabManagerEvent::RequestClose { id } => {
+                        // The document finished the save an interrupted close
+                        // asked for; the tab is safe to close now.
+                        this.close_tab(*id, window, cx);
+                        this.tab_manager
+                            .update(cx, |mgr, cx| mgr.focus_active(window, cx));
+                    }
                     TabManagerEvent::Opened(_)
                     | TabManagerEvent::Closed(_)
                     | TabManagerEvent::Reordered => {
@@ -2103,5 +2125,203 @@ impl Workspace {
             target = target.prev();
         }
         target
+    }
+}
+
+#[cfg(test)]
+mod tab_close_request_tests {
+    // Explicit imports, not `use super::*`: the parent glob together with
+    // `#[gpui::test]` sends the macro expansion into unbounded recursion.
+    use crate::keymap::{Command, CommandDispatcher};
+    use crate::ui::document::{CodeDocument, Tab, TabManagerEvent};
+    use crate::ui::overlays::modals::{
+        DirtySummaryEntry, UnsavedChangesOutcome, UnsavedChangesRequest,
+    };
+    use crate::ui::views::workspace::Workspace;
+    use dbflux_core::QueryLanguage;
+    use dbflux_core::document_id::DocumentId;
+    use dbflux_ui_base::AppStateEntity;
+    use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    fn new_workspace(
+        cx: &mut TestAppContext,
+    ) -> (
+        Entity<Workspace>,
+        Entity<AppStateEntity>,
+        &mut VisualTestContext,
+    ) {
+        cx.update(gpui_component::init);
+        cx.update(dbflux_components::theme::init);
+
+        let app_state: Entity<AppStateEntity> = cx.update(|cx| {
+            cx.new(|_| {
+                let runtime = dbflux_storage::bootstrap::StorageRuntime::in_memory()
+                    .expect("in-memory storage");
+                AppStateEntity::new_with_storage_runtime(runtime).expect("test storage setup")
+            })
+        });
+
+        let holder: Rc<RefCell<Option<Entity<Workspace>>>> = Rc::new(RefCell::new(None));
+        let workspace_ref = holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let workspace = cx.new(|cx| Workspace::new(app_state.clone(), window, cx));
+            workspace_ref.replace(Some(workspace.clone()));
+            gpui_component::Root::new(workspace, window, cx)
+        });
+
+        let workspace = holder
+            .borrow()
+            .clone()
+            .expect("workspace should be created");
+        (workspace, app_state, window)
+    }
+
+    /// Opens an empty query tab and returns its document id.
+    fn open_code_tab(
+        window: &mut VisualTestContext,
+        workspace: &Entity<Workspace>,
+        app_state: &Entity<AppStateEntity>,
+    ) -> DocumentId {
+        let document = window.update(|window, cx| {
+            cx.new(|cx| {
+                CodeDocument::new_with_language(
+                    app_state.clone(),
+                    None,
+                    QueryLanguage::Sql,
+                    window,
+                    cx,
+                )
+            })
+        });
+        let document_id = window.update(|_, cx| document.read(cx).id());
+
+        window.update(|_, cx| {
+            workspace.update(cx, |workspace, cx| {
+                let pane = CodeDocument::into_pane(document.clone(), cx);
+                workspace.tab_manager.update(cx, |manager, cx| {
+                    manager.open(Tab::Pane(Box::new(pane)), cx);
+                });
+            });
+        });
+
+        document_id
+    }
+
+    /// Regression: the document's close request only ends the tab because the
+    /// workspace subscribes to the tab manager. Removing that link would leave
+    /// every save-and-close tab open with no test failing.
+    #[gpui::test]
+    fn a_close_request_closes_the_tab_that_asked(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let document_id = open_code_tab(window, &workspace, &app_state);
+
+        window.update(|_, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.tab_manager.update(cx, |_manager, cx| {
+                    cx.emit(TabManagerEvent::RequestClose { id: document_id });
+                });
+            });
+        });
+        window.run_until_parked();
+
+        window.update(|_, cx| {
+            let workspace = workspace.read(cx);
+            assert!(
+                workspace
+                    .tab_manager
+                    .read(cx)
+                    .document(document_id)
+                    .is_none(),
+                "the workspace must close the tab whose document asked"
+            );
+        });
+    }
+
+    /// Regression: "Don't save" used to close every open tab, not just the
+    /// document the dialog was asking about.
+    #[gpui::test]
+    fn discarding_closes_only_the_listed_documents(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let discarded = open_code_tab(window, &workspace, &app_state);
+        let kept = open_code_tab(window, &workspace, &app_state);
+
+        window.update(|_, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.modal_unsaved_changes.update(cx, |_modal, cx| {
+                    cx.emit(UnsavedChangesOutcome::DiscardAll(vec![discarded]));
+                });
+            });
+        });
+        window.run_until_parked();
+
+        window.update(|_, cx| {
+            let manager = workspace.read(cx).tab_manager.read(cx);
+            assert!(
+                manager.document(discarded).is_none(),
+                "the listed document must close"
+            );
+            assert!(
+                manager.document(kept).is_some(),
+                "every other tab keeps its changes"
+            );
+        });
+    }
+
+    /// Regression: the workspace confirmation owns the keyboard, so its
+    /// routing must run before the sidebar guards in `dispatch`. Resolving the
+    /// modal through `dispatch` is what proves the call site is wired, which
+    /// calling the router directly would not.
+    #[gpui::test]
+    fn dispatch_resolves_a_visible_unsaved_changes_modal(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let document_id = open_code_tab(window, &workspace, &app_state);
+
+        window.update(|_, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.modal_unsaved_changes.update(cx, |modal, cx| {
+                    modal.open(
+                        UnsavedChangesRequest {
+                            entries: vec![DirtySummaryEntry {
+                                id: document_id,
+                                name: "query.sql".to_string(),
+                                summary: "1 pending change".to_string(),
+                            }],
+                        },
+                        cx,
+                    );
+                    assert!(modal.is_visible(), "the modal starts visible");
+                });
+            });
+        });
+
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.dispatch(Command::Cancel, window, cx);
+            });
+        });
+        window.run_until_parked();
+
+        window.update(|_, cx| {
+            assert!(
+                !workspace
+                    .read(cx)
+                    .modal_unsaved_changes
+                    .read(cx)
+                    .is_visible(),
+                "Escape must resolve the visible confirmation"
+            );
+            assert!(
+                workspace
+                    .read(cx)
+                    .tab_manager
+                    .read(cx)
+                    .document(document_id)
+                    .is_some(),
+                "cancelling keeps the tab open"
+            );
+        });
     }
 }

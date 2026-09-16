@@ -11,8 +11,10 @@ use std::collections::HashMap;
 /// Event emitted when the user resolves the modal.
 #[derive(Clone, Debug)]
 pub enum UnsavedChangesOutcome {
-    /// User chose "Don't save" — caller should discard changes and close all dirty tabs.
-    DiscardAll,
+    /// User chose "Don't save" — caller should discard changes and close the
+    /// listed documents. Carries exactly the documents the modal was opened
+    /// for, so a caller asked about one tab cannot close the others.
+    DiscardAll(Vec<DocumentId>),
     /// User chose "Cancel" — abort the close/quit flow.
     Cancelled,
     /// User chose "Save selected" — caller should save the given document IDs.
@@ -79,6 +81,12 @@ impl ModalUnsavedChanges {
     /// Enter resolves the modal through the same outcome handler as a mouse
     /// click.
     pub fn confirm(&mut self, cx: &mut Context<Self>) {
+        // The Save button is disabled at zero selections; Enter must not close
+        // the dialog over an operation the user cannot trigger either.
+        if self.selected_count() == 0 {
+            return;
+        }
+
         let ids = self.selected_ids();
         cx.emit(UnsavedChangesOutcome::SaveSelected(ids));
         self.close(cx);
@@ -206,7 +214,8 @@ impl Render for ModalUnsavedChanges {
             .child(rows);
 
         let on_discard = cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
-            cx.emit(UnsavedChangesOutcome::DiscardAll);
+            let ids = this.entries.iter().map(|entry| entry.id).collect();
+            cx.emit(UnsavedChangesOutcome::DiscardAll(ids));
             this.close(cx);
         });
 
@@ -362,6 +371,8 @@ mod tests {
             "modals.unsaved_changes.prompt",
             "modals.unsaved_changes.save_selected.one",
             "modals.unsaved_changes.save_selected.many",
+            "modals.unsaved_changes.cannot_save.one",
+            "modals.unsaved_changes.cannot_save.many",
             "modals.unsaved_changes.dont_save",
             "modals.unsaved_changes.cancel",
         ];
@@ -406,5 +417,65 @@ mod tests {
             many,
             dbflux_i18n::t!("modals.unsaved_changes.save_selected.many", count = 2)
         );
+    }
+}
+
+#[cfg(test)]
+mod confirm_keyboard_tests {
+    // Explicit imports rather than the parent glob: combining `use super::*`
+    // with `#[gpui::test]` sends the gpui_macros expansion into unbounded
+    // recursion.
+    use super::{
+        DirtySummaryEntry, ModalUnsavedChanges, UnsavedChangesOutcome, UnsavedChangesRequest,
+    };
+    use dbflux_core::document_id::DocumentId;
+    use gpui::{AppContext, TestAppContext};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use uuid::Uuid;
+
+    /// Enter must behave like the Save button: with nothing checked the button
+    /// is disabled, so the dialog stays open instead of resolving to a save of
+    /// nothing.
+    #[gpui::test]
+    fn enter_with_nothing_checked_keeps_the_dialog_open(cx: &mut TestAppContext) {
+        let id = DocumentId(Uuid::new_v4());
+        let modal = cx.new(ModalUnsavedChanges::new);
+
+        cx.update(|cx| {
+            modal.update(cx, |modal, cx| {
+                modal.open(
+                    UnsavedChangesRequest {
+                        entries: vec![DirtySummaryEntry {
+                            id,
+                            name: "query.sql".to_string(),
+                            summary: "+1/-1 lines".to_string(),
+                        }],
+                    },
+                    cx,
+                );
+                modal.selected.insert(id, false);
+            });
+        });
+
+        let outcomes: Rc<RefCell<Vec<UnsavedChangesOutcome>>> = Rc::new(RefCell::new(Vec::new()));
+        let sink = outcomes.clone();
+        cx.update(|cx| {
+            cx.subscribe(&modal, move |_, event: &UnsavedChangesOutcome, _| {
+                sink.borrow_mut().push(event.clone());
+            })
+            .detach();
+        });
+
+        cx.update(|cx| {
+            modal.update(cx, |modal, cx| modal.confirm(cx));
+        });
+
+        assert!(
+            outcomes.borrow().is_empty(),
+            "Enter must not resolve the dialog while nothing is selected"
+        );
+        let visible = cx.update(|cx| modal.read(cx).is_visible());
+        assert!(visible, "the dialog stays open for the user to choose");
     }
 }

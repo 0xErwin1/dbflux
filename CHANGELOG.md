@@ -33,6 +33,14 @@ All notable changes to DBFlux will be documented in this file.
   behind it. Focus returns to the editor when the dialog closes; the
   script-confirm Run button is highlighted as the primary action.
 
+* **"Save" on tab close waits for the save to land** — a tab whose close
+  opened the unsaved-changes dialog now closes only after the write
+  actually succeeded. Dismissing Save As, a failed write, or edits made
+  while the write was in flight keep the tab open with its changes
+  instead of closing over unsaved work; a document that has no save path
+  at all keeps its tab too and says so. "Don't save" discards only the
+  documents the dialog listed, not every open tab.
+
 * **Password save failures are reported** — a failed keyring write while
   saving or duplicating a connection profile now keeps the form open and
   shows the error instead of silently committing a profile with no secret.

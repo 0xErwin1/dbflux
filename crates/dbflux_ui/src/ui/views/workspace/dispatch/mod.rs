@@ -14,6 +14,26 @@ use preflight::sidebar_tree_command_is_blocked_by_search_focus;
 
 impl CommandDispatcher for Workspace {
     fn dispatch(&mut self, cmd: Command, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        // A visible workspace confirmation captures the keyboard
+        // (ContextId::ConfirmModal resolves only Enter/Escape), so it is
+        // resolved before every other dispatch domain, including the sidebar
+        // guards below. Without this, Enter fell through to
+        // `dispatch_connections` and connected the profile the user was about
+        // to delete, and Escape cleared the sidebar's pending delete without
+        // closing the overlay.
+        if matches!(cmd, Command::Execute | Command::Cancel)
+            && route_confirm_modal_command(
+                cmd,
+                &self.modal_delete_connection,
+                &self.modal_unsaved_changes,
+                &self.modal_delete_dashboard,
+                &self.modal_delete_saved_chart,
+                cx,
+            )
+        {
+            return true;
+        }
+
         if self.sidebar.read(cx).has_child_picker_open() {
             match cmd {
                 Command::SelectNext => {
@@ -78,26 +98,6 @@ impl CommandDispatcher for Workspace {
                 | Command::NewQueryTab => {}
                 _ => return true,
             }
-        }
-
-        // A visible workspace confirmation captures the keyboard
-        // (ContextId::ConfirmModal resolves only Enter/Escape): resolve it
-        // through its outcome handlers before any other dispatch domain gets
-        // the command. Without this, Enter fell through to
-        // `dispatch_connections` and connected the profile the user was about
-        // to delete, and Escape cleared the sidebar's pending delete without
-        // closing the overlay.
-        if matches!(cmd, Command::Execute | Command::Cancel)
-            && route_confirm_modal_command(
-                cmd,
-                &self.modal_delete_connection,
-                &self.modal_unsaved_changes,
-                &self.modal_delete_dashboard,
-                &self.modal_delete_saved_chart,
-                cx,
-            )
-        {
-            return true;
         }
 
         if cmd == Command::Cancel {
