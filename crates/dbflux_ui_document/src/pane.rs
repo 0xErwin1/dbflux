@@ -151,8 +151,11 @@ pub struct PaneHandle {
     pub matches_event_stream:
         Option<Box<dyn Fn(uuid::Uuid, &dbflux_core::EventStreamTarget, &App) -> bool>>,
 
-    /// Returns `Some(path)` when the document is file-backed and empty
-    /// (used by the empty-file-close cleanup in `actions.rs`).
+    /// Returns `Some(path)` when this document's backing file may be deleted on
+    /// close: the buffer is empty and the file still holds exactly the bytes the
+    /// document last loaded or wrote. A file changed outside dbflux, a missing
+    /// baseline, or an unreadable file reports `None` so the file is kept (used
+    /// by the empty-script cleanup in `actions/documents.rs`).
     pub is_file_backed_empty: Option<Box<dyn Fn(&App) -> Option<std::path::PathBuf>>>,
 
     /// Returns a session snapshot for code documents (used by session manifest).

@@ -249,6 +249,34 @@ fn start_next_physical_write(entity: &Entity<CodeDocument>, cx: &mut AsyncApp) {
 }
 
 impl CodeDocument {
+    /// Returns the backing path of an empty, file-backed script whose file still
+    /// holds exactly the bytes this document last loaded or wrote.
+    ///
+    /// The empty-script cleanup on close deletes the file this returns, so an
+    /// empty buffer alone is not enough: a file whose bytes changed outside
+    /// dbflux holds someone else's content and must be kept. The check uses the
+    /// document's own recorded baseline — the same seam autosave conflict-checks
+    /// against — so ownership is never inferred from a timestamp or a second
+    /// registry. Anything uncertain — no baseline, a baseline recorded for
+    /// another path, or a file that cannot be read — fails closed and returns
+    /// `None`, keeping the file.
+    pub fn file_backed_empty_path(&self, cx: &App) -> Option<PathBuf> {
+        if !self.is_file_backed() || !self.is_content_empty(cx) {
+            return None;
+        }
+
+        let path = self.editor.path.as_ref()?;
+        let baseline = self.physical_writes.baseline()?;
+
+        if baseline.path != *path {
+            return None;
+        }
+
+        let on_disk = std::fs::read_to_string(path).ok()?;
+
+        (on_disk == baseline.bytes).then(|| path.clone())
+    }
+
     /// Saves as part of an interrupted close.
     ///
     /// The tab is meant to close, but only once the write lands: this marks the

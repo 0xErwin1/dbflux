@@ -157,10 +157,13 @@ impl Tab {
         }
     }
 
-    /// Returns the path of the backing file if this tab is a file-backed script
-    /// that is currently empty — used by the empty-script cleanup path on close.
+    /// Returns the path of the backing file when this tab's script may be deleted
+    /// on close: its buffer is empty and the file still holds exactly the bytes the
+    /// document last loaded or wrote.
     ///
-    /// Returns `None` for non-script tabs and non-empty or non-file-backed scripts.
+    /// Returns `None` for non-script tabs, non-file-backed scripts, non-empty
+    /// buffers, files that changed outside dbflux, and files without a trustworthy
+    /// baseline — the caller keeps those files.
     pub fn is_file_backed_empty(&self, cx: &App) -> Option<std::path::PathBuf> {
         match self {
             Tab::Pane(p) => p.is_file_backed_empty.as_ref().and_then(|f| f(cx)),
