@@ -1945,9 +1945,14 @@ impl Workspace {
     /// deadline elapses.
     pub fn flush_pending_document_edits(&self, cx: &mut Context<Self>) -> bool {
         self.tab_manager.update(cx, |manager, cx| {
-            manager.documents().iter().fold(false, |outstanding, tab| {
-                tab.as_pane().flush_for_shutdown(cx) || outstanding
-            })
+            // Every document must be flushed, so this loop cannot short-circuit
+            // like `any` would: the first outstanding document must not stop the
+            // remaining ones from persisting their edits.
+            let mut outstanding = false;
+            for tab in manager.documents() {
+                outstanding |= tab.as_pane().flush_for_shutdown(cx);
+            }
+            outstanding
         })
     }
 
