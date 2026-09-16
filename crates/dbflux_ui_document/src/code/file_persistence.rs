@@ -321,10 +321,15 @@ fn prepare_staging_file(
     }
 
     // The uncommitted bytes stay owner-only while they carry a temporary name.
+    // Only unix has a permission mode to tighten, so the path is deliberately
+    // unused on the platforms that keep their default mode.
     #[cfg(unix)]
     {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
     }
+
+    #[cfg(not(unix))]
+    let _path = path;
 
     Ok(new_file_permissions)
 }
