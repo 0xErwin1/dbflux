@@ -51,6 +51,15 @@ pub use dbflux_core::{
     FetchSchemaTypesParams, FetchTableDetailsParams, SwitchDatabaseParams,
 };
 
+/// Records that `ScriptsDirectory::new()` failed during startup.
+///
+/// The failure text is retained for internal diagnostics only; the drain
+/// boundary omits it on purpose because it includes filesystem paths.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScriptsDirectoryDiagnostic {
+    pub message: String,
+}
+
 pub struct AppState {
     pub facade: SessionFacade,
     external_driver_diagnostics: HashMap<String, ExternalDriverDiagnostic>,
@@ -59,6 +68,7 @@ pub struct AppState {
     driver_settings: HashMap<DriverKey, FormValues>,
     hook_definitions: HashMap<String, EditableGlobalHook>,
     hook_load_diagnostics: Vec<crate::config_loader::HookLoadDiagnostic>,
+    scripts_directory_diagnostics: Vec<ScriptsDirectoryDiagnostic>,
     protected_hook_rows: Vec<crate::config_loader::ProtectedHookRow>,
     detached_hook_tasks: HashMap<Uuid, HashSet<TaskId>>,
     auth_provider_registry: AuthProviderRegistry,
@@ -1956,6 +1966,14 @@ impl AppState {
         std::mem::take(&mut self.hook_load_diagnostics)
     }
 
+    pub fn scripts_directory_diagnostics(&self) -> &[ScriptsDirectoryDiagnostic] {
+        &self.scripts_directory_diagnostics
+    }
+
+    pub fn take_scripts_directory_diagnostics(&mut self) -> Vec<ScriptsDirectoryDiagnostic> {
+        std::mem::take(&mut self.scripts_directory_diagnostics)
+    }
+
     pub fn set_hook_definitions(&mut self, definitions: HashMap<String, EditableGlobalHook>) {
         let hook_count = definitions.len();
         self.hook_definitions = definitions;
@@ -3134,6 +3152,22 @@ mod tests {
             dashboards.is_empty(),
             "fresh DB must return empty dashboards"
         );
+    }
+
+    /// A healthy bootstrap resolves the scripts directory and records no
+    /// scripts-directory diagnostic, so a normal start reports nothing.
+    #[test]
+    fn test_healthy_bootstrap_records_no_scripts_directory_diagnostic() {
+        let storage_runtime =
+            dbflux_storage::bootstrap::StorageRuntime::in_memory().expect("in-memory storage");
+        let state =
+            AppState::new_with_storage_runtime(storage_runtime).expect("test storage setup");
+
+        assert!(
+            state.scripts_directory().is_some(),
+            "the test environment resolves a scripts directory"
+        );
+        assert!(state.scripts_directory_diagnostics().is_empty());
     }
 
     // --- T-3.6: list_auth_profiles() union seam ---

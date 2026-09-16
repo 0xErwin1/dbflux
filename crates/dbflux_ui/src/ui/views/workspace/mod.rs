@@ -9,6 +9,7 @@ pub use inspector::{WorkspaceInspector, WorkspaceInspectorEvent};
 use crate::app::{AppStateChanged, AppStateEntity};
 use dbflux_components;
 use dbflux_core::observability::actions::CONFIG_CHANGE;
+use dbflux_ui_base::app_state_entity::drain_scripts_directory_diagnostics;
 use dbflux_ui_base::modals::{
     AddPanelOutcome, AddPanelRequest, CreateDashboardOutcome, CreateDashboardRequest,
     DeleteDashboardOutcome, DeleteDashboardRequest, DeleteSavedChartOutcome,
@@ -397,6 +398,13 @@ impl Workspace {
             drain_hook_load_diagnostics(&mut state.hook_load_diagnostics)
         });
         for error in hook_load_errors {
+            report_error(error, cx);
+        }
+
+        let scripts_directory_errors = app_state.update(cx, |state, _| {
+            drain_scripts_directory_diagnostics(&mut state.scripts_directory_diagnostics)
+        });
+        for error in scripts_directory_errors {
             report_error(error, cx);
         }
 

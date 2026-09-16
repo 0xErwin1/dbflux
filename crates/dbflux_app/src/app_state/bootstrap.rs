@@ -82,7 +82,7 @@ use crate::rpc_services::{
 #[cfg(test)]
 use dbflux_driver_ipc::driver::IpcDriverLaunchConfig;
 
-use super::AppState;
+use super::{AppState, ScriptsDirectoryDiagnostic};
 
 type DefaultDriverBuild = (
     BuiltDrivers,
@@ -169,9 +169,17 @@ impl AppState {
         proxies: Vec<dbflux_core::ProxyProfile>,
         ssh_tunnels: Vec<SshTunnelProfile>,
     ) -> Result<Self, dbflux_storage::error::StorageError> {
-        let scripts_directory = ScriptsDirectory::new()
-            .inspect_err(|e| log::warn!("Failed to initialize scripts directory: {}", e))
-            .ok();
+        let mut scripts_directory_diagnostics = Vec::new();
+        let scripts_directory = match ScriptsDirectory::new() {
+            Ok(directory) => Some(directory),
+            Err(error) => {
+                log::warn!("Failed to initialize scripts directory: {}", error);
+                scripts_directory_diagnostics.push(ScriptsDirectoryDiagnostic {
+                    message: error.to_string(),
+                });
+                None
+            }
+        };
 
         let (audit_service, audit_degraded, audit_emitter) =
             Self::init_audit_backend(storage_runtime.dbflux_db_path());
@@ -221,6 +229,7 @@ impl AppState {
             driver_settings,
             hook_definitions,
             hook_load_diagnostics,
+            scripts_directory_diagnostics,
             protected_hook_rows,
             detached_hook_tasks: HashMap::new(),
             auth_provider_registry,
