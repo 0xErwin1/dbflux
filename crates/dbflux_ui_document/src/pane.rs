@@ -19,6 +19,24 @@ use gpui::{AnyElement, App, Subscription, Window};
 /// Type-erased callback for document events, used by the `subscribe` closure.
 pub type BoxedDocEventCallback = Box<dyn Fn(&DocumentEvent, &mut App) + 'static>;
 
+/// What closing a document means, decided by the document's own close policy.
+///
+/// A pane exposes a policy through [`PaneHandle::resolve_close`]; panes without
+/// one leave the workspace on its existing behaviour, including the
+/// unsaved-changes dialog for a document that reports dirty state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CloseDisposition {
+    /// Nothing is pending: the workspace may remove the tab now.
+    CloseNow,
+    /// The document queued its pending edits to persist and will report
+    /// `DocumentEvent::RequestClose` once they land; the tab stays open until
+    /// then.
+    Deferred,
+    /// The pending edits could not be persisted; the tab stays open. The failure
+    /// has already been reported to the user.
+    KeepOpen,
+}
+
 /// A single document-contributed status-bar segment.
 ///
 /// Modeled directly on `dbflux_components::result_panel::ToolbarSegment` —
@@ -176,6 +194,13 @@ pub struct PaneHandle {
     /// workspace to close its tab once the write actually lands. `None` means
     /// the document has no save path, so its tab keeps the pending changes.
     pub save_for_close: Option<Box<dyn Fn(&mut Window, &mut App) -> bool>>,
+
+    /// Decides what closing this document means, before its tab is removed.
+    ///
+    /// `None` means the document has no close policy of its own: the workspace
+    /// falls back to its existing behaviour. Set only by documents that persist
+    /// their pending edits as part of closing (code documents).
+    pub resolve_close: Option<Box<dyn Fn(&mut Window, &mut App) -> CloseDisposition>>,
 }
 
 impl PaneHandle {
@@ -237,6 +262,7 @@ impl PaneHandle {
             take_pending_open_object_editor: None,
             on_close: None,
             save_for_close: None,
+            resolve_close: None,
         }
     }
 
@@ -350,6 +376,27 @@ impl PaneHandle {
             save(window, cx)
         } else {
             false
+        }
+    }
+
+    /// Returns `true` when this document decides its own close policy.
+    ///
+    /// The workspace uses this to keep the unsaved-changes dialog for documents
+    /// that require an explicit user save, while a document that can persist its
+    /// own pending edits is closed through [`PaneHandle::resolve_close`]
+    /// instead.
+    pub fn has_close_policy(&self) -> bool {
+        self.resolve_close.is_some()
+    }
+
+    /// Asks the document what closing means now.
+    ///
+    /// A pane with no close policy reports [`CloseDisposition::CloseNow`], so
+    /// callers keep today's behaviour for every other document type.
+    pub fn resolve_close(&self, window: &mut Window, cx: &mut App) -> CloseDisposition {
+        match self.resolve_close.as_ref() {
+            Some(resolve) => resolve(window, cx),
+            None => CloseDisposition::CloseNow,
         }
     }
 

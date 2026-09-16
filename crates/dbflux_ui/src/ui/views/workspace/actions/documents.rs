@@ -1,4 +1,5 @@
 use super::*;
+use crate::ui::document::pane::CloseDisposition;
 use crate::ui::labels::{
     NoActiveConnectionKind, documents_default_title, documents_no_active_connection_message,
 };
@@ -526,7 +527,41 @@ impl Workspace {
         }
     }
 
+    /// Routes one close through the document's own close policy.
+    ///
+    /// Every tab-close route funnels here — the close button, a middle-click,
+    /// the context menu, batch closes, and the active-tab command. A document
+    /// that persists its pending edits as part of closing reports `Deferred`,
+    /// keeps its tab open, and asks the workspace to close only once the write
+    /// lands; nothing is ever removed over unlanded edits. A document without a
+    /// close policy reports `CloseNow` and keeps its existing behaviour.
+    ///
+    /// Returns `true` when the close was accepted (the tab is gone, or its flush
+    /// is in flight and will close it), `false` when the tab stayed open.
     pub(in crate::ui::views::workspace) fn close_tab(
+        &mut self,
+        doc_id: crate::ui::document::DocumentId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let disposition = self.tab_manager.update(cx, |manager, cx| {
+            manager
+                .document(doc_id)
+                .map(|tab| tab.as_pane().resolve_close(window, cx))
+        });
+
+        match disposition {
+            Some(CloseDisposition::CloseNow) => {
+                self.close_tab_now(doc_id, window, cx);
+                true
+            }
+            Some(CloseDisposition::Deferred) => true,
+            Some(CloseDisposition::KeepOpen) | None => false,
+        }
+    }
+
+    /// Removes a tab whose own close policy agreed it may go now.
+    fn close_tab_now(
         &mut self,
         doc_id: crate::ui::document::DocumentId,
         _window: &mut Window,
@@ -541,10 +576,12 @@ impl Workspace {
 
     /// Closes the active tab.
     ///
-    /// If the tab has unsaved changes, opens `ModalUnsavedChanges` instead of
-    /// closing immediately and returns `false` — the caller must not refocus
-    /// the document, or the editor input steals keyboard back from the
-    /// confirmation. Returns `true` when the tab was closed.
+    /// A document that decides its own close policy (a code document) flushes
+    /// its pending edits and closes without the confirmation dialog: closing
+    /// persists first, so there is nothing to discard. A document that requires
+    /// an explicit user save still gets `ModalUnsavedChanges`, and this returns
+    /// `false` so the caller does not refocus the document over the
+    /// confirmation. Returns `true` when the close was accepted.
     pub(in crate::ui::views::workspace) fn close_active_tab(
         &mut self,
         window: &mut Window,
@@ -554,13 +591,24 @@ impl Workspace {
             return true;
         };
 
+        // The unsaved-changes dialog guards documents whose pending edits need
+        // an explicit save. A document with its own close policy persists them
+        // itself, so the dialog would only get in the way.
+        let decides_own_close = self
+            .tab_manager
+            .read(cx)
+            .document(doc_id)
+            .is_some_and(|tab| tab.as_pane().has_close_policy());
+
         let dirty_summaries = self.tab_manager.read(cx).dirty_summaries(cx);
         let this_doc_dirty = dirty_summaries
             .iter()
             .find(|(id, _)| *id == doc_id)
             .cloned();
 
-        if let Some((id, summary)) = this_doc_dirty {
+        if let Some((id, summary)) = this_doc_dirty
+            && !decides_own_close
+        {
             let doc_name = self
                 .tab_manager
                 .read(cx)
@@ -585,8 +633,7 @@ impl Workspace {
             self.focus_handle.focus(window);
             false
         } else {
-            self.close_tab(doc_id, window, cx);
-            true
+            self.close_tab(doc_id, window, cx)
         }
     }
 

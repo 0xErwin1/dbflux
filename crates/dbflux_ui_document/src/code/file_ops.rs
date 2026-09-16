@@ -2,6 +2,7 @@ use super::file_persistence::{
     ExecutedWrite, PhysicalWrite, WriteKind, WriteOutcome, execute_write,
 };
 use super::*;
+use crate::pane::CloseDisposition;
 use dbflux_ui_base::AsyncUpdateResultExt;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error_async};
 
@@ -44,6 +45,17 @@ fn report_save_failed(entity: &Entity<CodeDocument>, cx: &AsyncApp) {
     .log_if_dropped();
 }
 
+/// Drops the close intent a refused close flush armed, so a tab the user kept
+/// open cannot be closed by a later save.
+fn abandon_close_flush(entity: &Entity<CodeDocument>, cx: &mut AsyncApp) {
+    cx.update(|cx| {
+        entity.update(cx, |doc, cx| {
+            doc.report_save_outcome(false, cx);
+        });
+    })
+    .log_if_dropped();
+}
+
 /// Applies the result of one queued physical write: reports user-facing
 /// failures, reconciles dirty state by write kind, and lets the queue start
 /// the next write. The queue slot is freed inside the entity update, so the
@@ -58,6 +70,11 @@ async fn finish_physical_write(
         outcome,
         new_baseline,
     } = executed;
+
+    // A refused close flush must drop its close intent: the tab stays open with
+    // its changes, and a later save cannot close it behind the user's back.
+    let close_flush_was_refused =
+        write.kind == WriteKind::CloseFlush && !matches!(&outcome, WriteOutcome::Written);
 
     match outcome {
         WriteOutcome::Written => {
@@ -77,6 +94,13 @@ async fn finish_physical_write(
                         WriteKind::Auto => {
                             doc.reconcile_after_auto_save(&saved_input, cx);
                             doc.show_saved_label(cx);
+                        }
+                        WriteKind::CloseFlush => {
+                            // Report the outcome so the workspace closes the tab
+                            // only once nothing newer is pending; an edit typed
+                            // while the flush was in flight leaves it open.
+                            let landed = doc.mark_clean_against(&saved_input, cx);
+                            doc.report_save_outcome(landed, cx);
                         }
                         WriteKind::SaveAs { used_fallback } => {
                             if let Some(scratch) = doc.session.scratch_path.take()
@@ -179,7 +203,7 @@ async fn finish_physical_write(
                     );
                     report_save_failed(entity, cx);
                 }
-                WriteKind::Auto => {
+                WriteKind::Auto | WriteKind::CloseFlush => {
                     report_error_async(
                         UserFacingError::new(
                             ErrorKind::Storage,
@@ -195,6 +219,10 @@ async fn finish_physical_write(
             }
             start_next_physical_write(entity, cx);
         }
+    }
+
+    if close_flush_was_refused {
+        abandon_close_flush(entity, cx);
     }
 }
 
@@ -238,6 +266,73 @@ impl CodeDocument {
         if succeeded && close_after_save {
             cx.emit(DocumentEvent::RequestClose);
         }
+    }
+
+    /// Decides what closing this tab means, and starts the work that lets it
+    /// close.
+    ///
+    /// A clean, idle buffer closes immediately. Pending edits are queued to
+    /// persist: a file-backed script flushes through the conflict-checked
+    /// (autosave) path so closing never overwrites a change made outside dbflux
+    /// or recreates a deleted file, while an untitled buffer goes through Save As
+    /// as it always has. Either way the tab closes only when the write reports
+    /// `DocumentEvent::RequestClose`, and stays open with its changes when the
+    /// write cannot land.
+    pub fn resolve_close(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> CloseDisposition {
+        if !self.has_pending_close_work(cx) {
+            return CloseDisposition::CloseNow;
+        }
+
+        // A close that is already pending must not start a second one. The close
+        // intent is armed while a Save As is pending, and a `CloseFlush` running
+        // or waiting covers the file-backed flush (its own `RequestClose` would
+        // otherwise re-enter this function for the same tab). Either way, the
+        // write already queued reports back to the same close, so repeating the
+        // gesture is a no-op that keeps the same deferred disposition instead of
+        // stacking identical writes or opening another save dialog.
+        if self.close_after_save || self.physical_writes.has_pending_close_flush() {
+            // Keep the standing close armed. The intent is shared with the
+            // explicit-save path, so a save that lands first consumes it as its
+            // own outcome; re-arming here makes the flush already queued report
+            // back to this same close instead of silently dropping the gesture.
+            self.close_after_save = true;
+            return CloseDisposition::Deferred;
+        }
+
+        // Arm the close before the write is queued so a write that lands asks
+        // the workspace to close the tab.
+        self.close_after_save = true;
+
+        match self.editor.path.clone() {
+            Some(path) => {
+                // Conflict-checked, exactly like an autosave: closing must not
+                // silently destroy a change another process made to the file.
+                let saved_input = self.editor.input_state.read(cx).value().to_string();
+                let content = self.build_file_content(cx);
+                self.enqueue_physical_write(
+                    PhysicalWrite::close_flush(path, content, saved_input),
+                    cx,
+                );
+                CloseDisposition::Deferred
+            }
+            None => {
+                // Nowhere to flush: the untitled buffer saves through Save As,
+                // whose dismissed dialog or failed write drops the close intent
+                // and leaves the tab open with its changes.
+                self.save_file(window, cx);
+                CloseDisposition::Deferred
+            }
+        }
+    }
+
+    /// Returns `true` when the buffer still holds edits that must land before
+    /// the tab can close, either in the editor or already queued to the file.
+    fn has_pending_close_work(&self, cx: &App) -> bool {
+        self.has_unsaved_changes(cx) || self.physical_writes.has_pending()
     }
 
     /// Save to the current path. If no path is set, redirects to Save As.
@@ -622,6 +717,7 @@ impl CodeDocument {
 mod tests {
     use super::{CodeDocument, PhysicalWrite, build_file_content_for_language};
     use crate::handle::DocumentEvent;
+    use crate::pane::CloseDisposition;
     use dbflux_components::theme;
     use dbflux_core::{ExecutionContext, ExecutionSourceContext, QueryLanguage};
     use dbflux_storage::bootstrap::StorageRuntime;
@@ -1111,5 +1207,805 @@ mod tests {
 
         std::fs::remove_file(&old_path).ok();
         std::fs::remove_file(&new_path).ok();
+    }
+
+    // === Close flush (T2a) ===
+
+    /// Closing a dirty file-backed document flushes its newest content through
+    /// the conflict-checked path, then reports success and asks the workspace to
+    /// close the tab.
+    #[gpui::test]
+    fn a_close_flush_persists_the_newest_content_and_asks_to_close(cx: &mut TestAppContext) {
+        let path = temp_save_as_path("close-flush-persist");
+
+        with_file_backed_document(
+            cx,
+            path.clone(),
+            "OLD;",
+            |doc, app_state, events, window| {
+                window.update(|window, cx| {
+                    doc.update(cx, |document, cx| {
+                        document.editor.input_state.update(cx, |state, cx| {
+                            state.set_value("NEWEST;", window, cx);
+                        });
+                    });
+                });
+                // The edit's change effect has run by now, so the tab reports
+                // pending edits. Only then does the close defer.
+                window.update(|window, cx| {
+                    doc.update(cx, |document, cx| {
+                        assert_eq!(
+                            document.resolve_close(window, cx),
+                            CloseDisposition::Deferred,
+                            "pending edits defer the close until the flush lands"
+                        );
+                    });
+                });
+                window.run_until_parked();
+
+                assert_eq!(
+                    std::fs::read_to_string(&path).expect("the close flush must land"),
+                    "NEWEST;",
+                    "closing must write the newest content to the real file"
+                );
+                assert_eq!(
+                    events.borrow().clone(),
+                    vec![
+                        RecordedEvent::SaveFinished(true),
+                        RecordedEvent::RequestClose
+                    ],
+                    "the close flush reports success and asks to close"
+                );
+                assert_eq!(unread_errors(window, app_state), 0);
+            },
+        );
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// Two close gestures that both land inside one flush window must not stack
+    /// a second flush. When the first flush reports `RequestClose` the workspace
+    /// re-enters `resolve_close` for the same tab; without a guard, each landed
+    /// flush starts the next and the tab never closes. The second request is a
+    /// no-op that reports the same deferred disposition, so exactly one flush
+    /// runs and the tab still ends closed on its newest content.
+    #[gpui::test]
+    fn a_second_close_gesture_before_the_first_flush_lands_does_not_chain_another(
+        cx: &mut TestAppContext,
+    ) {
+        let path = temp_save_as_path("close-second-gesture");
+
+        with_file_backed_document(
+            cx,
+            path.clone(),
+            "OLD;",
+            |doc, app_state, events, window| {
+                window.update(|window, cx| {
+                    doc.update(cx, |document, cx| {
+                        document.editor.input_state.update(cx, |state, cx| {
+                            state.set_value("NEWEST;", window, cx);
+                        });
+                    });
+                });
+
+                // Both gestures arrive before any write has landed, exactly the
+                // window the loop used to chain.
+                window.update(|window, cx| {
+                    doc.update(cx, |document, cx| {
+                        assert_eq!(
+                            document.resolve_close(window, cx),
+                            CloseDisposition::Deferred,
+                            "the first close defers until the flush lands"
+                        );
+                        assert_eq!(
+                            document.resolve_close(window, cx),
+                            CloseDisposition::Deferred,
+                            "a second close while one is pending reports the same deferred disposition"
+                        );
+                    });
+                });
+
+                // Bounded: the accepted close lands one flush and stops. A
+                // broken build finishes both flushes and fails the assertions
+                // below rather than spinning forever here.
+                window.run_until_parked();
+
+                assert_eq!(
+                    std::fs::read_to_string(&path).expect("the close flush must land"),
+                    "NEWEST;",
+                    "the accepted close must still write the newest content"
+                );
+                assert_eq!(
+                    events.borrow().clone(),
+                    vec![
+                        RecordedEvent::SaveFinished(true),
+                        RecordedEvent::RequestClose
+                    ],
+                    "a second close must not enqueue a second flush: exactly one save and one close request"
+                );
+                assert_eq!(unread_errors(window, app_state), 0);
+            },
+        );
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// When a landed flush reports `RequestClose`, the workspace re-enters
+    /// `resolve_close` for the same tab. With two close gestures in one flush
+    /// window the broken build stacks a second flush, and each landed flush
+    /// restarts the close forever; the guard must collapse that to one flush and
+    /// let the re-entry close the clean tab. The test emulates the funnel and
+    /// bounds the re-entry, so a build that restarts the flush on every
+    /// `RequestClose` fails the assertions instead of spinning forever.
+    #[gpui::test]
+    fn the_reentry_after_a_landed_close_flush_does_not_start_another(cx: &mut TestAppContext) {
+        let path = temp_save_as_path("close-reentry");
+
+        with_file_backed_document(
+            cx,
+            path.clone(),
+            "OLD;",
+            |doc, app_state, events, window| {
+                let window_handle = window
+                    .windows()
+                    .first()
+                    .copied()
+                    .expect("the test window exists");
+                let dispositions = Rc::new(RefCell::new(Vec::new()));
+                let dispositions_in = dispositions.clone();
+
+                window.update(|_, app| {
+                    app.subscribe(&doc, move |doc_entity, event, cx| {
+                        if !matches!(event, DocumentEvent::RequestClose) {
+                            return;
+                        }
+                        // Bound the emulated funnel: a build that restarts the
+                        // flush on every RequestClose must terminate here and
+                        // fail the assertions below.
+                        if dispositions_in.borrow().len() >= 4 {
+                            return;
+                        }
+                        let disposition = cx
+                            .update_window(window_handle, |_, window, cx| {
+                                doc_entity
+                                    .update(cx, |document, cx| document.resolve_close(window, cx))
+                            })
+                            .expect("the emulated funnel must re-enter resolve_close");
+                        dispositions_in.borrow_mut().push(disposition);
+                    })
+                    .detach();
+                });
+
+                window.update(|window, cx| {
+                    doc.update(cx, |document, cx| {
+                        document.editor.input_state.update(cx, |state, cx| {
+                            state.set_value("NEWEST;", window, cx);
+                        });
+                    });
+                });
+                // Two gestures inside the same flush window.
+                window.update(|window, cx| {
+                    doc.update(cx, |document, cx| {
+                        assert_eq!(
+                            document.resolve_close(window, cx),
+                            CloseDisposition::Deferred,
+                            "pending edits defer the close until the flush lands"
+                        );
+                        assert_eq!(
+                            document.resolve_close(window, cx),
+                            CloseDisposition::Deferred
+                        );
+                    });
+                });
+                window.run_until_parked();
+
+                assert_eq!(
+                    std::fs::read_to_string(&path).expect("the close flush must land"),
+                    "NEWEST;"
+                );
+                assert_eq!(
+                    dispositions.borrow().clone(),
+                    vec![CloseDisposition::CloseNow],
+                    "the re-entry must close the clean tab instead of flushing again"
+                );
+                assert_eq!(
+                    events.borrow().clone(),
+                    vec![
+                        RecordedEvent::SaveFinished(true),
+                        RecordedEvent::RequestClose
+                    ]
+                );
+                assert_eq!(unread_errors(window, app_state), 0);
+            },
+        );
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// A close request must stand until it is satisfied, even when an explicit
+    /// save that it shares its intent with lands first.
+    ///
+    /// The Ctrl+S already in flight when the user closes consumes the shared
+    /// close intent as its own outcome, and the re-entry it triggers only defers
+    /// against the queued flush. Unless that deferral re-arms the intent, the
+    /// flush that lands afterward emits no `RequestClose` and the close gesture
+    /// is silently dropped. The tab must still close once the flush lands, with
+    /// the newest content on disk.
+    #[gpui::test]
+    fn an_explicit_save_landing_before_the_queued_close_flush_still_closes_the_tab(
+        cx: &mut TestAppContext,
+    ) {
+        let path = temp_save_as_path("close-after-explicit");
+
+        with_file_backed_document(
+            cx,
+            path.clone(),
+            "OLD;",
+            |doc, app_state, events, window| {
+                let window_handle = window
+                    .windows()
+                    .first()
+                    .copied()
+                    .expect("the test window exists");
+                let dispositions = Rc::new(RefCell::new(Vec::new()));
+                let dispositions_in = dispositions.clone();
+
+                window.update(|_, app| {
+                    app.subscribe(&doc, move |doc_entity, event, cx| {
+                        if !matches!(event, DocumentEvent::RequestClose) {
+                            return;
+                        }
+                        // Bound the emulated funnel: a build that keeps flushing
+                        // must terminate here and fail the assertions below
+                        // instead of spinning forever.
+                        if dispositions_in.borrow().len() >= 4 {
+                            return;
+                        }
+                        let disposition = cx
+                            .update_window(window_handle, |_, window, cx| {
+                                doc_entity
+                                    .update(cx, |document, cx| document.resolve_close(window, cx))
+                            })
+                            .expect("the emulated funnel must re-enter resolve_close");
+                        dispositions_in.borrow_mut().push(disposition);
+                    })
+                    .detach();
+                });
+
+                window.update(|window, cx| {
+                    doc.update(cx, |document, cx| {
+                        document.editor.input_state.update(cx, |state, cx| {
+                            state.set_value("NEWEST;", window, cx);
+                        });
+                        // A Ctrl+S is already in flight when the user closes.
+                        document.enqueue_physical_write(
+                            PhysicalWrite::explicit(
+                                path.clone(),
+                                "NEWEST;".to_string(),
+                                "NEWEST;".to_string(),
+                            ),
+                            cx,
+                        );
+                        assert_eq!(
+                            document.resolve_close(window, cx),
+                            CloseDisposition::Deferred,
+                            "the close queues its flush behind the running save"
+                        );
+                    });
+                });
+                window.run_until_parked();
+
+                assert_eq!(
+                    std::fs::read_to_string(&path).expect("the flush must land"),
+                    "NEWEST;",
+                    "the newest content must reach the real file"
+                );
+                assert_eq!(
+                    dispositions.borrow().clone(),
+                    vec![CloseDisposition::Deferred, CloseDisposition::CloseNow],
+                    "the queued flush must still close the tab after the explicit save lands"
+                );
+                assert_eq!(
+                    events.borrow().clone(),
+                    vec![
+                        RecordedEvent::SaveFinished(true),
+                        RecordedEvent::RequestClose,
+                        RecordedEvent::SaveFinished(true),
+                        RecordedEvent::RequestClose
+                    ],
+                    "the explicit save and the flush that follows each report once"
+                );
+                assert_eq!(unread_errors(window, app_state), 0);
+            },
+        );
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// The re-armed close intent must never close a tab whose flush was refused.
+    ///
+    /// In the same interleaving — explicit save in flight, close requested, the
+    /// save lands, the queued flush runs — an external change makes the flush
+    /// refuse. The tab must stay open with the user's buffer and must never emit
+    /// a close of its own afterward.
+    #[gpui::test]
+    fn a_close_flush_refused_after_a_landed_explicit_save_never_closes_the_tab(
+        cx: &mut TestAppContext,
+    ) {
+        let path = temp_save_as_path("close-refused-after-explicit");
+
+        with_file_backed_document(
+            cx,
+            path.clone(),
+            "OLD;",
+            |doc, app_state, events, window| {
+                let window_handle = window
+                    .windows()
+                    .first()
+                    .copied()
+                    .expect("the test window exists");
+                let dispositions = Rc::new(RefCell::new(Vec::new()));
+                let dispositions_in = dispositions.clone();
+                let injected = Rc::new(RefCell::new(false));
+                let injected_in = injected.clone();
+                let path_for_conflict = path.clone();
+
+                window.update(|_, app| {
+                    app.subscribe(&doc, move |doc_entity, event, cx| match event {
+                        // Another process rewrites the file between the explicit
+                        // save landing and the queued flush running.
+                        DocumentEvent::SaveFinished { succeeded: true } => {
+                            if !injected_in.replace(true) {
+                                std::fs::write(&path_for_conflict, "THEIRS;")
+                                    .expect("the external write must succeed");
+                            }
+                        }
+                        DocumentEvent::RequestClose => {
+                            if dispositions_in.borrow().len() >= 4 {
+                                return;
+                            }
+                            let disposition = cx
+                                .update_window(window_handle, |_, window, cx| {
+                                    doc_entity.update(cx, |document, cx| {
+                                        document.resolve_close(window, cx)
+                                    })
+                                })
+                                .expect("the emulated funnel must re-enter resolve_close");
+                            dispositions_in.borrow_mut().push(disposition);
+                        }
+                        _ => {}
+                    })
+                    .detach();
+                });
+
+                window.update(|window, cx| {
+                    doc.update(cx, |document, cx| {
+                        document.editor.input_state.update(cx, |state, cx| {
+                            state.set_value("NEWEST;", window, cx);
+                        });
+                        document.enqueue_physical_write(
+                            PhysicalWrite::explicit(
+                                path.clone(),
+                                "NEWEST;".to_string(),
+                                "NEWEST;".to_string(),
+                            ),
+                            cx,
+                        );
+                        assert_eq!(
+                            document.resolve_close(window, cx),
+                            CloseDisposition::Deferred
+                        );
+                    });
+                });
+                window.run_until_parked();
+
+                assert_eq!(
+                    std::fs::read_to_string(&path).expect("the foreign file must survive"),
+                    "THEIRS;",
+                    "a refused flush must never overwrite the change made outside dbflux"
+                );
+                assert_eq!(
+                    dispositions.borrow().clone(),
+                    vec![CloseDisposition::Deferred],
+                    "a refused flush must never ask to close, before or after"
+                );
+                assert_eq!(
+                    events.borrow().clone(),
+                    vec![
+                        RecordedEvent::SaveFinished(true),
+                        RecordedEvent::RequestClose,
+                        RecordedEvent::SaveFinished(false)
+                    ],
+                    "the refusal drops the close intent instead of closing the tab"
+                );
+                assert_eq!(
+                    unread_errors(window, app_state),
+                    1,
+                    "the refusal must be surfaced to the user"
+                );
+                assert_eq!(
+                    window.update(|_, app| doc
+                        .read(app)
+                        .editor
+                        .input_state
+                        .read(app)
+                        .value()
+                        .to_string()),
+                    "NEWEST;",
+                    "the tab keeps the user's buffer instead of closing over it"
+                );
+            },
+        );
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// A close flush queued while an autosave is already running waits for it and
+    /// lands afterward, so the file ends with the newest content rather than the
+    /// older queued bytes.
+    #[gpui::test]
+    fn a_close_flush_behind_a_running_autosave_lands_the_newest_content(cx: &mut TestAppContext) {
+        let path = temp_save_as_path("close-flush-order");
+
+        with_file_backed_document(
+            cx,
+            path.clone(),
+            "OLD;",
+            |doc, app_state, events, window| {
+                window.update(|window, cx| {
+                    doc.update(cx, |document, cx| {
+                        // An autosave for an older capture is already in flight.
+                        document.editor.input_state.update(cx, |state, cx| {
+                            state.set_value("OLDER;", window, cx);
+                        });
+                        document.enqueue_physical_write(
+                            PhysicalWrite::auto(
+                                path.clone(),
+                                "OLDER;".to_string(),
+                                "OLDER;".to_string(),
+                                None,
+                            ),
+                            cx,
+                        );
+
+                        // The newest edit arrives and the user asks to close.
+                        document.editor.input_state.update(cx, |state, cx| {
+                            state.set_value("NEWEST;", window, cx);
+                        });
+                        assert_eq!(
+                            document.resolve_close(window, cx),
+                            CloseDisposition::Deferred
+                        );
+                    });
+                });
+                window.run_until_parked();
+
+                assert_eq!(
+                    std::fs::read_to_string(&path).expect("the close flush must land"),
+                    "NEWEST;",
+                    "the close flush must land after the running autosave, with the newest content"
+                );
+                assert_eq!(
+                    events.borrow().clone(),
+                    vec![
+                        RecordedEvent::SaveFinished(true),
+                        RecordedEvent::RequestClose
+                    ],
+                );
+                assert_eq!(unread_errors(window, app_state), 0);
+            },
+        );
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// A close flush refused because the file changed outside dbflux leaves the
+    /// foreign bytes alone, reports the failure, and keeps the buffer pending.
+    #[gpui::test]
+    fn a_close_flush_refused_over_a_foreign_change_keeps_the_buffer_pending(
+        cx: &mut TestAppContext,
+    ) {
+        let path = temp_save_as_path("close-flush-conflict");
+
+        with_file_backed_document(
+            cx,
+            path.clone(),
+            "OLD;",
+            |doc, app_state, events, window| {
+                window.update(|window, cx| {
+                    doc.update(cx, |document, cx| {
+                        document.editor.input_state.update(cx, |state, cx| {
+                            state.set_value("MINE;", window, cx);
+                        });
+                    });
+                });
+
+                // Another process rewrites the file after the baseline was loaded.
+                std::fs::write(&path, "THEIRS;").expect("the external write must succeed");
+
+                window.update(|window, cx| {
+                    doc.update(cx, |document, cx| {
+                        assert_eq!(
+                            document.resolve_close(window, cx),
+                            CloseDisposition::Deferred
+                        );
+                    });
+                });
+                window.run_until_parked();
+
+                assert_eq!(
+                    std::fs::read_to_string(&path).expect("the foreign file must survive"),
+                    "THEIRS;",
+                    "a close flush must never overwrite a change made outside dbflux"
+                );
+                assert_eq!(
+                    events.borrow().clone(),
+                    vec![RecordedEvent::SaveFinished(false)],
+                    "a refused flush reports failure and never asks to close"
+                );
+                assert_eq!(
+                    unread_errors(window, app_state),
+                    1,
+                    "the refusal must be surfaced to the user"
+                );
+                assert!(
+                    window.update(|_, app| doc.read(app).editor.is_dirty),
+                    "the buffer stays pending so nothing typed is lost"
+                );
+            },
+        );
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// A refused flush must clear its close intent, so a later close is allowed
+    /// to start a fresh flush and lands once the file can be written safely.
+    #[gpui::test]
+    fn a_refused_close_flush_still_allows_a_later_close_to_start_a_new_flush(
+        cx: &mut TestAppContext,
+    ) {
+        let path = temp_save_as_path("close-flush-retry");
+
+        with_file_backed_document(
+            cx,
+            path.clone(),
+            "OLD;",
+            |doc, app_state, events, window| {
+                window.update(|window, cx| {
+                    doc.update(cx, |document, cx| {
+                        document.editor.input_state.update(cx, |state, cx| {
+                            state.set_value("MINE;", window, cx);
+                        });
+                    });
+                });
+
+                // Another process rewrites the file after the baseline was loaded.
+                std::fs::write(&path, "THEIRS;").expect("the external write must succeed");
+
+                window.update(|window, cx| {
+                    doc.update(cx, |document, cx| {
+                        assert_eq!(
+                            document.resolve_close(window, cx),
+                            CloseDisposition::Deferred
+                        );
+                    });
+                });
+                window.run_until_parked();
+
+                assert_eq!(
+                    events.borrow().clone(),
+                    vec![RecordedEvent::SaveFinished(false)],
+                    "the refused flush reports failure and never asks to close"
+                );
+
+                // The external change is reverted, so the document's baseline is
+                // trustworthy again and the user closes once more.
+                std::fs::write(&path, "OLD;").expect("the baseline bytes must be restorable");
+
+                window.update(|window, cx| {
+                    doc.update(cx, |document, cx| {
+                        assert_eq!(
+                            document.resolve_close(window, cx),
+                            CloseDisposition::Deferred,
+                            "an earlier refusal must not block a later close"
+                        );
+                    });
+                });
+                window.run_until_parked();
+
+                assert_eq!(
+                    std::fs::read_to_string(&path).expect("the retried flush must land"),
+                    "MINE;",
+                    "the later close must flush the newest content"
+                );
+                assert_eq!(
+                    events.borrow().clone(),
+                    vec![
+                        RecordedEvent::SaveFinished(false),
+                        RecordedEvent::SaveFinished(true),
+                        RecordedEvent::RequestClose
+                    ],
+                    "the retried close reports success and asks to close"
+                );
+                assert_eq!(unread_errors(window, app_state), 1);
+            },
+        );
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// A clean, idle document closes immediately: no write, no save event, no
+    /// needless work on the foreground thread.
+    #[gpui::test]
+    fn a_clean_idle_document_closes_now_without_a_write(cx: &mut TestAppContext) {
+        let path = temp_save_as_path("close-clean");
+
+        with_file_backed_document(
+            cx,
+            path.clone(),
+            "SEEDED;",
+            |doc, app_state, events, window| {
+                window.update(|window, cx| {
+                    doc.update(cx, |document, cx| {
+                        assert_eq!(
+                            document.resolve_close(window, cx),
+                            CloseDisposition::CloseNow,
+                            "a clean, idle document has nothing to flush"
+                        );
+                    });
+                });
+                window.run_until_parked();
+
+                assert_eq!(
+                    std::fs::read_to_string(&path).expect("the file must be intact"),
+                    "SEEDED;",
+                    "a clean close must not rewrite the file"
+                );
+                assert!(
+                    events.borrow().is_empty(),
+                    "a clean close must not emit save/close events"
+                );
+                assert_eq!(unread_errors(window, app_state), 0);
+            },
+        );
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// A pathless buffer has nowhere to flush, so closing keeps opening Save As
+    /// through the existing flow. A dismissed dialog drops the close intent and
+    /// leaves the edits pending.
+    #[gpui::test]
+    fn an_untitled_dirty_document_saves_through_save_as_and_keeps_its_buffer_when_dismissed(
+        cx: &mut TestAppContext,
+    ) {
+        init_test_runtime(cx);
+        let app_state = isolated_test_app_state(cx);
+        let holder: Rc<RefCell<Option<gpui::Entity<CodeDocument>>>> = Rc::new(RefCell::new(None));
+        let doc_ref = holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let doc = cx.new(|cx| {
+                let mut document = CodeDocument::new_with_language(
+                    app_state.clone(),
+                    None,
+                    QueryLanguage::Sql,
+                    window,
+                    cx,
+                );
+                document.set_content("SELECT 1;", window, cx);
+                document.editor.input_state.update(cx, |state, cx| {
+                    state.set_value("SELECT 2;", window, cx);
+                });
+                document
+            });
+            doc_ref.replace(Some(doc.clone()));
+            Root::new(doc, window, cx)
+        });
+
+        let doc = holder.borrow().clone().expect("document created");
+        let events: Rc<RefCell<Vec<RecordedEvent>>> = Rc::new(RefCell::new(Vec::new()));
+        let sink = events.clone();
+        window.update(|_, app| {
+            app.subscribe(&doc, move |_, event: &DocumentEvent, _| match event {
+                DocumentEvent::SaveFinished { succeeded } => {
+                    sink.borrow_mut()
+                        .push(RecordedEvent::SaveFinished(*succeeded));
+                }
+                DocumentEvent::RequestClose => {
+                    sink.borrow_mut().push(RecordedEvent::RequestClose);
+                }
+                _ => {}
+            })
+            .detach();
+        });
+
+        window.update(|window, cx| {
+            doc.update(cx, |document, cx| {
+                assert_eq!(
+                    document.resolve_close(window, cx),
+                    CloseDisposition::Deferred,
+                    "an untitled buffer must save through Save As, not close over its edits"
+                );
+            });
+        });
+
+        // The Save As task has not been polled yet: the user dismissed the picker.
+        window.update(|_, cx| {
+            doc.update(cx, |document, cx| {
+                document._pending_save = None;
+                document.report_save_outcome(false, cx);
+            });
+        });
+        window.run_until_parked();
+
+        assert_eq!(
+            events.borrow().clone(),
+            vec![RecordedEvent::SaveFinished(false)],
+            "a dismissed Save As drops the close intent and never asks to close"
+        );
+        assert!(
+            window.update(|_, app| doc.read(app).editor.is_dirty),
+            "the buffer stays pending after a dismissed dialog"
+        );
+    }
+
+    /// A second close while an untitled Save As is still pending reports the same
+    /// deferred disposition without starting another save flow, so a repeated
+    /// gesture cannot open a second dialog.
+    #[gpui::test]
+    fn a_second_untitled_close_while_save_as_is_pending_starts_no_second_flow(
+        cx: &mut TestAppContext,
+    ) {
+        init_test_runtime(cx);
+        let app_state = isolated_test_app_state(cx);
+        let holder: Rc<RefCell<Option<gpui::Entity<CodeDocument>>>> = Rc::new(RefCell::new(None));
+        let doc_ref = holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let doc = cx.new(|cx| {
+                let mut document = CodeDocument::new_with_language(
+                    app_state.clone(),
+                    None,
+                    QueryLanguage::Sql,
+                    window,
+                    cx,
+                );
+                document.set_content("SELECT 1;", window, cx);
+                document.editor.input_state.update(cx, |state, cx| {
+                    state.set_value("SELECT 2;", window, cx);
+                });
+                document
+            });
+            doc_ref.replace(Some(doc.clone()));
+            Root::new(doc, window, cx)
+        });
+
+        let doc = holder.borrow().clone().expect("document created");
+
+        window.update(|window, cx| {
+            doc.update(cx, |document, cx| {
+                assert_eq!(
+                    document.resolve_close(window, cx),
+                    CloseDisposition::Deferred,
+                    "an untitled buffer must save through Save As, not close over its edits"
+                );
+
+                // The first Save As owns the pending save. Dropping the unpolled
+                // task handle here lets a second close reveal whether it started
+                // another flow, without the dialog ever running.
+                document._pending_save = None;
+
+                assert_eq!(
+                    document.resolve_close(window, cx),
+                    CloseDisposition::Deferred,
+                    "a second close while a Save As is pending reports the same deferred disposition"
+                );
+                assert!(
+                    document._pending_save.is_none(),
+                    "the second close must not start another Save As flow"
+                );
+            });
+        });
     }
 }

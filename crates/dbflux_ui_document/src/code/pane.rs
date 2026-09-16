@@ -151,6 +151,16 @@ impl CodeDocument {
             Box::new(move |w, cx| e.update(cx, |document, cx| document.save_for_close(w, cx)))
         });
 
+        // Populate optional helper: the close policy. Every close route asks the
+        // document what closing means instead of removing the tab over pending
+        // edits: a clean, idle buffer closes now, a pending buffer flushes
+        // (conflict-checked on a file-backed script) and closes once the write
+        // lands, and a buffer that cannot be persisted keeps the tab open.
+        handle.resolve_close = Some({
+            let e = entity.clone();
+            Box::new(move |w, cx| e.update(cx, |document, cx| document.resolve_close(w, cx)))
+        });
+
         // Populate optional helper: empty file-backed detection used by the
         // cleanup path in actions.rs that deletes empty script files on close.
         handle.is_file_backed_empty = Some({

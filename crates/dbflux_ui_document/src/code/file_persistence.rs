@@ -25,6 +25,11 @@ pub(super) enum WriteKind {
     /// Save As: writes a path the document may not have written before, then
     /// retargets the document at it.
     SaveAs { used_fallback: bool },
+    /// Close-driven flush of pending edits: conflict-checked like an autosave
+    /// (closing must not overwrite a change made outside dbflux), but unlike an
+    /// autosave it reports its outcome and asks the workspace to close the tab
+    /// once the write lands.
+    CloseFlush,
 }
 
 /// The raw bytes a document last loaded from, or successfully wrote to, one
@@ -97,6 +102,16 @@ impl PhysicalWrite {
             saved_input,
             shadow: None,
             kind: WriteKind::SaveAs { used_fallback },
+        }
+    }
+
+    pub(super) fn close_flush(path: PathBuf, content: String, saved_input: String) -> Self {
+        Self {
+            path,
+            content,
+            saved_input,
+            shadow: None,
+            kind: WriteKind::CloseFlush,
         }
     }
 }
@@ -312,10 +327,10 @@ fn discard_staging(staged_path: &Path) {
 
 /// Executes one queued write synchronously; runs on the background executor.
 ///
-/// Autosaves are conflict-checked against `baseline` — the raw bytes this
+/// Autosaves and close flushes are conflict-checked against `baseline` — the raw bytes this
 /// document last loaded or successfully wrote to a specific path — so foreign
 /// changes are never silently overwritten. Without a baseline, or with a
-/// baseline that belongs to a different path, the autosave refuses: creating or
+/// baseline that belongs to a different path, the write refuses: creating or
 /// overwriting a file the document never read is exactly the blind write the
 /// baseline exists to prevent. Explicit saves and Save As intentionally
 /// overwrite and only adopt the new baseline on success.
@@ -324,7 +339,7 @@ pub(super) fn execute_write(
     baseline: Option<&FileBaseline>,
 ) -> ExecutedWrite {
     let denied = match write.kind {
-        WriteKind::Auto => match baseline {
+        WriteKind::Auto | WriteKind::CloseFlush => match baseline {
             // No loaded baseline, or one that belongs to another file: the file
             // was never read or written by this document, so there is nothing to
             // compare against and nothing that authorizes a write here.
@@ -367,7 +382,7 @@ pub(super) fn execute_write(
     }
 
     if let Err(e) = replace_file_contents(&write.path, &write.content) {
-        if write.kind == WriteKind::Auto {
+        if matches!(write.kind, WriteKind::Auto | WriteKind::CloseFlush) {
             write_shadow_best_effort(&write);
         }
         return ExecutedWrite {
@@ -377,7 +392,7 @@ pub(super) fn execute_write(
         };
     }
 
-    if write.kind == WriteKind::Auto {
+    if matches!(write.kind, WriteKind::Auto | WriteKind::CloseFlush) {
         write_shadow_best_effort(&write);
     }
 
@@ -398,6 +413,9 @@ pub(super) fn execute_write(
 pub(super) struct PhysicalWriteQueue {
     /// Whether a write's task is currently running.
     running: bool,
+    /// What the running write is, so a close-safe caller can tell whether a
+    /// close flush is already in flight. `None` while the queue is idle.
+    running_kind: Option<WriteKind>,
     /// Writes waiting for the running one to finish, in landing order.
     waiting: VecDeque<PhysicalWrite>,
     /// The bytes this document last loaded or wrote, paired with the path
@@ -409,6 +427,7 @@ impl PhysicalWriteQueue {
     pub(super) fn new() -> Self {
         Self {
             running: false,
+            running_kind: None,
             waiting: VecDeque::new(),
             baseline: None,
         }
@@ -446,12 +465,37 @@ impl PhysicalWriteQueue {
 
         let next = self.waiting.pop_front()?;
         self.running = true;
+        self.running_kind = Some(next.kind);
         Some(next)
     }
 
     /// Frees the running slot once a write's completion has been applied.
     pub(super) fn mark_finished(&mut self) {
         self.running = false;
+        self.running_kind = None;
+    }
+
+    /// Returns `true` while any write is in flight or waiting to start.
+    ///
+    /// A close-safe caller uses this together with the buffer's dirty state to
+    /// decide whether a flush is needed at all: a clean, idle document closes
+    /// without a pointless write.
+    pub(super) fn has_pending(&self) -> bool {
+        self.running || !self.waiting.is_empty()
+    }
+
+    /// Returns `true` while a close-driven flush is running or waiting.
+    ///
+    /// A repeated close uses this to stay a no-op instead of stacking another
+    /// `CloseFlush`: the flush already in flight reports back to the same close,
+    /// and one autosave or explicit save does not count, so closing still queues
+    /// its flush behind them.
+    pub(super) fn has_pending_close_flush(&self) -> bool {
+        self.running_kind == Some(WriteKind::CloseFlush)
+            || self
+                .waiting
+                .iter()
+                .any(|write| write.kind == WriteKind::CloseFlush)
     }
 
     /// The raw bytes, and their path, this document last loaded or wrote.
@@ -655,6 +699,55 @@ mod tests {
         queue.mark_finished();
         let second = queue.next_to_start().expect("the second save must run");
         assert_eq!(second.content, "C;");
+    }
+
+    /// While a close flush is running or waiting the queue reports it, so a
+    /// repeated close can stay a no-op without stacking another flush. A running
+    /// autosave never counts: closing must still queue its flush behind one.
+    #[test]
+    fn the_queue_reports_a_running_or_waiting_close_flush() {
+        let path = temp_write_path("close-flush-pending");
+        let mut queue = PhysicalWriteQueue::new();
+
+        assert!(
+            !queue.has_pending_close_flush(),
+            "an empty queue has no close flush"
+        );
+
+        assert!(queue.push(auto_write(path.clone(), "AUTO;")));
+        assert!(
+            queue.has_pending() && !queue.has_pending_close_flush(),
+            "an autosave is not a close flush, so closing may still queue behind it"
+        );
+        assert!(queue.next_to_start().is_some());
+        assert!(
+            !queue.has_pending_close_flush(),
+            "a running autosave is still not a close flush"
+        );
+
+        assert!(!queue.push(PhysicalWrite::close_flush(
+            path.clone(),
+            "MINE;".to_string(),
+            "MINE;".to_string(),
+        )));
+        assert!(
+            queue.has_pending_close_flush(),
+            "a waiting close flush is reported"
+        );
+
+        queue.mark_finished();
+        let running = queue.next_to_start().expect("the close flush starts");
+        assert!(matches!(running.kind, WriteKind::CloseFlush));
+        assert!(
+            queue.has_pending_close_flush(),
+            "a running close flush is reported"
+        );
+
+        queue.mark_finished();
+        assert!(
+            !queue.has_pending_close_flush(),
+            "an idle queue has no close flush"
+        );
     }
 
     /// An autosave must not write over bytes another process put on disk.
