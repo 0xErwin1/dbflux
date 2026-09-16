@@ -120,6 +120,11 @@ pub struct PaneHandle {
     // --- Side-effect reads (shared &App) ---
     flush_auto_save: Box<dyn Fn(&App)>,
 
+    /// Flushes this document's pending edits for a graceful shutdown without
+    /// closing its tab, and reports whether a physical write is still queued or
+    /// running. `None` for documents with no persistence path.
+    pub flush_for_shutdown: Option<Box<dyn Fn(&mut App) -> bool>>,
+
     // --- Mutations (&mut App) ---
     set_active_tab: Box<dyn Fn(bool, &mut App)>,
     set_refresh_policy: Box<dyn Fn(RefreshPolicy, &mut App)>,
@@ -243,6 +248,7 @@ impl PaneHandle {
             change_summary,
             refresh_policy,
             flush_auto_save,
+            flush_for_shutdown: None,
             set_active_tab,
             set_refresh_policy,
             matches_dedup_key,
@@ -331,6 +337,18 @@ impl PaneHandle {
     /// Flushes any pending auto-save for file-backed documents.
     pub fn flush_auto_save(&self, cx: &App) {
         (self.flush_auto_save)(cx)
+    }
+
+    /// Flushes this document's pending edits for a graceful shutdown.
+    ///
+    /// Returns `true` while a physical write is still queued or running so a
+    /// shutdown loop can poll. Never closes the tab and never reports through
+    /// the save/close flow. A pane with no persistence path returns `false`.
+    pub fn flush_for_shutdown(&self, cx: &mut App) -> bool {
+        self.flush_for_shutdown
+            .as_ref()
+            .map(|flush| flush(cx))
+            .unwrap_or(false)
     }
 
     /// Notifies the document that it became (or stopped being) the active tab.

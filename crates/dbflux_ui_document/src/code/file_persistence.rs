@@ -30,6 +30,11 @@ pub(super) enum WriteKind {
     /// autosave it reports its outcome and asks the workspace to close the tab
     /// once the write lands.
     CloseFlush,
+    /// Graceful-shutdown flush of pending edits: conflict-checked like an
+    /// autosave so quitting never overwrites a change made outside dbflux, but
+    /// unlike a close flush it never asks the workspace to close the tab and is
+    /// never reported as a user save.
+    ShutdownFlush,
 }
 
 /// The raw bytes a document last loaded from, or successfully wrote to, one
@@ -112,6 +117,16 @@ impl PhysicalWrite {
             saved_input,
             shadow: None,
             kind: WriteKind::CloseFlush,
+        }
+    }
+
+    pub(super) fn shutdown_flush(path: PathBuf, content: String, saved_input: String) -> Self {
+        Self {
+            path,
+            content,
+            saved_input,
+            shadow: None,
+            kind: WriteKind::ShutdownFlush,
         }
     }
 }
@@ -339,7 +354,7 @@ pub(super) fn execute_write(
     baseline: Option<&FileBaseline>,
 ) -> ExecutedWrite {
     let denied = match write.kind {
-        WriteKind::Auto | WriteKind::CloseFlush => match baseline {
+        WriteKind::Auto | WriteKind::CloseFlush | WriteKind::ShutdownFlush => match baseline {
             // No loaded baseline, or one that belongs to another file: the file
             // was never read or written by this document, so there is nothing to
             // compare against and nothing that authorizes a write here.
@@ -382,7 +397,10 @@ pub(super) fn execute_write(
     }
 
     if let Err(e) = replace_file_contents(&write.path, &write.content) {
-        if matches!(write.kind, WriteKind::Auto | WriteKind::CloseFlush) {
+        if matches!(
+            write.kind,
+            WriteKind::Auto | WriteKind::CloseFlush | WriteKind::ShutdownFlush
+        ) {
             write_shadow_best_effort(&write);
         }
         return ExecutedWrite {
@@ -392,7 +410,10 @@ pub(super) fn execute_write(
         };
     }
 
-    if matches!(write.kind, WriteKind::Auto | WriteKind::CloseFlush) {
+    if matches!(
+        write.kind,
+        WriteKind::Auto | WriteKind::CloseFlush | WriteKind::ShutdownFlush
+    ) {
         write_shadow_best_effort(&write);
     }
 
@@ -421,6 +442,12 @@ pub(super) struct PhysicalWriteQueue {
     /// The bytes this document last loaded or wrote, paired with the path
     /// they came from.
     baseline: Option<FileBaseline>,
+    /// Set once a shutdown flush has been queued for this document.
+    ///
+    /// A graceful shutdown polls until nothing is outstanding. Once a shutdown
+    /// flush has been queued, its refusal must not be retried forever, so the
+    /// next poll reports idle instead of stacking another identical write.
+    shutdown_flush_started: bool,
 }
 
 impl PhysicalWriteQueue {
@@ -430,6 +457,7 @@ impl PhysicalWriteQueue {
             running_kind: None,
             waiting: VecDeque::new(),
             baseline: None,
+            shutdown_flush_started: false,
         }
     }
 
@@ -496,6 +524,22 @@ impl PhysicalWriteQueue {
                 .waiting
                 .iter()
                 .any(|write| write.kind == WriteKind::CloseFlush)
+    }
+
+    /// Records that a shutdown flush has been queued for this document.
+    pub(super) fn mark_shutdown_flush_started(&mut self) {
+        self.shutdown_flush_started = true;
+    }
+
+    /// Whether a shutdown flush has already been queued for this document.
+    pub(super) fn has_started_shutdown_flush(&self) -> bool {
+        self.shutdown_flush_started
+    }
+
+    /// Clears the shutdown-flush record so a later poll can carry edits that
+    /// arrived while the flush was in flight.
+    pub(super) fn clear_shutdown_flush_started(&mut self) {
+        self.shutdown_flush_started = false;
     }
 
     /// The raw bytes, and their path, this document last loaded or wrote.

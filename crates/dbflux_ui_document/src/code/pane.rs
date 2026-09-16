@@ -151,6 +151,14 @@ impl CodeDocument {
             Box::new(move |w, cx| e.update(cx, |document, cx| document.save_for_close(w, cx)))
         });
 
+        // Populate optional helper: the graceful-shutdown flush. It persists the
+        // pending edits without closing the tab, so quitting never drops the
+        // content typed inside the autosave debounce window.
+        handle.flush_for_shutdown = Some({
+            let e = entity.clone();
+            Box::new(move |cx| e.update(cx, |document, cx| document.flush_for_shutdown(cx)))
+        });
+
         // Populate optional helper: the close policy. Every close route asks the
         // document what closing means instead of removing the tab over pending
         // edits: a clean, idle buffer closes now, a pending buffer flushes

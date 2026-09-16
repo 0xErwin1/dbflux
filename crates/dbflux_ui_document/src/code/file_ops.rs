@@ -102,6 +102,18 @@ async fn finish_physical_write(
                             let landed = doc.mark_clean_against(&saved_input, cx);
                             doc.report_save_outcome(landed, cx);
                         }
+                        WriteKind::ShutdownFlush => {
+                            // A quit is not a user save: reconcile the buffer
+                            // against the bytes that landed and never report
+                            // through the save/close flow. Edits that arrived
+                            // while the flush was in flight stay pending, and the
+                            // queue is cleared so the next shutdown poll can
+                            // carry them.
+                            let landed = doc.reconcile_after_auto_save(&saved_input, cx);
+                            if !landed {
+                                doc.physical_writes.clear_shutdown_flush_started();
+                            }
+                        }
                         WriteKind::SaveAs { used_fallback } => {
                             if let Some(scratch) = doc.session.scratch_path.take()
                                 && let Err(e) = std::fs::remove_file(&scratch)
@@ -203,7 +215,7 @@ async fn finish_physical_write(
                     );
                     report_save_failed(entity, cx);
                 }
-                WriteKind::Auto | WriteKind::CloseFlush => {
+                WriteKind::Auto | WriteKind::CloseFlush | WriteKind::ShutdownFlush => {
                     report_error_async(
                         UserFacingError::new(
                             ErrorKind::Storage,
@@ -667,6 +679,48 @@ impl CodeDocument {
         if let Err(e) = std::fs::write(target, &content) {
             log::error!("Flush auto-save failed for {}: {}", target.display(), e);
         }
+    }
+
+    /// Flushes this document's pending edits for a graceful shutdown, without
+    /// ever closing its tab.
+    ///
+    /// The session shadow is written first through the synchronous
+    /// [`CodeDocument::flush_auto_save`] path, so the newest content survives in
+    /// the recovery artifact even when the physical write is refused. A
+    /// file-backed document with pending edits then queues a conflict-checked
+    /// physical write behind anything already in flight, exactly like an
+    /// autosave, but its outcome is never reported as a user save and never asks
+    /// the workspace to close the tab.
+    ///
+    /// Returns `true` while a physical write for this document is still queued or
+    /// running, so the shutdown loop can poll; a clean, idle document returns
+    /// `false` without writing anything.
+    pub(super) fn flush_for_shutdown(&mut self, cx: &mut Context<Self>) -> bool {
+        let has_edits = self.has_unsaved_changes(cx);
+
+        if !has_edits && !self.physical_writes.has_pending() {
+            return false;
+        }
+
+        // The shadow is the safety net: it still lands when the physical write is
+        // refused, so the next launch can recover the content from it.
+        self.flush_auto_save(cx);
+
+        if has_edits && self.is_file_backed() && !self.physical_writes.has_started_shutdown_flush()
+        {
+            self.physical_writes.mark_shutdown_flush_started();
+
+            if let Some(path) = self.editor.path.clone() {
+                let saved_input = self.editor.input_state.read(cx).value().to_string();
+                let content = self.build_file_content(cx);
+                self.enqueue_physical_write(
+                    PhysicalWrite::shutdown_flush(path, content, saved_input),
+                    cx,
+                );
+            }
+        }
+
+        self.physical_writes.has_pending()
     }
 
     // === Explicit save (Ctrl+S) ===
@@ -2007,5 +2061,58 @@ mod tests {
                 );
             });
         });
+    }
+
+    /// An untitled document's pending edits are written to its scratch shadow on
+    /// a graceful shutdown, so content without a physical file is not lost on
+    /// quit.
+    #[gpui::test]
+    fn a_shutdown_flush_writes_an_untitled_documents_scratch(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+        let app_state = isolated_test_app_state(cx);
+        let holder: Rc<RefCell<Option<gpui::Entity<CodeDocument>>>> = Rc::new(RefCell::new(None));
+        let doc_ref = holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let doc = cx.new(|cx| {
+                let mut document = CodeDocument::new_with_language(
+                    app_state.clone(),
+                    None,
+                    QueryLanguage::Sql,
+                    window,
+                    cx,
+                );
+                document.set_content("OLD;", window, cx);
+                document.editor.input_state.update(cx, |state, cx| {
+                    state.set_value("SCRATCH;", window, cx);
+                });
+                document
+            });
+            doc_ref.replace(Some(doc.clone()));
+            Root::new(doc, window, cx)
+        });
+
+        let doc = holder.borrow().clone().expect("document created");
+        let scratch = window.update(|_, cx| {
+            doc.read(cx)
+                .scratch_path()
+                .cloned()
+                .expect("an untitled document has a scratch path")
+        });
+
+        let outstanding =
+            window.update(|_, cx| doc.update(cx, |document, cx| document.flush_for_shutdown(cx)));
+        assert!(
+            !outstanding,
+            "an untitled document has no physical write to wait for"
+        );
+
+        assert_eq!(
+            std::fs::read_to_string(&scratch).expect("the scratch must be written"),
+            "SCRATCH;",
+            "an untitled document's newest content lands in its scratch shadow"
+        );
+
+        std::fs::remove_file(&scratch).ok();
     }
 }
