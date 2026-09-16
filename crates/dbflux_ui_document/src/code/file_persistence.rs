@@ -460,8 +460,33 @@ impl PhysicalWriteQueue {
     }
 
     /// Adopts the bytes of a write that just landed, paired with its path.
+    ///
+    /// Adopting a baseline for a new path is what retargets the document (Save
+    /// As). Any autosave still waiting for the previous path can no longer land
+    /// against the new baseline - it would be refused as `BaselineUnknown` - so it
+    /// is discarded here instead of being attempted and surfaced as a spurious
+    /// refusal. Explicit saves and Save As are never discarded.
     pub(super) fn adopt_baseline(&mut self, baseline: Option<FileBaseline>) {
         self.baseline = baseline;
+        self.discard_waiting_autosaves_for_other_paths();
+    }
+
+    /// Drops queued autosaves that target a path other than the current
+    /// baseline's.
+    ///
+    /// Without a baseline there is nothing to retarget against and nothing is
+    /// dropped, so a failed write never clears the queue. The document's own path
+    /// normally matches every waiting autosave; only a retarget produces a
+    /// mismatch, and only autosaves are dropped - an explicit save is an
+    /// intentional user action that must never be silently discarded.
+    fn discard_waiting_autosaves_for_other_paths(&mut self) {
+        let Some(current_path) = self.baseline.as_ref().map(|baseline| baseline.path.clone())
+        else {
+            return;
+        };
+
+        self.waiting
+            .retain(|write| write.kind != WriteKind::Auto || write.path == current_path);
     }
 }
 
@@ -1002,5 +1027,72 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&directory).expect("the temp directory must be removable");
+    }
+
+    /// Retargeting adopts the chosen path's baseline. An autosave still waiting
+    /// for the previous path can never land against that baseline, so it is
+    /// discarded at the retarget instead of being attempted and refused.
+    #[test]
+    fn a_waiting_autosave_for_a_retargeted_path_is_discarded() {
+        let previous_path = temp_write_path("retarget-previous");
+        let chosen_path = temp_write_path("retarget-chosen");
+        let mut queue = PhysicalWriteQueue::new();
+
+        let save_as = PhysicalWrite::save_as(
+            chosen_path.clone(),
+            "SAVED;".to_string(),
+            "SAVED;".to_string(),
+            false,
+        );
+        assert!(
+            queue.push(save_as),
+            "an idle queue starts the write at once"
+        );
+        assert!(
+            queue.next_to_start().is_some(),
+            "the Save As starts running"
+        );
+
+        assert!(
+            !queue.push(auto_write(previous_path.clone(), "STALE;")),
+            "the autosave waits behind the running Save As"
+        );
+
+        // Save As lands: the document adopts the chosen path's baseline.
+        queue.adopt_baseline(Some(baseline(&chosen_path, "SAVED;")));
+        queue.mark_finished();
+
+        assert!(
+            queue.next_to_start().is_none(),
+            "an autosave for the previous path must not run against the new baseline"
+        );
+    }
+
+    /// An explicit save is never dropped by a retarget: it is an intentional user
+    /// action, unlike the stale autosave the retarget discards.
+    #[test]
+    fn a_waiting_explicit_save_survives_a_retarget() {
+        let previous_path = temp_write_path("explicit-previous");
+        let chosen_path = temp_write_path("explicit-chosen");
+        let mut queue = PhysicalWriteQueue::new();
+
+        let save_as = PhysicalWrite::save_as(
+            chosen_path.clone(),
+            "SAVED;".to_string(),
+            "SAVED;".to_string(),
+            false,
+        );
+        assert!(queue.push(save_as));
+        assert!(queue.next_to_start().is_some());
+
+        assert!(!queue.push(explicit_write(previous_path.clone(), "EXPLICIT;")));
+
+        queue.adopt_baseline(Some(baseline(&chosen_path, "SAVED;")));
+        queue.mark_finished();
+
+        let next = queue
+            .next_to_start()
+            .expect("an explicit save is never dropped by a retarget");
+        assert!(matches!(next.kind, WriteKind::Explicit));
     }
 }

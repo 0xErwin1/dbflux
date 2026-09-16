@@ -102,6 +102,15 @@ async fn finish_physical_write(
                                 .meta_right(dbflux_ui_base::toast::now_hms())
                                 .push(cx);
                             }
+
+                            // If the buffer holds text newer than what landed, the
+                            // debounce that carried it may have fired before this
+                            // retarget and been dropped as a stale-path write, so arm
+                            // a fresh one against the chosen path. Without this, that
+                            // newest text would be stranded until another keystroke.
+                            if !landed {
+                                doc.schedule_auto_save(cx);
+                            }
                         }
                     }
 
@@ -327,10 +336,7 @@ impl CodeDocument {
             // the queue's completion retargets the document at the new path.
             cx.update(|cx| {
                 entity.update(cx, |doc, cx| {
-                    doc.enqueue_physical_write(
-                        PhysicalWrite::save_as(path, content, saved_input, used_fallback),
-                        cx,
-                    );
+                    doc.enqueue_save_as_write(path, content, saved_input, used_fallback, cx);
                 });
             })
             .log_if_dropped();
@@ -365,12 +371,11 @@ impl CodeDocument {
             .auto_save_interval_ms;
 
         if self.is_file_backed() {
-            let Some(path) = self.editor.path.clone() else {
-                return;
-            };
-
             // Captured now, like the shadow-only autosave this replaces: later
-            // edits reset the debounce and arm a fresh capture.
+            // edits reset the debounce and arm a fresh capture. The destination is
+            // deliberately NOT captured here: Save As may retarget the document
+            // while this debounce is armed, so the autosave must follow the path
+            // the document holds when the write is actually enqueued.
             let saved_input = self.editor.input_state.read(cx).value().to_string();
             let content = self.build_file_content(cx);
             let shadow = self.session.shadow_path.clone();
@@ -386,6 +391,13 @@ impl CodeDocument {
                 // is conflict-checked against the bytes this document owns.
                 cx.update(|cx| {
                     entity.update(cx, |doc, cx| {
+                        // Resolve the destination when the write is enqueued: a
+                        // debounce armed before a Save As retarget must still write
+                        // to the document's current path, not the one it had when
+                        // the timer started.
+                        let Some(path) = doc.editor.path.clone() else {
+                            return;
+                        };
                         doc.enqueue_physical_write(
                             PhysicalWrite::auto(path, content, saved_input, shadow),
                             cx,
@@ -499,6 +511,24 @@ impl CodeDocument {
         }
     }
 
+    /// Queues a Save As of `content`, captured at dialog time, to `path`.
+    ///
+    /// Split out from `save_file_as` so the retarget path can be driven without
+    /// opening a native dialog; the behaviour is identical.
+    pub(super) fn enqueue_save_as_write(
+        &mut self,
+        path: PathBuf,
+        content: String,
+        saved_input: String,
+        used_fallback: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.enqueue_physical_write(
+            PhysicalWrite::save_as(path, content, saved_input, used_fallback),
+            cx,
+        );
+    }
+
     /// Frees the running slot and starts the next queued write, if any.
     ///
     /// Every write's completion runs this inside its entity update, so the
@@ -590,8 +620,18 @@ impl CodeDocument {
 
 #[cfg(test)]
 mod tests {
-    use super::build_file_content_for_language;
-    use dbflux_core::{ExecutionContext, ExecutionSourceContext};
+    use super::{CodeDocument, PhysicalWrite, build_file_content_for_language};
+    use crate::handle::DocumentEvent;
+    use dbflux_components::theme;
+    use dbflux_core::{ExecutionContext, ExecutionSourceContext, QueryLanguage};
+    use dbflux_storage::bootstrap::StorageRuntime;
+    use dbflux_ui_base::AppStateEntity;
+    use dbflux_ui_base::AppStateGlobal;
+    use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
+    use gpui::{AppContext, TestAppContext, VisualTestContext};
+    use gpui_component::Root;
+    use std::cell::RefCell;
+    use std::rc::Rc;
     use uuid::Uuid;
 
     fn collection_window_exec_ctx() -> ExecutionContext {
@@ -687,5 +727,389 @@ mod tests {
         let es = dbflux_i18n::t!("document.code.file_ops.save_as.title", locale = "es");
 
         assert_ne!(en, es);
+    }
+
+    // === Save As path/content correctness (T1a.3) ===
+
+    /// The document events these tests observe, in delivery order.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    enum RecordedEvent {
+        SaveFinished(bool),
+        RequestClose,
+    }
+
+    fn init_test_runtime(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        cx.update(theme::init);
+        cx.update(|cx| {
+            let host = cx.new(|_| ToastHost::new());
+            cx.set_global(ToastGlobal { host });
+        });
+    }
+
+    /// A `report_error`-observable app state: the `AppStateGlobal` registration is
+    /// what makes a refusal increment `unread_error_count`, so a spurious toast in
+    /// the save flow is visible to these tests.
+    fn isolated_test_app_state(cx: &mut TestAppContext) -> gpui::Entity<AppStateEntity> {
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                AppStateEntity::new_with_storage_runtime(
+                    StorageRuntime::in_memory().expect("isolated storage runtime"),
+                )
+                .expect("test storage setup")
+            })
+        });
+        cx.update(|cx| {
+            cx.set_global(AppStateGlobal {
+                entity: app_state.clone(),
+            });
+        });
+        app_state
+    }
+
+    fn temp_save_as_path(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "dbflux-save-as-{name}-{}.sql",
+            uuid::Uuid::new_v4()
+        ))
+    }
+
+    /// Mounts a file-backed document whose current path holds `seed_bytes`, with a
+    /// real loaded baseline, records its save/close events, and hands the mounted
+    /// document to `drive`.
+    fn with_file_backed_document(
+        cx: &mut TestAppContext,
+        old_path: std::path::PathBuf,
+        seed_bytes: &str,
+        drive: impl FnOnce(
+            &gpui::Entity<CodeDocument>,
+            &gpui::Entity<AppStateEntity>,
+            &Rc<RefCell<Vec<RecordedEvent>>>,
+            &mut VisualTestContext,
+        ),
+    ) {
+        init_test_runtime(cx);
+        let app_state = isolated_test_app_state(cx);
+
+        std::fs::write(&old_path, seed_bytes).expect("seed the preexisting file");
+
+        let doc_holder: Rc<RefCell<Option<gpui::Entity<CodeDocument>>>> =
+            Rc::new(RefCell::new(None));
+        let doc_ref = doc_holder.clone();
+        let app_state_for_doc = app_state.clone();
+        let old_for_doc = old_path.clone();
+        let seed = seed_bytes.to_string();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let doc = cx.new(|cx| {
+                let mut document = CodeDocument::new_with_language(
+                    app_state_for_doc.clone(),
+                    None,
+                    QueryLanguage::Sql,
+                    window,
+                    cx,
+                )
+                .with_path(old_for_doc.clone());
+                document.set_content(&seed, window, cx);
+                document.seed_file_baseline(old_for_doc.clone(), seed.clone());
+                document
+            });
+            doc_ref.replace(Some(doc.clone()));
+            Root::new(doc, window, cx)
+        });
+
+        let doc = doc_holder.borrow().clone().expect("document created");
+        let events: Rc<RefCell<Vec<RecordedEvent>>> = Rc::new(RefCell::new(Vec::new()));
+        let sink = events.clone();
+        window.update(|_, app| {
+            app.subscribe(&doc, move |_, event: &DocumentEvent, _| match event {
+                DocumentEvent::SaveFinished { succeeded } => {
+                    sink.borrow_mut()
+                        .push(RecordedEvent::SaveFinished(*succeeded));
+                }
+                DocumentEvent::RequestClose => {
+                    sink.borrow_mut().push(RecordedEvent::RequestClose);
+                }
+                _ => {}
+            })
+            .detach();
+        });
+
+        drive(&doc, &app_state, &events, window);
+    }
+
+    fn unread_errors(
+        window: &mut VisualTestContext,
+        app_state: &gpui::Entity<AppStateEntity>,
+    ) -> u32 {
+        window.update(|_, cx| app_state.read(cx).unread_error_count)
+    }
+
+    /// An autosave whose debounce was armed while the document pointed at the old
+    /// path must still resolve the destination when it is enqueued: by then Save As
+    /// has retargeted the document, so the newest text lands on the chosen target,
+    /// the old file is untouched, and no spurious refusal is raised.
+    #[gpui::test]
+    fn newest_edit_typed_while_save_as_is_open_lands_in_the_chosen_target(cx: &mut TestAppContext) {
+        let old_path = temp_save_as_path("typed-old");
+        let new_path = temp_save_as_path("typed-new");
+
+        with_file_backed_document(
+            cx,
+            old_path.clone(),
+            "OLD;",
+            |doc, app_state, _events, window| {
+                window.update(|window, cx| {
+                    doc.update(cx, |doc, cx| {
+                        // Before Save As the capture is "SAVED;" and a debounce is armed.
+                        doc.editor.input_state.update(cx, |state, cx| {
+                            state.set_value("SAVED;", window, cx);
+                        });
+                        doc.enqueue_save_as_write(
+                            new_path.clone(),
+                            "SAVED;".to_string(),
+                            "SAVED;".to_string(),
+                            false,
+                            cx,
+                        );
+                        // While the Save As is in flight the user keeps typing; this
+                        // re-arms the debounce with the newest text while the document
+                        // still points at the old path.
+                        doc.editor.input_state.update(cx, |state, cx| {
+                            state.set_value("TYPED;", window, cx);
+                        });
+                    });
+                });
+
+                window.run_until_parked();
+                assert_eq!(
+                    std::fs::read_to_string(&new_path).expect("new file readable"),
+                    "SAVED;",
+                    "Save As writes the content it captured"
+                );
+
+                // No further keystroke: the newest text must still reach the target.
+                window
+                    .executor()
+                    .advance_clock(std::time::Duration::from_secs(3));
+                window.run_until_parked();
+
+                assert_eq!(
+                    std::fs::read_to_string(&new_path).expect("new file readable"),
+                    "TYPED;",
+                    "the newest edit must reach the chosen target without another keystroke"
+                );
+                assert_eq!(
+                    std::fs::read_to_string(&old_path).expect("old file readable"),
+                    "OLD;",
+                    "the previous file must stay untouched"
+                );
+                assert_eq!(
+                    unread_errors(window, app_state),
+                    0,
+                    "the newest edit must land without a spurious refusal"
+                );
+            },
+        );
+
+        std::fs::remove_file(&old_path).ok();
+        std::fs::remove_file(&new_path).ok();
+    }
+
+    /// An Auto write already waiting in the queue for the previous path must not be
+    /// attempted against the new baseline when Save As completes: it is discarded,
+    /// so the user sees no spurious refusal and the previous file is untouched.
+    #[gpui::test]
+    fn a_waiting_autosave_for_the_previous_path_is_not_attempted_after_save_as(
+        cx: &mut TestAppContext,
+    ) {
+        let old_path = temp_save_as_path("retarget-old");
+        let new_path = temp_save_as_path("retarget-new");
+
+        with_file_backed_document(
+            cx,
+            old_path.clone(),
+            "OLD;",
+            |doc, app_state, _events, window| {
+                window.update(|window, cx| {
+                    doc.update(cx, |doc, cx| {
+                        doc.editor.input_state.update(cx, |state, cx| {
+                            state.set_value("SAVED;", window, cx);
+                        });
+                        doc.enqueue_save_as_write(
+                            new_path.clone(),
+                            "SAVED;".to_string(),
+                            "SAVED;".to_string(),
+                            false,
+                            cx,
+                        );
+                        // The debounce for the newest text fired while Save As was
+                        // still in flight, so its autosave waits in the queue for the
+                        // old path.
+                        doc.enqueue_physical_write(
+                            PhysicalWrite::auto(
+                                old_path.clone(),
+                                "SAVED;".to_string(),
+                                "SAVED;".to_string(),
+                                None,
+                            ),
+                            cx,
+                        );
+                    });
+                });
+                window.run_until_parked();
+
+                assert_eq!(
+                    std::fs::read_to_string(&new_path).expect("new file readable"),
+                    "SAVED;",
+                    "Save As lands the captured content on the chosen target"
+                );
+                assert_eq!(
+                    std::fs::read_to_string(&old_path).expect("old file readable"),
+                    "OLD;",
+                    "the stale autosave must not touch the previous file"
+                );
+                assert_eq!(
+                    unread_errors(window, app_state),
+                    0,
+                    "a retargeted autosave must not surface a spurious refusal"
+                );
+            },
+        );
+
+        std::fs::remove_file(&old_path).ok();
+        std::fs::remove_file(&new_path).ok();
+    }
+
+    /// When Save As completes with the buffer holding newer text than it landed,
+    /// and the debounce that carried that text already fired (its write was dropped
+    /// as a stale-path write), a fresh autosave is armed so the newest text still
+    /// reaches the chosen target without another keystroke.
+    #[gpui::test]
+    fn a_fired_autosave_dropped_by_a_retarget_is_rearmed_for_the_new_path(cx: &mut TestAppContext) {
+        let old_path = temp_save_as_path("rearm-old");
+        let new_path = temp_save_as_path("rearm-new");
+
+        with_file_backed_document(
+            cx,
+            old_path.clone(),
+            "OLD;",
+            |doc, app_state, _events, window| {
+                window.update(|window, cx| {
+                    doc.update(cx, |doc, cx| {
+                        doc.editor.input_state.update(cx, |state, cx| {
+                            state.set_value("SAVED;", window, cx);
+                        });
+                        doc.enqueue_save_as_write(
+                            new_path.clone(),
+                            "SAVED;".to_string(),
+                            "SAVED;".to_string(),
+                            false,
+                            cx,
+                        );
+                        // The user types the newest text, then its debounce fires before
+                        // Save As lands; that autosave is the one waiting for the old
+                        // path.
+                        doc.editor.input_state.update(cx, |state, cx| {
+                            state.set_value("TYPED;", window, cx);
+                        });
+                        doc.session._auto_save_debounce = None;
+                        doc.enqueue_physical_write(
+                            PhysicalWrite::auto(
+                                old_path.clone(),
+                                "TYPED;".to_string(),
+                                "TYPED;".to_string(),
+                                None,
+                            ),
+                            cx,
+                        );
+                    });
+                });
+
+                window.run_until_parked();
+                window
+                    .executor()
+                    .advance_clock(std::time::Duration::from_secs(3));
+                window.run_until_parked();
+
+                assert_eq!(
+                    std::fs::read_to_string(&new_path).expect("new file readable"),
+                    "TYPED;",
+                    "the dropped autosave's text must be re-armed against the chosen target"
+                );
+                assert_eq!(
+                    std::fs::read_to_string(&old_path).expect("old file readable"),
+                    "OLD;",
+                    "the previous file must stay untouched"
+                );
+                assert_eq!(
+                    unread_errors(window, app_state),
+                    0,
+                    "the re-armed autosave must land without a spurious refusal"
+                );
+            },
+        );
+
+        std::fs::remove_file(&old_path).ok();
+        std::fs::remove_file(&new_path).ok();
+    }
+
+    /// Save As still writes the captured content, retargets the document at the
+    /// chosen path, marks only that content clean, and reports its outcome through
+    /// the save/close flow without asking to close.
+    #[gpui::test]
+    fn save_as_writes_the_captured_content_and_retargets_the_document(cx: &mut TestAppContext) {
+        let old_path = temp_save_as_path("write-old");
+        let new_path = temp_save_as_path("write-new");
+
+        with_file_backed_document(
+            cx,
+            old_path.clone(),
+            "OLD;",
+            |doc, _app_state, events, window| {
+                window.update(|window, cx| {
+                    doc.update(cx, |doc, cx| {
+                        doc.editor.input_state.update(cx, |state, cx| {
+                            state.set_value("CAPTURED;", window, cx);
+                        });
+                        doc.enqueue_save_as_write(
+                            new_path.clone(),
+                            "CAPTURED;".to_string(),
+                            "CAPTURED;".to_string(),
+                            false,
+                            cx,
+                        );
+                    });
+                });
+                window.run_until_parked();
+
+                assert_eq!(
+                    std::fs::read_to_string(&new_path).expect("new file readable"),
+                    "CAPTURED;",
+                    "Save As writes the content it captured"
+                );
+                let (retargeted, dirty) = window.update(|_, cx| {
+                    let doc = doc.read(cx);
+                    (doc.path().cloned(), doc.editor.is_dirty)
+                });
+                assert_eq!(
+                    retargeted,
+                    Some(new_path.clone()),
+                    "Save As retargets the document at the chosen path"
+                );
+                assert!(
+                    !dirty,
+                    "the captured content landed, so the buffer is clean"
+                );
+                assert_eq!(
+                    events.borrow().clone(),
+                    vec![RecordedEvent::SaveFinished(true)],
+                    "Save As reports its outcome and never asks to close"
+                );
+            },
+        );
+
+        std::fs::remove_file(&old_path).ok();
+        std::fs::remove_file(&new_path).ok();
     }
 }
