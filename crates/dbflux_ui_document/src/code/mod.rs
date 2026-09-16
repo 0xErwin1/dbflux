@@ -62,6 +62,7 @@ mod diagnostics;
 mod execution;
 mod execution_session;
 mod file_ops;
+mod file_persistence;
 mod focus;
 mod live_output;
 pub mod pane;
@@ -423,6 +424,10 @@ pub struct CodeDocument {
 
     // Pending file I/O
     _pending_save: Option<Task<()>>,
+
+    // Serializes writes to the real file (autosave, explicit save, Save As)
+    // and tracks the on-disk baseline for external-change detection.
+    physical_writes: file_persistence::PhysicalWriteQueue,
 
     // Session persistence (auto-save to disk).
     session: SessionPersistence,
@@ -1027,6 +1032,7 @@ impl CodeDocument {
                 preflight_running: false,
             },
             _pending_save: None,
+            physical_writes: file_persistence::PhysicalWriteQueue::new(),
             session: SessionPersistence {
                 scratch_path,
                 shadow_path: None,
@@ -1155,6 +1161,20 @@ impl CodeDocument {
         self.editor.language_binding = LanguageBinding::Pinned;
         self.editor.cached_effective_language = self.editor.query_language.clone();
         self
+    }
+
+    /// Records the raw bytes currently on disk at `path` as this document's
+    /// physical baseline.
+    ///
+    /// Autosave conflict-checks the file against exactly these bytes before
+    /// writing, so the baseline must be what the file holds, paired with the path
+    /// it came from: bytes loaded from one file never authorize a write to
+    /// another. Callers seed it only after a successful create, load, or landed
+    /// write. A document with no baseline refuses to autosave rather than create
+    /// or overwrite a file it never read.
+    pub fn seed_file_baseline(&mut self, path: PathBuf, bytes: String) {
+        self.physical_writes
+            .adopt_baseline(Some(file_persistence::FileBaseline::new(path, bytes)));
     }
 
     /// Mark the document as read-only: blocks query execution, dirty marking,
@@ -1399,12 +1419,13 @@ impl CodeDocument {
     /// The user can keep typing while a write is in flight, so the buffer may no
     /// longer match what landed. It then stays dirty against that text — now the
     /// on-disk baseline — and reports `false`, so a close waiting on the save
-    /// keeps the tab open instead of discarding the newer edits.
+    /// keeps the tab open instead of discarding the newer edits. The debounce
+    /// armed for those newer edits is deliberately left running: cancelling it
+    /// here would strand the latest text until the user typed again.
     fn mark_clean_against(&mut self, saved_input: &str, cx: &mut Context<Self>) -> bool {
         if self.editor.input_state.read(cx).value() != saved_input {
             self.editor.original_content = saved_input.to_string();
             self.editor.is_dirty = true;
-            self.session._auto_save_debounce = None;
             cx.emit(DocumentEvent::MetaChanged);
             cx.notify();
             return false;
@@ -2264,6 +2285,12 @@ mod tests {
             Rc::new(RefCell::new(None));
         let doc_ref = doc_holder.clone();
 
+        // A caller that pre-creates the file gives the document a real loaded
+        // baseline; a path that does not exist yet leaves it without one, which is
+        // exactly the no-baseline case autosave must refuse.
+        let baseline_bytes = std::fs::read_to_string(&path).ok();
+        let path_for_doc = path.clone();
+
         let (_, window) = cx.add_window_view(|window, cx| {
             let doc = cx.new(|cx| {
                 let mut document = CodeDocument::new_with_language(
@@ -2273,8 +2300,13 @@ mod tests {
                     window,
                     cx,
                 )
-                .with_path(path);
+                .with_path(path_for_doc.clone());
                 document.set_content("SELECT 1;", window, cx);
+
+                if let Some(bytes) = baseline_bytes {
+                    document.seed_file_baseline(path_for_doc, bytes);
+                }
+
                 document.editor.input_state.update(cx, |state, cx| {
                     state.set_value("SELECT 2;", window, cx);
                 });
@@ -2540,5 +2572,369 @@ mod tests {
         );
 
         std::fs::remove_file(&path).expect("the temp save file must be removable");
+    }
+
+    // === Auto-save on the physical file (T1) ===
+
+    /// A file-backed edit must autosave to the real file, not only the shadow:
+    /// reopening the script reads the persisted text. A landed autosave clears
+    /// the dirty flag and, unlike an explicit save, emits no save/close events.
+    #[gpui::test]
+    fn autosave_writes_the_physical_file_and_clears_the_dirty_flag(cx: &mut TestAppContext) {
+        let path = temp_save_path();
+        std::fs::write(&path, "SELECT 1;").expect("seed the preexisting file");
+
+        let (events, dirty) = with_dirty_document(cx, path.clone(), |doc, window| {
+            // The edit armed the 2 s autosave debounce; advance the fake clock
+            // so it fires and its write lands.
+            window
+                .executor()
+                .advance_clock(std::time::Duration::from_secs(3));
+            window.run_until_parked();
+            let _ = doc;
+        });
+
+        let written =
+            std::fs::read_to_string(&path).expect("the autosave must write the real file");
+        assert_eq!(
+            written, "SELECT 2;",
+            "the autosave must land on the physical path, not only the shadow"
+        );
+        assert!(
+            events.is_empty(),
+            "an autosave is not an explicit save: it must not emit save/close events, got {events:?}"
+        );
+        assert!(!dirty, "a landed autosave must clear the dirty flag");
+
+        std::fs::remove_file(&path).expect("the temp save file must be removable");
+    }
+
+    /// A file-backed document that never loaded a trustworthy baseline (for
+    /// example a restore whose physical read failed) must refuse to autosave
+    /// rather than create or blind-overwrite the file. The newer edits stay
+    /// pending, so nothing the user typed is lost.
+    #[gpui::test]
+    fn autosave_refuses_without_a_loaded_baseline(cx: &mut TestAppContext) {
+        let path = temp_save_path();
+
+        let (events, dirty) = with_dirty_document(cx, path.clone(), |doc, window| {
+            window
+                .executor()
+                .advance_clock(std::time::Duration::from_secs(3));
+            window.run_until_parked();
+            let _ = doc;
+        });
+
+        assert!(
+            !path.exists(),
+            "an autosave with no loaded baseline must not create the file"
+        );
+        assert!(
+            events.is_empty(),
+            "a refused autosave reports no save event, got {events:?}"
+        );
+        assert!(dirty, "the unsaved edits must stay pending");
+    }
+
+    /// Edits typed while an explicit save is in flight must still autosave: the
+    /// save only clears the dirty state for the text it captured, so the debounce
+    /// armed for the newer text must survive the save's completion and land it
+    /// without another keystroke.
+    #[gpui::test]
+    fn newer_edits_typed_during_an_explicit_save_still_autosave(cx: &mut TestAppContext) {
+        let path = temp_save_path();
+        std::fs::write(&path, "SELECT 1;").expect("seed the preexisting file");
+
+        let (events, dirty) = with_dirty_document(cx, path.clone(), |doc, window| {
+            // The explicit save captures the buffer as it stands ("SELECT 2;").
+            window.update(|window, cx| {
+                doc.update(cx, |document, cx| document.save_file(window, cx));
+            });
+
+            // The user keeps typing before that write lands, so the buffer is now
+            // newer than the text the save will write.
+            window.update(|window, cx| {
+                doc.update(cx, |document, cx| {
+                    document.editor.input_state.update(cx, |state, cx| {
+                        state.set_value("SELECT 3;", window, cx);
+                    });
+                });
+            });
+
+            window.run_until_parked();
+            assert_eq!(
+                std::fs::read_to_string(&path).expect("the explicit save must land"),
+                "SELECT 2;",
+                "the explicit save writes the text it captured"
+            );
+
+            // No further keystroke: the debounce armed for the newer text must
+            // still be alive after the save's completion.
+            window
+                .executor()
+                .advance_clock(std::time::Duration::from_secs(3));
+            window.run_until_parked();
+        });
+
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("the autosave must land"),
+            "SELECT 3;",
+            "the newer edit must autosave without another keystroke"
+        );
+        assert_eq!(
+            events,
+            vec![RecordedEvent::SaveFinished(false)],
+            "only the explicit save reports an outcome; the autosave stays silent"
+        );
+        assert!(
+            !dirty,
+            "the newer edit autosaved and cleared the dirty flag"
+        );
+
+        std::fs::remove_file(&path).expect("the temp save file must be removable");
+    }
+
+    /// An autosave must never silently overwrite an external change: once the
+    /// document has written the file, foreign bytes on disk make the next
+    /// autosave refuse to write and keep the buffer dirty, with no save event.
+    #[gpui::test]
+    fn autosave_refuses_to_clobber_an_externally_changed_file(cx: &mut TestAppContext) {
+        let path = temp_save_path();
+        let path_for_external = path.clone();
+        std::fs::write(&path, "SELECT 1;").expect("seed the preexisting file");
+
+        let (events, dirty) = with_dirty_document(cx, path.clone(), |doc, window| {
+            // The first autosave lands and seeds the on-disk baseline.
+            window
+                .executor()
+                .advance_clock(std::time::Duration::from_secs(3));
+            window.run_until_parked();
+            assert_eq!(
+                std::fs::read_to_string(&path_for_external).expect("the first autosave lands"),
+                "SELECT 2;",
+                "the first autosave writes the content the document captured"
+            );
+
+            // An external process rewrites the file behind our back.
+            std::fs::write(&path_for_external, "EXTERNAL EDIT;")
+                .expect("the external write must succeed");
+
+            // The user keeps typing; the armed autosave must refuse to clobber.
+            window.update(|window, cx| {
+                doc.update(cx, |document, cx| {
+                    document.editor.input_state.update(cx, |state, cx| {
+                        state.set_value("SELECT 3;", window, cx);
+                    });
+                });
+            });
+            window
+                .executor()
+                .advance_clock(std::time::Duration::from_secs(3));
+            window.run_until_parked();
+        });
+
+        let written = std::fs::read_to_string(&path).expect("the file must still exist");
+        assert_eq!(
+            written, "EXTERNAL EDIT;",
+            "the autosave must not overwrite bytes another process wrote"
+        );
+        assert!(
+            events.is_empty(),
+            "a refused autosave reports no save event"
+        );
+        assert!(dirty, "the unsaved edits must keep the buffer dirty");
+
+        std::fs::remove_file(&path).expect("the temp save file must be removable");
+    }
+
+    /// A file that disappears after the document wrote it must not be silently
+    /// recreated by an autosave: the deletion is an external action the user
+    /// may rely on, so the write is refused and the buffer stays dirty.
+    #[gpui::test]
+    fn autosave_does_not_recreate_an_externally_deleted_file(cx: &mut TestAppContext) {
+        let path = temp_save_path();
+        let path_for_delete = path.clone();
+        std::fs::write(&path, "SELECT 1;").expect("seed the preexisting file");
+
+        let (events, dirty) = with_dirty_document(cx, path.clone(), |doc, window| {
+            // The first autosave lands and seeds the on-disk baseline.
+            window
+                .executor()
+                .advance_clock(std::time::Duration::from_secs(3));
+            window.run_until_parked();
+            assert!(
+                path_for_delete.exists(),
+                "the first autosave must have written the file"
+            );
+
+            // An external process deletes the file.
+            std::fs::remove_file(&path_for_delete).expect("the external delete must succeed");
+
+            // The user keeps typing; the armed autosave must not recreate it.
+            window.update(|window, cx| {
+                doc.update(cx, |document, cx| {
+                    document.editor.input_state.update(cx, |state, cx| {
+                        state.set_value("SELECT 3;", window, cx);
+                    });
+                });
+            });
+            window
+                .executor()
+                .advance_clock(std::time::Duration::from_secs(3));
+            window.run_until_parked();
+        });
+
+        assert!(
+            !path.exists(),
+            "the autosave must not recreate a file another process deleted"
+        );
+        assert!(
+            events.is_empty(),
+            "a refused autosave reports no save event"
+        );
+        assert!(dirty, "the unsaved edits must keep the buffer dirty");
+    }
+
+    /// Sequential autosaves must land in order: each landed write becomes the
+    /// new on-disk baseline, and the final file holds the newest content.
+    #[gpui::test]
+    fn sequential_autosaves_land_in_order_and_keep_the_newest_bytes(cx: &mut TestAppContext) {
+        let path = temp_save_path();
+        let path_for_assert = path.clone();
+        std::fs::write(&path, "SELECT 1;").expect("seed the preexisting file");
+
+        let (events, dirty) = with_dirty_document(cx, path.clone(), |doc, window| {
+            window
+                .executor()
+                .advance_clock(std::time::Duration::from_secs(3));
+            window.run_until_parked();
+            assert_eq!(
+                std::fs::read_to_string(&path_for_assert).expect("the first autosave lands"),
+                "SELECT 2;",
+            );
+
+            window.update(|window, cx| {
+                doc.update(cx, |document, cx| {
+                    document.editor.input_state.update(cx, |state, cx| {
+                        state.set_value("SELECT 3;", window, cx);
+                    });
+                });
+            });
+            window
+                .executor()
+                .advance_clock(std::time::Duration::from_secs(3));
+            window.run_until_parked();
+            assert_eq!(
+                std::fs::read_to_string(&path_for_assert).expect("the second autosave lands"),
+                "SELECT 3;",
+                "each autosave must replace the bytes of the previous one"
+            );
+
+            window.update(|window, cx| {
+                doc.update(cx, |document, cx| {
+                    document.editor.input_state.update(cx, |state, cx| {
+                        state.set_value("SELECT 4;", window, cx);
+                    });
+                });
+            });
+            window
+                .executor()
+                .advance_clock(std::time::Duration::from_secs(3));
+            window.run_until_parked();
+        });
+
+        let written =
+            std::fs::read_to_string(&path).expect("the final autosave must have written the file");
+        assert_eq!(
+            written, "SELECT 4;",
+            "the newest edit must be the one on disk"
+        );
+        assert!(events.is_empty(), "autosaves emit no save/close events");
+        assert!(!dirty, "the final autosave lands the current buffer");
+
+        std::fs::remove_file(&path).expect("the temp save file must be removable");
+    }
+
+    /// A file whose baseline was seeded from its own bytes before any autosave ran
+    /// must still refuse to clobber bytes an external process wrote before the
+    /// first debounce fired. The document keeps its edits pending and reports no
+    /// save event.
+    #[gpui::test]
+    fn autosave_refuses_foreign_change_after_baseline_seeded_before_first_write(
+        cx: &mut TestAppContext,
+    ) {
+        let path = temp_save_path();
+        let path_for_external = path.clone();
+        std::fs::write(&path, "ORIGINAL;").expect("seed the original file");
+
+        let (events, dirty) = with_dirty_document(cx, path.clone(), |doc, window| {
+            // The fixture seeded the baseline from ORIGINAL before any write ran.
+            std::fs::write(&path_for_external, "EXTERNAL EDIT;")
+                .expect("the external write must succeed");
+
+            window.update(|window, cx| {
+                doc.update(cx, |document, cx| {
+                    document.editor.input_state.update(cx, |state, cx| {
+                        state.set_value("SELECT 3;", window, cx);
+                    });
+                });
+            });
+            window
+                .executor()
+                .advance_clock(std::time::Duration::from_secs(3));
+            window.run_until_parked();
+        });
+
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("the file must still exist"),
+            "EXTERNAL EDIT;",
+            "the autosave must not overwrite bytes another process wrote"
+        );
+        assert!(
+            events.is_empty(),
+            "a refused autosave reports no save event"
+        );
+        assert!(dirty, "the unsaved edits must keep the buffer dirty");
+
+        std::fs::remove_file(&path).expect("the temp save file must be removable");
+    }
+
+    /// A file deleted after its baseline was seeded but before the first autosave
+    /// must not be recreated: the deletion is an external action the user may rely
+    /// on, so the write is refused and the buffer stays dirty.
+    #[gpui::test]
+    fn autosave_does_not_recreate_a_file_deleted_after_baseline_seeded_before_first_write(
+        cx: &mut TestAppContext,
+    ) {
+        let path = temp_save_path();
+        let path_for_delete = path.clone();
+        std::fs::write(&path, "ORIGINAL;").expect("seed the original file");
+
+        let (events, dirty) = with_dirty_document(cx, path.clone(), |doc, window| {
+            // The fixture seeded the baseline from ORIGINAL before any write ran.
+            std::fs::remove_file(&path_for_delete).expect("the external delete must succeed");
+
+            window.update(|window, cx| {
+                doc.update(cx, |document, cx| {
+                    document.editor.input_state.update(cx, |state, cx| {
+                        state.set_value("SELECT 3;", window, cx);
+                    });
+                });
+            });
+            window
+                .executor()
+                .advance_clock(std::time::Duration::from_secs(3));
+            window.run_until_parked();
+        });
+
+        assert!(
+            !path.exists(),
+            "the autosave must not recreate a file another process deleted"
+        );
+        assert!(
+            events.is_empty(),
+            "a refused autosave reports no save event"
+        );
+        assert!(dirty, "the unsaved edits must keep the buffer dirty");
     }
 }

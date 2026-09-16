@@ -239,7 +239,12 @@ impl PanelState {
 pub(super) struct PendingOpenScript {
     pub path: Option<PathBuf>,
     pub title: String,
+    /// Editor body with any leading annotation header stripped.
     pub body: String,
+    /// Raw bytes exactly as read from disk, annotation header included. The
+    /// document records these as its physical baseline so autosave compares
+    /// against what is actually on disk.
+    pub raw: String,
     pub language: QueryLanguage,
     pub connection_id: Option<uuid::Uuid>,
     pub exec_ctx: ExecutionContext,

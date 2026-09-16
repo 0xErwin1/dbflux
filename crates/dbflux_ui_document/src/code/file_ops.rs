@@ -1,3 +1,6 @@
+use super::file_persistence::{
+    ExecutedWrite, PhysicalWrite, WriteKind, WriteOutcome, execute_write,
+};
 use super::*;
 use dbflux_ui_base::AsyncUpdateResultExt;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error_async};
@@ -36,6 +39,161 @@ fn report_save_failed(entity: &Entity<CodeDocument>, cx: &AsyncApp) {
     cx.update(|cx| {
         entity.update(cx, |doc, cx| {
             doc.report_save_outcome(false, cx);
+        });
+    })
+    .log_if_dropped();
+}
+
+/// Applies the result of one queued physical write: reports user-facing
+/// failures, reconciles dirty state by write kind, and lets the queue start
+/// the next write. The queue slot is freed inside the entity update, so the
+/// next write starts only after this outcome is fully applied.
+async fn finish_physical_write(
+    entity: &Entity<CodeDocument>,
+    executed: ExecutedWrite,
+    cx: &mut AsyncApp,
+) {
+    let ExecutedWrite {
+        write,
+        outcome,
+        new_baseline,
+    } = executed;
+
+    match outcome {
+        WriteOutcome::Written => {
+            let kind = write.kind;
+            let saved_input = write.saved_input;
+            let path = write.path;
+
+            cx.update(|cx| {
+                entity.update(cx, |doc, cx| {
+                    doc.physical_writes.adopt_baseline(new_baseline);
+
+                    match kind {
+                        WriteKind::Explicit => {
+                            let landed = doc.mark_clean_against(&saved_input, cx);
+                            doc.report_save_outcome(landed, cx);
+                        }
+                        WriteKind::Auto => {
+                            doc.reconcile_after_auto_save(&saved_input, cx);
+                            doc.show_saved_label(cx);
+                        }
+                        WriteKind::SaveAs { used_fallback } => {
+                            if let Some(scratch) = doc.session.scratch_path.take()
+                                && let Err(e) = std::fs::remove_file(&scratch)
+                            {
+                                log::warn!("Failed to remove scratch {}: {e}", scratch.display());
+                            }
+
+                            doc.editor.path = Some(path.clone());
+                            let landed = doc.mark_clean_against(&saved_input, cx);
+                            doc.report_save_outcome(landed, cx);
+
+                            doc.app_state.update(cx, |state, cx| {
+                                state.record_recent_file(path.clone());
+                                cx.emit(dbflux_ui_base::AppStateChanged);
+                            });
+
+                            if used_fallback {
+                                dbflux_ui_base::toast::Toast::warning(dbflux_i18n::t!(
+                                    "document.code.file_ops.native_picker_fallback",
+                                    path = path.display().to_string()
+                                ))
+                                .meta_right(dbflux_ui_base::toast::now_hms())
+                                .push(cx);
+                            }
+                        }
+                    }
+
+                    doc.pump_physical_writes(cx);
+                });
+            })
+            .log_if_dropped();
+        }
+        WriteOutcome::ExternalConflict => {
+            report_error_async(
+                UserFacingError::new(
+                    ErrorKind::Storage,
+                    dbflux_i18n::t!(
+                        "document.code.file_ops.error.auto_save_failed",
+                        path = write.path.display().to_string()
+                    ),
+                )
+                .with_cause(
+                    "the file changed outside dbflux after the last save; keeping the buffer dirty instead of overwriting it",
+                ),
+                cx,
+            );
+            start_next_physical_write(entity, cx);
+        }
+        WriteOutcome::ExternallyDeleted => {
+            report_error_async(
+                UserFacingError::new(
+                    ErrorKind::Storage,
+                    dbflux_i18n::t!(
+                        "document.code.file_ops.error.auto_save_failed",
+                        path = write.path.display().to_string()
+                    ),
+                )
+                .with_cause(
+                    "the file was removed outside dbflux; keeping the buffer dirty instead of recreating it",
+                ),
+                cx,
+            );
+            start_next_physical_write(entity, cx);
+        }
+        WriteOutcome::BaselineUnknown => {
+            report_error_async(
+                UserFacingError::new(
+                    ErrorKind::Storage,
+                    dbflux_i18n::t!(
+                        "document.code.file_ops.error.auto_save_failed",
+                        path = write.path.display().to_string()
+                    ),
+                )
+                .with_cause(
+                    "no trustworthy on-disk baseline was loaded for this file; refusing to overwrite or recreate it",
+                ),
+                cx,
+            );
+            start_next_physical_write(entity, cx);
+        }
+        WriteOutcome::Failed(e) => {
+            match write.kind {
+                WriteKind::Explicit | WriteKind::SaveAs { .. } => {
+                    report_error_async(
+                        UserFacingError::new(
+                            ErrorKind::Storage,
+                            dbflux_i18n::t!("document.code.file_ops.error.save_failed", error = e),
+                        ),
+                        cx,
+                    );
+                    report_save_failed(entity, cx);
+                }
+                WriteKind::Auto => {
+                    report_error_async(
+                        UserFacingError::new(
+                            ErrorKind::Storage,
+                            dbflux_i18n::t!(
+                                "document.code.file_ops.error.auto_save_failed",
+                                path = write.path.display().to_string()
+                            ),
+                        )
+                        .with_cause(format!("{e}")),
+                        cx,
+                    );
+                }
+            }
+            start_next_physical_write(entity, cx);
+        }
+    }
+}
+
+/// Frees the queue slot and starts the next queued write, if any.
+fn start_next_physical_write(entity: &Entity<CodeDocument>, cx: &mut AsyncApp) {
+    cx.update(|cx| {
+        entity.update(cx, |doc, cx| {
+            doc.pump_physical_writes(cx);
         });
     })
     .log_if_dropped();
@@ -87,35 +245,9 @@ impl CodeDocument {
         let saved_input = self.editor.input_state.read(cx).value().to_string();
         let content = self.build_file_content(cx);
 
-        let entity = cx.entity().clone();
-        self._pending_save = Some(cx.spawn(async move |_this, cx| {
-            let write_result = cx.background_executor().spawn({
-                let path = path.clone();
-                async move { std::fs::write(&path, &content) }
-            });
-
-            match write_result.await {
-                Ok(()) => {
-                    cx.update(|cx| {
-                        entity.update(cx, |doc, cx| {
-                            let landed = doc.mark_clean_against(&saved_input, cx);
-                            doc.report_save_outcome(landed, cx);
-                        });
-                    })
-                    .log_if_dropped();
-                }
-                Err(e) => {
-                    report_error_async(
-                        UserFacingError::new(
-                            ErrorKind::Storage,
-                            dbflux_i18n::t!("document.code.file_ops.error.save_failed", error = e),
-                        ),
-                        cx,
-                    );
-                    report_save_failed(&entity, cx);
-                }
-            }
-        }));
+        // The queue serializes this with any autosave or Save As already in
+        // flight, so a Ctrl+S can never interleave with another write.
+        self.enqueue_physical_write(PhysicalWrite::explicit(path, content, saved_input), cx);
     }
 
     /// Open a "Save As" dialog and save to the chosen path.
@@ -145,7 +277,6 @@ impl CodeDocument {
         };
 
         let entity = cx.entity().clone();
-        let app_state = self.app_state.clone();
         let dialog_available = dbflux_ui_base::file_dialog::is_native_file_dialog_available();
 
         self._pending_save = Some(cx.spawn(async move |_this, cx| {
@@ -191,52 +322,18 @@ impl CodeDocument {
                 return;
             };
 
-            let write_result = std::fs::write(&path, &content);
-
-            match write_result {
-                Ok(()) => {
-                    let path_for_update = path.clone();
-                    cx.update(|cx| {
-                        entity.update(cx, |doc, cx| {
-                            if let Some(scratch) = doc.session.scratch_path.take() {
-                                let _ = std::fs::remove_file(&scratch);
-                            }
-
-                            doc.editor.path = Some(path_for_update.clone());
-                            let landed = doc.mark_clean_against(&saved_input, cx);
-                            doc.report_save_outcome(landed, cx);
-                        });
-
-                        app_state.update(cx, |state, cx| {
-                            state.record_recent_file(path_for_update.clone());
-                            cx.emit(dbflux_ui_base::AppStateChanged);
-                        });
-
-                        if used_fallback {
-                            dbflux_ui_base::toast::Toast::warning(dbflux_i18n::t!(
-                                "document.code.file_ops.native_picker_fallback",
-                                path = path_for_update.display().to_string()
-                            ))
-                            .meta_right(dbflux_ui_base::toast::now_hms())
-                            .push(cx);
-                        }
-                    })
-                    .log_if_dropped();
-                }
-                Err(e) => {
-                    report_error_async(
-                        UserFacingError::new(
-                            ErrorKind::Storage,
-                            dbflux_i18n::t!(
-                                "document.code.file_ops.error.save_script_failed",
-                                error = e
-                            ),
-                        ),
+            // The write itself joins the document's physical-write queue: it
+            // lands on the background executor after any save in flight, and
+            // the queue's completion retargets the document at the new path.
+            cx.update(|cx| {
+                entity.update(cx, |doc, cx| {
+                    doc.enqueue_physical_write(
+                        PhysicalWrite::save_as(path, content, saved_input, used_fallback),
                         cx,
                     );
-                    report_save_failed(&entity, cx);
-                }
-            }
+                });
+            })
+            .log_if_dropped();
         }));
     }
 
@@ -261,23 +358,52 @@ impl CodeDocument {
 
     /// Schedule an auto-save after a 2-second debounce. Resets on each call.
     pub fn schedule_auto_save(&mut self, cx: &mut Context<Self>) {
-        let target = if self.is_file_backed() {
-            self.session.shadow_path.clone()
-        } else {
-            self.session.scratch_path.clone()
-        };
-
-        let Some(target) = target else {
-            return;
-        };
-
-        let content = self.build_file_content(cx);
-        let entity = cx.entity().clone();
         let auto_save_ms = self
             .app_state
             .read(cx)
             .general_settings()
             .auto_save_interval_ms;
+
+        if self.is_file_backed() {
+            let Some(path) = self.editor.path.clone() else {
+                return;
+            };
+
+            // Captured now, like the shadow-only autosave this replaces: later
+            // edits reset the debounce and arm a fresh capture.
+            let saved_input = self.editor.input_state.read(cx).value().to_string();
+            let content = self.build_file_content(cx);
+            let shadow = self.session.shadow_path.clone();
+            let entity = cx.entity().clone();
+
+            self.session._auto_save_debounce = Some(cx.spawn(async move |_this, cx| {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(auto_save_ms))
+                    .await;
+
+                // The autosave writes the real file through the physical-write
+                // queue, so it serializes with explicit saves and Save As and
+                // is conflict-checked against the bytes this document owns.
+                cx.update(|cx| {
+                    entity.update(cx, |doc, cx| {
+                        doc.enqueue_physical_write(
+                            PhysicalWrite::auto(path, content, saved_input, shadow),
+                            cx,
+                        );
+                    });
+                })
+                .log_if_dropped();
+            }));
+
+            return;
+        }
+
+        let Some(target) = self.session.scratch_path.clone() else {
+            return;
+        };
+
+        let content = self.build_file_content(cx);
+        let entity = cx.entity().clone();
 
         self.session._auto_save_debounce = Some(cx.spawn(async move |_this, cx| {
             cx.background_executor()
@@ -338,6 +464,65 @@ impl CodeDocument {
             })
             .ok();
         }));
+    }
+
+    /// Reconciles dirty state after an autosave landed, without save/close
+    /// events.
+    ///
+    /// An autosave is not a user-visible save: it never emits `SaveFinished`,
+    /// so the close flow is untouched. The buffer is marked clean only against
+    /// the text that actually landed; newer edits stay pending, and a debounce
+    /// armed for them keeps running — the next autosave carries them once this
+    /// write has finished.
+    pub(super) fn reconcile_after_auto_save(
+        &mut self,
+        saved_input: &str,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.editor.input_state.read(cx).value() != saved_input {
+            self.editor.original_content = saved_input.to_string();
+            self.editor.is_dirty = true;
+            cx.emit(DocumentEvent::MetaChanged);
+            cx.notify();
+            return false;
+        }
+
+        self.mark_clean(cx);
+        true
+    }
+
+    /// Queues one write to the real file, starting it immediately when the
+    /// queue is idle.
+    fn enqueue_physical_write(&mut self, write: PhysicalWrite, cx: &mut Context<Self>) {
+        if self.physical_writes.push(write) {
+            self.pump_physical_writes(cx);
+        }
+    }
+
+    /// Frees the running slot and starts the next queued write, if any.
+    ///
+    /// Every write's completion runs this inside its entity update, so the
+    /// next write starts only after the previous outcome is fully applied:
+    /// two physical writes for one document can never interleave, and a
+    /// running write is never replaced by cancellation — it always lands.
+    fn pump_physical_writes(&mut self, cx: &mut Context<Self>) {
+        self.physical_writes.mark_finished();
+
+        let Some(write) = self.physical_writes.next_to_start() else {
+            return;
+        };
+        let baseline = self.physical_writes.baseline().cloned();
+
+        let entity = cx.entity().clone();
+        cx.spawn(async move |_this, cx| {
+            let executed = cx
+                .background_executor()
+                .spawn(async move { execute_write(write, baseline.as_ref()) })
+                .await;
+
+            finish_physical_write(&entity, executed, cx).await;
+        })
+        .detach();
     }
 
     /// Flush auto-save content synchronously (called before closing a tab).

@@ -308,9 +308,9 @@ impl Workspace {
         };
 
         let body = if uses_connection_context {
-            Self::strip_annotation_header(&content, &language)
+            Self::strip_annotation_header(&content, &language).to_string()
         } else {
-            &content
+            content.clone()
         };
 
         // Track in recent files
@@ -327,7 +327,8 @@ impl Workspace {
                 .map(str::to_string)
                 .unwrap_or_else(documents_default_title),
             path: Some(path),
-            body: body.to_string(),
+            body,
+            raw: content,
             language,
             connection_id,
             exec_ctx,
@@ -341,22 +342,36 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let PendingOpenScript {
+            path,
+            title,
+            body,
+            raw,
+            language,
+            connection_id,
+            exec_ctx,
+        } = pending;
+
         let doc = cx.new(|cx| {
             let mut doc = CodeDocument::new_with_language(
                 self.app_state.clone(),
-                pending.connection_id,
-                pending.language,
+                connection_id,
+                language,
                 window,
                 cx,
             )
-            .with_exec_ctx(pending.exec_ctx, cx);
-            doc = doc.with_title(pending.title);
+            .with_exec_ctx(exec_ctx, cx);
+            doc = doc.with_title(title);
 
-            if let Some(path) = pending.path {
-                doc = doc.with_path(path);
+            if let Some(path) = path {
+                doc = doc.with_path(path.clone());
+                // The editor shows the stripped body, but the file's raw bytes —
+                // annotation header included — are the physical baseline, so the
+                // first autosave compares against exactly what is on disk.
+                doc.seed_file_baseline(path, raw);
             }
 
-            doc.set_content(&pending.body, window, cx);
+            doc.set_content(&body, window, cx);
             doc
         });
 
