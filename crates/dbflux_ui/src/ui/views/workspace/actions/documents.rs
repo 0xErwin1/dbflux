@@ -542,15 +542,16 @@ impl Workspace {
     /// Closes the active tab.
     ///
     /// If the tab has unsaved changes, opens `ModalUnsavedChanges` instead of
-    /// closing immediately. The modal's subscription in `Workspace::new` handles
-    /// the final close/save after the user decides.
+    /// closing immediately and returns `false` — the caller must not refocus
+    /// the document, or the editor input steals keyboard back from the
+    /// confirmation. Returns `true` when the tab was closed.
     pub(in crate::ui::views::workspace) fn close_active_tab(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
         let Some(doc_id) = self.tab_manager.read(cx).active_id() else {
-            return;
+            return true;
         };
 
         let dirty_summaries = self.tab_manager.read(cx).dirty_summaries(cx);
@@ -578,8 +579,14 @@ impl Workspace {
             self.modal_unsaved_changes.update(cx, |modal, cx| {
                 modal.open(req, cx);
             });
+            // Take focus off any editor input so Enter/Escape resolve through
+            // the ConfirmModal keymap instead of editing the buffer behind the
+            // modal.
+            self.focus_handle.focus(window);
+            false
         } else {
             self.close_tab(doc_id, window, cx);
+            true
         }
     }
 

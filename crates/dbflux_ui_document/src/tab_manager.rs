@@ -107,6 +107,14 @@ impl Tab {
         }
     }
 
+    /// Starts a save for an interrupted close; `false` means the document has
+    /// no save path and its tab must stay open.
+    pub fn save_for_close(&self, window: &mut Window, cx: &mut App) -> bool {
+        match self {
+            Tab::Pane(p) => p.save_for_close(window, cx),
+        }
+    }
+
     // --- Mutations ---
 
     pub fn set_active_tab(&self, active: bool, cx: &mut App) {
@@ -299,6 +307,15 @@ impl TabManager {
             tab_manager.update(cx, |_, cx| match event {
                 DocumentEvent::RequestFocus => {
                     cx.emit(TabManagerEvent::DocumentRequestedFocus);
+                }
+                DocumentEvent::SaveFinished { succeeded } => {
+                    cx.emit(TabManagerEvent::SaveFinished {
+                        id,
+                        succeeded: *succeeded,
+                    });
+                }
+                DocumentEvent::RequestClose => {
+                    cx.emit(TabManagerEvent::RequestClose { id });
                 }
                 DocumentEvent::RequestSqlPreview {
                     context,
@@ -733,6 +750,15 @@ pub enum TabManagerEvent {
     Opened(DocumentId),
     Closed(DocumentId),
     Activated(DocumentId),
+    /// A document finished a save attempt, successful or not.
+    SaveFinished {
+        id: DocumentId,
+        succeeded: bool,
+    },
+    /// A document asked to be closed — it is safe to close now.
+    RequestClose {
+        id: DocumentId,
+    },
     Reordered,
     /// A document requested focus (user clicked on it).
     DocumentRequestedFocus,

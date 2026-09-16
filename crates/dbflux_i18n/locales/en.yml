@@ -2433,6 +2433,9 @@ modals:
     save_selected:
       one: "Save selected (%{count})"
       many: "Save selected (%{count})"
+    cannot_save:
+      one: "This document can't be saved from here — its changes are kept and the tab stays open"
+      many: "%{count} documents can't be saved from here — their changes are kept and the tabs stay open"
     dont_save: Don't save
     cancel: Cancel
 palette:

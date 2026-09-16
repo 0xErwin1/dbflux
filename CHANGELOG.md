@@ -25,6 +25,22 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **Confirm modals are keyboard-accessible** — Enter now confirms and
+  Escape cancels every confirm dialog (multi-statement script
+  confirmation, dangerous query, and any other modal on the shared
+  `ConfirmModal` keymap context), and focus moves off the SQL editor
+  while a confirmation is open, so typing no longer edits the buffer
+  behind it. Focus returns to the editor when the dialog closes; the
+  script-confirm Run button is highlighted as the primary action.
+
+* **"Save" on tab close waits for the save to land** — a tab whose close
+  opened the unsaved-changes dialog now closes only after the write
+  actually succeeded. Dismissing Save As, a failed write, or edits made
+  while the write was in flight keep the tab open with its changes
+  instead of closing over unsaved work; a document that has no save path
+  at all keeps its tab too and says so. "Don't save" discards only the
+  documents the dialog listed, not every open tab.
+
 * **Password save failures are reported** — a failed keyring write while
   saving or duplicating a connection profile now keeps the form open and
   shows the error instead of silently committing a profile with no secret.

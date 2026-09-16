@@ -429,6 +429,10 @@ pub struct CodeDocument {
 
     /// Deferred action slots drained at the top of each render cycle.
     pending: PendingActions,
+
+    /// Set when a save was started by the interrupted-close flow, so a write
+    /// that lands also asks the workspace to close the tab.
+    close_after_save: bool,
 }
 
 struct PendingQueryResult {
@@ -1031,6 +1035,7 @@ impl CodeDocument {
                 _saved_label_timer: None,
             },
             pending: PendingActions::default(),
+            close_after_save: false,
         };
 
         document.sync_context_dropdowns(cx);
@@ -1389,6 +1394,26 @@ impl CodeDocument {
         }
     }
 
+    /// Marks the buffer clean against the text a finished write captured.
+    ///
+    /// The user can keep typing while a write is in flight, so the buffer may no
+    /// longer match what landed. It then stays dirty against that text — now the
+    /// on-disk baseline — and reports `false`, so a close waiting on the save
+    /// keeps the tab open instead of discarding the newer edits.
+    fn mark_clean_against(&mut self, saved_input: &str, cx: &mut Context<Self>) -> bool {
+        if self.editor.input_state.read(cx).value() != saved_input {
+            self.editor.original_content = saved_input.to_string();
+            self.editor.is_dirty = true;
+            self.session._auto_save_debounce = None;
+            cx.emit(DocumentEvent::MetaChanged);
+            cx.notify();
+            return false;
+        }
+
+        self.mark_clean(cx);
+        true
+    }
+
     // === Accessors for DocumentHandle ===
 
     pub fn id(&self) -> DocumentId {
@@ -1565,11 +1590,26 @@ impl CodeDocument {
         if self.pending.dangerous_query.is_some() {
             match cmd {
                 Command::Cancel => {
-                    self.cancel_dangerous_query(cx);
+                    self.cancel_dangerous_query(window, cx);
                     return true;
                 }
                 Command::Execute => {
                     self.confirm_dangerous_query(false, window, cx);
+                    return true;
+                }
+                _ => return false,
+            }
+        }
+
+        // Same for the multi-statement script confirmation.
+        if self.pending.script_confirm.is_some() {
+            match cmd {
+                Command::Cancel => {
+                    self.cancel_script_query(window, cx);
+                    return true;
+                }
+                Command::Execute => {
+                    self.confirm_script_query(window, cx);
                     return true;
                 }
                 _ => return false,
@@ -1969,6 +2009,7 @@ mod tests {
     use super::{
         CodeDocument, LanguageBinding, diff_stats_from_pair, source_input_values_from_context,
     };
+    use crate::handle::DocumentEvent;
     use dbflux_components::theme;
     use dbflux_core::{ExecutionSourceContext, QueryLanguage};
     use dbflux_storage::bootstrap::StorageRuntime;
@@ -2196,5 +2237,308 @@ mod tests {
         let es = dbflux_i18n::t!("document.code.title.untitled", locale = "es");
 
         assert_ne!(en, es);
+    }
+
+    /// The document events the workspace acts on, in delivery order.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    enum RecordedEvent {
+        SaveFinished(bool),
+        RequestClose,
+    }
+
+    /// Builds a document with real pending edits and records its events while
+    /// `drive` runs, then reports the recorded events and whether the buffer is
+    /// still dirty.
+    ///
+    /// The fixture edits the buffer rather than forcing the dirty flag, so it
+    /// is dirty by the same `change_summary` predicate the close flow uses to
+    /// decide whether to raise the unsaved-changes dialog at all.
+    fn with_dirty_document(
+        cx: &mut TestAppContext,
+        path: std::path::PathBuf,
+        drive: impl FnOnce(&gpui::Entity<CodeDocument>, &mut gpui::VisualTestContext),
+    ) -> (Vec<RecordedEvent>, bool) {
+        init_test_runtime(cx);
+        let app_state = isolated_test_app_state(cx);
+        let doc_holder: Rc<RefCell<Option<gpui::Entity<CodeDocument>>>> =
+            Rc::new(RefCell::new(None));
+        let doc_ref = doc_holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let doc = cx.new(|cx| {
+                let mut document = CodeDocument::new_with_language(
+                    app_state.clone(),
+                    None,
+                    QueryLanguage::Sql,
+                    window,
+                    cx,
+                )
+                .with_path(path);
+                document.set_content("SELECT 1;", window, cx);
+                document.editor.input_state.update(cx, |state, cx| {
+                    state.set_value("SELECT 2;", window, cx);
+                });
+                document
+            });
+            doc_ref.replace(Some(doc.clone()));
+            Root::new(doc, window, cx)
+        });
+
+        let doc = doc_holder.borrow().clone().expect("doc should be created");
+
+        let summary = window.update(|_, app| doc.read(app).change_summary(app));
+        assert!(
+            summary.is_some(),
+            "the fixture must be dirty by the close flow's own predicate"
+        );
+
+        let events: Rc<RefCell<Vec<RecordedEvent>>> = Rc::new(RefCell::new(Vec::new()));
+        let sink = events.clone();
+        window.update(|_, app| {
+            app.subscribe(&doc, move |_, event: &DocumentEvent, _| match event {
+                DocumentEvent::SaveFinished { succeeded } => {
+                    sink.borrow_mut()
+                        .push(RecordedEvent::SaveFinished(*succeeded));
+                }
+                DocumentEvent::RequestClose => {
+                    sink.borrow_mut().push(RecordedEvent::RequestClose);
+                }
+                _ => {}
+            })
+            .detach();
+        });
+
+        drive(&doc, window);
+        window.run_until_parked();
+
+        let dirty = window.update(|_, app| doc.read(app).editor.is_dirty);
+        let recorded = events.borrow().clone();
+
+        (recorded, dirty)
+    }
+
+    fn temp_save_path() -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("dbflux-save-outcome-{}.sql", uuid::Uuid::new_v4()))
+    }
+
+    /// A landed ordinary save reports success but must not close the tab: only
+    /// the interrupted-close flow may ask for that.
+    #[gpui::test]
+    fn a_landed_save_reports_success_and_clears_the_dirty_flag(cx: &mut TestAppContext) {
+        let path = temp_save_path();
+
+        let (events, dirty) = with_dirty_document(cx, path.clone(), |doc, window| {
+            window.update(|window, cx| {
+                doc.update(cx, |document, cx| document.save_file(window, cx));
+            });
+        });
+
+        assert_eq!(
+            events,
+            vec![RecordedEvent::SaveFinished(true)],
+            "a landed write reports success and does not ask to close"
+        );
+        assert!(!dirty, "a landed write must clear the dirty flag");
+
+        std::fs::remove_file(&path).expect("the temp save file must be removable");
+    }
+
+    /// Regression for the blocking review: the tab closes only once the write
+    /// the interrupted close started actually landed.
+    #[gpui::test]
+    fn a_landed_save_for_close_asks_to_close_the_tab(cx: &mut TestAppContext) {
+        let path = temp_save_path();
+
+        let (events, dirty) = with_dirty_document(cx, path.clone(), |doc, window| {
+            window.update(|window, cx| {
+                doc.update(cx, |document, cx| {
+                    document.save_for_close(window, cx);
+                });
+            });
+        });
+
+        assert_eq!(
+            events,
+            vec![
+                RecordedEvent::SaveFinished(true),
+                RecordedEvent::RequestClose
+            ],
+            "the close the dialog interrupted must finish after the write lands"
+        );
+        assert!(!dirty, "a landed write must clear the dirty flag");
+
+        std::fs::remove_file(&path).expect("the temp save file must be removable");
+    }
+
+    /// Regression for the blocking review: a save that cannot land reports
+    /// failure, so the tab stays open with its changes.
+    #[gpui::test]
+    fn a_failed_save_reports_failure_and_keeps_the_buffer_dirty(cx: &mut TestAppContext) {
+        // Writing over a directory fails on every platform, which is the same
+        // branch a full disk or a revoked permission takes.
+        let (events, dirty) = with_dirty_document(cx, std::env::temp_dir(), |doc, window| {
+            window.update(|window, cx| {
+                doc.update(cx, |document, cx| {
+                    document.save_for_close(window, cx);
+                });
+            });
+        });
+
+        assert_eq!(
+            events,
+            vec![RecordedEvent::SaveFinished(false)],
+            "a failed write reports failure and never asks to close"
+        );
+        assert!(dirty, "a failed write must keep the buffer dirty");
+    }
+
+    /// Regression for the poisoned-expectation case the review found: a
+    /// cancelled or failed close-driven save must drop its close intent, so the
+    /// user's own later save cannot close the tab behind their back.
+    #[gpui::test]
+    fn a_failed_save_for_close_forgets_the_close_intent(cx: &mut TestAppContext) {
+        let writable = temp_save_path();
+
+        let (events, dirty) = with_dirty_document(cx, std::env::temp_dir(), |doc, window| {
+            window.update(|window, cx| {
+                doc.update(cx, |document, cx| {
+                    document.save_for_close(window, cx);
+                });
+            });
+            window.run_until_parked();
+
+            // The user retries later, at a path that works: that is an
+            // ordinary save, so it must not close the tab.
+            window.update(|window, cx| {
+                doc.update(cx, |document, cx| {
+                    document.editor.path = Some(writable.clone());
+                    document.save_file(window, cx);
+                });
+            });
+        });
+
+        assert_eq!(
+            events,
+            vec![
+                RecordedEvent::SaveFinished(false),
+                RecordedEvent::SaveFinished(true)
+            ],
+            "the failed close-driven save must not arm a later save to close the tab"
+        );
+        assert!(!dirty, "the retried write must land");
+
+        std::fs::remove_file(&writable).expect("the temp save file must be removable");
+    }
+
+    /// Regression: edits made while the close-driven write is in flight are
+    /// neither written nor discarded. The tab stays open and dirty, and the
+    /// file holds exactly the text the write captured.
+    #[gpui::test]
+    fn typing_during_a_save_for_close_keeps_the_tab_open(cx: &mut TestAppContext) {
+        let path = temp_save_path();
+        let path_for_write = path.clone();
+
+        let (events, dirty) = with_dirty_document(cx, path.clone(), |doc, window| {
+            window.update(|window, cx| {
+                doc.update(cx, |document, cx| {
+                    document.save_for_close(window, cx);
+                });
+            });
+
+            // The write is still in flight: the buffer moves on without it.
+            window.update(|window, cx| {
+                doc.update(cx, |document, cx| {
+                    document.editor.input_state.update(cx, |state, cx| {
+                        state.set_value("SELECT 3;", window, cx);
+                    });
+                });
+            });
+        });
+
+        assert_eq!(
+            events,
+            vec![RecordedEvent::SaveFinished(false)],
+            "a save the buffer outgrew must not close the tab"
+        );
+        assert!(dirty, "the newer edits must stay pending");
+
+        let written = std::fs::read_to_string(&path_for_write).expect("the save must land");
+        assert_eq!(
+            written, "SELECT 2;",
+            "the file holds the text the write captured, not the newer edits"
+        );
+
+        std::fs::remove_file(&path_for_write).expect("the temp save file must be removable");
+    }
+
+    /// The workspace only learns about a finished close through this relay: the
+    /// document event becomes a `TabManagerEvent` carrying the tab's own id.
+    #[gpui::test]
+    fn a_close_request_relays_through_the_tab_manager(cx: &mut TestAppContext) {
+        use crate::tab_manager::{Tab, TabManager, TabManagerEvent};
+
+        let path = temp_save_path();
+        init_test_runtime(cx);
+        let app_state = isolated_test_app_state(cx);
+        let doc_holder: Rc<RefCell<Option<gpui::Entity<CodeDocument>>>> =
+            Rc::new(RefCell::new(None));
+        let doc_ref = doc_holder.clone();
+        let path_for_doc = path.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let doc = cx.new(|cx| {
+                let mut document = CodeDocument::new_with_language(
+                    app_state.clone(),
+                    None,
+                    QueryLanguage::Sql,
+                    window,
+                    cx,
+                )
+                .with_path(path_for_doc);
+                document.set_content("SELECT 1;", window, cx);
+                document.editor.input_state.update(cx, |state, cx| {
+                    state.set_value("SELECT 2;", window, cx);
+                });
+                document
+            });
+            doc_ref.replace(Some(doc.clone()));
+            Root::new(doc, window, cx)
+        });
+
+        let doc = doc_holder.borrow().clone().expect("doc should be created");
+        let document_id = window.update(|_, app| doc.read(app).id());
+
+        let manager = window.new(|_| TabManager::new());
+        let events: Rc<RefCell<Vec<TabManagerEvent>>> = Rc::new(RefCell::new(Vec::new()));
+        let sink = events.clone();
+        window.update(|_, app| {
+            app.subscribe(&manager, move |_, event: &TabManagerEvent, _| {
+                sink.borrow_mut().push(event.clone());
+            })
+            .detach();
+
+            let pane = CodeDocument::into_pane(doc.clone(), app);
+            manager.update(app, |manager, cx| {
+                manager.open(Tab::Pane(Box::new(pane)), cx)
+            });
+        });
+
+        window.update(|window, cx| {
+            doc.update(cx, |document, cx| {
+                document.save_for_close(window, cx);
+            });
+        });
+        window.run_until_parked();
+
+        let recorded = events.borrow().clone();
+        assert!(
+            recorded.iter().any(|event| matches!(
+                event,
+                TabManagerEvent::RequestClose { id } if *id == document_id
+            )),
+            "the tab manager must relay the close request for the tab that asked, got {recorded:?}"
+        );
+
+        std::fs::remove_file(&path).expect("the temp save file must be removable");
     }
 }

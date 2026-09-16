@@ -171,6 +171,11 @@ pub struct PaneHandle {
 
     /// Runs document-owned asynchronous teardown before the pane is removed.
     pub on_close: Option<Box<dyn Fn(&mut App)>>,
+
+    /// Saves the document as part of an interrupted close and asks the
+    /// workspace to close its tab once the write actually lands. `None` means
+    /// the document has no save path, so its tab keeps the pending changes.
+    pub save_for_close: Option<Box<dyn Fn(&mut Window, &mut App) -> bool>>,
 }
 
 impl PaneHandle {
@@ -231,6 +236,7 @@ impl PaneHandle {
             take_pending_open_bucket: None,
             take_pending_open_object_editor: None,
             on_close: None,
+            save_for_close: None,
         }
     }
 
@@ -332,6 +338,18 @@ impl PaneHandle {
     pub fn on_close(&self, cx: &mut App) {
         if let Some(close) = self.on_close.as_ref() {
             close(cx);
+        }
+    }
+
+    /// Starts a save for an interrupted close.
+    ///
+    /// Returns `false` when the document has no save path: the workspace must
+    /// then leave the tab open with its changes.
+    pub fn save_for_close(&self, window: &mut Window, cx: &mut App) -> bool {
+        if let Some(save) = self.save_for_close.as_ref() {
+            save(window, cx)
+        } else {
+            false
         }
     }
 

@@ -196,6 +196,10 @@ impl CodeDocument {
                 in_new_tab,
                 statement_count,
             });
+            // Take focus off the editor input so Enter/Escape resolve through
+            // the ConfirmModal keymap instead of editing the buffer behind the
+            // modal.
+            self.focus_handle.focus(window);
             cx.notify();
             return;
         }
@@ -232,11 +236,13 @@ impl CodeDocument {
             return;
         };
 
+        self.focus(window, cx);
         self.run_query_text(pending.query, pending.in_new_tab, window, cx);
     }
 
-    pub(super) fn cancel_script_query(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn cancel_script_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.pending.script_confirm = None;
+        self.focus(window, cx);
         cx.notify();
     }
 
@@ -244,7 +250,7 @@ impl CodeDocument {
         &mut self,
         query: String,
         in_new_tab: bool,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if query.trim().is_empty() {
@@ -299,6 +305,10 @@ impl CodeDocument {
                         kind,
                         in_new_tab,
                     });
+                    // Take focus off the editor input so Enter/Escape resolve
+                    // through the ConfirmModal keymap instead of editing the
+                    // buffer behind the modal.
+                    self.focus_handle.focus(window);
                     cx.notify();
                     return;
                 }
@@ -885,6 +895,7 @@ impl CodeDocument {
         // Emit audit event for dangerous query confirmation
         self.emit_dangerous_query_audit_event(cx, pending.kind);
 
+        self.focus(window, cx);
         self.execute_query_internal(pending.query, pending.in_new_tab, window, cx);
     }
 
@@ -1013,8 +1024,9 @@ impl CodeDocument {
         }
     }
 
-    pub(super) fn cancel_dangerous_query(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn cancel_dangerous_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.pending.dangerous_query = None;
+        self.focus(window, cx);
         cx.notify();
     }
 

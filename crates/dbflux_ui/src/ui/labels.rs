@@ -457,6 +457,16 @@ pub(crate) fn settings_default_connection_name() -> String {
     dbflux_i18n::t!("settings.action.default_connection_name")
 }
 
+/// Formats the warning shown when the unsaved-changes dialog cannot save the
+/// documents it listed, so their tabs stay open with the pending changes.
+pub(crate) fn unsaved_changes_cannot_save_message(count: usize) -> String {
+    if count == 1 {
+        dbflux_i18n::t!("modals.unsaved_changes.cannot_save.one", count = count)
+    } else {
+        dbflux_i18n::t!("modals.unsaved_changes.cannot_save.many", count = count)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -478,7 +488,8 @@ mod tests {
         scripts_filter_javascript_mongodb_label, scripts_filter_redis_label,
         scripts_filter_sql_label, scripts_open_dialog_title, scripts_read_file_failed_message,
         select_dump_analyzer, settings_default_connection_name, shutdown_phase_label,
-        tasks_running_label, workspace_delete_connection_message, workspace_delete_folder_message,
+        tasks_running_label, unsaved_changes_cannot_save_message,
+        workspace_delete_connection_message, workspace_delete_folder_message,
         workspace_delete_selected_message, workspace_drop_object_message,
     };
     use dbflux_core::ShutdownPhase;
@@ -627,6 +638,19 @@ mod tests {
         let message = workspace_delete_connection_message("prod-db");
 
         assert!(message.contains("prod-db"));
+    }
+
+    #[test]
+    fn unsaved_changes_cannot_save_message_embeds_count_and_pluralizes() {
+        let one = unsaved_changes_cannot_save_message(1);
+        let many = unsaved_changes_cannot_save_message(4);
+
+        assert!(!one.is_empty() && !many.is_empty());
+        assert!(
+            many.contains('4'),
+            "the plural form must say how many documents are affected"
+        );
+        assert_ne!(one, many, "the singular and plural forms must differ");
     }
 
     const WORKSPACE_ACTIONS_CATALOG_KEYS: &[&str] = &[

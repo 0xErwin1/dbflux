@@ -152,6 +152,12 @@ impl ObjectEditorDocument {
             Box::new(move |cx| e.read(cx).status_segments(cx))
         });
 
+        // The interrupted-close save: the tab closes only after the write lands.
+        pane.save_for_close = Some({
+            let e = entity.clone();
+            Box::new(move |_w, cx| e.update(cx, |d, cx| d.save_for_close(cx)))
+        });
+
         pane
     }
 }

@@ -2433,6 +2433,9 @@ modals:
     save_selected:
       one: "保存所选（%{count}）"
       many: "保存所选（%{count}）"
+    cannot_save:
+      one: "此文档无法在此处保存：更改已保留，标签页保持打开"
+      many: "%{count} 个文档无法在此处保存：更改已保留，标签页保持打开"
     dont_save: 不保存
     cancel: 取消
 palette:

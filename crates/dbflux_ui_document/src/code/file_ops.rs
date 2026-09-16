@@ -1,4 +1,5 @@
 use super::*;
+use dbflux_ui_base::AsyncUpdateResultExt;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error_async};
 
 /// Build the file content, prepending the execution-context annotation header
@@ -28,7 +29,50 @@ fn build_file_content_for_language(
     format!("{}\n{}", header, body)
 }
 
+/// Reports a save that did not reach the filesystem: the Save As picker was
+/// dismissed, could not be opened, or the write failed. The buffer stays dirty,
+/// so a tab close waiting on that save must not proceed.
+fn report_save_failed(entity: &Entity<CodeDocument>, cx: &AsyncApp) {
+    cx.update(|cx| {
+        entity.update(cx, |doc, cx| {
+            doc.report_save_outcome(false, cx);
+        });
+    })
+    .log_if_dropped();
+}
+
 impl CodeDocument {
+    /// Saves as part of an interrupted close.
+    ///
+    /// The tab is meant to close, but only once the write lands: this marks the
+    /// save as close-driven, and `report_save_outcome` asks the workspace to
+    /// close the tab when it succeeds. A dismissed Save As, a failed write, or
+    /// a buffer the user kept typing in clears the mark, so the tab keeps its
+    /// changes. Repeating the request while a save is in flight is intentional:
+    /// that save now reports to the close the second request asked for.
+    pub fn save_for_close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        self.close_after_save = true;
+        // A code document always has a save path: file-backed buffers write in
+        // place, an untitled buffer redirects to Save As.
+        self.save_file(window, cx);
+        true
+    }
+
+    /// Reports a finished save to the workspace.
+    ///
+    /// Only a save the interrupted-close flow started, and only one that
+    /// actually landed, asks for the tab to close; every other outcome drops
+    /// that intent so a later manual save cannot close a tab the user kept.
+    pub(super) fn report_save_outcome(&mut self, succeeded: bool, cx: &mut Context<Self>) {
+        let close_after_save = std::mem::take(&mut self.close_after_save);
+
+        cx.emit(DocumentEvent::SaveFinished { succeeded });
+
+        if succeeded && close_after_save {
+            cx.emit(DocumentEvent::RequestClose);
+        }
+    }
+
     /// Save to the current path. If no path is set, redirects to Save As.
     pub fn save_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(path) = self.editor.path.clone() else {
@@ -36,6 +80,11 @@ impl CodeDocument {
             return;
         };
 
+        // The buffer may change while the write is in flight; the save only
+        // clears the dirty state for the text that actually landed. Compared in
+        // buffer terms, not file terms, because the written bytes also carry the
+        // execution-context annotation header.
+        let saved_input = self.editor.input_state.read(cx).value().to_string();
         let content = self.build_file_content(cx);
 
         let entity = cx.entity().clone();
@@ -49,10 +98,11 @@ impl CodeDocument {
                 Ok(()) => {
                     cx.update(|cx| {
                         entity.update(cx, |doc, cx| {
-                            doc.mark_clean(cx);
+                            let landed = doc.mark_clean_against(&saved_input, cx);
+                            doc.report_save_outcome(landed, cx);
                         });
                     })
-                    .ok();
+                    .log_if_dropped();
                 }
                 Err(e) => {
                     report_error_async(
@@ -62,6 +112,7 @@ impl CodeDocument {
                         ),
                         cx,
                     );
+                    report_save_failed(&entity, cx);
                 }
             }
         }));
@@ -69,6 +120,9 @@ impl CodeDocument {
 
     /// Open a "Save As" dialog and save to the chosen path.
     pub fn save_file_as(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        // The dialog can stay open long enough for the user to type: only the
+        // text captured here is written, so only that text may be marked clean.
+        let saved_input = self.editor.input_state.read(cx).value().to_string();
         let content = self.build_file_content(cx);
         let default_ext = self.effective_language().default_extension().to_string();
         let language_name = self.effective_language().display_name().to_string();
@@ -125,6 +179,7 @@ impl CodeDocument {
                             ),
                             cx,
                         );
+                        report_save_failed(&entity, cx);
                         return;
                     }
                 }
@@ -132,6 +187,7 @@ impl CodeDocument {
 
             let Some((path, used_fallback)) = target else {
                 // Native dialog was available and user cancelled — no toast.
+                report_save_failed(&entity, cx);
                 return;
             };
 
@@ -147,7 +203,8 @@ impl CodeDocument {
                             }
 
                             doc.editor.path = Some(path_for_update.clone());
-                            doc.mark_clean(cx);
+                            let landed = doc.mark_clean_against(&saved_input, cx);
+                            doc.report_save_outcome(landed, cx);
                         });
 
                         app_state.update(cx, |state, cx| {
@@ -164,7 +221,7 @@ impl CodeDocument {
                             .push(cx);
                         }
                     })
-                    .ok();
+                    .log_if_dropped();
                 }
                 Err(e) => {
                     report_error_async(
@@ -177,6 +234,7 @@ impl CodeDocument {
                         ),
                         cx,
                     );
+                    report_save_failed(&entity, cx);
                 }
             }
         }));

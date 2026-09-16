@@ -36,10 +36,14 @@ impl Workspace {
                 Some(true)
             }
             Command::CloseCurrentTab => {
-                self.close_active_tab(window, cx);
-                // Focus the newly active document if any
-                self.tab_manager
-                    .update(cx, |mgr, cx| mgr.focus_active(window, cx));
+                let closed = self.close_active_tab(window, cx);
+                // Focus the newly active document if any. When the dirty
+                // check opened the confirmation instead, it owns the keyboard
+                // and the document focus must stay off the editor input.
+                if closed {
+                    self.tab_manager
+                        .update(cx, |mgr, cx| mgr.focus_active(window, cx));
+                }
                 Some(true)
             }
 
