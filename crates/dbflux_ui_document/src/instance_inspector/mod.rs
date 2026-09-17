@@ -267,8 +267,7 @@ impl InspectorPanel {
                     panel.pending_result = Some(PendingResult { task_id, result });
                     cx.notify();
                 });
-            })
-            .ok();
+            });
         })
         .detach();
     }
@@ -316,7 +315,7 @@ impl InspectorPanel {
             loop {
                 cx.background_executor().timer(duration).await;
 
-                let _ = cx.update(|cx| {
+                cx.update(|cx| {
                     let Some(entity) = this.upgrade() else {
                         return;
                     };
@@ -397,16 +396,13 @@ impl InspectorPanel {
             // Resolve the connection at execution time (after the user confirms),
             // not at click time. This prevents a stale Arc from being used if the
             // profile disconnects and reconnects between click and confirm.
-            let connection: Option<Arc<dyn dbflux_core::Connection>> = cx
-                .update(|cx| {
-                    app_state
-                        .read(cx)
-                        .connections()
-                        .get(&profile_id)
-                        .and_then(|c| c.resolve_connection_for_execution(None).ok())
-                })
-                .ok()
-                .flatten();
+            let connection: Option<Arc<dyn dbflux_core::Connection>> = cx.update(|cx| {
+                app_state
+                    .read(cx)
+                    .connections()
+                    .get(&profile_id)
+                    .and_then(|c| c.resolve_connection_for_execution(None).ok())
+            });
 
             let Some(conn) = connection else {
                 let uf = UserFacingError::new(
@@ -441,7 +437,7 @@ impl InspectorPanel {
                 let uf = kill_error_to_user_facing(&action_id, &action_label, &metric_id, e);
                 report_error_async(uf, cx);
             } else {
-                let _ = cx.update(|cx| {
+                cx.update(|cx| {
                     if let Some(entity) = this.upgrade() {
                         entity.update(cx, |panel, cx| panel.request_reexec(cx));
                     }

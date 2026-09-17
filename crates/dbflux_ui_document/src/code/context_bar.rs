@@ -937,8 +937,7 @@ impl CodeDocument {
                             cx.notify();
                         })
                         .ok();
-                    })
-                    .log_if_dropped();
+                    });
                 }
                 Err(e) => {
                     log::error!("Failed to connect to database {}: {}", target_db, e);
@@ -954,8 +953,7 @@ impl CodeDocument {
                             cx.notify();
                         })
                         .ok();
-                    })
-                    .log_if_dropped();
+                    });
                 }
             }
         })

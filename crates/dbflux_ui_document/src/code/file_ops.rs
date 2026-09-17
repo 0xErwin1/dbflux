@@ -41,8 +41,7 @@ fn report_save_failed(entity: &Entity<CodeDocument>, cx: &AsyncApp) {
         entity.update(cx, |doc, cx| {
             doc.report_save_outcome(false, cx);
         });
-    })
-    .log_if_dropped();
+    });
 }
 
 /// Drops the close intent a refused close flush armed, so a tab the user kept
@@ -52,8 +51,7 @@ fn abandon_close_flush(entity: &Entity<CodeDocument>, cx: &mut AsyncApp) {
         entity.update(cx, |doc, cx| {
             doc.report_save_outcome(false, cx);
         });
-    })
-    .log_if_dropped();
+    });
 }
 
 /// Applies the result of one queued physical write: reports user-facing
@@ -152,8 +150,7 @@ async fn finish_physical_write(
 
                     doc.pump_physical_writes(cx);
                 });
-            })
-            .log_if_dropped();
+            });
         }
         WriteOutcome::ExternalConflict => {
             report_error_async(
@@ -244,8 +241,7 @@ fn start_next_physical_write(entity: &Entity<CodeDocument>, cx: &mut AsyncApp) {
         entity.update(cx, |doc, cx| {
             doc.pump_physical_writes(cx);
         });
-    })
-    .log_if_dropped();
+    });
 }
 
 impl CodeDocument {
@@ -473,8 +469,7 @@ impl CodeDocument {
                 entity.update(cx, |doc, cx| {
                     doc.enqueue_save_as_write(path, content, saved_input, used_fallback, cx);
                 });
-            })
-            .log_if_dropped();
+            });
         }));
     }
 
@@ -538,8 +533,7 @@ impl CodeDocument {
                             cx,
                         );
                     });
-                })
-                .log_if_dropped();
+                });
             }));
 
             return;
@@ -572,8 +566,7 @@ impl CodeDocument {
                         entity.update(cx, |doc, cx| {
                             doc.show_saved_label(cx);
                         });
-                    })
-                    .ok();
+                    });
                 }
                 Err(e) => {
                     report_error_async(
@@ -608,8 +601,7 @@ impl CodeDocument {
                         cx.notify();
                     });
                 }
-            })
-            .ok();
+            });
         }));
     }
 

@@ -103,7 +103,7 @@ pub(super) fn render_record(
     )
     .size_full()
     .with_sizing_behavior(ListSizingBehavior::Auto)
-    .track_scroll(record_scroll_handle.clone());
+    .track_scroll(&record_scroll_handle);
 
     list.style().restrict_scroll_to_axis = Some(true);
 

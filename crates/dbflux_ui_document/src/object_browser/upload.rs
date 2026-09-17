@@ -154,8 +154,7 @@ impl ObjectBrowserDocument {
                 }
 
                 entity.update(cx, |doc, cx| doc.reload_current_prefix(cx));
-            })
-            .ok();
+            });
         })
         .detach();
     }

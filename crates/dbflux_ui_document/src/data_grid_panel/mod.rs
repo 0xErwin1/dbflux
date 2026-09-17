@@ -843,8 +843,7 @@ impl DataGridPanel {
                     panel.pending.rebuild = true;
                     cx.notify();
                 });
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
     }
@@ -942,7 +941,9 @@ impl DataGridPanel {
             &filter_input,
             window,
             |this, input, event: &InputEvent, window, cx| match event {
-                InputEvent::PressEnter { secondary: false } => {
+                InputEvent::PressEnter {
+                    secondary: false, ..
+                } => {
                     this.refresh(window, cx);
                     this.focus_table(window, cx);
                 }
@@ -968,7 +969,9 @@ impl DataGridPanel {
             &limit_input,
             window,
             |this, _, event: &InputEvent, window, cx| match event {
-                InputEvent::PressEnter { secondary: false } => {
+                InputEvent::PressEnter {
+                    secondary: false, ..
+                } => {
                     this.refresh(window, cx);
                     this.focus_table(window, cx);
                 }
@@ -2018,7 +2021,7 @@ impl DataGridPanel {
             loop {
                 cx.background_executor().timer(duration).await;
 
-                let _ = cx.update(|cx| {
+                cx.update(|cx| {
                     let Some(entity) = this.upgrade() else {
                         return;
                     };
@@ -3656,8 +3659,7 @@ impl DataGridPanel {
                                         details,
                                     );
                                 });
-                            })
-                            .ok();
+                            });
                         }
                     } else {
                         log::warn!(
@@ -3770,8 +3772,7 @@ impl DataGridPanel {
                     Err(_) => grid.mark_fk_unavailable(cx),
                 })
                 .ok();
-            })
-            .ok();
+            });
         })
         .detach();
     }
@@ -3824,8 +3825,7 @@ impl DataGridPanel {
                     Err(_) => grid.mark_fk_unavailable(cx),
                 })
                 .ok();
-            })
-            .ok();
+            });
         })
         .detach();
     }
@@ -4404,8 +4404,7 @@ impl DataGridPanel {
                                 grid.runner.fail_mutation(task_id, e.to_string(), cx);
                             })
                             .ok();
-                        })
-                        .ok();
+                        });
                         report_error_async(
                             UserFacingError::new(
                                 ErrorKind::Driver,
@@ -4427,8 +4426,7 @@ impl DataGridPanel {
                                 crate::labels::mutation_execution_completed_toast(rows_affected),
                             )
                             .push(cx);
-                        })
-                        .ok();
+                        });
                     }
                     Ok(MutationOutcome::Cancelled { rows_affected }) => {
                         cx.update(|cx| {
@@ -4440,8 +4438,7 @@ impl DataGridPanel {
                                 crate::labels::mutation_execution_cancelled_toast(rows_affected),
                             )
                             .push(cx);
-                        })
-                        .ok();
+                        });
                     }
                     Ok(MutationOutcome::Failed { error }) => {
                         cx.update(|cx| {
@@ -4449,8 +4446,7 @@ impl DataGridPanel {
                                 grid.runner.fail_mutation(task_id, error.clone(), cx);
                             })
                             .ok();
-                        })
-                        .ok();
+                        });
                         report_error_async(
                             UserFacingError::new(
                                 ErrorKind::Driver,
@@ -4498,8 +4494,7 @@ impl DataGridPanel {
                                 grid.runner.fail_mutation(task_id, e.to_string(), cx);
                             })
                             .ok();
-                        })
-                        .ok();
+                        });
                         report_error_async(
                             UserFacingError::new(
                                 ErrorKind::Driver,
@@ -4521,8 +4516,7 @@ impl DataGridPanel {
                                 crate::labels::mutation_execution_completed_toast(rows_affected),
                             )
                             .push(cx);
-                        })
-                        .ok();
+                        });
                     }
                     Ok(MutationOutcome::Cancelled { rows_affected }) => {
                         cx.update(|cx| {
@@ -4534,8 +4528,7 @@ impl DataGridPanel {
                                 crate::labels::mutation_execution_cancelled_toast(rows_affected),
                             )
                             .push(cx);
-                        })
-                        .ok();
+                        });
                     }
                     Ok(MutationOutcome::Failed { error }) => {
                         cx.update(|cx| {
@@ -4543,8 +4536,7 @@ impl DataGridPanel {
                                 grid.runner.fail_mutation(task_id, error.clone(), cx);
                             })
                             .ok();
-                        })
-                        .ok();
+                        });
                         report_error_async(
                             UserFacingError::new(
                                 ErrorKind::Driver,
@@ -4586,8 +4578,7 @@ impl DataGridPanel {
                                 grid.runner.fail_mutation(task_id, e.to_string(), cx);
                             })
                             .ok();
-                        })
-                        .ok();
+                        });
                         report_error_async(
                             UserFacingError::new(
                                 ErrorKind::Driver,
@@ -4609,8 +4600,7 @@ impl DataGridPanel {
                                 crate::labels::mutation_execution_completed_toast(rows_affected),
                             )
                             .push(cx);
-                        })
-                        .ok();
+                        });
                     }
                     Ok(MutationOutcome::Cancelled { rows_affected }) => {
                         cx.update(|cx| {
@@ -4622,8 +4612,7 @@ impl DataGridPanel {
                                 crate::labels::mutation_execution_cancelled_toast(rows_affected),
                             )
                             .push(cx);
-                        })
-                        .ok();
+                        });
                     }
                     Ok(MutationOutcome::Failed { error }) => {
                         cx.update(|cx| {
@@ -4631,8 +4620,7 @@ impl DataGridPanel {
                                 grid.runner.fail_mutation(task_id, error.clone(), cx);
                             })
                             .ok();
-                        })
-                        .ok();
+                        });
                         report_error_async(
                             UserFacingError::new(
                                 ErrorKind::Driver,

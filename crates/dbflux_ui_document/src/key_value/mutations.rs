@@ -167,8 +167,7 @@ impl super::KeyValueDocument {
                     }
                     cx.notify();
                 });
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
     }
@@ -265,8 +264,7 @@ impl super::KeyValueDocument {
                         this.reload_selected_value(cx);
                     }
                 });
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
     }
@@ -383,8 +381,7 @@ impl super::KeyValueDocument {
                         cx.notify();
                     }
                 });
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
 
@@ -519,8 +516,7 @@ impl super::KeyValueDocument {
                         cx.notify();
                     }
                 });
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
     }
@@ -718,8 +714,7 @@ impl super::KeyValueDocument {
                         cx.notify();
                     }
                 });
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
 
@@ -848,8 +843,7 @@ impl super::KeyValueDocument {
                         cx.notify();
                     }
                 });
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
     }
@@ -998,8 +992,7 @@ impl super::KeyValueDocument {
                         cx.notify();
                     }
                 });
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
     }

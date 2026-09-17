@@ -158,8 +158,7 @@ impl ObjectBrowserDocument {
                         ))
                         .meta_right(now_hms())
                         .push(cx);
-                    })
-                    .ok();
+                    });
                 }
                 Err(err) => report_error_async(db_error_to_user_facing(err), cx),
             }
@@ -172,8 +171,7 @@ impl ObjectBrowserDocument {
                         }
                         doc.reload_current_prefix(cx);
                     });
-                })
-                .ok();
+                });
             }
         })
         .detach();

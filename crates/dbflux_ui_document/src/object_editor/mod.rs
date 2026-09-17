@@ -325,8 +325,7 @@ impl ObjectEditorDocument {
                 entity.update(cx, |doc, cx| {
                     doc.apply_load_outcome(result, cx);
                 });
-            })
-            .ok();
+            });
         })
         .detach();
     }
@@ -588,8 +587,7 @@ impl ObjectEditorDocument {
                 entity.update(cx, |doc, cx| {
                     doc.apply_save_outcome(text, byte_len, result.is_ok(), cx);
                 });
-            })
-            .ok();
+            });
         })
         .detach();
     }

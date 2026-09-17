@@ -1092,8 +1092,7 @@ impl DataGridPanel {
                                 });
                                 cx.notify();
                             });
-                        })
-                        .log_if_dropped();
+                        });
                         return;
                     }
                 }
@@ -1149,8 +1148,7 @@ impl DataGridPanel {
                     panel.pending.toast = Some(PendingToast { message, is_error });
                     cx.notify();
                 });
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
     }
@@ -1884,8 +1882,7 @@ impl DataGridPanel {
                             insp.resolve_reference(index, Err(e.to_string()), cx);
                         }
                     })
-                })
-                .ok();
+                });
             })
             .detach();
         }
@@ -2312,8 +2309,7 @@ impl DataGridPanel {
                         }
                         cx.notify();
                     });
-                })
-                .log_if_dropped();
+                });
             })
             .detach();
 
@@ -2442,8 +2438,7 @@ impl DataGridPanel {
                     }
                     cx.notify();
                 });
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
     }

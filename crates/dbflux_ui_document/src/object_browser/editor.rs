@@ -406,8 +406,7 @@ impl ObjectBrowserDocument {
                 entity.update(cx, |doc, cx| {
                     doc.apply_save_outcome(key, text, byte_len, result.is_ok(), elapsed_millis, cx);
                 });
-            })
-            .ok();
+            });
         })
         .detach();
     }

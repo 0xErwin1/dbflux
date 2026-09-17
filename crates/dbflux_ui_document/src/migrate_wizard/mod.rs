@@ -161,33 +161,29 @@ async fn fetch_table_details_via_seam(
     table_ref: &TableRef,
     cx: &mut AsyncApp,
 ) -> Result<TableDetailsFetch, String> {
-    let prepared = cx
-        .update(|cx| {
-            app_state.read(cx).prepare_fetch_table_details(
-                profile_id,
-                database,
-                table_ref.schema.as_deref(),
-                &table_ref.name,
-            )
-        })
-        .map_err(|e| e.to_string())?;
+    let prepared = cx.update(|cx| {
+        app_state.read(cx).prepare_fetch_table_details(
+            profile_id,
+            database,
+            table_ref.schema.as_deref(),
+            &table_ref.name,
+        )
+    });
 
     let params = match prepared {
         Ok(params) => params,
         Err(e) if is_already_cached_sentinel(&e) => {
-            let cached = cx
-                .update(|cx| {
-                    app_state
-                        .read(cx)
-                        .get_table_details(
-                            profile_id,
-                            database,
-                            table_ref.schema.as_deref(),
-                            &table_ref.name,
-                        )
-                        .cloned()
-                })
-                .map_err(|e| e.to_string())?;
+            let cached = cx.update(|cx| {
+                app_state
+                    .read(cx)
+                    .get_table_details(
+                        profile_id,
+                        database,
+                        table_ref.schema.as_deref(),
+                        &table_ref.name,
+                    )
+                    .cloned()
+            });
             return Ok(match cached {
                 Some(info) => TableDetailsFetch::Found(Box::new(info)),
                 None => TableDetailsFetch::NotFound(
@@ -223,8 +219,7 @@ async fn fetch_table_details_via_seam(
                         result.dependents,
                     );
                 });
-            })
-            .map_err(|e| e.to_string())?;
+            });
             Ok(TableDetailsFetch::Found(Box::new(details)))
         }
         Err(error @ DbError::ObjectNotFound(_)) => {
@@ -247,29 +242,25 @@ async fn fetch_schema_foreign_keys_via_seam(
     schema: Option<&str>,
     cx: &mut AsyncApp,
 ) -> Result<Vec<SchemaForeignKeyInfo>, String> {
-    let prepared = cx
-        .update(|cx| {
-            app_state
-                .read(cx)
-                .prepare_fetch_schema_foreign_keys(profile_id, database, schema)
-        })
-        .map_err(|e| e.to_string())?;
+    let prepared = cx.update(|cx| {
+        app_state
+            .read(cx)
+            .prepare_fetch_schema_foreign_keys(profile_id, database, schema)
+    });
 
     let params = match prepared {
         Ok(params) => params,
         Err(e) if is_already_cached_sentinel(&e) => {
             let key = SchemaCacheKey::new(database, schema.map(str::to_string));
-            return cx
-                .update(|cx| {
-                    app_state
-                        .read(cx)
-                        .connections()
-                        .get(&profile_id)
-                        .and_then(|connected| connected.schema_foreign_keys.get(&key))
-                        .cloned()
-                        .unwrap_or_default()
-                })
-                .map_err(|e| e.to_string());
+            return Ok(cx.update(|cx| {
+                app_state
+                    .read(cx)
+                    .connections()
+                    .get(&profile_id)
+                    .and_then(|connected| connected.schema_foreign_keys.get(&key))
+                    .cloned()
+                    .unwrap_or_default()
+            }));
         }
         Err(e) => return Err(e),
     };
@@ -289,8 +280,7 @@ async fn fetch_schema_foreign_keys_via_seam(
                 execute_result.foreign_keys,
             );
         });
-    })
-    .map_err(|e| e.to_string())?;
+    });
 
     Ok(foreign_keys)
 }

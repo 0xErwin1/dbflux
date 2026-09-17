@@ -84,7 +84,9 @@ impl ObjectBrowserDocument {
                 &name_input,
                 |this, _input, event: &InputEvent, cx| match event {
                     InputEvent::Change => cx.notify(),
-                    InputEvent::PressEnter { secondary: false } => this.submit_new_folder(cx),
+                    InputEvent::PressEnter {
+                        secondary: false, ..
+                    } => this.submit_new_folder(cx),
                     _ => {}
                 },
             );
@@ -191,8 +193,7 @@ impl ObjectBrowserDocument {
                 entity.update(cx, |doc, cx| {
                     doc.apply_folder_created(key_for_task, outcome, cx);
                 });
-            })
-            .ok();
+            });
         })
         .detach();
     }

@@ -688,7 +688,7 @@ impl ChartDocument {
             loop {
                 cx.background_executor().timer(duration).await;
 
-                let _ = cx.update(|cx| {
+                cx.update(|cx| {
                     let Some(entity) = this.upgrade() else {
                         return;
                     };
@@ -903,8 +903,7 @@ impl ChartDocument {
                     doc.pending_result = Some(PendingResult { task_id, result });
                     cx.notify();
                 });
-            })
-            .ok();
+            });
         })
         .detach();
     }

@@ -132,8 +132,7 @@ impl ObjectBrowserDocument {
                     });
                     doc.apply_prefix_page(&prefix, result, cx);
                 });
-            })
-            .ok();
+            });
         })
         .detach();
     }
@@ -211,8 +210,7 @@ impl ObjectBrowserDocument {
                     });
                     doc.apply_object_metadata(generation, key, result, cx);
                 });
-            })
-            .ok();
+            });
         })
         .detach();
     }
@@ -357,8 +355,7 @@ impl ObjectBrowserDocument {
                         }
                     }
                 });
-            })
-            .ok();
+            });
         })
         .detach();
     }
@@ -458,8 +455,7 @@ impl ObjectBrowserDocument {
                 entity.update(cx, |doc, cx| {
                     doc.apply_prepared_preview(generation, key, prepared, cx);
                 });
-            })
-            .ok();
+            });
         })
         .detach();
     }
@@ -577,8 +573,7 @@ impl ObjectBrowserDocument {
                     };
                     cx.notify();
                 });
-            })
-            .ok();
+            });
         })
         .detach();
     }
@@ -629,8 +624,7 @@ impl ObjectBrowserDocument {
                     };
                     cx.notify();
                 });
-            })
-            .ok();
+            });
         })
         .detach();
     }
