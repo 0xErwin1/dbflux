@@ -4800,6 +4800,18 @@ mod tests {
         QueryResult::table(zero_row_columns(), Vec::new(), None, Duration::ZERO)
     }
 
+    /// One-column `id` result: `rebuild_table` maps the panel's key columns onto
+    /// the result by name, so a panel without a matching column stays read-only
+    /// no matter what the cache says.
+    fn id_result() -> QueryResult {
+        QueryResult::table(
+            vec![key_column("id", true)],
+            vec![vec![dbflux_core::Value::Int(1)]],
+            None,
+            Duration::ZERO,
+        )
+    }
+
     fn key_column(name: &str, is_primary_key: bool) -> ColumnMeta {
         ColumnMeta {
             name: name.to_string(),
@@ -7120,7 +7132,10 @@ mod tests {
                     order_by,
                     total_rows: None,
                 };
-                DataGridPanel::new_internal(source, app_state.clone(), pk_columns, window, cx)
+                let mut panel =
+                    DataGridPanel::new_internal(source, app_state.clone(), pk_columns, window, cx);
+                panel.result = id_result();
+                panel
             });
 
             // The path taken when that lookup comes back empty: with the details
@@ -7162,6 +7177,37 @@ mod tests {
             "a table whose cached primary key was found must stay editable"
         );
 
+        // #634 is about the grid's own gate, which `rebuild_table` fills from the
+        // same PK indices, and about the `ORDER BY` the first page needs.
+        let ordered_columns = window.update(|_, app| match &panel.read(app).source {
+            DataSource::Table { order_by, .. } => order_by
+                .iter()
+                .map(|o| o.column.name.clone())
+                .collect::<Vec<_>>(),
+            _ => Vec::new(),
+        });
+        assert_eq!(
+            ordered_columns,
+            vec!["id".to_string()],
+            "the cached primary key must order the table's pages"
+        );
+
+        let grid_editable = window.update(|_, app| {
+            panel.update(app, |panel, cx| panel.rebuild_table(None, cx));
+            panel
+                .read(app)
+                .grid_table
+                .table_state
+                .as_ref()
+                .expect("table_state must exist after rebuild_table")
+                .read(app)
+                .is_editable()
+        });
+        assert!(
+            grid_editable,
+            "the grid itself must be editable, not just the panel's mutations gate"
+        );
+
         let fetch_panel = fetch_panel_holder
             .borrow()
             .clone()
@@ -7178,6 +7224,183 @@ mod tests {
         assert!(
             !fetch_pending,
             "a cache hit must not leave the panel waiting for a fetch"
+        );
+    }
+
+    /// #634 — the cold path. The first page is issued before the primary keys are
+    /// known, so it carries no `ORDER BY` and `LIMIT/OFFSET` paging can repeat or
+    /// skip rows. When the details arrive, the source must be rewritten with the
+    /// order just learned, the page must be re-issued with it, and the grid must
+    /// come out editable.
+    #[gpui::test]
+    fn first_open_requeries_with_the_primary_key_order_it_learned(cx: &mut TestAppContext) {
+        use dbflux_core::{ColumnInfo, TableInfo};
+
+        init_test_runtime(cx);
+
+        let profile_id = uuid::Uuid::new_v4();
+        let app_state = isolated_test_app_state(cx);
+        let users = TableRef::with_schema("public", "users");
+
+        cx.update(|cx| {
+            app_state.update(cx, |app, _| {
+                use dbflux_core::{ConnectedProfile, DbConfig, MutationPolicy};
+                use std::path::PathBuf;
+
+                let profile = dbflux_core::ConnectionProfile::new(
+                    "test",
+                    DbConfig::SQLite {
+                        path: PathBuf::from(":memory:"),
+                        connection_id: None,
+                    },
+                );
+                let connected = ConnectedProfile {
+                    profile,
+                    connection: Arc::new(StubConnection) as Arc<dyn dbflux_core::Connection>,
+                    schema: None,
+                    mutation_policy: MutationPolicy::default(),
+                    read_only_reason: None,
+                    database_schemas: Default::default(),
+                    table_details: Default::default(),
+                    collection_children: Default::default(),
+                    schema_types: Default::default(),
+                    schema_indexes: Default::default(),
+                    schema_foreign_keys: Default::default(),
+                    schema_routines: Default::default(),
+                    dependents_cache: Default::default(),
+                    active_database: None,
+                    redis_key_cache: Default::default(),
+                    database_connections: Default::default(),
+                    proxy_tunnel: None,
+                };
+                app.connections_mut().insert(profile_id, connected);
+            });
+        });
+
+        let panel_holder = Rc::new(RefCell::new(None));
+        let panel_handle = panel_holder.clone();
+
+        // The panel is deliberately kept out of the window's tree: rendering it
+        // would drain `pending.requery` into a real query, which the stub
+        // connection cannot answer.
+        struct Harness;
+
+        impl gpui::Render for Harness {
+            fn render(
+                &mut self,
+                _window: &mut gpui::Window,
+                _cx: &mut gpui::Context<Self>,
+            ) -> impl gpui::IntoElement {
+                gpui::div()
+            }
+        }
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let panel = cx.new(|cx| {
+                // The state `new_for_table` leaves behind on a cold cache: no
+                // order yet, because the key columns are still unknown.
+                let source = DataSource::Table {
+                    profile_id,
+                    database: Some("testdb".to_string()),
+                    table: users.clone(),
+                    pagination: Pagination::default(),
+                    order_by: Vec::new(),
+                    total_rows: None,
+                };
+                let mut panel =
+                    DataGridPanel::new_internal(source, app_state.clone(), Vec::new(), window, cx);
+                panel.result = id_result();
+                panel
+            });
+            panel_handle.replace(Some(panel));
+            Harness
+        });
+
+        let panel = panel_holder
+            .borrow()
+            .clone()
+            .expect("panel should be created");
+
+        // The fetch stores the details and then hands the key columns over.
+        window.update(|_, app| {
+            app_state.update(app, |app, _| {
+                app.set_table_details(
+                    profile_id,
+                    "testdb".to_string(),
+                    Some("public".to_string()),
+                    "users".to_string(),
+                    TableInfo {
+                        name: "users".to_string(),
+                        schema: Some("public".to_string()),
+                        columns: Some(vec![ColumnInfo {
+                            name: "id".to_string(),
+                            type_name: "int4".to_string(),
+                            nullable: false,
+                            is_primary_key: true,
+                            default_value: None,
+                            enum_values: None,
+                        }]),
+                        indexes: None,
+                        foreign_keys: None,
+                        constraints: None,
+                        sample_fields: None,
+                        presentation: Default::default(),
+                        child_items: None,
+                        storage_hints: None,
+                    },
+                );
+            });
+        });
+
+        // Read both straight after the call: a render would already have consumed
+        // the queued requery.
+        let (ordered_columns, requery_order) = window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                panel.apply_pk_details(vec!["id".to_string()], cx);
+
+                let ordered = match &panel.source {
+                    DataSource::Table { order_by, .. } => order_by
+                        .iter()
+                        .map(|o| o.column.name.clone())
+                        .collect::<Vec<_>>(),
+                    _ => Vec::new(),
+                };
+                let requery = panel.pending.requery.as_ref().map(|pending| {
+                    pending
+                        .order_by
+                        .iter()
+                        .map(|o| o.column.name.clone())
+                        .collect::<Vec<_>>()
+                });
+                (ordered, requery)
+            })
+        });
+
+        assert_eq!(
+            ordered_columns,
+            vec!["id".to_string()],
+            "the source must carry the order the panel just learned"
+        );
+        assert_eq!(
+            requery_order,
+            Some(vec!["id".to_string()]),
+            "the unordered first page must be re-issued with that order"
+        );
+
+        let grid_editable = window.update(|_, app| {
+            panel.update(app, |panel, cx| panel.rebuild_table(None, cx));
+            panel
+                .read(app)
+                .grid_table
+                .table_state
+                .as_ref()
+                .expect("table_state must exist after rebuild_table")
+                .read(app)
+                .is_editable()
+        });
+        assert!(
+            grid_editable,
+            "a first open whose primary key arrived late must still end up editable"
         );
     }
 

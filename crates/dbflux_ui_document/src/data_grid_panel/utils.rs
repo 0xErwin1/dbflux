@@ -132,7 +132,10 @@ impl DataGridPanel {
     }
 
     pub(super) fn get_all_column_defaults(&self, cx: &Context<Self>) -> Vec<Option<String>> {
-        let Some(columns) = self.table_details_for(cx).and_then(|d| d.columns.as_deref()) else {
+        let Some(columns) = self
+            .table_details_for(cx)
+            .and_then(|d| d.columns.as_deref())
+        else {
             return vec![None; self.result.columns.len()];
         };
 
