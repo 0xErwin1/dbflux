@@ -79,6 +79,8 @@ impl DetachedHookScope {
                 return Ok(());
             };
 
+            // 0.6.1: `AsyncApp::update` runs inline and cannot fail; tasks spawned on
+            // the foreground executor are never polled after the app is released.
             cx.update(|cx| {
                 app_state.update(cx, |state, cx| {
                     for task_id in &task_ids {
@@ -86,13 +88,7 @@ impl DetachedHookScope {
                     }
                     cx.emit(AppStateChanged);
                 });
-            })
-            .map_err(|error| {
-                DetachedHookCleanupError::new(
-                    task_ids,
-                    format!("failed to update application state: {error:?}"),
-                )
-            })?;
+            });
 
             cx.background_executor()
                 .timer(Duration::from_millis(50))
@@ -384,17 +380,12 @@ async fn drain_task_output(
                 }
             }
 
-            if let Err(error) = cx.update(|cx| {
+            cx.update(|cx| {
                 app_state.update(cx, |state, cx| {
                     state.append_task_details(task_id, &chunk);
                     cx.emit(AppStateChanged);
                 });
-            }) {
-                log::warn!(
-                    "Failed to append detached hook output to task details: {:?}",
-                    error
-                );
-            }
+            });
         }
 
         if disconnected {
@@ -417,25 +408,23 @@ fn start_detached_hook_task(
     let description = handle.description.clone();
     let ready_signal = handle.ready_signal.clone();
 
-    let (task_id, cancel_token) = cx
-        .update(|cx| {
-            app_state.update(cx, |state, cx| {
-                let task = state.start_task_for_profile(
-                    TaskKind::Hook { phase },
-                    format!(
-                        "Hook Process: {} — {} — {}",
-                        phase.label(),
-                        profile_name,
-                        description
-                    ),
-                    Some(profile_id),
-                );
-                state.register_detached_hook_task(profile_id, task.0);
-                cx.emit(AppStateChanged);
-                task
-            })
+    let (task_id, cancel_token) = cx.update(|cx| {
+        app_state.update(cx, |state, cx| {
+            let task = state.start_task_for_profile(
+                TaskKind::Hook { phase },
+                format!(
+                    "Hook Process: {} — {} — {}",
+                    phase.label(),
+                    profile_name,
+                    description
+                ),
+                Some(profile_id),
+            );
+            state.register_detached_hook_task(profile_id, task.0);
+            cx.emit(AppStateChanged);
+            task
         })
-        .map_err(|_| ())?;
+    });
     scope.register(task_id);
 
     let (ready_sender, ready_receiver) = if ready_signal.is_some() {
@@ -479,7 +468,7 @@ fn start_detached_hook_task(
             })
             .await;
 
-        if let Err(error) = cx.update(|cx| {
+        cx.update(|cx| {
             app_state_for_completion.update(cx, |state, cx| {
                 scope.unregister(task_id);
                 state.unregister_detached_hook_task(profile_id, task_id);
@@ -533,12 +522,7 @@ fn start_detached_hook_task(
 
                 cx.emit(AppStateChanged);
             });
-        }) {
-            log::warn!(
-                "Failed to apply detached hook completion to sidebar state: {:?}",
-                error
-            );
-        }
+        });
     })
     .detach();
 
@@ -693,7 +677,7 @@ where
         }
 
         let command_display = hook.display_command();
-        let (task_id, hook_cancel_token) = match cx.update(|cx| {
+        let (task_id, hook_cancel_token) = cx.update(|cx| {
             app_state.update(cx, |state, cx| {
                 let task = state.start_hook_task_for_profile(
                     phase,
@@ -704,26 +688,18 @@ where
                 cx.emit(AppStateChanged);
                 task
             })
-        }) {
-            Ok(value) => value,
-            Err(_) => return HookPhaseState::Cancelled,
-        };
+        });
 
         if phase == HookPhase::PreConnect && hook.is_detached() && hook.ready_signal.is_none() {
             let error = "Detached pre-connect hooks must set a ready signal before DBFlux can continue connecting"
                 .to_string();
 
-            if let Err(error) = cx.update(|cx| {
+            cx.update(|cx| {
                 app_state.update(cx, |state, cx| {
                     state.fail_task(task_id, error.clone());
                     cx.emit(AppStateChanged);
                 });
-            }) {
-                log::warn!(
-                    "Failed to apply detached hook registration failure state: {:?}",
-                    error
-                );
-            }
+            });
 
             return HookPhaseState::Aborted { error };
         }
@@ -750,7 +726,7 @@ where
         let hook_start_ms = dbflux_core::chrono::Utc::now().timestamp_millis();
         let hook_command_for_audit = hook.display_command();
         let phase_label = phase.label();
-        if let Err(error) = cx.update(|cx| {
+        cx.update(|cx| {
             if let Err(error) = app_state.read(cx).audit_service().record(
                 dbflux_core::observability::EventRecord::new(
                     hook_start_ms,
@@ -774,9 +750,7 @@ where
             ) {
                 log::warn!("Failed to record hook lifecycle audit event: {}", error);
             }
-        }) {
-            log::warn!("Failed to record hook start audit event: {:?}", error);
-        }
+        });
 
         let hook_result = cx
             .background_executor()
@@ -825,17 +799,12 @@ where
         }
 
         if let Some(error) = detached_task_registration_failed {
-            if let Err(update_error) = cx.update(|cx| {
+            cx.update(|cx| {
                 app_state.update(cx, |state, cx| {
                     state.fail_task(task_id, error.clone());
                     cx.emit(AppStateChanged);
                 });
-            }) {
-                log::warn!(
-                    "Failed to apply detached hook registration failure state: {:?}",
-                    update_error
-                );
-            }
+            });
 
             return HookPhaseState::Aborted { error };
         }
@@ -892,7 +861,7 @@ where
             hook_task_details(&hook, phase, &command_display, &hook_result)
         };
 
-        if let Err(error) = cx.update(|cx| {
+        cx.update(|cx| {
             app_state.update(cx, |state, cx| {
                 if let Some(message) = &failure_message {
                     state.fail_task_with_details(task_id, message.clone(), details.clone());
@@ -901,12 +870,7 @@ where
                 }
                 cx.emit(AppStateChanged);
             });
-        }) {
-            log::warn!(
-                "Failed to apply hook phase task completion state: {:?}",
-                error
-            );
-        }
+        });
 
         let hook_end_ms = dbflux_core::chrono::Utc::now().timestamp_millis();
         let duration_ms = hook_end_ms - hook_start_ms;
@@ -942,7 +906,7 @@ where
             format!("Hook '{}' ({}) completed", command_display, phase.label())
         };
 
-        if let Err(error) = cx.update(|cx| {
+        cx.update(|cx| {
             let audit_service = app_state.read(cx).audit_service().clone();
             let mut event = dbflux_core::observability::EventRecord::new(
                 hook_end_ms,
@@ -972,9 +936,7 @@ where
             if let Err(error) = audit_service.record(event) {
                 log::warn!("Failed to record hook lifecycle audit event: {}", error);
             }
-        }) {
-            log::warn!("Failed to record hook completion audit event: {:?}", error);
-        }
+        });
 
         if cancelled {
             return HookPhaseState::Cancelled;

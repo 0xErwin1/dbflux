@@ -369,8 +369,7 @@ impl ToastHost {
                         host.dismiss(id, cx);
                     });
                 }
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
     }
