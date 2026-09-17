@@ -78,11 +78,11 @@ Scope is the affected area: a driver name (`postgres`, `mongodb`), `ui`, `mcp`, 
 7. A documentation change ships with its translations. When you edit a page under `docs/`, a driver README, or a root document the site renders (`ARCHITECTURE.md`, `CONTRIBUTING.md`, `SECURITY.md`, `TRADEMARK.md`, `PRIVACY.md`), apply the same change to every existing counterpart under `docs/es/` and `docs/zh_Hans/` in the same PR. A page with no counterpart yet needs none. See [Translations](docs/TRANSLATIONS.md).
 
 
-### Commit messages are load-bearing
+### Commit messages and the changelog
 
-DBFlux uses [git-cliff](https://git-cliff.org) to generate the changelog and release notes directly from git history. **Do not hand-edit `CHANGELOG.md` or `[Unreleased]`.** Your commit message is what surfaces to users.
+DBFlux keeps two artifacts in step from the same change: the curated `CHANGELOG.md` in this repository, and the GitHub release notes that [git-cliff](https://git-cliff.org) generates from git history in CI. Add your `## [Unreleased]` entry in the same commit as the change; the commit type decides what the generated release notes carry.
 
-Rules for what appears in the changelog:
+Rules for what appears in the generated release notes:
 
 | Type | Surfaces in changelog? |
 |------|------------------------|
@@ -96,8 +96,9 @@ Breaking changes (`feat!:`, `fix!:`, or a `BREAKING CHANGE:` footer) always surf
 
 **What this means in practice:**
 
-- User-visible changes **must** use `feat`, `fix`, or `perf` as the type. A `chore` or `refactor` commit is invisible to users in the changelog.
-- Write a clear, imperative subject line — it becomes the changelog bullet verbatim.
+- User-visible changes **must** use `feat`, `fix`, or `perf` as the type, and add their bullet under `## [Unreleased]` (`### Added`, `### Fixed`, or `### Changed`). A `chore` or `refactor` commit is invisible to users.
+- Write a clear, imperative subject line — it is the bullet in the generated release notes, verbatim.
+- Write the `[Unreleased]` bullet for a user, not for a reviewer: it is what the repository's changelog says.
 - If a single PR contains both internal and user-visible changes, split them into separate commits with the appropriate types.
 - Security fixes: use `fix(security): ...` or add a `Security: ...` trailer so the change lands under the Security section.
 
