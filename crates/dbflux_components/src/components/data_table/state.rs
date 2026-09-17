@@ -907,7 +907,7 @@ impl DataTableState {
 
         match visual_order.get(coord.row).copied() {
             Some(VisualRowSource::Base(base_idx)) => {
-                self.edit_buffer.set_cell(base_idx, coord.col, cell_value);
+                self.stage_base_cell_value(base_idx, coord.col, cell_value);
             }
             Some(VisualRowSource::Insert(insert_idx)) => {
                 self.edit_buffer
@@ -962,6 +962,30 @@ impl DataTableState {
         self.close_editor(apply, true, cx);
     }
 
+    /// Stage a value typed for a cell of the row set the table already holds.
+    ///
+    /// A value that matches what the row already holds has to drop any staged
+    /// value instead of staging one, or the row keeps showing the edited value
+    /// and stays marked as modified.
+    pub fn stage_base_cell_value(
+        &mut self,
+        base_idx: usize,
+        col: usize,
+        cell_value: super::model::CellValue,
+    ) {
+        let base_text = self
+            .model
+            .cell(base_idx, col)
+            .map(|cell| cell.display_text().to_string())
+            .unwrap_or_default();
+
+        if cell_value.display_text().as_ref() == base_text.as_str() {
+            self.edit_buffer.clear_cell(base_idx, col);
+        } else {
+            self.edit_buffer.set_cell(base_idx, col, cell_value);
+        }
+    }
+
     /// Close the inline editor, optionally applying the change and optionally
     /// asking for focus back.
     ///
@@ -985,16 +1009,11 @@ impl DataTableState {
 
                 match visual_order.get(coord.row).copied() {
                     Some(VisualRowSource::Base(base_idx)) => {
-                        let original = self
-                            .model
-                            .cell(base_idx, coord.col)
-                            .map(|c| c.display_text().to_string())
-                            .unwrap_or_default();
-
-                        if value_str != original {
-                            let cell_value = super::model::CellValue::text(&value_str);
-                            self.edit_buffer.set_cell(base_idx, coord.col, cell_value);
-                        }
+                        self.stage_base_cell_value(
+                            base_idx,
+                            coord.col,
+                            super::model::CellValue::text(&value_str),
+                        );
                     }
                     Some(VisualRowSource::Insert(insert_idx)) => {
                         // Apply to pending insert (with undo support)
@@ -1464,6 +1483,65 @@ mod tests {
         });
 
         (state, input, window)
+    }
+
+    /// Regression: typing back the value the row already holds must drop the
+    /// pending change instead of leaving the row marked as modified.
+    #[gpui::test]
+    fn typing_the_rows_own_value_drops_the_staged_edit(cx: &mut gpui::TestAppContext) {
+        use super::super::selection::CellCoord;
+
+        let (state, input, window) = editing_state(cx, CellCoord::new(0, 1));
+
+        window.update(|window, app| {
+            input.update(app, |input, cx| input.set_value("carol", window, cx));
+        });
+        window.update(|_, app| {
+            state.update(app, |s, cx| s.stop_editing(true, cx));
+        });
+
+        let staged = window.update(|_, app| {
+            state
+                .read(app)
+                .edit_buffer()
+                .row_changes(0)
+                .into_iter()
+                .map(|(col, value)| (col, value.display_text().to_string()))
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(
+            staged,
+            vec![(1usize, "carol".to_string())],
+            "the typed value must be staged as a pending change"
+        );
+
+        let input = window.update(|window, app| {
+            state.update(app, |s, cx| {
+                assert!(s.start_editing(CellCoord::new(0, 1), window, cx));
+                s.cell_input()
+                    .cloned()
+                    .expect("cell input for the second edit")
+            })
+        });
+        window.update(|window, app| {
+            input.update(app, |input, cx| input.set_value("alice", window, cx));
+        });
+        window.update(|_, app| {
+            state.update(app, |s, cx| s.stop_editing(true, cx));
+        });
+
+        let (dirty, row_clean) = window.update(|_, app| {
+            let state = state.read(app);
+            (
+                state.edit_buffer().is_cell_dirty(0, 1),
+                state.edit_buffer().row_state(0).is_clean(),
+            )
+        });
+        assert!(
+            !dirty,
+            "typing the value the row already holds must drop the pending change"
+        );
+        assert!(row_clean, "the row must no longer be reported as modified");
     }
 
     /// Regression: clicking another cell while a cell is being edited must keep

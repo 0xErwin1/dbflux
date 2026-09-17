@@ -2020,14 +2020,32 @@ impl DataGridPanel {
         };
 
         table_state.update(cx, |state, cx| {
-            if let Some(coord) = state.selection().active {
-                let cell_value =
-                    dbflux_components::components::data_table::model::CellValue::text(&text);
-                state
-                    .edit_buffer_mut()
-                    .set_cell(coord.row, coord.col, cell_value);
-                cx.notify();
+            use dbflux_components::components::data_table::model::VisualRowSource;
+
+            let Some(coord) = state.selection().active else {
+                return;
+            };
+
+            // The selection carries visual indices while the edit buffer is keyed
+            // by source rows, so the pasted value has to be resolved the way the
+            // other staging paths resolve it.
+            let visual_order = state.edit_buffer().compute_visual_order();
+            let cell_value =
+                dbflux_components::components::data_table::model::CellValue::text(&text);
+
+            match visual_order.get(coord.row).copied() {
+                Some(VisualRowSource::Base(base_idx)) => {
+                    state.stage_base_cell_value(base_idx, coord.col, cell_value);
+                }
+                Some(VisualRowSource::Insert(insert_idx)) => {
+                    state
+                        .edit_buffer_mut()
+                        .set_insert_cell(insert_idx, coord.col, cell_value);
+                }
+                None => {}
             }
+
+            cx.notify();
         });
     }
 
@@ -2111,8 +2129,7 @@ impl DataGridPanel {
         };
 
         table_state.update(cx, |state, cx| {
-            let buffer = state.edit_buffer_mut();
-            let visual_order = buffer.compute_visual_order();
+            let visual_order = state.edit_buffer().compute_visual_order();
 
             let cell_value = if let Some(default) = default_value {
                 dbflux_components::components::data_table::model::CellValue::text(&default)
@@ -2122,10 +2139,12 @@ impl DataGridPanel {
 
             match visual_order.get(row).copied() {
                 Some(VisualRowSource::Base(base_idx)) => {
-                    buffer.set_cell(base_idx, col, cell_value);
+                    state.stage_base_cell_value(base_idx, col, cell_value);
                 }
                 Some(VisualRowSource::Insert(insert_idx)) => {
-                    buffer.set_insert_cell(insert_idx, col, cell_value);
+                    state
+                        .edit_buffer_mut()
+                        .set_insert_cell(insert_idx, col, cell_value);
                 }
                 None => {}
             }
@@ -2142,16 +2161,17 @@ impl DataGridPanel {
         };
 
         table_state.update(cx, |state, cx| {
-            let buffer = state.edit_buffer_mut();
-            let visual_order = buffer.compute_visual_order();
+            let visual_order = state.edit_buffer().compute_visual_order();
             let cell_value = dbflux_components::components::data_table::model::CellValue::null();
 
             match visual_order.get(row).copied() {
                 Some(VisualRowSource::Base(base_idx)) => {
-                    buffer.set_cell(base_idx, col, cell_value);
+                    state.stage_base_cell_value(base_idx, col, cell_value);
                 }
                 Some(VisualRowSource::Insert(insert_idx)) => {
-                    buffer.set_insert_cell(insert_idx, col, cell_value);
+                    state
+                        .edit_buffer_mut()
+                        .set_insert_cell(insert_idx, col, cell_value);
                 }
                 None => {}
             }
@@ -2191,17 +2211,18 @@ impl DataGridPanel {
         };
 
         table_state.update(cx, |state, cx| {
-            let buffer = state.edit_buffer_mut();
-            let visual_order = buffer.compute_visual_order();
+            let visual_order = state.edit_buffer().compute_visual_order();
             let cell_value =
                 dbflux_components::components::data_table::model::CellValue::text(value);
 
             match visual_order.get(row).copied() {
                 Some(VisualRowSource::Base(base_idx)) => {
-                    buffer.set_cell(base_idx, col, cell_value);
+                    state.stage_base_cell_value(base_idx, col, cell_value);
                 }
                 Some(VisualRowSource::Insert(insert_idx)) => {
-                    buffer.set_insert_cell(insert_idx, col, cell_value);
+                    state
+                        .edit_buffer_mut()
+                        .set_insert_cell(insert_idx, col, cell_value);
                 }
                 None => {}
             }
