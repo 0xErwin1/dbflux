@@ -1515,19 +1515,16 @@ impl Workspace {
                                     .flatten()
                                     .map(|s| s.retention_days)
                                     .unwrap_or(30)
-                            })
-                            .unwrap_or(30);
+                            });
 
                         // Get audit_service for purge and emit from foreground update.
-                        let purge_result = cx
-                            .update(|cx| {
-                                let audit_service = app_state.read(cx).audit_service().clone();
-                                audit_service.purge_old_events(retention_days, 500)
-                            })
-                            .ok();
+                        let purge_result = cx.update(|cx| {
+                            let audit_service = app_state.read(cx).audit_service().clone();
+                            audit_service.purge_old_events(retention_days, 500)
+                        });
 
                         match purge_result {
-                            Some(Ok(stats)) => {
+                            Ok(stats) => {
                                 log::info!(
                                     "Periodic audit purge completed: deleted {} events in {} batches ({}ms)",
                                     stats.deleted_count,
@@ -1548,14 +1545,14 @@ impl Workspace {
                                     stats.deleted_count
                                 ))
                                 .with_duration_ms(stats.duration_ms as i64);
-                                let _ = cx.update(|cx| {
+                                cx.update(|cx| {
                                     let audit_service = app_state.read(cx).audit_service().clone();
                                     if let Err(rec_err) = audit_service.record(event) {
                                         log::warn!("Failed to record purge success audit event: {}", rec_err);
                                     }
                                 });
                             }
-                            Some(Err(e)) => {
+                            Err(e) => {
                                 log::warn!("Periodic audit purge failed: {}", e);
                                 // Emit a system failure event for the purge failure.
                                 let now_ms = dbflux_core::chrono::Utc::now().timestamp_millis();
@@ -1571,15 +1568,12 @@ impl Workspace {
                                     e
                                 ));
                                 // Emit through a foreground update so we have proper context.
-                                let _ = cx.update(|cx| {
+                                cx.update(|cx| {
                                     let audit_service = app_state.read(cx).audit_service().clone();
                                     if let Err(rec_err) = audit_service.record(event) {
                                         log::warn!("Failed to record purge failure audit event: {}", rec_err);
                                     }
                                 });
-                            }
-                            None => {
-                                // cx.update failed - skip this cycle.
                             }
                         }
                     }
