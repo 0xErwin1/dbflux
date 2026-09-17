@@ -925,7 +925,11 @@ impl EditBuffer {
                 replaced_value,
             } => {
                 self.overrides.insert((row, col), replaced_value.clone());
-                self.row_states.insert(row, RowState::Dirty);
+                // Restoring a value must not move a row out of `PendingDelete`:
+                // `clear_cell` and the redo arm both leave that state alone.
+                if !self.is_pending_delete(row) {
+                    self.row_states.insert(row, RowState::Dirty);
+                }
                 self.redo_stack.push(EditAction::ClearCell {
                     row,
                     col,
@@ -1191,6 +1195,46 @@ mod tests {
         assert!(
             !untouched.undo(),
             "clearing a cell with no staged value must not record an undo step"
+        );
+    }
+
+    /// Undoing a cleared cell must not turn a row marked for deletion back into
+    /// an edited one: the row is still going away, and `PendingDelete` is what
+    /// keeps the delete in the batch.
+    #[test]
+    fn undoing_a_cleared_cell_keeps_the_row_pending_delete() {
+        let mut buffer = EditBuffer::new();
+        buffer.set_base_row_count(1);
+
+        buffer.set_cell(0, 0, CellValue::int(9));
+        buffer.mark_for_delete(0);
+        assert!(
+            buffer.is_pending_delete(0),
+            "the row must start out marked for deletion"
+        );
+
+        // Clearing a staged cell on a pending-delete row leaves the delete alone
+        // and records the value it dropped, so undoing it must put the value back
+        // without reviving the row as an edit.
+        buffer.clear_cell(0, 0);
+        assert!(
+            buffer.is_pending_delete(0),
+            "clearing a staged cell must not drop the delete"
+        );
+
+        assert!(buffer.undo());
+        let restored = buffer.row_changes(0);
+        assert_eq!(
+            restored
+                .iter()
+                .map(|(col, value)| (*col, value.display_text().to_string()))
+                .collect::<Vec<_>>(),
+            vec![(0usize, "9".to_string())],
+            "undo must bring the dropped value back"
+        );
+        assert!(
+            buffer.is_pending_delete(0),
+            "undoing the cleared cell must leave the row pending delete"
         );
     }
 
