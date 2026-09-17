@@ -906,7 +906,8 @@ impl DataTableState {
         cx.notify();
     }
 
-    fn cancel_enum_edit(&mut self, cx: &mut Context<Self>) {        self.editing_cell = None;
+    fn cancel_enum_edit(&mut self, cx: &mut Context<Self>) {
+        self.editing_cell = None;
         self.enum_dropdown = None;
         cx.notify();
     }
@@ -995,7 +996,8 @@ impl DataTableState {
                 self.stage_base_cell_value(base_idx, col, cell_value);
             }
             Some(VisualRowSource::Insert(insert_idx)) => {
-                self.edit_buffer.set_insert_cell(insert_idx, col, cell_value);
+                self.edit_buffer
+                    .set_insert_cell(insert_idx, col, cell_value);
             }
             None => {}
         }
@@ -1440,6 +1442,91 @@ mod tests {
             editing_cell,
             Some(CellCoord::new(1, 1)),
             "a stale Blur from the previous input must not cancel the new edit"
+        );
+    }
+
+    /// The enum dropdown hands over the coordinate it was opened for, which is a
+    /// visual row. With a pending insert between the base rows the value has to
+    /// land on the insert the user picked, and the null sentinel has to land as a
+    /// null one row below it.
+    #[gpui::test]
+    fn enum_selection_stages_the_row_the_table_shows(cx: &mut gpui::TestAppContext) {
+        use super::super::model::CellValue;
+        use super::super::selection::CellCoord;
+
+        let state_holder = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let holder_clone = state_holder.clone();
+
+        let (_, window) = cx.add_window_view(move |_window, cx| {
+            let model = two_row_model();
+            let state = cx.new(|cx| {
+                let mut s = super::DataTableState::new(model, cx);
+                s.set_pk_columns(vec![0]);
+                s
+            });
+            holder_clone.replace(Some(state.clone()));
+            StateHarness { state }
+        });
+
+        let state = state_holder
+            .borrow()
+            .clone()
+            .expect("state entity must be created");
+
+        // Visual row 1 becomes the insert, and base row 1 moves down to row 2.
+        let insert_idx = window.update(|_, app| {
+            state.update(app, |s, cx| {
+                let insert_idx = s
+                    .edit_buffer_mut()
+                    .add_pending_insert_after(0, vec![CellValue::text(""), CellValue::text("")]);
+                cx.notify();
+                insert_idx
+            })
+        });
+
+        window.update(|_, app| {
+            state.update(app, |s, cx| {
+                s.apply_enum_selection_at(CellCoord::new(1, 1), "carol", cx);
+            });
+        });
+
+        let insert_value = window.update(|_, app| {
+            state
+                .read(app)
+                .edit_buffer()
+                .get_pending_insert_by_idx(insert_idx)
+                .and_then(|cells| cells.get(1))
+                .map(|cell| cell.display_text().to_string())
+        });
+        assert_eq!(
+            insert_value.as_deref(),
+            Some("carol"),
+            "the chosen value must be staged on the pending insert it was picked for"
+        );
+
+        window.update(|_, app| {
+            state.update(app, |s, cx| {
+                s.apply_enum_selection_at(
+                    CellCoord::new(2, 1),
+                    super::DataTableState::NULL_SENTINEL,
+                    cx,
+                );
+            });
+        });
+
+        let base_changes = window.update(|_, app| {
+            state
+                .read(app)
+                .edit_buffer()
+                .row_changes(1)
+                .into_iter()
+                .map(|(col, value)| (col, value.is_null()))
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(
+            base_changes,
+            vec![(1usize, true)],
+            "the null sentinel must stage a null on the base row below the insert"
         );
     }
 
