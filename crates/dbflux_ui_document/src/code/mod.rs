@@ -2027,12 +2027,13 @@ mod tests {
     use dbflux_components::theme;
     use dbflux_core::{ExecutionSourceContext, QueryLanguage};
     use dbflux_storage::bootstrap::StorageRuntime;
-    use dbflux_ui_base::AppStateEntity;
     use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
+    use dbflux_ui_base::{AppStateEntity, SaveTargetOutcome, SaveTargetProvider};
     use gpui::{AppContext, TestAppContext};
     use gpui_component::Root;
     use std::cell::RefCell;
     use std::rc::Rc;
+    use std::sync::Arc;
 
     fn isolated_test_app_state(cx: &mut TestAppContext) -> gpui::Entity<AppStateEntity> {
         cx.update(|cx| {
@@ -2041,6 +2042,21 @@ mod tests {
                     StorageRuntime::in_memory().expect("isolated storage runtime");
                 AppStateEntity::new_with_storage_runtime(storage_runtime)
                     .expect("test storage setup")
+            })
+        })
+    }
+
+    fn isolated_test_app_state_with_picker(
+        cx: &mut TestAppContext,
+        picker: SaveTargetProvider,
+    ) -> gpui::Entity<AppStateEntity> {
+        cx.update(|cx| {
+            cx.new(|_| {
+                let storage_runtime =
+                    StorageRuntime::in_memory().expect("isolated storage runtime");
+                AppStateEntity::new_with_storage_runtime(storage_runtime)
+                    .expect("test storage setup")
+                    .with_save_target_override(picker)
             })
         })
     }
@@ -2274,6 +2290,25 @@ mod tests {
     ) -> (Vec<RecordedEvent>, bool) {
         init_test_runtime(cx);
         let app_state = isolated_test_app_state(cx);
+        with_dirty_document_and_app_state(cx, app_state, Some(path), drive)
+    }
+
+    fn with_dirty_untitled_document_with_picker(
+        cx: &mut TestAppContext,
+        picker: SaveTargetProvider,
+        drive: impl FnOnce(&gpui::Entity<CodeDocument>, &mut gpui::VisualTestContext),
+    ) -> (Vec<RecordedEvent>, bool) {
+        init_test_runtime(cx);
+        let app_state = isolated_test_app_state_with_picker(cx, picker);
+        with_dirty_document_and_app_state(cx, app_state, None, drive)
+    }
+
+    fn with_dirty_document_and_app_state(
+        cx: &mut TestAppContext,
+        app_state: gpui::Entity<AppStateEntity>,
+        path: Option<std::path::PathBuf>,
+        drive: impl FnOnce(&gpui::Entity<CodeDocument>, &mut gpui::VisualTestContext),
+    ) -> (Vec<RecordedEvent>, bool) {
         let doc_holder: Rc<RefCell<Option<gpui::Entity<CodeDocument>>>> =
             Rc::new(RefCell::new(None));
         let doc_ref = doc_holder.clone();
@@ -2281,7 +2316,9 @@ mod tests {
         // A caller that pre-creates the file gives the document a real loaded
         // baseline; a path that does not exist yet leaves it without one, which is
         // exactly the no-baseline case autosave must refuse.
-        let baseline_bytes = std::fs::read_to_string(&path).ok();
+        let baseline_bytes = path
+            .as_ref()
+            .and_then(|path| std::fs::read_to_string(path).ok());
         let path_for_doc = path.clone();
 
         let (_, window) = cx.add_window_view(|window, cx| {
@@ -2292,12 +2329,14 @@ mod tests {
                     QueryLanguage::Sql,
                     window,
                     cx,
-                )
-                .with_path(path_for_doc.clone());
+                );
+                if let Some(path) = path {
+                    document = document.with_path(path);
+                }
                 document.set_content("SELECT 1;", window, cx);
 
-                if let Some(bytes) = baseline_bytes {
-                    document.seed_file_baseline(path_for_doc, bytes);
+                if let (Some(bytes), Some(path)) = (baseline_bytes, path_for_doc) {
+                    document.seed_file_baseline(path, bytes);
                 }
 
                 document.editor.input_state.update(cx, |state, cx| {
@@ -2393,6 +2432,164 @@ mod tests {
         assert!(!dirty, "a landed write must clear the dirty flag");
 
         std::fs::remove_file(&path).expect("the temp save file must be removable");
+    }
+
+    /// Cancelling Save As must leave the tab open with its pending edits. The
+    /// close intent is dropped, so a later ordinary save cannot close it either.
+    #[gpui::test]
+    fn cancelling_save_as_keeps_the_tab_open(cx: &mut TestAppContext) {
+        let retry_path = temp_save_path();
+        let picker: SaveTargetProvider =
+            Arc::new(|_request| gpui::Task::ready(SaveTargetOutcome::Cancelled));
+
+        let retry_path_for_drive = retry_path.clone();
+        let (events, dirty) =
+            with_dirty_untitled_document_with_picker(cx, picker, move |doc, window| {
+                window.update(|window, cx| {
+                    doc.update(cx, |document, cx| {
+                        document.save_for_close(window, cx);
+                    });
+                });
+                window.run_until_parked();
+
+                let (still_dirty, has_close_intent, file_created) = window.update(|_, app| {
+                    let document = doc.read(app);
+                    (
+                        document.editor.is_dirty,
+                        document.close_after_save,
+                        retry_path_for_drive.exists(),
+                    )
+                });
+                assert!(still_dirty, "cancelling Save As must keep the buffer dirty");
+                assert!(
+                    !has_close_intent,
+                    "cancelling Save As must drop the close intent"
+                );
+                assert!(!file_created, "cancelling Save As must not create a file");
+
+                window.update(|window, cx| {
+                    doc.update(cx, |document, cx| {
+                        document.editor.path = Some(retry_path_for_drive.clone());
+                        document.save_file(window, cx);
+                    });
+                });
+            });
+
+        assert_eq!(
+            events,
+            vec![
+                RecordedEvent::SaveFinished(false),
+                RecordedEvent::SaveFinished(true)
+            ],
+            "the cancelled close-driven save reports failure; the retry does not ask to close"
+        );
+        assert!(!dirty, "the retried write must land");
+        assert_eq!(
+            std::fs::read_to_string(&retry_path).expect("the retry must write"),
+            "SELECT 2;"
+        );
+
+        std::fs::remove_file(&retry_path).expect("the retry file must be removable");
+    }
+
+    /// Choosing a path in Save As writes the captured buffer, retargets the
+    /// document at that path, and lets the interrupted close finish.
+    #[gpui::test]
+    fn choosing_a_path_in_save_as_writes_and_closes(cx: &mut TestAppContext) {
+        let path = temp_save_path();
+        let retarget_expected = path.clone();
+        let picker: SaveTargetProvider = {
+            let path = path.clone();
+            Arc::new(move |_request| {
+                gpui::Task::ready(SaveTargetOutcome::Selected {
+                    path: path.clone(),
+                    used_fallback: false,
+                })
+            })
+        };
+
+        let (events, dirty) =
+            with_dirty_untitled_document_with_picker(cx, picker, move |doc, window| {
+                window.update(|window, cx| {
+                    doc.update(cx, |document, cx| {
+                        document.save_for_close(window, cx);
+                    });
+                });
+                window.run_until_parked();
+
+                let retargeted = window.update(|_, app| doc.read(app).path().cloned());
+                assert_eq!(
+                    retargeted,
+                    Some(retarget_expected),
+                    "Save As must retarget the document at the chosen path"
+                );
+            });
+
+        assert_eq!(
+            events,
+            vec![
+                RecordedEvent::SaveFinished(true),
+                RecordedEvent::RequestClose
+            ],
+            "a Save As write that lands must finish the close it started"
+        );
+        assert!(!dirty, "the chosen path must receive the pending buffer");
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("the chosen file must exist"),
+            "SELECT 2;"
+        );
+
+        std::fs::remove_file(&path).expect("the chosen file must be removable");
+    }
+
+    /// Save As from the toolbar is not a close: it retargets the document and
+    /// reports its outcome without asking the workspace to close the tab.
+    #[gpui::test]
+    fn save_as_from_the_toolbar_retargets_without_asking_to_close(cx: &mut TestAppContext) {
+        let path = temp_save_path();
+        let retarget_expected = path.clone();
+        let picker: SaveTargetProvider = {
+            let path = path.clone();
+            Arc::new(move |_request| {
+                gpui::Task::ready(SaveTargetOutcome::Selected {
+                    path: path.clone(),
+                    used_fallback: false,
+                })
+            })
+        };
+
+        let (events, dirty) =
+            with_dirty_untitled_document_with_picker(cx, picker, move |doc, window| {
+                window.update(|window, cx| {
+                    doc.update(cx, |document, cx| {
+                        document.save_file_as(window, cx);
+                    });
+                });
+                window.run_until_parked();
+
+                let retargeted = window.update(|_, app| doc.read(app).path().cloned());
+                assert_eq!(
+                    retargeted,
+                    Some(retarget_expected),
+                    "Save As must retarget the document at the chosen path"
+                );
+            });
+
+        assert_eq!(
+            events,
+            vec![RecordedEvent::SaveFinished(true)],
+            "Save As reports its outcome and never asks to close on its own"
+        );
+        assert!(
+            !dirty,
+            "the captured content landed, so the buffer is clean"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("the chosen file must exist"),
+            "SELECT 2;"
+        );
+
+        std::fs::remove_file(&path).expect("the chosen file must be removable");
     }
 
     /// Regression for the blocking review: a save that cannot land reports

@@ -117,12 +117,12 @@ impl ObjectBrowserDocument {
         let bucket = self.bucket.clone();
         let profile_id = self.profile_id;
         let suggested_name = object_file_name(&key);
-        let dialog_available = file_dialog::is_native_file_dialog_available();
+        let save_target_override = self.app_state.read(cx).save_target_override();
 
         cx.spawn(async move |_this, cx| {
             let destination = match purpose {
                 TransferPurpose::Download => {
-                    match choose_download_path(&suggested_name, dialog_available).await {
+                    match choose_download_path(save_target_override, &suggested_name).await {
                         Ok(Some(path)) => path,
                         // Cancelled picker: the user already knows nothing
                         // happened, so no toast and no audit row.
@@ -226,36 +226,41 @@ impl ObjectBrowserDocument {
 /// picker was cancelled, or the shared export directory when the host has no
 /// working picker at all.
 async fn choose_download_path(
+    provider: Option<dbflux_ui_base::SaveTargetProvider>,
     suggested_name: &str,
-    dialog_available: bool,
 ) -> Result<Option<PathBuf>, String> {
-    if !dialog_available {
-        let dir = file_dialog::fallback_export_dir().map_err(|err| {
-            dbflux_i18n::t!(
-                "document.object_browser.transfer.error.fallback_dir_failed",
-                error = err.as_str()
-            )
-        })?;
+    let title = dbflux_i18n::t!("document.object_browser.transfer.dialog_title");
+    let all_files_filter =
+        dbflux_i18n::t!("document.object_browser.transfer.dialog_filter_all_files");
 
-        return Ok(Some(file_dialog::unique_path_in(
-            dir.as_path(),
+    let outcome = file_dialog::resolve_save_target(
+        provider,
+        dbflux_ui_base::SaveTargetRequest {
             suggested_name,
-        )));
+            language_name: &all_files_filter,
+            default_extension: "*",
+        },
+        async {
+            let handle = rfd::AsyncFileDialog::new()
+                .set_title(title)
+                .set_file_name(suggested_name)
+                .add_filter(&all_files_filter, &["*"])
+                .save_file()
+                .await;
+
+            handle.map(|handle| handle.path().to_path_buf())
+        },
+    )
+    .await;
+
+    match outcome {
+        dbflux_ui_base::SaveTargetOutcome::Selected { path, .. } => Ok(Some(path)),
+        dbflux_ui_base::SaveTargetOutcome::Cancelled => Ok(None),
+        dbflux_ui_base::SaveTargetOutcome::Failed(err) => Err(dbflux_i18n::t!(
+            "document.object_browser.transfer.error.fallback_dir_failed",
+            error = err
+        )),
     }
-
-    let handle = rfd::AsyncFileDialog::new()
-        .set_title(dbflux_i18n::t!(
-            "document.object_browser.transfer.dialog_title"
-        ))
-        .set_file_name(suggested_name)
-        .add_filter(
-            dbflux_i18n::t!("document.object_browser.transfer.dialog_filter_all_files"),
-            &["*"],
-        )
-        .save_file()
-        .await;
-
-    Ok(handle.map(|handle| handle.path().to_path_buf()))
 }
 
 fn fetch_and_write(

@@ -45,6 +45,17 @@ All notable changes to DBFlux will be documented in this file.
   saving or duplicating a connection profile now keeps the form open and
   shows the error instead of silently committing a profile with no secret.
 
+* **An unresponsive system keyring no longer freezes the app** — every
+  keyring call now runs on its own thread under a five-second bound, so a
+  secret service that never answers (a locked keyring whose unlock prompt
+  is never answered, competing providers on `org.freedesktop.secrets`, a
+  stuck D-Bus session) reports a timeout instead of blocking the caller —
+  the UI thread on the connection save and duplicate paths — forever. After
+  a failed *write* DBFlux stops writing for five seconds, so a burst of
+  clicks on Save fails immediately instead of paying the bound again and
+  leaving another worker behind, and picks writes back up on its own once
+  that passes; stored passwords stay readable throughout.
+
 * **MongoDB multi-statement JavaScript script execution** — a buffer that
   does not parse as a single `db.` call or JSON query now runs as a
   mongosh-style script in a sandboxed QuickJS engine, executing every
@@ -65,6 +76,27 @@ All notable changes to DBFlux will be documented in this file.
   past a computed method name or a conditionally-reached operation, which
   dispatch-boundary classification fixes for both scripts and MCP-driven
   execution.
+
+* **A reopened table keeps its grid editable** — the primary key was read from
+  the connection's table-details cache under a different database key than the
+  one the fetch wrote it under, so only the first open of a table after
+  connecting had the inline editor and every later open showed the "no primary
+  key" banner until the profile was reconnected. Every reader now builds the
+  key the fetch writes with, and details that are already cached are used
+  instead of being fetched again. A table whose keys were still unknown when
+  its first page loaded is re-queried ordered by those keys, so paging a large
+  table no longer repeats or skips rows, and a table-details fetch that cannot
+  start reports the failure instead of leaving the grid read-only.
+
+* **An inline edit can be taken back by typing the row's own value** — the
+  typed value was compared with the value the row already holds and, on a
+  match, an earlier pending change was neither replaced nor dropped: the cell
+  kept showing the edit, the row stayed marked as modified, and applying the
+  changes wrote the discarded value. Typing the row's own value now drops the
+  pending change, the cell and the row go back to clean, and the drop is
+  undoable. The enum dropdown, the value panel, "Set NULL", "Set default" and
+  paste go through the same path, and paste writes to the row the grid shows
+  when a pending insert sits above the selection instead of one row below it.
 
 ### Changed
 

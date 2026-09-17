@@ -3,6 +3,7 @@
 //! This module provides `AppStateEntity`, which wraps the pure `AppState` from `dbflux_app`
 //! and adds GPUI-specific state (like the settings window handle) and event types.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use dbflux_app::{
@@ -110,6 +111,39 @@ pub struct McpRuntimeEventRaised {
     pub event: dbflux_mcp::McpRuntimeEvent,
 }
 
+/// Context passed to a [`SaveTargetProvider`] so a test or alternate UI can
+/// decide where a Save As should write. Production leaves the provider unset.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SaveTargetRequest<'a> {
+    /// File name (with extension) suggested to the user.
+    pub suggested_name: &'a str,
+    /// Human-readable language/format name for picker filtering.
+    pub language_name: &'a str,
+    /// Default extension for the picker.
+    pub default_extension: &'a str,
+}
+
+/// What a save-target picker did. Separating selection from fallback lets a
+/// caller model the same states for native dialogs, test pickers, and the
+/// no-native-dialog export fallback.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SaveTargetOutcome {
+    /// A concrete destination was selected.
+    Selected { path: PathBuf, used_fallback: bool },
+    /// The user dismissed the picker.
+    Cancelled,
+    /// No destination could be produced; the string is a user-facing message.
+    Failed(String),
+}
+
+/// Overridable Save As implementation owned by a single [`AppStateEntity`].
+///
+/// The provider is per-entity, so tests do not mutate any process-global dialog
+/// state. Production leaves it unset and uses the shared native/fallback
+/// resolver in [`crate::file_dialog`].
+pub type SaveTargetProvider =
+    Arc<dyn for<'a> Fn(SaveTargetRequest<'a>) -> gpui::Task<SaveTargetOutcome> + Send + Sync>;
+
 // ============================================================================
 // AppStateEntity — the main GPUI entity wrapping AppState
 // ============================================================================
@@ -166,6 +200,10 @@ pub struct AppStateEntity {
     pub hook_load_diagnostics: Vec<HookLoadDiagnostic>,
 
     pub scripts_directory_diagnostics: Vec<ScriptsDirectoryDiagnostic>,
+
+    /// Optional per-entity Save As override. `None` preserves the normal
+    /// native-dialog / fallback-export behavior.
+    save_target_override: Option<SaveTargetProvider>,
 }
 
 impl AppStateEntity {
@@ -199,6 +237,7 @@ impl AppStateEntity {
             unread_error_count: 0,
             hook_load_diagnostics,
             scripts_directory_diagnostics,
+            save_target_override: None,
         })
     }
 
@@ -234,7 +273,21 @@ impl AppStateEntity {
             unread_error_count: 0,
             hook_load_diagnostics,
             scripts_directory_diagnostics,
+            save_target_override: None,
         })
+    }
+
+    /// Returns the per-entity Save As override, if one was installed for tests
+    /// or an alternate embedding.
+    pub fn save_target_override(&self) -> Option<SaveTargetProvider> {
+        self.save_target_override.clone()
+    }
+
+    /// Installs a per-entity Save As override. Intended for tests and embeds;
+    /// production leaves it unset and uses the shared native/fallback resolver.
+    pub fn with_save_target_override(mut self, provider: SaveTargetProvider) -> Self {
+        self.save_target_override = Some(provider);
+        self
     }
 
     /// Increments the unread-error counter and notifies subscribers.
