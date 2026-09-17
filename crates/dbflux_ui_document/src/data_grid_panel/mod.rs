@@ -730,22 +730,17 @@ impl DataGridPanel {
             Self::table_details_database(connected, source_database.as_deref())
         };
 
-        log::info!(
-            "[PK] Fetching table details for PK columns: {}.{}",
-            database,
-            table.qualified_name()
-        );
-
         // Details cached under this key must be used rather than fetched again:
         // `prepare_fetch_table_details` refuses a second fetch for a key that is
         // already populated, and treating that refusal as a failure is what left
-        // a reopened table read-only.
+        // a reopened table read-only. An entry carrying only `sample_fields` is
+        // such a populated key as well, so its absence of columns is read as
+        // "no primary keys here" rather than as an excuse to fetch again.
         let cached_pk_names = self
             .app_state
             .read(cx)
             .get_table_details(profile_id, &database, table.schema.as_deref(), &table.name)
-            .and_then(|details| details.columns.as_deref())
-            .map(Self::primary_key_names);
+            .map(|details| Self::primary_key_names(details.columns.as_deref().unwrap_or(&[])));
 
         if let Some(pk_names) = cached_pk_names {
             log::info!(
@@ -756,6 +751,14 @@ impl DataGridPanel {
             self.apply_pk_details(pk_names, cx);
             return;
         }
+
+        // Logged only for a cache miss: printing it above the check made a warm
+        // cache look like a fetch, which is what made #634's evidence ambiguous.
+        log::info!(
+            "[PK] Fetching table details for PK columns: {}.{}",
+            database,
+            table.qualified_name()
+        );
 
         let params = match self.app_state.read(cx).prepare_fetch_table_details(
             profile_id,
