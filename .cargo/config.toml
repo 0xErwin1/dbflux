@@ -28,3 +28,24 @@ rustflags = ["-C", "link-arg=-fuse-ld=mold"]
 # are built with `/MT /Zl` (no CRT reference), so no mixed-runtime link.
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-C", "target-feature=+crt-static"]
+
+# Keep the font stack out of the ELF's DT_NEEDED.
+#
+# `gpui-pre-wgpu` depends on `zed-font-kit` with its default features, which
+# selects the *linked* fontconfig and freetype loaders. Building that way makes
+# `fontconfig.pc` a requirement of every Linux build and turns `libfontconfig`
+# into a hard runtime dependency: without it the dynamic loader refuses to
+# start the process instead of letting the renderer fall back. The previous
+# `gpui` stack did not link it, so DBFlux's released Linux binary has no font
+# libraries in DT_NEEDED at all.
+#
+# `RUST_FONTCONFIG_DLOPEN` makes the bindings load fontconfig on demand, which
+# removes both the build-time probe and the runtime requirement. It is set here
+# rather than in each CI job so that local, CI and Nix builds agree.
+#
+# freetype is left to its own build script: it uses the system library when a
+# suitable `freetype2.pc` is present and otherwise compiles its vendored
+# sources, so a missing development package costs build time rather than
+# failing the build.
+[env]
+RUST_FONTCONFIG_DLOPEN = "1"
