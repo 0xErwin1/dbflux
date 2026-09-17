@@ -890,14 +890,10 @@ impl DataTableState {
     /// event may have already cleared `editing_cell` via `cancel_enum_edit`
     /// by the time `DropdownSelectionChanged` is delivered (auto-close race).
     fn apply_enum_selection_at(&mut self, coord: CellCoord, value: &str, cx: &mut Context<Self>) {
-        use super::model::VisualRowSource;
-
         // Clear editing state first so a subsequent `cancel_enum_edit` from
         // the dropdown's auto-close becomes a harmless no-op.
         self.editing_cell = None;
         self.enum_dropdown = None;
-
-        let visual_order = self.edit_buffer.compute_visual_order();
 
         let cell_value = if value == Self::NULL_SENTINEL {
             super::model::CellValue::null()
@@ -905,22 +901,12 @@ impl DataTableState {
             super::model::CellValue::text(value)
         };
 
-        match visual_order.get(coord.row).copied() {
-            Some(VisualRowSource::Base(base_idx)) => {
-                self.stage_base_cell_value(base_idx, coord.col, cell_value);
-            }
-            Some(VisualRowSource::Insert(insert_idx)) => {
-                self.edit_buffer
-                    .set_insert_cell(insert_idx, coord.col, cell_value);
-            }
-            None => {}
-        }
+        self.stage_cell_value(coord.row, coord.col, cell_value);
 
         cx.notify();
     }
 
-    fn cancel_enum_edit(&mut self, cx: &mut Context<Self>) {
-        self.editing_cell = None;
+    fn cancel_enum_edit(&mut self, cx: &mut Context<Self>) {        self.editing_cell = None;
         self.enum_dropdown = None;
         cx.notify();
     }
@@ -986,13 +972,40 @@ impl DataTableState {
         }
     }
 
+    /// Stage a value for a cell addressed the way the table displays it.
+    ///
+    /// Callers that hold visual indices — the selection, menus, the editor —
+    /// must not resolve them themselves: the edit buffer is keyed by source
+    /// rows, and a pending insert is written through the insert buffer instead.
+    pub fn stage_cell_value(
+        &mut self,
+        visual_row: usize,
+        col: usize,
+        cell_value: super::model::CellValue,
+    ) {
+        use super::model::VisualRowSource;
+
+        match self
+            .edit_buffer
+            .compute_visual_order()
+            .get(visual_row)
+            .copied()
+        {
+            Some(VisualRowSource::Base(base_idx)) => {
+                self.stage_base_cell_value(base_idx, col, cell_value);
+            }
+            Some(VisualRowSource::Insert(insert_idx)) => {
+                self.edit_buffer.set_insert_cell(insert_idx, col, cell_value);
+            }
+            None => {}
+        }
+    }
+
     /// Close the inline editor, optionally applying the change and optionally
     /// asking for focus back.
     ///
     /// Note: The stored `editing_cell` uses visual row indices.
     fn close_editor(&mut self, apply: bool, refocus: bool, cx: &mut Context<Self>) {
-        use super::model::VisualRowSource;
-
         let coord = match self.editing_cell.take() {
             Some(c) => c,
             None => return,
@@ -1004,25 +1017,11 @@ impl DataTableState {
             if let Some(input) = self.cell_input.take() {
                 let value_str = input.read(cx).value().to_string();
 
-                // Translate visual row to source
-                let visual_order = self.edit_buffer.compute_visual_order();
-
-                match visual_order.get(coord.row).copied() {
-                    Some(VisualRowSource::Base(base_idx)) => {
-                        self.stage_base_cell_value(
-                            base_idx,
-                            coord.col,
-                            super::model::CellValue::text(&value_str),
-                        );
-                    }
-                    Some(VisualRowSource::Insert(insert_idx)) => {
-                        // Apply to pending insert (with undo support)
-                        let cell_value = super::model::CellValue::text(&value_str);
-                        self.edit_buffer
-                            .set_insert_cell(insert_idx, coord.col, cell_value);
-                    }
-                    None => {}
-                }
+                self.stage_cell_value(
+                    coord.row,
+                    coord.col,
+                    super::model::CellValue::text(&value_str),
+                );
             }
         } else {
             self.cell_input = None;
