@@ -419,8 +419,8 @@ impl ImportConnectionsPanel {
         });
 
         cx.spawn(async move |_this, cx| {
-            if let Some(path) = task.await
-                && let Err(error) = cx.update(|cx| {
+            if let Some(path) = task.await {
+                cx.update(|cx| {
                     this.update(cx, |this, cx| {
                         let path = path.to_string_lossy().to_string();
                         if is_secondary {
@@ -431,12 +431,7 @@ impl ImportConnectionsPanel {
                         this.external_parse_error = None;
                         cx.notify();
                     });
-                })
-            {
-                log::warn!(
-                    "Failed to apply external import file path to panel state: {:?}",
-                    error
-                );
+                });
             }
         })
         .detach();
@@ -513,7 +508,7 @@ impl ImportConnectionsPanel {
                 })
                 .await;
 
-            if let Err(e) = cx.update(|cx| {
+            cx.update(|cx| {
                 this.update(cx, |this, cx| {
                     this.is_parsing_external = false;
 
@@ -531,12 +526,7 @@ impl ImportConnectionsPanel {
                     }
                     cx.notify();
                 });
-            }) {
-                log::warn!(
-                    "Failed to update import panel after external parse: {:?}",
-                    e
-                );
-            }
+            });
         })
         .detach();
     }
@@ -596,12 +586,7 @@ impl ImportConnectionsPanel {
                     this.step = Step::Outcome;
                     cx.notify();
                 });
-            }) {
-                log::warn!(
-                    "Failed to update import panel after external apply: {:?}",
-                    e
-                );
-            }
+            });
         })
         .detach();
     }
@@ -626,15 +611,13 @@ impl ImportConnectionsPanel {
             });
 
             cx.spawn(async move |_this, cx| {
-                if let Some(path) = task.await
-                    && let Err(error) = cx.update(|cx| {
+                if let Some(path) = task.await {
+                    cx.update(|cx| {
                         this.update(cx, |this, cx| {
                             this.pending_file_path = Some(path.to_string_lossy().to_string());
                             cx.notify();
                         });
-                    })
-                {
-                    log::warn!("Failed to apply import path to panel state: {:?}", error);
+                    });
                 }
             })
             .detach();
@@ -741,7 +724,7 @@ impl ImportConnectionsPanel {
 
             let (is_encrypted, outcome) = result;
 
-            if let Err(e) = cx.update(|cx| {
+            cx.update(|cx| {
                 this.update(cx, |this, cx| {
                     this.is_parsing = false;
                     this.bundle_encrypted = is_encrypted;
@@ -769,9 +752,7 @@ impl ImportConnectionsPanel {
                     }
                     cx.notify();
                 });
-            }) {
-                log::warn!("Failed to update import panel after parse: {:?}", e);
-            }
+            });
         })
         .detach();
     }
@@ -910,7 +891,7 @@ impl ImportConnectionsPanel {
                 .spawn(async move { dbflux_portability::import::apply(&parsed, &plan, &choices) })
                 .await;
 
-            if let Err(e) = cx.update(|cx| match apply_result {
+            cx.update(|cx| match apply_result {
                 Err(e) => {
                     this.update(cx, |this, cx| {
                         this.is_applying = false;
@@ -959,9 +940,7 @@ impl ImportConnectionsPanel {
                         cx.notify();
                     });
                 }
-            }) {
-                log::warn!("Failed to update import panel after apply: {:?}", e);
-            }
+            });
         })
         .detach();
     }

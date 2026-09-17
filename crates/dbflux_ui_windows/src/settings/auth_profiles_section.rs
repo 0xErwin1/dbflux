@@ -815,7 +815,7 @@ impl AuthProfilesSection {
         cx.spawn(async move |_this, cx| {
             let result = fetch_task.await;
 
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 this.update(cx, |this, cx| {
                     match result {
                         Ok(response) => {
@@ -1749,7 +1749,7 @@ impl AuthProfilesSection {
             loop {
                 match url_rx.try_recv() {
                     Ok(Some(url)) => {
-                        let _ = cx.update(|cx| {
+                        cx.update(|cx| {
                             this_for_url.update(cx, |this, cx| {
                                 this.active_login_url = Some(url.clone());
                                 this.pending_sso_url =
@@ -1776,7 +1776,7 @@ impl AuthProfilesSection {
         cx.spawn(async move |_this, cx| {
             let result = provider.login(&profile, url_callback).await;
 
-            if let Err(err) = cx.update(|cx| {
+            cx.update(|cx| {
                 this.update(cx, |this, cx| {
                     this.provider_login_loading = false;
                     // Login finished — clear the inline URL display regardless
@@ -1809,9 +1809,7 @@ impl AuthProfilesSection {
 
                     cx.notify();
                 });
-            }) {
-                log::warn!("Failed to apply auth-provider login result: {:?}", err);
-            }
+            });
         })
         .detach();
     }
@@ -2984,11 +2982,13 @@ impl Render for AuthProfilesSection {
                     crate::labels::auth_profiles_delete_body(&delete_name, affected_connections);
 
                 element.child(
-                    Dialog::new(window, cx)
+                    Dialog::new(cx)
                         .title(dbflux_i18n::t!(
                             "settings.auth_profiles.delete_dialog_title"
                         ))
-                        .confirm()
+                        .button_props(DialogButtonProps::default().show_cancel(true))
+                        .overlay_closable(false)
+                        .close_button(false)
                         .on_ok(move |_, window, cx| {
                             entity.update(cx, |section, cx| {
                                 section.confirm_delete_profile(window, cx);
