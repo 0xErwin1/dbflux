@@ -1725,27 +1725,8 @@ impl DataGridPanel {
         use super::row_inspector::FkReference;
         use dbflux_components::primitives::LoadingState;
 
-        let (profile_id, table_ref) = match &self.source {
-            super::DataSource::Table {
-                profile_id, table, ..
-            } => (*profile_id, table),
-            _ => return Vec::new(),
-        };
-
-        let state = self.app_state.read(cx);
-        let connected = match state.connections().get(&profile_id) {
-            Some(c) => c,
-            None => return Vec::new(),
-        };
-        let database = connected.active_database.as_deref().unwrap_or("default");
-        let cache_key = (
-            database.to_string(),
-            table_ref.schema.clone(),
-            table_ref.name.clone(),
-        );
-        let table_info = match connected.table_details.get(&cache_key) {
-            Some(t) => t,
-            None => return Vec::new(),
+        let Some(table_info) = self.table_details_for(cx) else {
+            return Vec::new();
         };
 
         let fk_list = match table_info.foreign_keys.as_deref() {
@@ -3124,20 +3105,9 @@ impl DataGridPanel {
         };
 
         // Get column info including primary keys
-        let state = self.app_state.read(cx);
-        let connected = match state.connections().get(&profile_id) {
-            Some(c) => c,
-            None => return,
-        };
-
-        let database = connected.active_database.as_deref().unwrap_or("default");
-        let cache_key = (
-            database.to_string(),
-            table_ref.schema.clone(),
-            table_ref.name.clone(),
-        );
-        let table_info = connected.table_details.get(&cache_key);
-        let columns_info = table_info.and_then(|t| t.columns.as_deref());
+        let columns_info = self
+            .table_details_for(cx)
+            .and_then(|table_info| table_info.columns.as_deref());
 
         let col_names: Vec<String> = self.result.columns.iter().map(|c| c.name.clone()).collect();
         let ts = table_state.read(cx);
