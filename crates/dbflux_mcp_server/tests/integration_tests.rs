@@ -650,9 +650,9 @@ async fn authorize_and_execute_non_audited_has_no_query_key() {
             Some(&connection_id),
             ExecutionClassification::Read,
             || async {
-                Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-                    "[]",
-                )]))
+                Ok(CallToolResult::success(vec![
+                    rmcp::model::ContentBlock::text("[]"),
+                ]))
             },
         )
         .await
@@ -692,7 +692,7 @@ async fn seam_merges_query_into_details_json() {
             ExecutionClassification::Write,
             || async {
                 Ok((
-                    CallToolResult::success(vec![rmcp::model::Content::text("updated 1")]),
+                    CallToolResult::success(vec![rmcp::model::ContentBlock::text("updated 1")]),
                     AuditDetails {
                         query: Some(raw_sql.to_string()),
                     },
