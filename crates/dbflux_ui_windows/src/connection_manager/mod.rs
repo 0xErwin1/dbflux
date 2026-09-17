@@ -2979,10 +2979,10 @@ impl ConnectionManagerWindow {
             .filter(|profile| profile.enabled)
             .collect::<Vec<_>>();
 
-        let this = cx.entity().clone();
-        cx.spawn(async move |_entity, cx| {
+        cx.spawn(async move |entity, cx| {
             for profile in profiles {
                 let provider = match cx.update(|cx| {
+                    let this = entity.upgrade()?;
                     this.read(cx)
                         .app_state
                         .read(cx)
@@ -2998,12 +2998,14 @@ impl ConnectionManagerWindow {
                     .unwrap_or(AuthSessionState::LoginRequired);
 
                 cx.update(|cx| {
-                    this.update(cx, |this, cx| {
-                        this.auth_profile
-                            .auth_profile_session_states
-                            .insert(profile.id, status);
-                        this.populate_auth_profile_dropdown(cx);
-                    });
+                    if let Some(this) = entity.upgrade() {
+                        this.update(cx, |this, cx| {
+                            this.auth_profile
+                                .auth_profile_session_states
+                                .insert(profile.id, status);
+                            this.populate_auth_profile_dropdown(cx);
+                        });
+                    }
                 });
             }
         })
