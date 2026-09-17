@@ -10,6 +10,16 @@ For project structure, crate boundaries, key files, and subsystem overviews, use
 
 For the branching model, version rules, tag flow, and release procedure, use `docs/RELEASE.md` as the canonical reference. For contributor workflow and the label taxonomy, use `CONTRIBUTING.md`. The automated release skill (`skills/dbflux-release/SKILL.md`) follows the same rules.
 
+## Issues and Pull Requests
+
+Both are created from the repository's own templates — never from a remembered or invented shape:
+
+- An issue uses one of the forms in `.github/ISSUE_TEMPLATE/` — `bug_report.yml` for a defect, `feature_request.yml` for a capability. Fill the form's fields in the order it declares them, and keep the `[bug] ` / `[feature] ` title prefix and the `Labels I plan to apply` checklist it renders.
+- A pull request uses `.github/pull_request_template.md` verbatim: `Summary`, `What does this resolve?`, `How was this solved?`, `Validation`, `Where was this tested?`, `Checklist`, `Labels to apply`. Do not add sections of your own; follow-up work and known limitations belong where the template asks for them.
+- The mechanics (duplicate search, choosing the form, `gh` commands, reading the full branch delta) live in `skills/issue-creation/SKILL.md` and `skills/branch-pr/SKILL.md`.
+- Use only labels from the taxonomy in `CONTRIBUTING.md` § Label Guide, and never invent labels such as `area:*`.
+- A contributor without write access to `0xErwin1/dbflux` cannot apply labels from a fork. State the labels the change needs where the template asks for them and ask a maintainer to apply them during triage — do not drop that part of the template.
+
 ## Build & Run Commands
 
 ```bash
