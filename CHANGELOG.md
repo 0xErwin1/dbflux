@@ -77,6 +77,27 @@ All notable changes to DBFlux will be documented in this file.
   dispatch-boundary classification fixes for both scripts and MCP-driven
   execution.
 
+* **A reopened table keeps its grid editable** — the primary key was read from
+  the connection's table-details cache under a different database key than the
+  one the fetch wrote it under, so only the first open of a table after
+  connecting had the inline editor and every later open showed the "no primary
+  key" banner until the profile was reconnected. Every reader now builds the
+  key the fetch writes with, and details that are already cached are used
+  instead of being fetched again. A table whose keys were still unknown when
+  its first page loaded is re-queried ordered by those keys, so paging a large
+  table no longer repeats or skips rows, and a table-details fetch that cannot
+  start reports the failure instead of leaving the grid read-only.
+
+* **An inline edit can be taken back by typing the row's own value** — the
+  typed value was compared with the value the row already holds and, on a
+  match, an earlier pending change was neither replaced nor dropped: the cell
+  kept showing the edit, the row stayed marked as modified, and applying the
+  changes wrote the discarded value. Typing the row's own value now drops the
+  pending change, the cell and the row go back to clean, and the drop is
+  undoable. The enum dropdown, the value panel, "Set NULL", "Set default" and
+  paste go through the same path, and paste writes to the row the grid shows
+  when a pending insert sits above the selection instead of one row below it.
+
 ### Changed
 
 * **Language list derived from the translation catalogs (#360)** — the
