@@ -45,6 +45,17 @@ All notable changes to DBFlux will be documented in this file.
   saving or duplicating a connection profile now keeps the form open and
   shows the error instead of silently committing a profile with no secret.
 
+* **An unresponsive system keyring no longer freezes the app** — every
+  keyring call now runs on its own thread under a five-second bound, so a
+  secret service that never answers (a locked keyring whose unlock prompt
+  is never answered, competing providers on `org.freedesktop.secrets`, a
+  stuck D-Bus session) reports a timeout instead of blocking the caller —
+  the UI thread on the connection save and duplicate paths — forever. After
+  a failed *write* DBFlux stops writing for five seconds, so a burst of
+  clicks on Save fails immediately instead of paying the bound again and
+  leaving another worker behind, and picks writes back up on its own once
+  that passes; stored passwords stay readable throughout.
+
 * **MongoDB multi-statement JavaScript script execution** — a buffer that
   does not parse as a single `db.` call or JSON query now runs as a
   mongosh-style script in a sandboxed QuickJS engine, executing every
