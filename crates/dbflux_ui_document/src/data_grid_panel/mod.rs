@@ -860,31 +860,10 @@ impl DataGridPanel {
             self.pk_columns = pk_names;
         }
 
-        // Cold-cache upgrade: if a committed visual spec exists, recompute
-        // the binding now that details are available. This upgrades a
-        // previously read-only builder result to editable without requiring
-        // the user to re-run the query.
-        if let Some(spec) = self.builder.current_visual_spec.clone()
-            && let DataSource::Table {
-                profile_id,
-                database,
-                ..
-            } = &self.source
-        {
-            let binding =
-                self.compute_builder_binding(Some(&spec), *profile_id, database.as_deref(), cx);
-            self.pk_columns = binding
-                .as_ref()
-                .map(|b| b.pk_columns.clone())
-                .unwrap_or_else(|| self.pk_columns.clone());
-            self.builder.builder_editable_binding = binding;
-        }
-
-        // The first page was issued before these key columns were known, so it
-        // carried no `ORDER BY` and `LIMIT/OFFSET` paging can repeat or skip
-        // rows. Rewrite the source with the order just learned and requery — the
-        // shape `handle_sort_clear` uses for the same reason.
-        let unordered_table = match &self.source {
+        // Everything below needs the table this panel reads, so the source is
+        // destructured once and both the binding recompute and the requery
+        // decision work from that.
+        let source_fields = match &self.source {
             DataSource::Table {
                 profile_id,
                 database,
@@ -892,21 +871,46 @@ impl DataGridPanel {
                 pagination,
                 order_by,
                 total_rows,
-            } if order_by.is_empty() => Some((
+            } => Some((
                 *profile_id,
                 database.clone(),
                 table.clone(),
                 pagination.clone(),
                 *total_rows,
+                order_by.is_empty(),
             )),
             _ => None,
         };
 
-        let Some((profile_id, database, table, pagination, total_rows)) = unordered_table else {
+        let Some((profile_id, database, table, pagination, total_rows, unordered)) = source_fields
+        else {
             self.pending.rebuild = true;
             cx.notify();
             return;
         };
+
+        // Cold-cache upgrade: if a committed visual spec exists, recompute
+        // the binding now that details are available. This upgrades a
+        // previously read-only builder result to editable without requiring
+        // the user to re-run the query.
+        if let Some(spec) = self.builder.current_visual_spec.clone() {
+            let binding =
+                self.compute_builder_binding(Some(&spec), profile_id, database.as_deref(), cx);
+            if let Some(binding) = &binding {
+                self.pk_columns = binding.pk_columns.clone();
+            }
+            self.builder.builder_editable_binding = binding;
+        }
+
+        // The first page was issued before these key columns were known, so it
+        // carried no `ORDER BY` and `LIMIT/OFFSET` paging can repeat or skip
+        // rows. Rewrite the source with the order just learned and requery — the
+        // shape `handle_sort_clear` uses for the same reason.
+        if !unordered {
+            self.pending.rebuild = true;
+            cx.notify();
+            return;
+        }
 
         let order_by = Self::get_primary_key_columns(
             &self.app_state,
