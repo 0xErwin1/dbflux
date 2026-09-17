@@ -71,6 +71,17 @@ tracing.workspace = true
 [dev-dependencies]
 # Test support
 dbflux_test_support = { workspace = true }
+
+# The MCP client half is test-only: the transport-level end-to-end tests connect
+# to the server as an external agent does, and nothing in the shipped server
+# binary needs the client role or the in-memory transport.
+rmcp = { version = "2.0.0", features = ["client", "transport-async-rw"] }
+
+# Real driver for the end-to-end data path. The crate already carries it as an
+# optional dependency behind the `sqlite` feature; declaring it here keeps the
+# end-to-end tests runnable under a plain `cargo test -p dbflux_mcp_server`.
+dbflux_driver_sqlite = { workspace = true }
+
 tempfile = "3.10"
 
 # Async test runtime
