@@ -352,7 +352,7 @@ impl ExportBundleModal {
             .update(cx, |state, cx| state.set_value(default_path, window, cx));
 
         self.visible = true;
-        window.focus(&self.focus_handle);
+        window.focus(&self.focus_handle, cx);
         cx.notify();
     }
 

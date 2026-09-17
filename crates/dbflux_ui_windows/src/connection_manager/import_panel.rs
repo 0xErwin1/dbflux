@@ -355,7 +355,7 @@ impl ImportConnectionsPanel {
         self.file_input
             .update(cx, |state, cx| state.set_value("", window, cx));
 
-        window.focus(&self.focus_handle);
+        window.focus(&self.focus_handle, cx);
         cx.notify();
     }
 

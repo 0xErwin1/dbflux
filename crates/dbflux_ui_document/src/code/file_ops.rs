@@ -1300,7 +1300,7 @@ mod tests {
                 window.update(|window, cx| {
                     doc.update(cx, |document, cx| {
                         document.editor.input_state.update(cx, |state, cx| {
-                            state.set_value("NEWEST;", window, cx);
+                            state.replace_all("NEWEST;", window, cx);
                         });
                     });
                 });
@@ -1357,7 +1357,7 @@ mod tests {
                 window.update(|window, cx| {
                     doc.update(cx, |document, cx| {
                         document.editor.input_state.update(cx, |state, cx| {
-                            state.set_value("NEWEST;", window, cx);
+                            state.replace_all("NEWEST;", window, cx);
                         });
                     });
                 });
@@ -1453,7 +1453,7 @@ mod tests {
                 window.update(|window, cx| {
                     doc.update(cx, |document, cx| {
                         document.editor.input_state.update(cx, |state, cx| {
-                            state.set_value("NEWEST;", window, cx);
+                            state.replace_all("NEWEST;", window, cx);
                         });
                     });
                 });
@@ -1549,7 +1549,7 @@ mod tests {
                 window.update(|window, cx| {
                     doc.update(cx, |document, cx| {
                         document.editor.input_state.update(cx, |state, cx| {
-                            state.set_value("NEWEST;", window, cx);
+                            state.replace_all("NEWEST;", window, cx);
                         });
                         // A Ctrl+S is already in flight when the user closes.
                         document.enqueue_physical_write(
@@ -1789,7 +1789,7 @@ mod tests {
                 window.update(|window, cx| {
                     doc.update(cx, |document, cx| {
                         document.editor.input_state.update(cx, |state, cx| {
-                            state.set_value("MINE;", window, cx);
+                            state.replace_all("MINE;", window, cx);
                         });
                     });
                 });
@@ -1848,7 +1848,7 @@ mod tests {
                 window.update(|window, cx| {
                     doc.update(cx, |document, cx| {
                         document.editor.input_state.update(cx, |state, cx| {
-                            state.set_value("MINE;", window, cx);
+                            state.replace_all("MINE;", window, cx);
                         });
                     });
                 });
@@ -1969,7 +1969,7 @@ mod tests {
                 );
                 document.set_content("SELECT 1;", window, cx);
                 document.editor.input_state.update(cx, |state, cx| {
-                    state.set_value("SELECT 2;", window, cx);
+                    state.replace_all("SELECT 2;", window, cx);
                 });
                 document
             });
@@ -2047,7 +2047,7 @@ mod tests {
                 );
                 document.set_content("SELECT 1;", window, cx);
                 document.editor.input_state.update(cx, |state, cx| {
-                    state.set_value("SELECT 2;", window, cx);
+                    state.replace_all("SELECT 2;", window, cx);
                 });
                 document
             });

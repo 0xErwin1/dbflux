@@ -905,11 +905,12 @@ impl ObjectBrowserDocument {
         };
 
         // A real edit, not `set_value`: the component replaces text silently
-        // in `set_value`, so only this path emits the `Change` the dirty
-        // tracking listens for.
+        // in `set_value`, so only the typed-text paths emit the `Change` the
+        // dirty tracking listens for. `insert` is the public user-typing
+        // primitive on 0.6.1.
         let text = text.to_string();
         input.update(cx, |state, cx| {
-            state.replace_text_in_range(None, &text, window, cx)
+            state.insert(&text, window, cx);
         });
     }
 
