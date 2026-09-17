@@ -149,13 +149,38 @@ impl KeyringSecretStore {
     ///   no-op store and silently drop secrets; individual writes will surface
     ///   their own errors until it is unlocked.
     /// - `PlatformFailure` / other: no working secure storage -> unavailable.
-    /// - No answer within the timeout: treated as unavailable rather than waiting.
+    /// - No answer within the timeout: available, as with `NoStorageAccess`. The
+    ///   service is present but not answering, and downgrading to the no-op store
+    ///   would drop secrets already stored in it for the rest of the process,
+    ///   while a timed-out *write* recovers by itself once the cooldown passes.
+    ///   Reads are still attempted and report their own timeout.
     ///
     /// Each case logs a distinct message so a locked keyring can be told apart
     /// from an absent one when diagnosing.
     fn check_availability(&self) -> bool {
-        match self.bounded("availability probe", Self::probe) {
+        self.check_availability_with(Self::probe)
+    }
+
+    /// [`Self::check_availability`] with an injectable probe, so the timeout
+    /// case can be exercised without a hung desktop keyring.
+    fn check_availability_with<Call>(&self, probe: Call) -> bool
+    where
+        Call: FnOnce() -> Result<bool, DbError> + Send + 'static,
+    {
+        match self.bounded("availability probe", probe) {
             Ok(available) => available,
+            // A probe that accepts the call and never answers is the locked
+            // keyring `NoStorageAccess` also describes, not a missing backend:
+            // latching `available = false` here would silently drop SSH, proxy
+            // and auth-profile secrets until the application restarts.
+            Err(DbError::Timeout) => {
+                log::warn!(
+                    "Secret service did not answer the availability probe; treating it as \
+                     present but locked, so stored secrets stay readable and each call \
+                     reports its own timeout."
+                );
+                true
+            }
             Err(e) => {
                 log::warn!("Keyring probe failed; secrets disabled: {e}");
                 false
@@ -380,6 +405,27 @@ mod tests {
         assert!(
             matches!(&read, Ok(Some(secret)) if secret.expose_secret() == "stored"),
             "reads still run after a write timed out, got {read:?}"
+        );
+    }
+
+    /// A probe that never answers must not disable the store: the service is
+    /// present but locked, and "unavailable" would drop the secrets already
+    /// stored in it for the rest of the process.
+    #[test]
+    fn a_probe_that_times_out_keeps_the_store_available() {
+        let store = silent_keyring_store();
+
+        assert!(
+            store.check_availability_with(|| {
+                std::thread::sleep(Duration::from_secs(30));
+                Ok(false)
+            }),
+            "a silent probe is the locked case, so secrets stay enabled"
+        );
+
+        assert!(
+            !store.check_availability_with(|| Err(DbError::io_message("no backend"))),
+            "a probe that reports a real failure still disables secrets"
         );
     }
 
