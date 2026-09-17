@@ -62,7 +62,16 @@ impl DataGridPanel {
             .to_string()
     }
 
-    pub(super) fn get_column_default(&self, col: usize, cx: &Context<Self>) -> Option<String> {
+    /// Cached details of the table this panel shows, keyed exactly as
+    /// [`DataGridPanel::table_details_database`] documents.
+    ///
+    /// Readers that build the key tuple themselves can drift from the writer —
+    /// that drift is what left a reopened table read-only — so they read the
+    /// entry through here instead.
+    pub(super) fn table_details_for<'a>(
+        &'a self,
+        cx: &'a Context<'a, Self>,
+    ) -> Option<&'a dbflux_core::TableInfo> {
         let (profile_id, table_ref, database) = match &self.source {
             super::DataSource::Table {
                 profile_id,
@@ -70,11 +79,10 @@ impl DataGridPanel {
                 table,
                 ..
             } => (*profile_id, table, database.as_deref()),
-            super::DataSource::Collection { .. } => return None,
-            super::DataSource::QueryResult { .. } => return None,
+            super::DataSource::Collection { .. } | super::DataSource::QueryResult { .. } => {
+                return None;
+            }
         };
-
-        let col_name = self.result.columns.get(col)?.name.clone();
 
         let state = self.app_state.read(cx);
         let connected = state.connections().get(&profile_id)?;
@@ -83,8 +91,12 @@ impl DataGridPanel {
             table_ref.schema.clone(),
             table_ref.name.clone(),
         );
-        let table_info = connected.table_details.get(&cache_key)?;
-        let columns = table_info.columns.as_deref()?;
+        connected.table_details.get(&cache_key)
+    }
+
+    pub(super) fn get_column_default(&self, col: usize, cx: &Context<Self>) -> Option<String> {
+        let col_name = self.result.columns.get(col)?.name.clone();
+        let columns = self.table_details_for(cx)?.columns.as_deref()?;
 
         columns
             .iter()
@@ -97,27 +109,7 @@ impl DataGridPanel {
         &self,
         cx: &Context<Self>,
     ) -> Option<Vec<dbflux_core::ColumnInfo>> {
-        let (profile_id, table_ref, database) = match &self.source {
-            super::DataSource::Table {
-                profile_id,
-                database,
-                table,
-                ..
-            } => (*profile_id, table, database.as_deref()),
-            super::DataSource::Collection { .. } => return None,
-            super::DataSource::QueryResult { .. } => return None,
-        };
-
-        let state = self.app_state.read(cx);
-        let connected = state.connections().get(&profile_id)?;
-        let cache_key = (
-            Self::table_details_database(connected, database),
-            table_ref.schema.clone(),
-            table_ref.name.clone(),
-        );
-        let table_info = connected.table_details.get(&cache_key)?;
-
-        table_info.columns.clone()
+        self.table_details_for(cx)?.columns.clone()
     }
 
     /// Returns the set of local column names that are FK source columns for the
@@ -126,34 +118,11 @@ impl DataGridPanel {
         &self,
         cx: &Context<Self>,
     ) -> std::collections::HashSet<String> {
-        let (profile_id, table_ref, database) = match &self.source {
-            super::DataSource::Table {
-                profile_id,
-                database,
-                table,
-                ..
-            } => (*profile_id, table, database.as_deref()),
-            super::DataSource::Collection { .. } => return std::collections::HashSet::new(),
-            super::DataSource::QueryResult { .. } => return std::collections::HashSet::new(),
+        let Some(details) = self.table_details_for(cx) else {
+            return std::collections::HashSet::new();
         };
 
-        let state = self.app_state.read(cx);
-        let connected = match state.connections().get(&profile_id) {
-            Some(c) => c,
-            None => return std::collections::HashSet::new(),
-        };
-
-        let cache_key = (
-            Self::table_details_database(connected, database),
-            table_ref.schema.clone(),
-            table_ref.name.clone(),
-        );
-        let table_info = match connected.table_details.get(&cache_key) {
-            Some(t) => t,
-            None => return std::collections::HashSet::new(),
-        };
-
-        table_info
+        details
             .foreign_keys
             .as_deref()
             .unwrap_or(&[])
@@ -163,40 +132,8 @@ impl DataGridPanel {
     }
 
     pub(super) fn get_all_column_defaults(&self, cx: &Context<Self>) -> Vec<Option<String>> {
-        let (profile_id, table_ref, database) = match &self.source {
-            super::DataSource::Table {
-                profile_id,
-                database,
-                table,
-                ..
-            } => (*profile_id, table, database.as_deref()),
-            super::DataSource::Collection { .. } => {
-                return vec![None; self.result.columns.len()];
-            }
-            super::DataSource::QueryResult { .. } => {
-                return vec![None; self.result.columns.len()];
-            }
-        };
-
-        let state = self.app_state.read(cx);
-        let connected = match state.connections().get(&profile_id) {
-            Some(c) => c,
-            None => return vec![None; self.result.columns.len()],
-        };
-
-        let cache_key = (
-            Self::table_details_database(connected, database),
-            table_ref.schema.clone(),
-            table_ref.name.clone(),
-        );
-        let table_info = match connected.table_details.get(&cache_key) {
-            Some(t) => t,
-            None => return vec![None; self.result.columns.len()],
-        };
-
-        let columns = match table_info.columns.as_deref() {
-            Some(c) => c,
-            None => return vec![None; self.result.columns.len()],
+        let Some(columns) = self.table_details_for(cx).and_then(|d| d.columns.as_deref()) else {
+            return vec![None; self.result.columns.len()];
         };
 
         // Map result columns to their defaults
