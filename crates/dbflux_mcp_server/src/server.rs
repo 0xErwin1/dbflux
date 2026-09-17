@@ -372,8 +372,12 @@ impl McpConnectionFactory {
 }
 
 /// Main DBFlux MCP Server
+///
+/// Public so embedders (and the transport-level end-to-end tests) can serve the
+/// same handler over a transport of their choice. `run_mcp_server` is the stdio
+/// entry point; this type is the seam for anything else.
 #[derive(Clone)]
-pub(crate) struct DbFluxServer {
+pub struct DbFluxServer {
     #[allow(dead_code)] // Used by governance middleware and tools
     pub(crate) state: ServerState,
     #[allow(dead_code)] // Used for policy evaluation

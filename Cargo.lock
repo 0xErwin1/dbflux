@@ -2607,6 +2607,7 @@ dependencies = [
  "dbflux_i18n",
  "dbflux_ipc",
  "dbflux_ssh",
+ "dbflux_storage",
  "dbflux_test_support",
  "dbflux_ui",
  "embed-resource",
@@ -2616,6 +2617,8 @@ dependencies = [
  "libc",
  "log",
  "rustls 0.23.43",
+ "serde_json",
+ "tempfile",
  "tokio",
 ]
 
@@ -8702,6 +8705,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.20",
  "tokio",
+ "tokio-stream",
  "tokio-util",
  "tracing",
 ]
