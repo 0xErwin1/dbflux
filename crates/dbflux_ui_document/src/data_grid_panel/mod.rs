@@ -2673,6 +2673,15 @@ impl DataGridPanel {
     /// `database` is the database the table was opened from. The cache key is
     /// built by [`DataGridPanel::table_details_database`], the same key
     /// `fetch_table_details_for_pk` writes the entry under.
+    ///
+    /// That key is not the sidebar's. `ItemIdParts::cache_database`
+    /// (`dbflux_ui_sidebar`) falls back to the schema name for a node that
+    /// carries no database, so one table reaches the cache as `"main"` there and
+    /// as `"default"` here: two entries that can go stale independently. A single
+    /// fallback cannot reconcile them, because the string carries two roles at
+    /// once — a component of the cache key and the database the fetch targets.
+    /// `new_internal`'s filter completion cache is the one reader left on a third
+    /// chain, through `table.schema`.
     fn get_primary_key_columns(
         app_state: &Entity<AppStateEntity>,
         profile_id: Uuid,
