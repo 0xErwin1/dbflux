@@ -1719,10 +1719,13 @@ impl DataGridPanel {
         use super::row_inspector::FkReference;
         use dbflux_components::primitives::LoadingState;
 
-        let (profile_id, table_ref) = match &self.source {
+        let (profile_id, table_ref, database) = match &self.source {
             super::DataSource::Table {
-                profile_id, table, ..
-            } => (*profile_id, table),
+                profile_id,
+                database,
+                table,
+                ..
+            } => (*profile_id, table, database.as_deref()),
             _ => return Vec::new(),
         };
 
@@ -1731,9 +1734,8 @@ impl DataGridPanel {
             Some(c) => c,
             None => return Vec::new(),
         };
-        let database = connected.active_database.as_deref().unwrap_or("default");
         let cache_key = (
-            database.to_string(),
+            Self::table_details_database(connected, database),
             table_ref.schema.clone(),
             table_ref.name.clone(),
         );
@@ -3124,9 +3126,12 @@ impl DataGridPanel {
             None => return,
         };
 
-        let database = connected.active_database.as_deref().unwrap_or("default");
+        let source_database = match &self.source {
+            DataSource::Table { database, .. } => database.as_deref(),
+            _ => None,
+        };
         let cache_key = (
-            database.to_string(),
+            Self::table_details_database(connected, source_database),
             table_ref.schema.clone(),
             table_ref.name.clone(),
         );

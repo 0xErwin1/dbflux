@@ -44,11 +44,32 @@ pub(super) fn value_to_json(value: &Value) -> serde_json::Value {
 }
 
 impl DataGridPanel {
+    /// Database the connection's `table_details` cache is keyed by for the table
+    /// this panel shows.
+    ///
+    /// The table's own database leads — a table opened from the sidebar carries
+    /// it even when the connection recorded no active database, because
+    /// connecting leaves `active_database` unset and only clicking the database
+    /// node sets it. This is the key the fetch that fills the cache writes with,
+    /// so every reader must build it the same way.
+    pub(super) fn table_details_database(
+        connected: &dbflux_core::ConnectedProfile,
+        database: Option<&str>,
+    ) -> String {
+        database
+            .or(connected.active_database.as_deref())
+            .unwrap_or("default")
+            .to_string()
+    }
+
     pub(super) fn get_column_default(&self, col: usize, cx: &Context<Self>) -> Option<String> {
-        let (profile_id, table_ref) = match &self.source {
+        let (profile_id, table_ref, database) = match &self.source {
             super::DataSource::Table {
-                profile_id, table, ..
-            } => (*profile_id, table),
+                profile_id,
+                database,
+                table,
+                ..
+            } => (*profile_id, table, database.as_deref()),
             super::DataSource::Collection { .. } => return None,
             super::DataSource::QueryResult { .. } => return None,
         };
@@ -57,9 +78,8 @@ impl DataGridPanel {
 
         let state = self.app_state.read(cx);
         let connected = state.connections().get(&profile_id)?;
-        let database = connected.active_database.as_deref().unwrap_or("default");
         let cache_key = (
-            database.to_string(),
+            Self::table_details_database(connected, database),
             table_ref.schema.clone(),
             table_ref.name.clone(),
         );
@@ -77,19 +97,21 @@ impl DataGridPanel {
         &self,
         cx: &Context<Self>,
     ) -> Option<Vec<dbflux_core::ColumnInfo>> {
-        let (profile_id, table_ref) = match &self.source {
+        let (profile_id, table_ref, database) = match &self.source {
             super::DataSource::Table {
-                profile_id, table, ..
-            } => (*profile_id, table),
+                profile_id,
+                database,
+                table,
+                ..
+            } => (*profile_id, table, database.as_deref()),
             super::DataSource::Collection { .. } => return None,
             super::DataSource::QueryResult { .. } => return None,
         };
 
         let state = self.app_state.read(cx);
         let connected = state.connections().get(&profile_id)?;
-        let database = connected.active_database.as_deref().unwrap_or("default");
         let cache_key = (
-            database.to_string(),
+            Self::table_details_database(connected, database),
             table_ref.schema.clone(),
             table_ref.name.clone(),
         );
@@ -104,10 +126,13 @@ impl DataGridPanel {
         &self,
         cx: &Context<Self>,
     ) -> std::collections::HashSet<String> {
-        let (profile_id, table_ref) = match &self.source {
+        let (profile_id, table_ref, database) = match &self.source {
             super::DataSource::Table {
-                profile_id, table, ..
-            } => (*profile_id, table),
+                profile_id,
+                database,
+                table,
+                ..
+            } => (*profile_id, table, database.as_deref()),
             super::DataSource::Collection { .. } => return std::collections::HashSet::new(),
             super::DataSource::QueryResult { .. } => return std::collections::HashSet::new(),
         };
@@ -118,9 +143,8 @@ impl DataGridPanel {
             None => return std::collections::HashSet::new(),
         };
 
-        let database = connected.active_database.as_deref().unwrap_or("default");
         let cache_key = (
-            database.to_string(),
+            Self::table_details_database(connected, database),
             table_ref.schema.clone(),
             table_ref.name.clone(),
         );
@@ -139,10 +163,13 @@ impl DataGridPanel {
     }
 
     pub(super) fn get_all_column_defaults(&self, cx: &Context<Self>) -> Vec<Option<String>> {
-        let (profile_id, table_ref) = match &self.source {
+        let (profile_id, table_ref, database) = match &self.source {
             super::DataSource::Table {
-                profile_id, table, ..
-            } => (*profile_id, table),
+                profile_id,
+                database,
+                table,
+                ..
+            } => (*profile_id, table, database.as_deref()),
             super::DataSource::Collection { .. } => {
                 return vec![None; self.result.columns.len()];
             }
@@ -157,9 +184,8 @@ impl DataGridPanel {
             None => return vec![None; self.result.columns.len()],
         };
 
-        let database = connected.active_database.as_deref().unwrap_or("default");
         let cache_key = (
-            database.to_string(),
+            Self::table_details_database(connected, database),
             table_ref.schema.clone(),
             table_ref.name.clone(),
         );

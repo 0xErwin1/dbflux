@@ -94,8 +94,13 @@ impl DataGridPanel {
                 total_rows,
                 ..
             } => {
-                let pk_order =
-                    Self::get_primary_key_columns(&self.app_state, *profile_id, table, cx);
+                let pk_order = Self::get_primary_key_columns(
+                    &self.app_state,
+                    *profile_id,
+                    database.as_deref(),
+                    table,
+                    cx,
+                );
                 Some((
                     *profile_id,
                     database.clone(),
