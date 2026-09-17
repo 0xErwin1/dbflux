@@ -22,7 +22,7 @@ use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use dbflux_ui_base::{AppStateChanged, AppStateEntity};
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::dialog::Dialog;
+use gpui_component::dialog::{Dialog, DialogButtonProps};
 use gpui_component::{ActiveTheme, Icon};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
