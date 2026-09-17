@@ -349,7 +349,8 @@ fn run_gui() {
 
     info!("IPC socket bound successfully");
 
-    Application::new().with_assets(Assets).run(|cx: &mut App| {
+    let application = gpui_platform::application().with_assets(Assets);
+    application.run(|cx: &mut App| {
         dbflux_ui::theme::init(cx);
         dbflux_ui::ui::components::data_table::init(cx);
         dbflux_ui::ui::components::document_tree::init(cx);
