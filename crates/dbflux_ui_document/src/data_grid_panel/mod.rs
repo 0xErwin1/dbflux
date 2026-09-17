@@ -716,9 +716,18 @@ impl DataGridPanel {
             _ => None,
         };
 
-        let database = match self.app_state.read(cx).connections().get(&profile_id) {
-            Some(connected) => Self::table_details_database(connected, source_database.as_deref()),
-            None => source_database.unwrap_or_else(|| "default".to_string()),
+        let database = {
+            let state = self.app_state.read(cx);
+            let Some(connected) = state.connections().get(&profile_id) else {
+                // `prepare_fetch_table_details` rejects a disconnected profile,
+                // so there is no key to invent and no fetch to attempt.
+                log::warn!(
+                    "[PK] Cannot fetch table details: profile {} is not connected",
+                    profile_id
+                );
+                return;
+            };
+            Self::table_details_database(connected, source_database.as_deref())
         };
 
         log::info!(
@@ -756,7 +765,15 @@ impl DataGridPanel {
         ) {
             Ok(p) => p,
             Err(e) => {
-                log::warn!("[PK] Failed to prepare fetch_table_details: {}", e);
+                // Returning silently here is how #634 presented: a read-only
+                // grid and nothing but a log line.
+                dbflux_ui_base::user_error::report_error(
+                    dbflux_ui_base::user_error::UserFacingError::new(
+                        dbflux_ui_base::user_error::ErrorKind::Driver,
+                        crate::labels::pk_details_fetch_failed_error(&e.to_string()),
+                    ),
+                    cx,
+                );
                 return;
             }
         };
