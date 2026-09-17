@@ -77,11 +77,11 @@ scope 指受影响的范围：可以是某个驱动程序名（`postgres`、`mon
 6. CI 必须通过（`tests.yml`、`style.yml`）。如有失败，推送前请在本地重新运行。
 7. 文档改动应与译文一并提交。当你修改 `docs/` 下的页面、某个驱动程序的 README，或是网站会渲染的根文档（`ARCHITECTURE.md`、`CONTRIBUTING.md`、`SECURITY.md`、`TRADEMARK.md`、`PRIVACY.md`）时，请在同一个拉取请求中，把同样的改动同步到 `docs/es/` 与 `docs/zh_Hans/` 下的所有对应文件。若某页面还没有对应译文，则无需处理。参见[翻译](docs/TRANSLATIONS.md)。
 
-### 提交信息至关重要
+### 提交信息与更新日志
 
-DBFlux 使用 [git-cliff](https://git-cliff.org) 直接从 git 历史生成变更日志与发布说明。**不要手动编辑 `CHANGELOG.md` 或 `[Unreleased]`。** 呈现给用户看的就是你的提交信息。
+DBFlux 让两个产物随着同一个改动保持同步：本仓库中经过人工整理的 `CHANGELOG.md`，以及 [git-cliff](https://git-cliff.org) 在 CI 中根据 git 历史生成的 GitHub 发布说明。在产生该改动的同一个提交中添加你的 `## [Unreleased]` 条目；提交的 type 决定生成的发布说明会承载什么。
 
-变更日志的收录规则：
+生成的发布说明的收录规则：
 
 | 类型 | 是否进入变更日志？ |
 |------|------------------------|
@@ -95,8 +95,9 @@ DBFlux 使用 [git-cliff](https://git-cliff.org) 直接从 git 历史生成变�
 
 **实际影响：**
 
-- 用户可见的改动**必须**使用 `feat`、`fix` 或 `perf` 作为类型。`chore` 或 `refactor` 提交在变更日志中对用户不可见。
-- 标题行要清晰、使用祈使句式 —— 它会原样成为变更日志中的一条。
+- 用户可见的改动**必须**使用 `feat`、`fix` 或 `perf` 作为类型，并在 `## [Unreleased]`（`### Added`、`### Fixed` 或 `### Changed`）下添加条目。`chore` 或 `refactor` 提交对用户不可见。
+- 标题行要清晰、使用祈使句式 —— 它会原样成为生成的发布说明中的一条。
+- 为 `[Unreleased]` 写条目时面向用户，而不是面向评审者：它就是仓库更新日志要说的话。
 - 如果一个拉取请求同时包含内部改动与用户可见改动，请把它们拆成类型恰当的多个提交。
 - 安全修复：使用 `fix(security): ...`，或添加 `Security: ...` 尾部说明，使该改动归入 Security 一节。
 
