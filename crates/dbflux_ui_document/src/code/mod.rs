@@ -2323,7 +2323,9 @@ mod tests {
         // A caller that pre-creates the file gives the document a real loaded
         // baseline; a path that does not exist yet leaves it without one, which is
         // exactly the no-baseline case autosave must refuse.
-        let baseline_bytes = std::fs::read_to_string(&path).ok();
+        let baseline_bytes = path
+            .as_ref()
+            .and_then(|path| std::fs::read_to_string(path).ok());
         let path_for_doc = path.clone();
 
         let (_, window) = cx.add_window_view(|window, cx| {
@@ -2340,8 +2342,8 @@ mod tests {
                 }
                 document.set_content("SELECT 1;", window, cx);
 
-                if let Some(bytes) = baseline_bytes {
-                    document.seed_file_baseline(path_for_doc, bytes);
+                if let (Some(bytes), Some(path)) = (baseline_bytes, path_for_doc) {
+                    document.seed_file_baseline(path, bytes);
                 }
 
                 document.editor.input_state.update(cx, |state, cx| {
@@ -2497,11 +2499,12 @@ mod tests {
         std::fs::remove_file(&retry_path).expect("the retry file must be removable");
     }
 
-    /// Choosing a path in Save As writes the captured buffer and lets the
-    /// interrupted close finish.
+    /// Choosing a path in Save As writes the captured buffer, retargets the
+    /// document at that path, and lets the interrupted close finish.
     #[gpui::test]
     fn choosing_a_path_in_save_as_writes_and_closes(cx: &mut TestAppContext) {
         let path = temp_save_path();
+        let retarget_expected = path.clone();
         let picker: SaveTargetProvider = {
             let path = path.clone();
             Arc::new(move |_request| {
@@ -2513,12 +2516,20 @@ mod tests {
         };
 
         let (events, dirty) =
-            with_dirty_untitled_document_with_picker(cx, picker, |doc, window| {
+            with_dirty_untitled_document_with_picker(cx, picker, move |doc, window| {
                 window.update(|window, cx| {
                     doc.update(cx, |document, cx| {
                         document.save_for_close(window, cx);
                     });
                 });
+                window.run_until_parked();
+
+                let retargeted = window.update(|_, app| doc.read(app).path().cloned());
+                assert_eq!(
+                    retargeted,
+                    Some(retarget_expected),
+                    "Save As must retarget the document at the chosen path"
+                );
             });
 
         assert_eq!(
@@ -2530,6 +2541,56 @@ mod tests {
             "a Save As write that lands must finish the close it started"
         );
         assert!(!dirty, "the chosen path must receive the pending buffer");
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("the chosen file must exist"),
+            "SELECT 2;"
+        );
+
+        std::fs::remove_file(&path).expect("the chosen file must be removable");
+    }
+
+    /// Save As from the toolbar is not a close: it retargets the document and
+    /// reports its outcome without asking the workspace to close the tab.
+    #[gpui::test]
+    fn save_as_from_the_toolbar_retargets_without_asking_to_close(cx: &mut TestAppContext) {
+        let path = temp_save_path();
+        let retarget_expected = path.clone();
+        let picker: SaveTargetProvider = {
+            let path = path.clone();
+            Arc::new(move |_request| {
+                gpui::Task::ready(SaveTargetOutcome::Selected {
+                    path: path.clone(),
+                    used_fallback: false,
+                })
+            })
+        };
+
+        let (events, dirty) =
+            with_dirty_untitled_document_with_picker(cx, picker, move |doc, window| {
+                window.update(|window, cx| {
+                    doc.update(cx, |document, cx| {
+                        document.save_file_as(window, cx);
+                    });
+                });
+                window.run_until_parked();
+
+                let retargeted = window.update(|_, app| doc.read(app).path().cloned());
+                assert_eq!(
+                    retargeted,
+                    Some(retarget_expected),
+                    "Save As must retarget the document at the chosen path"
+                );
+            });
+
+        assert_eq!(
+            events,
+            vec![RecordedEvent::SaveFinished(true)],
+            "Save As reports its outcome and never asks to close on its own"
+        );
+        assert!(
+            !dirty,
+            "the captured content landed, so the buffer is clean"
+        );
         assert_eq!(
             std::fs::read_to_string(&path).expect("the chosen file must exist"),
             "SELECT 2;"
