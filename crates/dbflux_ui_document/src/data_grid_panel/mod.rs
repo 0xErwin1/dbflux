@@ -4855,6 +4855,12 @@ mod tests {
 
     /// Connection stub for tests that only need a connected profile to hang
     /// cached metadata off; it answers no query.
+    ///
+    /// `dialect()` panics rather than returning a stand-in: the test-only
+    /// dialects live in `dbflux_core` behind `#[cfg(test)]`, so any path that
+    /// reaches a dialect — `new_for_table` does, through `refresh` and
+    /// `run_query` — panics instead of failing an assertion. Tests here drive the
+    /// panel through `new_internal` and call the method under test directly.
     struct StubConnection;
 
     impl dbflux_core::Connection for StubConnection {
