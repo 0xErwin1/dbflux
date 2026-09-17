@@ -183,9 +183,9 @@ impl DumpAnalysisDocument {
     pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(state) = &self.largest_keys_state {
             let handle = state.read(cx).focus_handle().clone();
-            handle.focus(window);
+            handle.focus(window, cx);
         } else {
-            self.focus_handle.focus(window);
+            self.focus_handle.focus(window, cx);
         }
     }
 

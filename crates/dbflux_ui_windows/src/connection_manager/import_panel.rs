@@ -460,7 +460,7 @@ impl ImportConnectionsPanel {
         self.is_parsing_external = true;
         self.external_parse_error = None;
         self.run_result = None;
-        window.focus(&self.focus_handle);
+        window.focus(&self.focus_handle, cx);
         cx.notify();
 
         let this = cx.entity().clone();
@@ -556,11 +556,11 @@ impl ImportConnectionsPanel {
         let this = cx.entity().clone();
 
         self.is_applying_external = true;
-        window.focus(&self.focus_handle);
+        window.focus(&self.focus_handle, cx);
         cx.notify();
 
         cx.spawn(async move |_this, cx| {
-            if let Err(e) = cx.update(|cx| {
+            cx.update(|cx| {
                 let outcome = app_state_entity.update(cx, |state, cx| {
                     let mut deps = AppStatePersistence::new(state);
                     let mut outcome = ExternalPersistOutcome::default();
@@ -679,7 +679,7 @@ impl ImportConnectionsPanel {
         self.is_parsing = true;
         self.parse_error = None;
         self.run_result = None;
-        window.focus(&self.focus_handle);
+        window.focus(&self.focus_handle, cx);
         cx.notify();
 
         cx.spawn(async move |_this, cx| {
@@ -901,7 +901,7 @@ impl ImportConnectionsPanel {
         let this = cx.entity().clone();
 
         self.is_applying = true;
-        window.focus(&self.focus_handle);
+        window.focus(&self.focus_handle, cx);
         cx.notify();
 
         cx.spawn(async move |_this, cx| {

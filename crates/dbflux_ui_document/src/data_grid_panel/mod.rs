@@ -2184,12 +2184,12 @@ impl DataGridPanel {
 
         if self.view_config.mode == super::data_view::DataViewMode::Document {
             if let Some(tree_state) = &self.document_view.document_tree_state {
-                tree_state.update(cx, |state, _| state.focus(window));
+                tree_state.update(cx, |state, cx| state.focus(window, cx));
             } else {
-                self.focus_handle.focus(window);
+                self.focus_handle.focus(window, cx);
             }
         } else {
-            self.focus_handle.focus(window);
+            self.focus_handle.focus(window, cx);
         }
 
         cx.emit(DataGridEvent::Focused);
@@ -2904,9 +2904,9 @@ impl DataGridPanel {
 
         ViewHandle::builder()
             .render(move |_window, _cx| {
-                // Render via the GPUI AnyView path: entity.clone().into_any()
-                // produces an AnyElement that delegates to DataGridPanel::render.
-                AnyView::from(e_render.clone()).into_any()
+                // AnyView is itself an element and delegates to
+                // DataGridPanel::render.
+                AnyView::from(e_render.clone()).into_any_element()
             })
             .focus({
                 move |window, cx| {

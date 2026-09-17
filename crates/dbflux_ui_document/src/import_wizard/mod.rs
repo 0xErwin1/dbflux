@@ -161,7 +161,7 @@ impl ImportWizard {
         self.active_task_id = None;
         self.result_summary = None;
         self.result_warnings.clear();
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
         cx.notify();
     }
 

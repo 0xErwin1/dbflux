@@ -1404,7 +1404,7 @@ impl Workspace {
         .detach();
 
         let focus_handle = cx.focus_handle();
-        focus_handle.focus(window);
+        focus_handle.focus(window, cx);
 
         let mut workspace = Self {
             app_state,
@@ -1923,7 +1923,7 @@ impl Workspace {
         });
 
         if target == FocusTarget::Sidebar {
-            self.focus_handle.focus(window);
+            self.focus_handle.focus(window, cx);
         }
 
         if target == FocusTarget::Document {

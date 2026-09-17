@@ -88,7 +88,7 @@ impl LoginModal {
                     launch_error: None,
                     started_at: Instant::now(),
                 };
-                self.focus_handle.focus(window);
+                self.focus_handle.focus(window, cx);
                 self.schedule_timeout(cx);
             }
             PipelineState::Failed { stage, error } => {
@@ -97,7 +97,7 @@ impl LoginModal {
                     provider_name: self.last_provider_name.clone(),
                     error: format!("{}: {}", stage, error),
                 };
-                self.focus_handle.focus(window);
+                self.focus_handle.focus(window, cx);
             }
             PipelineState::Cancelled => {
                 self.visible = false;
@@ -198,7 +198,7 @@ impl LoginModal {
             launch_error: None,
             started_at: Instant::now(),
         };
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
         self.schedule_timeout(cx);
         cx.notify();
     }

@@ -1154,7 +1154,7 @@ impl CodeDocument {
 
         self.focus_mode = SqlQueryFocus::ContextBar;
         self.context_bar_slot = visible[0];
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
         self.update_context_bar_focus_rings(cx);
         cx.notify();
     }

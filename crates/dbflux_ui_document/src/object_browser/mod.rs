@@ -379,7 +379,7 @@ impl ObjectBrowserDocument {
     }
 
     pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
         self.focus_mode = ObjectBrowserFocusMode::Listing;
         cx.notify();
     }
@@ -1074,7 +1074,7 @@ impl ObjectBrowserDocument {
             // key here would leave the panel open and unreachable.
             if cmd == Command::Cancel && self.editor_input_is_focused(window, cx) {
                 self.focus_mode = ObjectBrowserFocusMode::Listing;
-                self.focus_handle.focus(window);
+                self.focus_handle.focus(window, cx);
                 cx.notify();
                 return true;
             }
@@ -1151,7 +1151,7 @@ impl ObjectBrowserDocument {
                 }
 
                 self.focus_mode = ObjectBrowserFocusMode::Listing;
-                self.focus_handle.focus(window);
+                self.focus_handle.focus(window, cx);
                 cx.notify();
                 true
             }

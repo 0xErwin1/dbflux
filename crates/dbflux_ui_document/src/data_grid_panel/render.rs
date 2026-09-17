@@ -229,7 +229,7 @@ impl DataGridPanel {
         if self.context_menu.is_none() {
             self.pending.context_menu_focus = false;
         } else if std::mem::take(&mut self.pending.context_menu_focus) {
-            self.focus.context_menu_focus.focus(window);
+            self.focus.context_menu_focus.focus(window, cx);
         }
 
         if let Some(modal) = self.pending.modal_open.take() {
@@ -1338,7 +1338,7 @@ impl DataGridPanel {
                                                 }
                                             });
                                         }
-                                        window.focus(&this.focus_handle);
+                                        window.focus(&this.focus_handle, cx);
                                     }))
                             })
                             .when(!can_undo, |d| d.border_color(theme.border))
@@ -1382,7 +1382,7 @@ impl DataGridPanel {
                                                 }
                                             });
                                         }
-                                        window.focus(&this.focus_handle);
+                                        window.focus(&this.focus_handle, cx);
                                     }))
                             })
                             .when(!can_redo, |d| d.border_color(theme.border))
@@ -1415,7 +1415,7 @@ impl DataGridPanel {
                                             });
                                         }
                                         // Refocus table after button click
-                                        window.focus(&this.focus_handle);
+                                        window.focus(&this.focus_handle, cx);
                                     }))
                             })
                             .when(!has_changes, |d| d.border_color(theme.border))
@@ -1454,7 +1454,7 @@ impl DataGridPanel {
                                             });
                                         }
                                         // Refocus table after button click
-                                        window.focus(&this.focus_handle);
+                                        window.focus(&this.focus_handle, cx);
                                     }))
                             })
                             .child(

@@ -1479,8 +1479,8 @@ impl AuditDocument {
 
     // ── Focus ─────────────────────────────────────────────────────────────
 
-    pub fn focus(&mut self, window: &mut Window, _cx: &mut Context<Self>) {
-        self.focus_handle.focus(window);
+    pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.focus_handle.focus(window, cx);
     }
 
     pub fn filter_by_correlation(&mut self, correlation_id: String, cx: &mut Context<Self>) {

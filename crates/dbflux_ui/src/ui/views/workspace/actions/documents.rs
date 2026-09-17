@@ -630,7 +630,7 @@ impl Workspace {
             // Take focus off any editor input so Enter/Escape resolve through
             // the ConfirmModal keymap instead of editing the buffer behind the
             // modal.
-            self.focus_handle.focus(window);
+            self.focus_handle.focus(window, cx);
             false
         } else {
             self.close_tab(doc_id, window, cx)

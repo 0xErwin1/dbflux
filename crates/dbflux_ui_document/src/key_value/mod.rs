@@ -511,7 +511,7 @@ impl KeyValueDocument {
 
     pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.focus_mode = KeyValueFocusMode::List;
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
         cx.notify();
     }
 

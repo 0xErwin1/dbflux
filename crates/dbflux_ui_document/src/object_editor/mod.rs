@@ -251,7 +251,7 @@ impl ObjectEditorDocument {
                 .input
                 .clone()
                 .update(cx, |state, cx| state.focus(window, cx)),
-            None => self.focus_handle.focus(window),
+            None => self.focus_handle.focus(window, cx),
         }
 
         cx.notify();

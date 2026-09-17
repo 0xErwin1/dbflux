@@ -51,7 +51,7 @@ impl ObjectBrowserDocument {
         let action = self.take_pending_object_action();
 
         if action.is_some() {
-            self.focus_handle.focus(window);
+            self.focus_handle.focus(window, cx);
         }
 
         match action {

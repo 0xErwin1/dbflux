@@ -675,7 +675,7 @@ impl ExportBundleModal {
         self.pending_result = None;
         cx.notify();
 
-        window.focus(&self.focus_handle);
+        window.focus(&self.focus_handle, cx);
 
         cx.spawn(async move |_this, cx| {
             // Run the export and write the file entirely on the background

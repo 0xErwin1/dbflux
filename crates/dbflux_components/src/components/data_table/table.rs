@@ -198,7 +198,7 @@ impl gpui::Render for DataTable {
             .update(cx, |state, _cx| state.take_pending_refocus())
         {
             let focus_handle = self.state.read(cx).focus_handle().clone();
-            focus_handle.focus(window);
+            focus_handle.focus(window, cx);
         }
 
         let state = self.state.read(cx);
@@ -530,7 +530,7 @@ impl gpui::Render for DataTable {
                             .size_full()
                             .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                                 cx.stop_propagation();
-                                window.focus(&focus_for_empty);
+                                focus_for_empty.focus(window, cx);
                             })
                             .on_mouse_down(MouseButton::Right, move |event, window, cx| {
                                 cx.stop_propagation();

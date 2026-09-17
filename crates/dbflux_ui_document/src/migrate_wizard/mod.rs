@@ -518,7 +518,7 @@ impl MigrateWizard {
         if self.is_running(cx) {
             self.visible = true;
             self.phase = WizardPhase::Run;
-            self.focus_handle.focus(window);
+            self.focus_handle.focus(window, cx);
             cx.notify();
             return;
         }
@@ -566,7 +566,7 @@ impl MigrateWizard {
         ));
         self.source_target = Some(source_target);
 
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
         cx.notify();
     }
 
@@ -1233,7 +1233,7 @@ impl MigrateWizard {
             return;
         }
         if let Some(handle) = self.active_phase_focus_handle(cx) {
-            handle.focus(window);
+            handle.focus(window, cx);
             self.focused_phase = Some(self.phase);
         }
     }

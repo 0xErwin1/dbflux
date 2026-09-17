@@ -680,8 +680,8 @@ impl DashboardDocument {
         ContextId::Global
     }
 
-    pub fn focus(&mut self, window: &mut Window, _cx: &mut Context<Self>) {
-        self.focus_handle.focus(window);
+    pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.focus_handle.focus(window, cx);
     }
 
     pub fn dispatch_command(
@@ -1339,7 +1339,10 @@ impl DashboardDocument {
             window,
             move |this, entity, event: &dbflux_components::controls::InputEvent, _window, cx| {
                 match event {
-                    dbflux_components::controls::InputEvent::PressEnter { secondary: false } => {
+                    dbflux_components::controls::InputEvent::PressEnter {
+                        secondary: false,
+                        ..
+                    } => {
                         let value = entity.read(cx).value().to_string();
                         if let Some(idx) = this.editing_title_panel_index.take() {
                             this.update_panel_title(idx, value, cx);
@@ -1410,7 +1413,9 @@ impl DashboardDocument {
             window,
             |this, entity, event: &dbflux_components::controls::InputEvent, _window, cx| match event
             {
-                dbflux_components::controls::InputEvent::PressEnter { secondary: false } => {
+                dbflux_components::controls::InputEvent::PressEnter {
+                    secondary: false, ..
+                } => {
                     let value = entity.read(cx).value().to_string();
                     this.commit_dashboard_name_edit(value, cx);
                 }

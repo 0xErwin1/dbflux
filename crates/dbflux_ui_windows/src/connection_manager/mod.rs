@@ -770,7 +770,7 @@ impl ConnectionManagerWindow {
             |this, _, event: &ImportConnectionsPanelEvent, window, cx| match event {
                 ImportConnectionsPanelEvent::Cancelled | ImportConnectionsPanelEvent::Completed => {
                     this.view = View::DriverSelect;
-                    window.focus(&this.focus_handle);
+                    window.focus(&this.focus_handle, cx);
                     cx.notify();
                 }
             },
@@ -807,7 +807,7 @@ impl ConnectionManagerWindow {
         subscriptions.push(mcp_client_filter_sub);
 
         let focus_handle = cx.focus_handle();
-        window.focus(&focus_handle);
+        window.focus(&focus_handle, cx);
 
         Self {
             app_state: app_state.clone(),
@@ -1271,7 +1271,7 @@ impl ConnectionManagerWindow {
         self.view = View::EditForm;
         self.edit_state = EditState::Navigating;
         self.form_focus = FormFocus::Name;
-        window.focus(&self.focus_handle);
+        window.focus(&self.focus_handle, cx);
         cx.notify();
     }
 
@@ -1666,7 +1666,7 @@ impl ConnectionManagerWindow {
     }
 
     fn back_to_driver_select(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        window.focus(&self.focus_handle);
+        window.focus(&self.focus_handle, cx);
         self.view = View::DriverSelect;
         self.form.selected_driver_id = None;
         self.form.selected_driver = None;

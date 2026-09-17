@@ -221,7 +221,7 @@ impl Render for SettingsCoordinator {
             self.pending_focus_return = false;
             self.focus_area = SettingsFocus::Content;
             self.active_section_entity.focus_in(_window, cx);
-            self.focus_handle.focus(_window);
+            self.focus_handle.focus(_window, cx);
         }
 
         // A section asked to open a portability overlay; do it here where a

@@ -178,8 +178,8 @@ impl InspectorPanel {
 
     pub fn set_active_tab(&mut self, _active: bool) {}
 
-    pub fn focus(&mut self, window: &mut Window, _cx: &mut Context<Self>) {
-        self.focus_handle.focus(window);
+    pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.focus_handle.focus(window, cx);
     }
 
     pub fn dispatch_command(

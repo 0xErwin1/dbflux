@@ -199,7 +199,7 @@ impl CodeDocument {
             // Take focus off the editor input so Enter/Escape resolve through
             // the ConfirmModal keymap instead of editing the buffer behind the
             // modal.
-            self.focus_handle.focus(window);
+            self.focus_handle.focus(window, cx);
             cx.notify();
             return;
         }
@@ -308,7 +308,7 @@ impl CodeDocument {
                     // Take focus off the editor input so Enter/Escape resolve
                     // through the ConfirmModal keymap instead of editing the
                     // buffer behind the modal.
-                    self.focus_handle.focus(window);
+                    self.focus_handle.focus(window, cx);
                     cx.notify();
                     return;
                 }
