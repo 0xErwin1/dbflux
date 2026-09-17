@@ -2,10 +2,12 @@ use crate::controls::{GpuiInput as Input, InputEvent, InputState};
 use crate::icons::AppIcon;
 use crate::primitives::{Icon, Text};
 use crate::tokens::{FontSizes, Heights, Radii, Spacing};
+use crate::typography::AppFonts;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::Sizable;
+use gpui_component::input::{Editor, EditorState};
 
 use super::events::{DocumentTreeEvent, TreeDirection};
 use super::node::{NodeId, NodeValue, TreeNode};
@@ -81,7 +83,7 @@ pub fn init(cx: &mut App) {
 pub struct DocumentTree {
     id: ElementId,
     state: Entity<DocumentTreeState>,
-    raw_json_input: Option<Entity<InputState>>,
+    raw_json_input: Option<Entity<EditorState>>,
     search_input: Option<Entity<InputState>>,
     _search_subscription: Option<Subscription>,
 }
@@ -105,16 +107,16 @@ impl DocumentTree {
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Entity<InputState> {
+    ) -> Entity<EditorState> {
         if let Some(input) = &self.raw_json_input {
             return input.clone();
         }
 
+        // soft_wrap defaults to true in 0.6.1, so the old explicit builder is gone.
         let input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .code_editor("json")
+            EditorState::new(window, cx)
+                .language("json")
                 .line_number(true)
-                .soft_wrap(true)
         });
 
         self.raw_json_input = Some(input.clone());
@@ -401,17 +403,21 @@ impl Render for DocumentTree {
                                         .collect()
                                 }
                             })
-                            .track_scroll(scroll_handle)
+                            .track_scroll(&scroll_handle)
                             .size_full()
                             .with_sizing_behavior(ListSizingBehavior::Infer),
                         )
                     })
                     .when_some(raw_json_input.filter(|_| !is_tree_mode), |d, input| {
                         d.child(
-                            div()
-                                .size_full()
-                                .p(Spacing::SM)
-                                .child(Input::new(&input).w_full().h_full()),
+                            div().size_full().p(Spacing::SM).child(
+                                Editor::new(&input)
+                                    .w_full()
+                                    .h_full()
+                                    .font_family(AppFonts::BODY)
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_size(FontSizes::BASE),
+                            ),
                         )
                     }),
             )

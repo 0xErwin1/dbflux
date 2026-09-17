@@ -29,7 +29,7 @@ use crate::object_text::{
 // `CodeDocument` renders its editor with: only it supports the full-height,
 // line-numbered code-editor layout.
 use dbflux_app::keymap::Modifiers;
-use dbflux_components::controls::{GpuiInput, InputEvent, InputState};
+use dbflux_components::controls::{GpuiInput, InputEvent};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Text, overlay_bg, surface_panel};
 use dbflux_components::tokens::{Heights, Radii, Spacing};
@@ -40,6 +40,7 @@ use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error, repor
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
+use gpui_component::input::EditorState;
 
 /// Diameter of the dirty indicator inside the "modified" pill.
 const DIRTY_DOT: Pixels = px(7.0);
@@ -59,7 +60,7 @@ pub(super) struct PendingTextBody {
 /// The editable buffer for one object.
 pub(super) struct ObjectEditor {
     pub(super) key: String,
-    pub(super) input: Entity<InputState>,
+    pub(super) input: Entity<EditorState>,
     /// Content as last loaded or last saved. `dirty` is `buffer != baseline`.
     pub(super) baseline: String,
     pub(super) line_ending: LineEnding,
@@ -595,8 +596,9 @@ impl ObjectBrowserDocument {
                         }
                     }))
                     .child(
-                        GpuiInput::new(&editor.input)
+                        gpui_component::input::Editor::new(&editor.input)
                             .appearance(false)
+                            .readonly(true)
                             .disabled(!is_editable)
                             .w_full()
                             .h_full(),

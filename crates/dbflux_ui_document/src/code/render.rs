@@ -303,16 +303,11 @@ impl CodeDocument {
                 }))
                 .child(
                     div().flex_1().min_h_0().overflow_hidden().child(
-                        Input::new(&self.editor.input_state)
+                        gpui_component::input::Editor::new(&self.editor.input_state)
                             .appearance(false)
+                            .readonly(self.read_only)
                             .w_full()
-                            .h_full()
-                            // Propagate read-only into the Input component so the
-                            // underlying InputState has its `disabled` flag set
-                            // during render. This prevents all text-mutating actions
-                            // (backspace, delete, paste, undo, redo) from being
-                            // bound while keeping selection and copy fully functional.
-                            .disabled(self.read_only),
+                            .h_full(),
                     ),
                 ),
             cx,

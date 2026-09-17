@@ -16,6 +16,7 @@ use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Render, Subscription, Task,
     WeakEntity, Window,
 };
+use gpui_component::input::EditorState as GpuiEditorState;
 use uuid::Uuid;
 
 use dbflux_ui_base::AppStateEntity;
@@ -290,7 +291,7 @@ pub struct QueryBuilderPanel {
     /// The editor uses SQL syntax highlighting and is disabled (no user edits).
     /// Synced from `sql_preview` during render via the `pending_preview_sync` flag.
     /// `None` only in unit tests that bypass the GPUI runtime via `make_panel`.
-    pub(crate) sql_preview_state: Option<Entity<InputState>>,
+    pub(crate) sql_preview_state: Option<Entity<GpuiEditorState>>,
 
     /// Set to `true` whenever `sql_preview` text changes, so the render cycle
     /// can flush the new text into `sql_preview_state` while `Window` is available.
@@ -306,7 +307,7 @@ pub struct QueryBuilderPanel {
     ///
     /// Length always matches `join_rows`. Rebuilt (with subscriptions) whenever
     /// the join row count changes.
-    pub(crate) join_input_states: Vec<(Entity<InputState>, Entity<InputState>)>,
+    pub(crate) join_input_states: Vec<(Entity<GpuiEditorState>, Entity<InputState>)>,
 
     /// All input subscriptions (limit, offset, join rows, filter predicates).
     ///
@@ -319,10 +320,10 @@ pub struct QueryBuilderPanel {
     pub(crate) pending_join_rebuild: bool,
 
     /// InputState backing the "add column (alias.column)" entry field.
-    pub(crate) add_column_input_state: Option<Entity<InputState>>,
+    pub(crate) add_column_input_state: Option<Entity<GpuiEditorState>>,
 
     /// InputState backing the "add sort (alias.column)" entry field.
-    pub(crate) add_sort_input_state: Option<Entity<InputState>>,
+    pub(crate) add_sort_input_state: Option<Entity<GpuiEditorState>>,
 
     /// Monotonically increasing counter used to mint stable `node_id` values for
     /// new `Predicate` nodes. The counter only moves forward; no value is reused.
@@ -336,7 +337,7 @@ pub struct QueryBuilderPanel {
 
     /// Per-predicate column-reference `InputState` keyed by `Predicate::node_id`.
     /// Holds the dotted "alias.column" string editable by the user.
-    pub(crate) predicate_column_input_states: HashMap<u64, Entity<InputState>>,
+    pub(crate) predicate_column_input_states: HashMap<u64, Entity<GpuiEditorState>>,
 
     /// Per-predicate comparator `Dropdown` keyed by `Predicate::node_id`. The
     /// dropdown carries one item per `Comparator` variant; the subscription
@@ -349,8 +350,8 @@ pub struct QueryBuilderPanel {
 
     /// Per-join-condition input/dropdown state keyed by `JoinPredicate::node_id`.
     /// Holds the left/right `alias.column` inputs and the comparator dropdown.
-    pub(crate) join_cond_left_inputs: HashMap<u64, Entity<InputState>>,
-    pub(crate) join_cond_right_inputs: HashMap<u64, Entity<InputState>>,
+    pub(crate) join_cond_left_inputs: HashMap<u64, Entity<GpuiEditorState>>,
+    pub(crate) join_cond_right_inputs: HashMap<u64, Entity<GpuiEditorState>>,
     pub(crate) join_cond_op_dropdowns: HashMap<u64, Entity<Dropdown>>,
 
     /// Names of columns available on the source table, used to render the
@@ -450,7 +451,7 @@ pub struct QueryBuilderPanel {
     ///
     /// Each entry holds an `InputState` for the "alias.column" text field.
     /// Rebuilt whenever the group-by row count changes.
-    pub(crate) group_by_col_inputs: Vec<Entity<InputState>>,
+    pub(crate) group_by_col_inputs: Vec<Entity<GpuiEditorState>>,
 
     /// Per-aggregate-row function `Dropdown` (parallel to `aggregate_rows`).
     pub(crate) agg_fn_dropdowns: Vec<Entity<Dropdown>>,
@@ -459,7 +460,7 @@ pub struct QueryBuilderPanel {
     ///
     /// Holds an `InputState` for the "alias.column" reference. Disabled (read-only)
     /// when the selected function is `CountStar`.
-    pub(crate) agg_col_inputs: Vec<Entity<InputState>>,
+    pub(crate) agg_col_inputs: Vec<Entity<GpuiEditorState>>,
 
     /// Per-aggregate-row alias text input (parallel to `aggregate_rows`).
     pub(crate) agg_alias_inputs: Vec<Entity<InputState>>,
@@ -472,7 +473,7 @@ pub struct QueryBuilderPanel {
     pub(crate) having_predicate_input_states: HashMap<u64, Entity<InputState>>,
 
     /// Per-predicate column-reference `InputState` for HAVING predicates, keyed by node_id.
-    pub(crate) having_predicate_column_input_states: HashMap<u64, Entity<InputState>>,
+    pub(crate) having_predicate_column_input_states: HashMap<u64, Entity<GpuiEditorState>>,
 
     /// Per-predicate comparator `Dropdown` for HAVING predicates, keyed by node_id.
     pub(crate) having_predicate_comparator_dropdowns: HashMap<u64, Entity<Dropdown>>,
@@ -595,7 +596,7 @@ impl QueryBuilderPanel {
         let sql_preview = generate_preview(&spec);
         let focus_handle = Some(cx.focus_handle());
 
-        let sql_preview_state = cx.new(|cx| InputState::new(window, cx).code_editor("sql"));
+        let sql_preview_state = cx.new(|cx| GpuiEditorState::new(window, cx).language("sql"));
 
         let limit_val = limit_text.clone();
         let limit_input_state = cx.new(|cx| {
@@ -661,11 +662,13 @@ impl QueryBuilderPanel {
 
         let app_state_weak = app_state.downgrade();
 
-        let add_column_input_state =
-            cx.new(|cx| InputState::new(window, cx).placeholder("alias.column"));
+        let add_column_input_state = cx.new(|cx| {
+            crate::completion_support::new_single_line_completion_state(window, cx, "alias.column")
+        });
 
-        let add_sort_input_state =
-            cx.new(|cx| InputState::new(window, cx).placeholder("alias.column"));
+        let add_sort_input_state = cx.new(|cx| {
+            crate::completion_support::new_single_line_completion_state(window, cx, "alias.column")
+        });
 
         let alias_or_column_provider: Rc<dyn CompletionProvider> =
             Rc::new(SchemaCompletionProvider::new(
@@ -678,11 +681,11 @@ impl QueryBuilderPanel {
             ));
 
         add_column_input_state.update(cx, |state, _| {
-            state.lsp.completion_provider = Some(alias_or_column_provider.clone());
+            state.lsp_mut().completion_provider = Some(alias_or_column_provider.clone());
         });
 
         add_sort_input_state.update(cx, |state, _| {
-            state.lsp.completion_provider = Some(alias_or_column_provider.clone());
+            state.lsp_mut().completion_provider = Some(alias_or_column_provider.clone());
         });
 
         let limit_sub = cx.subscribe_in(

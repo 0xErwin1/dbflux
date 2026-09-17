@@ -34,6 +34,7 @@ use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::calendar::Date;
 use gpui_component::date_picker::DatePickerState;
+use gpui_component::input::{EditorState as GpuiEditorState, TextareaState};
 use uuid::Uuid;
 
 use super::handle::DocumentEvent;
@@ -133,8 +134,8 @@ pub struct AuditDocument {
     events: Vec<AuditEventDto>,
     total_events: u64,
     expanded_event_ids: HashSet<i64>,
-    external_message_inputs: HashMap<i64, Entity<InputState>>,
-    external_details_inputs: HashMap<i64, Entity<InputState>>,
+    external_message_inputs: HashMap<i64, Entity<TextareaState>>,
+    external_details_inputs: HashMap<i64, Entity<GpuiEditorState>>,
     pagination: Pagination,
     status_message: Option<String>,
     is_loading: bool,
@@ -319,7 +320,9 @@ impl AuditDocument {
 
         let search_sub = cx.subscribe(&search_input, |this, _, event: &InputEvent, cx| {
             match event {
-                InputEvent::PressEnter { secondary: false } => {
+                InputEvent::PressEnter {
+                    secondary: false, ..
+                } => {
                     this.handle_search_submit(cx);
                 }
                 // When the input loses focus (e.g. user presses Escape inside the input),

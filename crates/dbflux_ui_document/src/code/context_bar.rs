@@ -185,8 +185,8 @@ impl CodeDocument {
         self.editor.current_editor_mode = editor_mode.clone();
 
         self.editor.input_state.update(cx, |state, cx| {
-            state.lsp.completion_provider = Some(completion_provider);
-            state.lsp.code_action_providers = vec![code_action_provider];
+            state.lsp_mut().completion_provider = Some(completion_provider);
+            state.lsp_mut().code_action_providers = vec![code_action_provider];
 
             // `set_highlighter` resets the cached SyntaxHighlighter to `None`
             // and gpui-component only rebuilds it on the next text edit, so

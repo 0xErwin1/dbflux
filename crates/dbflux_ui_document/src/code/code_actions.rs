@@ -1,6 +1,7 @@
 use super::*;
 use crate::completion_support::normalize_identifier;
 use dbflux_core::{CodeAction as CoreCodeAction, LanguageService, SchemaColumns};
+use gpui_component::input::EditorState as GpuiEditorState;
 use lsp_types::CodeAction as LspCodeAction;
 use serde::{Deserialize, Serialize};
 use std::ops::Range as StdRange;
@@ -173,7 +174,7 @@ impl CodeActionProvider for SqlCodeActionProvider {
 
     fn code_actions(
         &self,
-        state: Entity<InputState>,
+        state: Entity<GpuiEditorState>,
         range: StdRange<usize>,
         _window: &mut Window,
         cx: &mut App,
@@ -201,7 +202,7 @@ impl CodeActionProvider for SqlCodeActionProvider {
 
     fn perform_code_action(
         &self,
-        state: Entity<InputState>,
+        state: Entity<GpuiEditorState>,
         action: LspCodeAction,
         _push_to_history: bool,
         window: &mut Window,

@@ -1,12 +1,12 @@
 use crate::components::json_editor_view::{self, JsonEditorView};
 use crate::composites::ModalFrame;
-use crate::controls::InputState;
 use crate::icon::IconSource;
 use crate::icons::AppIcon;
 use crate::primitives::Icon;
 use crate::tokens::Heights;
 use dbflux_core::keymap_types::ContextId;
 use gpui::*;
+use gpui_component::input::EditorState;
 
 /// Sentinel value for `doc_index` when opening the modal in insert (new document) mode.
 /// When the modal saves with this index, the handler should call `insert_document` instead
@@ -28,18 +28,18 @@ pub struct DocumentPreviewClosedEvent;
 pub struct DocumentPreviewModal {
     visible: bool,
     doc_index: usize,
-    input: Entity<InputState>,
+    input: Entity<EditorState>,
     focus_handle: FocusHandle,
     validation_error: Option<String>,
 }
 
 impl DocumentPreviewModal {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        // soft_wrap defaults to true in 0.6.1, so the old explicit builder is gone.
         let input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .code_editor("json")
+            EditorState::new(window, cx)
+                .language("json")
                 .line_number(true)
-                .soft_wrap(true)
         });
 
         Self {

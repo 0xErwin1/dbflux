@@ -16,7 +16,7 @@ use dbflux_components::chart::{
 use dbflux_components::chart::{SourceRowRef, point_inspector_element};
 use dbflux_components::common::time_range::view::TimeRangePanel;
 use dbflux_components::components::data_table::SortState as TableSortState;
-use dbflux_components::controls::{Checkbox, Input, InputState, completion_input_keys_wrapper};
+use dbflux_components::controls::{Checkbox, Input, InputState};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{BannerBlock, BannerVariant, Icon, Text, surface_raised};
 use dbflux_components::semantic::ChartColors;
@@ -26,6 +26,7 @@ use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
+use gpui_component::input::EditorState;
 
 /// Snapshot of derived render state computed once per frame from `&self`.
 ///
@@ -40,7 +41,7 @@ struct RenderState {
     source_name: String,
     source_query_prefix: &'static str,
     filter_keyword: String,
-    filter_input: Entity<InputState>,
+    filter_input: Entity<EditorState>,
     filter_has_value: bool,
     limit_input: Entity<InputState>,
     pagination_info: Option<Pagination>,
@@ -825,9 +826,10 @@ pub(super) fn render_filter_bar_as_segment(
                                 }
                             })
                             .child(
-                                completion_input_keys_wrapper(&filter_input)
-                                    .flex_1()
-                                    .child(Input::new(&filter_input).small()),
+                                crate::completion_support::single_line_completion_editor(
+                                    &filter_input,
+                                )
+                                .flex_1(),
                             )
                             .when(filter_has_value, move |d| {
                                 let grid = grid_for_clear_event.clone();
@@ -992,7 +994,7 @@ impl DataGridPanel {
         source_query_prefix: &str,
         filter_keyword: &str,
         source_name: &str,
-        filter_input: &Entity<InputState>,
+        filter_input: &Entity<EditorState>,
         filter_has_value: bool,
         limit_input: &Entity<InputState>,
         show_toolbar_focus: bool,
@@ -1086,9 +1088,10 @@ impl DataGridPanel {
                                     }),
                                 )
                                 .child(
-                                    completion_input_keys_wrapper(filter_input)
-                                        .flex_1()
-                                        .child(Input::new(filter_input).small()),
+                                    crate::completion_support::single_line_completion_editor(
+                                        filter_input,
+                                    )
+                                    .flex_1(),
                                 )
                                 .when(filter_has_value, |d| {
                                     d.child(
@@ -1962,7 +1965,7 @@ impl DataGridPanel {
                 };
 
                 let chart_row = div()
-                    .flex_grow()
+                    .flex_grow(1.0)
                     .size_full()
                     .pt(Spacing::MD)
                     .pb(Spacing::SM)
@@ -1974,7 +1977,7 @@ impl DataGridPanel {
                     .relative()
                     .flex()
                     .flex_col()
-                    .flex_grow()
+                    .flex_grow(1.0)
                     .min_h_0()
                     .child(chart_row)
                     .when(has_chart_view, |d| {
@@ -2718,7 +2721,7 @@ impl DataGridPanel {
             .border_color(theme.border)
             .bg(theme.popover)
             .occlude()
-            .child(div().flex_grow().min_h_0().overflow_hidden().child(body))
+            .child(div().flex_grow(1.0).min_h_0().overflow_hidden().child(body))
     }
 
     /// Section container helper for the right dock panels.

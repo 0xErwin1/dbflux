@@ -41,6 +41,7 @@ use gpui_component::Sizable;
 use gpui_component::highlighter::{
     Diagnostic as InputDiagnostic, DiagnosticSeverity as InputDiagnosticSeverity,
 };
+use gpui_component::input::EditorState as GpuiEditorState;
 use gpui_component::resizable::{resizable_panel, v_resizable};
 use lsp_types::{
     CompletionContext, CompletionItem, CompletionItemKind, CompletionResponse, CompletionTextEdit,
@@ -259,7 +260,7 @@ pub(super) enum LanguageBinding {
 /// that track editor-lifecycle concerns: content dirtiness, file path, language,
 /// and the incremental diagnostic refresh debounce.
 pub(super) struct EditorState {
-    pub(super) input_state: Entity<InputState>,
+    pub(super) input_state: Entity<GpuiEditorState>,
     pub(super) _input_subscriptions: Vec<Subscription>,
     pub(super) original_content: String,
     pub(super) saved_query_id: Option<Uuid>,
@@ -597,8 +598,8 @@ impl CodeDocument {
         };
 
         let input_state = cx.new(|cx| {
-            InputState::new(window, cx)
-                .code_editor(editor_mode)
+            GpuiEditorState::new(window, cx)
+                .language(editor_mode)
                 .line_number(true)
                 .soft_wrap(false)
                 .placeholder(placeholder)
@@ -863,9 +864,9 @@ impl CodeDocument {
         ));
 
         input_state.update(cx, |state, _cx| {
-            state.lsp.completion_provider =
+            state.lsp_mut().completion_provider =
                 supports_connection_context.then_some(completion_provider.clone());
-            state.lsp.code_action_providers = vec![code_action_provider.clone()];
+            state.lsp_mut().code_action_providers = vec![code_action_provider.clone()];
         });
 
         let (connection_dropdown, conn_sub) =
@@ -1193,8 +1194,8 @@ impl CodeDocument {
         // the Input component receives key events before the disabled guard
         // blocks the actual text insertion).
         self.editor.input_state.update(cx, |state, _cx| {
-            state.lsp.completion_provider = None;
-            state.lsp.code_action_providers = Vec::new();
+            state.lsp_mut().completion_provider = None;
+            state.lsp_mut().code_action_providers = Vec::new();
         });
 
         self

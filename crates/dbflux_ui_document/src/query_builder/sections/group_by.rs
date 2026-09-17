@@ -14,11 +14,12 @@ pub fn render_group_by(
 ) -> impl IntoElement {
     use crate::labels::agg_fn_display;
     use crate::query_builder::panel::AGG_FN_ORDER;
-    use dbflux_components::controls::{Button, Input, completion_input_keys_wrapper};
+    use dbflux_components::controls::{Button, Input};
     use dbflux_components::tokens::{Heights, Radii};
     use dbflux_core::AggFn;
     use gpui::prelude::*;
     use gpui_component::ActiveTheme;
+    use gpui_component::input::EditorState;
 
     let group_by_rows: Vec<GroupByRow> = panel.group_by_rows.clone();
     let aggregate_rows: Vec<AggregateRow> = panel.aggregate_rows.clone();
@@ -43,15 +44,10 @@ pub fn render_group_by(
 
         if let Some(col_input) = gb_col_inputs.get(i).cloned() {
             row_div = row_div.child(
-                completion_input_keys_wrapper(&col_input)
+                crate::completion_support::single_line_completion_editor(&col_input)
                     .flex_1()
                     .min_w(gpui::px(0.0))
-                    .child(
-                        Input::new(&col_input)
-                            .small()
-                            .w_full()
-                            .placeholder("alias.column"),
-                    ),
+                    .w_full(),
             );
         }
 
@@ -122,15 +118,10 @@ pub fn render_group_by(
                 let _col_input = col_input;
             } else {
                 row_div = row_div.child(
-                    completion_input_keys_wrapper(&col_input)
+                    crate::completion_support::single_line_completion_editor(&col_input)
                         .flex_1()
                         .min_w(gpui::px(0.0))
-                        .child(
-                            Input::new(&col_input)
-                                .small()
-                                .w_full()
-                                .placeholder("alias.column"),
-                        ),
+                        .w_full(),
                 );
             }
         }

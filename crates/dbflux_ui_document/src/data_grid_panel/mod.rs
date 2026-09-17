@@ -50,6 +50,7 @@ use dbflux_ui_base::AsyncUpdateResultExt;
 use dbflux_ui_base::toast::PendingToast;
 use gpui::*;
 use gpui_component::Sizable;
+use gpui_component::input::EditorState;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -429,7 +430,7 @@ struct GridTableState {
 /// `render_filter_bar_as_segment`; they are created together at construction
 /// time and are never individually swapped out.
 struct FilterBarState {
-    filter_input: Entity<InputState>,
+    filter_input: Entity<EditorState>,
     /// Schema cache backing the WHERE filter's autocomplete. `Some` only when
     /// `source` is `DataSource::Table` and a completion provider was wired.
     filter_completion_cache: Option<Rc<RefCell<SchemaCache>>>,
@@ -878,7 +879,13 @@ impl DataGridPanel {
     ) -> Self {
         let filter_placeholder = Self::filter_placeholder_for_source(&source, &app_state, cx);
 
-        let filter_input = cx.new(|cx| InputState::new(window, cx).placeholder(filter_placeholder));
+        let filter_input = cx.new(|cx| {
+            crate::completion_support::new_single_line_completion_state(
+                window,
+                cx,
+                filter_placeholder,
+            )
+        });
 
         let filter_completion_cache: Option<Rc<RefCell<SchemaCache>>> = if let DataSource::Table {
             profile_id,
@@ -923,7 +930,7 @@ impl DataGridPanel {
                 ));
 
             filter_input.update(cx, |state, _| {
-                state.lsp.completion_provider = Some(filter_provider);
+                state.lsp_mut().completion_provider = Some(filter_provider);
             });
 
             Some(filter_cache)

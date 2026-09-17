@@ -1,3 +1,6 @@
+use dbflux_components::tokens::FontSizes;
+use gpui::{Entity, FontWeight, Styled as _};
+use gpui_component::input::EditorState;
 use lsp_types::{
     CompletionItem, CompletionItemKind, CompletionTextEdit, InsertTextFormat,
     Position as LspPosition, Range as LspRange, TextEdit,
@@ -114,4 +117,40 @@ pub(crate) fn extract_identifier_prefix(source: &str, cursor: usize) -> (usize, 
     let cursor = min(cursor, source.len());
     let prefix_start = scan_identifier_start(source, cursor);
     (prefix_start, source[prefix_start..cursor].to_string())
+}
+
+/// Creates an `EditorState` presented as a visually single-line field.
+///
+/// gpui-component 0.6.1 hosts the completion engine on `EditorState` only, so
+/// inputs that opt into a `CompletionProvider` must use it even when they
+/// render as one-row fields. This reproduces the old single-line `InputState`
+/// contract: no gutter, no wrap, no editor chrome, and Enter submits instead
+/// of inserting a newline (Shift+Enter still does, if the field is ever grown).
+pub(crate) fn new_single_line_completion_state(
+    window: &mut gpui::Window,
+    cx: &mut gpui::Context<'_, EditorState>,
+    placeholder: impl Into<gpui::SharedString>,
+) -> EditorState {
+    EditorState::new(window, cx)
+        .line_number(false)
+        .soft_wrap(false)
+        .folding(false)
+        .searchable(false)
+        .submit_on_enter(true)
+        .placeholder(placeholder)
+}
+
+/// Renders a single-line completion input as a one-row `Editor`.
+///
+/// Pairs with [`new_single_line_completion_state`]: same visual contract as
+/// the old `.small()` single-line input (24 px, DBFlux body font) while the
+/// underlying state is the `EditorState` the completion engine requires.
+pub(crate) fn single_line_completion_editor(
+    state: &Entity<EditorState>,
+) -> gpui_component::input::Editor {
+    gpui_component::input::Editor::new(state)
+        .h(dbflux_components::tokens::Heights::ROW_COMPACT)
+        .font_family(dbflux_components::typography::AppFonts::BODY)
+        .font_weight(gpui::FontWeight::MEDIUM)
+        .text_size(dbflux_components::tokens::FontSizes::SM)
 }
