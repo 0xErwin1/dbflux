@@ -89,4 +89,8 @@ serde_json.workspace = true
 # driven through dbflux_app/dbflux_mcp_server.
 # dbflux_ssh is an optional dep forwarded only to enable the vendored-openssl
 # feature on the ssh crate; no source-level use of dbflux_ssh is needed.
-ignored = ["tokio", "dbflux_ssh"]
+# gpui-pre-platform publishes the package `gpui-pre-platform` but names its
+# library `gpui_platform`, so main.rs opens the platform through
+# `gpui_platform::application()` and no source path can ever contain the
+# package name.
+ignored = ["tokio", "dbflux_ssh", "gpui-pre-platform"]
