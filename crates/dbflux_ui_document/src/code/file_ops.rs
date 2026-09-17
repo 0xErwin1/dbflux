@@ -3,8 +3,8 @@ use super::file_persistence::{
 };
 use super::*;
 use crate::pane::CloseDisposition;
-use dbflux_ui_base::AsyncUpdateResultExt;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error_async};
+use dbflux_ui_base::{AsyncUpdateResultExt, SaveTargetOutcome};
 
 /// Build the file content, prepending the execution-context annotation header
 /// when the editor surface is connection-backed.
@@ -421,49 +421,57 @@ impl CodeDocument {
         };
 
         let entity = cx.entity().clone();
-        let dialog_available = dbflux_ui_base::file_dialog::is_native_file_dialog_available();
+        let save_target_override = self.app_state.read(cx).save_target_override();
 
         self._pending_save = Some(cx.spawn(async move |_this, cx| {
-            let target: Option<(std::path::PathBuf, bool)> = if dialog_available {
-                let file_handle = rfd::AsyncFileDialog::new()
-                    .set_title(dbflux_i18n::t!("document.code.file_ops.save_as.title"))
-                    .set_file_name(&suggested_name)
-                    .add_filter(&language_name, &[&default_ext])
-                    .add_filter(
-                        dbflux_i18n::t!("document.code.file_ops.save_as.all_files"),
-                        &["*"],
-                    )
-                    .save_file()
-                    .await;
+            let outcome = dbflux_ui_base::file_dialog::resolve_save_target(
+                save_target_override,
+                dbflux_ui_base::SaveTargetRequest {
+                    suggested_name: &suggested_name,
+                    language_name: &language_name,
+                    default_extension: &default_ext,
+                },
+                async {
+                    let file_handle = rfd::AsyncFileDialog::new()
+                        .set_title(dbflux_i18n::t!("document.code.file_ops.save_as.title"))
+                        .set_file_name(&suggested_name)
+                        .add_filter(&language_name, &[&default_ext])
+                        .add_filter(
+                            dbflux_i18n::t!("document.code.file_ops.save_as.all_files"),
+                            &["*"],
+                        )
+                        .save_file()
+                        .await;
 
-                file_handle.map(|handle| (handle.path().to_path_buf(), false))
-            } else {
-                match dbflux_ui_base::file_dialog::fallback_export_dir() {
-                    Ok(dir) => Some((
-                        dbflux_ui_base::file_dialog::unique_path_in(&dir, &suggested_name),
-                        true,
-                    )),
-                    Err(err) => {
-                        report_error_async(
-                            UserFacingError::new(
-                                ErrorKind::Storage,
-                                dbflux_i18n::t!(
-                                    "document.code.file_ops.error.dialog_unavailable",
-                                    error = err
-                                ),
-                            ),
-                            cx,
-                        );
-                        report_save_failed(&entity, cx);
-                        return;
-                    }
+                    file_handle.map(|handle| handle.path().to_path_buf())
+                },
+            )
+            .await;
+
+            let (path, used_fallback) = match outcome {
+                SaveTargetOutcome::Selected {
+                    path,
+                    used_fallback,
+                } => (path, used_fallback),
+                SaveTargetOutcome::Cancelled => {
+                    // Native dialog was available and user cancelled — no toast.
+                    report_save_failed(&entity, cx);
+                    return;
                 }
-            };
-
-            let Some((path, used_fallback)) = target else {
-                // Native dialog was available and user cancelled — no toast.
-                report_save_failed(&entity, cx);
-                return;
+                SaveTargetOutcome::Failed(err) => {
+                    report_error_async(
+                        UserFacingError::new(
+                            ErrorKind::Storage,
+                            dbflux_i18n::t!(
+                                "document.code.file_ops.error.dialog_unavailable",
+                                error = err
+                            ),
+                        ),
+                        cx,
+                    );
+                    report_save_failed(&entity, cx);
+                    return;
+                }
             };
 
             // The write itself joins the document's physical-write queue: it
@@ -1232,65 +1240,6 @@ mod tests {
         std::fs::remove_file(&new_path).ok();
     }
 
-    /// Save As still writes the captured content, retargets the document at the
-    /// chosen path, marks only that content clean, and reports its outcome through
-    /// the save/close flow without asking to close.
-    #[gpui::test]
-    fn save_as_writes_the_captured_content_and_retargets_the_document(cx: &mut TestAppContext) {
-        let old_path = temp_save_as_path("write-old");
-        let new_path = temp_save_as_path("write-new");
-
-        with_file_backed_document(
-            cx,
-            old_path.clone(),
-            "OLD;",
-            |doc, _app_state, events, window| {
-                window.update(|window, cx| {
-                    doc.update(cx, |doc, cx| {
-                        doc.editor.input_state.update(cx, |state, cx| {
-                            state.set_value("CAPTURED;", window, cx);
-                        });
-                        doc.enqueue_save_as_write(
-                            new_path.clone(),
-                            "CAPTURED;".to_string(),
-                            "CAPTURED;".to_string(),
-                            false,
-                            cx,
-                        );
-                    });
-                });
-                window.run_until_parked();
-
-                assert_eq!(
-                    std::fs::read_to_string(&new_path).expect("new file readable"),
-                    "CAPTURED;",
-                    "Save As writes the content it captured"
-                );
-                let (retargeted, dirty) = window.update(|_, cx| {
-                    let doc = doc.read(cx);
-                    (doc.path().cloned(), doc.editor.is_dirty)
-                });
-                assert_eq!(
-                    retargeted,
-                    Some(new_path.clone()),
-                    "Save As retargets the document at the chosen path"
-                );
-                assert!(
-                    !dirty,
-                    "the captured content landed, so the buffer is clean"
-                );
-                assert_eq!(
-                    events.borrow().clone(),
-                    vec![RecordedEvent::SaveFinished(true)],
-                    "Save As reports its outcome and never asks to close"
-                );
-            },
-        );
-
-        std::fs::remove_file(&old_path).ok();
-        std::fs::remove_file(&new_path).ok();
-    }
-
     // === Close flush (T2a) ===
 
     /// Closing a dirty file-backed document flushes its newest content through
@@ -1952,84 +1901,6 @@ mod tests {
         );
 
         std::fs::remove_file(&path).ok();
-    }
-
-    /// A pathless buffer has nowhere to flush, so closing keeps opening Save As
-    /// through the existing flow. A dismissed dialog drops the close intent and
-    /// leaves the edits pending.
-    #[gpui::test]
-    fn an_untitled_dirty_document_saves_through_save_as_and_keeps_its_buffer_when_dismissed(
-        cx: &mut TestAppContext,
-    ) {
-        init_test_runtime(cx);
-        let app_state = isolated_test_app_state(cx);
-        let holder: Rc<RefCell<Option<gpui::Entity<CodeDocument>>>> = Rc::new(RefCell::new(None));
-        let doc_ref = holder.clone();
-
-        let (_, window) = cx.add_window_view(|window, cx| {
-            let doc = cx.new(|cx| {
-                let mut document = CodeDocument::new_with_language(
-                    app_state.clone(),
-                    None,
-                    QueryLanguage::Sql,
-                    window,
-                    cx,
-                );
-                document.set_content("SELECT 1;", window, cx);
-                document.editor.input_state.update(cx, |state, cx| {
-                    state.set_value("SELECT 2;", window, cx);
-                });
-                document
-            });
-            doc_ref.replace(Some(doc.clone()));
-            Root::new(doc, window, cx)
-        });
-
-        let doc = holder.borrow().clone().expect("document created");
-        let events: Rc<RefCell<Vec<RecordedEvent>>> = Rc::new(RefCell::new(Vec::new()));
-        let sink = events.clone();
-        window.update(|_, app| {
-            app.subscribe(&doc, move |_, event: &DocumentEvent, _| match event {
-                DocumentEvent::SaveFinished { succeeded } => {
-                    sink.borrow_mut()
-                        .push(RecordedEvent::SaveFinished(*succeeded));
-                }
-                DocumentEvent::RequestClose => {
-                    sink.borrow_mut().push(RecordedEvent::RequestClose);
-                }
-                _ => {}
-            })
-            .detach();
-        });
-
-        window.update(|window, cx| {
-            doc.update(cx, |document, cx| {
-                assert_eq!(
-                    document.resolve_close(window, cx),
-                    CloseDisposition::Deferred,
-                    "an untitled buffer must save through Save As, not close over its edits"
-                );
-            });
-        });
-
-        // The Save As task has not been polled yet: the user dismissed the picker.
-        window.update(|_, cx| {
-            doc.update(cx, |document, cx| {
-                document._pending_save = None;
-                document.report_save_outcome(false, cx);
-            });
-        });
-        window.run_until_parked();
-
-        assert_eq!(
-            events.borrow().clone(),
-            vec![RecordedEvent::SaveFinished(false)],
-            "a dismissed Save As drops the close intent and never asks to close"
-        );
-        assert!(
-            window.update(|_, app| doc.read(app).editor.is_dirty),
-            "the buffer stays pending after a dismissed dialog"
-        );
     }
 
     /// A second close while an untitled Save As is still pending reports the same

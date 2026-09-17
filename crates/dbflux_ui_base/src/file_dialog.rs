@@ -9,6 +9,8 @@
 
 use std::path::PathBuf;
 
+use crate::app_state_entity::{SaveTargetOutcome, SaveTargetProvider, SaveTargetRequest};
+
 /// Returns `true` when a native file picker is expected to work on this host.
 ///
 /// On Windows and macOS this is unconditionally `true` — the native pickers
@@ -117,4 +119,39 @@ pub fn unique_path_in(dir: &std::path::Path, filename: &str) -> PathBuf {
     }
 
     initial
+}
+
+/// Resolves a save destination through a per-entity test/embedding provider if
+/// one is installed, otherwise through the normal native-dialog or fallback
+/// export path.
+///
+/// The native future is lazy: when a provider is present, or when no native
+/// dialog is available, it is never polled. That keeps dialog construction at
+/// the call site while centralizing cancellation and fallback semantics here.
+pub async fn resolve_save_target<'a>(
+    provider: Option<SaveTargetProvider>,
+    request: SaveTargetRequest<'a>,
+    native: impl std::future::Future<Output = Option<PathBuf>>,
+) -> SaveTargetOutcome {
+    if let Some(provider) = provider {
+        return provider(request).await;
+    }
+
+    if !is_native_file_dialog_available() {
+        return match fallback_export_dir() {
+            Ok(dir) => SaveTargetOutcome::Selected {
+                path: unique_path_in(&dir, request.suggested_name),
+                used_fallback: true,
+            },
+            Err(err) => SaveTargetOutcome::Failed(err),
+        };
+    }
+
+    match native.await {
+        Some(path) => SaveTargetOutcome::Selected {
+            path,
+            used_fallback: false,
+        },
+        None => SaveTargetOutcome::Cancelled,
+    }
 }

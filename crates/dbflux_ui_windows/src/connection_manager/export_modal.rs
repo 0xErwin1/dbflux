@@ -18,7 +18,7 @@ use dbflux_core::access::AccessKind;
 use dbflux_core::secrecy::SecretString;
 use dbflux_portability::{AuthExportMode, AwsRef, EncryptionChoice, ExportOptions, IncludeExclude};
 use dbflux_ui_base::{
-    AppStateEntity,
+    AppStateEntity, AsyncUpdateResultExt, SaveTargetOutcome,
     user_error::{ErrorKind, UserFacingError, report_error_async},
 };
 use gpui::prelude::*;
@@ -567,46 +567,55 @@ impl ExportBundleModal {
         let title = crate::labels::export_title_with_kind(&display_kind);
         let toml_filter_label = dbflux_i18n::t!("connection_manager.import.filter.toml");
         let all_files_filter_label = dbflux_i18n::t!("connection_manager.import.filter.all");
+        let save_target_override = self.app_state.read(cx).save_target_override();
+        let this = cx.entity().clone();
 
-        if dbflux_ui_base::file_dialog::is_native_file_dialog_available() {
-            let this = cx.entity().clone();
-            let task = cx.background_executor().spawn(async move {
-                rfd::FileDialog::new()
-                    .set_title(title)
-                    .add_filter(toml_filter_label, &["toml"])
-                    .add_filter(all_files_filter_label, &["*"])
-                    .set_file_name(file_name)
-                    .save_file()
-            });
+        cx.spawn(async move |_this, cx| {
+            let outcome = dbflux_ui_base::file_dialog::resolve_save_target(
+                save_target_override,
+                dbflux_ui_base::SaveTargetRequest {
+                    suggested_name: &file_name,
+                    language_name: &toml_filter_label,
+                    default_extension: "toml",
+                },
+                async {
+                    rfd::AsyncFileDialog::new()
+                        .set_title(title)
+                        .add_filter(&toml_filter_label, &["toml"])
+                        .add_filter(&all_files_filter_label, &["*"])
+                        .set_file_name(&file_name)
+                        .save_file()
+                        .await
+                        .map(|handle| handle.path().to_path_buf())
+                },
+            )
+            .await;
 
-            cx.spawn(async move |_this, cx| {
-                if let Some(path) = task.await
-                    && let Err(error) = cx.update(|cx| {
+            match outcome {
+                SaveTargetOutcome::Selected { path, .. } => {
+                    cx.update(|cx| {
                         this.update(cx, |this, cx| {
                             this.pending_output_path = Some(path.to_string_lossy().to_string());
                             cx.notify();
                         });
                     })
-                {
-                    log::warn!("Failed to apply export path to modal state: {:?}", error);
+                    .log_if_dropped();
                 }
-            })
-            .detach();
-        } else {
-            match dbflux_ui_base::file_dialog::fallback_export_dir() {
-                Ok(dir) => {
-                    let path = dbflux_ui_base::file_dialog::unique_path_in(&dir, &file_name);
-                    self.pending_output_path = Some(path.to_string_lossy().to_string());
-                    cx.notify();
-                }
-                Err(e) => {
-                    self.validation_error = Some(
-                        crate::labels::export_error_cannot_determine_output_path(&e.to_string()),
-                    );
-                    cx.notify();
+                SaveTargetOutcome::Cancelled => {}
+                SaveTargetOutcome::Failed(err) => {
+                    cx.update(|cx| {
+                        this.update(cx, |this, cx| {
+                            this.validation_error = Some(
+                                crate::labels::export_error_cannot_determine_output_path(&err),
+                            );
+                            cx.notify();
+                        });
+                    })
+                    .log_if_dropped();
                 }
             }
-        }
+        })
+        .detach();
     }
 
     /// Validate inputs, assemble the export graph for the target, and run the
