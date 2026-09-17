@@ -844,28 +844,89 @@ impl DataGridPanel {
         // the binding now that details are available. This upgrades a
         // previously read-only builder result to editable without requiring
         // the user to re-run the query.
-        if self.builder.current_visual_spec.is_some() {
-            let profile_id = match &self.source {
-                DataSource::Table { profile_id, .. } => Some(*profile_id),
-                _ => None,
-            };
-            if let Some(pid) = profile_id {
-                let database = match &self.source {
-                    DataSource::Table { database, .. } => database.clone(),
-                    _ => None,
-                };
-                let spec = self.builder.current_visual_spec.clone();
-                let binding =
-                    self.compute_builder_binding(spec.as_ref(), pid, database.as_deref(), cx);
-                self.pk_columns = binding
-                    .as_ref()
-                    .map(|b| b.pk_columns.clone())
-                    .unwrap_or_else(|| self.pk_columns.clone());
-                self.builder.builder_editable_binding = binding;
-            }
+        if let Some(spec) = self.builder.current_visual_spec.clone()
+            && let DataSource::Table {
+                profile_id,
+                database,
+                ..
+            } = &self.source
+        {
+            let binding =
+                self.compute_builder_binding(Some(&spec), *profile_id, database.as_deref(), cx);
+            self.pk_columns = binding
+                .as_ref()
+                .map(|b| b.pk_columns.clone())
+                .unwrap_or_else(|| self.pk_columns.clone());
+            self.builder.builder_editable_binding = binding;
         }
 
-        self.pending.rebuild = true;
+        // The first page was issued before these key columns were known, so it
+        // carried no `ORDER BY` and `LIMIT/OFFSET` paging can repeat or skip
+        // rows. Rewrite the source with the order just learned and requery — the
+        // shape `handle_sort_clear` uses for the same reason.
+        let unordered_table = match &self.source {
+            DataSource::Table {
+                profile_id,
+                database,
+                table,
+                pagination,
+                order_by,
+                total_rows,
+            } if order_by.is_empty() => Some((
+                *profile_id,
+                database.clone(),
+                table.clone(),
+                pagination.clone(),
+                *total_rows,
+            )),
+            _ => None,
+        };
+
+        let Some((profile_id, database, table, pagination, total_rows)) = unordered_table else {
+            self.pending.rebuild = true;
+            cx.notify();
+            return;
+        };
+
+        let order_by = Self::get_primary_key_columns(
+            &self.app_state,
+            profile_id,
+            database.as_deref(),
+            &table,
+            cx,
+        );
+
+        if order_by.is_empty() {
+            self.pending.rebuild = true;
+            cx.notify();
+            return;
+        }
+
+        let filter_value = self.filter_bar.filter_input.read(cx).value();
+        let filter = if filter_value.trim().is_empty() {
+            None
+        } else {
+            Some(filter_value.to_string())
+        };
+
+        self.source = DataSource::Table {
+            profile_id,
+            database: database.clone(),
+            table: table.clone(),
+            pagination: pagination.clone(),
+            order_by: order_by.clone(),
+            total_rows,
+        };
+        self.pending.requery = Some(PendingRequery {
+            profile_id,
+            database,
+            table,
+            pagination,
+            order_by,
+            filter,
+            total_rows,
+        });
+
         cx.notify();
     }
 
