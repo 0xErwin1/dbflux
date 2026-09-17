@@ -15,6 +15,7 @@ path = "src/main.rs"
 [dependencies]
 gpui.workspace = true
 gpui-component.workspace = true
+gpui-pre-platform.workspace = true
 dbflux_app.workspace = true
 dbflux_ui = { workspace = true }
 dbflux_core = { workspace = true, features = ["tracing-bridge"] }
