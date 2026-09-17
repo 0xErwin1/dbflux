@@ -15,8 +15,8 @@ use dbflux_core::{
     RowIdentity, RowInsert, RowPatch, Value,
 };
 use dbflux_export::ExportFormat;
-use dbflux_ui_base::AsyncUpdateResultExt;
 use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
+use dbflux_ui_base::{AsyncUpdateResultExt, SaveTargetOutcome};
 use gpui::prelude::FluentBuilder;
 use gpui::{deferred, *};
 use gpui_component::ActiveTheme;
@@ -1053,56 +1053,62 @@ impl DataGridPanel {
 
         let entity = cx.entity().clone();
         let audit_service = self.app_state.read(cx).audit_service().clone();
-        let dialog_available = dbflux_ui_base::file_dialog::is_native_file_dialog_available();
+        let save_target_override = self.app_state.read(cx).save_target_override();
 
         cx.spawn(async move |_this, cx| {
-            let target: Option<(std::path::PathBuf, bool)> = if dialog_available {
-                let file_handle = rfd::AsyncFileDialog::new()
-                    .set_title(crate::labels::context_menu_export_dialog_title(format_name))
-                    .set_file_name(&suggested_name)
-                    .add_filter(format_name, &[extension])
-                    .save_file()
-                    .await;
+            let outcome = dbflux_ui_base::file_dialog::resolve_save_target(
+                save_target_override,
+                dbflux_ui_base::SaveTargetRequest {
+                    suggested_name: &suggested_name,
+                    language_name: format_name,
+                    default_extension: extension,
+                },
+                async {
+                    let file_handle = rfd::AsyncFileDialog::new()
+                        .set_title(crate::labels::context_menu_export_dialog_title(format_name))
+                        .set_file_name(&suggested_name)
+                        .add_filter(format_name, &[extension])
+                        .save_file()
+                        .await;
 
-                file_handle.map(|handle| (handle.path().to_path_buf(), false))
-            } else {
-                match dbflux_ui_base::file_dialog::fallback_export_dir() {
-                    Ok(dir) => Some((
-                        dbflux_ui_base::file_dialog::unique_path_in(&dir, &suggested_name),
-                        true,
-                    )),
-                    Err(err) => {
-                        record_export_audit(
-                            &audit_service,
-                            format_name,
-                            None,
-                            true,
-                            false,
-                            Some(&err),
-                        );
-                        let message =
-                            crate::labels::context_menu_export_dialog_fallback_failed_error(
-                                &err.to_string(),
-                            );
-                        cx.update(|cx| {
-                            entity.update(cx, |panel, cx| {
-                                panel.pending.toast = Some(PendingToast {
-                                    message,
-                                    is_error: true,
-                                });
-                                cx.notify();
-                            });
-                        })
-                        .log_if_dropped();
-                        return;
-                    }
+                    file_handle.map(|handle| handle.path().to_path_buf())
+                },
+            )
+            .await;
+
+            let (target_path, used_fallback) = match outcome {
+                SaveTargetOutcome::Selected {
+                    path,
+                    used_fallback,
+                } => (path, used_fallback),
+                SaveTargetOutcome::Cancelled => {
+                    // Native dialog was available and the user cancelled — no
+                    // toast, no audit. Cancellations are not failures.
+                    return;
                 }
-            };
-
-            let Some((target_path, used_fallback)) = target else {
-                // Native dialog was available and the user cancelled — no
-                // toast, no audit. Cancellations are not failures.
-                return;
+                SaveTargetOutcome::Failed(err) => {
+                    record_export_audit(
+                        &audit_service,
+                        format_name,
+                        None,
+                        true,
+                        false,
+                        Some(err.as_str()),
+                    );
+                    let message =
+                        crate::labels::context_menu_export_dialog_fallback_failed_error(&err);
+                    cx.update(|cx| {
+                        entity.update(cx, |panel, cx| {
+                            panel.pending.toast = Some(PendingToast {
+                                message,
+                                is_error: true,
+                            });
+                            cx.notify();
+                        });
+                    })
+                    .log_if_dropped();
+                    return;
+                }
             };
 
             let export_result = (|| {

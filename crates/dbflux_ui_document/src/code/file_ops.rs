@@ -3,8 +3,8 @@ use super::file_persistence::{
 };
 use super::*;
 use crate::pane::CloseDisposition;
-use dbflux_ui_base::AsyncUpdateResultExt;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error_async};
+use dbflux_ui_base::{AsyncUpdateResultExt, SaveTargetOutcome};
 
 /// Build the file content, prepending the execution-context annotation header
 /// when the editor surface is connection-backed.
@@ -421,49 +421,57 @@ impl CodeDocument {
         };
 
         let entity = cx.entity().clone();
-        let dialog_available = dbflux_ui_base::file_dialog::is_native_file_dialog_available();
+        let save_target_override = self.app_state.read(cx).save_target_override();
 
         self._pending_save = Some(cx.spawn(async move |_this, cx| {
-            let target: Option<(std::path::PathBuf, bool)> = if dialog_available {
-                let file_handle = rfd::AsyncFileDialog::new()
-                    .set_title(dbflux_i18n::t!("document.code.file_ops.save_as.title"))
-                    .set_file_name(&suggested_name)
-                    .add_filter(&language_name, &[&default_ext])
-                    .add_filter(
-                        dbflux_i18n::t!("document.code.file_ops.save_as.all_files"),
-                        &["*"],
-                    )
-                    .save_file()
-                    .await;
+            let outcome = dbflux_ui_base::file_dialog::resolve_save_target(
+                save_target_override,
+                dbflux_ui_base::SaveTargetRequest {
+                    suggested_name: &suggested_name,
+                    language_name: &language_name,
+                    default_extension: &default_ext,
+                },
+                async {
+                    let file_handle = rfd::AsyncFileDialog::new()
+                        .set_title(dbflux_i18n::t!("document.code.file_ops.save_as.title"))
+                        .set_file_name(&suggested_name)
+                        .add_filter(&language_name, &[&default_ext])
+                        .add_filter(
+                            dbflux_i18n::t!("document.code.file_ops.save_as.all_files"),
+                            &["*"],
+                        )
+                        .save_file()
+                        .await;
 
-                file_handle.map(|handle| (handle.path().to_path_buf(), false))
-            } else {
-                match dbflux_ui_base::file_dialog::fallback_export_dir() {
-                    Ok(dir) => Some((
-                        dbflux_ui_base::file_dialog::unique_path_in(&dir, &suggested_name),
-                        true,
-                    )),
-                    Err(err) => {
-                        report_error_async(
-                            UserFacingError::new(
-                                ErrorKind::Storage,
-                                dbflux_i18n::t!(
-                                    "document.code.file_ops.error.dialog_unavailable",
-                                    error = err
-                                ),
-                            ),
-                            cx,
-                        );
-                        report_save_failed(&entity, cx);
-                        return;
-                    }
+                    file_handle.map(|handle| handle.path().to_path_buf())
+                },
+            )
+            .await;
+
+            let (path, used_fallback) = match outcome {
+                SaveTargetOutcome::Selected {
+                    path,
+                    used_fallback,
+                } => (path, used_fallback),
+                SaveTargetOutcome::Cancelled => {
+                    // Native dialog was available and user cancelled — no toast.
+                    report_save_failed(&entity, cx);
+                    return;
                 }
-            };
-
-            let Some((path, used_fallback)) = target else {
-                // Native dialog was available and user cancelled — no toast.
-                report_save_failed(&entity, cx);
-                return;
+                SaveTargetOutcome::Failed(err) => {
+                    report_error_async(
+                        UserFacingError::new(
+                            ErrorKind::Storage,
+                            dbflux_i18n::t!(
+                                "document.code.file_ops.error.dialog_unavailable",
+                                error = err
+                            ),
+                        ),
+                        cx,
+                    );
+                    report_save_failed(&entity, cx);
+                    return;
+                }
             };
 
             // The write itself joins the document's physical-write queue: it
