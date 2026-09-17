@@ -14,7 +14,7 @@ use dbflux_core::{LanguageService, QueryLanguage, QueryRequest};
 use rmcp::{
     ErrorData,
     handler::server::wrapper::Parameters,
-    model::{CallToolResult, Content},
+    model::{CallToolResult, ContentBlock},
     schemars::JsonSchema,
     tool, tool_router,
 };
@@ -264,7 +264,7 @@ impl DbFluxServer {
                         .await
                         .map_err(|e| e.into_error_data())?;
 
-                    Ok(CallToolResult::success(vec![Content::text(
+                    Ok(CallToolResult::success(vec![ContentBlock::text(
                         r#"{"status": "Script deleted successfully"}"#,
                     )]))
                 },
