@@ -59,7 +59,11 @@ nix run                              # Run directly
 `x86_64-unknown-linux-gnu` target with `-fuse-ld=mold`, so the `mold` linker
 must be on `PATH` for any local `cargo build`/`test`/`check`. The Nix dev shell
 and CI provide it; non-Nix Linux setups must install `mold` via their package
-manager. Windows and macOS use their default linker and are unaffected.
+manager. The renderer's font stack additionally needs fontconfig development
+headers (`fontconfig` on Nix, `libfontconfig1-dev` on Debian/Ubuntu):
+`yeslogic-fontconfig-sys` probes for them at build time while building
+`zed-font-kit`, and without them the build fails before any crate is compiled.
+Windows and macOS use their default linker and are unaffected.
 
 ## Rust Guidelines
 
