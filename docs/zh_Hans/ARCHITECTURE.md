@@ -403,7 +403,7 @@ crates/
       ssh_tunnel_manager.rs # SshTunnelManager
       item_manager.rs       # 通用 ItemManager<T>、Identifiable、DefaultFilename trait
     src/storage/            # 持久化与状态
-      session.rs            # 会话持久化（临时/影子文件、清单（manifest））
+      session.rs            # 会话清单（manifest）类型与临时/影子文件路径
       history.rs            # 历史记录持久化
       saved_query.rs        # 已保存查询持久化
       recent_files.rs       # 最近文件跟踪
@@ -573,7 +573,7 @@ crates/
 
 1. **`Tab`**（`tab_manager.rs`）—— `#[non_exhaustive]` 枚举，只有一个 `Pane(Box<PaneHandle>)` 变体。保留枚举形式是为了向前兼容（例如将来可能出现可分离的面板变体）。`TabManager` 持有一个 `Vec<Tab>` 以及 MRU 顺序。
 
-2. **`PaneHandle`**（`pane.rs`）—— 擦除闭包的壳，取代了原先封闭的 `DocumentHandle` 枚举。它的 22 项操作（render、focus、dispatch_command、meta_snapshot、tab_title、can_close、connection_id、active_context、change_summary、refresh_policy、set_active_tab、set_refresh_policy、flush_auto_save、matches_dedup_key、subscribe，以及若干可选辅助方法）各自是一个捕获类型化 `Entity<T>` 的 `Box<dyn Fn>` 闭包。`PaneHandle` 不实现 `Clone`。每种文档类型都在自己的 `pane.rs` 中提供 `XxxDocument::into_pane(entity, cx) -> PaneHandle`（均位于 `crates/dbflux_ui_document/src/` 下）。新增一种文档类型无需改动 `workspace/mod.rs`、`tab_manager.rs`、`tab_bar.rs` 或 `handle.rs`。
+2. **`PaneHandle`**（`pane.rs`）—— 擦除闭包的壳，取代了原先封闭的 `DocumentHandle` 枚举。它的各项操作（render、focus、dispatch_command、meta_snapshot、tab_title、can_close、connection_id、active_context、change_summary、refresh_policy、set_active_tab、set_refresh_policy、flush_auto_save、matches_dedup_key、subscribe，以及若干可选辅助方法，如 `resolve_close`、`save_for_close`、`flush_for_shutdown` 和 `is_file_backed_empty`）各自是一个捕获类型化 `Entity<T>` 的 `Box<dyn Fn>` 闭包。`PaneHandle` 不实现 `Clone`。每种文档类型都在自己的 `pane.rs` 中提供 `XxxDocument::into_pane(entity, cx) -> PaneHandle`（均位于 `crates/dbflux_ui_document/src/` 下）。新增一种文档类型无需改动 `workspace/mod.rs`、`tab_manager.rs`、`tab_bar.rs` 或 `handle.rs`。
 
 3. **`DocumentKey`**（`dedup.rs`）—— 用于标签页去重的身份枚举。变体：`Table`、`Collection`、`File`、`KeyValueDb`、`Chart`、`Audit`、`EventStream`、`Routine`、`MetricChart`、`Dashboard`、`InstanceMetric`、`InstanceInspector`、`InstanceOverview`、`ObjectStoreBucketsRoot`、`ObjectBrowser`、`ObjectEditor`。它取代了旧 `DocumentHandle` 上的那些 `is_*` 方法。调用点写作 `tab_manager.find_by_key(&DocumentKey::Table { ... }, cx)`。
 
@@ -605,8 +605,8 @@ crates/
 
 - `KeyValueView` 与 `LogStreamView` 是文件级边界结构体，而非独立的 GPUI 实体。当一个文档里有 40 多个 `cx.listener()` 闭包捕获 `Self` 时，GPUI 单一 `Context<T>` 的借用模型会让跨实体的 `impl Render` 拆分不可行；要拆分就必须把所有领域状态迁到视图实体上。最终实现的边界是文件级的。
 - `DataView` trait（`data_view_trait.rs`）不包含 `render` 方法。规范原本要求在 trait 上提供 `render`，但 `impl IntoElement` 不是 trait 对象安全的，而装箱成 `AnyElement` 又与 GPUI 的惯用法冲突。渲染改由 `ViewHandle.render` 承担。
-- 自动保存：标签页以 2 秒防抖（Debounce）自动保存到临时文件（未命名）或影子文件（有文件支撑）。Ctrl+S 写入原文件。标签页关闭时不再提示。
-- 会话恢复：`SessionStore` 把已打开标签页的清单（manifest）持久化到 `~/.local/share/dbflux/sessions/`。启动时会恢复所有标签页，并对被外部修改的文件做冲突检测。只有代码文档会产生 `CodeSessionTabSnapshot`；其他文档类型不做会话持久化。
+- 自动保存与关闭：有文件支撑的代码文档按配置的间隔自动保存到其脚本文件，经由与 Ctrl+S 和 Save As 相同的按文档写队列。写入采用先暂存再替换的方式（保留文件权限；只读目标会被拒绝），会覆盖在 dbflux 之外被修改过的文件的自动写入会被拒绝，缓冲区保持未保存状态（Ctrl+S 与 Save As 是刻意操作，仍会写入）。所有关闭路径都会在移除标签页之前先保存未保存的编辑 —— 如果写入无法落盘，标签页保持打开 —— 退出时也会写入；未保存更改对话框不再适用于代码文档。未命名内容自动保存到临时文件，未保存的编辑会在 `sessions/` 文件夹中保留一份影子副本作为恢复保障。
+- 会话恢复：已打开标签页的清单（manifest）存放在 `dbflux.db` 中（`st_sessions` / `st_session_tabs`，经由 `crates/dbflux_storage/src/repositories/state/sessions.rs`）。`sessions/` 文件夹（`~/.local/share/dbflux/sessions/`）保存用于恢复和找回内容的临时/影子文件。只有代码文档会产生 `CodeSessionTabSnapshot`；其他文档类型不做会话持久化。
 - 重复预防：`tab_manager.find_by_key` 在打开新标签页之前先检查 `PaneHandle::matches_dedup_key`，若命中则聚焦已有的标签页。
 
 ### 可视化查询构建器
@@ -780,7 +780,7 @@ DBFlux 把图表配置持久化为**已保存图表**，并把它们组合成**�
 
 **密钥**：`SecretManager` 使用 `HasSecretRef` trait 完成密钥环操作。密钥存放在操作系统密钥环中，引用则存放在 SQLite 中。
 
-**会话持久化**：临时/影子文件与会话清单（manifest）位于 `~/.local/share/dbflux/sessions/`，用于启动时恢复标签页。
+**会话持久化**：会话清单（manifest）存放在 `dbflux.db` 中（`st_sessions` / `st_session_tabs`）；用于恢复标签页的临时/影子文件保留在 `~/.local/share/dbflux/sessions/`。
 
 **执行上下文**：`crates/dbflux_core/src/connection/context.rs` 跟踪按标签页的连接、数据库、schema，以及由驱动程序声明的通用源上下文。当前通用的源窗口形状是 `ExecutionSourceContext::CollectionWindow { targets, start_ms, end_ms }`。只有连接/数据库/schema 这几项注解会被序列化进已保存文件的头部。
 
@@ -918,7 +918,7 @@ DBFlux 支持 Model Context Protocol（MCP），用于接入 AI 客户端，并�
 
 ## 数据流
 
-- 启动：`main` 创建 `AppState` 与 `Workspace`，恢复上一次会话（标签页来自 `session.json`），并打开主窗口。如果没有恢复任何标签页，焦点默认落在侧边栏（`crates/dbflux/src/main.rs`、`crates/dbflux_ui/src/ui/views/workspace/`）。
+- 启动：`main` 创建 `AppState` 与 `Workspace`，恢复上一次会话（标签页来自 `dbflux.db` 中的会话清单），并打开主窗口。如果没有恢复任何标签页，焦点默认落在侧边栏（`crates/dbflux/src/main.rs`、`crates/dbflux_ui/src/ui/views/workspace/`）。
 - 外部驱动程序引导：启动时，DBFlux 从 `~/.local/share/dbflux/dbflux.db` 读取 `cfg_services`，逐个探测服务，并且只注册那些成功完成 RPC 握手（`Hello`）的服务。
 - 连接流程：`AppState::prepare_pipeline_input` 构建与提供程序无关的连接前流水线输入。流水线在驱动连接 + 获取 Schema 之前，先做认证/会话校验、动态取值解析，以及托管/直连访问的设置。支持基于表单的配置、直接填写 URI、可选的代理/SSH，以及托管访问（`aws-ssm`）。连接 Hook 仍在各阶段执行（连接前、连接后、断开前、断开后）。
 - 查询流程：当活动的 `QueryLanguage` 支持连接上下文时，`CodeDocument` 把数据库查询提交给 `Connection` 实现。查询语言（SQL/MongoDB 等）由驱动程序元数据决定。结果在同一文档内的结果标签页中渲染。危险查询（不带 WHERE 的 DELETE、DROP、TRUNCATE）会触发确认对话框（在 `code/execution.rs` 中处理）。当驱动程序声明了 `MULTI_STATEMENT` 能力时，包含多个以 `;` 分隔语句的脚本会作为一个批次执行，每个语句产生一个结果集。
@@ -983,7 +983,7 @@ DBFlux 支持 Model Context Protocol（MCP），用于接入 AI 客户端，并�
   - `~/.config/dbflux/config.json`（仅旧版 rpc_services）→ `cfg_services`，旧行默认 `service_kind='driver'`
   - 导入具幂等性（在 `sys_legacy_imports` 中跟踪）
 - 会话数据（数据目录）：
-  - `sessions/` 用于自动保存的临时与影子文件（crates/dbflux_core/src/storage/session.rs）。
+  - `sessions/` 用于编辑器自动保存与内容恢复的临时与影子文件（crates/dbflux_storage/src/artifacts.rs）。
   - `scripts/` 用户脚本文件夹（crates/dbflux_core/src/config/scripts_directory.rs）。
 - 密钥：密码存放在操作系统密钥环中；引用由配置 ID 推导。`HasSecretRef` trait 统一了 SSH 隧道与代理的密钥操作（crates/dbflux_core/src/storage/secrets.rs、crates/dbflux_core/src/storage/secret_manager.rs）。
 

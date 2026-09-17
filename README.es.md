@@ -114,7 +114,7 @@ Ver [docs/DRIVERS.md](docs/DRIVERS.md) para una matriz de capacidades completa y
 - Command palette con búsqueda difusa
 - Sistema de notificaciones toast personalizado con auto-dismiss
 - Panel de tareas en background
-- Restauración de sesión: los tabs abiertos se restauran al iniciar con detección de conflictos para archivos modificados externamente
+- Restauración de sesión: los tabs abiertos se restauran al iniciar, y un borrador recuperado que difiere de su archivo nunca lo sobrescribe
 
 ### Constructor visual de queries
 

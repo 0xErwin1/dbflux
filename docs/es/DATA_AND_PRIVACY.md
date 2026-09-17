@@ -8,7 +8,7 @@ audit log y cómo hacer un backup o un reseteo completo.
 | Tus datos                                                                  | Dónde viven                                                          |
 | -------------------------------------------------------------------------- | -------------------------------------------------------------------- |
 | Perfiles de conexión, settings, historial, saved charts/queries, audit log | Un único archivo SQLite: `dbflux.db` en el directorio de datos       |
-| Pestañas abiertas / sesión                                                 | El mismo `dbflux.db`, más archivos scratch en el directorio de datos |
+| Pestañas abiertas / sesión                                                 | El mismo `dbflux.db`, más archivos de script y archivos scratch/shadow en disco |
 | Contraseñas, passphrases, secretos de API                                  | Tu **keyring del sistema operativo** — nunca en `dbflux.db`          |
 | Token de auth de IPC/MCP                                                   | Un archivo `0600` en el directorio de configuración                  |
 
@@ -32,8 +32,9 @@ El directorio de datos contiene:
 
 - **`dbflux.db`** — la base de datos unificada (todo lo de más abajo en [Qué hay
   en la base de datos](#whats-in-the-database)).
-- **`st_sessions/`** — archivos scratch/shadow para las pestañas de editor
-  abiertas.
+- **`sessions/`** — archivos scratch/shadow para las pestañas de editor
+  abiertas: contenido sin título, más una copia de recuperación de las ediciones
+  sin guardar.
 - **`ipc_auth_token`** — el token de auth de IPC/MCP (ver [más
   abajo](#ipcmcp-auth-token)).
 - **`ssh_known_hosts`** — claves de host SSH aceptadas (TOFU).
@@ -116,10 +117,17 @@ de datos solo guarda un string de referencia por secreto:
 
 Qué pestañas tienes abiertas — su tipo, rutas de archivo, orden, pestaña activa
 y estado de pin — se registra en `dbflux.db` (`st_sessions` /
-`st_session_tabs`). El contenido real de los archivos scratch/shadow vive junto
-a ella bajo `st_sessions/` en el directorio de datos. Al arrancar, DBFlux
-restaura esta sesión cuando **Settings → General → Restore session on startup**
-está activado (el valor por defecto).
+`st_session_tabs`). Las copias scratch/shadow que se usan para restaurarlas
+viven bajo `sessions/` en el directorio de datos. Un script respaldado por un
+archivo se guarda en ese archivo mismo: en el intervalo de auto-guardado, al
+cerrar su pestaña y al salir. El contenido sin título sin guardar se conserva
+en la carpeta `sessions/`. Esas escrituras automáticas nunca sobrescriben un
+archivo de script que cambió fuera de dbflux: la escritura se rechaza y las
+ediciones pendientes quedan en el editor (y en la copia de la carpeta
+`sessions/`). `Ctrl+s` y **Save File As** son deliberados: escriben el archivo
+tal como lo pediste. Al arrancar,
+DBFlux restaura esta sesión cuando **Settings → General → Restore session on
+startup** está activado (el valor por defecto).
 
 ---
 

@@ -4,6 +4,62 @@ use crate::ui::labels::{
     documents_write_initial_script_failed_message,
 };
 
+/// The editor body and the autosave authorization a session-restored
+/// file-backed tab derives from one physical read plus the recovered shadow.
+struct RestoredFileSelection {
+    /// Raw file bytes to load into the editor, annotation header included.
+    content: String,
+    /// The bytes this document may treat as its on-disk baseline. `None` means
+    /// autosave must refuse (`BaselineUnknown`) until an intentional Save.
+    baseline: Option<String>,
+}
+
+/// Selects the editor body and the physical baseline for a restored file-backed
+/// tab from a single physical read and, when present, the recovered shadow read.
+///
+/// The physical file is read exactly once; the body and the baseline both come
+/// from that same read, so a change landing mid-restore can never pair an old
+/// body with a newer baseline. A readable shadow is shown as the body, but it
+/// only authorizes an automatic overwrite when its bytes are identical to the
+/// physical read; otherwise the document gets no baseline and autosave refuses
+/// (`BaselineUnknown`) until the user saves intentionally. Returns `None` when
+/// neither the file nor its shadow could be read, so the caller skips the tab
+/// instead of restoring an empty body over unknown disk state.
+fn select_restored_file_content(
+    physical: Result<String, std::io::Error>,
+    shadow: Option<Result<String, std::io::Error>>,
+) -> Option<RestoredFileSelection> {
+    let shadow_content = shadow.and_then(Result::ok);
+
+    match (physical, shadow_content) {
+        // The file is readable and a shadow survived: show the recovered shadow,
+        // and adopt the physical read as the baseline only when the shadow's bytes
+        // are identical to it. Different bytes mean the shadow is unproven against
+        // disk, so autosave must refuse rather than clobber the file.
+        (Ok(disk), Some(shadow)) => {
+            let same_as_disk = shadow == disk;
+            Some(RestoredFileSelection {
+                content: shadow,
+                baseline: same_as_disk.then_some(disk),
+            })
+        }
+        // No readable shadow: the body and the baseline are the same physical read.
+        (Ok(disk), None) => Some(RestoredFileSelection {
+            content: disk.clone(),
+            baseline: Some(disk),
+        }),
+        // The file is unreadable but a shadow survived: preserve its text and seed
+        // no baseline, so autosave refuses instead of recreating a missing file.
+        (Err(_), Some(shadow)) => Some(RestoredFileSelection {
+            content: shadow,
+            baseline: None,
+        }),
+        // Neither source is readable: skip rather than restore empty content over
+        // unknown disk state.
+        (Err(_), None) => None,
+    }
+}
+
 impl Workspace {
     /// Creates a new SQL query tab backed by a script file.
     pub(in crate::ui::views::workspace) fn new_query_tab(
@@ -39,7 +95,11 @@ impl Workspace {
                     .and_then(|n| n.to_str())
                     .map(str::to_string)
                     .unwrap_or_else(documents_new_query_name);
-                doc = doc.with_title(title).with_path(path);
+                doc = doc.with_title(title).with_path(path.clone());
+                // `create_file` just wrote an empty file: those bytes are the
+                // document's first trustworthy baseline, so an ordinary autosave
+                // may land on the file this tab created.
+                doc.seed_file_baseline(path, String::new());
             }
             doc
         });
@@ -104,14 +164,24 @@ impl Workspace {
         // Write initial content to the script file (with annotation headers)
         if let Some(path) = script_path {
             let content = doc.read(cx).build_file_content(cx);
-            if let Err(e) = std::fs::write(&path, &content) {
-                report_error(
-                    UserFacingError::new(
-                        ErrorKind::Storage,
-                        documents_write_initial_script_failed_message(e),
-                    ),
-                    cx,
-                );
+            match std::fs::write(&path, &content) {
+                Ok(()) => {
+                    // Only bytes that actually landed are trustworthy as the
+                    // baseline. A failed initial write leaves the document without
+                    // one, so autosave refuses instead of guessing.
+                    doc.update(cx, |document, _cx| {
+                        document.seed_file_baseline(path, content);
+                    });
+                }
+                Err(e) => {
+                    report_error(
+                        UserFacingError::new(
+                            ErrorKind::Storage,
+                            documents_write_initial_script_failed_message(e),
+                        ),
+                        cx,
+                    );
+                }
             }
         }
 
@@ -295,7 +365,10 @@ impl Workspace {
                 continue;
             }
 
-            let (content, path, scratch_path, shadow_path) = match tab.tab_kind.as_str() {
+            let (content, path, scratch_path, shadow_path, physical_baseline) = match tab
+                .tab_kind
+                .as_str()
+            {
                 "Scratch" => {
                     let sp = match tab.scratch_path.as_ref() {
                         Some(p) => p.clone(),
@@ -308,7 +381,7 @@ impl Workspace {
                         }
                     };
                     let content = std::fs::read_to_string(&sp).unwrap_or_default();
-                    (content, None, Some(sp), None)
+                    (content, None, Some(sp), None, None)
                 }
                 "FileBacked" => {
                     let fp = match tab.file_path.as_ref() {
@@ -321,31 +394,51 @@ impl Workspace {
                             continue;
                         }
                     };
-                    let content = if let Some(ref sh) = tab.shadow_path {
-                        let shadow_content = std::fs::read_to_string(sh).unwrap_or_default();
-                        let original_modified =
-                            std::fs::metadata(&fp).ok().and_then(|m| m.modified().ok());
-                        let shadow_modified =
-                            std::fs::metadata(sh).ok().and_then(|m| m.modified().ok());
 
-                        if let (Some(orig_t), Some(shad_t)) = (original_modified, shadow_modified) {
-                            if orig_t > shad_t {
-                                log::warn!(
-                                    "External edit detected for {}: using original file",
-                                    fp.display()
-                                );
-                                std::fs::read_to_string(&fp).unwrap_or(shadow_content)
-                            } else {
-                                shadow_content
-                            }
-                        } else {
-                            shadow_content
+                    // Read the physical file exactly once: both the editor body and
+                    // the baseline come from this same read.
+                    let physical = std::fs::read_to_string(&fp);
+                    if let Err(e) = &physical
+                        && e.kind() != std::io::ErrorKind::NotFound
+                    {
+                        log::warn!(
+                            "Could not read the physical baseline for {}: {e}; \
+                             autosave will refuse until the file is reloaded",
+                            fp.display()
+                        );
+                    }
+
+                    let shadow = tab.shadow_path.as_ref().map(|shadow_path| {
+                        let read = std::fs::read_to_string(shadow_path);
+                        if let Err(e) = &read {
+                            log::warn!(
+                                "Could not read the recovered shadow {} for {}: {e}; \
+                                 the physical file body is used instead",
+                                shadow_path.display(),
+                                fp.display()
+                            );
                         }
-                    } else {
-                        std::fs::read_to_string(&fp).unwrap_or_default()
+                        read
+                    });
+
+                    let Some(selection) = select_restored_file_content(physical, shadow) else {
+                        log::warn!(
+                            "File-backed tab '{}' has neither a readable file ({}) nor a \
+                             readable shadow — skipping so an empty body never replaces \
+                             unknown disk state",
+                            tab.title,
+                            fp.display()
+                        );
+                        continue;
                     };
 
-                    (content, Some(fp), None, tab.shadow_path.clone())
+                    (
+                        selection.content,
+                        Some(fp),
+                        None,
+                        tab.shadow_path.clone(),
+                        selection.baseline,
+                    )
                 }
                 _ => continue,
             };
@@ -383,7 +476,16 @@ impl Workspace {
                 doc.set_session_paths(scratch_path.clone(), shadow_path.clone());
 
                 if let Some(p) = path {
-                    doc = doc.with_path(p);
+                    doc = doc.with_path(p.clone());
+                    // The baseline is the same single physical read the body was chosen
+                    // from. When a recovered shadow differed from that read,
+                    // `selection.baseline` is `None`, so nothing is seeded here and
+                    // autosave refuses (`BaselineUnknown`) until an intentional Save;
+                    // a recovered shadow can never authorize overwriting disk bytes it
+                    // does not match, and a missing file is never recreated blind.
+                    if let Some(bytes) = physical_baseline {
+                        doc.seed_file_baseline(p, bytes);
+                    }
                 }
 
                 doc = doc.with_title(title).with_exec_ctx(exec_ctx, cx);
@@ -419,5 +521,99 @@ impl Workspace {
                 });
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::select_restored_file_content;
+    use std::io::{Error, ErrorKind};
+
+    fn unreadable() -> Error {
+        Error::new(ErrorKind::NotFound, "missing on disk")
+    }
+
+    /// A recovered local shadow that differs from the bytes on disk must be shown
+    /// without authorizing an automatic overwrite: seeding the physical read as the
+    /// baseline would let a later autosave clobber that foreign content. The
+    /// document must refuse (`BaselineUnknown`) instead.
+    #[test]
+    fn a_recovered_shadow_differing_from_disk_gets_no_baseline() {
+        let selection = select_restored_file_content(
+            Ok("FOREIGN;".to_string()),
+            Some(Ok("LOCAL;".to_string())),
+        )
+        .expect("a readable file and shadow must yield a selection");
+
+        assert_eq!(
+            selection.content, "LOCAL;",
+            "the recovered shadow body must be shown"
+        );
+        assert_eq!(
+            selection.baseline, None,
+            "a shadow that differs from disk must not adopt the disk bytes as its baseline"
+        );
+    }
+
+    /// With no shadow, the body and the baseline come from the same single physical
+    /// read, so an autosave may land on the file it just loaded.
+    #[test]
+    fn a_file_restored_without_a_shadow_seeds_its_own_read_as_baseline() {
+        let selection = select_restored_file_content(Ok("BODY;".to_string()), None)
+            .expect("a readable file must yield a selection");
+
+        assert_eq!(selection.content, "BODY;");
+        assert_eq!(selection.baseline, Some("BODY;".to_string()));
+    }
+
+    /// A shadow byte-identical to disk is the safe case: its bytes equal the
+    /// physical read, so they may authorize the automatic overwrite.
+    #[test]
+    fn an_identical_shadow_keeps_a_safe_baseline() {
+        let selection =
+            select_restored_file_content(Ok("SAME;".to_string()), Some(Ok("SAME;".to_string())))
+                .expect("identical bytes must yield a selection");
+
+        assert_eq!(selection.content, "SAME;");
+        assert_eq!(selection.baseline, Some("SAME;".to_string()));
+    }
+
+    /// A missing (or unreadable) physical file with a readable shadow preserves the
+    /// recovered text but seeds no baseline, so autosave refuses instead of
+    /// recreating a file another process removed.
+    #[test]
+    fn a_missing_file_with_a_readable_shadow_preserves_the_shadow() {
+        let selection =
+            select_restored_file_content(Err(unreadable()), Some(Ok("LOCAL;".to_string())))
+                .expect("a readable shadow must yield a selection");
+
+        assert_eq!(selection.content, "LOCAL;");
+        assert_eq!(selection.baseline, None);
+    }
+
+    /// When the shadow cannot be read, the physical body is used and the baseline is
+    /// that same read; nothing is left empty.
+    #[test]
+    fn an_unreadable_shadow_falls_back_to_the_physical_body() {
+        let selection =
+            select_restored_file_content(Ok("DISK;".to_string()), Some(Err(unreadable())))
+                .expect("a readable file must yield a selection");
+
+        assert_eq!(selection.content, "DISK;");
+        assert_eq!(selection.baseline, Some("DISK;".to_string()));
+    }
+
+    /// When neither the file nor the shadow can be read, the caller must skip the
+    /// tab rather than restore an empty body over unknown disk state.
+    #[test]
+    fn a_file_with_no_readable_source_yields_no_selection() {
+        assert!(
+            select_restored_file_content(Err(unreadable()), None).is_none(),
+            "no readable file or shadow must skip the tab"
+        );
+        assert!(
+            select_restored_file_content(Err(unreadable()), Some(Err(unreadable()))).is_none(),
+            "unreadable file and shadow must skip the tab"
+        );
     }
 }

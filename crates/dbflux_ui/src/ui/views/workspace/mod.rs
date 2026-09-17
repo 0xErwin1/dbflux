@@ -9,6 +9,7 @@ pub use inspector::{WorkspaceInspector, WorkspaceInspectorEvent};
 use crate::app::{AppStateChanged, AppStateEntity};
 use dbflux_components;
 use dbflux_core::observability::actions::CONFIG_CHANGE;
+use dbflux_ui_base::app_state_entity::drain_scripts_directory_diagnostics;
 use dbflux_ui_base::modals::{
     AddPanelOutcome, AddPanelRequest, CreateDashboardOutcome, CreateDashboardRequest,
     DeleteDashboardOutcome, DeleteDashboardRequest, DeleteSavedChartOutcome,
@@ -215,6 +216,38 @@ pub(super) fn map_item_to_selection(item: &PaletteItem) -> Option<PaletteSelecti
     }
 }
 
+/// Polls a shutdown flush until it reports idle or `timeout` elapses.
+///
+/// Returns `true` when the flush finished within the deadline and `false` when
+/// the deadline expired first; the caller continues either way, so a write that
+/// never lands can only delay shutdown by `timeout`. Each iteration waits
+/// `poll_interval` on the executor, which is what lets queued writes run between
+/// polls. The executor's clock is used instead of `Instant::now` so the loop is
+/// deterministic under a test executor.
+pub async fn await_document_flush<F>(
+    cx: &mut AsyncApp,
+    timeout: std::time::Duration,
+    poll_interval: std::time::Duration,
+    mut is_outstanding: F,
+) -> bool
+where
+    F: FnMut(&mut AsyncApp) -> bool,
+{
+    let deadline = cx.background_executor().now() + timeout;
+
+    loop {
+        if !is_outstanding(cx) {
+            return true;
+        }
+
+        if cx.background_executor().now() > deadline {
+            return false;
+        }
+
+        cx.background_executor().timer(poll_interval).await;
+    }
+}
+
 /// State for collapsible panels (tasks panel).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum PanelState {
@@ -239,7 +272,12 @@ impl PanelState {
 pub(super) struct PendingOpenScript {
     pub path: Option<PathBuf>,
     pub title: String,
+    /// Editor body with any leading annotation header stripped.
     pub body: String,
+    /// Raw bytes exactly as read from disk, annotation header included. The
+    /// document records these as its physical baseline so autosave compares
+    /// against what is actually on disk.
+    pub raw: String,
     pub language: QueryLanguage,
     pub connection_id: Option<uuid::Uuid>,
     pub exec_ctx: ExecutionContext,
@@ -360,6 +398,13 @@ impl Workspace {
             drain_hook_load_diagnostics(&mut state.hook_load_diagnostics)
         });
         for error in hook_load_errors {
+            report_error(error, cx);
+        }
+
+        let scripts_directory_errors = app_state.update(cx, |state, _| {
+            drain_scripts_directory_diagnostics(&mut state.scripts_directory_diagnostics)
+        });
+        for error in scripts_directory_errors {
             report_error(error, cx);
         }
 
@@ -1889,6 +1934,28 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Flushes every open document that still has pending edits, as part of a
+    /// graceful shutdown, and reports whether any flush is still outstanding.
+    ///
+    /// This never closes a tab: closing rewrites the session manifest, and a
+    /// shutdown that emptied it would destroy the restored session. A clean,
+    /// idle document is skipped without writing anything. Returns `true` while at
+    /// least one document still has a physical write queued or running, so the
+    /// caller can poll with [`await_document_flush`] until the writes land or a
+    /// deadline elapses.
+    pub fn flush_pending_document_edits(&self, cx: &mut Context<Self>) -> bool {
+        self.tab_manager.update(cx, |manager, cx| {
+            // Every document must be flushed, so this loop cannot short-circuit
+            // like `any` would: the first outstanding document must not stop the
+            // remaining ones from persisting their edits.
+            let mut outstanding = false;
+            for tab in manager.documents() {
+                outstanding |= tab.as_pane().flush_for_shutdown(cx);
+            }
+            outstanding
+        })
+    }
+
     pub fn toggle_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let was_visible = self.command_palette.read(cx).is_visible();
 
@@ -2133,17 +2200,19 @@ mod tab_close_request_tests {
     // Explicit imports, not `use super::*`: the parent glob together with
     // `#[gpui::test]` sends the macro expansion into unbounded recursion.
     use crate::keymap::{Command, CommandDispatcher};
-    use crate::ui::document::{CodeDocument, Tab, TabManagerEvent};
+    use crate::ui::document::pane::CloseDisposition;
+    use crate::ui::document::{CodeDocument, InspectorPanel, Tab, TabBarEvent, TabManagerEvent};
     use crate::ui::overlays::modals::{
         DirtySummaryEntry, UnsavedChangesOutcome, UnsavedChangesRequest,
     };
-    use crate::ui::views::workspace::Workspace;
+    use crate::ui::views::workspace::{Workspace, await_document_flush};
     use dbflux_core::QueryLanguage;
     use dbflux_core::document_id::DocumentId;
     use dbflux_ui_base::AppStateEntity;
     use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
     use std::rc::Rc;
+    use std::time::Duration;
 
     fn new_workspace(
         cx: &mut TestAppContext,
@@ -2323,5 +2392,695 @@ mod tab_close_request_tests {
                 "cancelling keeps the tab open"
             );
         });
+    }
+
+    // === Close-route unification and close flush (T2a) ===
+
+    fn temp_close_path(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("dbflux-close-{name}-{}.sql", uuid::Uuid::new_v4()))
+    }
+
+    /// Opens a real file-backed code tab whose buffer holds `buffer` while the
+    /// file on disk holds `on_disk`, with a real loaded baseline.
+    ///
+    /// When `dirty` is set the tab reports pending edits (through the same
+    /// `restore_dirty` session restore uses), so closing it must persist them.
+    fn open_file_backed_code_tab(
+        window: &mut VisualTestContext,
+        workspace: &Entity<Workspace>,
+        app_state: &Entity<AppStateEntity>,
+        path: &std::path::Path,
+        buffer: &str,
+        on_disk: &str,
+        dirty: bool,
+    ) -> DocumentId {
+        std::fs::write(path, on_disk).expect("seed the backing file");
+        let path = path.to_path_buf();
+        let buffer = buffer.to_string();
+        let on_disk = on_disk.to_string();
+
+        let document = window.update(|window, cx| {
+            cx.new(|cx| {
+                let mut document = CodeDocument::new_with_language(
+                    app_state.clone(),
+                    None,
+                    QueryLanguage::Sql,
+                    window,
+                    cx,
+                )
+                .with_path(path.clone());
+                document.set_content(&buffer, window, cx);
+                document.seed_file_baseline(path.clone(), on_disk);
+                if dirty {
+                    document.restore_dirty(cx);
+                }
+                document
+            })
+        });
+        let document_id = window.update(|_, cx| document.read(cx).id());
+
+        window.update(|_, cx| {
+            workspace.update(cx, |workspace, cx| {
+                let pane = CodeDocument::into_pane(document.clone(), cx);
+                workspace.tab_manager.update(cx, |manager, cx| {
+                    manager.open(Tab::Pane(Box::new(pane)), cx);
+                });
+            });
+        });
+
+        document_id
+    }
+
+    /// The single close funnel persists a dirty code tab's newest content to the
+    /// real file before the tab is removed.
+    #[gpui::test]
+    fn closing_a_dirty_code_tab_persists_before_removing_it(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let path = temp_close_path("persist");
+        let id = open_file_backed_code_tab(
+            window, &workspace, &app_state, &path, "NEWEST;", "OLD;", true,
+        );
+
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.close_tab(id, window, cx);
+                assert!(
+                    workspace.tab_manager.read(cx).document(id).is_some(),
+                    "a deferred close must not remove the tab before its flush lands"
+                );
+            });
+        });
+
+        window.run_until_parked();
+
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("the flush must land on the real file"),
+            "NEWEST;",
+            "closing a dirty tab must persist its newest content"
+        );
+        window.update(|_, cx| {
+            assert!(
+                workspace
+                    .read(cx)
+                    .tab_manager
+                    .read(cx)
+                    .document(id)
+                    .is_none(),
+                "the tab closes only once its flush lands"
+            );
+        });
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// A close whose flush is refused leaves the tab open with its buffer, and
+    /// the foreign bytes on disk stay untouched.
+    #[gpui::test]
+    fn a_close_flush_refused_over_a_foreign_change_keeps_the_tab_open(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let path = temp_close_path("conflict");
+        let id =
+            open_file_backed_code_tab(window, &workspace, &app_state, &path, "MINE;", "OLD;", true);
+
+        std::fs::write(&path, "THEIRS;").expect("the external rewrite must succeed");
+
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.close_tab(id, window, cx);
+            });
+        });
+        window.run_until_parked();
+
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("the foreign content must survive"),
+            "THEIRS;",
+            "a refused flush must never overwrite the foreign change"
+        );
+        window.update(|_, cx| {
+            assert!(
+                workspace
+                    .read(cx)
+                    .tab_manager
+                    .read(cx)
+                    .document(id)
+                    .is_some(),
+                "a refused flush leaves the tab open with its buffer"
+            );
+        });
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// A clean, idle tab closes immediately: no flush, no pointless write.
+    #[gpui::test]
+    fn a_clean_idle_code_tab_closes_without_a_flush(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let path = temp_close_path("clean");
+        let id = open_file_backed_code_tab(
+            window, &workspace, &app_state, &path, "SEEDED;", "SEEDED;", false,
+        );
+
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                assert!(workspace.close_tab(id, window, cx));
+                assert!(
+                    workspace.tab_manager.read(cx).document(id).is_none(),
+                    "a clean, idle tab closes immediately"
+                );
+            });
+        });
+        window.run_until_parked();
+
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("the file must be intact"),
+            "SEEDED;",
+            "a clean close must not rewrite the file"
+        );
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// A dirty code tab closes by persisting, not by asking: the unsaved-changes
+    /// dialog is only for documents that need an explicit user save.
+    #[gpui::test]
+    fn closing_a_dirty_code_tab_persists_instead_of_asking(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let path = temp_close_path("no-dialog");
+        let id = open_file_backed_code_tab(
+            window, &workspace, &app_state, &path, "NEWEST;", "OLD;", true,
+        );
+
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                assert!(
+                    workspace.close_active_tab(window, cx),
+                    "a code document's close is accepted and deferred"
+                );
+                assert!(
+                    !workspace.modal_unsaved_changes.read(cx).is_visible(),
+                    "a code document persists its edits instead of asking"
+                );
+                assert!(
+                    workspace.tab_manager.read(cx).document(id).is_some(),
+                    "the tab stays open until the flush lands"
+                );
+            });
+        });
+        window.run_until_parked();
+
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("the flush must land"),
+            "NEWEST;"
+        );
+        window.update(|_, cx| {
+            assert!(
+                workspace
+                    .read(cx)
+                    .tab_manager
+                    .read(cx)
+                    .document(id)
+                    .is_none()
+            );
+        });
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// Batch close applies the same per-document policy: clean tabs close, a
+    /// tab whose flush is refused stays open.
+    #[gpui::test]
+    fn close_others_closes_the_clean_tabs_and_keeps_a_blocked_one(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let kept_path = temp_close_path("kept");
+        let clean_path = temp_close_path("other-clean");
+        let blocked_path = temp_close_path("other-blocked");
+
+        let kept = open_file_backed_code_tab(
+            window, &workspace, &app_state, &kept_path, "KEEP;", "KEEP;", false,
+        );
+        let clean = open_file_backed_code_tab(
+            window,
+            &workspace,
+            &app_state,
+            &clean_path,
+            "CLEAN;",
+            "CLEAN;",
+            false,
+        );
+        let blocked = open_file_backed_code_tab(
+            window,
+            &workspace,
+            &app_state,
+            &blocked_path,
+            "MINE;",
+            "OLD;",
+            true,
+        );
+
+        // A foreign change makes the blocked tab's flush refuse.
+        std::fs::write(&blocked_path, "THEIRS;").expect("the external rewrite must succeed");
+
+        // Route through the tab bar exactly as the context menu does.
+        window.update(|_, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.tab_bar.update(cx, |_bar, cx| {
+                    cx.emit(TabBarEvent::CloseOtherTabs(kept));
+                });
+            });
+        });
+        window.run_until_parked();
+
+        window.update(|_, cx| {
+            let manager = workspace.read(cx).tab_manager.read(cx);
+            assert!(manager.document(kept).is_some(), "the reference tab stays");
+            assert!(manager.document(clean).is_none(), "a clean tab closes");
+            assert!(
+                manager.document(blocked).is_some(),
+                "a blocked tab stays open"
+            );
+        });
+        assert_eq!(
+            std::fs::read_to_string(&blocked_path).expect("the foreign content must survive"),
+            "THEIRS;"
+        );
+
+        std::fs::remove_file(&kept_path).ok();
+        std::fs::remove_file(&clean_path).ok();
+        std::fs::remove_file(&blocked_path).ok();
+    }
+
+    /// Only code documents decide their own close; every other document keeps
+    /// the unsaved-changes dialog and reports `CloseNow` to the funnel.
+    #[gpui::test]
+    fn only_code_documents_decide_their_own_close(cx: &mut TestAppContext) {
+        let (_workspace, app_state, window) = new_workspace(cx);
+
+        let code = window.update(|window, cx| {
+            cx.new(|cx| {
+                CodeDocument::new_with_language(
+                    app_state.clone(),
+                    None,
+                    QueryLanguage::Sql,
+                    window,
+                    cx,
+                )
+            })
+        });
+        let code_pane = window.update(|_, cx| CodeDocument::into_pane(code, cx));
+        assert!(
+            code_pane.has_close_policy(),
+            "code documents persist their own edits on close"
+        );
+
+        let inspector = window.update(|_, cx| {
+            cx.new(|cx| {
+                InspectorPanel::new(
+                    uuid::Uuid::new_v4(),
+                    "metric".to_string(),
+                    app_state.clone(),
+                    cx,
+                )
+            })
+        });
+        let inspector_pane = window.update(|_, cx| InspectorPanel::into_pane(inspector, cx));
+        assert!(
+            !inspector_pane.has_close_policy(),
+            "documents without a close policy keep the unsaved-changes dialog"
+        );
+        assert_eq!(
+            window.update(|window, cx| inspector_pane.resolve_close(window, cx)),
+            CloseDisposition::CloseNow,
+            "a document without a policy is always closable by the funnel"
+        );
+    }
+
+    // === Graceful-shutdown flush (T2b) ===
+
+    fn temp_shutdown_path(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "dbflux-shutdown-{name}-{}.sql",
+            uuid::Uuid::new_v4()
+        ))
+    }
+
+    /// Opens a code tab backed by `path` with its session shadow at `shadow` —
+    /// the shape a graceful shutdown flushes. `dirty` marks pending edits the way
+    /// the session restore does, and `seed_baseline` controls whether the document
+    /// owns a trustworthy on-disk baseline.
+    #[allow(clippy::too_many_arguments)]
+    fn open_shutdown_code_tab(
+        window: &mut VisualTestContext,
+        workspace: &Entity<Workspace>,
+        app_state: &Entity<AppStateEntity>,
+        path: &std::path::Path,
+        shadow: &std::path::Path,
+        buffer: &str,
+        on_disk: &str,
+        dirty: bool,
+        seed_baseline: bool,
+    ) -> DocumentId {
+        std::fs::write(path, on_disk).expect("seed the backing file");
+        let path = path.to_path_buf();
+        let shadow = shadow.to_path_buf();
+        let buffer = buffer.to_string();
+        let on_disk = on_disk.to_string();
+
+        let document = window.update(|window, cx| {
+            cx.new(|cx| {
+                let mut document = CodeDocument::new_with_language(
+                    app_state.clone(),
+                    None,
+                    QueryLanguage::Sql,
+                    window,
+                    cx,
+                )
+                .with_path(path.clone());
+                document.set_content(&buffer, window, cx);
+                document.set_session_paths(None, Some(shadow.clone()));
+                if seed_baseline {
+                    document.seed_file_baseline(path.clone(), on_disk);
+                }
+                if dirty {
+                    document.restore_dirty(cx);
+                }
+                document
+            })
+        });
+        let document_id = window.update(|_, cx| document.read(cx).id());
+
+        window.update(|_, cx| {
+            workspace.update(cx, |workspace, cx| {
+                let pane = CodeDocument::into_pane(document.clone(), cx);
+                workspace.tab_manager.update(cx, |manager, cx| {
+                    manager.open(Tab::Pane(Box::new(pane)), cx);
+                });
+            });
+        });
+
+        document_id
+    }
+
+    /// Counts the tabs persisted in the workspace session manifest.
+    fn manifest_tab_count(
+        window: &mut VisualTestContext,
+        app_state: &Entity<AppStateEntity>,
+    ) -> usize {
+        window.update(|_, cx| {
+            let runtime = app_state.read(cx).storage_runtime();
+            let repo = runtime.sessions();
+            let artifacts = runtime.artifacts();
+            repo.restore_session(artifacts)
+                .ok()
+                .flatten()
+                .map(|session| session.tabs.len())
+                .unwrap_or(0)
+        })
+    }
+
+    /// A dirty file-backed document flushed at exit lands its newest content in
+    /// the real file, without closing its tab or emptying the session manifest.
+    #[gpui::test]
+    fn a_shutdown_flush_lands_pending_edits_and_keeps_the_tab(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let path = temp_shutdown_path("land");
+        let shadow = temp_shutdown_path("land-shadow");
+        let id = open_shutdown_code_tab(
+            window, &workspace, &app_state, &path, &shadow, "NEWEST;", "OLD;", true, true,
+        );
+
+        assert_eq!(
+            manifest_tab_count(window, &app_state),
+            1,
+            "opening a file-backed tab records it in the session manifest"
+        );
+
+        window.update(|_, cx| {
+            workspace.update(cx, |workspace, cx| {
+                assert!(
+                    workspace.flush_pending_document_edits(cx),
+                    "a dirty document reports its flush as outstanding"
+                );
+                assert!(
+                    workspace.tab_manager.read(cx).document(id).is_some(),
+                    "the shutdown flush must not close the tab"
+                );
+            });
+        });
+
+        window.run_until_parked();
+
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("the flush must land on the real file"),
+            "NEWEST;",
+            "a shutdown flush persists the newest content"
+        );
+        window.update(|_, cx| {
+            assert!(
+                workspace
+                    .read(cx)
+                    .tab_manager
+                    .read(cx)
+                    .document(id)
+                    .is_some(),
+                "the tab survives a shutdown flush"
+            );
+        });
+        assert_eq!(
+            manifest_tab_count(window, &app_state),
+            1,
+            "the session manifest still holds the tab after a shutdown flush"
+        );
+
+        std::fs::remove_file(&path).ok();
+        std::fs::remove_file(&shadow).ok();
+    }
+
+    /// The workspace reports a flush as outstanding until its write lands, then
+    /// reports nothing outstanding.
+    #[gpui::test]
+    fn a_shutdown_flush_reports_nothing_outstanding_once_it_lands(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let path = temp_shutdown_path("outstanding");
+        let shadow = temp_shutdown_path("outstanding-shadow");
+        open_shutdown_code_tab(
+            window, &workspace, &app_state, &path, &shadow, "NEWEST;", "OLD;", true, true,
+        );
+
+        window.update(|_, cx| {
+            workspace.update(cx, |workspace, cx| {
+                assert!(
+                    workspace.flush_pending_document_edits(cx),
+                    "the write is outstanding before it runs"
+                );
+                // Polling again before the executor runs must neither block nor
+                // drop the queued write.
+                assert!(
+                    workspace.flush_pending_document_edits(cx),
+                    "a queued write keeps reporting outstanding"
+                );
+            });
+        });
+
+        window.run_until_parked();
+
+        window.update(|_, cx| {
+            workspace.update(cx, |workspace, cx| {
+                assert!(
+                    !workspace.flush_pending_document_edits(cx),
+                    "nothing is outstanding once the flush lands"
+                );
+            });
+        });
+
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("the flush must land"),
+            "NEWEST;"
+        );
+
+        std::fs::remove_file(&path).ok();
+        std::fs::remove_file(&shadow).ok();
+    }
+
+    /// A shutdown flush refused over an external change overwrites nothing, still
+    /// writes the session shadow, and never closes the tab.
+    #[gpui::test]
+    fn a_shutdown_flush_refused_over_a_foreign_change_writes_only_the_shadow(
+        cx: &mut TestAppContext,
+    ) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let path = temp_shutdown_path("conflict");
+        let shadow = temp_shutdown_path("conflict-shadow");
+        let id = open_shutdown_code_tab(
+            window, &workspace, &app_state, &path, &shadow, "MINE;", "OLD;", true, true,
+        );
+
+        std::fs::write(&path, "THEIRS;").expect("the external rewrite must succeed");
+
+        window.update(|_, cx| {
+            workspace.update(cx, |workspace, cx| {
+                assert!(workspace.flush_pending_document_edits(cx));
+            });
+        });
+        window.run_until_parked();
+
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("the foreign content must survive"),
+            "THEIRS;",
+            "a refused shutdown flush must never overwrite the foreign change"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&shadow).expect("the shadow is the safety net"),
+            "MINE;",
+            "the session shadow still carries the pending edits"
+        );
+
+        let entity = workspace.clone();
+        window.update(|_, cx| {
+            assert!(
+                entity.read(cx).tab_manager.read(cx).document(id).is_some(),
+                "a refused flush never closes the tab"
+            );
+            assert!(
+                !entity.update(cx, |workspace, cx| workspace
+                    .flush_pending_document_edits(cx)),
+                "a refusal is reported and not retried forever"
+            );
+        });
+
+        std::fs::remove_file(&path).ok();
+        std::fs::remove_file(&shadow).ok();
+    }
+
+    /// A shutdown flush refused because the file was deleted keeps it deleted and
+    /// writes the shadow instead.
+    #[gpui::test]
+    fn a_shutdown_flush_refused_over_a_deleted_file_keeps_it_deleted(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let path = temp_shutdown_path("deleted");
+        let shadow = temp_shutdown_path("deleted-shadow");
+        open_shutdown_code_tab(
+            window, &workspace, &app_state, &path, &shadow, "MINE;", "OLD;", true, true,
+        );
+
+        std::fs::remove_file(&path).expect("the backing file must be removable");
+
+        window.update(|_, cx| {
+            workspace.update(cx, |workspace, cx| {
+                assert!(workspace.flush_pending_document_edits(cx));
+            });
+        });
+        window.run_until_parked();
+
+        assert!(
+            !path.exists(),
+            "a refused shutdown flush must not recreate the deleted file"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&shadow).expect("the shadow is the safety net"),
+            "MINE;"
+        );
+
+        std::fs::remove_file(&shadow).ok();
+    }
+
+    /// A shutdown flush with no trustworthy baseline refuses rather than creating
+    /// or overwriting the file, and still writes the shadow.
+    #[gpui::test]
+    fn a_shutdown_flush_without_a_baseline_refuses_and_writes_the_shadow(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let path = temp_shutdown_path("no-baseline");
+        let shadow = temp_shutdown_path("no-baseline-shadow");
+        // No baseline is seeded, so the shutdown flush has nothing to compare the
+        // on-disk bytes against and must refuse.
+        open_shutdown_code_tab(
+            window, &workspace, &app_state, &path, &shadow, "MINE;", "OLD;", true, false,
+        );
+
+        window.update(|_, cx| {
+            workspace.update(cx, |workspace, cx| {
+                assert!(workspace.flush_pending_document_edits(cx));
+            });
+        });
+        window.run_until_parked();
+
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("the file must survive untouched"),
+            "OLD;",
+            "a shutdown flush with no baseline must not overwrite the file"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&shadow).expect("the shadow is the safety net"),
+            "MINE;"
+        );
+
+        std::fs::remove_file(&path).ok();
+        std::fs::remove_file(&shadow).ok();
+    }
+
+    /// A clean, idle document is skipped by the shutdown flush: no physical write
+    /// and no session shadow.
+    #[gpui::test]
+    fn a_clean_idle_document_is_skipped_by_the_shutdown_flush(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let path = temp_shutdown_path("clean");
+        let shadow = temp_shutdown_path("clean-shadow");
+        open_shutdown_code_tab(
+            window, &workspace, &app_state, &path, &shadow, "SEEDED;", "SEEDED;", false, true,
+        );
+
+        window.update(|_, cx| {
+            workspace.update(cx, |workspace, cx| {
+                assert!(
+                    !workspace.flush_pending_document_edits(cx),
+                    "a clean, idle document has nothing outstanding"
+                );
+            });
+        });
+        window.run_until_parked();
+
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("the file must be intact"),
+            "SEEDED;",
+            "a clean, idle document must not be rewritten"
+        );
+        assert!(
+            !shadow.exists(),
+            "a clean, idle document must not write a session shadow"
+        );
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// A flush that never finishes is bounded by the deadline rather than hanging
+    /// the shutdown sequence.
+    #[gpui::test]
+    fn the_shutdown_flush_deadline_bounds_a_write_that_never_completes(cx: &mut TestAppContext) {
+        let timeout = Duration::from_millis(100);
+        let poll_interval = Duration::from_millis(50);
+
+        let result = Rc::new(Cell::new(None));
+        let result_out = result.clone();
+
+        let task = cx.spawn(move |mut app_cx| async move {
+            let finished = await_document_flush(
+                &mut app_cx,
+                timeout,
+                poll_interval,
+                |_app_cx| true, // the write never finishes
+            )
+            .await;
+            result_out.set(Some(finished));
+        });
+
+        cx.executor().advance_clock(Duration::from_millis(300));
+        cx.run_until_parked();
+
+        assert_eq!(
+            result.get(),
+            Some(false),
+            "the deadline must stop a flush that never finishes"
+        );
+
+        drop(task);
     }
 }

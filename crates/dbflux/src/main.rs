@@ -23,7 +23,7 @@ use dbflux_ui::ipc_server::IpcServer;
 use dbflux_ui::keymap::{input_context_keybindings, workspace_keybindings};
 use dbflux_ui::platform;
 use dbflux_ui::ui::overlays::command_palette::command_palette_keybindings;
-use dbflux_ui::ui::views::workspace::Workspace;
+use dbflux_ui::ui::views::workspace::{Workspace, await_document_flush};
 use gpui::*;
 use gpui_component::Root;
 use interprocess::local_socket::{
@@ -47,6 +47,11 @@ static AUDIT_SERVICE_FOR_PANIC: Mutex<Option<AuditService>> = Mutex::new(None);
 /// though `BridgeHandle` is created in `run_gui` before the GPUI closure runs.
 static BRIDGE_HANDLE: Mutex<Option<BridgeHandle>> = Mutex::new(None);
 
+/// Weak handle to the workspace, captured where the main window is created so
+/// the shutdown sequence can flush pending document edits. Weak so shutdown can
+/// never keep the view alive.
+static WORKSPACE_FOR_SHUTDOWN: Mutex<Option<WeakEntity<Workspace>>> = Mutex::new(None);
+
 /// Previous panic hook, chained after our hook.
 #[allow(clippy::type_complexity)]
 static PREV_PANIC_HOOK: Mutex<Option<Box<dyn Fn(&std::panic::PanicHookInfo) + Send + Sync>>> =
@@ -54,6 +59,9 @@ static PREV_PANIC_HOOK: Mutex<Option<Box<dyn Fn(&std::panic::PanicHookInfo) + Se
 
 const TASK_CANCEL_TIMEOUT: Duration = Duration::from_millis(2000);
 const CONNECTION_CLOSE_TIMEOUT: Duration = Duration::from_millis(3000);
+/// Bounds the document-flush phase. It runs before anything cancels tasks, and a
+/// write that never lands can only delay shutdown by this much.
+const DOCUMENT_FLUSH_TIMEOUT: Duration = Duration::from_millis(2000);
 const TOTAL_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(10000);
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
@@ -420,6 +428,13 @@ fn run_gui() {
 
                 let workspace = cx.new(|cx| Workspace::new(app_state.clone(), window, cx));
 
+                // Publish a weak handle before the view is moved into `Root` so
+                // both shutdown entry points (window close and SIGINT/SIGTERM)
+                // can flush pending document edits.
+                *WORKSPACE_FOR_SHUTDOWN
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(workspace.downgrade());
+
                 IpcServer::start_with_listener(
                     listener,
                     workspace.clone(),
@@ -503,8 +518,53 @@ fn initiate_graceful_shutdown(app_state: &Entity<AppStateEntity>, cx: &mut App) 
     }
 }
 
+/// Flushes pending editor edits before any shutdown phase cancels the tasks the
+/// writes run on.
+///
+/// Bounded by [`DOCUMENT_FLUSH_TIMEOUT`]: a write that never lands can delay
+/// shutdown, but never hang it. A timeout is reported and the sequence continues
+/// with whatever did land.
+async fn flush_document_edits(cx: &mut AsyncApp) {
+    let workspace = WORKSPACE_FOR_SHUTDOWN
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .as_ref()
+        .and_then(|weak| weak.upgrade());
+
+    let Some(workspace) = workspace else {
+        info!("No workspace available, skipping document flush");
+        return;
+    };
+
+    info!("Shutdown phase: Flushing document edits...");
+
+    let finished = await_document_flush(cx, DOCUMENT_FLUSH_TIMEOUT, POLL_INTERVAL, |app_cx| {
+        app_cx
+            .update(|cx| {
+                workspace.update(cx, |workspace, cx| {
+                    workspace.flush_pending_document_edits(cx)
+                })
+            })
+            .unwrap_or(false)
+    })
+    .await;
+
+    if finished {
+        info!("All pending document edits flushed");
+    } else {
+        log::warn!(
+            "Document flush timed out after {:?}; some edits may not have reached their files",
+            DOCUMENT_FLUSH_TIMEOUT
+        );
+    }
+}
+
 async fn run_shutdown_sequence(app_state: Entity<AppStateEntity>, cx: &mut AsyncApp) {
     let start = Instant::now();
+
+    // Flush pending editor edits first, before cancelling tasks: the final
+    // writes must not race a shutdown that cancels the work they run on.
+    flush_document_edits(cx).await;
 
     info!("Shutdown phase: Cancelling tasks...");
     let task_cancel_result = cx.update(|cx| {

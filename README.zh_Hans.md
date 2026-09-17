@@ -107,7 +107,7 @@ curl -fsSL https://raw.githubusercontent.com/0xErwin1/dbflux/main/scripts/instal
 - 命令面板，支持模糊搜索
 - 自定义 Toast 提示，支持自动消失
 - 后台任务面板
-- 会话恢复：启动时恢复已打开的标签页，并对外部修改过的文件做冲突检测
+- 会话恢复：启动时恢复已打开的标签页，恢复出的草稿若与文件内容不同，绝不会覆盖该文件
 
 ### 可视化查询构建器
 

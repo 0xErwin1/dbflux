@@ -50,7 +50,7 @@ converted crate by crate and stays in English for now.
 | **Reopen last connections** | Off | Reconnect to the connections that were active. |
 | **Default focus** | Sidebar | Where focus lands on launch (Sidebar or the last tab). |
 | **Max history entries** | 1000 | Query-history cap (minimum 10). |
-| **Auto-save interval (ms)** | 2000 | How often editor buffers auto-save (minimum 500). |
+| **Auto-save interval (ms)** | 2000 | How often open editors auto-save (minimum 500). A script backed by a file is written to that file; unsaved untitled content is kept in the sessions folder. |
 
 ### Refresh & background
 

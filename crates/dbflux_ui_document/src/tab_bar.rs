@@ -115,6 +115,15 @@ impl TabBar {
         self.context_menu.is_some()
     }
 
+    /// Requests a close for one tab through the tab bar's single close route.
+    ///
+    /// The close button, a middle-click, and the context menu's Close item all
+    /// emit `TabBarEvent::CloseTab`, so the workspace applies one close policy
+    /// to every gesture instead of removing the tab from the bar directly.
+    pub fn request_close(&mut self, id: DocumentId, cx: &mut Context<Self>) {
+        cx.emit(TabBarEvent::CloseTab(id));
+    }
+
     pub fn open_context_menu_for_active(&mut self, cx: &mut Context<Self>) {
         let manager = self.tab_manager.read(cx);
         let Some(active_id) = manager.active_id() else {
@@ -340,15 +349,14 @@ impl TabBar {
                     });
                 })
             })
-            // Middle-click to close
-            .on_mouse_down(MouseButton::Middle, {
-                let tab_manager = tab_manager.clone();
-                cx.listener(move |_this, _event, _window, cx| {
-                    tab_manager.update(cx, |mgr, cx| {
-                        mgr.close(id, cx);
-                    });
-                })
-            })
+            // Middle-click to close: routed through the workspace, like every
+            // other close gesture, so pending edits are persisted first.
+            .on_mouse_down(
+                MouseButton::Middle,
+                cx.listener(move |this, _event, _window, cx| {
+                    this.request_close(id, cx);
+                }),
+            )
             // Right-click for context menu
             .on_mouse_down(
                 MouseButton::Right,
@@ -436,9 +444,7 @@ impl TabBar {
                         MouseButton::Left,
                         cx.listener(move |this, _event, _window, cx| {
                             cx.stop_propagation();
-                            this.tab_manager.update(cx, |mgr, cx| {
-                                mgr.close(id, cx);
-                            });
+                            this.request_close(id, cx);
                         }),
                     )
                     .into_any_element()
@@ -478,14 +484,18 @@ pub enum TabBarEvent {
 mod tests {
     use super::{
         TAB_MENU_CLOSE, TAB_MENU_CLOSE_ALL, TAB_MENU_CLOSE_LEFT, TAB_MENU_CLOSE_OTHERS,
-        TAB_MENU_CLOSE_RIGHT, TAB_MENU_SEPARATOR, TabBar, next_actionable_index,
+        TAB_MENU_CLOSE_RIGHT, TAB_MENU_SEPARATOR, TabBar, TabBarEvent, next_actionable_index,
         prev_actionable_index,
     };
+    use crate::tab_manager::TabManager;
+    use crate::types::DocumentId;
     use dbflux_components::theme;
     use dbflux_components::tokens::FontSizes;
     use dbflux_components::typography::AppFonts;
-    use gpui::TestAppContext;
+    use gpui::{AppContext as _, TestAppContext};
     use gpui_component::theme::Theme;
+    use std::cell::RefCell;
+    use std::rc::Rc;
 
     #[test]
     fn build_tab_menu_items_returns_correct_structure() {
@@ -621,5 +631,37 @@ mod tests {
             assert_eq!(inspection.weight_override, None);
             assert!(inspection.has_custom_color_override);
         }
+    }
+
+    /// The close button, a middle-click, and the context menu all emit the same
+    /// `TabBarEvent::CloseTab`, so the workspace applies one close policy to
+    /// every gesture instead of the bar removing tabs directly.
+    #[gpui::test]
+    fn every_close_gesture_requests_close_through_one_event(cx: &mut TestAppContext) {
+        cx.update(theme::init);
+
+        let manager = cx.update(|cx| cx.new(|_| TabManager::new()));
+        let bar = cx.update(|cx| cx.new(|cx| TabBar::new(manager, cx)));
+        let id = DocumentId::new();
+
+        let events: Rc<RefCell<Vec<TabBarEvent>>> = Rc::new(RefCell::new(Vec::new()));
+        let sink = events.clone();
+        cx.update(|cx| {
+            cx.subscribe(&bar, move |_, event: &TabBarEvent, _| {
+                sink.borrow_mut().push(event.clone());
+            })
+            .detach();
+        });
+
+        cx.update(|cx| {
+            bar.update(cx, |bar, cx| bar.request_close(id, cx));
+        });
+        cx.run_until_parked();
+
+        let recorded = events.borrow().clone();
+        assert!(
+            matches!(recorded.as_slice(), [TabBarEvent::CloseTab(got)] if *got == id),
+            "every close gesture shares one close request, got {recorded:?}"
+        );
     }
 }

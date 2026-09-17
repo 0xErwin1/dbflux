@@ -116,7 +116,7 @@ See [docs/DRIVERS.md](docs/DRIVERS.md) for a full capability matrix and per-driv
 - Command palette with fuzzy search
 - Custom toast notification system with auto-dismiss
 - Background task panel
-- Session restore: open tabs are restored on startup with conflict detection for externally modified files
+- Session restore: open tabs are restored on startup, and a recovered draft that differs from its file is never written over it
 
 ### Visual Query Builder
 
