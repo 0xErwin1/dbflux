@@ -103,6 +103,12 @@ impl DbError {
         Self::ValueResolutionFailed(msg.into())
     }
 
+    /// Wraps a failure that does not come with an [`std::io::Error`] — a
+    /// third-party crate error, a status string — as [`DbError::IoError`].
+    pub(crate) fn io_message(message: impl std::fmt::Display) -> Self {
+        Self::IoError(std::io::Error::other(message.to_string()))
+    }
+
     /// Access the structured error information, if the variant carries one.
     pub fn formatted(&self) -> Option<&FormattedError> {
         match self {

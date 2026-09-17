@@ -1,3 +1,4 @@
+pub(crate) mod blocking;
 pub(crate) mod error;
 pub(crate) mod error_formatter;
 pub(crate) mod execution_session;
