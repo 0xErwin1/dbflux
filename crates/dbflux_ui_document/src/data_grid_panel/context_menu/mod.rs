@@ -2001,14 +2001,17 @@ impl DataGridPanel {
         };
 
         table_state.update(cx, |state, cx| {
-            if let Some(coord) = state.selection().active {
-                let cell_value =
-                    dbflux_components::components::data_table::model::CellValue::text(&text);
-                state
-                    .edit_buffer_mut()
-                    .set_cell(coord.row, coord.col, cell_value);
-                cx.notify();
-            }
+            let Some(coord) = state.selection().active else {
+                return;
+            };
+
+            state.stage_cell_value(
+                coord.row,
+                coord.col,
+                dbflux_components::components::data_table::model::CellValue::text(&text),
+            );
+
+            cx.notify();
         });
     }
 
@@ -2082,8 +2085,6 @@ impl DataGridPanel {
     }
 
     pub(super) fn handle_set_default(&mut self, row: usize, col: usize, cx: &mut Context<Self>) {
-        use dbflux_components::components::data_table::model::VisualRowSource;
-
         // Get column default value from table details
         let default_value = self.get_column_default(col, cx);
 
@@ -2092,50 +2093,29 @@ impl DataGridPanel {
         };
 
         table_state.update(cx, |state, cx| {
-            let buffer = state.edit_buffer_mut();
-            let visual_order = buffer.compute_visual_order();
-
             let cell_value = if let Some(default) = default_value {
                 dbflux_components::components::data_table::model::CellValue::text(&default)
             } else {
                 dbflux_components::components::data_table::model::CellValue::null()
             };
 
-            match visual_order.get(row).copied() {
-                Some(VisualRowSource::Base(base_idx)) => {
-                    buffer.set_cell(base_idx, col, cell_value);
-                }
-                Some(VisualRowSource::Insert(insert_idx)) => {
-                    buffer.set_insert_cell(insert_idx, col, cell_value);
-                }
-                None => {}
-            }
+            state.stage_cell_value(row, col, cell_value);
 
             cx.notify();
         });
     }
 
     pub(super) fn handle_set_null(&mut self, row: usize, col: usize, cx: &mut Context<Self>) {
-        use dbflux_components::components::data_table::model::VisualRowSource;
-
         let Some(table_state) = &self.grid_table.table_state else {
             return;
         };
 
         table_state.update(cx, |state, cx| {
-            let buffer = state.edit_buffer_mut();
-            let visual_order = buffer.compute_visual_order();
-            let cell_value = dbflux_components::components::data_table::model::CellValue::null();
-
-            match visual_order.get(row).copied() {
-                Some(VisualRowSource::Base(base_idx)) => {
-                    buffer.set_cell(base_idx, col, cell_value);
-                }
-                Some(VisualRowSource::Insert(insert_idx)) => {
-                    buffer.set_insert_cell(insert_idx, col, cell_value);
-                }
-                None => {}
-            }
+            state.stage_cell_value(
+                row,
+                col,
+                dbflux_components::components::data_table::model::CellValue::null(),
+            );
 
             cx.notify();
         });
@@ -2165,27 +2145,16 @@ impl DataGridPanel {
         value: &str,
         cx: &mut Context<Self>,
     ) {
-        use dbflux_components::components::data_table::model::VisualRowSource;
-
         let Some(table_state) = &self.grid_table.table_state else {
             return;
         };
 
         table_state.update(cx, |state, cx| {
-            let buffer = state.edit_buffer_mut();
-            let visual_order = buffer.compute_visual_order();
-            let cell_value =
-                dbflux_components::components::data_table::model::CellValue::text(value);
-
-            match visual_order.get(row).copied() {
-                Some(VisualRowSource::Base(base_idx)) => {
-                    buffer.set_cell(base_idx, col, cell_value);
-                }
-                Some(VisualRowSource::Insert(insert_idx)) => {
-                    buffer.set_insert_cell(insert_idx, col, cell_value);
-                }
-                None => {}
-            }
+            state.stage_cell_value(
+                row,
+                col,
+                dbflux_components::components::data_table::model::CellValue::text(value),
+            );
 
             cx.notify();
         });
