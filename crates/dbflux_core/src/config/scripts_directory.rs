@@ -83,7 +83,71 @@ impl ScriptsDirectory {
 
     /// Re-scan the filesystem and update the cached entry tree.
     pub fn refresh(&mut self) {
-        self.entries = scan_directory(&self.root);
+        self.adopt_scan(Self::scan(&self.root));
+    }
+
+    /// Scans the scripts root, without touching the cached tree.
+    ///
+    /// Split from [`Self::refresh`] so the walking can happen off the thread that
+    /// renders: a directory on a stalled mount blocks for as long as the disk
+    /// takes to answer, and a close gesture must not inherit that wait.
+    pub fn scan(root: &Path) -> Vec<ScriptEntry> {
+        scan_directory(root)
+    }
+
+    /// Replaces the cached tree with entries scanned elsewhere.
+    ///
+    /// The entries are taken as given: this does not check that they still
+    /// describe the root, because only the caller that scanned them knows how
+    /// fresh they are.
+    pub fn adopt_scan(&mut self, entries: Vec<ScriptEntry>) {
+        self.entries = entries;
+    }
+
+    /// Removes `path` when it still holds exactly `expected_bytes`.
+    ///
+    /// The comparison and the removal happen in one step, so nothing can write
+    /// into the file between them. `Ok(false)` means the file is gone or no longer
+    /// holds those bytes — a foreign change, which is kept — and `Ok(true)` means
+    /// it was removed. An error is reserved for a file that could not be read or
+    /// removed; keeping a file deliberately is not an error.
+    ///
+    /// Pure filesystem work: it neither reads nor updates the cached tree, so the
+    /// caller can run it off the UI thread and hand the result to
+    /// [`Self::adopt_scan`] afterwards.
+    pub fn remove_if_unchanged(
+        root: &Path,
+        path: &Path,
+        expected_bytes: &str,
+    ) -> Result<bool, DbError> {
+        Self::ensure_deletable(root, path)?;
+
+        match fs::read_to_string(path) {
+            Ok(on_disk) if on_disk == expected_bytes => {
+                fs::remove_file(path).map_err(DbError::IoError)?;
+                Ok(true)
+            }
+            Ok(_) => Ok(false),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(e) => Err(DbError::IoError(e)),
+        }
+    }
+
+    /// Refuses a path that is not a removable entry of the scripts root.
+    fn ensure_deletable(root: &Path, path: &Path) -> Result<(), DbError> {
+        if !path.starts_with(root) {
+            return Err(DbError::IoError(std::io::Error::other(
+                "Path is outside scripts root",
+            )));
+        }
+
+        if path == root {
+            return Err(DbError::IoError(std::io::Error::other(
+                "Cannot delete scripts root",
+            )));
+        }
+
+        Ok(())
     }
 
     /// Returns the next available name like "Query 1", "Query 2", etc.
@@ -196,17 +260,7 @@ impl ScriptsDirectory {
 
     /// Delete a file or folder (recursive for folders).
     pub fn delete(&mut self, path: &Path) -> Result<(), DbError> {
-        if !path.starts_with(&self.root) {
-            return Err(DbError::IoError(std::io::Error::other(
-                "Path is outside scripts root",
-            )));
-        }
-
-        if path == self.root {
-            return Err(DbError::IoError(std::io::Error::other(
-                "Cannot delete scripts root",
-            )));
-        }
+        Self::ensure_deletable(&self.root, path)?;
 
         if path.is_dir() {
             fs::remove_dir_all(path).map_err(DbError::IoError)?;
@@ -472,6 +526,61 @@ mod tests {
 
         dir.delete(&new_path).unwrap();
         assert!(dir.entries().is_empty());
+    }
+
+    #[test]
+    fn remove_if_unchanged_removes_only_the_bytes_it_was_given() {
+        let tmp = TempDir::new().unwrap();
+        let mut dir = make_dir(tmp.path());
+        let root = tmp.path();
+        let path = dir.create_file(None, "query", "sql").unwrap();
+
+        // A change made outside dbflux is kept, and is not an error.
+        fs::write(&path, "FOREIGN;").unwrap();
+        assert!(!ScriptsDirectory::remove_if_unchanged(root, &path, "").unwrap());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "FOREIGN;");
+
+        // A file that is already gone is kept gone, and is not recreated.
+        fs::remove_file(&path).unwrap();
+        assert!(!ScriptsDirectory::remove_if_unchanged(root, &path, "").unwrap());
+        assert!(!path.exists());
+
+        // The document's own bytes are the ones that are removed.
+        fs::write(&path, "MINE;").unwrap();
+        assert!(ScriptsDirectory::remove_if_unchanged(root, &path, "MINE;").unwrap());
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn remove_if_unchanged_refuses_the_root_and_paths_outside_it() {
+        let tmp = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        let victim = outside.path().join("victim.sql");
+        fs::write(&victim, "MINE;").unwrap();
+
+        assert!(ScriptsDirectory::remove_if_unchanged(tmp.path(), &victim, "MINE;").is_err());
+        assert!(ScriptsDirectory::remove_if_unchanged(tmp.path(), tmp.path(), "MINE;").is_err());
+        assert!(victim.exists(), "a path outside the root is never removed");
+    }
+
+    #[test]
+    fn an_adopted_scan_replaces_the_cached_tree() {
+        let tmp = TempDir::new().unwrap();
+        let mut dir = make_dir(tmp.path());
+        fs::write(tmp.path().join("later.sql"), "SELECT 1;").unwrap();
+
+        assert!(
+            dir.entries().is_empty(),
+            "the cached tree is stale until a scan replaces it"
+        );
+
+        // The off-thread shape: the scan runs apart from the owner of the cache,
+        // which adopts the result once it has one.
+        let scanned = ScriptsDirectory::scan(tmp.path());
+        dir.adopt_scan(scanned);
+
+        assert_eq!(dir.entries().len(), 1);
+        assert_eq!(dir.entries()[0].name(), "later.sql");
     }
 
     #[test]

@@ -25,6 +25,13 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **Closing an empty script no longer waits on its own file** — the close that
+  removes an emptied script's backing file used to read the whole file, then
+  delete it and rescan the scripts directory, all on the UI thread, so a slow
+  or stalled volume froze the window for as long as it took to answer. Those
+  three steps now run off the UI thread, and the cleanup still fails closed: a
+  file another process wrote into is left alone.
+
 * **Closing an untitled buffer asks before it drops the edits** — a buffer
   with no file yet (a new query before its first save, or a restored scratch
   buffer) could only be closed by completing Save As, so dismissing that

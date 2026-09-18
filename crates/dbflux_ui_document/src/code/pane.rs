@@ -17,7 +17,7 @@ impl CodeDocument {
     /// Reads the document ID synchronously from `cx` then seals all operations
     /// behind `Box<dyn Fn>` closures capturing `entity` by clone.
     ///
-    /// The optional `is_file_backed_empty` and `session_tab_snapshot` helpers
+    /// The optional `empty_script_cleanup` and `session_tab_snapshot` helpers
     /// are populated so that `write_session_manifest` and the empty-script
     /// cleanup in `actions/documents.rs` can operate without pattern-matching on
     /// the `DocumentHandle::Code` variant.
@@ -180,12 +180,13 @@ impl CodeDocument {
 
         // Populate optional helper: the only backing file the cleanup path in
         // actions.rs may delete as it closes a tab — an empty, file-backed script
-        // whose file still holds exactly the document's own last-loaded or
-        // written bytes. A foreign change, a missing or different-path baseline,
-        // or an unreadable file all report `None`, so cleanup keeps the file.
-        handle.is_file_backed_empty = Some({
+        // whose file is expected to hold exactly the bytes this document last
+        // loaded or wrote. A missing or different-path baseline reports `None`, so
+        // cleanup keeps the file; whether the file still holds those bytes is
+        // verified away from the UI thread, together with the removal.
+        handle.empty_script_cleanup = Some({
             let e = entity.clone();
-            Box::new(move |cx| e.read(cx).file_backed_empty_path(cx))
+            Box::new(move |cx| e.read(cx).pending_empty_script_cleanup(cx))
         });
 
         // Populate optional helper: session manifest serialization data.

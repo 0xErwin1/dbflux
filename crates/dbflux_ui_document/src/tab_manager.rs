@@ -2,7 +2,7 @@
 
 use super::dedup::DocumentKey;
 use super::handle::DocumentEvent;
-use super::pane::PaneHandle;
+use super::pane::{EmptyScriptCleanup, PaneHandle};
 use super::types::{DocumentId, DocumentKind, DocumentMetaSnapshot};
 use dbflux_app::keymap::{Command, ContextId};
 use dbflux_core::RefreshPolicy;
@@ -157,16 +157,19 @@ impl Tab {
         }
     }
 
-    /// Returns the path of the backing file when this tab's script may be deleted
-    /// on close: its buffer is empty and the file still holds exactly the bytes the
-    /// document last loaded or wrote.
+    /// Reports the cleanup this tab leaves behind when it closes, if any: an empty
+    /// buffer over a file-backed script, with the bytes that file is expected to
+    /// hold.
     ///
     /// Returns `None` for non-script tabs, non-file-backed scripts, non-empty
-    /// buffers, files that changed outside dbflux, and files without a trustworthy
-    /// baseline — the caller keeps those files.
-    pub fn is_file_backed_empty(&self, cx: &App) -> Option<std::path::PathBuf> {
+    /// buffers, and files without a trustworthy baseline — the caller keeps those.
+    ///
+    /// The bytes are not read from disk here: the report carries the document's own
+    /// baseline, and the caller verifies the file against it away from the UI
+    /// thread, where removing it also happens.
+    pub fn pending_empty_script_cleanup(&self, cx: &App) -> Option<EmptyScriptCleanup> {
         match self {
-            Tab::Pane(p) => p.is_file_backed_empty.as_ref().and_then(|f| f(cx)),
+            Tab::Pane(p) => p.empty_script_cleanup.as_ref().and_then(|f| f(cx)),
         }
     }
 
@@ -390,7 +393,13 @@ impl TabManager {
         cx.notify();
     }
 
-    /// Closes a document by ID.
+    /// Removes a document, without asking what closing it means.
+    ///
+    /// The caller owns that question: the workspace funnel asks the document's
+    /// own close policy first and reaches this only once the answer was
+    /// `CloseNow`. A caller that removes a tab here directly still drops pending
+    /// edits exactly as before, which is why every close route above this crate
+    /// goes through the funnel and never calls this itself.
     pub fn close(&mut self, id: DocumentId, cx: &mut Context<Self>) -> bool {
         let Some(idx) = self.index_of(id) else {
             return false;
@@ -531,63 +540,46 @@ impl TabManager {
         }
     }
 
-    pub fn close_others(&mut self, keep_id: DocumentId, cx: &mut Context<Self>) {
-        let ids_to_close: Vec<DocumentId> = self
-            .documents
+    /// The ids of every open document, in tab order.
+    ///
+    /// A batch close selects from this list and hands the result to the workspace
+    /// funnel, whose per-tab step asks the document what closing means before
+    /// removing anything. This crate cannot ask that question itself, so it never
+    /// closes in batches on its own: doing so would drop pending edits, which is
+    /// the regression the funnel exists to prevent.
+    pub fn document_ids(&self) -> Vec<DocumentId> {
+        self.documents.iter().map(|d| d.id()).collect()
+    }
+
+    /// The ids a "close others" batch removes: everything but the tab the gesture
+    /// names.
+    pub fn ids_to_close_others(all_ids: &[DocumentId], keep_id: DocumentId) -> Vec<DocumentId> {
+        all_ids
             .iter()
-            .map(|d| d.id())
+            .copied()
             .filter(|&id| id != keep_id)
-            .collect();
-
-        for id in ids_to_close {
-            self.close(id, cx);
-        }
+            .collect()
     }
 
-    pub fn close_all(&mut self, cx: &mut Context<Self>) {
-        let ids: Vec<DocumentId> = self.documents.iter().map(|d| d.id()).collect();
-
-        for id in ids {
-            self.close(id, cx);
-        }
-    }
-
-    pub fn close_to_left(&mut self, id: DocumentId, cx: &mut Context<Self>) {
-        let Some(target_idx) = self.index_of(id) else {
-            return;
+    /// The ids a "close to the left" batch removes: every tab before the target.
+    ///
+    /// An unknown target selects nothing, which closes nothing — the same answer
+    /// the positional fallback a caller might write by hand would produce.
+    pub fn ids_to_close_left(all_ids: &[DocumentId], target_id: DocumentId) -> Vec<DocumentId> {
+        let Some(idx) = all_ids.iter().position(|&id| id == target_id) else {
+            return Vec::new();
         };
-
-        let ids_to_close: Vec<DocumentId> = self.documents[..target_idx]
-            .iter()
-            .map(|d| d.id())
-            .collect();
-
-        for id in ids_to_close {
-            self.close(id, cx);
-        }
+        all_ids[..idx].to_vec()
     }
 
-    pub fn close_to_right(&mut self, id: DocumentId, cx: &mut Context<Self>) {
-        let Some(target_idx) = self.index_of(id) else {
-            return;
+    /// The ids a "close to the right" batch removes: every tab after the target.
+    ///
+    /// An unknown target selects nothing, exactly like [`Self::ids_to_close_left`].
+    pub fn ids_to_close_right(all_ids: &[DocumentId], target_id: DocumentId) -> Vec<DocumentId> {
+        let Some(idx) = all_ids.iter().position(|&id| id == target_id) else {
+            return Vec::new();
         };
-
-        let ids_to_close: Vec<DocumentId> = self.documents[(target_idx + 1)..]
-            .iter()
-            .map(|d| d.id())
-            .collect();
-
-        for id in ids_to_close {
-            self.close(id, cx);
-        }
-    }
-
-    /// Closes the active tab.
-    pub fn close_active(&mut self, cx: &mut Context<Self>) {
-        if let Some(idx) = self.active_index {
-            let id = self.documents[idx].id();
-            self.close(id, cx);
-        }
+        all_ids[(idx + 1)..].to_vec()
     }
 
     /// Switches to tab by 1-based number (Ctrl+1 through Ctrl+9).
@@ -723,31 +715,6 @@ impl Default for TabManager {
 
 impl EventEmitter<TabManagerEvent> for TabManager {}
 
-#[cfg(test)]
-fn ids_to_close_others(all_ids: &[DocumentId], keep_id: DocumentId) -> Vec<DocumentId> {
-    all_ids
-        .iter()
-        .copied()
-        .filter(|&id| id != keep_id)
-        .collect()
-}
-
-#[cfg(test)]
-fn ids_to_close_left(all_ids: &[DocumentId], target_id: DocumentId) -> Vec<DocumentId> {
-    let Some(idx) = all_ids.iter().position(|&id| id == target_id) else {
-        return Vec::new();
-    };
-    all_ids[..idx].to_vec()
-}
-
-#[cfg(test)]
-fn ids_to_close_right(all_ids: &[DocumentId], target_id: DocumentId) -> Vec<DocumentId> {
-    let Some(idx) = all_ids.iter().position(|&id| id == target_id) else {
-        return Vec::new();
-    };
-    all_ids[(idx + 1)..].to_vec()
-}
-
 #[derive(Clone, Debug)]
 pub enum TabManagerEvent {
     Opened(DocumentId),
@@ -804,7 +771,7 @@ pub enum TabManagerEvent {
 
 #[cfg(test)]
 mod tests {
-    use super::{DocumentId, ids_to_close_left, ids_to_close_others, ids_to_close_right};
+    use super::{DocumentId, TabManager};
     use uuid::Uuid;
 
     fn make_ids(n: usize) -> Vec<DocumentId> {
@@ -815,7 +782,7 @@ mod tests {
     fn close_others_excludes_keep_id() {
         let ids = make_ids(5);
         let keep = ids[2];
-        let result = ids_to_close_others(&ids, keep);
+        let result = TabManager::ids_to_close_others(&ids, keep);
 
         assert_eq!(result.len(), 4);
         assert!(!result.contains(&keep));
@@ -828,14 +795,14 @@ mod tests {
     #[test]
     fn close_others_with_single_tab_returns_empty() {
         let ids = make_ids(1);
-        let result = ids_to_close_others(&ids, ids[0]);
+        let result = TabManager::ids_to_close_others(&ids, ids[0]);
         assert!(result.is_empty());
     }
 
     #[test]
     fn close_left_returns_ids_before_target() {
         let ids = make_ids(5);
-        let result = ids_to_close_left(&ids, ids[3]);
+        let result = TabManager::ids_to_close_left(&ids, ids[3]);
 
         assert_eq!(result.len(), 3);
         assert_eq!(result, &ids[..3]);
@@ -844,7 +811,7 @@ mod tests {
     #[test]
     fn close_left_at_first_position_returns_empty() {
         let ids = make_ids(5);
-        let result = ids_to_close_left(&ids, ids[0]);
+        let result = TabManager::ids_to_close_left(&ids, ids[0]);
         assert!(result.is_empty());
     }
 
@@ -852,14 +819,14 @@ mod tests {
     fn close_left_with_unknown_id_returns_empty() {
         let ids = make_ids(3);
         let unknown = DocumentId(Uuid::new_v4());
-        let result = ids_to_close_left(&ids, unknown);
+        let result = TabManager::ids_to_close_left(&ids, unknown);
         assert!(result.is_empty());
     }
 
     #[test]
     fn close_right_returns_ids_after_target() {
         let ids = make_ids(5);
-        let result = ids_to_close_right(&ids, ids[1]);
+        let result = TabManager::ids_to_close_right(&ids, ids[1]);
 
         assert_eq!(result.len(), 3);
         assert_eq!(result, &ids[2..]);
@@ -868,7 +835,7 @@ mod tests {
     #[test]
     fn close_right_at_last_position_returns_empty() {
         let ids = make_ids(5);
-        let result = ids_to_close_right(&ids, ids[4]);
+        let result = TabManager::ids_to_close_right(&ids, ids[4]);
         assert!(result.is_empty());
     }
 
@@ -876,7 +843,7 @@ mod tests {
     fn close_right_with_unknown_id_returns_empty() {
         let ids = make_ids(3);
         let unknown = DocumentId(Uuid::new_v4());
-        let result = ids_to_close_right(&ids, unknown);
+        let result = TabManager::ids_to_close_right(&ids, unknown);
         assert!(result.is_empty());
     }
 
@@ -884,7 +851,7 @@ mod tests {
     #[test]
     fn close_right_from_first_returns_two_tabs() {
         let ids = make_ids(3);
-        let result = ids_to_close_right(&ids, ids[0]);
+        let result = TabManager::ids_to_close_right(&ids, ids[0]);
         assert_eq!(
             result.len(),
             2,

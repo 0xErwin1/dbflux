@@ -1226,45 +1226,25 @@ impl Workspace {
                     this.close_tab(*id, window, cx);
                 }
                 TabBarEvent::CloseOtherTabs(id) => {
-                    this.close_tabs_batch(
-                        window,
-                        cx,
-                        |docs, keep| {
-                            docs.iter()
-                                .map(|d| d.id())
-                                .filter(|&did| did != keep)
-                                .collect()
-                        },
-                        *id,
-                    );
+                    let keep = *id;
+                    this.close_tabs_by(window, cx, |ids| {
+                        TabManager::ids_to_close_others(ids, keep)
+                    });
                 }
                 TabBarEvent::CloseAllTabs => {
-                    this.close_all_tabs(window, cx);
+                    this.close_tabs_by(window, cx, |ids| ids.to_vec());
                 }
                 TabBarEvent::CloseTabsToLeft(id) => {
-                    this.close_tabs_batch(
-                        window,
-                        cx,
-                        |docs, target| {
-                            let idx = docs.iter().position(|d| d.id() == target).unwrap_or(0);
-                            docs[..idx].iter().map(|d| d.id()).collect()
-                        },
-                        *id,
-                    );
+                    let target = *id;
+                    this.close_tabs_by(window, cx, |ids| {
+                        TabManager::ids_to_close_left(ids, target)
+                    });
                 }
                 TabBarEvent::CloseTabsToRight(id) => {
-                    this.close_tabs_batch(
-                        window,
-                        cx,
-                        |docs, target| {
-                            let idx = docs
-                                .iter()
-                                .position(|d| d.id() == target)
-                                .unwrap_or(docs.len().saturating_sub(1));
-                            docs[(idx + 1)..].iter().map(|d| d.id()).collect()
-                        },
-                        *id,
-                    );
+                    let target = *id;
+                    this.close_tabs_by(window, cx, |ids| {
+                        TabManager::ids_to_close_right(ids, target)
+                    });
                 }
             },
         )
@@ -2937,17 +2917,9 @@ mod tab_close_request_tests {
         window.update(|window, cx| {
             workspace.update(cx, |workspace, cx| {
                 let all = [first, second, clean];
-                workspace.close_tabs_batch(
-                    window,
-                    cx,
-                    move |docs, _keep| {
-                        docs.iter()
-                            .map(|d| d.id())
-                            .filter(|id| all.contains(id))
-                            .collect()
-                    },
-                    first,
-                );
+                workspace.close_tabs_by(window, cx, move |ids| {
+                    ids.iter().copied().filter(|id| all.contains(id)).collect()
+                });
             });
         });
         window.run_until_parked();

@@ -238,7 +238,9 @@ fn combine_cleanup(
 mod tests {
     use super::*;
     use crate::code::CodeDocument;
+    use crate::pane::CloseDisposition;
     use crate::tab_manager::TabManager;
+    use crate::types::DocumentId;
     use dbflux_components::controls::DropdownItem;
     use dbflux_components::theme;
     use dbflux_core::{
@@ -984,6 +986,31 @@ mod tests {
         );
     }
 
+    /// The sequence the workspace funnel runs for one tab: ask the document what
+    /// closing means, then remove it when the answer is `CloseNow`.
+    ///
+    /// The tab manager no longer closes in batches on its own (#646): a batch
+    /// close above this crate selects ids and runs exactly this per-tab step, so
+    /// no route can reach the removal while skipping the close policy. These
+    /// documents are clean and file-less, so every route answers `CloseNow`.
+    fn close_through_the_funnel(
+        tabs: &mut TabManager,
+        id: DocumentId,
+        window: &mut gpui::Window,
+        cx: &mut gpui::Context<TabManager>,
+    ) {
+        let disposition = tabs
+            .document(id)
+            .map(|tab| tab.as_pane().resolve_close(window, cx));
+
+        assert_eq!(
+            disposition,
+            Some(CloseDisposition::CloseNow),
+            "a clean document with nothing to persist closes now"
+        );
+        assert!(tabs.close(id, cx));
+    }
+
     #[gpui::test]
     fn two_mounted_documents_keep_sessions_independent_after_tab_close(
         cx: &mut gpui::TestAppContext,
@@ -1067,17 +1094,29 @@ mod tests {
             if route == CloseRoute::CloseAll {
                 drop(documents);
             }
-            window.update(|_, cx| {
-                tabs.update(cx, |tabs, cx| match route {
-                    CloseRoute::Close => assert!(tabs.close(ids[1], cx)),
-                    CloseRoute::CloseActive => {
-                        tabs.activate(ids[1], cx);
-                        tabs.close_active(cx);
+            window.update(|window, cx| {
+                tabs.update(cx, |tabs, cx| {
+                    let ids_to_close: Vec<DocumentId> = match route {
+                        CloseRoute::Close => vec![ids[1]],
+                        CloseRoute::CloseActive => {
+                            tabs.activate(ids[1], cx);
+                            tabs.active_id().into_iter().collect()
+                        }
+                        CloseRoute::CloseAll => tabs.document_ids(),
+                        CloseRoute::CloseOthers => {
+                            TabManager::ids_to_close_others(&tabs.document_ids(), ids[1])
+                        }
+                        CloseRoute::CloseToLeft => {
+                            TabManager::ids_to_close_left(&tabs.document_ids(), ids[2])
+                        }
+                        CloseRoute::CloseToRight => {
+                            TabManager::ids_to_close_right(&tabs.document_ids(), ids[0])
+                        }
+                    };
+
+                    for id in ids_to_close {
+                        close_through_the_funnel(tabs, id, window, cx);
                     }
-                    CloseRoute::CloseAll => tabs.close_all(cx),
-                    CloseRoute::CloseOthers => tabs.close_others(ids[1], cx),
-                    CloseRoute::CloseToLeft => tabs.close_to_left(ids[2], cx),
-                    CloseRoute::CloseToRight => tabs.close_to_right(ids[0], cx),
                 });
             });
             window.run_until_parked();

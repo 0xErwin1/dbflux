@@ -2,7 +2,7 @@ use super::file_persistence::{
     ExecutedWrite, PhysicalWrite, WriteKind, WriteOutcome, execute_write,
 };
 use super::*;
-use crate::pane::CloseDisposition;
+use crate::pane::{CloseDisposition, EmptyScriptCleanup};
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error_async};
 use dbflux_ui_base::{AsyncUpdateResultExt, SaveTargetOutcome};
 
@@ -267,18 +267,23 @@ fn start_next_physical_write(entity: &Entity<CodeDocument>, cx: &mut AsyncApp) {
 }
 
 impl CodeDocument {
-    /// Returns the backing path of an empty, file-backed script whose file still
-    /// holds exactly the bytes this document last loaded or wrote.
+    /// Reports an empty, file-backed script whose backing file may be deleted as
+    /// the tab closes.
     ///
     /// The empty-script cleanup on close deletes the file this returns, so an
-    /// empty buffer alone is not enough: a file whose bytes changed outside
-    /// dbflux holds someone else's content and must be kept. The check uses the
+    /// empty buffer alone is not enough. What authorizes the deletion is the
     /// document's own recorded baseline — the same seam autosave conflict-checks
     /// against — so ownership is never inferred from a timestamp or a second
-    /// registry. Anything uncertain — no baseline, a baseline recorded for
-    /// another path, or a file that cannot be read — fails closed and returns
-    /// `None`, keeping the file.
-    pub fn file_backed_empty_path(&self, cx: &App) -> Option<PathBuf> {
+    /// registry, and a file whose bytes someone else wrote is never assumed to be
+    /// ours. Anything uncertain — no baseline, or a baseline recorded for another
+    /// path — fails closed and returns `None`, keeping the file.
+    ///
+    /// Nothing is read from disk here. The bytes come from the baseline the
+    /// document already holds, and the caller compares them against the file and
+    /// removes it off the UI thread: this used to read the whole file inside an
+    /// `&App`, which blocked the close gesture for as long as the disk took to
+    /// answer.
+    pub fn pending_empty_script_cleanup(&self, cx: &App) -> Option<EmptyScriptCleanup> {
         if !self.is_file_backed() || !self.is_content_empty(cx) {
             return None;
         }
@@ -290,9 +295,10 @@ impl CodeDocument {
             return None;
         }
 
-        let on_disk = std::fs::read_to_string(path).ok()?;
-
-        (on_disk == baseline.bytes).then(|| path.clone())
+        Some(EmptyScriptCleanup {
+            path: path.clone(),
+            expected_bytes: baseline.bytes.clone(),
+        })
     }
 
     /// Saves as part of an interrupted close.
@@ -334,7 +340,9 @@ impl CodeDocument {
     /// path, so closing never overwrites a change made outside dbflux or
     /// recreates a deleted file; the tab closes only when the write reports
     /// `DocumentEvent::RequestClose`, and stays open with its changes when the
-    /// write cannot land. An untitled buffer has nowhere to persist, so it
+    /// write cannot land. A close that arrives while a save of its own edits is
+    /// still in flight rides that save instead of queueing a second write of the
+    /// same bytes. An untitled buffer has nowhere to persist, so it
     /// answers `KeepOpen`: the workspace asks about those through the
     /// unsaved-changes confirmation before any close route reaches this method.
     pub fn resolve_close(
@@ -362,34 +370,43 @@ impl CodeDocument {
             return CloseDisposition::Deferred;
         }
 
-        match self.editor.path.clone() {
-            Some(path) => {
-                // Arm the close before the write is queued so a write that lands
-                // asks the workspace to close the tab. Only this arm arms it: an
-                // untitled buffer stores nothing, and arming the intent for one
-                // would let a later manual save close a tab the user kept.
-                self.close_after_save = true;
+        let Some(path) = self.editor.path.clone() else {
+            // Nowhere to persist: an untitled buffer has no file, so only the
+            // user can decide whether its edits are kept. The workspace asks
+            // through the unsaved-changes confirmation before it ever reaches
+            // this point, so arriving here means a caller bypassed that gate.
+            // Keeping the tab open is the fail-closed answer; forcing Save As
+            // or dropping the edits are both this document's call to make.
+            //
+            // Nothing is armed here: an untitled buffer stores nothing, and
+            // arming the intent for one would let a later manual save close a tab
+            // the user kept.
+            return CloseDisposition::KeepOpen;
+        };
 
-                // Conflict-checked, exactly like an autosave: closing must not
-                // silently destroy a change another process made to the file.
-                let saved_input = self.editor.input_state.read(cx).value().to_string();
-                let content = self.build_file_content(cx);
-                self.enqueue_physical_write(
-                    PhysicalWrite::close_flush(path, content, saved_input),
-                    cx,
-                );
-                CloseDisposition::Deferred
-            }
-            None => {
-                // Nowhere to persist: an untitled buffer has no file, so only the
-                // user can decide whether its edits are kept. The workspace asks
-                // through the unsaved-changes confirmation before it ever reaches
-                // this point, so arriving here means a caller bypassed that gate.
-                // Keeping the tab open is the fail-closed answer; forcing Save As
-                // or dropping the edits are both this document's call to make.
-                CloseDisposition::KeepOpen
-            }
+        // Arm the close before the write is queued, so a write that lands asks
+        // the workspace to close the tab. Only this arm arms it.
+        self.close_after_save = true;
+
+        let saved_input = self.editor.input_state.read(cx).value().to_string();
+
+        // A save the user already asked for, and that carries exactly these
+        // edits for this path, reports this close itself when it lands — the same
+        // report the flush below would produce. Queueing it anyway would write
+        // the same bytes a second time: staging file, chmod, rename, and a second
+        // completion for a save that already happened.
+        if self
+            .physical_writes
+            .carries_exact_edits(&path, &saved_input)
+        {
+            return CloseDisposition::Deferred;
         }
+
+        // Conflict-checked, exactly like an autosave: closing must not
+        // silently destroy a change another process made to the file.
+        let content = self.build_file_content(cx);
+        self.enqueue_physical_write(PhysicalWrite::close_flush(path, content, saved_input), cx);
+        CloseDisposition::Deferred
     }
 
     /// Returns `true` when the buffer still holds edits that must land before
@@ -1724,19 +1741,16 @@ mod tests {
         std::fs::remove_file(&path).ok();
     }
 
-    /// A close request must stand until it is satisfied, even when an explicit
-    /// save that it shares its intent with lands first.
+    /// A close that arrives while an explicit save is carrying exactly its edits
+    /// rides that save: one write, one report, and the tab closes.
     ///
-    /// The Ctrl+S already in flight when the user closes consumes the shared
-    /// close intent as its own outcome, and the re-entry it triggers only defers
-    /// against the queued flush. Unless that deferral re-arms the intent, the
-    /// flush that lands afterward emits no `RequestClose` and the close gesture
-    /// is silently dropped. The tab must still close once the flush lands, with
-    /// the newest content on disk.
+    /// The Ctrl+S already in flight when the user closes consumes the shared close
+    /// intent as its own outcome, and the `RequestClose` it emits re-enters the
+    /// funnel, which finds the document clean and closes it. A second flush of the
+    /// same bytes would add nothing to that: the staged replacement would run
+    /// again for identical content and the save would report a second time.
     #[gpui::test]
-    fn an_explicit_save_landing_before_the_queued_close_flush_still_closes_the_tab(
-        cx: &mut TestAppContext,
-    ) {
+    fn a_close_riding_an_in_flight_explicit_save_still_closes_the_tab(cx: &mut TestAppContext) {
         let path = temp_save_as_path("close-after-explicit");
 
         with_file_backed_document(
@@ -1804,18 +1818,75 @@ mod tests {
                 );
                 assert_eq!(
                     dispositions.borrow().clone(),
-                    vec![CloseDisposition::Deferred, CloseDisposition::CloseNow],
-                    "the queued flush must still close the tab after the explicit save lands"
+                    vec![CloseDisposition::CloseNow],
+                    "the re-entry the save triggers finds the document clean and closes it"
                 );
                 assert_eq!(
                     events.borrow().clone(),
                     vec![
                         RecordedEvent::SaveFinished(true),
-                        RecordedEvent::RequestClose,
-                        RecordedEvent::SaveFinished(true),
                         RecordedEvent::RequestClose
                     ],
-                    "the explicit save and the flush that follows each report once"
+                    "the save the close rode reports once, and nothing is written twice"
+                );
+                assert_eq!(unread_errors(window, app_state), 0);
+            },
+        );
+
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// A close is absorbed only by a save that carries the edits it was given. A
+    /// save in flight for text the user has since replaced leaves the close to
+    /// queue its own flush, and that flush is what puts the newest bytes on disk.
+    ///
+    /// Riding it would be silent data loss on the way out: the stale save would
+    /// land its older text, and the newest text — which only the flush carries —
+    /// would never be written.
+    #[gpui::test]
+    fn a_close_is_not_absorbed_by_a_save_that_carries_older_edits(cx: &mut TestAppContext) {
+        let path = temp_save_as_path("close-over-stale-save");
+
+        with_file_backed_document(
+            cx,
+            path.clone(),
+            "OLD;",
+            |doc, app_state, events, window| {
+                window.update(|window, cx| {
+                    doc.update(cx, |document, cx| {
+                        document.editor.input_state.update(cx, |state, cx| {
+                            state.replace_all("NEWEST;", window, cx);
+                        });
+                        // A Ctrl+S captured text the user has since replaced.
+                        document.enqueue_physical_write(
+                            PhysicalWrite::explicit(
+                                path.clone(),
+                                "STALE;".to_string(),
+                                "STALE;".to_string(),
+                            ),
+                            cx,
+                        );
+                        assert_eq!(
+                            document.resolve_close(window, cx),
+                            CloseDisposition::Deferred,
+                            "the close queues its flush behind the running save"
+                        );
+                    });
+                });
+                window.run_until_parked();
+
+                assert_eq!(
+                    std::fs::read_to_string(&path).expect("the file must survive"),
+                    "NEWEST;",
+                    "the close must land the newest text the stale save does not carry"
+                );
+                assert_eq!(
+                    events.borrow().clone(),
+                    vec![
+                        RecordedEvent::SaveFinished(false),
+                        RecordedEvent::SaveFinished(true)
+                    ],
+                    "the stale save reports its own outcome, then the flush reports its own"
                 );
                 assert_eq!(unread_errors(window, app_state), 0);
             },
@@ -1826,10 +1897,10 @@ mod tests {
 
     /// The re-armed close intent must never close a tab whose flush was refused.
     ///
-    /// In the same interleaving — explicit save in flight, close requested, the
-    /// save lands, the queued flush runs — an external change makes the flush
-    /// refuse. The tab must stay open with the user's buffer and must never emit
-    /// a close of its own afterward.
+    /// In the shape an in-flight save leaves reachable — the save carries older
+    /// text than the buffer, so the close still queues its own flush behind it — an
+    /// external change makes that flush refuse. The tab must stay open with the
+    /// user's buffer and must never emit a close of its own afterward.
     #[gpui::test]
     fn a_close_flush_refused_after_a_landed_explicit_save_never_closes_the_tab(
         cx: &mut TestAppContext,
@@ -1854,9 +1925,9 @@ mod tests {
 
                 window.update(|_, app| {
                     app.subscribe(&doc, move |doc_entity, event, cx| match event {
-                        // Another process rewrites the file between the explicit
-                        // save landing and the queued flush running.
-                        DocumentEvent::SaveFinished { succeeded: true } => {
+                        // Another process rewrites the file between the save landing
+                        // and the queued flush running.
+                        DocumentEvent::SaveFinished { .. } => {
                             if !injected_in.replace(true) {
                                 std::fs::write(&path_for_conflict, "THEIRS;")
                                     .expect("the external write must succeed");
@@ -1885,11 +1956,13 @@ mod tests {
                         document.editor.input_state.update(cx, |state, cx| {
                             state.set_value("NEWEST;", window, cx);
                         });
+                        // A save of older text is still in flight when the user
+                        // closes, so the close queues its own flush for the newest.
                         document.enqueue_physical_write(
                             PhysicalWrite::explicit(
                                 path.clone(),
-                                "NEWEST;".to_string(),
-                                "NEWEST;".to_string(),
+                                "STALE;".to_string(),
+                                "STALE;".to_string(),
                             ),
                             cx,
                         );
@@ -1906,16 +1979,14 @@ mod tests {
                     "THEIRS;",
                     "a refused flush must never overwrite the change made outside dbflux"
                 );
-                assert_eq!(
-                    dispositions.borrow().clone(),
-                    vec![CloseDisposition::Deferred],
+                assert!(
+                    dispositions.borrow().is_empty(),
                     "a refused flush must never ask to close, before or after"
                 );
                 assert_eq!(
                     events.borrow().clone(),
                     vec![
-                        RecordedEvent::SaveFinished(true),
-                        RecordedEvent::RequestClose,
+                        RecordedEvent::SaveFinished(false),
                         RecordedEvent::SaveFinished(false)
                     ],
                     "the refusal drops the close intent instead of closing the tab"

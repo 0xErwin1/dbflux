@@ -1115,16 +1115,17 @@ impl Workspace {
     pub(in crate::ui::views::workspace) fn on_delete_dashboard_confirmed(
         &mut self,
         dashboard_id: uuid::Uuid,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         // Close the open tab before deleting the row so the UI never references
-        // a deleted entity.
+        // a deleted entity. The removal goes through the funnel's own step rather
+        // than the tab manager: a dashboard holds no unsaved edits to ask about,
+        // and it must close even if a close policy were ever added to it, because
+        // the row it renders is about to stop existing.
         let key = crate::ui::document::DocumentKey::Dashboard { dashboard_id };
         if let Some(doc_id) = self.tab_manager.read(cx).find_by_key(&key, cx) {
-            self.tab_manager.update(cx, |mgr, cx| {
-                mgr.close(doc_id, cx);
-            });
+            self.close_tab_now(doc_id, window, cx);
         }
 
         let result = self.app_state.update(cx, |state, _cx| {

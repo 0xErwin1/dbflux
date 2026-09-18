@@ -43,6 +43,20 @@ pub enum CloseDisposition {
     KeepOpen,
 }
 
+/// An empty script tab whose backing file may be deleted as the tab closes.
+///
+/// Reports what the document knows without reading anything: the file it owns and
+/// the bytes it last loaded or wrote there. Whether the file still holds those
+/// bytes is not answered here — that check reads the file, so the caller runs it
+/// off the UI thread together with the removal it authorizes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EmptyScriptCleanup {
+    /// The backing file the close may delete.
+    pub path: std::path::PathBuf,
+    /// The bytes the document last loaded or wrote at `path`.
+    pub expected_bytes: String,
+}
+
 /// A single document-contributed status-bar segment.
 ///
 /// Modeled directly on `dbflux_components::result_panel::ToolbarSegment` —
@@ -157,12 +171,20 @@ pub struct PaneHandle {
     pub matches_event_stream:
         Option<Box<dyn Fn(uuid::Uuid, &dbflux_core::EventStreamTarget, &App) -> bool>>,
 
-    /// Returns `Some(path)` when this document's backing file may be deleted on
-    /// close: the buffer is empty and the file still holds exactly the bytes the
-    /// document last loaded or wrote. A file changed outside dbflux, a missing
-    /// baseline, or an unreadable file reports `None` so the file is kept (used
-    /// by the empty-script cleanup in `actions/documents.rs`).
-    pub is_file_backed_empty: Option<Box<dyn Fn(&App) -> Option<std::path::PathBuf>>>,
+    /// Reports the cleanup an emptying close leaves behind, without touching the
+    /// disk.
+    ///
+    /// `Some(cleanup)` when this document's backing file may be deleted on close:
+    /// the buffer is empty and `cleanup.expected_bytes` are the bytes the document
+    /// last loaded or wrote there. A file changed outside dbflux, a baseline
+    /// recorded for another path, and a missing baseline all report `None`, so the
+    /// file is kept (used by the empty-script cleanup in `actions/documents.rs`).
+    ///
+    /// The report is a candidate, not a verdict: the caller re-reads the file and
+    /// compares it against `expected_bytes` before removing anything, and does both
+    /// away from the UI thread — this used to read the whole file here, inside an
+    /// `&App`, which blocked the close gesture for as long as the disk took.
+    pub empty_script_cleanup: Option<Box<dyn Fn(&App) -> Option<EmptyScriptCleanup>>>,
 
     /// Returns a session snapshot for code documents (used by session manifest).
     pub session_tab_snapshot: Option<Box<dyn Fn(&App) -> Option<CodeSessionTabSnapshot>>>,
@@ -233,7 +255,7 @@ impl PaneHandle {
     ///
     /// Called by per-document `into_pane` constructors for simple documents
     /// (Chart, KeyValue) that do not need `set_category_filter`,
-    /// `matches_event_stream`, `is_file_backed_empty`, or `session_tab_snapshot`.
+    /// `matches_event_stream`, `empty_script_cleanup`, or `session_tab_snapshot`.
     #[allow(clippy::too_many_arguments)]
     pub fn new_chart(
         id: DocumentId,
@@ -276,7 +298,7 @@ impl PaneHandle {
             set_category_filter: None,
             set_correlation_filter: None,
             matches_event_stream: None,
-            is_file_backed_empty: None,
+            empty_script_cleanup: None,
             session_tab_snapshot: None,
             mark_inspector_closed: None,
             row_inspector_is_tracking: None,

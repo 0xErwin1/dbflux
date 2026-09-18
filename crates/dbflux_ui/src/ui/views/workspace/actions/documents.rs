@@ -510,35 +510,20 @@ impl Workspace {
         self.set_focus(FocusTarget::Document, window, cx);
     }
 
-    pub(in crate::ui::views::workspace) fn close_tabs_batch(
+    /// Closes the tabs a batch gesture selects, through the same funnel as a
+    /// single close.
+    ///
+    /// `select` receives every open document id in tab order and returns the
+    /// ones to close, so each gesture keeps its own selection rule
+    /// ([`crate::ui::document::TabManager::ids_to_close_others`] and siblings)
+    /// while the closing itself has one home: [`Self::close_tabs`].
+    pub(in crate::ui::views::workspace) fn close_tabs_by(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
-        selector: impl FnOnce(
-            &[crate::ui::document::Tab],
-            crate::ui::document::DocumentId,
-        ) -> Vec<crate::ui::document::DocumentId>,
-        reference_id: crate::ui::document::DocumentId,
+        select: impl FnOnce(&[crate::ui::document::DocumentId]) -> Vec<crate::ui::document::DocumentId>,
     ) {
-        let ids = selector(self.tab_manager.read(cx).documents(), reference_id);
-        self.close_tabs(window, cx, ids);
-    }
-
-    /// Closes every open tab through the same funnel, asking once about the
-    /// documents that need a decision.
-    pub(in crate::ui::views::workspace) fn close_all_tabs(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let ids: Vec<crate::ui::document::DocumentId> = self
-            .tab_manager
-            .read(cx)
-            .documents()
-            .iter()
-            .map(|d| d.id())
-            .collect();
-
+        let ids = select(&self.tab_manager.read(cx).document_ids());
         self.close_tabs(window, cx, ids);
     }
 
@@ -722,32 +707,76 @@ impl Workspace {
     /// but only while the file still holds exactly what dbflux last loaded or
     /// wrote there.
     ///
-    /// The pane reports a path only when the empty buffer and the document's own
-    /// recorded baseline for that path agree with the current on-disk bytes, so a
-    /// file another process changed into, a file with no trustworthy baseline,
-    /// a baseline belonging to another path, and an unreadable file are all
-    /// kept. Deleting on buffer emptiness alone could destroy foreign content; a
-    /// leftover empty script is the safer failure.
+    /// The pane reports a candidate without reading anything: the path, and the
+    /// bytes the document last loaded or wrote. Both the verification and the
+    /// removal run on the background executor — reading the whole file, and the
+    /// directory walk that follows the removal, block for as long as the disk takes
+    /// to answer, and a close gesture must not inherit that wait. The foreground
+    /// only adopts the freshly scanned tree and tells the sidebar.
+    ///
+    /// Deleting on buffer emptiness alone could destroy foreign content, and a
+    /// leftover empty script is the safer failure, so every uncertain case keeps
+    /// the file: a change made outside dbflux, a file that is already gone, a file
+    /// that cannot be read, and a document with no trustworthy baseline for the
+    /// path (which the pane reports as no candidate at all).
     fn cleanup_empty_script(
         &mut self,
         doc_id: crate::ui::document::DocumentId,
         cx: &mut Context<Self>,
     ) {
-        let empty_script_path = self
+        let Some(cleanup) = self
             .tab_manager
             .read(cx)
             .document(doc_id)
-            .and_then(|tab| tab.is_file_backed_empty(cx));
+            .and_then(|tab| tab.pending_empty_script_cleanup(cx))
+        else {
+            return;
+        };
 
-        if let Some(path) = empty_script_path {
-            self.app_state.update(cx, |state, cx| {
-                if let Some(dir) = state.scripts_directory_mut()
-                    && dir.delete(&path).is_ok()
-                {
-                    cx.emit(AppStateChanged);
+        let Some(root) = self
+            .app_state
+            .read(cx)
+            .scripts_directory()
+            .map(|dir| dir.root_path().to_path_buf())
+        else {
+            return;
+        };
+
+        let app_state = self.app_state.clone();
+        cx.spawn(async move |_this, cx| {
+            let scanned_after_removal = cx
+                .background_executor()
+                .spawn(async move {
+                    match dbflux_core::ScriptsDirectory::remove_if_unchanged(
+                        &root,
+                        &cleanup.path,
+                        &cleanup.expected_bytes,
+                    ) {
+                        Ok(true) => Some(dbflux_core::ScriptsDirectory::scan(&root)),
+                        Ok(false) => None,
+                        Err(e) => {
+                            log::warn!(
+                                "Failed to remove the emptied script {}: {e}",
+                                cleanup.path.display()
+                            );
+                            None
+                        }
+                    }
+                })
+                .await;
+
+            let Some(entries) = scanned_after_removal else {
+                return;
+            };
+
+            app_state.update(cx, |state, cx| {
+                if let Some(dir) = state.scripts_directory_mut() {
+                    dir.adopt_scan(entries);
                 }
+                cx.emit(AppStateChanged);
             });
-        }
+        })
+        .detach();
     }
 }
 
@@ -1047,13 +1076,14 @@ mod tests {
         );
     }
 
-    /// A file deleted outside dbflux cannot be read, so cleanup fails closed and
-    /// never recreates it.
+    /// A file deleted outside dbflux is never recreated by cleanup.
     ///
-    /// The guard is the seam itself: with the file gone the document cannot
-    /// prove it owns the missing path, so it presents nothing to delete. That
-    /// assertion, not the surviving absence, is what distinguishes this test from
-    /// a buffer-only seam — which would still report `Some(path)` here.
+    /// The pane cannot know the file is gone without reading it, so it reports the
+    /// candidate and leaves the verdict to the verification step: the background
+    /// read finds no file, and a document that cannot prove it still owns what is on
+    /// disk keeps what it finds — here, keeps it gone. The discriminating case for a
+    /// seam that stopped verifying is the sibling test that keeps a file another
+    /// process wrote into; this test pins the candidate report and the outcome.
     #[gpui::test]
     fn an_empty_buffer_whose_file_was_deleted_outside_dbflux_is_not_recreated(
         cx: &mut TestAppContext,
@@ -1073,15 +1103,17 @@ mod tests {
         std::fs::remove_file(&path).expect("the external delete must succeed");
 
         window.update(|_, cx| {
+            let candidate = workspace
+                .read(cx)
+                .tab_manager
+                .read(cx)
+                .document(id)
+                .and_then(|tab| tab.pending_empty_script_cleanup(cx));
+
             assert!(
-                workspace
-                    .read(cx)
-                    .tab_manager
-                    .read(cx)
-                    .document(id)
-                    .and_then(|tab| tab.is_file_backed_empty(cx))
-                    .is_none(),
-                "a file deleted outside dbflux must present nothing for cleanup to delete"
+                candidate.is_some_and(|cleanup| cleanup.path == path),
+                "the pane reports the candidate; whether the file is still ours is what\
+                 the background step decides"
             );
         });
 
@@ -1139,7 +1171,7 @@ mod tests {
                 "the brand-new script's backing file exists before close"
             );
             assert!(
-                tab.is_file_backed_empty(cx).is_some(),
+                tab.pending_empty_script_cleanup(cx).is_some(),
                 "a brand-new, never-edited empty script still owned by dbflux is deletable"
             );
         });
@@ -1184,7 +1216,7 @@ mod tests {
                     .tab_manager
                     .read(cx)
                     .document(id)
-                    .and_then(|tab| tab.is_file_backed_empty(cx))
+                    .and_then(|tab| tab.pending_empty_script_cleanup(cx))
                     .is_none(),
                 "a scratch document presents nothing for cleanup to delete"
             );
