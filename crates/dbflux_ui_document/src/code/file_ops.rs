@@ -65,6 +65,10 @@ fn refusal_error_key(kind: WriteKind) -> &'static str {
     match kind {
         WriteKind::CloseFlush => "document.code.file_ops.error.close_flush_failed",
         WriteKind::ShutdownFlush => "document.code.file_ops.error.shutdown_flush_failed",
+        // `Explicit` and `SaveAs` deliberately overwrite, so `execute_write`
+        // never conflict-checks them and they never reach a refusal. They report
+        // through `save_failed` when the write itself fails; this arm only keeps
+        // the match exhaustive.
         WriteKind::Auto | WriteKind::Explicit | WriteKind::SaveAs { .. } => {
             "document.code.file_ops.error.auto_save_failed"
         }
@@ -329,13 +333,14 @@ impl CodeDocument {
     /// Decides what closing this tab means, and starts the work that lets it
     /// close.
     ///
-    /// A clean, idle buffer closes immediately. Pending edits are queued to
-    /// persist: a file-backed script flushes through the conflict-checked
-    /// (autosave) path so closing never overwrites a change made outside dbflux
-    /// or recreates a deleted file, while an untitled buffer goes through Save As
-    /// as it always has. Either way the tab closes only when the write reports
+    /// A clean, idle buffer closes immediately. Pending edits on a file-backed
+    /// document are queued to persist through the conflict-checked (autosave)
+    /// path, so closing never overwrites a change made outside dbflux or
+    /// recreates a deleted file; the tab closes only when the write reports
     /// `DocumentEvent::RequestClose`, and stays open with its changes when the
-    /// write cannot land.
+    /// write cannot land. An untitled buffer has nowhere to persist, so it
+    /// answers `KeepOpen`: the workspace asks about those through the
+    /// unsaved-changes confirmation before any close route reaches this method.
     pub fn resolve_close(
         &mut self,
         _window: &mut Window,

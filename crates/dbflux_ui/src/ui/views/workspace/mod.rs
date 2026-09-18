@@ -2695,8 +2695,6 @@ mod tab_close_request_tests {
         (provider, invoked)
     }
 
-    /// Opens an untitled, dirty code tab the way a scratch buffer looks after
-    /// the user typed: no backing file, pending edits, no baseline.
     /// Opens an untitled code tab holding edits the user typed: no backing file,
     /// a buffer that differs from the content it loaded, and no baseline.
     ///
