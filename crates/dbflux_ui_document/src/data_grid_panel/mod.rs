@@ -50,6 +50,7 @@ use dbflux_ui_base::AsyncUpdateResultExt;
 use dbflux_ui_base::toast::PendingToast;
 use gpui::*;
 use gpui_component::Sizable;
+use gpui_component::input::EditorState;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -366,6 +367,24 @@ struct TableContextMenu {
     row_actions: Vec<dbflux_core::InspectorRowAction>,
 }
 
+impl TableContextMenu {
+    fn any_submenu_open(&self) -> bool {
+        self.sql_submenu_open
+            || self.copy_query_submenu_open
+            || self.filter_submenu_open
+            || self.order_submenu_open
+    }
+
+    /// Hovering a plain item closes whatever submenu was open, as native
+    /// menus do.
+    fn close_submenus(&mut self) {
+        self.sql_submenu_open = false;
+        self.copy_query_submenu_open = false;
+        self.filter_submenu_open = false;
+        self.order_submenu_open = false;
+    }
+}
+
 /// A single item in the context menu.
 struct ContextMenuItem {
     label: SharedString,
@@ -429,7 +448,7 @@ struct GridTableState {
 /// `render_filter_bar_as_segment`; they are created together at construction
 /// time and are never individually swapped out.
 struct FilterBarState {
-    filter_input: Entity<InputState>,
+    filter_input: Entity<EditorState>,
     /// Schema cache backing the WHERE filter's autocomplete. `Some` only when
     /// `source` is `DataSource::Table` and a completion provider was wired.
     filter_completion_cache: Option<Rc<RefCell<SchemaCache>>>,
@@ -610,6 +629,8 @@ pub struct DataGridPanel {
     runner: DocumentTaskRunner,
     focus_handle: FocusHandle,
     panel_origin: Point<Pixels>,
+    /// Panel size from the same canvas; the context menu is kept inside it.
+    panel_size: Size<Pixels>,
     /// A table-details fetch for the primary key is in flight. Until it
     /// answers, the grid is read-only for want of a key it may well have, so
     /// the "no primary key" banner waits rather than flashing on every open.
@@ -837,8 +858,7 @@ impl DataGridPanel {
                 entity.update(cx, |panel, cx| {
                     panel.apply_pk_details(pk_names, cx);
                 });
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
     }
@@ -984,7 +1004,13 @@ impl DataGridPanel {
     ) -> Self {
         let filter_placeholder = Self::filter_placeholder_for_source(&source, &app_state, cx);
 
-        let filter_input = cx.new(|cx| InputState::new(window, cx).placeholder(filter_placeholder));
+        let filter_input = cx.new(|cx| {
+            crate::completion_support::new_single_line_completion_state(
+                window,
+                cx,
+                filter_placeholder,
+            )
+        });
 
         let filter_completion_cache: Option<Rc<RefCell<SchemaCache>>> = if let DataSource::Table {
             profile_id,
@@ -1029,7 +1055,7 @@ impl DataGridPanel {
                 ));
 
             filter_input.update(cx, |state, _| {
-                state.lsp.completion_provider = Some(filter_provider);
+                state.lsp_mut().completion_provider = Some(filter_provider);
             });
 
             Some(filter_cache)
@@ -1047,7 +1073,9 @@ impl DataGridPanel {
             &filter_input,
             window,
             |this, input, event: &InputEvent, window, cx| match event {
-                InputEvent::PressEnter { secondary: false } => {
+                InputEvent::PressEnter {
+                    secondary: false, ..
+                } => {
                     this.refresh(window, cx);
                     this.focus_table(window, cx);
                 }
@@ -1073,7 +1101,9 @@ impl DataGridPanel {
             &limit_input,
             window,
             |this, _, event: &InputEvent, window, cx| match event {
-                InputEvent::PressEnter { secondary: false } => {
+                InputEvent::PressEnter {
+                    secondary: false, ..
+                } => {
                     this.refresh(window, cx);
                     this.focus_table(window, cx);
                 }
@@ -1306,6 +1336,7 @@ impl DataGridPanel {
             runner,
             focus_handle,
             panel_origin: Point::default(),
+            panel_size: Size::default(),
             pk_details_pending: false,
             view_config,
             context_menu: None,
@@ -2123,7 +2154,7 @@ impl DataGridPanel {
             loop {
                 cx.background_executor().timer(duration).await;
 
-                let _ = cx.update(|cx| {
+                cx.update(|cx| {
                     let Some(entity) = this.upgrade() else {
                         return;
                     };
@@ -2289,12 +2320,12 @@ impl DataGridPanel {
 
         if self.view_config.mode == super::data_view::DataViewMode::Document {
             if let Some(tree_state) = &self.document_view.document_tree_state {
-                tree_state.update(cx, |state, _| state.focus(window));
+                tree_state.update(cx, |state, cx| state.focus(window, cx));
             } else {
-                self.focus_handle.focus(window);
+                self.focus_handle.focus(window, cx);
             }
         } else {
-            self.focus_handle.focus(window);
+            self.focus_handle.focus(window, cx);
         }
 
         cx.emit(DataGridEvent::Focused);
@@ -3023,9 +3054,9 @@ impl DataGridPanel {
 
         ViewHandle::builder()
             .render(move |_window, _cx| {
-                // Render via the GPUI AnyView path: entity.clone().into_any()
-                // produces an AnyElement that delegates to DataGridPanel::render.
-                AnyView::from(e_render.clone()).into_any()
+                // AnyView is itself an element and delegates to
+                // DataGridPanel::render.
+                AnyView::from(e_render.clone()).into_any_element()
             })
             .focus({
                 move |window, cx| {
@@ -3757,8 +3788,7 @@ impl DataGridPanel {
                                         details,
                                     );
                                 });
-                            })
-                            .ok();
+                            });
                         }
                     } else {
                         log::warn!(
@@ -3871,8 +3901,7 @@ impl DataGridPanel {
                     Err(_) => grid.mark_fk_unavailable(cx),
                 })
                 .ok();
-            })
-            .ok();
+            });
         })
         .detach();
     }
@@ -3925,8 +3954,7 @@ impl DataGridPanel {
                     Err(_) => grid.mark_fk_unavailable(cx),
                 })
                 .ok();
-            })
-            .ok();
+            });
         })
         .detach();
     }
@@ -4505,8 +4533,7 @@ impl DataGridPanel {
                                 grid.runner.fail_mutation(task_id, e.to_string(), cx);
                             })
                             .ok();
-                        })
-                        .ok();
+                        });
                         report_error_async(
                             UserFacingError::new(
                                 ErrorKind::Driver,
@@ -4528,8 +4555,7 @@ impl DataGridPanel {
                                 crate::labels::mutation_execution_completed_toast(rows_affected),
                             )
                             .push(cx);
-                        })
-                        .ok();
+                        });
                     }
                     Ok(MutationOutcome::Cancelled { rows_affected }) => {
                         cx.update(|cx| {
@@ -4541,8 +4567,7 @@ impl DataGridPanel {
                                 crate::labels::mutation_execution_cancelled_toast(rows_affected),
                             )
                             .push(cx);
-                        })
-                        .ok();
+                        });
                     }
                     Ok(MutationOutcome::Failed { error }) => {
                         cx.update(|cx| {
@@ -4550,8 +4575,7 @@ impl DataGridPanel {
                                 grid.runner.fail_mutation(task_id, error.clone(), cx);
                             })
                             .ok();
-                        })
-                        .ok();
+                        });
                         report_error_async(
                             UserFacingError::new(
                                 ErrorKind::Driver,
@@ -4599,8 +4623,7 @@ impl DataGridPanel {
                                 grid.runner.fail_mutation(task_id, e.to_string(), cx);
                             })
                             .ok();
-                        })
-                        .ok();
+                        });
                         report_error_async(
                             UserFacingError::new(
                                 ErrorKind::Driver,
@@ -4622,8 +4645,7 @@ impl DataGridPanel {
                                 crate::labels::mutation_execution_completed_toast(rows_affected),
                             )
                             .push(cx);
-                        })
-                        .ok();
+                        });
                     }
                     Ok(MutationOutcome::Cancelled { rows_affected }) => {
                         cx.update(|cx| {
@@ -4635,8 +4657,7 @@ impl DataGridPanel {
                                 crate::labels::mutation_execution_cancelled_toast(rows_affected),
                             )
                             .push(cx);
-                        })
-                        .ok();
+                        });
                     }
                     Ok(MutationOutcome::Failed { error }) => {
                         cx.update(|cx| {
@@ -4644,8 +4665,7 @@ impl DataGridPanel {
                                 grid.runner.fail_mutation(task_id, error.clone(), cx);
                             })
                             .ok();
-                        })
-                        .ok();
+                        });
                         report_error_async(
                             UserFacingError::new(
                                 ErrorKind::Driver,
@@ -4687,8 +4707,7 @@ impl DataGridPanel {
                                 grid.runner.fail_mutation(task_id, e.to_string(), cx);
                             })
                             .ok();
-                        })
-                        .ok();
+                        });
                         report_error_async(
                             UserFacingError::new(
                                 ErrorKind::Driver,
@@ -4710,8 +4729,7 @@ impl DataGridPanel {
                                 crate::labels::mutation_execution_completed_toast(rows_affected),
                             )
                             .push(cx);
-                        })
-                        .ok();
+                        });
                     }
                     Ok(MutationOutcome::Cancelled { rows_affected }) => {
                         cx.update(|cx| {
@@ -4723,8 +4741,7 @@ impl DataGridPanel {
                                 crate::labels::mutation_execution_cancelled_toast(rows_affected),
                             )
                             .push(cx);
-                        })
-                        .ok();
+                        });
                     }
                     Ok(MutationOutcome::Failed { error }) => {
                         cx.update(|cx| {
@@ -4732,8 +4749,7 @@ impl DataGridPanel {
                                 grid.runner.fail_mutation(task_id, error.clone(), cx);
                             })
                             .ok();
-                        })
-                        .ok();
+                        });
                         report_error_async(
                             UserFacingError::new(
                                 ErrorKind::Driver,

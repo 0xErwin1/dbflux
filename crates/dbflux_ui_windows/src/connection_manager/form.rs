@@ -833,7 +833,7 @@ impl ConnectionManagerWindow {
             )
             .await;
 
-            if let Err(error) = cx.update(|cx| {
+            cx.update(|cx| {
                 this.update(cx, |this, cx| {
                     match result {
                         Ok(result) => {
@@ -857,12 +857,7 @@ impl ConnectionManagerWindow {
                     }
                     cx.notify();
                 });
-            }) {
-                log::warn!(
-                    "Failed to apply test connection result to UI state: {:?}",
-                    error
-                );
-            }
+            });
         })
         .detach();
     }
@@ -1982,6 +1977,8 @@ mod tests {
             cx.update(|cx| host.read(cx).last_toast_title()),
             Some(PRIMARY_PASSWORD_SAVE_ERROR.to_string())
         );
+
+        window.update(&mut cx, |_, window, _| window.remove_window());
     }
 
     #[::core::prelude::v1::test]
@@ -2016,6 +2013,8 @@ mod tests {
             1,
             "one safe failure is reported"
         );
+
+        window.update(&mut cx, |_, window, _| window.remove_window());
     }
 
     #[::core::prelude::v1::test]
@@ -2063,5 +2062,9 @@ mod tests {
             0,
             "success reports no error toast"
         );
+
+        if window.root(&mut cx).is_ok() {
+            window.update(&mut cx, |_, window, _| window.remove_window());
+        }
     }
 }

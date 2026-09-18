@@ -1,12 +1,12 @@
 use crate::components::json_editor_view::{self, JsonEditorView};
 use crate::composites::ModalFrame;
-use crate::controls::InputState;
 use crate::icon::IconSource;
 use crate::icons::AppIcon;
 use crate::primitives::Icon;
 use crate::tokens::Heights;
 use dbflux_core::keymap_types::ContextId;
 use gpui::*;
+use gpui_component::input::EditorState;
 
 /// Event emitted when the modal editor saves.
 #[derive(Clone)]
@@ -26,18 +26,18 @@ pub struct CellEditorModal {
     row: usize,
     col: usize,
     is_json: bool,
-    input: Entity<InputState>,
+    input: Entity<EditorState>,
     focus_handle: FocusHandle,
     validation_error: Option<String>,
 }
 
 impl CellEditorModal {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        // soft_wrap defaults to true in 0.6.1, so the old explicit builder is gone.
         let input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .code_editor("json")
+            EditorState::new(window, cx)
+                .language("json")
                 .line_number(true)
-                .soft_wrap(true)
         });
 
         Self {
@@ -81,7 +81,7 @@ impl CellEditorModal {
             state.focus(window, cx);
         });
 
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
         cx.notify();
     }
 

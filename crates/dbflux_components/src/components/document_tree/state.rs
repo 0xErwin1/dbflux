@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, HashSet};
 use crate::controls::{InputEvent, InputState};
 use dbflux_core::{QueryResult, Value};
 use gpui::{
-    AppContext, Context, EventEmitter, FocusHandle, Focusable, UniformListScrollHandle, Window,
+    App, AppContext, Context, EventEmitter, FocusHandle, Focusable, UniformListScrollHandle, Window,
 };
 
 use super::events::{DocumentTreeEvent, TreeDirection};
@@ -710,8 +710,8 @@ impl DocumentTreeState {
 
     // === Actions ===
 
-    pub fn focus(&self, window: &mut gpui::Window) {
-        self.focus_handle.focus(window);
+    pub fn focus(&self, window: &mut gpui::Window, cx: &mut App) {
+        self.focus_handle.focus(window, cx);
     }
 
     pub fn start_edit_at_cursor(&mut self, window: &mut Window, cx: &mut Context<Self>) {

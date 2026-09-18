@@ -522,7 +522,7 @@ impl Sidebar {
                 Err(error) => DatabaseRefreshExecutionOutcome::Failed { error, held_state },
             };
 
-            if let Err(update_error) = cx.update(|cx| {
+            cx.update(|cx| {
                 sidebar.update(cx, |sidebar, cx| {
                     sidebar.clear_tracked_operation_task(task_id);
                     Self::apply_database_refresh_outcome(
@@ -537,12 +537,7 @@ impl Sidebar {
                         cx,
                     );
                 });
-            }) {
-                log::warn!(
-                    "Failed to apply lazy database refresh outcome: {:?}",
-                    update_error
-                );
-            }
+            });
         });
 
         self.track_operation_task(task_id, operation_task);
@@ -636,7 +631,7 @@ impl Sidebar {
                 })
                 .await;
 
-            if let Err(update_error) = cx.update(|cx| {
+            cx.update(|cx| {
                 sidebar.update(cx, |sidebar, cx| {
                     sidebar.clear_tracked_operation_task(task_id);
                     Self::apply_database_refresh_outcome(
@@ -651,12 +646,7 @@ impl Sidebar {
                         cx,
                     );
                 });
-            }) {
-                log::warn!(
-                    "Failed to apply per-database refresh outcome: {:?}",
-                    update_error
-                );
-            }
+            });
         });
 
         self.track_operation_task(task_id, operation_task);
@@ -703,14 +693,14 @@ impl Sidebar {
                     .get(&profile_id)
                     .map(|connected| connected.connection.clone())
             }) {
-                Ok(Some(connection)) => connection,
-                Ok(None) => {
+                Some(connection) => connection,
+                None => {
                     let outcome = DatabaseRefreshExecutionOutcome::Failed {
                         error: "Profile not connected".to_string(),
                         held_state,
                     };
 
-                    if let Err(update_error) = cx.update(|cx| {
+                    cx.update(|cx| {
                         sidebar.update(cx, |sidebar, cx| {
                             sidebar.clear_tracked_operation_task(task_id);
                             Self::apply_database_refresh_outcome(
@@ -725,19 +715,7 @@ impl Sidebar {
                                 cx,
                             );
                         });
-                    }) {
-                        log::warn!(
-                            "Failed to apply missing connection refresh outcome: {:?}",
-                            update_error
-                        );
-                    }
-                    return;
-                }
-                Err(update_error) => {
-                    log::warn!(
-                        "Failed to read current connection for refresh: {:?}",
-                        update_error
-                    );
+                    });
                     return;
                 }
             };
@@ -760,7 +738,7 @@ impl Sidebar {
                 },
             };
 
-            if let Err(update_error) = cx.update(|cx| {
+            cx.update(|cx| {
                 sidebar.update(cx, |sidebar, cx| {
                     sidebar.clear_tracked_operation_task(task_id);
                     Self::apply_database_refresh_outcome(
@@ -775,12 +753,7 @@ impl Sidebar {
                         cx,
                     );
                 });
-            }) {
-                log::warn!(
-                    "Failed to apply current database refresh outcome: {:?}",
-                    update_error
-                );
-            }
+            });
         });
 
         self.track_operation_task(task_id, operation_task);
@@ -878,7 +851,7 @@ impl Sidebar {
         cx.spawn(async move |_this, cx| {
             let result = task.await;
 
-            if let Err(error) = cx.update(|cx| {
+            cx.update(|cx| {
                 if cancel_token.is_cancelled() {
                     log::info!("Fetch database schema task was cancelled");
                     app_state.update(cx, |state, cx| {
@@ -938,12 +911,7 @@ impl Sidebar {
 
                     sidebar.refresh_tree(cx);
                 });
-            }) {
-                log::warn!(
-                    "Failed to apply schema fetch result to sidebar state: {:?}",
-                    error
-                );
-            }
+            });
         })
         .detach();
     }
@@ -1035,7 +1003,7 @@ impl Sidebar {
         cx.spawn(async move |_this, cx| {
             let result = task.await;
 
-            if let Err(error) = cx.update(|cx| {
+            cx.update(|cx| {
                 if cancel_token.is_cancelled() {
                     log::info!("Database connection task was cancelled, discarding result");
                     app_state.update(cx, |state, cx| {
@@ -1087,12 +1055,7 @@ impl Sidebar {
                     sidebar.pending_toast = toast;
                     sidebar.refresh_tree(cx);
                 });
-            }) {
-                log::warn!(
-                    "Failed to apply per-database connection result to sidebar state: {:?}",
-                    error
-                );
-            }
+            });
         })
         .detach();
     }
@@ -1323,7 +1286,7 @@ impl Sidebar {
                 }
             };
 
-            if let Err(update_error) = cx.update(|cx| {
+            cx.update(|cx| {
                 sidebar.update(cx, |sidebar, cx| {
                     sidebar.clear_tracked_operation_task(task_id);
                     sidebar.loading_items.remove(&item_id);
@@ -1445,9 +1408,7 @@ impl Sidebar {
 
                     sidebar.refresh_tree(cx);
                 });
-            }) {
-                log::warn!("Failed to apply object refresh result: {:?}", update_error);
-            }
+            });
         });
 
         self.track_operation_task(task_id, operation_task);

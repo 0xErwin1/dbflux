@@ -115,7 +115,9 @@ impl ObjectBrowserDocument {
                 &name_input,
                 |this, _input, event: &InputEvent, cx| match event {
                     InputEvent::Change => cx.notify(),
-                    InputEvent::PressEnter { secondary: false } => this.submit_rename_object(cx),
+                    InputEvent::PressEnter {
+                        secondary: false, ..
+                    } => this.submit_rename_object(cx),
                     _ => {}
                 },
             );
@@ -222,8 +224,7 @@ impl ObjectBrowserDocument {
                     entity.update(cx, |doc, cx| {
                         doc.apply_rename_outcome(source_key, new_key, Err(err.to_string()), cx);
                     });
-                })
-                .ok();
+                });
                 return;
             }
 
@@ -268,8 +269,7 @@ impl ObjectBrowserDocument {
                 entity.update(cx, |doc, cx| {
                     doc.apply_rename_outcome(source_key, new_key, outcome, cx);
                 });
-            })
-            .ok();
+            });
         })
         .detach();
     }

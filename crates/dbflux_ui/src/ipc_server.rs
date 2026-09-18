@@ -133,7 +133,7 @@ async fn process_commands(
     loop {
         match cmd_rx.try_recv() {
             Ok(cmd) => {
-                let dispatch = cx.update(|cx| match cmd {
+                cx.update(|cx| match cmd {
                     IpcCommand::OpenScript { path } => {
                         workspace.update(cx, |ws, cx| {
                             ws.open_script_from_path(path, cx);
@@ -147,10 +147,6 @@ async fn process_commands(
                         }
                     }
                 });
-
-                if let Err(e) = dispatch {
-                    log::warn!("Failed to dispatch IPC command: {:?}", e);
-                }
             }
             Err(mpsc::TryRecvError::Empty) => {
                 cx.background_executor()

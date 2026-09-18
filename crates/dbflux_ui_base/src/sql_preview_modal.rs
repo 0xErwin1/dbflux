@@ -1,9 +1,9 @@
 use crate::app_state_entity::AppStateEntity;
 use crate::modal_frame::ModalFrame;
-use dbflux_components::controls::{GpuiInput as Input, InputState};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Text};
 use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
+use dbflux_components::typography::AppFonts;
 // SqlGenerationType and SqlPreviewContext now live in dbflux_components;
 // re-export here so existing call-sites via this module path are unchanged.
 pub use dbflux_components::{SqlGenerationType, SqlPreviewContext};
@@ -16,6 +16,7 @@ use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::Sizable;
 use gpui_component::checkbox::Checkbox;
+use gpui_component::input::{Editor, EditorState};
 use uuid::Uuid;
 
 /// Settings for SQL generation.
@@ -42,7 +43,7 @@ pub struct SqlPreviewModal {
     context: Option<SqlPreviewContext>,
     generation_type: SqlGenerationType,
     settings: SqlPreviewSettings,
-    sql_display: Entity<InputState>,
+    sql_display: Entity<EditorState>,
     generated_sql: String,
     focus_handle: FocusHandle,
 
@@ -57,10 +58,10 @@ impl SqlPreviewModal {
         cx: &mut Context<Self>,
     ) -> Self {
         let sql_display = cx.new(|cx| {
-            InputState::new(window, cx)
-                .code_editor("sql")
+            // soft_wrap defaults to true in 0.6.1, so the old explicit builder is gone.
+            EditorState::new(window, cx)
+                .language("sql")
                 .line_number(true)
-                .soft_wrap(true)
         });
 
         Self {
@@ -93,10 +94,9 @@ impl SqlPreviewModal {
             self.query_language = None;
             self.badge_label = None;
             self.sql_display = cx.new(|cx| {
-                InputState::new(window, cx)
-                    .code_editor("sql")
+                EditorState::new(window, cx)
+                    .language("sql")
                     .line_number(true)
-                    .soft_wrap(true)
             });
         }
 
@@ -104,7 +104,7 @@ impl SqlPreviewModal {
         self.generation_type = generation_type;
         self.visible = true;
         self.regenerate_sql(window, cx);
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
         cx.notify();
     }
 
@@ -126,15 +126,14 @@ impl SqlPreviewModal {
         self.generated_sql = query.clone();
 
         self.sql_display = cx.new(|cx| {
-            let mut state = InputState::new(window, cx)
-                .code_editor(editor_mode)
-                .line_number(true)
-                .soft_wrap(true);
+            let mut state = EditorState::new(window, cx)
+                .language(editor_mode)
+                .line_number(true);
             state.set_value(&query, window, cx);
             state
         });
 
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
         cx.notify();
     }
 
@@ -531,7 +530,14 @@ impl Render for SqlPreviewModal {
                     .min_h(px(200.0))
                     .max_h(px(300.0))
                     .overflow_hidden()
-                    .child(Input::new(&sql_display).w_full().h_full()),
+                    .child(
+                        Editor::new(&sql_display)
+                            .w_full()
+                            .h_full()
+                            .font_family(AppFonts::BODY)
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_size(FontSizes::BASE),
+                    ),
             );
 
         // -- Options (SQL mode, DML only) --

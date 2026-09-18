@@ -508,7 +508,6 @@ diagnostics:
     summary: "Los scripts no se pueden guardar en la carpeta de scripts."
     action: "Las queries nuevas se conservan en el session store, así que tu trabajo está a salvo. Verifica que el directorio de datos sea escribible y tenga espacio libre, y reinicia DBFlux."
   shutdown_flush_timed_out: "Es posible que algunas ediciones no hayan llegado a sus archivos: DBFlux se quedó sin tiempo para guardarlas al salir. Se conservan en el session store para recuperarlas."
-  shutdown_flush_unreachable: "Es posible que algunas ediciones no hayan llegado a sus archivos: el guardado no pudo ejecutarse al salir. Se conservan en el session store para recuperarlas."
 document:
   audit:
     actor:

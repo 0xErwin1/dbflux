@@ -41,8 +41,7 @@ fn report_save_failed(entity: &Entity<CodeDocument>, cx: &AsyncApp) {
         entity.update(cx, |doc, cx| {
             doc.report_save_outcome(false, cx);
         });
-    })
-    .log_if_dropped();
+    });
 }
 
 /// Drops the close intent a refused close flush armed, so a tab the user kept
@@ -52,8 +51,7 @@ fn abandon_close_flush(entity: &Entity<CodeDocument>, cx: &mut AsyncApp) {
         entity.update(cx, |doc, cx| {
             doc.report_save_outcome(false, cx);
         });
-    })
-    .log_if_dropped();
+    });
 }
 
 /// The toast key a refused write reports through, by what asked for the write.
@@ -189,8 +187,7 @@ async fn finish_physical_write(
 
                     doc.pump_physical_writes(cx);
                 });
-            })
-            .log_if_dropped();
+            });
         }
         WriteOutcome::ExternalConflict => {
             report_error_async(
@@ -266,8 +263,7 @@ fn start_next_physical_write(entity: &Entity<CodeDocument>, cx: &mut AsyncApp) {
         entity.update(cx, |doc, cx| {
             doc.pump_physical_writes(cx);
         });
-    })
-    .log_if_dropped();
+    });
 }
 
 impl CodeDocument {
@@ -508,8 +504,7 @@ impl CodeDocument {
                 entity.update(cx, |doc, cx| {
                     doc.enqueue_save_as_write(path, content, saved_input, used_fallback, cx);
                 });
-            })
-            .log_if_dropped();
+            });
         }));
     }
 
@@ -573,8 +568,7 @@ impl CodeDocument {
                             cx,
                         );
                     });
-                })
-                .log_if_dropped();
+                });
             }));
 
             return;
@@ -607,8 +601,7 @@ impl CodeDocument {
                         entity.update(cx, |doc, cx| {
                             doc.show_saved_label(cx);
                         });
-                    })
-                    .ok();
+                    });
                 }
                 Err(e) => {
                     report_error_async(
@@ -643,8 +636,7 @@ impl CodeDocument {
                         cx.notify();
                     });
                 }
-            })
-            .ok();
+            });
         }));
     }
 
@@ -1536,7 +1528,7 @@ mod tests {
                 window.update(|window, cx| {
                     doc.update(cx, |document, cx| {
                         document.editor.input_state.update(cx, |state, cx| {
-                            state.set_value("NEWEST;", window, cx);
+                            state.replace_all("NEWEST;", window, cx);
                         });
                     });
                 });
@@ -1593,7 +1585,7 @@ mod tests {
                 window.update(|window, cx| {
                     doc.update(cx, |document, cx| {
                         document.editor.input_state.update(cx, |state, cx| {
-                            state.set_value("NEWEST;", window, cx);
+                            state.replace_all("NEWEST;", window, cx);
                         });
                     });
                 });
@@ -1689,7 +1681,7 @@ mod tests {
                 window.update(|window, cx| {
                     doc.update(cx, |document, cx| {
                         document.editor.input_state.update(cx, |state, cx| {
-                            state.set_value("NEWEST;", window, cx);
+                            state.replace_all("NEWEST;", window, cx);
                         });
                     });
                 });
@@ -1785,7 +1777,7 @@ mod tests {
                 window.update(|window, cx| {
                     doc.update(cx, |document, cx| {
                         document.editor.input_state.update(cx, |state, cx| {
-                            state.set_value("NEWEST;", window, cx);
+                            state.replace_all("NEWEST;", window, cx);
                         });
                         // A Ctrl+S is already in flight when the user closes.
                         document.enqueue_physical_write(
@@ -2025,7 +2017,7 @@ mod tests {
                 window.update(|window, cx| {
                     doc.update(cx, |document, cx| {
                         document.editor.input_state.update(cx, |state, cx| {
-                            state.set_value("MINE;", window, cx);
+                            state.replace_all("MINE;", window, cx);
                         });
                     });
                 });
@@ -2084,7 +2076,7 @@ mod tests {
                 window.update(|window, cx| {
                     doc.update(cx, |document, cx| {
                         document.editor.input_state.update(cx, |state, cx| {
-                            state.set_value("MINE;", window, cx);
+                            state.replace_all("MINE;", window, cx);
                         });
                     });
                 });
@@ -2205,7 +2197,7 @@ mod tests {
                 );
                 document.set_content("SELECT 1;", window, cx);
                 document.editor.input_state.update(cx, |state, cx| {
-                    state.set_value("SELECT 2;", window, cx);
+                    state.replace_all("SELECT 2;", window, cx);
                 });
                 document
             });

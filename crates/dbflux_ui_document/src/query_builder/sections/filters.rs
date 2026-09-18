@@ -3,6 +3,7 @@ use gpui::{AnyElement, Context, ElementId, Entity, IntoElement, SharedString, di
 use crate::labels::{bool_op_label, comparator_label};
 use crate::query_builder::panel::{FILTER_DEPTH_CAP, FilterTarget, QueryBuilderPanel};
 use dbflux_components::controls::{Dropdown, InputState};
+use gpui_component::input::EditorState;
 
 /// Renders the Filters section of the Query Builder (WHERE target).
 ///
@@ -160,7 +161,7 @@ fn render_filter_node(
     target: FilterTarget,
     source_alias: &str,
     input_states: &std::collections::HashMap<u64, Entity<InputState>>,
-    column_input_states: &std::collections::HashMap<u64, Entity<InputState>>,
+    column_input_states: &std::collections::HashMap<u64, Entity<EditorState>>,
     comparator_dropdowns: &std::collections::HashMap<u64, Entity<Dropdown>>,
     cx: &mut Context<QueryBuilderPanel>,
 ) -> AnyElement {
@@ -207,7 +208,7 @@ fn render_filter_group(
     target: FilterTarget,
     source_alias: &str,
     input_states: &std::collections::HashMap<u64, Entity<InputState>>,
-    column_input_states: &std::collections::HashMap<u64, Entity<InputState>>,
+    column_input_states: &std::collections::HashMap<u64, Entity<EditorState>>,
     comparator_dropdowns: &std::collections::HashMap<u64, Entity<Dropdown>>,
     cx: &mut Context<QueryBuilderPanel>,
 ) -> impl IntoElement {
@@ -312,11 +313,11 @@ fn render_filter_predicate(
     path: Vec<usize>,
     target: FilterTarget,
     input_state: Option<Entity<InputState>>,
-    column_input_state: Option<Entity<InputState>>,
+    column_input_state: Option<Entity<EditorState>>,
     comparator_dropdown: Option<Entity<Dropdown>>,
     cx: &mut Context<QueryBuilderPanel>,
 ) -> impl IntoElement {
-    use dbflux_components::controls::{Button, Input, completion_input_keys_wrapper};
+    use dbflux_components::controls::{Button, Input};
     use gpui::SharedString;
     use gpui::prelude::*;
 
@@ -336,9 +337,9 @@ fn render_filter_predicate(
 
     if let Some(col_state) = column_input_state {
         row = row.child(
-            completion_input_keys_wrapper(&col_state)
+            crate::completion_support::single_line_completion_editor(&col_state)
                 .flex_1()
-                .child(Input::new(&col_state).small().w_full()),
+                .w_full(),
         );
     } else {
         let fallback = format!("{}.{}", pred.source_alias, pred.column);

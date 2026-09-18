@@ -293,8 +293,7 @@ impl super::KeyValueDocument {
                     this.kv_decode_outcome = outcome;
                     cx.notify();
                 });
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
     }

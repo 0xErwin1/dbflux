@@ -32,6 +32,7 @@ use dbflux_ui_base::AppStateEntity;
 use dbflux_ui_base::toast::{Toast, now_hms};
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error, report_error_async};
 use gpui::*;
+use gpui_component::input::EditorState;
 use std::time::Instant;
 use uuid::Uuid;
 
@@ -75,7 +76,7 @@ struct PendingBody {
 /// The editable buffer, with the content last loaded or saved as the baseline
 /// so "modified" is a plain comparison rather than a change counter.
 struct Buffer {
-    input: Entity<InputState>,
+    input: Entity<EditorState>,
     baseline: String,
     line_ending: LineEnding,
     content_type: Option<String>,
@@ -251,7 +252,7 @@ impl ObjectEditorDocument {
                 .input
                 .clone()
                 .update(cx, |state, cx| state.focus(window, cx)),
-            None => self.focus_handle.focus(window),
+            None => self.focus_handle.focus(window, cx),
         }
 
         cx.notify();
@@ -325,8 +326,7 @@ impl ObjectEditorDocument {
                 entity.update(cx, |doc, cx| {
                     doc.apply_load_outcome(result, cx);
                 });
-            })
-            .ok();
+            });
         })
         .detach();
     }
@@ -588,8 +588,7 @@ impl ObjectEditorDocument {
                 entity.update(cx, |doc, cx| {
                     doc.apply_save_outcome(text, byte_len, result.is_ok(), cx);
                 });
-            })
-            .ok();
+            });
         })
         .detach();
     }

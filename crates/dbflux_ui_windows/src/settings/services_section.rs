@@ -9,7 +9,7 @@ use dbflux_ui_base::AppStateEntity;
 use dbflux_ui_base::keymap::key_chord_from_gpui;
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::dialog::Dialog;
+use gpui_component::dialog::{Dialog, DialogButtonProps};
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(super) enum ServiceFocus {
@@ -365,7 +365,7 @@ impl FormSection for ServicesSection {
 }
 
 impl Render for ServicesSection {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let show_svc_delete = self.pending_delete_svc_idx.is_some();
         let svc_delete_name = self
             .pending_delete_svc_idx
@@ -381,9 +381,11 @@ impl Render for ServicesSection {
                 let entity_cancel = entity.clone();
 
                 element.child(
-                    Dialog::new(window, cx)
+                    Dialog::new(cx)
                         .title(dbflux_i18n::t!("settings.rpc_services.delete_dialog_title"))
-                        .confirm()
+                        .button_props(DialogButtonProps::default().show_cancel(true))
+                        .overlay_closable(false)
+                        .close_button(false)
                         .on_ok(move |_, window, cx| {
                             entity.update(cx, |section, cx| {
                                 section.confirm_delete_service(window, cx);

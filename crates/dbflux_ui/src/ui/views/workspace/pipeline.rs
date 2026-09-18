@@ -47,14 +47,12 @@ impl PipelineProgress {
                 loop {
                     let changed = watcher.changed().await;
                     if changed.is_err() {
-                        if let Err(error) = cx.update(|cx| {
+                        cx.update(|cx| {
                             this.update(cx, |this, cx| {
                                 this.handle_watch_closed(cx);
                             })
                             .ok();
-                        }) {
-                            log::warn!("Failed to handle pipeline watcher closure: {:?}", error);
-                        }
+                        });
                         break;
                     }
 
@@ -66,15 +64,12 @@ impl PipelineProgress {
                             | PipelineState::Cancelled
                     );
 
-                    if let Err(error) = cx.update(|cx| {
+                    cx.update(|cx| {
                         this.update(cx, |this, cx| {
                             this.apply_state(new_state, cx);
                         })
                         .ok();
-                    }) {
-                        log::warn!("Failed to apply pipeline state change: {:?}", error);
-                        break;
-                    }
+                    });
 
                     if is_terminal {
                         break;

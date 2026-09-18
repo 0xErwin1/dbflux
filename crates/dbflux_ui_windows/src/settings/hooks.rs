@@ -1,7 +1,8 @@
 use dbflux_app::config_loader::{EditableGlobalHook, HookDefinitionSave};
 use dbflux_app::keymap::Modifiers;
+use dbflux_components::controls::InputEvent;
 use dbflux_components::controls::{Button, Checkbox, Input};
-use dbflux_components::controls::{InputEvent, InputState};
+
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Label, focus_frame};
 use dbflux_components::tokens::{Heights, Radii, Spacing, Widths};
@@ -16,6 +17,7 @@ use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
+use gpui_component::input::EditorState;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -80,10 +82,10 @@ impl HooksSection {
         let editor_mode = self.hook_script_editor_mode(cx);
 
         let input = cx.new(|cx| {
-            let mut state = InputState::new(window, cx)
-                .code_editor(editor_mode)
+            // soft_wrap defaults to true in 0.6.1, so the old explicit builder is gone.
+            let mut state = EditorState::new(window, cx)
+                .language(editor_mode)
                 .line_number(true)
-                .soft_wrap(true)
                 .placeholder(dbflux_i18n::t!("hooks.script.placeholder"));
 
             state.set_value(value.clone(), window, cx);

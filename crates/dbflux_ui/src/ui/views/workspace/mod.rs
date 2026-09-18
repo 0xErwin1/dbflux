@@ -218,18 +218,16 @@ pub(super) fn map_item_to_selection(item: &PaletteItem) -> Option<PaletteSelecti
 
 /// How a bounded document flush ended.
 ///
-/// "Nothing outstanding" and "everything landed" are not the same thing: a
-/// refused write empties its queue, and an unreachable app context cannot be
-/// asked at all. The caller needs the difference to report what happened
-/// instead of claiming a flush.
+/// A bool would read as "did the flush finish", which hides the difference the
+/// exit report needs: writes that drained, and a deadline that expired with
+/// writes still in flight. A drained flush also says nothing about the edits
+/// having reached their files, so neither outcome is a successful save.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DocumentFlushOutcome {
     /// The poll reported nothing outstanding before the deadline.
     Drained,
     /// Writes were still outstanding when the deadline expired.
     TimedOut,
-    /// The app context could no longer be reached, so nothing could be asked.
-    Unreachable,
 }
 
 /// Polls a shutdown flush until it reports idle or `timeout` elapses.
@@ -237,12 +235,10 @@ pub enum DocumentFlushOutcome {
 /// Returns [`DocumentFlushOutcome::Drained`] when nothing was outstanding before
 /// the deadline and [`DocumentFlushOutcome::TimedOut`] when the deadline expired
 /// first; the caller continues either way, so a write that never lands can only
-/// delay shutdown by `timeout`. `is_outstanding` returns `None` once the app
-/// context can no longer be reached, which is reported as
-/// [`DocumentFlushOutcome::Unreachable`] rather than as a finished flush. Each
-/// iteration waits `poll_interval` on the executor, which is what lets queued
-/// writes run between polls. The executor's clock is used instead of
-/// `Instant::now` so the loop is deterministic under a test executor.
+/// delay shutdown by `timeout`. Each iteration waits `poll_interval` on the
+/// executor, which is what lets queued writes run between polls. The executor's
+/// clock is used instead of `Instant::now` so the loop is deterministic under a
+/// test executor.
 pub async fn await_document_flush<F>(
     cx: &mut AsyncApp,
     timeout: std::time::Duration,
@@ -250,15 +246,13 @@ pub async fn await_document_flush<F>(
     mut is_outstanding: F,
 ) -> DocumentFlushOutcome
 where
-    F: FnMut(&mut AsyncApp) -> Option<bool>,
+    F: FnMut(&mut AsyncApp) -> bool,
 {
     let deadline = cx.background_executor().now() + timeout;
 
     loop {
-        match is_outstanding(cx) {
-            Some(false) => return DocumentFlushOutcome::Drained,
-            None => return DocumentFlushOutcome::Unreachable,
-            Some(true) => {}
+        if !is_outstanding(cx) {
+            return DocumentFlushOutcome::Drained;
         }
 
         if cx.background_executor().now() > deadline {
@@ -1420,7 +1414,7 @@ impl Workspace {
         .detach();
 
         let focus_handle = cx.focus_handle();
-        focus_handle.focus(window);
+        focus_handle.focus(window, cx);
 
         let mut workspace = Self {
             app_state,
@@ -1531,19 +1525,16 @@ impl Workspace {
                                     .flatten()
                                     .map(|s| s.retention_days)
                                     .unwrap_or(30)
-                            })
-                            .unwrap_or(30);
+                            });
 
                         // Get audit_service for purge and emit from foreground update.
-                        let purge_result = cx
-                            .update(|cx| {
-                                let audit_service = app_state.read(cx).audit_service().clone();
-                                audit_service.purge_old_events(retention_days, 500)
-                            })
-                            .ok();
+                        let purge_result = cx.update(|cx| {
+                            let audit_service = app_state.read(cx).audit_service().clone();
+                            audit_service.purge_old_events(retention_days, 500)
+                        });
 
                         match purge_result {
-                            Some(Ok(stats)) => {
+                            Ok(stats) => {
                                 log::info!(
                                     "Periodic audit purge completed: deleted {} events in {} batches ({}ms)",
                                     stats.deleted_count,
@@ -1564,14 +1555,14 @@ impl Workspace {
                                     stats.deleted_count
                                 ))
                                 .with_duration_ms(stats.duration_ms as i64);
-                                let _ = cx.update(|cx| {
+                                cx.update(|cx| {
                                     let audit_service = app_state.read(cx).audit_service().clone();
                                     if let Err(rec_err) = audit_service.record(event) {
                                         log::warn!("Failed to record purge success audit event: {}", rec_err);
                                     }
                                 });
                             }
-                            Some(Err(e)) => {
+                            Err(e) => {
                                 log::warn!("Periodic audit purge failed: {}", e);
                                 // Emit a system failure event for the purge failure.
                                 let now_ms = dbflux_core::chrono::Utc::now().timestamp_millis();
@@ -1587,15 +1578,12 @@ impl Workspace {
                                     e
                                 ));
                                 // Emit through a foreground update so we have proper context.
-                                let _ = cx.update(|cx| {
+                                cx.update(|cx| {
                                     let audit_service = app_state.read(cx).audit_service().clone();
                                     if let Err(rec_err) = audit_service.record(event) {
                                         log::warn!("Failed to record purge failure audit event: {}", rec_err);
                                     }
                                 });
-                            }
-                            None => {
-                                // cx.update failed - skip this cycle.
                             }
                         }
                     }
@@ -1939,7 +1927,7 @@ impl Workspace {
         });
 
         if target == FocusTarget::Sidebar {
-            self.focus_handle.focus(window);
+            self.focus_handle.focus(window, cx);
         }
 
         if target == FocusTarget::Document {
@@ -3335,7 +3323,7 @@ mod tab_close_request_tests {
                 &mut app_cx,
                 timeout,
                 poll_interval,
-                |_app_cx| Some(true), // the write never finishes
+                |_app_cx| true, // the write never finishes
             )
             .await;
             result_out.set(Some(outcome));
@@ -3348,39 +3336,6 @@ mod tab_close_request_tests {
             result.get(),
             Some(DocumentFlushOutcome::TimedOut),
             "the deadline must stop a flush that never finishes"
-        );
-
-        drop(task);
-    }
-
-    /// An app context that can no longer be asked must report that, not a
-    /// finished flush.
-    ///
-    /// The previous boolean return collapsed "nothing outstanding" and "cannot
-    /// ask anymore" into the same value, which is what let the exit log claim
-    /// every pending edit had been flushed while the context was already gone.
-    #[gpui::test]
-    fn an_unreachable_context_is_not_reported_as_a_finished_flush(cx: &mut TestAppContext) {
-        let result = Rc::new(Cell::new(None));
-        let result_out = result.clone();
-
-        let task = cx.spawn(move |mut app_cx| async move {
-            let outcome = await_document_flush(
-                &mut app_cx,
-                Duration::from_millis(100),
-                Duration::from_millis(50),
-                |_app_cx| None, // the context is gone
-            )
-            .await;
-            result_out.set(Some(outcome));
-        });
-
-        cx.run_until_parked();
-
-        assert_eq!(
-            result.get(),
-            Some(DocumentFlushOutcome::Unreachable),
-            "a context that cannot be asked is not a finished flush"
         );
 
         drop(task);

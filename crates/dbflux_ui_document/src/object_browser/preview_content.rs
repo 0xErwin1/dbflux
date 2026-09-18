@@ -390,6 +390,8 @@ pub fn format_label(format: ImageFormat) -> &'static str {
         ImageFormat::Svg => "SVG",
         ImageFormat::Bmp => "BMP",
         ImageFormat::Tiff => "TIFF",
+        ImageFormat::Ico => "ICO",
+        ImageFormat::Pnm => "PNM",
     }
 }
 

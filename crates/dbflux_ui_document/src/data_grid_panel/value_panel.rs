@@ -35,6 +35,7 @@ use dbflux_components::primitives::{Icon, Text};
 use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
+use gpui_component::input::EditorState;
 use gpui_component::{ActiveTheme, Sizable};
 
 /// Everything the panel needs to show one cell.
@@ -67,7 +68,7 @@ pub struct ValuePanelContent {
     /// this rather than against the cell, so pretty-printing alone does not
     /// count as an edit the user must resolve.
     loaded_text: String,
-    input: Entity<InputState>,
+    input: Entity<EditorState>,
     /// Whether the editor holds the keyboard. The results keymap binds bare
     /// letters to grid commands, so `DataGridPanel::active_context` has to
     /// hand the keyboard to the text layer while the user is typing here.
@@ -241,12 +242,12 @@ fn build_input(
     word_wrap: bool,
     window: &mut Window,
     cx: &mut Context<ValuePanelContent>,
-) -> (Entity<InputState>, Subscription) {
+) -> (Entity<EditorState>, Subscription) {
     // The editor language is fixed at construction in `gpui-component`, so a
     // format switch replaces the whole input rather than mutating it.
     let input = cx.new(|cx| {
-        InputState::new(window, cx)
-            .code_editor(format.editor_language())
+        EditorState::new(window, cx)
+            .language(format.editor_language())
             .line_number(true)
             .soft_wrap(word_wrap)
     });
@@ -291,7 +292,7 @@ impl Render for ValuePanelContent {
                     .flex_1()
                     .min_h_0()
                     .overflow_hidden()
-                    .child(Input::new(&self.input).h_full()),
+                    .child(gpui_component::input::Editor::new(&self.input).h_full()),
             )
             .when_some(self.error.clone(), |d, error| {
                 d.child(

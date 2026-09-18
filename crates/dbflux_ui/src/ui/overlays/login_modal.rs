@@ -88,7 +88,7 @@ impl LoginModal {
                     launch_error: None,
                     started_at: Instant::now(),
                 };
-                self.focus_handle.focus(window);
+                self.focus_handle.focus(window, cx);
                 self.schedule_timeout(cx);
             }
             PipelineState::Failed { stage, error } => {
@@ -97,7 +97,7 @@ impl LoginModal {
                     provider_name: self.last_provider_name.clone(),
                     error: format!("{}: {}", stage, error),
                 };
-                self.focus_handle.focus(window);
+                self.focus_handle.focus(window, cx);
             }
             PipelineState::Cancelled => {
                 self.visible = false;
@@ -134,7 +134,7 @@ impl LoginModal {
         cx.spawn(async move |_entity, cx| {
             cx.background_executor().timer(SSO_LOGIN_TIMEOUT).await;
 
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 this.update(cx, |this, cx| {
                     if generation != this.timeout_generation {
                         return;
@@ -165,7 +165,7 @@ impl LoginModal {
                 .timer(LOGIN_SUCCESS_AUTO_CLOSE_DELAY)
                 .await;
 
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 this.update(cx, |this, cx| {
                     if generation != this.success_generation {
                         return;
@@ -198,7 +198,7 @@ impl LoginModal {
             launch_error: None,
             started_at: Instant::now(),
         };
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
         self.schedule_timeout(cx);
         cx.notify();
     }

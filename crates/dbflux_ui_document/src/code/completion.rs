@@ -352,12 +352,7 @@ impl QueryCompletionProvider {
     /// Results land in the connection's shared `table_details` cache via
     /// `set_table_details`, where the next completion request picks them up.
     /// Failures are logged only (autocomplete is not a user-facing operation).
-    fn prefetch_sql_table_details(
-        &self,
-        source: &str,
-        cursor: usize,
-        cx: &mut Context<InputState>,
-    ) {
+    fn prefetch_sql_table_details(&self, source: &str, cursor: usize, cx: &mut App) {
         let Some(connection_id) = self.connection_id else {
             return;
         };
@@ -429,7 +424,7 @@ impl QueryCompletionProvider {
                 .background_executor()
                 .spawn(async move { params.execute() });
 
-            cx.spawn(async move |_this, cx| match task.await {
+            cx.spawn(async move |cx| match task.await {
                 Ok(result) => {
                     cx.update(|cx| {
                         app_state.update(cx, |state, _| {
@@ -448,8 +443,7 @@ impl QueryCompletionProvider {
                                 result.dependents,
                             );
                         });
-                    })
-                    .ok();
+                    });
                 }
                 Err(err) => {
                     // Release the key so a later keystroke can retry.
@@ -469,7 +463,7 @@ impl QueryCompletionProvider {
     /// Background-fetches the table listing for the editor's selected
     /// database on lazy-per-database drivers, which is otherwise only
     /// populated when the user expands the database in the sidebar.
-    fn prefetch_database_schema(&self, connection_id: Uuid, cx: &mut Context<InputState>) {
+    fn prefetch_database_schema(&self, connection_id: Uuid, cx: &mut App) {
         let Some(database) = ({
             let state = self.app_state.read(cx);
             state
@@ -505,7 +499,7 @@ impl QueryCompletionProvider {
             .background_executor()
             .spawn(async move { params.execute() });
 
-        cx.spawn(async move |_this, cx| match task.await {
+        cx.spawn(async move |cx| match task.await {
             Ok(result) => {
                 cx.update(|cx| {
                     app_state.update(cx, |state, _| {
@@ -515,8 +509,7 @@ impl QueryCompletionProvider {
                             result.schema,
                         );
                     });
-                })
-                .ok();
+                });
             }
             Err(err) => {
                 // Release the key so a later keystroke can retry.
@@ -1238,7 +1231,7 @@ impl CompletionProvider for QueryCompletionProvider {
         offset: usize,
         _trigger: CompletionContext,
         _window: &mut Window,
-        _cx: &mut Context<InputState>,
+        _cx: &mut App,
     ) -> Task<anyhow::Result<CompletionResponse>> {
         self.completion_query_generation
             .set(self.completion_query_generation.get() + 1);
@@ -1295,12 +1288,7 @@ impl CompletionProvider for QueryCompletionProvider {
         Task::ready(Ok(CompletionResponse::Array(items)))
     }
 
-    fn is_completion_trigger(
-        &self,
-        _offset: usize,
-        new_text: &str,
-        cx: &mut Context<InputState>,
-    ) -> bool {
+    fn is_completion_trigger(&self, _offset: usize, new_text: &str, cx: &mut App) -> bool {
         // Deletions arrive as an empty replacement. Letting them through
         // makes an open menu re-query at the new cursor position (refresh,
         // or hide via an empty item list) instead of going stale next to the

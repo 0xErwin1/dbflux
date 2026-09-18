@@ -1,11 +1,12 @@
-use crate::controls::{GpuiInput as Input, InputState};
 use crate::icons::AppIcon;
 use crate::primitives::{Icon, Text};
 use crate::tokens::{FontSizes, Heights, Spacing};
+use crate::typography::AppFonts;
 use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::Sizable;
 use gpui_component::button::{Button, ButtonVariant, ButtonVariants};
+use gpui_component::input::{Editor, EditorState};
 
 type ClickHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 
@@ -42,7 +43,7 @@ pub fn validate_json(s: &str, allow_empty: bool) -> Result<(), String> {
 /// and Cancel/Save buttons on the right.
 pub struct JsonEditorView {
     id_prefix: &'static str,
-    input: Entity<InputState>,
+    input: Entity<EditorState>,
     validation_error: Option<String>,
     show_format_buttons: bool,
     min_editor_height: Pixels,
@@ -55,7 +56,7 @@ pub struct JsonEditorView {
 impl JsonEditorView {
     pub fn new(
         id_prefix: &'static str,
-        input: &Entity<InputState>,
+        input: &Entity<EditorState>,
         on_save: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
         on_cancel: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     ) -> Self {
@@ -108,7 +109,14 @@ impl JsonEditorView {
                     .p(Spacing::MD)
                     .min_h(self.min_editor_height)
                     .overflow_hidden()
-                    .child(Input::new(&self.input).w_full().h_full()),
+                    .child(
+                        Editor::new(&self.input)
+                            .w_full()
+                            .h_full()
+                            .font_family(AppFonts::BODY)
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_size(FontSizes::BASE),
+                    ),
             );
 
         // Validation error banner
