@@ -56,6 +56,39 @@ fn abandon_close_flush(entity: &Entity<CodeDocument>, cx: &mut AsyncApp) {
     .log_if_dropped();
 }
 
+/// The toast key a refused write reports through, by what asked for the write.
+///
+/// A refused close flush means the tab stayed open; a refused shutdown flush
+/// means the edits did not reach the file. Everything else reports through the
+/// autosave key.
+fn refusal_error_key(kind: WriteKind) -> &'static str {
+    match kind {
+        WriteKind::CloseFlush => "document.code.file_ops.error.close_flush_failed",
+        WriteKind::ShutdownFlush => "document.code.file_ops.error.shutdown_flush_failed",
+        WriteKind::Auto | WriteKind::Explicit | WriteKind::SaveAs { .. } => {
+            "document.code.file_ops.error.auto_save_failed"
+        }
+    }
+}
+
+/// Builds the user-facing refusal for one refused conflict-checked write.
+///
+/// The summary says what asked for the write ([`refusal_error_key`]) and the
+/// cause carries the precise reason. The suggested action names the deliberate
+/// way out: an explicit save, which — unlike the conflict-checked
+/// `Auto | CloseFlush | ShutdownFlush` writes — intentionally overwrites
+/// whatever is on disk.
+fn refusal_error(kind: WriteKind, path: &std::path::Path, cause: String) -> UserFacingError {
+    UserFacingError::new(
+        ErrorKind::Storage,
+        dbflux_i18n::t!(refusal_error_key(kind), path = path.display().to_string()),
+    )
+    .with_cause(cause)
+    .with_suggested_action(dbflux_i18n::t!(
+        "document.code.file_ops.error.refusal_suggested_action"
+    ))
+}
+
 /// Applies the result of one queued physical write: reports user-facing
 /// failures, reconciles dirty state by write kind, and lets the queue start
 /// the next write. The queue slot is freed inside the entity update, so the
@@ -157,15 +190,10 @@ async fn finish_physical_write(
         }
         WriteOutcome::ExternalConflict => {
             report_error_async(
-                UserFacingError::new(
-                    ErrorKind::Storage,
-                    dbflux_i18n::t!(
-                        "document.code.file_ops.error.auto_save_failed",
-                        path = write.path.display().to_string()
-                    ),
-                )
-                .with_cause(
-                    "the file changed outside dbflux after the last save; keeping the buffer dirty instead of overwriting it",
+                refusal_error(
+                    write.kind,
+                    &write.path,
+                    "the file changed outside dbflux after the last save; keeping the buffer dirty instead of overwriting it".to_string(),
                 ),
                 cx,
             );
@@ -173,15 +201,10 @@ async fn finish_physical_write(
         }
         WriteOutcome::ExternallyDeleted => {
             report_error_async(
-                UserFacingError::new(
-                    ErrorKind::Storage,
-                    dbflux_i18n::t!(
-                        "document.code.file_ops.error.auto_save_failed",
-                        path = write.path.display().to_string()
-                    ),
-                )
-                .with_cause(
-                    "the file was removed outside dbflux; keeping the buffer dirty instead of recreating it",
+                refusal_error(
+                    write.kind,
+                    &write.path,
+                    "the file was removed outside dbflux; keeping the buffer dirty instead of recreating it".to_string(),
                 ),
                 cx,
             );
@@ -189,15 +212,10 @@ async fn finish_physical_write(
         }
         WriteOutcome::BaselineUnknown => {
             report_error_async(
-                UserFacingError::new(
-                    ErrorKind::Storage,
-                    dbflux_i18n::t!(
-                        "document.code.file_ops.error.auto_save_failed",
-                        path = write.path.display().to_string()
-                    ),
-                )
-                .with_cause(
-                    "no trustworthy on-disk baseline was loaded for this file; refusing to overwrite or recreate it",
+                refusal_error(
+                    write.kind,
+                    &write.path,
+                    "no trustworthy on-disk baseline was loaded for this file; refusing to overwrite or recreate it".to_string(),
                 ),
                 cx,
             );
@@ -220,7 +238,7 @@ async fn finish_physical_write(
                         UserFacingError::new(
                             ErrorKind::Storage,
                             dbflux_i18n::t!(
-                                "document.code.file_ops.error.auto_save_failed",
+                                refusal_error_key(write.kind),
                                 path = write.path.display().to_string()
                             ),
                         )
@@ -320,7 +338,7 @@ impl CodeDocument {
     /// write cannot land.
     pub fn resolve_close(
         &mut self,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> CloseDisposition {
         if !self.has_pending_close_work(cx) {
@@ -343,12 +361,14 @@ impl CodeDocument {
             return CloseDisposition::Deferred;
         }
 
-        // Arm the close before the write is queued so a write that lands asks
-        // the workspace to close the tab.
-        self.close_after_save = true;
-
         match self.editor.path.clone() {
             Some(path) => {
+                // Arm the close before the write is queued so a write that lands
+                // asks the workspace to close the tab. Only this arm arms it: an
+                // untitled buffer stores nothing, and arming the intent for one
+                // would let a later manual save close a tab the user kept.
+                self.close_after_save = true;
+
                 // Conflict-checked, exactly like an autosave: closing must not
                 // silently destroy a change another process made to the file.
                 let saved_input = self.editor.input_state.read(cx).value().to_string();
@@ -360,11 +380,13 @@ impl CodeDocument {
                 CloseDisposition::Deferred
             }
             None => {
-                // Nowhere to flush: the untitled buffer saves through Save As,
-                // whose dismissed dialog or failed write drops the close intent
-                // and leaves the tab open with its changes.
-                self.save_file(window, cx);
-                CloseDisposition::Deferred
+                // Nowhere to persist: an untitled buffer has no file, so only the
+                // user can decide whether its edits are kept. The workspace asks
+                // through the unsaved-changes confirmation before it ever reaches
+                // this point, so arriving here means a caller bypassed that gate.
+                // Keeping the tab open is the fail-closed answer; forcing Save As
+                // or dropping the edits are both this document's call to make.
+                CloseDisposition::KeepOpen
             }
         }
     }
@@ -700,6 +722,16 @@ impl CodeDocument {
 
     /// Flush auto-save content synchronously (called before closing a tab).
     pub fn flush_auto_save(&self, cx: &App) {
+        let content = self.build_file_content(cx);
+        self.write_session_artifact(&content);
+    }
+
+    /// Writes `content` into this document's session artifact: the shadow for a
+    /// file-backed document, the scratch copy for an untitled one.
+    ///
+    /// Writes nothing when the document has no artifact path, which is the case
+    /// for a document whose session carries no shadow and no scratch file.
+    fn write_session_artifact(&self, content: &str) {
         let target = if self.is_file_backed() {
             self.session.shadow_path.as_ref()
         } else {
@@ -710,9 +742,7 @@ impl CodeDocument {
             return;
         };
 
-        let content = self.build_file_content(cx);
-
-        if let Err(e) = std::fs::write(target, &content) {
+        if let Err(e) = std::fs::write(target, content) {
             log::error!("Flush auto-save failed for {}: {}", target.display(), e);
         }
     }
@@ -738,21 +768,28 @@ impl CodeDocument {
             return false;
         }
 
-        // The shadow is the safety net: it still lands when the physical write is
-        // refused, so the next launch can recover the content from it.
-        self.flush_auto_save(cx);
+        if has_edits {
+            let content = self.build_file_content(cx);
 
-        if has_edits && self.is_file_backed() && !self.physical_writes.has_started_shutdown_flush()
-        {
-            self.physical_writes.mark_shutdown_flush_started();
+            // The shadow is the safety net: it still lands when the physical write
+            // is refused, so the next launch can recover the content from it. The
+            // shutdown loop polls every 50 ms, so the artifact is rewritten only
+            // once per distinct buffer instead of once per poll.
+            if self.session.shutdown_flush_written.as_deref() != Some(content.as_str()) {
+                self.write_session_artifact(&content);
+                self.session.shutdown_flush_written = Some(content.clone());
+            }
 
-            if let Some(path) = self.editor.path.clone() {
-                let saved_input = self.editor.input_state.read(cx).value().to_string();
-                let content = self.build_file_content(cx);
-                self.enqueue_physical_write(
-                    PhysicalWrite::shutdown_flush(path, content, saved_input),
-                    cx,
-                );
+            if self.is_file_backed() && !self.physical_writes.has_started_shutdown_flush() {
+                self.physical_writes.mark_shutdown_flush_started();
+
+                if let Some(path) = self.editor.path.clone() {
+                    let saved_input = self.editor.input_state.read(cx).value().to_string();
+                    self.enqueue_physical_write(
+                        PhysicalWrite::shutdown_flush(path, content, saved_input),
+                        cx,
+                    );
+                }
             }
         }
 
@@ -805,7 +842,9 @@ impl CodeDocument {
 
 #[cfg(test)]
 mod tests {
-    use super::{CodeDocument, PhysicalWrite, build_file_content_for_language};
+    use super::{
+        CodeDocument, PhysicalWrite, WriteKind, build_file_content_for_language, refusal_error,
+    };
     use crate::handle::DocumentEvent;
     use crate::pane::CloseDisposition;
     use dbflux_components::theme;
@@ -813,11 +852,14 @@ mod tests {
     use dbflux_storage::bootstrap::StorageRuntime;
     use dbflux_ui_base::AppStateEntity;
     use dbflux_ui_base::AppStateGlobal;
+    use dbflux_ui_base::SaveTargetOutcome;
+    use dbflux_ui_base::SaveTargetProvider;
     use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
     use gpui::{AppContext, TestAppContext, VisualTestContext};
     use gpui_component::Root;
     use std::cell::RefCell;
     use std::rc::Rc;
+    use std::sync::Arc;
     use uuid::Uuid;
 
     fn collection_window_exec_ctx() -> ExecutionContext {
@@ -878,11 +920,14 @@ mod tests {
             "document.code.file_ops.error.dialog_unavailable",
             "document.code.file_ops.error.save_script_failed",
             "document.code.file_ops.error.auto_save_failed",
+            "document.code.file_ops.error.close_flush_failed",
+            "document.code.file_ops.error.shutdown_flush_failed",
+            "document.code.file_ops.error.refusal_suggested_action",
             "document.code.file_ops.native_picker_fallback",
         ];
 
         for key in keys {
-            for locale in ["en", "es"] {
+            for locale in ["en", "es", "zh_Hans"] {
                 let value = dbflux_i18n::t!(key, locale = locale);
 
                 assert!(!value.is_empty(), "{key} resolved empty in {locale}");
@@ -913,6 +958,41 @@ mod tests {
         let es = dbflux_i18n::t!("document.code.file_ops.save_as.title", locale = "es");
 
         assert_ne!(en, es);
+    }
+
+    /// A close-flush refusal names what happened to the tab and a shutdown
+    /// refusal names what happened to the edits: neither reports through the
+    /// autosave key, and each carries the deliberate way out. The refusal
+    /// builder is what every conflict-check refusal arm reports through.
+    #[test]
+    fn refusal_toasts_name_the_close_and_shutdown_contexts() {
+        let path = std::path::PathBuf::from("/tmp/whatever.sql");
+        let autosave = refusal_error(WriteKind::Auto, &path, "cause".to_string());
+        let close = refusal_error(WriteKind::CloseFlush, &path, "cause".to_string());
+        let shutdown = refusal_error(WriteKind::ShutdownFlush, &path, "cause".to_string());
+
+        assert_ne!(
+            close.summary, autosave.summary,
+            "a refused close must not say 'auto-save failed'"
+        );
+        assert_ne!(
+            shutdown.summary, autosave.summary,
+            "a refused shutdown flush must not say 'auto-save failed'"
+        );
+        assert_ne!(
+            close.summary, shutdown.summary,
+            "closing and quitting refusals describe different consequences"
+        );
+
+        for refusal in [&autosave, &close, &shutdown] {
+            let action = refusal.suggested_action.as_ref().expect(
+                "a conflict-check refusal must carry a suggested action naming the way out",
+            );
+            assert!(
+                action.contains("Ctrl+S") || action.contains("Save"),
+                "the suggested action must name the explicit save that overwrites: {action}"
+            );
+        }
     }
 
     // === Save As path/content correctness (T1a.3) ===
@@ -958,6 +1038,201 @@ mod tests {
             "dbflux-save-as-{name}-{}.sql",
             uuid::Uuid::new_v4()
         ))
+    }
+
+    /// A `report_error`-observable app state with a test Save As override
+    /// installed.
+    fn isolated_test_app_state_with_picker(
+        cx: &mut TestAppContext,
+        picker: SaveTargetProvider,
+    ) -> gpui::Entity<AppStateEntity> {
+        cx.update(|cx| {
+            cx.new(|_| {
+                AppStateEntity::new_with_storage_runtime(
+                    StorageRuntime::in_memory().expect("isolated storage runtime"),
+                )
+                .expect("test storage setup")
+                .with_save_target_override(picker)
+            })
+        })
+    }
+
+    /// A Save As picker that records that it was invoked, then reports the user
+    /// dismissing the dialog, so a test can prove a route never started a Save
+    /// As flow.
+    fn cancelled_recording_picker() -> (SaveTargetProvider, Arc<std::sync::atomic::AtomicBool>) {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let invoked = Arc::new(AtomicBool::new(false));
+        let flag = invoked.clone();
+        let provider: SaveTargetProvider = Arc::new(move |_request| {
+            flag.store(true, Ordering::SeqCst);
+            gpui::Task::ready(SaveTargetOutcome::Cancelled)
+        });
+        (provider, invoked)
+    }
+
+    /// Mounts a dirty, untitled document (no backing file, no baseline) with a
+    /// recording Cancelled picker, and hands it to `drive`.
+    fn with_dirty_untitled_document(
+        cx: &mut TestAppContext,
+        picker: SaveTargetProvider,
+        drive: impl FnOnce(&gpui::Entity<CodeDocument>, &mut VisualTestContext),
+    ) {
+        init_test_runtime(cx);
+        let app_state = isolated_test_app_state_with_picker(cx, picker);
+
+        let doc_holder: Rc<RefCell<Option<gpui::Entity<CodeDocument>>>> =
+            Rc::new(RefCell::new(None));
+        let doc_ref = doc_holder.clone();
+        let app_state_for_doc = app_state.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let doc = cx.new(|cx| {
+                let mut document = CodeDocument::new_with_language(
+                    app_state_for_doc.clone(),
+                    None,
+                    QueryLanguage::Sql,
+                    window,
+                    cx,
+                );
+                document.set_content("SELECT 1;", window, cx);
+                document.editor.input_state.update(cx, |state, cx| {
+                    state.set_value("SELECT 2;", window, cx);
+                });
+                document
+            });
+            doc_ref.replace(Some(doc.clone()));
+            Root::new(doc, window, cx)
+        });
+
+        let doc = doc_holder.borrow().clone().expect("document created");
+        drive(&doc, window);
+        window.run_until_parked();
+    }
+
+    /// An untitled dirty buffer that reaches `resolve_close` despite the
+    /// workspace's ask-first gate must fail closed: the tab stays open instead
+    /// of silently forcing a Save As dialog onto the close route.
+    #[gpui::test]
+    fn an_untitled_buffer_reaching_resolve_close_fails_closed(cx: &mut TestAppContext) {
+        let (picker, picker_invoked) = cancelled_recording_picker();
+
+        with_dirty_untitled_document(cx, picker, |doc, window| {
+            window.update(|window, cx| {
+                doc.update(cx, |document, cx| {
+                    assert_eq!(
+                        document.resolve_close(window, cx),
+                        CloseDisposition::KeepOpen,
+                        "an untitled buffer must not start a Save As from resolve_close"
+                    );
+                });
+            });
+        });
+
+        assert!(
+            !picker_invoked.load(std::sync::atomic::Ordering::SeqCst),
+            "resolve_close must not open the Save As picker for an untitled buffer"
+        );
+    }
+
+    /// Mounts a dirty, file-backed document whose path holds a file on disk but
+    /// whose document owns no loaded baseline — the shape that makes a
+    /// conflict-checked write refuse as `BaselineUnknown` — and hands it to
+    /// `drive`.
+    fn with_file_backed_document_without_baseline(
+        cx: &mut TestAppContext,
+        path: std::path::PathBuf,
+        drive: impl FnOnce(
+            &gpui::Entity<CodeDocument>,
+            &gpui::Entity<AppStateEntity>,
+            &Rc<RefCell<Vec<RecordedEvent>>>,
+            &mut VisualTestContext,
+        ),
+    ) {
+        init_test_runtime(cx);
+        let app_state = isolated_test_app_state(cx);
+
+        std::fs::write(&path, "OLD;").expect("seed the preexisting file");
+
+        let doc_holder: Rc<RefCell<Option<gpui::Entity<CodeDocument>>>> =
+            Rc::new(RefCell::new(None));
+        let doc_ref = doc_holder.clone();
+        let app_state_for_doc = app_state.clone();
+        let path_for_doc = path.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let doc = cx.new(|cx| {
+                let mut document = CodeDocument::new_with_language(
+                    app_state_for_doc.clone(),
+                    None,
+                    QueryLanguage::Sql,
+                    window,
+                    cx,
+                )
+                .with_path(path_for_doc.clone());
+                document.set_content("MINE;", window, cx);
+                document.restore_dirty(cx);
+                document
+            });
+            doc_ref.replace(Some(doc.clone()));
+            Root::new(doc, window, cx)
+        });
+
+        let doc = doc_holder.borrow().clone().expect("document created");
+        let events: Rc<RefCell<Vec<RecordedEvent>>> = Rc::new(RefCell::new(Vec::new()));
+        let sink = events.clone();
+        window.update(|_, app| {
+            app.subscribe(&doc, move |_, event: &DocumentEvent, _| match event {
+                DocumentEvent::SaveFinished { succeeded } => {
+                    sink.borrow_mut()
+                        .push(RecordedEvent::SaveFinished(*succeeded));
+                }
+                DocumentEvent::RequestClose => {
+                    sink.borrow_mut().push(RecordedEvent::RequestClose);
+                }
+                _ => {}
+            })
+            .detach();
+        });
+
+        drive(&doc, &app_state, &events, window);
+    }
+
+    /// A close flush refused for a missing baseline is reported to the user:
+    /// the refusal goes through the close-flow refusal builder, which carries a
+    /// suggested action naming the way out. The stored toast summary itself is
+    /// not exposed to tests, so the message shape is asserted on the builder in
+    /// `refusal_toasts_name_the_close_and_shutdown_contexts`.
+    #[gpui::test]
+    fn a_close_flush_refused_without_a_baseline_reports_a_refusal(cx: &mut TestAppContext) {
+        let path = temp_save_as_path("baseline-unknown-close");
+
+        with_file_backed_document_without_baseline(
+            cx,
+            path.clone(),
+            |doc, app_state, _events, window| {
+                window.update(|window, cx| {
+                    doc.update(cx, |document, cx| {
+                        document.resolve_close(window, cx);
+                    });
+                });
+                window.run_until_parked();
+
+                assert_eq!(
+                    unread_errors(window, app_state),
+                    1,
+                    "a refused close flush must be reported"
+                );
+                assert_eq!(
+                    std::fs::read_to_string(&path).expect("the seeded file must survive"),
+                    "OLD;",
+                    "a refused flush must leave content it does not own untouched"
+                );
+            },
+        );
+
+        std::fs::remove_file(&path).ok();
     }
 
     /// Mounts a file-backed document whose current path holds `seed_bytes`, with a
@@ -1903,13 +2178,13 @@ mod tests {
         std::fs::remove_file(&path).ok();
     }
 
-    /// A second close while an untitled Save As is still pending reports the same
-    /// deferred disposition without starting another save flow, so a repeated
-    /// gesture cannot open a second dialog.
+    /// An untitled buffer that reaches `resolve_close` keeps failing closed on
+    /// every gesture and never starts a Save As flow. The workspace asks through
+    /// the unsaved-changes confirmation before any close route gets this far, so
+    /// this path must not invent a save target, and it must not drop the edits
+    /// either.
     #[gpui::test]
-    fn a_second_untitled_close_while_save_as_is_pending_starts_no_second_flow(
-        cx: &mut TestAppContext,
-    ) {
+    fn a_repeated_close_on_an_untitled_buffer_keeps_failing_closed(cx: &mut TestAppContext) {
         init_test_runtime(cx);
         let app_state = isolated_test_app_state(cx);
         let holder: Rc<RefCell<Option<gpui::Entity<CodeDocument>>>> = Rc::new(RefCell::new(None));
@@ -1940,23 +2215,18 @@ mod tests {
             doc.update(cx, |document, cx| {
                 assert_eq!(
                     document.resolve_close(window, cx),
-                    CloseDisposition::Deferred,
-                    "an untitled buffer must save through Save As, not close over its edits"
+                    CloseDisposition::KeepOpen,
+                    "an untitled buffer has no save target, so the tab stays open"
                 );
-
-                // The first Save As owns the pending save. Dropping the unpolled
-                // task handle here lets a second close reveal whether it started
-                // another flow, without the dialog ever running.
-                document._pending_save = None;
 
                 assert_eq!(
                     document.resolve_close(window, cx),
-                    CloseDisposition::Deferred,
-                    "a second close while a Save As is pending reports the same deferred disposition"
+                    CloseDisposition::KeepOpen,
+                    "a repeated gesture reports the same fail-closed disposition"
                 );
                 assert!(
                     document._pending_save.is_none(),
-                    "the second close must not start another Save As flow"
+                    "no close gesture may start a Save As flow for an untitled buffer"
                 );
             });
         });

@@ -169,6 +169,15 @@ impl CodeDocument {
             Box::new(move |w, cx| e.update(cx, |document, cx| document.resolve_close(w, cx)))
         });
 
+        // Populate optional helper: whether the close policy applies right now.
+        // A code document persists its pending edits on close only when it has
+        // a file to persist to; an untitled buffer has no save target short of
+        // Save As, so it keeps the unsaved-changes dialog instead.
+        handle.decides_own_close = Some({
+            let e = entity.clone();
+            Box::new(move |cx| e.read(cx).path().is_some())
+        });
+
         // Populate optional helper: the only backing file the cleanup path in
         // actions.rs may delete as it closes a tab — an empty, file-backed script
         // whose file still holds exactly the document's own last-loaded or

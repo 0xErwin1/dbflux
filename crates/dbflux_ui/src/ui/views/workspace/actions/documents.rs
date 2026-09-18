@@ -521,10 +521,119 @@ impl Workspace {
         reference_id: crate::ui::document::DocumentId,
     ) {
         let ids = selector(self.tab_manager.read(cx).documents(), reference_id);
+        self.close_tabs(window, cx, ids);
+    }
+
+    /// Closes every open tab through the same funnel, asking once about the
+    /// documents that need a decision.
+    pub(in crate::ui::views::workspace) fn close_all_tabs(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let ids: Vec<crate::ui::document::DocumentId> = self
+            .tab_manager
+            .read(cx)
+            .documents()
+            .iter()
+            .map(|d| d.id())
+            .collect();
+
+        self.close_tabs(window, cx, ids);
+    }
+
+    /// Closes a set of tabs, asking about the ones that need a decision.
+    ///
+    /// Documents that must be asked about are asked about in ONE confirmation
+    /// carrying every one of them: closing a batch must not open a dialog per
+    /// tab and overwrite the previous request. None of the asked-about documents
+    /// is closed here, and the rest still close through [`Self::close_tab`].
+    fn close_tabs(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        ids: Vec<crate::ui::document::DocumentId>,
+    ) {
+        let needs_confirmation =
+            self.documents_requiring_close_confirmation(ids.iter().copied(), cx);
+
+        if !needs_confirmation.is_empty() {
+            let asked: Vec<crate::ui::document::DocumentId> =
+                needs_confirmation.iter().map(|entry| entry.id).collect();
+            self.ask_before_closing(needs_confirmation, window, cx);
+
+            for doc_id in ids {
+                if !asked.contains(&doc_id) {
+                    self.close_tab(doc_id, window, cx);
+                }
+            }
+
+            return;
+        }
 
         for doc_id in ids {
             self.close_tab(doc_id, window, cx);
         }
+    }
+
+    /// Returns the pending-edit entries of the documents in `ids` that must be
+    /// asked about before they close: they hold edits and they do not persist
+    /// them by closing.
+    ///
+    /// A document whose close policy applies is never listed, because closing
+    /// already saves it. An untitled code buffer has no file to write, so only
+    /// the user can decide whether its edits are kept or dropped.
+    fn documents_requiring_close_confirmation(
+        &self,
+        ids: impl IntoIterator<Item = crate::ui::document::DocumentId>,
+        cx: &App,
+    ) -> Vec<crate::ui::overlays::modals::DirtySummaryEntry> {
+        use crate::ui::overlays::modals::DirtySummaryEntry;
+
+        let manager = self.tab_manager.read(cx);
+        let dirty = manager.dirty_summaries(cx);
+
+        ids.into_iter()
+            .filter_map(|doc_id| {
+                let (_, summary) = dirty.iter().find(|(id, _)| *id == doc_id)?;
+
+                let decides_own_close = manager
+                    .document(doc_id)
+                    .is_some_and(|tab| tab.as_pane().has_close_policy(cx));
+
+                if decides_own_close {
+                    return None;
+                }
+
+                let name = manager
+                    .document(doc_id)
+                    .map(|d| d.tab_title(cx))
+                    .unwrap_or_else(documents_default_title);
+
+                Some(DirtySummaryEntry {
+                    id: doc_id,
+                    name,
+                    summary: summary.clone(),
+                })
+            })
+            .collect()
+    }
+
+    /// Opens the unsaved-changes confirmation for the documents that need a
+    /// decision, and takes the keyboard so Enter and Escape resolve through the
+    /// ConfirmModal keymap instead of editing the buffer behind the modal.
+    fn ask_before_closing(
+        &mut self,
+        entries: Vec<crate::ui::overlays::modals::DirtySummaryEntry>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::ui::overlays::modals::UnsavedChangesRequest;
+
+        self.modal_unsaved_changes.update(cx, |modal, cx| {
+            modal.open(UnsavedChangesRequest { entries }, cx);
+        });
+        self.focus_handle.focus(window);
     }
 
     /// Routes one close through the document's own close policy.
@@ -544,6 +653,18 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        // A document that cannot persist its own pending edits is asked about
+        // before anything is written or removed. The gate lives here rather than
+        // at one entry point because every close route reaches this funnel, and
+        // a route that skipped it would force a Save As dialog instead of
+        // asking.
+        let needs_confirmation = self.documents_requiring_close_confirmation([doc_id], cx);
+
+        if !needs_confirmation.is_empty() {
+            self.ask_before_closing(needs_confirmation, window, cx);
+            return false;
+        }
+
         let disposition = self.tab_manager.update(cx, |manager, cx| {
             manager
                 .document(doc_id)
@@ -560,8 +681,13 @@ impl Workspace {
         }
     }
 
-    /// Removes a tab whose own close policy agreed it may go now.
-    fn close_tab_now(
+    /// Removes a tab directly, without consulting its close policy.
+    ///
+    /// Used by the funnel once a document's own policy agreed it may go, and by
+    /// the discard outcome of the unsaved-changes confirmation: discarding means
+    /// the tab goes without saving, so it must not re-enter the ask-first gate
+    /// in [`Self::close_tab`].
+    pub(in crate::ui::views::workspace) fn close_tab_now(
         &mut self,
         doc_id: crate::ui::document::DocumentId,
         _window: &mut Window,
@@ -576,12 +702,10 @@ impl Workspace {
 
     /// Closes the active tab.
     ///
-    /// A document that decides its own close policy (a code document) flushes
-    /// its pending edits and closes without the confirmation dialog: closing
-    /// persists first, so there is nothing to discard. A document that requires
-    /// an explicit user save still gets `ModalUnsavedChanges`, and this returns
-    /// `false` so the caller does not refocus the document over the
-    /// confirmation. Returns `true` when the close was accepted.
+    /// Every route, this one included, goes through [`Self::close_tab`], which
+    /// asks about the documents that cannot persist their own pending edits and
+    /// otherwise defers to the document's own close policy. Returns `true` when
+    /// the close was accepted.
     pub(in crate::ui::views::workspace) fn close_active_tab(
         &mut self,
         window: &mut Window,
@@ -591,50 +715,7 @@ impl Workspace {
             return true;
         };
 
-        // The unsaved-changes dialog guards documents whose pending edits need
-        // an explicit save. A document with its own close policy persists them
-        // itself, so the dialog would only get in the way.
-        let decides_own_close = self
-            .tab_manager
-            .read(cx)
-            .document(doc_id)
-            .is_some_and(|tab| tab.as_pane().has_close_policy());
-
-        let dirty_summaries = self.tab_manager.read(cx).dirty_summaries(cx);
-        let this_doc_dirty = dirty_summaries
-            .iter()
-            .find(|(id, _)| *id == doc_id)
-            .cloned();
-
-        if let Some((id, summary)) = this_doc_dirty
-            && !decides_own_close
-        {
-            let doc_name = self
-                .tab_manager
-                .read(cx)
-                .document(doc_id)
-                .map(|d| d.tab_title(cx))
-                .unwrap_or_else(documents_default_title);
-
-            use crate::ui::overlays::modals::{DirtySummaryEntry, UnsavedChangesRequest};
-            let req = UnsavedChangesRequest {
-                entries: vec![DirtySummaryEntry {
-                    id,
-                    name: doc_name,
-                    summary,
-                }],
-            };
-            self.modal_unsaved_changes.update(cx, |modal, cx| {
-                modal.open(req, cx);
-            });
-            // Take focus off any editor input so Enter/Escape resolve through
-            // the ConfirmModal keymap instead of editing the buffer behind the
-            // modal.
-            self.focus_handle.focus(window);
-            false
-        } else {
-            self.close_tab(doc_id, window, cx)
-        }
+        self.close_tab(doc_id, window, cx)
     }
 
     /// Deletes the backing file of an empty file-backed script about to be closed,

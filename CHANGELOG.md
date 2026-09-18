@@ -25,6 +25,21 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **Closing an untitled buffer asks before it drops the edits** — a buffer
+  with no file yet (a new query before its first save, or a restored scratch
+  buffer) could only be closed by completing Save As, so dismissing that
+  dialog left the tab open with no way out. Every close route now asks first:
+  save it, close it without saving, or cancel. "Don't save" removes the tab
+  without saving the edits, matching every other document.
+
+* **A refused save before closing says what failed** — closing a tab or
+  quitting with edits that could not reach their file reported "Auto-save
+  failed", the message for a background autosave the user never asked for. A
+  refused close now says the tab stayed open, a refused quit says the edits
+  stayed in the session, and both point at `Ctrl+s` / **Save File As** as the
+  deliberate overwrite. A file with no trustworthy baseline therefore no
+  longer leaves its tab impossible to close without that hint.
+
 * **Confirm modals are keyboard-accessible** — Enter now confirms and
   Escape cancels every confirm dialog (multi-statement script
   confirmation, dangerous query, and any other modal on the shared

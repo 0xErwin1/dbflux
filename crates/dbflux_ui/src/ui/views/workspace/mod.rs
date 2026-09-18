@@ -554,9 +554,13 @@ impl Workspace {
                 match outcome {
                     UnsavedChangesOutcome::DiscardAll(ids) => {
                         // Close the documents the dialog listed, nothing else:
-                        // every other tab keeps its changes.
+                        // every other tab keeps its changes. Discarding must not
+                        // go back through `close_tab`, because it would re-enter
+                        // this dialog's own gate for exactly the documents it
+                        // listed, and the funnel would save the edits the user
+                        // just chose to drop. Removing the tab is the discard.
                         for id in ids {
-                            this.close_tab(*id, window, cx);
+                            this.close_tab_now(*id, window, cx);
                         }
                         this.tab_manager
                             .update(cx, |mgr, cx| mgr.focus_active(window, cx));
@@ -1220,16 +1224,7 @@ impl Workspace {
                     );
                 }
                 TabBarEvent::CloseAllTabs => {
-                    let ids: Vec<_> = this
-                        .tab_manager
-                        .read(cx)
-                        .documents()
-                        .iter()
-                        .map(|d| d.id())
-                        .collect();
-                    for doc_id in ids {
-                        this.close_tab(doc_id, window, cx);
-                    }
+                    this.close_all_tabs(window, cx);
                 }
                 TabBarEvent::CloseTabsToLeft(id) => {
                     this.close_tabs_batch(
@@ -2212,7 +2207,10 @@ mod tab_close_request_tests {
     use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};
     use std::cell::{Cell, RefCell};
     use std::rc::Rc;
+    use std::sync::Arc;
     use std::time::Duration;
+
+    use dbflux_ui_base::{SaveTargetOutcome, SaveTargetProvider};
 
     fn new_workspace(
         cx: &mut TestAppContext,
@@ -2221,9 +2219,6 @@ mod tab_close_request_tests {
         Entity<AppStateEntity>,
         &mut VisualTestContext,
     ) {
-        cx.update(gpui_component::init);
-        cx.update(dbflux_components::theme::init);
-
         let app_state: Entity<AppStateEntity> = cx.update(|cx| {
             cx.new(|_| {
                 let runtime = dbflux_storage::bootstrap::StorageRuntime::in_memory()
@@ -2231,6 +2226,22 @@ mod tab_close_request_tests {
                 AppStateEntity::new_with_storage_runtime(runtime).expect("test storage setup")
             })
         });
+        new_workspace_with(cx, app_state)
+    }
+
+    /// Like [`new_workspace`], but with a caller-built app state — used by tests
+    /// that need a Save As override or other per-entity test seam installed
+    /// before any document is opened.
+    fn new_workspace_with(
+        cx: &mut TestAppContext,
+        app_state: Entity<AppStateEntity>,
+    ) -> (
+        Entity<Workspace>,
+        Entity<AppStateEntity>,
+        &mut VisualTestContext,
+    ) {
+        cx.update(gpui_component::init);
+        cx.update(dbflux_components::theme::init);
 
         let holder: Rc<RefCell<Option<Entity<Workspace>>>> = Rc::new(RefCell::new(None));
         let workspace_ref = holder.clone();
@@ -2669,13 +2680,36 @@ mod tab_close_request_tests {
         std::fs::remove_file(&blocked_path).ok();
     }
 
-    /// Only code documents decide their own close; every other document keeps
-    /// the unsaved-changes dialog and reports `CloseNow` to the funnel.
-    #[gpui::test]
-    fn only_code_documents_decide_their_own_close(cx: &mut TestAppContext) {
-        let (_workspace, app_state, window) = new_workspace(cx);
+    /// A Save As picker that records that it was invoked, then reports the
+    /// user dismissing the dialog. Used to prove a close route never started
+    /// a Save As flow: no picker call, no file created anywhere.
+    fn cancelled_recording_picker() -> (SaveTargetProvider, Arc<std::sync::atomic::AtomicBool>) {
+        use std::sync::atomic::{AtomicBool, Ordering};
 
-        let code = window.update(|window, cx| {
+        let invoked = Arc::new(AtomicBool::new(false));
+        let flag = invoked.clone();
+        let provider: SaveTargetProvider = Arc::new(move |_request| {
+            flag.store(true, Ordering::SeqCst);
+            gpui::Task::ready(SaveTargetOutcome::Cancelled)
+        });
+        (provider, invoked)
+    }
+
+    /// Opens an untitled, dirty code tab the way a scratch buffer looks after
+    /// the user typed: no backing file, pending edits, no baseline.
+    /// Opens an untitled code tab holding edits the user typed: no backing file,
+    /// a buffer that differs from the content it loaded, and no baseline.
+    ///
+    /// The text enters through the editor's own input path rather than a
+    /// fixture-only setter, so the document is dirty by the same predicate the
+    /// close flow consults. The assertion is what keeps this fixture from
+    /// looking dirty to a test while looking clean to the code.
+    fn open_dirty_untitled_code_tab(
+        window: &mut VisualTestContext,
+        workspace: &Entity<Workspace>,
+        app_state: &Entity<AppStateEntity>,
+    ) -> DocumentId {
+        let document = window.update(|window, cx| {
             cx.new(|cx| {
                 CodeDocument::new_with_language(
                     app_state.clone(),
@@ -2686,10 +2720,78 @@ mod tab_close_request_tests {
                 )
             })
         });
-        let code_pane = window.update(|_, cx| CodeDocument::into_pane(code, cx));
+        let document_id = window.update(|_, cx| document.read(cx).id());
+
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                let pane = CodeDocument::into_pane(document.clone(), cx);
+                workspace.tab_manager.update(cx, |manager, cx| {
+                    manager.open(Tab::Pane(Box::new(pane)), cx);
+                });
+                workspace.set_focus(crate::keymap::FocusTarget::Document, window, cx);
+            });
+        });
+        window.run_until_parked();
+
+        window.simulate_input("SELECT 1;");
+        window.run_until_parked();
+
+        window.update(|_, cx| {
+            assert!(
+                document.read(cx).change_summary(cx).is_some(),
+                "the fixture must look dirty to the close flow's own predicate"
+            );
+        });
+
+        document_id
+    }
+
+    /// Only code documents decide their own close; every other document keeps
+    /// the unsaved-changes dialog and reports `CloseNow` to the funnel. A code
+    /// document decides its own close only while it has a file to persist to:
+    /// an untitled buffer has no save target short of Save As, so the dialog
+    /// guards it.
+    #[gpui::test]
+    fn only_code_documents_decide_their_own_close(cx: &mut TestAppContext) {
+        let (_workspace, app_state, window) = new_workspace(cx);
+
+        let untitled = window.update(|window, cx| {
+            cx.new(|cx| {
+                CodeDocument::new_with_language(
+                    app_state.clone(),
+                    None,
+                    QueryLanguage::Sql,
+                    window,
+                    cx,
+                )
+            })
+        });
+        let untitled_pane = window.update(|_, cx| CodeDocument::into_pane(untitled, cx));
+        let untitled_keeps_dialog = window.update(|_, cx| !untitled_pane.has_close_policy(cx));
         assert!(
-            code_pane.has_close_policy(),
-            "code documents persist their own edits on close"
+            untitled_keeps_dialog,
+            "an untitled code document has no file to persist to, so the dialog guards it"
+        );
+
+        let backing_path =
+            std::env::temp_dir().join(format!("dbflux-policy-{}.sql", uuid::Uuid::new_v4()));
+        let file_backed = window.update(|window, cx| {
+            cx.new(|cx| {
+                CodeDocument::new_with_language(
+                    app_state.clone(),
+                    None,
+                    QueryLanguage::Sql,
+                    window,
+                    cx,
+                )
+                .with_path(backing_path.clone())
+            })
+        });
+        let file_backed_pane = window.update(|_, cx| CodeDocument::into_pane(file_backed, cx));
+        let file_backed_decides = window.update(|_, cx| file_backed_pane.has_close_policy(cx));
+        assert!(
+            file_backed_decides,
+            "a file-backed code document persists its own edits on close"
         );
 
         let inspector = window.update(|_, cx| {
@@ -2703,8 +2805,9 @@ mod tab_close_request_tests {
             })
         });
         let inspector_pane = window.update(|_, cx| InspectorPanel::into_pane(inspector, cx));
+        let inspector_keeps_dialog = window.update(|_, cx| !inspector_pane.has_close_policy(cx));
         assert!(
-            !inspector_pane.has_close_policy(),
+            inspector_keeps_dialog,
             "documents without a close policy keep the unsaved-changes dialog"
         );
         assert_eq!(
@@ -2712,6 +2815,153 @@ mod tab_close_request_tests {
             CloseDisposition::CloseNow,
             "a document without a policy is always closable by the funnel"
         );
+    }
+
+    /// Closing a dirty untitled tab through the funnel must ask before
+    /// discarding: the confirmation opens, the tab stays open, and no Save As
+    /// flow starts, so no file is ever created.
+    #[gpui::test]
+    fn a_dirty_untitled_tab_closed_through_the_funnel_asks_first(cx: &mut TestAppContext) {
+        let (picker, picker_invoked) = cancelled_recording_picker();
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                let runtime = dbflux_storage::bootstrap::StorageRuntime::in_memory()
+                    .expect("in-memory storage");
+                AppStateEntity::new_with_storage_runtime(runtime)
+                    .expect("test storage setup")
+                    .with_save_target_override(picker)
+            })
+        });
+        let (workspace, app_state, window) = new_workspace_with(cx, app_state);
+        let id = open_dirty_untitled_code_tab(window, &workspace, &app_state);
+
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                let accepted = workspace.close_tab(id, window, cx);
+                assert!(!accepted, "the close must wait for the user's decision");
+                assert!(
+                    workspace.modal_unsaved_changes.read(cx).is_visible(),
+                    "a dirty untitled tab must raise the unsaved-changes confirmation"
+                );
+                assert!(
+                    workspace.tab_manager.read(cx).document(id).is_some(),
+                    "the tab stays open until the user chooses"
+                );
+            });
+        });
+
+        assert!(
+            !picker_invoked.load(std::sync::atomic::Ordering::SeqCst),
+            "the funnel must ask, not start a Save As behind the dialog"
+        );
+    }
+
+    /// "Don't save" must remove the tab directly: routing the discard back
+    /// through the funnel would re-open the same confirmation forever, and a
+    /// funnel flush would save the very changes the user chose to drop.
+    #[gpui::test]
+    fn discarding_a_dirty_untitled_tab_removes_it_without_re_asking(cx: &mut TestAppContext) {
+        let (picker, picker_invoked) = cancelled_recording_picker();
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                let runtime = dbflux_storage::bootstrap::StorageRuntime::in_memory()
+                    .expect("in-memory storage");
+                AppStateEntity::new_with_storage_runtime(runtime)
+                    .expect("test storage setup")
+                    .with_save_target_override(picker)
+            })
+        });
+        let (workspace, app_state, window) = new_workspace_with(cx, app_state);
+        let id = open_dirty_untitled_code_tab(window, &workspace, &app_state);
+
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.close_tab(id, window, cx);
+            });
+        });
+
+        window.update(|_, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.modal_unsaved_changes.update(cx, |modal, cx| {
+                    // The buttons emit and then close, so the confirmation is
+                    // already gone by the time the workspace handles the choice.
+                    cx.emit(UnsavedChangesOutcome::DiscardAll(vec![id]));
+                    modal.close(cx);
+                });
+            });
+        });
+        window.run_until_parked();
+
+        window.update(|_, cx| {
+            assert!(
+                workspace
+                    .read(cx)
+                    .tab_manager
+                    .read(cx)
+                    .document(id)
+                    .is_none(),
+                "discard removes the listed tab"
+            );
+            assert!(
+                !workspace
+                    .read(cx)
+                    .modal_unsaved_changes
+                    .read(cx)
+                    .is_visible(),
+                "discard must not re-open the confirmation"
+            );
+        });
+        assert!(
+            !picker_invoked.load(std::sync::atomic::Ordering::SeqCst),
+            "discard must not save the edits the user chose to drop"
+        );
+    }
+
+    /// A batch close asks once about every document that needs it: one modal
+    /// carrying all their entries, none of them closed by the batch, while the
+    /// documents that need no decision still close.
+    #[gpui::test]
+    fn a_batch_close_asks_once_about_all_documents_that_need_it(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let first = open_dirty_untitled_code_tab(window, &workspace, &app_state);
+        let second = open_dirty_untitled_code_tab(window, &workspace, &app_state);
+        let clean = open_code_tab(window, &workspace, &app_state);
+
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                let all = [first, second, clean];
+                workspace.close_tabs_batch(
+                    window,
+                    cx,
+                    move |docs, _keep| {
+                        docs.iter()
+                            .map(|d| d.id())
+                            .filter(|id| all.contains(id))
+                            .collect()
+                    },
+                    first,
+                );
+            });
+        });
+        window.run_until_parked();
+
+        window.update(|_, cx| {
+            let manager = workspace.read(cx).tab_manager.read(cx);
+            assert!(
+                workspace
+                    .read(cx)
+                    .modal_unsaved_changes
+                    .read(cx)
+                    .is_visible(),
+                "a batch with documents that must be asked about opens the confirmation"
+            );
+            assert!(manager.document(first).is_some(), "asked tabs stay open");
+            assert!(manager.document(second).is_some(), "asked tabs stay open");
+            assert!(
+                manager.document(clean).is_none(),
+                "a clean tab still closes"
+            );
+        });
     }
 
     // === Graceful-shutdown flush (T2b) ===
