@@ -510,35 +510,20 @@ impl Workspace {
         self.set_focus(FocusTarget::Document, window, cx);
     }
 
-    pub(in crate::ui::views::workspace) fn close_tabs_batch(
+    /// Closes the tabs a batch gesture selects, through the same funnel as a
+    /// single close.
+    ///
+    /// `select` receives every open document id in tab order and returns the
+    /// ones to close, so each gesture keeps its own selection rule
+    /// ([`crate::ui::document::TabManager::ids_to_close_others`] and siblings)
+    /// while the closing itself has one home: [`Self::close_tabs`].
+    pub(in crate::ui::views::workspace) fn close_tabs_by(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
-        selector: impl FnOnce(
-            &[crate::ui::document::Tab],
-            crate::ui::document::DocumentId,
-        ) -> Vec<crate::ui::document::DocumentId>,
-        reference_id: crate::ui::document::DocumentId,
+        select: impl FnOnce(&[crate::ui::document::DocumentId]) -> Vec<crate::ui::document::DocumentId>,
     ) {
-        let ids = selector(self.tab_manager.read(cx).documents(), reference_id);
-        self.close_tabs(window, cx, ids);
-    }
-
-    /// Closes every open tab through the same funnel, asking once about the
-    /// documents that need a decision.
-    pub(in crate::ui::views::workspace) fn close_all_tabs(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let ids: Vec<crate::ui::document::DocumentId> = self
-            .tab_manager
-            .read(cx)
-            .documents()
-            .iter()
-            .map(|d| d.id())
-            .collect();
-
+        let ids = select(&self.tab_manager.read(cx).document_ids());
         self.close_tabs(window, cx, ids);
     }
 
