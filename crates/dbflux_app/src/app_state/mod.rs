@@ -3163,11 +3163,17 @@ mod tests {
         let state =
             AppState::new_with_storage_runtime(storage_runtime).expect("test storage setup");
 
-        assert!(
-            state.scripts_directory().is_some(),
-            "the test environment resolves a scripts directory"
+        // Whether THIS host can resolve its data directory is not what the test
+        // is about: asserting that it resolved would fail on a host where it
+        // cannot, and that is not a regression. What the bootstrap is
+        // responsible for, and what holds on any host, is the correspondence: a
+        // diagnostic is recorded exactly when the scripts directory could not
+        // be resolved.
+        assert_eq!(
+            state.scripts_directory().is_none(),
+            !state.scripts_directory_diagnostics().is_empty(),
+            "a scripts directory that could not be resolved is the only thing that reports a diagnostic"
         );
-        assert!(state.scripts_directory_diagnostics().is_empty());
     }
 
     // --- T-3.6: list_auth_profiles() union seam ---

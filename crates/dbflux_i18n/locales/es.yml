@@ -499,6 +499,15 @@ connections:
     refreshing_schema: Actualizando esquema...
   error:
     refresh_schema_failed: "No se pudo actualizar el esquema: %{error}"
+diagnostics:
+  hook_load:
+    repair_summary_named: 'La definición de hook "%{row_name}" (ID: %{row_id}) necesita reparación.'
+    repair_summary_unnamed: "La definición de hook con ID: %{row_id} necesita reparación."
+    repair_action: "La fila almacenada se conservó. Abre Ajustes > Hooks para repararla o recrearla."
+  scripts_directory:
+    summary: "Los scripts no se pueden guardar en la carpeta de scripts."
+    action: "Las queries nuevas se conservan en el session store, así que tu trabajo está a salvo. Verifica que el directorio de datos sea escribible y tenga espacio libre, y reinicia DBFlux."
+  shutdown_flush_timed_out: "Es posible que algunas ediciones no hayan llegado a sus archivos: DBFlux se quedó sin tiempo para guardarlas al salir. Se conservan en el session store para recuperarlas."
 document:
   audit:
     actor:
@@ -888,7 +897,6 @@ document:
       error:
         save_failed: "No se pudo guardar el archivo: %{error}"
         dialog_unavailable: "Error al guardar — el selector de archivos no está disponible y no se pudo crear el directorio alternativo: %{error}"
-        save_script_failed: "No se pudo guardar el script: %{error}"
         auto_save_failed: "El guardado automático falló para %{path}"
         close_flush_failed: "No se pudo guardar %{path} antes de cerrar, así que la pestaña quedó abierta"
         shutdown_flush_failed: "No se pudo guardar %{path} al salir; las ediciones quedan en esta sesión"

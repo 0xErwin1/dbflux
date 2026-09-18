@@ -20,6 +20,7 @@ dbflux_app.workspace = true
 dbflux_ui = { workspace = true }
 dbflux_core = { workspace = true, features = ["tracing-bridge"] }
 dbflux_i18n.workspace = true
+dbflux_ui_base.workspace = true
 dbflux_ipc.workspace = true
 dbflux_driver_ipc.workspace = true
 dbflux_audit.workspace = true

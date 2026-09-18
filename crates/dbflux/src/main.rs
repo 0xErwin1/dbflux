@@ -23,7 +23,8 @@ use dbflux_ui::ipc_server::IpcServer;
 use dbflux_ui::keymap::{input_context_keybindings, workspace_keybindings};
 use dbflux_ui::platform;
 use dbflux_ui::ui::overlays::command_palette::command_palette_keybindings;
-use dbflux_ui::ui::views::workspace::{Workspace, await_document_flush};
+use dbflux_ui::ui::views::workspace::{DocumentFlushOutcome, Workspace, await_document_flush};
+use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error_async};
 use gpui::*;
 use gpui_component::Root;
 use interprocess::local_socket::{
@@ -537,7 +538,7 @@ async fn flush_document_edits(cx: &mut AsyncApp) {
 
     info!("Shutdown phase: Flushing document edits...");
 
-    let finished = await_document_flush(cx, DOCUMENT_FLUSH_TIMEOUT, POLL_INTERVAL, |app_cx| {
+    let outcome = await_document_flush(cx, DOCUMENT_FLUSH_TIMEOUT, POLL_INTERVAL, |app_cx| {
         app_cx.update(|cx| {
             workspace.update(cx, |workspace, cx| {
                 workspace.flush_pending_document_edits(cx)
@@ -546,13 +547,27 @@ async fn flush_document_edits(cx: &mut AsyncApp) {
     })
     .await;
 
-    if finished {
-        info!("All pending document edits flushed");
-    } else {
-        log::warn!(
-            "Document flush timed out after {:?}; some edits may not have reached their files",
-            DOCUMENT_FLUSH_TIMEOUT
-        );
+    // What the flush observed is not the same as what landed: a refused write
+    // empties its queue, so a drained flush says nothing about the edits having
+    // reached their files. A quit is too late for a toast, which is why a
+    // failure goes through the error seam and leaves an audit row behind.
+    match outcome {
+        DocumentFlushOutcome::Drained => {
+            info!("Document flush finished: no writes outstanding");
+        }
+        DocumentFlushOutcome::TimedOut => {
+            log::warn!(
+                "Document flush timed out after {:?}; some edits may not have reached their files",
+                DOCUMENT_FLUSH_TIMEOUT
+            );
+            report_error_async(
+                UserFacingError::new(
+                    ErrorKind::Storage,
+                    dbflux_i18n::t!("diagnostics.shutdown_flush_timed_out"),
+                ),
+                cx,
+            );
+        }
     }
 }
 

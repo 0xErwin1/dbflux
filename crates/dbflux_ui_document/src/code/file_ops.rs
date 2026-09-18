@@ -915,7 +915,6 @@ mod tests {
             "document.code.file_ops.save_as.all_files",
             "document.code.file_ops.error.save_failed",
             "document.code.file_ops.error.dialog_unavailable",
-            "document.code.file_ops.error.save_script_failed",
             "document.code.file_ops.error.auto_save_failed",
             "document.code.file_ops.error.close_flush_failed",
             "document.code.file_ops.error.shutdown_flush_failed",

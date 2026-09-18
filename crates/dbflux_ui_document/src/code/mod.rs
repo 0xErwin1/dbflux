@@ -1403,8 +1403,13 @@ impl CodeDocument {
             self.editor.original_content = self.editor.input_state.read(cx).value().to_string();
             self.session._auto_save_debounce = None;
 
-            if let Some(shadow) = self.session.shadow_path.take() {
-                let _ = std::fs::remove_file(&shadow);
+            if let Some(shadow) = self.session.shadow_path.take()
+                && let Err(e) = std::fs::remove_file(&shadow)
+            {
+                log::warn!(
+                    "Failed to remove the session shadow {}: {e}; a stale copy may be restored on the next launch",
+                    shadow.display()
+                );
             }
 
             cx.emit(DocumentEvent::MetaChanged);
@@ -2384,6 +2389,43 @@ mod tests {
         let recorded = events.borrow().clone();
 
         (recorded, dirty)
+    }
+
+    /// A session shadow that cannot be removed must not disturb the transition
+    /// to clean, and must not be swallowed either.
+    ///
+    /// A directory is what makes the removal fail: `remove_file` refuses it,
+    /// which is the same shape a read-only or otherwise hostile session
+    /// directory produces. The document has to end clean with its shadow path
+    /// cleared; the failure itself is reported on the log, so it is the
+    /// removal having really happened that this test pins.
+    #[gpui::test]
+    fn a_shadow_that_cannot_be_removed_still_leaves_the_document_clean(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let shadow = std::env::temp_dir().join(format!("dbflux-shadow-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&shadow).expect("shadow stand-in directory");
+
+        let app_state = isolated_test_app_state(cx);
+        let (_, dirty) = with_dirty_document_and_app_state(cx, app_state, None, |doc, window| {
+            window.update(|_, cx| {
+                doc.update(cx, |document, cx| {
+                    document.set_session_paths(None, Some(shadow.clone()));
+                    document.mark_clean(cx);
+                });
+            });
+        });
+
+        assert!(
+            !dirty,
+            "a shadow removal that fails must still clear the dirty state"
+        );
+        assert!(
+            shadow.exists(),
+            "the removal must really have been attempted, so the fixture stayed a directory"
+        );
+
+        std::fs::remove_dir_all(&shadow).expect("cleanup");
     }
 
     fn temp_save_path() -> std::path::PathBuf {

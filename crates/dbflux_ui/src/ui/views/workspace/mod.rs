@@ -216,20 +216,35 @@ pub(super) fn map_item_to_selection(item: &PaletteItem) -> Option<PaletteSelecti
     }
 }
 
+/// How a bounded document flush ended.
+///
+/// A bool would read as "did the flush finish", which hides the difference the
+/// exit report needs: writes that drained, and a deadline that expired with
+/// writes still in flight. A drained flush also says nothing about the edits
+/// having reached their files, so neither outcome is a successful save.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DocumentFlushOutcome {
+    /// The poll reported nothing outstanding before the deadline.
+    Drained,
+    /// Writes were still outstanding when the deadline expired.
+    TimedOut,
+}
+
 /// Polls a shutdown flush until it reports idle or `timeout` elapses.
 ///
-/// Returns `true` when the flush finished within the deadline and `false` when
-/// the deadline expired first; the caller continues either way, so a write that
-/// never lands can only delay shutdown by `timeout`. Each iteration waits
-/// `poll_interval` on the executor, which is what lets queued writes run between
-/// polls. The executor's clock is used instead of `Instant::now` so the loop is
-/// deterministic under a test executor.
+/// Returns [`DocumentFlushOutcome::Drained`] when nothing was outstanding before
+/// the deadline and [`DocumentFlushOutcome::TimedOut`] when the deadline expired
+/// first; the caller continues either way, so a write that never lands can only
+/// delay shutdown by `timeout`. Each iteration waits `poll_interval` on the
+/// executor, which is what lets queued writes run between polls. The executor's
+/// clock is used instead of `Instant::now` so the loop is deterministic under a
+/// test executor.
 pub async fn await_document_flush<F>(
     cx: &mut AsyncApp,
     timeout: std::time::Duration,
     poll_interval: std::time::Duration,
     mut is_outstanding: F,
-) -> bool
+) -> DocumentFlushOutcome
 where
     F: FnMut(&mut AsyncApp) -> bool,
 {
@@ -237,11 +252,11 @@ where
 
     loop {
         if !is_outstanding(cx) {
-            return true;
+            return DocumentFlushOutcome::Drained;
         }
 
         if cx.background_executor().now() > deadline {
-            return false;
+            return DocumentFlushOutcome::TimedOut;
         }
 
         cx.background_executor().timer(poll_interval).await;
@@ -2194,7 +2209,7 @@ mod tab_close_request_tests {
     use crate::ui::overlays::modals::{
         DirtySummaryEntry, UnsavedChangesOutcome, UnsavedChangesRequest,
     };
-    use crate::ui::views::workspace::{Workspace, await_document_flush};
+    use crate::ui::views::workspace::{DocumentFlushOutcome, Workspace, await_document_flush};
     use dbflux_core::QueryLanguage;
     use dbflux_core::document_id::DocumentId;
     use dbflux_ui_base::AppStateEntity;
@@ -3304,14 +3319,14 @@ mod tab_close_request_tests {
         let result_out = result.clone();
 
         let task = cx.spawn(move |mut app_cx| async move {
-            let finished = await_document_flush(
+            let outcome = await_document_flush(
                 &mut app_cx,
                 timeout,
                 poll_interval,
                 |_app_cx| true, // the write never finishes
             )
             .await;
-            result_out.set(Some(finished));
+            result_out.set(Some(outcome));
         });
 
         cx.executor().advance_clock(Duration::from_millis(300));
@@ -3319,7 +3334,7 @@ mod tab_close_request_tests {
 
         assert_eq!(
             result.get(),
-            Some(false),
+            Some(DocumentFlushOutcome::TimedOut),
             "the deadline must stop a flush that never finishes"
         );
 

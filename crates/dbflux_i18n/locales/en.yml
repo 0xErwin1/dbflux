@@ -499,6 +499,15 @@ connections:
     refreshing_schema: Refreshing schema...
   error:
     refresh_schema_failed: "Failed to refresh schema: %{error}"
+diagnostics:
+  hook_load:
+    repair_summary_named: 'Hook definition "%{row_name}" (ID: %{row_id}) needs repair.'
+    repair_summary_unnamed: "Hook definition ID: %{row_id} needs repair."
+    repair_action: "The stored row was preserved. Open Settings > Hooks to repair or recreate it."
+  scripts_directory:
+    summary: "Scripts cannot be saved to the scripts folder."
+    action: "New queries are kept in the session store instead, so your work is preserved. Check that the data directory is writable and has free space, then restart DBFlux."
+  shutdown_flush_timed_out: "Some edits may not have reached their files: DBFlux ran out of time saving them while quitting. They are kept in the session store for recovery."
 document:
   audit:
     actor:
@@ -888,7 +897,6 @@ document:
       error:
         save_failed: "Failed to save file: %{error}"
         dialog_unavailable: "Save failed — file dialog unavailable and fallback directory could not be created: %{error}"
-        save_script_failed: "Failed to save script: %{error}"
         auto_save_failed: "Auto-save failed for %{path}"
         close_flush_failed: "Could not save %{path} before closing, so the tab stayed open"
         shutdown_flush_failed: "Could not save %{path} while quitting; the edits stay in this session"

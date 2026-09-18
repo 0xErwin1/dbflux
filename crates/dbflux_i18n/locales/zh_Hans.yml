@@ -499,6 +499,15 @@ connections:
     refreshing_schema: 正在刷新 Schema…
   error:
     refresh_schema_failed: "刷新 Schema 失败：%{error}"
+diagnostics:
+  hook_load:
+    repair_summary_named: 'Hook 定义 "%{row_name}"（ID：%{row_id}）需要修复。'
+    repair_summary_unnamed: "Hook 定义 ID：%{row_id} 需要修复。"
+    repair_action: "已保留存储的行。打开设置 > Hooks 进行修复或重新创建。"
+  scripts_directory:
+    summary: "脚本无法保存到 scripts 文件夹。"
+    action: "新查询会保留在会话存储中，因此你的工作不会丢失。请确认数据目录可写且有剩余空间，然后重启 DBFlux。"
+  shutdown_flush_timed_out: "部分编辑可能未写入文件：退出时 DBFlux 未能及时保存。它们已保留在会话存储中以便恢复。"
 document:
   audit:
     actor:
@@ -888,7 +897,6 @@ document:
       error:
         save_failed: "保存文件失败：%{error}"
         dialog_unavailable: "保存失败 — 文件对话框不可用且无法创建回退目录：%{error}"
-        save_script_failed: "保存脚本失败：%{error}"
         auto_save_failed: "%{path} 自动保存失败"
         close_flush_failed: "关闭前无法保存 %{path}，因此标签页保持打开"
         shutdown_flush_failed: "退出时无法保存 %{path}；编辑内容保留在本次会话中"
