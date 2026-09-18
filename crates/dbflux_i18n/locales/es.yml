@@ -888,7 +888,6 @@ document:
       error:
         save_failed: "No se pudo guardar el archivo: %{error}"
         dialog_unavailable: "Error al guardar — el selector de archivos no está disponible y no se pudo crear el directorio alternativo: %{error}"
-        save_script_failed: "No se pudo guardar el script: %{error}"
         auto_save_failed: "El guardado automático falló para %{path}"
         close_flush_failed: "No se pudo guardar %{path} antes de cerrar, así que la pestaña quedó abierta"
         shutdown_flush_failed: "No se pudo guardar %{path} al salir; las ediciones quedan en esta sesión"
