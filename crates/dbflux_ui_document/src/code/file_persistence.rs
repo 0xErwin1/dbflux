@@ -401,7 +401,23 @@ pub(super) fn execute_write(
         };
     }
 
-    if let Err(e) = replace_file_contents(&write.path, &write.content) {
+    // The check above established that the file holds exactly the baseline, so
+    // bytes equal to the baseline mean a staged replacement — create the staging
+    // file, write, chmod, rename — would reproduce the file it already is. That
+    // is the close that arrives while an autosave is landing, or any
+    // conflict-checked write that repeats what last landed.
+    //
+    // Listed positively, and deliberately not extended to `Explicit`/`SaveAs`:
+    // those overwrite on purpose and skip the check above, so "equal to the
+    // baseline" says nothing about what is on disk now, and skipping one would
+    // stop Ctrl+S from overwriting a change made outside dbflux.
+    let already_on_disk = matches!(
+        write.kind,
+        WriteKind::Auto | WriteKind::CloseFlush | WriteKind::ShutdownFlush
+    ) && baseline
+        .is_some_and(|owned| owned.path == write.path && owned.bytes == write.content);
+
+    if !already_on_disk && let Err(e) = replace_file_contents(&write.path, &write.content) {
         if matches!(
             write.kind,
             WriteKind::Auto | WriteKind::CloseFlush | WriteKind::ShutdownFlush
@@ -430,6 +446,37 @@ pub(super) fn execute_write(
     }
 }
 
+/// The write whose task is running, kept so a close can tell whether it already
+/// persists the edits the close was about to queue.
+///
+/// Only the identity a close needs is retained: the bytes themselves live in the
+/// running task, and holding a second copy of a whole file for the duration of
+/// every write would cost more than the question is worth.
+struct RunningWrite {
+    kind: WriteKind,
+    path: PathBuf,
+    saved_input: String,
+}
+
+/// Whether a write of this identity carries exactly these edits for this path.
+///
+/// Only an explicit save and a Save As qualify. Both report a save outcome when
+/// they land, which is the report a close is waiting for, so a close that rides
+/// one still learns whether it may close. An autosave reports nothing: a close
+/// that rode one would drop the close gesture, leaving the tab open with no
+/// pending write and no report ever coming.
+fn carries_exact_edits(
+    kind: WriteKind,
+    path: &Path,
+    saved_input: &str,
+    target: &Path,
+    target_input: &str,
+) -> bool {
+    matches!(kind, WriteKind::Explicit | WriteKind::SaveAs { .. })
+        && path == target
+        && saved_input == target_input
+}
+
 /// FIFO queue of physical writes with autosave coalescing.
 ///
 /// A write runs alone; while it runs, later writes wait in `waiting`. A new
@@ -437,11 +484,8 @@ pub(super) fn execute_write(
 /// once, with the newest bytes), but explicit saves and Save As are never
 /// dropped or reordered — they append after whatever is queued.
 pub(super) struct PhysicalWriteQueue {
-    /// Whether a write's task is currently running.
-    running: bool,
-    /// What the running write is, so a close-safe caller can tell whether a
-    /// close flush is already in flight. `None` while the queue is idle.
-    running_kind: Option<WriteKind>,
+    /// The write whose task is running, `None` while the queue is idle.
+    running: Option<RunningWrite>,
     /// Writes waiting for the running one to finish, in landing order.
     waiting: VecDeque<PhysicalWrite>,
     /// The bytes this document last loaded or wrote, paired with the path
@@ -458,8 +502,7 @@ pub(super) struct PhysicalWriteQueue {
 impl PhysicalWriteQueue {
     pub(super) fn new() -> Self {
         Self {
-            running: false,
-            running_kind: None,
+            running: None,
             waiting: VecDeque::new(),
             baseline: None,
             shutdown_flush_started: false,
@@ -469,7 +512,7 @@ impl PhysicalWriteQueue {
     /// Queues a write. Returns `true` when the caller must start it now (the
     /// queue was idle), `false` when an earlier write must finish first.
     pub(super) fn push(&mut self, write: PhysicalWrite) -> bool {
-        if self.running {
+        if self.running.is_some() {
             let replaces_waiting_autosave = write.kind == WriteKind::Auto
                 && self
                     .waiting
@@ -492,20 +535,22 @@ impl PhysicalWriteQueue {
     /// Takes the next write to run and marks the queue busy. Returns `None`
     /// while a write is still running or nothing is queued.
     pub(super) fn next_to_start(&mut self) -> Option<PhysicalWrite> {
-        if self.running {
+        if self.running.is_some() {
             return None;
         }
 
         let next = self.waiting.pop_front()?;
-        self.running = true;
-        self.running_kind = Some(next.kind);
+        self.running = Some(RunningWrite {
+            kind: next.kind,
+            path: next.path.clone(),
+            saved_input: next.saved_input.clone(),
+        });
         Some(next)
     }
 
     /// Frees the running slot once a write's completion has been applied.
     pub(super) fn mark_finished(&mut self) {
-        self.running = false;
-        self.running_kind = None;
+        self.running = None;
     }
 
     /// Returns `true` while any write is in flight or waiting to start.
@@ -514,7 +559,7 @@ impl PhysicalWriteQueue {
     /// decide whether a flush is needed at all: a clean, idle document closes
     /// without a pointless write.
     pub(super) fn has_pending(&self) -> bool {
-        self.running || !self.waiting.is_empty()
+        self.running.is_some() || !self.waiting.is_empty()
     }
 
     /// Returns `true` while a close-driven flush is running or waiting.
@@ -524,11 +569,36 @@ impl PhysicalWriteQueue {
     /// and one autosave or explicit save does not count, so closing still queues
     /// its flush behind them.
     pub(super) fn has_pending_close_flush(&self) -> bool {
-        self.running_kind == Some(WriteKind::CloseFlush)
+        self.running
+            .as_ref()
+            .is_some_and(|running| running.kind == WriteKind::CloseFlush)
             || self
                 .waiting
                 .iter()
                 .any(|write| write.kind == WriteKind::CloseFlush)
+    }
+
+    /// Whether a write already running or waiting carries exactly these edits for
+    /// this path.
+    ///
+    /// A close uses this to ride a save that is already carrying what the close
+    /// was about to queue: that save reports its own outcome, which is the report
+    /// the close waits for, so queueing an identical flush behind it would write
+    /// the same bytes a second time.
+    pub(super) fn carries_exact_edits(&self, path: &Path, saved_input: &str) -> bool {
+        let carried_by = |kind: WriteKind, candidate: &Path, input: &str| {
+            carries_exact_edits(kind, candidate, input, path, saved_input)
+        };
+
+        if let Some(running) = self.running.as_ref()
+            && carried_by(running.kind, &running.path, &running.saved_input)
+        {
+            return true;
+        }
+
+        self.waiting
+            .iter()
+            .any(|write| carried_by(write.kind, &write.path, &write.saved_input))
     }
 
     /// Records that a shutdown flush has been queued for this document.
@@ -799,6 +869,104 @@ mod tests {
         );
     }
 
+    /// A close rides an explicit save that already carries its edits: the save
+    /// reports the outcome the close waits for, so queueing a flush of the same
+    /// bytes would replace the file twice.
+    ///
+    /// The report is exact rather than approximate: only the same path carrying
+    /// the same text counts, because those are the two things the save's outcome
+    /// will be reconciled against.
+    #[test]
+    fn a_running_explicit_save_carries_the_edits_it_was_given() {
+        let path = temp_write_path("carries-edits");
+        let other_path = temp_write_path("carries-edits-other");
+        let mut queue = PhysicalWriteQueue::new();
+
+        assert!(
+            !queue.carries_exact_edits(&path, "SELECT 1;"),
+            "an empty queue carries nothing"
+        );
+
+        assert!(queue.push(explicit_write(path.clone(), "SELECT 1;")));
+        let started = queue.next_to_start().expect("the push said start");
+
+        assert!(
+            queue.carries_exact_edits(&path, "SELECT 1;"),
+            "the running save carries exactly these edits"
+        );
+        assert!(
+            !queue.carries_exact_edits(&other_path, "SELECT 1;"),
+            "another path is not the file the running save persists"
+        );
+        assert!(
+            !queue.carries_exact_edits(&path, "SELECT 2;"),
+            "edited text is not what the running save persists"
+        );
+
+        assert!(
+            !queue.push(explicit_write(path.clone(), "SELECT 2;")),
+            "a running write defers the next one"
+        );
+        assert!(
+            queue.carries_exact_edits(&path, "SELECT 2;"),
+            "a waiting save carries its edits too"
+        );
+
+        queue.mark_finished();
+        queue.next_to_start().expect("the waiting save starts");
+        queue.mark_finished();
+        assert!(
+            !queue.carries_exact_edits(&path, "SELECT 2;"),
+            "an idle queue carries nothing"
+        );
+        assert_eq!(started.content, "SELECT 1;");
+    }
+
+    /// A Save As that targets the document's own path reports a save outcome as
+    /// well, so a close can ride it exactly like an explicit save.
+    #[test]
+    fn a_save_as_for_the_current_path_carries_the_edits() {
+        let path = temp_write_path("carries-save-as");
+        let mut queue = PhysicalWriteQueue::new();
+
+        let write = PhysicalWrite::save_as(
+            path.clone(),
+            "SELECT 1;".to_string(),
+            "SELECT 1;".to_string(),
+            false,
+        );
+        assert!(queue.push(write));
+        assert!(queue.next_to_start().is_some());
+
+        assert!(
+            queue.carries_exact_edits(&path, "SELECT 1;"),
+            "a Save As onto the same path reports a save the close can ride"
+        );
+    }
+
+    /// An autosave never carries edits for a close, however exactly it matches:
+    /// it reports no save outcome, so a close that rode one would wait for a
+    /// report that can never come and leave the tab open forever.
+    #[test]
+    fn an_autosave_never_carries_edits_for_a_close() {
+        let path = temp_write_path("carries-autosave");
+        let mut queue = PhysicalWriteQueue::new();
+
+        assert!(queue.push(auto_write(path.clone(), "SELECT 1;")));
+        assert!(queue.next_to_start().is_some());
+
+        assert!(
+            !queue.carries_exact_edits(&path, "SELECT 1;"),
+            "a running autosave carries nothing a close can ride"
+        );
+
+        assert!(!queue.push(auto_write(path.clone(), "SELECT 1;")));
+        assert!(
+            !queue.carries_exact_edits(&path, "SELECT 1;"),
+            "a waiting autosave does not carry them either"
+        );
+    }
+
     /// An autosave must not write over bytes another process put on disk.
     #[test]
     fn an_autosave_refuses_to_write_over_foreign_bytes() {
@@ -990,6 +1158,109 @@ mod tests {
         );
 
         std::fs::remove_file(&path).expect("the temp file must be removable");
+    }
+
+    /// An explicit save whose bytes happen to equal the document's own baseline
+    /// must still replace the file. The baseline is what dbflux wrote last, not
+    /// what is on disk now, so equal bytes prove nothing about the foreign change
+    /// this save exists to overwrite — and a guard that skipped it would report a
+    /// landed save over a file that kept someone else's content.
+    #[test]
+    fn an_explicit_save_still_replaces_a_file_that_matches_the_stale_baseline() {
+        let directory = temp_write_directory("explicit-identical");
+        let path = directory.join("script.sql");
+        std::fs::write(&path, "THEIRS;").expect("seed the foreign file");
+
+        let executed = execute_write(
+            explicit_write(path.clone(), "MINE;"),
+            Some(&baseline(&path, "MINE;")),
+        );
+
+        assert!(matches!(executed.outcome, WriteOutcome::Written));
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("the save must land"),
+            "MINE;",
+            "the deliberate save must overwrite the foreign bytes even though they came from the stale baseline"
+        );
+
+        std::fs::remove_dir_all(&directory).ok();
+    }
+
+    /// A conflict-checked write whose bytes the file already holds does not
+    /// replace it.
+    ///
+    /// The check above it established that the disk holds exactly the baseline,
+    /// so equal bytes mean the staged create/write/chmod/rename cycle would
+    /// reproduce the file it already is. This is the write that repeats what last
+    /// landed: the close that arrives behind a landed autosave, or any flush whose
+    /// text has not moved since.
+    #[test]
+    fn a_conflict_checked_write_does_not_replace_a_file_that_already_holds_its_bytes() {
+        let directory = temp_write_directory("identical-write");
+        let path = directory.join("script.sql");
+        std::fs::write(&path, "SELECT 1;").expect("seed the file the document owns");
+        let owned = baseline(&path, "SELECT 1;");
+
+        let writes = [
+            (
+                "an autosave",
+                PhysicalWrite::auto(
+                    path.clone(),
+                    "SELECT 1;".to_string(),
+                    "SELECT 1;".to_string(),
+                    None,
+                ),
+            ),
+            (
+                "a close flush",
+                PhysicalWrite::close_flush(
+                    path.clone(),
+                    "SELECT 1;".to_string(),
+                    "SELECT 1;".to_string(),
+                ),
+            ),
+            (
+                "a shutdown flush",
+                PhysicalWrite::shutdown_flush(
+                    path.clone(),
+                    "SELECT 1;".to_string(),
+                    "SELECT 1;".to_string(),
+                ),
+            ),
+        ];
+
+        for (label, write) in writes {
+            // Armed for the next physical write, so a replacement is observable
+            // directly instead of being inferred from the bytes left behind.
+            inject_physical_write_fault(partial_write_fault);
+
+            let executed = execute_write(write, Some(&owned));
+
+            assert!(
+                take_physical_write_fault().is_some(),
+                "{label} must not reach the physical write when the bytes already match"
+            );
+            assert!(
+                matches!(executed.outcome, WriteOutcome::Written),
+                "{label} already landed: the file holds exactly its bytes"
+            );
+            assert_eq!(
+                executed
+                    .new_baseline
+                    .expect("a landed write adopts a baseline")
+                    .bytes,
+                "SELECT 1;",
+                "{label} adopts the bytes it already had"
+            );
+        }
+
+        assert!(staging_leftovers(&directory).is_empty());
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("the file must survive"),
+            "SELECT 1;"
+        );
+
+        std::fs::remove_dir_all(&directory).ok();
     }
 
     /// A write that fails partway through must not damage the bytes already on
