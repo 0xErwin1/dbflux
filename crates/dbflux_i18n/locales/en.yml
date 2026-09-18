@@ -890,6 +890,9 @@ document:
         dialog_unavailable: "Save failed — file dialog unavailable and fallback directory could not be created: %{error}"
         save_script_failed: "Failed to save script: %{error}"
         auto_save_failed: "Auto-save failed for %{path}"
+        close_flush_failed: "Could not save %{path} before closing, so the tab stayed open"
+        shutdown_flush_failed: "Could not save %{path} while quitting; the edits stay in this session"
+        refusal_suggested_action: Use Ctrl+S or Save File As to write these edits deliberately
       native_picker_fallback: "Native file picker unavailable — script saved to %{path} instead. Install xdg-desktop-portal, zenity, or kdialog for a save dialog."
     title:
       untitled: Untitled

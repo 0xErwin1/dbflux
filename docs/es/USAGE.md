@@ -138,9 +138,12 @@ son deliberados y escriben el archivo incluso entonces.
 
 Cerrar una pestaña con ediciones pendientes las guarda primero y después la
 cierra; si la escritura no puede aterrizar (por ejemplo, el archivo cambió
-fuera de DBFlux o es read-only), la pestaña queda abierta con tus cambios. Al
-salir, DBFlux guarda las ediciones pendientes de la misma forma antes de
-apagarse. Si la carpeta de scripts no pudo crearse al arrancar, las queries
+fuera de DBFlux o es read-only), la pestaña queda abierta con tus cambios y
+DBFlux te indica `Ctrl+s` / **Save File As** como la escritura deliberada. Un
+buffer que todavía no tiene archivo es la excepción: al cerrarlo se te pregunta
+primero, así que puedes guardarlo, cerrarlo sin guardar o cancelar. Al salir,
+DBFlux guarda las ediciones pendientes de la misma forma antes de apagarse. Si
+la carpeta de scripts no pudo crearse al arrancar, las queries
 nuevas se conservan en el session store y **Save File As** se ofrece al
 cerrarlas.
 
