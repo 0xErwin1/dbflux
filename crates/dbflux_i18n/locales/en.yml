@@ -499,6 +499,14 @@ connections:
     refreshing_schema: Refreshing schema...
   error:
     refresh_schema_failed: "Failed to refresh schema: %{error}"
+diagnostics:
+  hook_load:
+    repair_summary_named: 'Hook definition "%{row_name}" (ID: %{row_id}) needs repair.'
+    repair_summary_unnamed: "Hook definition ID: %{row_id} needs repair."
+    repair_action: "The stored row was preserved. Open Settings > Hooks to repair or recreate it."
+  scripts_directory:
+    summary: "Scripts cannot be saved to the scripts folder."
+    action: "New queries are kept in the session store instead, so your work is preserved. Check that the data directory is writable and has free space, then restart DBFlux."
 document:
   audit:
     actor:

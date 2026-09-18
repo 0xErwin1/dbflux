@@ -32,18 +32,19 @@ pub fn drain_hook_load_diagnostics(
         .into_iter()
         .map(|diagnostic| {
             let summary = match diagnostic.row_name {
-                Some(row_name) => {
-                    format!(
-                        "Hook definition \"{row_name}\" (ID: {}) needs repair.",
-                        diagnostic.row_id
-                    )
-                }
-                None => format!("Hook definition ID: {} needs repair.", diagnostic.row_id),
+                Some(row_name) => dbflux_i18n::t!(
+                    "diagnostics.hook_load.repair_summary_named",
+                    row_name = row_name,
+                    row_id = diagnostic.row_id
+                ),
+                None => dbflux_i18n::t!(
+                    "diagnostics.hook_load.repair_summary_unnamed",
+                    row_id = diagnostic.row_id
+                ),
             };
 
-            UserFacingError::new(ErrorKind::Config, summary).with_suggested_action(
-                "The stored row was preserved. Open Settings > Hooks to repair or recreate it.",
-            )
+            UserFacingError::new(ErrorKind::Config, summary)
+                .with_suggested_action(dbflux_i18n::t!("diagnostics.hook_load.repair_action"))
         })
         .collect()
 }
@@ -60,12 +61,9 @@ pub fn drain_scripts_directory_diagnostics(
         .map(|_diagnostic| {
             UserFacingError::new(
                 ErrorKind::Config,
-                "Scripts cannot be saved to the scripts folder.",
+                dbflux_i18n::t!("diagnostics.scripts_directory.summary"),
             )
-            .with_suggested_action(
-                "New queries are kept in the session store instead, so your work is preserved. \
-                 Check that the data directory is writable and has free space, then restart DBFlux.",
-            )
+            .with_suggested_action(dbflux_i18n::t!("diagnostics.scripts_directory.action"))
         })
         .collect()
 }
@@ -414,13 +412,17 @@ mod tests {
 
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].kind, crate::user_error::ErrorKind::Config);
-        assert_eq!(
-            errors[0].summary,
-            "Hook definition \"Nightly backup\" (ID: legacy-row-42) needs repair."
+        let expected_summary = dbflux_i18n::t!(
+            "diagnostics.hook_load.repair_summary_named",
+            row_name = "Nightly backup",
+            row_id = "legacy-row-42"
         );
+        let expected_action = dbflux_i18n::t!("diagnostics.hook_load.repair_action");
+
+        assert_eq!(errors[0].summary, expected_summary);
         assert_eq!(
             errors[0].suggested_action.as_deref(),
-            Some("The stored row was preserved. Open Settings > Hooks to repair or recreate it.")
+            Some(expected_action.as_str())
         );
         assert!(!errors[0].summary.contains(secret_payload));
         assert!(
@@ -444,7 +446,10 @@ mod tests {
         assert_eq!(errors.len(), 1);
         assert_eq!(
             errors[0].summary,
-            "Hook definition ID: legacy-row-43 needs repair."
+            dbflux_i18n::t!(
+                "diagnostics.hook_load.repair_summary_unnamed",
+                row_id = "legacy-row-43"
+            )
         );
         assert!(diagnostics.is_empty());
     }
@@ -468,16 +473,13 @@ mod tests {
 
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].kind, crate::user_error::ErrorKind::Config);
-        assert_eq!(
-            errors[0].summary,
-            "Scripts cannot be saved to the scripts folder."
-        );
+        let expected_summary = dbflux_i18n::t!("diagnostics.scripts_directory.summary");
+        let expected_action = dbflux_i18n::t!("diagnostics.scripts_directory.action");
+
+        assert_eq!(errors[0].summary, expected_summary);
         assert_eq!(
             errors[0].suggested_action.as_deref(),
-            Some(
-                "New queries are kept in the session store instead, so your work is preserved. \
-                 Check that the data directory is writable and has free space, then restart DBFlux."
-            )
+            Some(expected_action.as_str())
         );
         assert!(!errors[0].summary.contains(secret_path));
         assert!(

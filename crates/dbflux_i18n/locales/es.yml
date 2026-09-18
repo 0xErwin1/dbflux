@@ -499,6 +499,14 @@ connections:
     refreshing_schema: Actualizando esquema...
   error:
     refresh_schema_failed: "No se pudo actualizar el esquema: %{error}"
+diagnostics:
+  hook_load:
+    repair_summary_named: 'La definición de hook "%{row_name}" (ID: %{row_id}) necesita reparación.'
+    repair_summary_unnamed: "La definición de hook con ID: %{row_id} necesita reparación."
+    repair_action: "La fila almacenada se conservó. Abre Ajustes > Hooks para repararla o recrearla."
+  scripts_directory:
+    summary: "Los scripts no se pueden guardar en la carpeta de scripts."
+    action: "Las queries nuevas se conservan en el session store, así que tu trabajo está a salvo. Verifica que el directorio de datos sea escribible y tenga espacio libre, y reinicia DBFlux."
 document:
   audit:
     actor:

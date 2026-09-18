@@ -499,6 +499,14 @@ connections:
     refreshing_schema: 正在刷新 Schema…
   error:
     refresh_schema_failed: "刷新 Schema 失败：%{error}"
+diagnostics:
+  hook_load:
+    repair_summary_named: 'Hook 定义 "%{row_name}"（ID：%{row_id}）需要修复。'
+    repair_summary_unnamed: "Hook 定义 ID：%{row_id} 需要修复。"
+    repair_action: "已保留存储的行。打开设置 > Hooks 进行修复或重新创建。"
+  scripts_directory:
+    summary: "脚本无法保存到 scripts 文件夹。"
+    action: "新查询会保留在会话存储中，因此你的工作不会丢失。请确认数据目录可写且有剩余空间，然后重启 DBFlux。"
 document:
   audit:
     actor:
