@@ -23,7 +23,8 @@ use dbflux_ui::ipc_server::IpcServer;
 use dbflux_ui::keymap::{input_context_keybindings, workspace_keybindings};
 use dbflux_ui::platform;
 use dbflux_ui::ui::overlays::command_palette::command_palette_keybindings;
-use dbflux_ui::ui::views::workspace::{Workspace, await_document_flush};
+use dbflux_ui::ui::views::workspace::{DocumentFlushOutcome, Workspace, await_document_flush};
+use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error_async};
 use gpui::*;
 use gpui_component::Root;
 use interprocess::local_socket::{
@@ -538,24 +539,51 @@ async fn flush_document_edits(cx: &mut AsyncApp) {
 
     info!("Shutdown phase: Flushing document edits...");
 
-    let finished = await_document_flush(cx, DOCUMENT_FLUSH_TIMEOUT, POLL_INTERVAL, |app_cx| {
+    let outcome = await_document_flush(cx, DOCUMENT_FLUSH_TIMEOUT, POLL_INTERVAL, |app_cx| {
         app_cx
             .update(|cx| {
                 workspace.update(cx, |workspace, cx| {
                     workspace.flush_pending_document_edits(cx)
                 })
             })
-            .unwrap_or(false)
+            .ok()
     })
     .await;
 
-    if finished {
-        info!("All pending document edits flushed");
-    } else {
-        log::warn!(
-            "Document flush timed out after {:?}; some edits may not have reached their files",
-            DOCUMENT_FLUSH_TIMEOUT
-        );
+    // What the flush observed is not the same as what landed: a refused write
+    // empties its queue, so a drained flush says nothing about the edits having
+    // reached their files. Only the three outcomes the loop can actually
+    // distinguish are reported, and a quit is too late for a toast, so the audit
+    // row is what makes a failed flush visible afterwards.
+    match outcome {
+        DocumentFlushOutcome::Drained => {
+            info!("Document flush finished: no writes outstanding");
+        }
+        DocumentFlushOutcome::TimedOut => {
+            log::warn!(
+                "Document flush timed out after {:?}; some edits may not have reached their files",
+                DOCUMENT_FLUSH_TIMEOUT
+            );
+            report_error_async(
+                UserFacingError::new(
+                    ErrorKind::Storage,
+                    dbflux_i18n::t!("diagnostics.shutdown_flush_timed_out"),
+                ),
+                cx,
+            );
+        }
+        DocumentFlushOutcome::Unreachable => {
+            log::warn!(
+                "Document flush stopped early: the app context was gone, so its edits may not have reached their files"
+            );
+            report_error_async(
+                UserFacingError::new(
+                    ErrorKind::Storage,
+                    dbflux_i18n::t!("diagnostics.shutdown_flush_unreachable"),
+                ),
+                cx,
+            );
+        }
     }
 }
 

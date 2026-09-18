@@ -216,32 +216,53 @@ pub(super) fn map_item_to_selection(item: &PaletteItem) -> Option<PaletteSelecti
     }
 }
 
+/// How a bounded document flush ended.
+///
+/// "Nothing outstanding" and "everything landed" are not the same thing: a
+/// refused write empties its queue, and an unreachable app context cannot be
+/// asked at all. The caller needs the difference to report what happened
+/// instead of claiming a flush.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DocumentFlushOutcome {
+    /// The poll reported nothing outstanding before the deadline.
+    Drained,
+    /// Writes were still outstanding when the deadline expired.
+    TimedOut,
+    /// The app context could no longer be reached, so nothing could be asked.
+    Unreachable,
+}
+
 /// Polls a shutdown flush until it reports idle or `timeout` elapses.
 ///
-/// Returns `true` when the flush finished within the deadline and `false` when
-/// the deadline expired first; the caller continues either way, so a write that
-/// never lands can only delay shutdown by `timeout`. Each iteration waits
-/// `poll_interval` on the executor, which is what lets queued writes run between
-/// polls. The executor's clock is used instead of `Instant::now` so the loop is
-/// deterministic under a test executor.
+/// Returns [`DocumentFlushOutcome::Drained`] when nothing was outstanding before
+/// the deadline and [`DocumentFlushOutcome::TimedOut`] when the deadline expired
+/// first; the caller continues either way, so a write that never lands can only
+/// delay shutdown by `timeout`. `is_outstanding` returns `None` once the app
+/// context can no longer be reached, which is reported as
+/// [`DocumentFlushOutcome::Unreachable`] rather than as a finished flush. Each
+/// iteration waits `poll_interval` on the executor, which is what lets queued
+/// writes run between polls. The executor's clock is used instead of
+/// `Instant::now` so the loop is deterministic under a test executor.
 pub async fn await_document_flush<F>(
     cx: &mut AsyncApp,
     timeout: std::time::Duration,
     poll_interval: std::time::Duration,
     mut is_outstanding: F,
-) -> bool
+) -> DocumentFlushOutcome
 where
-    F: FnMut(&mut AsyncApp) -> bool,
+    F: FnMut(&mut AsyncApp) -> Option<bool>,
 {
     let deadline = cx.background_executor().now() + timeout;
 
     loop {
-        if !is_outstanding(cx) {
-            return true;
+        match is_outstanding(cx) {
+            Some(false) => return DocumentFlushOutcome::Drained,
+            None => return DocumentFlushOutcome::Unreachable,
+            Some(true) => {}
         }
 
         if cx.background_executor().now() > deadline {
-            return false;
+            return DocumentFlushOutcome::TimedOut;
         }
 
         cx.background_executor().timer(poll_interval).await;
@@ -2200,7 +2221,7 @@ mod tab_close_request_tests {
     use crate::ui::overlays::modals::{
         DirtySummaryEntry, UnsavedChangesOutcome, UnsavedChangesRequest,
     };
-    use crate::ui::views::workspace::{Workspace, await_document_flush};
+    use crate::ui::views::workspace::{DocumentFlushOutcome, Workspace, await_document_flush};
     use dbflux_core::QueryLanguage;
     use dbflux_core::document_id::DocumentId;
     use dbflux_ui_base::AppStateEntity;
@@ -3310,14 +3331,14 @@ mod tab_close_request_tests {
         let result_out = result.clone();
 
         let task = cx.spawn(move |mut app_cx| async move {
-            let finished = await_document_flush(
+            let outcome = await_document_flush(
                 &mut app_cx,
                 timeout,
                 poll_interval,
-                |_app_cx| true, // the write never finishes
+                |_app_cx| Some(true), // the write never finishes
             )
             .await;
-            result_out.set(Some(finished));
+            result_out.set(Some(outcome));
         });
 
         cx.executor().advance_clock(Duration::from_millis(300));
@@ -3325,8 +3346,41 @@ mod tab_close_request_tests {
 
         assert_eq!(
             result.get(),
-            Some(false),
+            Some(DocumentFlushOutcome::TimedOut),
             "the deadline must stop a flush that never finishes"
+        );
+
+        drop(task);
+    }
+
+    /// An app context that can no longer be asked must report that, not a
+    /// finished flush.
+    ///
+    /// The previous boolean return collapsed "nothing outstanding" and "cannot
+    /// ask anymore" into the same value, which is what let the exit log claim
+    /// every pending edit had been flushed while the context was already gone.
+    #[gpui::test]
+    fn an_unreachable_context_is_not_reported_as_a_finished_flush(cx: &mut TestAppContext) {
+        let result = Rc::new(Cell::new(None));
+        let result_out = result.clone();
+
+        let task = cx.spawn(move |mut app_cx| async move {
+            let outcome = await_document_flush(
+                &mut app_cx,
+                Duration::from_millis(100),
+                Duration::from_millis(50),
+                |_app_cx| None, // the context is gone
+            )
+            .await;
+            result_out.set(Some(outcome));
+        });
+
+        cx.run_until_parked();
+
+        assert_eq!(
+            result.get(),
+            Some(DocumentFlushOutcome::Unreachable),
+            "a context that cannot be asked is not a finished flush"
         );
 
         drop(task);

@@ -507,6 +507,8 @@ diagnostics:
   scripts_directory:
     summary: "脚本无法保存到 scripts 文件夹。"
     action: "新查询会保留在会话存储中，因此你的工作不会丢失。请确认数据目录可写且有剩余空间，然后重启 DBFlux。"
+  shutdown_flush_timed_out: "部分编辑可能未写入文件：退出时 DBFlux 未能及时保存。它们已保留在会话存储中以便恢复。"
+  shutdown_flush_unreachable: "部分编辑可能未写入文件：退出时未能执行保存。它们已保留在会话存储中以便恢复。"
 document:
   audit:
     actor:

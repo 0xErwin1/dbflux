@@ -507,6 +507,8 @@ diagnostics:
   scripts_directory:
     summary: "Scripts cannot be saved to the scripts folder."
     action: "New queries are kept in the session store instead, so your work is preserved. Check that the data directory is writable and has free space, then restart DBFlux."
+  shutdown_flush_timed_out: "Some edits may not have reached their files: DBFlux ran out of time saving them while quitting. They are kept in the session store for recovery."
+  shutdown_flush_unreachable: "Some edits may not have reached their files: the flush could not run while quitting. They are kept in the session store for recovery."
 document:
   audit:
     actor:

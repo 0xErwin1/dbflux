@@ -2610,6 +2610,7 @@ dependencies = [
  "dbflux_storage",
  "dbflux_test_support",
  "dbflux_ui",
+ "dbflux_ui_base",
  "embed-resource",
  "gpui",
  "gpui-component",
