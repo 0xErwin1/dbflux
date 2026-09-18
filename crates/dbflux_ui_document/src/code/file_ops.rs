@@ -2,7 +2,7 @@ use super::file_persistence::{
     ExecutedWrite, PhysicalWrite, WriteKind, WriteOutcome, execute_write,
 };
 use super::*;
-use crate::pane::CloseDisposition;
+use crate::pane::{CloseDisposition, EmptyScriptCleanup};
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error_async};
 use dbflux_ui_base::{AsyncUpdateResultExt, SaveTargetOutcome};
 
@@ -267,18 +267,23 @@ fn start_next_physical_write(entity: &Entity<CodeDocument>, cx: &mut AsyncApp) {
 }
 
 impl CodeDocument {
-    /// Returns the backing path of an empty, file-backed script whose file still
-    /// holds exactly the bytes this document last loaded or wrote.
+    /// Reports an empty, file-backed script whose backing file may be deleted as
+    /// the tab closes.
     ///
     /// The empty-script cleanup on close deletes the file this returns, so an
-    /// empty buffer alone is not enough: a file whose bytes changed outside
-    /// dbflux holds someone else's content and must be kept. The check uses the
+    /// empty buffer alone is not enough. What authorizes the deletion is the
     /// document's own recorded baseline — the same seam autosave conflict-checks
     /// against — so ownership is never inferred from a timestamp or a second
-    /// registry. Anything uncertain — no baseline, a baseline recorded for
-    /// another path, or a file that cannot be read — fails closed and returns
-    /// `None`, keeping the file.
-    pub fn file_backed_empty_path(&self, cx: &App) -> Option<PathBuf> {
+    /// registry, and a file whose bytes someone else wrote is never assumed to be
+    /// ours. Anything uncertain — no baseline, or a baseline recorded for another
+    /// path — fails closed and returns `None`, keeping the file.
+    ///
+    /// Nothing is read from disk here. The bytes come from the baseline the
+    /// document already holds, and the caller compares them against the file and
+    /// removes it off the UI thread: this used to read the whole file inside an
+    /// `&App`, which blocked the close gesture for as long as the disk took to
+    /// answer.
+    pub fn pending_empty_script_cleanup(&self, cx: &App) -> Option<EmptyScriptCleanup> {
         if !self.is_file_backed() || !self.is_content_empty(cx) {
             return None;
         }
@@ -290,9 +295,10 @@ impl CodeDocument {
             return None;
         }
 
-        let on_disk = std::fs::read_to_string(path).ok()?;
-
-        (on_disk == baseline.bytes).then(|| path.clone())
+        Some(EmptyScriptCleanup {
+            path: path.clone(),
+            expected_bytes: baseline.bytes.clone(),
+        })
     }
 
     /// Saves as part of an interrupted close.

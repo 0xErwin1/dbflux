@@ -2,7 +2,7 @@
 
 use super::dedup::DocumentKey;
 use super::handle::DocumentEvent;
-use super::pane::PaneHandle;
+use super::pane::{EmptyScriptCleanup, PaneHandle};
 use super::types::{DocumentId, DocumentKind, DocumentMetaSnapshot};
 use dbflux_app::keymap::{Command, ContextId};
 use dbflux_core::RefreshPolicy;
@@ -157,16 +157,19 @@ impl Tab {
         }
     }
 
-    /// Returns the path of the backing file when this tab's script may be deleted
-    /// on close: its buffer is empty and the file still holds exactly the bytes the
-    /// document last loaded or wrote.
+    /// Reports the cleanup this tab leaves behind when it closes, if any: an empty
+    /// buffer over a file-backed script, with the bytes that file is expected to
+    /// hold.
     ///
     /// Returns `None` for non-script tabs, non-file-backed scripts, non-empty
-    /// buffers, files that changed outside dbflux, and files without a trustworthy
-    /// baseline — the caller keeps those files.
-    pub fn is_file_backed_empty(&self, cx: &App) -> Option<std::path::PathBuf> {
+    /// buffers, and files without a trustworthy baseline — the caller keeps those.
+    ///
+    /// The bytes are not read from disk here: the report carries the document's own
+    /// baseline, and the caller verifies the file against it away from the UI
+    /// thread, where removing it also happens.
+    pub fn pending_empty_script_cleanup(&self, cx: &App) -> Option<EmptyScriptCleanup> {
         match self {
-            Tab::Pane(p) => p.is_file_backed_empty.as_ref().and_then(|f| f(cx)),
+            Tab::Pane(p) => p.empty_script_cleanup.as_ref().and_then(|f| f(cx)),
         }
     }
 
