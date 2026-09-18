@@ -125,10 +125,12 @@ and **Save File As** are deliberate and write the file even then.
 
 Closing a tab with pending edits saves them first, then closes; if the write
 cannot land (for example, the file changed outside DBFlux or is read-only), the
-tab stays open with your changes. Quitting DBFlux saves pending edits the same
-way before it shuts down. If the scripts folder could not be created at startup,
-new queries are kept in the session store instead, and **Save File As** is
-offered when you close them.
+tab stays open with your changes and DBFlux points at `Ctrl+s` / **Save File As**
+as the deliberate overwrite. A buffer with no file yet is the exception: closing
+it asks first, so you can save it, close it without saving, or cancel. Quitting
+DBFlux saves pending edits the same way before it shuts down. If the scripts
+folder could not be created at startup, new queries are kept in the session store
+instead, and **Save File As** is offered when you close them.
 
 ### Executing
 

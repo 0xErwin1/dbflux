@@ -890,6 +890,9 @@ document:
         dialog_unavailable: "保存失败 — 文件对话框不可用且无法创建回退目录：%{error}"
         save_script_failed: "保存脚本失败：%{error}"
         auto_save_failed: "%{path} 自动保存失败"
+        close_flush_failed: "关闭前无法保存 %{path}，因此标签页保持打开"
+        shutdown_flush_failed: "退出时无法保存 %{path}；编辑内容保留在本次会话中"
+        refusal_suggested_action: 使用 Ctrl+S 或另存为以显式写入这些修改
       native_picker_fallback: "原生文件选择器不可用 — 脚本已改存到 %{path}。请安装 xdg-desktop-portal、zenity 或 kdialog 以使用保存对话框。"
     title:
       untitled: 未命名

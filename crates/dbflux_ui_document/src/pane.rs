@@ -34,6 +34,12 @@ pub enum CloseDisposition {
     Deferred,
     /// The pending edits could not be persisted; the tab stays open. The failure
     /// has already been reported to the user.
+    ///
+    /// Also the fail-closed answer for a document that has nowhere to persist:
+    /// an untitled code buffer stores nothing on close, so a caller that reaches
+    /// its close policy keeps the tab open rather than forcing a save or
+    /// dropping the edits. The unsaved-changes confirmation is what normally
+    /// resolves that case.
     KeepOpen,
 }
 
@@ -209,6 +215,17 @@ pub struct PaneHandle {
     /// falls back to its existing behaviour. Set only by documents that persist
     /// their pending edits as part of closing (code documents).
     pub resolve_close: Option<Box<dyn Fn(&mut Window, &mut App) -> CloseDisposition>>,
+
+    /// Reports whether the document's close policy applies in its current
+    /// state.
+    ///
+    /// A document can have a close policy that does not apply in its current
+    /// state: a code document persists itself only when it has a file to
+    /// persist to, so an untitled buffer reports `false` here and keeps the
+    /// unsaved-changes dialog. `None` means the document has no close policy,
+    /// so its policy never applies; the workspace consults this through
+    /// [`PaneHandle::has_close_policy`] rather than reading the field directly.
+    pub decides_own_close: Option<Box<dyn Fn(&App) -> bool>>,
 }
 
 impl PaneHandle {
@@ -272,6 +289,7 @@ impl PaneHandle {
             on_close: None,
             save_for_close: None,
             resolve_close: None,
+            decides_own_close: None,
         }
     }
 
@@ -400,14 +418,21 @@ impl PaneHandle {
         }
     }
 
-    /// Returns `true` when this document decides its own close policy.
+    /// Returns `true` when this document currently decides its own close
+    /// policy.
     ///
-    /// The workspace uses this to keep the unsaved-changes dialog for documents
-    /// that require an explicit user save, while a document that can persist its
-    /// own pending edits is closed through [`PaneHandle::resolve_close`]
-    /// instead.
-    pub fn has_close_policy(&self) -> bool {
+    /// A document can have a close policy that does not apply in its current
+    /// state: a code document persists itself only when it has a file to
+    /// persist to, so an untitled buffer reports `false` and keeps the
+    /// unsaved-changes dialog. The workspace consults this before deferring to
+    /// [`PaneHandle::resolve_close`]; a document whose policy does not apply is
+    /// never closed over its pending edits without an explicit user decision.
+    pub fn has_close_policy(&self, cx: &App) -> bool {
         self.resolve_close.is_some()
+            && self
+                .decides_own_close
+                .as_ref()
+                .is_none_or(|decides| decides(cx))
     }
 
     /// Asks the document what closing means now.

@@ -306,6 +306,10 @@ pub(super) struct SessionPersistence {
     pub(super) _auto_save_debounce: Option<Task<()>>,
     pub(super) show_saved_label: bool,
     pub(super) _saved_label_timer: Option<Task<()>>,
+    /// The content the shutdown flush last wrote into this document's session
+    /// artifact. The shutdown loop polls every 50 ms, so this is what keeps one
+    /// quit from rewriting identical bytes dozens of times.
+    pub(super) shutdown_flush_written: Option<String>,
 }
 
 /// History modal entity and its event subscription.
@@ -1031,6 +1035,7 @@ impl CodeDocument {
                 _auto_save_debounce: None,
                 show_saved_label: false,
                 _saved_label_timer: None,
+                shutdown_flush_written: None,
             },
             pending: PendingActions::default(),
             close_after_save: false,

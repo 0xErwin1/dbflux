@@ -367,6 +367,24 @@ struct TableContextMenu {
     row_actions: Vec<dbflux_core::InspectorRowAction>,
 }
 
+impl TableContextMenu {
+    fn any_submenu_open(&self) -> bool {
+        self.sql_submenu_open
+            || self.copy_query_submenu_open
+            || self.filter_submenu_open
+            || self.order_submenu_open
+    }
+
+    /// Hovering a plain item closes whatever submenu was open, as native
+    /// menus do.
+    fn close_submenus(&mut self) {
+        self.sql_submenu_open = false;
+        self.copy_query_submenu_open = false;
+        self.filter_submenu_open = false;
+        self.order_submenu_open = false;
+    }
+}
+
 /// A single item in the context menu.
 struct ContextMenuItem {
     label: SharedString,
@@ -611,6 +629,8 @@ pub struct DataGridPanel {
     runner: DocumentTaskRunner,
     focus_handle: FocusHandle,
     panel_origin: Point<Pixels>,
+    /// Panel size from the same canvas; the context menu is kept inside it.
+    panel_size: Size<Pixels>,
     /// A table-details fetch for the primary key is in flight. Until it
     /// answers, the grid is read-only for want of a key it may well have, so
     /// the "no primary key" banner waits rather than flashing on every open.
@@ -1316,6 +1336,7 @@ impl DataGridPanel {
             runner,
             focus_handle,
             panel_origin: Point::default(),
+            panel_size: Size::default(),
             pk_details_pending: false,
             view_config,
             context_menu: None,
