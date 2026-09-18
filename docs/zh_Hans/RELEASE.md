@@ -16,19 +16,31 @@ DBFlux 采用**基于主干的开发模式，配合短生命周期的发布分�
 
 各渠道的应用程序图标在 [issue #183](https://github.com/0xErwin1/dbflux/issues/183) 中跟踪。请勿在此处实现。
 
-## 更新日志模型（git-cliff，模型 B）
+## 更新日志模型
 
-更新日志由 [git-cliff](https://git-cliff.org) **根据 git 历史自动生成**。不要手动编辑 `[Unreleased]`。
+两个产物，各自只有一个编写来源：
 
-- 仓库根目录下的 `cliff.toml` 配置生成器。
-- `[Unreleased]` 表示“自上一个**稳定版**标签以来的每个用户可见约定式提交”。rc 与 nightly 标签是透明的：它们不会关闭 `[Unreleased]` 窗口（`cliff.toml` 中的 `skip_tags`）。
-- **提交信息具有实际效力。** 类型为 `feat`、`fix` 或 `perf` 的提交会出现在更新日志中；而 `chore`、`ci`、`docs`、`test`、`refactor` 或 `style` 类型的提交则会被丢弃。与安全相关的改动使用 `fix(security):` 或 `Security:` 脚注。
-- `[Unreleased]` 区块**仅在发布稳定版时**关闭。当推送一个稳定版标签时，git-cliff 会将该标签对应的、自上一个稳定版以来的全部用户可见提交渲染为该标签的发布说明。
-- 在切出 rc 或 nightly 时，不要手动重命名 `[Unreleased]`。在此模型下，rc 的切出流程更简单——见下文。
+- **本仓库中的 `CHANGELOG.md` 是正式的更新日志，由人工编写。** 它承载每个 release 面向用户的、经过整理的文字说明。
+- **GitHub 发布说明正文由 CI 生成**，在所有渠道上用 [git-cliff](https://git-cliff.org) 从约定式提交生成。仓库根目录的 `cliff.toml` 配置生成器，正文绝不手工编辑。
 
-`CHANGELOG.md` 保存在仓库中，并在发布时通过 `git-cliff --prepend` **前置插入**新版本章节来更新。它从不被手动编辑，也从不整体重新生成——整体重新生成（`git-cliff -o CHANGELOG.md`）会把所有历史章节合并为自上一个稳定版起的一个区间，从而破坏 `## [0.6.0]` 与 `## [0.6.0-dev.N]` 条目。
+同一个提交同时供给两者：它的约定式 type 决定生成的发布说明使用哪一节，而在 `## [Unreleased]` 下编写的条目决定仓库更新日志的内容。两者不是彼此的副本。发布说明正文简洁（subject、PR 编号、所属小节）；仓库更新日志是完整的文字说明。
 
-> **v0.7.0 过渡说明：** git-cliff 更新日志生成从 v0.7.0 开始适用。`## [0.6.0]` 与 `## [0.6.0-dev.N]` 章节是手工编写、已提交到 `CHANGELOG.md` 的基线内容。绝不能重新生成它们——否则会导致重复或合并。前置插入工作流从第一个 v0.7.0 rc 开始。
+### 仓库更新日志（`CHANGELOG.md`）
+
+- 每个用户可见的改动（`feat`、`fix`、`perf`）都在产生该改动的同一个提交中，于 `### Added`、`### Fixed` 或 `### Changed` 之下添加它的 `## [Unreleased]` 条目。PR 模板的清单会要求这一点。
+- `[Unreleased]` 收集将随下一个 **minor** 发布的工作。rc 与 nightly 标签是透明的：它们不会关闭该窗口。
+- 在升级为稳定版时，标题**只重命名一次**，改为 `## [X.Y.0] - <date>`，在发布分支上，与版本号更新在同一个提交中（见下文“升级为稳定版”）。当已发布的章节被带回 `main` 时，`main` 会打开一个全新的 `[Unreleased]`。
+- **补丁是例外：** 补丁发布的 `## [X.Y.Z]` 章节在发布分支上用 `git-cliff --prepend` 生成。补丁章节不经人工整理。
+- 绝不要运行 `git-cliff -o CHANGELOG.md`。整体重新生成会把所有历史章节折叠为自上一个稳定版标签起的一个区间。前置插入或手工编辑是仅有的安全写入方式。
+
+> **v0.7.0 过渡说明：** 补丁章节自 v0.7.x 起由 git-cliff 生成。`## [0.6.0]` 与 `## [0.6.0-dev.N]` 章节是手工编写、已提交到 `CHANGELOG.md` 的基线内容。绝不能重新生成它们——否则会导致重复或折叠。
+
+### 发布说明正文（GitHub）
+
+- 由 `.github/workflows/release.yml` 根据 git-cliff 的输出组装。`feat`、`fix` 或 `perf` 提交会呈现；`chore`、`ci`、`docs`、`test`、`refactor` 或 `style` 提交会被丢弃。与安全相关的改动使用 `fix(security):` 或 `Security:` 脚注。破坏性改动（`feat!:`、`fix!:`，或 `BREAKING CHANGE:` 脚注）始终呈现。
+- 稳定版正文涵盖自上一个**稳定版**标签以来的每个用户可见提交。rc 与 nightly 标签是透明的（`cliff.toml` 中的 `skip_tags`）。
+- 允许在 GitHub UI 中编辑已发布的正文，用于添加编辑性简介或更正。它不会改动 `CHANGELOG.md`。
+- 稳定版标签的版本若在 `CHANGELOG.md` 中没有对应的 `## [X.Y.Z]` 章节，发布作业会直接失败，而不是发布出来。
 
 ## 分支
 
@@ -39,10 +51,10 @@ DBFlux 采用**基于主干的开发模式，配合短生命周期的发布分�
 
 ### 不可违反的规则
 
-- 提交**绝不**在发布分支上直接创建。它总是先合入 `main`，再通过 `git cherry-pick -x <sha>` 拣选到发布分支。
+- 提交**绝不**在发布分支上直接创建。它总是先合入 `main`，再通过 `git cherry-pick -x <sha>` 拣选到发布分支。在发布分支上唯一会写入的提交，是该发布自身的版本制品更新（它们携带 `CHANGELOG.md` 的标题重命名）以及生成的补丁章节。
 - 发布分支**绝不**合并回 `main`。
 - 发布分支一旦切出，便不再加入新功能。只允许修复缺陷以及该发布自身的版本制品更新。
-- `main` 始终开放开发。`main` 上无需手动添加更新日志条目——提交信息已包含相应内容。
+- `main` 始终开放开发。每个用户可见的改动都在产生该改动的同一个提交中添加它的 `[Unreleased]` 条目。
 
 ## 标签
 
@@ -77,7 +89,7 @@ git push origin vX.Y.Z[-suffix.N]
 
 ## 周期示例：`0.7.0`
 
-1. 新功能合入 `main`，无需手动添加更新日志条目。
+1. 新功能合入 `main`，每项功能都在同一个提交中向 `CHANGELOG.md` 添加自己的 `## [Unreleased]` 条目。
 2. 准备稳定化时，从 `main` HEAD 切出 `release/v0.7`。
    - 在 `release/v0.7` 上：将每个带版本号的制品更新到 `0.7.0-rc.0`。提交并推送。
    - 在 `main` 上：将每个带版本号的制品更新到 `0.8.0-dev.0`。提交并推送。`main` 现在指向下一个次版本。
@@ -86,9 +98,9 @@ git push origin vX.Y.Z[-suffix.N]
    - 在 `main` 上提交修复。
    - 通过 `git cherry-pick -x <sha>` 拣选到 `release/v0.7`。
    - 更新到 `v0.7.0-rc.1` 并打标签。
-4. 当状态干净时，将发布分支从 `v0.7.0-rc.N` 更新到 `v0.7.0`。打标签 `v0.7.0`。git-cliff 会将完整的未发布区间（自 `v0.6.0` 起）渲染为稳定版发布说明。
-5. `main` 已经处于 `0.8.0-dev.0`——稳定版发布后无需再更新。
-6. 补丁（`v0.7.1`、`v0.7.2`……）通过从 `main` 拣选提交，来自同一条发布分支。
+4. 当状态干净时，将发布分支从 `v0.7.0-rc.N` 更新到 `v0.7.0`，并在同一个提交中将 `CHANGELOG.md` 顶部的标题重命名为 `## [0.7.0] - <date>`。打标签 `v0.7.0`。git-cliff 会将自 `v0.6.0` 起的完整区间渲染为稳定版发布说明正文。
+5. `main` 已经处于 `0.8.0-dev.0`——稳定版发布后无需再更新。一个提交关闭已发布的 `[Unreleased]` 章节，并在其上方打开全新的章节。
+6. 补丁（`v0.7.1`、`v0.7.2`……）通过从 `main` 拣选提交，来自同一条发布分支，并且每个补丁都会向 `CHANGELOG.md` 前置插入生成的 `## [0.7.N]` 章节。
 
 ## 制品身份与签名
 
@@ -158,16 +170,7 @@ magick 16.png 32.png 48.png 64.png 128.png 256.png packaging/icons/dbflux.ico
 
 4. 在 `release/vX.Y` 上：
    - 将每个带版本号的制品更新到 `X.Y.0-rc.0`（见[需要更新的文件](#需要更新的文件)）。
-   - 将新 rc 章节前置插入 `CHANGELOG.md`：
-
-     ```bash
-     git-cliff --tag vX.Y.0-rc.0 --unreleased --prepend CHANGELOG.md
-     git add CHANGELOG.md
-     # 合并到与版本更新相同的 chore(release) 提交中
-     ```
-
-     > **警告：** 不要使用 `git-cliff -o CHANGELOG.md`。该命令会整体重新生成文件，并将自上一个稳定版起的所有历史章节合并为一个区块。
-
+   - 不要动 `CHANGELOG.md`。该分支保留从 `main` 继承来的 `[Unreleased]` 区块，拣选进来的修复会自带各自的条目。标题在升级为稳定版时才重命名，而不是在这里：rc 不是正式发布的记录。
    - 提交信息：`chore(release): cut release/vX.Y at vX.Y.0-rc.0`。
    - 推送：`git push -u origin release/vX.Y`。
 5. 回到 `main` 后：
@@ -176,33 +179,32 @@ magick 16.png 32.png 48.png 64.png 128.png 256.png packaging/icons/dbflux.ico
    - 推送。
 6. 在发布分支上打标签 `vX.Y.0-rc.0`。
 
-在 git-cliff 模型下**没有更新日志重命名步骤**。rc 的发布说明正文由约定式提交自动生成。
+rc 的发布说明正文会根据约定式提交自动生成，因此 rc 完全不需要任何 CHANGELOG 步骤。
 
 ## 升级为稳定版：`release/vX.Y` → `vX.Y.0`
 
 当 rc 状态干净时，在 `release/vX.Y` 上执行：
 
 1. 将每个带版本号的制品从 `X.Y.0-rc.N` 更新到 `X.Y.0`。
-2. 将稳定版章节前置插入 `CHANGELOG.md`：
+2. 关闭更新日志章节：将 `CHANGELOG.md` 顶部的 `## [Unreleased]` 标题重命名为 `## [X.Y.0] - <date>`，使用今天的日期。在 `main` 上收集、并随拣选带入的条目已经是本次发布的内容；这里不会向文件生成任何内容。
 
-   ```bash
-   git-cliff --tag vX.Y.0 --unreleased --prepend CHANGELOG.md
-   git add CHANGELOG.md
-   # 合并到与版本更新相同的 chore(release) 提交中
+   ```text
+   ## [Unreleased]     ->     ## [X.Y.0] - 2026-07-31
    ```
 
-   > **警告：** 不要使用 `git-cliff -o CHANGELOG.md`。该命令会整体重新生成文件，并将自上一个稳定版起的所有历史章节合并为一个区块。
+   > **警告：** 不要前置插入生成的章节，也不要使用 `git-cliff -o CHANGELOG.md`。仓库更新日志是人工整理的；发布说明正文单独生成。
 
 3. 提交信息：`chore(release): promote release/vX.Y to vX.Y.0`。
 4. 在发布分支上打标签 `vX.Y.0`，并推送分支与标签。
+5. CI 会根据自上一个稳定版标签以来的每个用户可见提交，生成稳定版发布说明正文。
 
-git-cliff 会基于自上一个稳定版标签以来的全部用户可见提交，生成经过整理的发布说明。没有手动整理更新日志的步骤。
-
-> **可选的整理：** 若你想为稳定版发布说明正文添加人工编写的简介或编辑性说明，可在工作流发布后，直接在 GitHub Release 的编辑界面中操作。这不会改动 `CHANGELOG.md`。
+发布工作流会拒绝发布一个在 `CHANGELOG.md` 中没有对应 `## [X.Y.Z]` 章节的稳定版标签，因此第 2 步不可能被无声地跳过。
 
 ## 下一开发周期
 
 `main` 会在**切出 `release/vX.Y` 时**更新到 `X.(Y+1).0-dev.0`（见切出流程第 5 步）。稳定版标签发布后无需再更新 `main`。nightly 构建会从 `main` HEAD 自动持续进行，在整个稳定化窗口期间生成 `X.(Y+1).0-nightly+<sha>`。
+
+稳定版标签推送后，`main` 会得到一个提交，以同样的方式关闭已发布的章节（将 `## [Unreleased]` 重命名为 `## [X.Y.0] - <date>`），并在其上方打开全新的 `## [Unreleased]`，让仓库更新日志保留已发布的历史。`7a13aceb` 就是这样一个提交的例子。切出之后落在 `main` 上、但未随本次发布的工作，归属新的 `[Unreleased]`，而不是已发布的章节；这一拆分是该模型唯一一处需要手工完成的地方。
 
 ## 需要更新的文件
 

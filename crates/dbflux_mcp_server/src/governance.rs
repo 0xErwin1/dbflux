@@ -14,7 +14,7 @@ use dbflux_mcp::{
     },
 };
 use dbflux_policy::ExecutionClassification;
-use rmcp::model::RawContent;
+use rmcp::model::ContentBlock;
 use rmcp::model::{CallToolResult, ErrorData as McpError};
 use std::future::Future;
 
@@ -350,31 +350,34 @@ fn build_execution_event(
 
 /// Extracts the error content from a [`CallToolResult`] that has `is_error == true`.
 ///
-/// `CallToolResult.content` is a `Vec<Content>` where `Content = Annotated<RawContent>`.
-/// We deref to `RawContent` and match on its enum variants.
+/// `CallToolResult.content` is a `Vec<ContentBlock>`, the MCP 2025-11-25 unified
+/// content union, so the variants are matched directly.
 fn extract_error_content(result: &CallToolResult) -> String {
     let mut msgs = Vec::new();
     for content in &result.content {
-        match &**content {
-            RawContent::Text(text) => {
+        match content {
+            ContentBlock::Text(text) => {
                 msgs.push(text.text.clone());
             }
-            RawContent::Image(img) => {
+            ContentBlock::Image(img) => {
                 msgs.push(format!("[image: {} bytes]", img.data.len()));
             }
-            RawContent::Audio(_) => {
+            ContentBlock::Audio(_) => {
                 msgs.push("[audio content]".to_string());
             }
-            RawContent::Resource(res) => {
-                let uri = match &res.resource {
-                    rmcp::model::ResourceContents::TextResourceContents { uri, .. } => uri,
-                    rmcp::model::ResourceContents::BlobResourceContents { uri, .. } => uri,
+            ContentBlock::Resource(res) => {
+                match &res.resource {
+                    rmcp::model::ResourceContents::TextResourceContents { uri, .. }
+                    | rmcp::model::ResourceContents::BlobResourceContents { uri, .. } => {
+                        msgs.push(format!("[resource: {}]", uri));
+                    }
+                    _ => {}
                 };
-                msgs.push(format!("[resource: {}]", uri));
             }
-            RawContent::ResourceLink(link) => {
+            ContentBlock::ResourceLink(link) => {
                 msgs.push(format!("[resource_link: {}]", link.uri));
             }
+            _ => {}
         }
     }
     msgs.join("\n")
@@ -533,9 +536,9 @@ mod tests {
                 None,
                 ExecutionClassification::Metadata,
                 || async {
-                    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-                        "test result",
-                    )]))
+                    Ok(CallToolResult::success(vec![
+                        rmcp::model::ContentBlock::text("test result"),
+                    ]))
                 },
             )
             .await;

@@ -126,6 +126,27 @@ de queries de MongoDB, comandos de Redis, etc.) lo determina el driver de la
 conexión activa, que también controla el resaltado de sintaxis y el texto de
 placeholder.
 
+### Guardar y cerrar pestañas
+
+Una pestaña de query nueva (`Ctrl+n`) queda respaldada por un archivo real en tu
+carpeta de scripts, igual que un script abierto con `Ctrl+o`. Los editores
+abiertos se auto-guardan en ese archivo según el intervalo configurado, y
+`Ctrl+s` / **Save File As** usan la misma cola. El auto-guardado y el cierre
+nunca sobrescriben un archivo que cambió fuera de DBFlux: tu versión sigue en
+el editor y DBFlux informa de la escritura rechazada. `Ctrl+s` y **Save File As**
+son deliberados y escriben el archivo incluso entonces.
+
+Cerrar una pestaña con ediciones pendientes las guarda primero y después la
+cierra; si la escritura no puede aterrizar (por ejemplo, el archivo cambió
+fuera de DBFlux o es read-only), la pestaña queda abierta con tus cambios y
+DBFlux te indica `Ctrl+s` / **Save File As** como la escritura deliberada. Un
+buffer que todavía no tiene archivo es la excepción: al cerrarlo se te pregunta
+primero, así que puedes guardarlo, cerrarlo sin guardar o cancelar. Al salir,
+DBFlux guarda las ediciones pendientes de la misma forma antes de apagarse. Si
+la carpeta de scripts no pudo crearse al arrancar, las queries
+nuevas se conservan en el session store y **Save File As** se ofrece al
+cerrarlas.
+
 ### Ejecutar
 
 - `Ctrl+Enter` (`Cmd+Enter`) — **Run Query**.
@@ -322,6 +343,23 @@ el resultado. Los campos se editan igual que las celdas de la cuadrícula, así
 que los cambios sin guardar, Guardar fila y revertir funcionan igual en ambos
 modos; `Up`/`Down` recorren los campos y `Left`/`Right` cambian de fila. Pulsa
 `i` de nuevo para volver a la cuadrícula.
+
+### Menú de la cabecera de columna
+
+Haz clic derecho en la cabecera de una columna para abrir un menú limitado a
+esa columna: ordenar ascendente o descendente, quitar el orden y todos los
+operadores de filtro, en una sola lista plana. El clic izquierdo en la
+cabecera sigue alternando el orden.
+
+### Panel de valor
+
+Haz clic derecho en una celda y elige **Ver valor**, o pulsa `v`, para abrir la
+celda en el panel inspector de la derecha. Muestra el valor como JSON, XML o
+texto plano — detectado a partir del contenido, y solo cuando realmente se
+analiza — con formato legible, compacto y ajuste de línea. Se puede editar allí:
+**Guardar** confirma la fila directamente y **Revertir** descarta el cambio. El
+panel sigue la celda seleccionada al moverte por la cuadrícula, salvo mientras
+tenga un cambio sin guardar.
 
 ### Filtrar resultados
 
@@ -540,6 +578,7 @@ así la escritura funciona con normalidad.)
 | `o`                                           | Añadir fila                                |
 | `y`                                           | Copiar fila                                |
 | `i`                                           | Alternar la vista de registro (una fila)   |
+| `v`                                           | Alternar el panel de valor de la celda     |
 | `Ctrl+c` / `Cmd+c`                            | Copiar celda(s)                            |
 | `z`                                           | Alternar colapso del panel                 |
 | `m` (o `Shift+F10`)                           | Abrir menú contextual                      |

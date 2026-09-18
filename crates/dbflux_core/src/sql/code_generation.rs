@@ -1,6 +1,8 @@
 use bitflags::bitflags;
 use serde::{Deserialize, Serialize};
 
+use crate::{DbError, TableRef};
+
 bitflags! {
     /// DDL operations supported by a driver.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -195,6 +197,96 @@ pub enum DefaultSpec<'a> {
     Set(&'a str),
 }
 
+/// An owned default alteration used by a catalog-aware table alteration plan.
+///
+/// `None` on [`TableAlterOperation::AlterColumn`] means retain the existing
+/// default. `Drop` removes a default, while `Set("NULL")` deliberately keeps an
+/// explicit SQL `NULL` default distinct from the absence of a default clause.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OwnedDefaultSpec {
+    Drop,
+    Set(String),
+}
+
+/// An owned operation selected for one table-level alteration request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TableAlterOperation {
+    AlterColumn {
+        name: String,
+        new_type: Option<String>,
+        nullable: Option<bool>,
+        default: Option<OwnedDefaultSpec>,
+    },
+    DropColumn {
+        name: String,
+    },
+    /// A selected change that cannot use the bounded table-alter contract.
+    ///
+    /// Planners must reject a request containing this variant as a whole rather
+    /// than executing a supported prefix.
+    Unsupported {
+        description: String,
+    },
+}
+
+/// Expected source values for fields selected in a table alteration request.
+///
+/// An absent field expectation means that field was not selected. For defaults,
+/// the outer option records whether the default was selected and the inner option
+/// records whether the source has no default (`Some(None)`) or an explicit one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableAlterExpectedColumn {
+    pub name: String,
+    pub type_name: Option<String>,
+    pub nullable: Option<bool>,
+    pub default: Option<Option<String>>,
+}
+
+/// Complete, owned set of selected changes for a single table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableAlterRequest {
+    pub table: TableRef,
+    pub operations: Vec<TableAlterOperation>,
+    pub expected_before: Vec<TableAlterExpectedColumn>,
+}
+
+/// The driver-owned execution path a read-only preview describes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TableAlterRoute {
+    Native,
+    Rebuild,
+}
+
+/// A read-only description of a prepared table alteration.
+///
+/// Statements are illustrative and are never an executable apply payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableAlterPreview {
+    pub route: TableAlterRoute,
+    pub statements: Vec<String>,
+    pub warnings: Vec<String>,
+    pub table_atomic: bool,
+    pub driver_managed: bool,
+}
+
+/// Success-only result emitted after a driver completes its table lifecycle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TableAlterOutcome {
+    pub statement_count: usize,
+    pub table_atomic: bool,
+}
+
+/// Driver-owned planner for catalog-aware, table-level schema alterations.
+pub trait TableAlterPlanner: Send + Sync {
+    fn prepare(&self, request: &TableAlterRequest) -> Result<Box<dyn PreparedTableAlter>, DbError>;
+}
+
+/// A single-use, connection-bound table alteration plan.
+pub trait PreparedTableAlter: Send + Sync {
+    fn preview(&self) -> &TableAlterPreview;
+    fn execute(self: Box<Self>) -> Result<TableAlterOutcome, DbError>;
+}
+
 #[derive(Debug, Clone)]
 pub struct AlterColumnRequest<'a> {
     pub table_name: &'a str,
@@ -343,7 +435,143 @@ impl CodeGenerator for NoOpCodeGenerator {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
     use super::*;
+
+    #[test]
+    fn table_alter_request_preserves_owned_default_states_and_preview_metadata() {
+        let request = TableAlterRequest {
+            table: crate::TableRef::new("users"),
+            operations: vec![
+                TableAlterOperation::AlterColumn {
+                    name: "untouched".to_string(),
+                    new_type: None,
+                    nullable: None,
+                    default: None,
+                },
+                TableAlterOperation::AlterColumn {
+                    name: "remove_default".to_string(),
+                    new_type: None,
+                    nullable: None,
+                    default: Some(OwnedDefaultSpec::Drop),
+                },
+                TableAlterOperation::AlterColumn {
+                    name: "sql_null".to_string(),
+                    new_type: None,
+                    nullable: None,
+                    default: Some(OwnedDefaultSpec::Set("NULL".to_string())),
+                },
+                TableAlterOperation::AlterColumn {
+                    name: "text_null".to_string(),
+                    new_type: None,
+                    nullable: None,
+                    default: Some(OwnedDefaultSpec::Set("'NULL'".to_string())),
+                },
+            ],
+            expected_before: Vec::new(),
+        };
+        let preview = TableAlterPreview {
+            route: TableAlterRoute::Rebuild,
+            statements: vec!["illustrative only".to_string()],
+            warnings: vec!["Data has not been validated.".to_string()],
+            table_atomic: true,
+            driver_managed: true,
+        };
+
+        assert_eq!(request.operations.len(), 4);
+        assert_ne!(
+            request.operations[0], request.operations[1],
+            "unchanged and dropped defaults must remain distinct"
+        );
+        assert_ne!(request.operations[2], request.operations[3]);
+        assert_eq!(preview.route, TableAlterRoute::Rebuild);
+        assert!(preview.driver_managed);
+        assert!(
+            preview
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("not been validated"))
+        );
+    }
+
+    #[test]
+    fn prepared_table_alter_is_send_sync_and_executes_only_when_consumed() {
+        struct FakePlanner {
+            execute_calls: Arc<AtomicUsize>,
+        }
+
+        struct FakePreparedTableAlter {
+            execute_calls: Arc<AtomicUsize>,
+            preview: TableAlterPreview,
+        }
+
+        impl TableAlterPlanner for FakePlanner {
+            fn prepare(
+                &self,
+                _request: &TableAlterRequest,
+            ) -> Result<Box<dyn PreparedTableAlter>, DbError> {
+                Ok(Box::new(FakePreparedTableAlter {
+                    execute_calls: self.execute_calls.clone(),
+                    preview: TableAlterPreview {
+                        route: TableAlterRoute::Native,
+                        statements: vec!["ALTER TABLE users DROP COLUMN legacy".to_string()],
+                        warnings: vec!["Execution remains pending.".to_string()],
+                        table_atomic: true,
+                        driver_managed: true,
+                    },
+                }))
+            }
+        }
+
+        impl PreparedTableAlter for FakePreparedTableAlter {
+            fn preview(&self) -> &TableAlterPreview {
+                &self.preview
+            }
+
+            fn execute(self: Box<Self>) -> Result<TableAlterOutcome, DbError> {
+                self.execute_calls.fetch_add(1, Ordering::SeqCst);
+                Ok(TableAlterOutcome {
+                    statement_count: 1,
+                    table_atomic: true,
+                })
+            }
+        }
+
+        fn assert_send_sync<T: Send + Sync + ?Sized>() {}
+        assert_send_sync::<dyn TableAlterPlanner>();
+        assert_send_sync::<dyn PreparedTableAlter>();
+
+        let execute_calls = Arc::new(AtomicUsize::new(0));
+        let planner = FakePlanner {
+            execute_calls: execute_calls.clone(),
+        };
+        let request = TableAlterRequest {
+            table: crate::TableRef::new("users"),
+            operations: Vec::new(),
+            expected_before: Vec::new(),
+        };
+
+        let prepared = planner
+            .prepare(&request)
+            .expect("fake planner should prepare a non-executing plan");
+        assert_eq!(execute_calls.load(Ordering::SeqCst), 0);
+
+        let preview = prepared.preview();
+        assert_eq!(preview.route, TableAlterRoute::Native);
+        assert_eq!(preview.statements.len(), 1);
+        assert_eq!(execute_calls.load(Ordering::SeqCst), 0);
+
+        let outcome = prepared
+            .execute()
+            .expect("fake prepared plan should execute once");
+        assert_eq!(execute_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(outcome.statement_count, 1);
+        assert!(outcome.table_atomic);
+    }
 
     #[test]
     fn capabilities_include_the_three_new_column_alter_bits() {

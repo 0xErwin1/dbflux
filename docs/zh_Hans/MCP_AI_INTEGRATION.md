@@ -204,7 +204,7 @@ Linux 上的典型默认值：
 | 路径 | 内容 |
 |---|---|
 | `~/.local/share/dbflux/dbflux.db` | 统一数据库：连接配置、认证、SSH 隧道、治理、审计事件、历史记录、会话、界面状态 |
-| `~/.local/share/dbflux/sessions/` | 用于自动保存与会话恢复的临时文件和影子文件 |
+| `~/.local/share/dbflux/sessions/` | 用于会话恢复与找回的临时文件和影子文件 |
 | `~/.local/share/dbflux/scripts/` | 用户编写的脚本目录 |
 
 `dbflux.db` 数据库按前缀包含所有领域表：
@@ -293,7 +293,7 @@ if !outcome.allowed {
 - 把 `--config-dir` 指向临时目录，或设置 `HOME` / `XDG_CONFIG_HOME` / `XDG_DATA_HOME`。
 - 审计测试使用临时的 SQLite 路径。
 - 测试代码中不要读写 `~/.config/dbflux` 或 `~/.local/share/dbflux`。
-- 内置策略与角色开箱可用，无需任何设置 —— 不要在测试夹具中手动插入它们。
+- 内置策略与角色开箱可用，无需任何设置 —— 不要在测试固件中手动插入它们。
 - `dbflux_audit::temp_sqlite_path(name)` 这个辅助函数会为每个测试生成一个隔离路径。
 
 ## 12. 故障排查

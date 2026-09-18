@@ -9,7 +9,7 @@ use gpui_component::ActiveTheme;
 use gpui_component::button::{Button, ButtonVariants};
 
 /// Outcome emitted when the user resolves the modal.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum DeleteConnectionOutcome {
     Confirmed,
     Cancelled,
@@ -56,6 +56,21 @@ impl ModalDeleteConnection {
         self.visible = false;
         self.request = None;
         cx.notify();
+    }
+
+    /// Resolve the modal as if the primary button was clicked: emit the
+    /// outcome and close. The keyboard path (ConfirmModal keymap) uses this
+    /// so Enter resolves the modal through the same outcome handler as a
+    /// mouse click.
+    pub fn confirm(&mut self, cx: &mut Context<Self>) {
+        cx.emit(DeleteConnectionOutcome::Confirmed);
+        self.close(cx);
+    }
+
+    /// Resolve the modal as if the cancel button was clicked.
+    pub fn cancel(&mut self, cx: &mut Context<Self>) {
+        cx.emit(DeleteConnectionOutcome::Cancelled);
+        self.close(cx);
     }
 }
 

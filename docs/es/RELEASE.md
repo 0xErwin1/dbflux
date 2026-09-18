@@ -22,37 +22,60 @@ antiguos permanecen en GitHub pero no se crean nuevos.
 Los íconos de aplicación por canal se rastrean en el [issue
 #183](https://github.com/0xErwin1/dbflux/issues/183). No los implementes aquí.
 
-## Modelo de Changelog (git-cliff, Modelo B)
+## Modelo de Changelog
 
-El changelog se **deriva del historial de git** mediante
-[git-cliff](https://git-cliff.org). No edites `[Unreleased]` a mano.
+Dos artefactos, cada uno con una única fuente de autoría:
 
-- `cliff.toml` en la raíz del repositorio configura el generador.
-- `[Unreleased]` significa "cada commit convencional visible para el usuario
-  desde el último tag **stable**." Los tags rc y nightly son transparentes: no
-  cierran la ventana `[Unreleased]` (`skip_tags` en `cliff.toml`).
-- **Los mensajes de commit son fundamentales para el proceso.** Un commit
-  `feat`, `fix` o `perf` aparece en el changelog; un commit `chore`, `ci`,
+- **El `CHANGELOG.md` de este repositorio es el changelog de referencia, escrito
+  a mano.** Lleva la prosa curada y orientada al usuario de cada release.
+- **El cuerpo del release de GitHub se genera** en CI con
+  [git-cliff](https://git-cliff.org) a partir de commits convencionales, para
+  todos los canales. `cliff.toml` en la raíz del repositorio lo configura, y
+  nunca se edita a mano.
+
+Un mismo commit alimenta ambos: su type convencional decide qué sección usan
+las release notes generadas, y el bullet escrito bajo `## [Unreleased]` decide
+lo que dice el changelog del repositorio. No son copias uno del otro. El cuerpo
+del release es lacónico (subject, número de PR, sección); el changelog del
+repositorio es prosa.
+
+### Changelog del repositorio (`CHANGELOG.md`)
+
+- Cada cambio visible para el usuario (`feat`, `fix`, `perf`) agrega su bullet
+  bajo `## [Unreleased]`, en el mismo commit del cambio, bajo `### Added`,
+  `### Fixed` o `### Changed`. El checklist de la plantilla de PR lo pide.
+- `[Unreleased]` acumula el trabajo que se publica como el próximo **minor**.
+  Los tags rc y nightly son transparentes: no lo cierran.
+- En la promoción a stable el heading se renombra **una sola vez**, a
+  `## [X.Y.0] - <date>`, en el release branch, en el mismo commit que el bump
+  de versión (ver Promoción a Stable abajo). `main` abre un `[Unreleased]`
+  fresco cuando la sección publicada se lleva de vuelta a él.
+- **Los patches son la excepción:** una sección `## [X.Y.Z]` para un patch
+  release se genera en el release branch con `git-cliff --prepend`. Las
+  secciones de patches no se curan.
+- Nunca ejecutes `git-cliff -o CHANGELOG.md`. Una regeneración completa colapsa
+  todas las secciones históricas en un único rango desde el último tag stable.
+  Anteponer, o editar a mano, es la única escritura segura.
+
+> **Transición a v0.7.0:** las secciones de patches las genera git-cliff desde
+> v0.7.x. Las secciones `## [0.6.0]` y `## [0.6.0-dev.N]` son baselines escritas
+> a mano, comiteadas en `CHANGELOG.md`. Nunca deben regenerarse — hacerlo las
+> duplicaría o colapsaría.
+
+### Cuerpo del release (GitHub)
+
+- Compuesto por `.github/workflows/release.yml` a partir de la salida de
+  git-cliff. Un commit `feat`, `fix` o `perf` aparece; un commit `chore`, `ci`,
   `docs`, `test`, `refactor` o `style` se descarta. Los cambios relevantes de
-  seguridad usan `fix(security):` o un footer `Security:`.
-- El bloque `[Unreleased]` se cierra **solo en stable**. Cuando se hace push de
-  un tag stable, git-cliff renderiza el conjunto completo de commits visibles
-  para el usuario desde el stable anterior como las release notes de ese tag.
-- No renombres `[Unreleased]` a mano al cortar un RC o un nightly. El
-  procedimiento de corte de RC es más simple bajo este modelo — ver abajo.
-
-`CHANGELOG.md` se mantiene en el repositorio y se actualiza en el momento del
-release **anteponiendo** (prepending) la sección de la nueva versión con
-`git-cliff --prepend`. Nunca se edita a mano ni se regenera por completo — una
-regeneración completa (`git-cliff -o CHANGELOG.md`) colapsaría todas las
-secciones históricas en un único rango desde el último tag stable, destruyendo
-las entradas `## [0.6.0]` y `## [0.6.0-dev.N]`.
-
-> **Transición a v0.7.0:** la generación de changelog con git-cliff aplica desde
-> v0.7.0 en adelante. Las secciones `## [0.6.0]` y `## [0.6.0-dev.N]` son
-> baselines escritas a mano, comiteadas en `CHANGELOG.md`. Nunca deben
-> regenerarse — hacerlo las duplicaría o colapsaría. El flujo de prepend
-> comienza con el primer RC de v0.7.0.
+  seguridad usan `fix(security):` o un footer `Security:`. Los breaking changes
+  (`feat!:`, `fix!:`, o un footer `BREAKING CHANGE:`) siempre aparecen.
+- El cuerpo stable cubre cada commit visible para el usuario desde el último
+  tag **stable**. Los tags rc y nightly son transparentes (`skip_tags` en
+  `cliff.toml`).
+- Editar el cuerpo publicado en la UI de GitHub está permitido, para una
+  introducción editorial o una corrección. No toca `CHANGELOG.md`.
+- Un tag stable cuya versión no tiene una sección `## [X.Y.Z]` en
+  `CHANGELOG.md` hace fallar el job de release en lugar de publicar.
 
 ## Branches
 
@@ -65,12 +88,14 @@ las entradas `## [0.6.0]` y `## [0.6.0-dev.N]`.
 
 - Un commit **nunca** se autoriza directamente en un release branch. Siempre
   aterriza primero en `main`, y luego se hace `git cherry-pick -x <sha>` hacia
-  el release branch.
+  el release branch. Los únicos commits que se escriben ahí son los propios
+  bumps de version-artifact del release, que llevan el renombre del heading de
+  `CHANGELOG.md`, y las secciones de patches generadas.
 - Un release branch **nunca** se hace merge de vuelta a `main`.
 - **Sin features nuevas** en un release branch una vez creado. Solo bugfixes y
   los propios bumps de version-artifact del release.
-- `main` siempre está abierto para desarrollo. No se requiere una entrada manual
-  de CHANGELOG en `main` — los mensajes de commit llevan la información.
+- `main` siempre está abierto para desarrollo. Cada cambio visible para el
+  usuario agrega su bullet `[Unreleased]` en el mismo commit que hace el cambio.
 
 ## Tags
 
@@ -115,8 +140,8 @@ agregando `-nightly+<short-sha>`.
 
 ## Ejemplo de Ciclo: `0.7.0`
 
-1. Las features aterrizan en `main`. No se requieren entradas manuales de
-   changelog.
+1. Las features aterrizan en `main`, cada una agregando su bullet
+   `## [Unreleased]` a `CHANGELOG.md` en el mismo commit.
 2. Cuando está listo para estabilizar, se crea `release/v0.7` desde `main` HEAD.
    - En `release/v0.7`: subir cada artefacto versionado a `0.7.0-rc.0`. Commit y
      push.
@@ -128,12 +153,15 @@ agregando `-nightly+<short-sha>`.
    - Commitear el fix en `main`.
    - `git cherry-pick -x <sha>` hacia `release/v0.7`.
    - Subir a `v0.7.0-rc.1` y taggear.
-4. Cuando está limpio, subir el release branch de `v0.7.0-rc.N` a `v0.7.0`. Tag
-   `v0.7.0`. git-cliff renderiza el rango unreleased completo (desde `v0.6.0`)
-   como las release notes de stable.
+4. Cuando está limpio, subir el release branch de `v0.7.0-rc.N` a `v0.7.0` y
+   renombrar el heading superior de `CHANGELOG.md` a `## [0.7.0] - <date>` en
+   ese mismo commit. Tag `v0.7.0`. git-cliff renderiza el rango completo desde
+   `v0.6.0` como el cuerpo del release stable.
 5. `main` ya está en `0.8.0-dev.0` — no se necesita más bump después de stable.
+   Un commit cierra la sección `[Unreleased]` publicada y abre una nueva encima.
 6. Los patches (`v0.7.1`, `v0.7.2`, …) vienen del mismo release branch vía
-   cherry-picks desde `main`.
+   cherry-picks desde `main`, y cada uno antepone a `CHANGELOG.md` una sección
+   `## [0.7.N]` generada.
 
 ## Identidad y Firma de Artefactos
 
@@ -220,18 +248,10 @@ Los archivos `.icns` de macOS que están al lado (`dbflux.icns`,
 4. En `release/vX.Y`:
    - Sube cada artefacto versionado a `X.Y.0-rc.0` (ver [Archivos a
      Actualizar](#files-to-bump)).
-   - Antepón la nueva sección de RC a `CHANGELOG.md`:
-
-     ```bash
-     git-cliff --tag vX.Y.0-rc.0 --unreleased --prepend CHANGELOG.md
-     git add CHANGELOG.md
-     # incorpóralo al mismo commit chore(release) que el bump de versión
-     ```
-
-     > **Advertencia:** NO uses `git-cliff -o CHANGELOG.md`. Eso regenera el
-     > archivo por completo y colapsa todas las secciones históricas desde el
-     > último tag stable en un único bloque.
-
+   - No toques `CHANGELOG.md`. El branch lleva el bloque `[Unreleased]` que
+     heredó de `main`, y los fixes cherry-picked dentro de él traen sus propios
+     bullets. El heading se renombra en la promoción a stable, no aquí: un RC no
+     es un release de referencia.
    - Commit: `chore(release): cut release/vX.Y at vX.Y.0-rc.0`.
    - Push: `git push -u origin release/vX.Y`.
 
@@ -243,37 +263,35 @@ Los archivos `.icns` de macOS que están al lado (`dbflux.icns`,
 
 6. Tag `vX.Y.0-rc.0` en el release branch.
 
-No hay **paso de renombre de CHANGELOG** bajo el modelo de git-cliff. El cuerpo
-del release RC se genera automáticamente a partir de commits convencionales.
+El cuerpo del release RC se genera automáticamente a partir de commits
+convencionales, así que un RC no necesita ningún paso de CHANGELOG.
 
 ## Promoción a Stable: `release/vX.Y` → `vX.Y.0`
 
 Ejecuta esto en `release/vX.Y` cuando el RC está limpio:
 
 1. Sube cada artefacto versionado de `X.Y.0-rc.N` a `X.Y.0`.
-2. Antepón la sección stable a `CHANGELOG.md`:
+2. Cierra la sección de changelog: renombra el heading `## [Unreleased]`
+   superior de `CHANGELOG.md` a `## [X.Y.0] - <date>`, con la fecha de hoy. Los
+   bullets acumulados en `main` y traídos por los cherry-picks ya son el
+   contenido de este release; nada se genera en el archivo aquí.
 
-   ```bash
-   git-cliff --tag vX.Y.0 --unreleased --prepend CHANGELOG.md
-   git add CHANGELOG.md
-   # incorpóralo al mismo commit chore(release) que el bump de versión
+   ```text
+   ## [Unreleased]     ->     ## [X.Y.0] - 2026-07-31
    ```
 
-   > **Advertencia:** NO uses `git-cliff -o CHANGELOG.md`. Eso regenera el
-   > archivo por completo y colapsa todas las secciones históricas desde el
-   > último tag stable en un único bloque.
+   > **Advertencia:** no antepongas una sección generada, y NO uses
+   > `git-cliff -o CHANGELOG.md`. El changelog del repositorio es curado; el
+   > cuerpo del release se genera por separado.
 
 3. Commit: `chore(release): promote release/vX.Y to vX.Y.0`.
 4. Tag `vX.Y.0` en el release branch y push del branch + tag.
+5. CI genera el cuerpo del release stable a partir de todos los commits
+   visibles para el usuario desde el último tag stable.
 
-git-cliff genera las release notes curadas a partir de todos los commits
-visibles para el usuario desde el tag stable anterior. No hay paso manual de
-curación de CHANGELOG.
-
-> **Curación opcional:** si quieres agregar una introducción escrita a mano o
-> una nota editorial al cuerpo del release stable, puedes hacerlo directamente
-> en la UI de edición de GitHub Release después de que el workflow lo publique.
-> Esto no toca CHANGELOG.md.
+El workflow de release se niega a publicar un tag stable cuya versión no tiene
+una sección `## [X.Y.Z]` en `CHANGELOG.md`, así que el paso 2 no puede saltarse
+en silencio.
 
 ## Próximo Ciclo de Desarrollo
 
@@ -281,6 +299,14 @@ curación de CHANGELOG.
 Procedimiento de Corte, paso 5). No se requiere más bump a `main` después del
 tag stable. Los builds de nightly continúan desde `main` HEAD automáticamente,
 produciendo `X.(Y+1).0-nightly+<sha>` durante toda la ventana de estabilización.
+
+Una vez hecho push del tag stable, `main` recibe un commit que cierra la sección
+publicada de la misma manera (renombrar `## [Unreleased]` a
+`## [X.Y.0] - <date>`) y abre un `[Unreleased]` fresco encima, para que el
+changelog del repositorio conserve el historial publicado. `7a13aceb` es un
+ejemplo de ese commit. El trabajo que aterrizó en `main` después del corte y no
+se publicó pertenece al nuevo `[Unreleased]`, no a la sección publicada; esa
+separación es el único ajuste a mano del modelo.
 
 ## Archivos a Actualizar
 

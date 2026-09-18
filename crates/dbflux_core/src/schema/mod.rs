@@ -18,8 +18,8 @@ pub use node_id::{ParseSchemaNodeIdError, SchemaNodeId, SchemaNodeKind};
 pub use query_parser::{QueryTableRef, extract_referenced_tables};
 pub use schema_drift::{
     ColumnDiff, ColumnSnapshot, IndexSnapshot, RiskedChange, SchemaChange, SchemaDiff,
-    SchemaDriftDetected, TableChange, classify_table_added, classify_table_removed, diff_schema,
-    diff_table_info,
+    SchemaDriftDetected, TableAlterNormalizationError, TableChange, classify_table_added,
+    classify_table_removed, diff_schema, diff_table_info, normalize_selected_table_alter,
 };
 pub use snapshot_record::{SchemaSnapshotRecord, SnapshotDepth};
 pub use types::{

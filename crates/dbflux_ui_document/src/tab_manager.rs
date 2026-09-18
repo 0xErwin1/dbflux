@@ -107,6 +107,14 @@ impl Tab {
         }
     }
 
+    /// Starts a save for an interrupted close; `false` means the document has
+    /// no save path and its tab must stay open.
+    pub fn save_for_close(&self, window: &mut Window, cx: &mut App) -> bool {
+        match self {
+            Tab::Pane(p) => p.save_for_close(window, cx),
+        }
+    }
+
     // --- Mutations ---
 
     pub fn set_active_tab(&self, active: bool, cx: &mut App) {
@@ -149,10 +157,13 @@ impl Tab {
         }
     }
 
-    /// Returns the path of the backing file if this tab is a file-backed script
-    /// that is currently empty — used by the empty-script cleanup path on close.
+    /// Returns the path of the backing file when this tab's script may be deleted
+    /// on close: its buffer is empty and the file still holds exactly the bytes the
+    /// document last loaded or wrote.
     ///
-    /// Returns `None` for non-script tabs and non-empty or non-file-backed scripts.
+    /// Returns `None` for non-script tabs, non-file-backed scripts, non-empty
+    /// buffers, files that changed outside dbflux, and files without a trustworthy
+    /// baseline — the caller keeps those files.
     pub fn is_file_backed_empty(&self, cx: &App) -> Option<std::path::PathBuf> {
         match self {
             Tab::Pane(p) => p.is_file_backed_empty.as_ref().and_then(|f| f(cx)),
@@ -167,6 +178,41 @@ impl Tab {
             Tab::Pane(p) => {
                 if let Some(f) = p.mark_inspector_closed.as_ref() {
                     f(cx);
+                }
+            }
+        }
+    }
+
+    pub fn row_inspector_is_tracking(&self, cx: &App) -> bool {
+        match self {
+            Tab::Pane(p) => p
+                .row_inspector_is_tracking
+                .as_ref()
+                .is_some_and(|tracking| tracking(cx)),
+        }
+    }
+
+    pub fn set_row_inspector_tracking(&self, tracking: bool, cx: &mut App) {
+        match self {
+            Tab::Pane(p) => {
+                if let Some(set_tracking) = p.set_row_inspector_tracking.as_ref() {
+                    set_tracking(tracking, cx);
+                }
+            }
+        }
+    }
+
+    pub fn value_panel_is_open(&self, cx: &App) -> bool {
+        match self {
+            Tab::Pane(p) => p.value_panel_is_open.as_ref().is_some_and(|open| open(cx)),
+        }
+    }
+
+    pub fn set_value_panel_open(&self, open: bool, cx: &mut App) {
+        match self {
+            Tab::Pane(p) => {
+                if let Some(set_open) = p.set_value_panel_open.as_ref() {
+                    set_open(open, cx);
                 }
             }
         }
@@ -234,6 +280,14 @@ pub struct TabManager {
     subscriptions: HashMap<DocumentId, Subscription>,
 }
 
+/// The shared inspector rail's per-tab state, carried from the outgoing
+/// document to the incoming one so an open rail follows the user.
+#[derive(Clone, Copy, Default)]
+struct RailState {
+    row_inspector_tracking: bool,
+    value_panel_open: bool,
+}
+
 impl TabManager {
     pub fn new() -> Self {
         Self {
@@ -256,6 +310,15 @@ impl TabManager {
             tab_manager.update(cx, |_, cx| match event {
                 DocumentEvent::RequestFocus => {
                     cx.emit(TabManagerEvent::DocumentRequestedFocus);
+                }
+                DocumentEvent::SaveFinished { succeeded } => {
+                    cx.emit(TabManagerEvent::SaveFinished {
+                        id,
+                        succeeded: *succeeded,
+                    });
+                }
+                DocumentEvent::RequestClose => {
+                    cx.emit(TabManagerEvent::RequestClose { id });
                 }
                 DocumentEvent::RequestSqlPreview {
                     context,
@@ -308,15 +371,22 @@ impl TabManager {
             });
         });
 
+        let rail = self.capture_rail_state(cx);
+
         self.subscriptions.insert(id, subscription);
         self.documents.push(doc);
         let new_index = self.documents.len() - 1;
         self.active_index = Some(new_index);
+        self.hand_over_rail_state(new_index, rail, cx);
 
         // Add to front of MRU
         self.mru_order.insert(0, id);
 
         cx.emit(TabManagerEvent::Opened(id));
+        // Opening a tab activates it. Without this the workspace never runs
+        // its per-document `set_active_tab` pass, so the shared inspector rail
+        // keeps rendering the tab the user just navigated away from.
+        cx.emit(TabManagerEvent::Activated(id));
         cx.notify();
     }
 
@@ -327,6 +397,7 @@ impl TabManager {
         };
 
         self.documents[idx].flush_auto_save(cx);
+        self.documents[idx].as_pane().on_close(cx);
         self.remove_document(idx, id, cx);
         true
     }
@@ -368,7 +439,10 @@ impl TabManager {
             return; // Already active
         }
 
+        let rail = self.capture_rail_state(cx);
+
         self.active_index = Some(idx);
+        self.hand_over_rail_state(idx, rail, cx);
 
         // Move to front of MRU
         self.mru_order.retain(|&i| i != id);
@@ -376,6 +450,31 @@ impl TabManager {
 
         cx.emit(TabManagerEvent::Activated(id));
         cx.notify();
+    }
+
+    /// Read the rail state of the currently active document, before the
+    /// active index moves.
+    fn capture_rail_state(&self, cx: &App) -> RailState {
+        let outgoing = self
+            .active_index
+            .and_then(|active| self.documents.get(active));
+
+        RailState {
+            row_inspector_tracking: outgoing.is_some_and(|tab| tab.row_inspector_is_tracking(cx)),
+            value_panel_open: outgoing.is_some_and(|tab| tab.value_panel_is_open(cx)),
+        }
+    }
+
+    /// The inspector rail is shared by the workspace, so hand its state to the
+    /// newly active document. A closed rail likewise clears stale per-tab
+    /// state before that tab is mounted.
+    fn hand_over_rail_state(&mut self, idx: usize, rail: RailState, cx: &mut App) {
+        let Some(document) = self.documents.get(idx) else {
+            return;
+        };
+
+        document.set_row_inspector_tracking(rail.row_inspector_tracking, cx);
+        document.set_value_panel_open(rail.value_panel_open, cx);
     }
 
     /// Navigates to the next tab in VISUAL order (Ctrl+PgDn).
@@ -654,6 +753,15 @@ pub enum TabManagerEvent {
     Opened(DocumentId),
     Closed(DocumentId),
     Activated(DocumentId),
+    /// A document finished a save attempt, successful or not.
+    SaveFinished {
+        id: DocumentId,
+        succeeded: bool,
+    },
+    /// A document asked to be closed — it is safe to close now.
+    RequestClose {
+        id: DocumentId,
+    },
     Reordered,
     /// A document requested focus (user clicked on it).
     DocumentRequestedFocus,

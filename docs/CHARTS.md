@@ -68,7 +68,7 @@ Auto-detection is driven entirely by the `ColumnKind` enum defined in
 | `Unknown` | The driver could not classify this column. |
 
 Each driver is responsible for setting `ColumnMeta::kind` on every column it
-returns (see the "Adding a New Driver" rules in `CLAUDE.md`). Columns left as
+returns (see the "Adding a New Driver" rules in `AGENTS.md`). Columns left as
 `Unknown` are never used as chart axes or series.
 
 ### Auto-detection rules
@@ -95,7 +95,7 @@ inspects `ColumnKind` values — never `type_name` strings or driver identifiers
 The `detect_chart_columns` function reads only `column.kind`; it never reads
 `column.type_name`, `column.name`, or any driver ID. This keeps the engine
 fully decoupled from specific drivers, matching the driver/UI decoupling rule in
-`CLAUDE.md`: a driver makes its columns chartable purely by classifying them
+`AGENTS.md`: a driver makes its columns chartable purely by classifying them
 with the correct `ColumnKind`.
 
 Because `Unknown` is neither `Timestamp` nor `Float`/`Integer`, an unclassified

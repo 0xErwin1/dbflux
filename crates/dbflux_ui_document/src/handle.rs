@@ -7,7 +7,22 @@ pub enum DocumentEvent {
     MetaChanged,
     ExecutionStarted,
     ExecutionFinished,
+    /// A save attempt finished.
+    ///
+    /// `succeeded: false` covers a dismissed Save As picker, a failed write,
+    /// and a write that landed while the user kept typing — in every case the
+    /// document still has pending changes. `true` means the buffer is clean
+    /// against what was written. Saving is asynchronous, so the workspace uses
+    /// this to give the keyboard back when the close it was waiting on did not
+    /// happen.
+    SaveFinished {
+        succeeded: bool,
+    },
     /// The document wants to close itself.
+    ///
+    /// Emitted only for a save the unsaved-changes dialog interrupted that
+    /// actually landed, and only by documents that can save: it is what lets a
+    /// tab close after its asynchronous write instead of over it.
     RequestClose,
     /// The document area was clicked and wants focus.
     RequestFocus,

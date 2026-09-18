@@ -470,6 +470,7 @@ fn db_kind_to_str(kind: DbKind) -> String {
         DbKind::Redshift => "Redshift",
         DbKind::S3 => "S3",
         DbKind::ClickHouse => "ClickHouse",
+        DbKind::Turso => "Turso",
     }
     .to_string()
 }
@@ -489,6 +490,7 @@ fn str_to_db_kind(s: &str) -> Option<DbKind> {
         "Redshift" => Some(DbKind::Redshift),
         "S3" => Some(DbKind::S3),
         "ClickHouse" => Some(DbKind::ClickHouse),
+        "Turso" => Some(DbKind::Turso),
         _ => None,
     }
 }
@@ -507,6 +509,7 @@ fn default_db_config_for_kind(kind: DbKind) -> dbflux_core::DbConfig {
         DbKind::Redshift => dbflux_core::DbConfig::default_redshift(),
         DbKind::S3 => dbflux_core::DbConfig::default_s3(),
         DbKind::ClickHouse => dbflux_core::DbConfig::default_clickhouse(),
+        DbKind::Turso => dbflux_core::DbConfig::default_turso(),
     }
 }
 
@@ -2846,5 +2849,15 @@ mod tests {
             loaded.services[0].resolved_api_contract(),
             dbflux_core::ServiceRpcApiContract::new("driver_rpc", 1, 1)
         );
+    }
+
+    #[test]
+    fn turso_kind_maps_to_an_empty_url_default_config() {
+        assert_eq!(db_kind_to_str(DbKind::Turso), "Turso");
+        assert_eq!(str_to_db_kind("Turso"), Some(DbKind::Turso));
+        assert!(matches!(
+            default_db_config_for_kind(DbKind::Turso),
+            DbConfig::Turso { ref url } if url.is_empty()
+        ));
     }
 }

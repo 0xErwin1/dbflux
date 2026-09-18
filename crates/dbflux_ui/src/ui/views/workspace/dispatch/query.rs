@@ -103,7 +103,8 @@ impl Workspace {
             Command::ResultsAddRow
             | Command::ResultsCopyRow
             | Command::ResultsCopyCell
-            | Command::ToggleRecordView => {
+            | Command::ToggleRecordView
+            | Command::ToggleValuePanel => {
                 self.tab_manager.update(cx, |mgr, cx| {
                     mgr.dispatch_active(cmd, window, cx);
                 });

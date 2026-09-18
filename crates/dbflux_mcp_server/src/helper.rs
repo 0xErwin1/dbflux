@@ -1,17 +1,17 @@
 use dbflux_core::{QueryResult, SqlDialect, Value};
 use rmcp::ErrorData;
-use rmcp::model::Content;
+use rmcp::model::ContentBlock;
 use serde::Serialize;
 
-/// Serialize a value to pretty JSON wrapped in an MCP text `Content`.
+/// Serialize a value to pretty JSON wrapped in an MCP text `ContentBlock`.
 ///
 /// Replaces the `serde_json::to_string_pretty(..).unwrap()` pattern repeated
 /// across the tool handlers. Serializing the handlers' own response DTOs is
 /// effectively infallible, but this lives on the MCP request path, so a
 /// serialization failure is surfaced as an `ErrorData` instead of a panic.
-pub fn to_json_content<T: Serialize>(value: &T) -> Result<Content, ErrorData> {
+pub fn to_json_content<T: Serialize>(value: &T) -> Result<ContentBlock, ErrorData> {
     serde_json::to_string_pretty(value)
-        .map(Content::text)
+        .map(ContentBlock::text)
         .map_err(|error| {
             ErrorData::internal_error(format!("Failed to serialize response: {error}"), None)
         })

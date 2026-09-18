@@ -74,7 +74,7 @@ jobs:
           cache-on-failure: true
 
       - name: Run deterministic workspace tests
-        run: cargo test --workspace --locked --features "sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,clickhouse,aws"
+        run: cargo test --workspace --locked --features "sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,clickhouse,turso,aws"
 
   driver-live-integration:
     name: Driver Live Integration
@@ -116,35 +116,58 @@ jobs:
       # binaries race to pull the same tag and anonymous Docker Hub throttling
       # aborts mid-stream ("bytes remaining on stream"). Pulling everything
       # up front, serially and with retries, removes that failure mode.
+      #
+      # Most images come from mirror.gcr.io, Google's pull-through mirror of
+      # Docker Hub: it has no per-IP rate limit and needs no credentials, so
+      # it removes the throttling this step was built to survive and keeps
+      # working on pull requests from forks. grokzen/redis-cluster is not
+      # carried there and stays on Docker Hub.
+      #
+      # This step is an optimisation, not a gate, so it never fails the job.
+      # It used to `exit 1` on the first image it could not fetch, which meant
+      # one withdrawn image took down every driver suite — a dead MinIO tag
+      # blocked PostgreSQL, MySQL, MongoDB, Redis and DynamoDB, none of which
+      # use it, and blocked every pull request in the repository with it.
+      # An image that cannot be pre-pulled is reported here and left to
+      # testcontainers, so only the suite that actually needs it fails, and it
+      # fails with a test error rather than a red job that ran no tests.
       - name: Pre-pull container images
         run: |
           images=(
-            postgres:16
-            pgvector/pgvector:0.8.0-pg16
-            mysql:8.4
-            mongo:7
-            redis:7
+            mirror.gcr.io/library/postgres:16
+            mirror.gcr.io/pgvector/pgvector:0.8.0-pg16
+            mirror.gcr.io/library/mysql:8.4
+            mirror.gcr.io/library/mongo:7
+            mirror.gcr.io/library/redis:7
             grokzen/redis-cluster:7.0.10
-            clickhouse/clickhouse-server:25.8.30.16
+            mirror.gcr.io/clickhouse/clickhouse-server:25.8.30.16
             mcr.microsoft.com/mssql/server:2022-latest
-            amazon/dynamodb-local:latest
-            influxdb:2.7
-            influxdb:1.8
-            minio/minio:RELEASE.2025-09-07T16-13-09Z
-            localstack/localstack:3
+            mirror.gcr.io/amazon/dynamodb-local:latest
+            mirror.gcr.io/library/influxdb:2.7
+            mirror.gcr.io/library/influxdb:1.8
+            quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+            mirror.gcr.io/localstack/localstack:3
+            ghcr.io/tursodatabase/libsql-server:v0.24.33
           )
+          unpulled=()
           for image in "${images[@]}"; do
             for attempt in 1 2 3; do
               if docker pull --quiet "$image"; then
                 break
               fi
               if [ "$attempt" = 3 ]; then
-                echo "failed to pull $image after 3 attempts" >&2
-                exit 1
+                echo "::warning::could not pre-pull $image after 3 attempts; \
+          the suite that needs it will pull it at test time and fail there if it is genuinely gone"
+                unpulled+=("$image")
+                break
               fi
               sleep $((attempt * 15))
             done
           done
+
+          if [ ${#unpulled[@]} -gt 0 ]; then
+            echo "images left for testcontainers to pull: ${unpulled[*]}"
+          fi
 
       - name: Run PostgreSQL live integration tests
         run: cargo test -p dbflux_driver_postgres --locked --test live_integration -- --ignored
@@ -193,6 +216,9 @@ jobs:
 
       - name: Run ClickHouse live integration tests
         run: cargo test -p dbflux_driver_clickhouse --locked --test live_integration -- --ignored --test-threads=1
+
+      - name: Run TursoDB live integration tests
+        run: cargo test -p dbflux_driver_turso --locked --test live_integration -- --ignored --test-threads=1
 
       # Each test spins up its own LocalStack container (~1.3 GB image), so
       # this suite runs single-threaded like the MSSQL/InfluxDB/ClickHouse
@@ -253,4 +279,4 @@ jobs:
           cache-on-failure: true
 
       - name: Cargo check
-        run: cargo check --workspace --locked --features "sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,clickhouse,aws${{ matrix.extra_features }}"
+        run: cargo check --workspace --locked --features "sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,clickhouse,turso,aws${{ matrix.extra_features }}"

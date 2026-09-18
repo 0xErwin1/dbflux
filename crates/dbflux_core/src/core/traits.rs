@@ -12,8 +12,8 @@ use crate::{
     FormFieldKind, FormValues, LanguageService, NoOpCodeGenerator, QueryHandle, QueryLanguage,
     QueryRequest, QueryResult, RelationRef, RoutineInfo, RowDelete, RowInsert, RowPatch,
     SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot, SemanticPlan, SemanticPlanner,
-    SemanticRequest, SqlDialect, SqlGenerationRequest, SqlLanguageService, TableBrowseRequest,
-    TableCountRequest, TableInfo, Value, ViewInfo,
+    SemanticRequest, SqlDialect, SqlGenerationRequest, SqlLanguageService, TableAlterPlanner,
+    TableBrowseRequest, TableCountRequest, TableInfo, Value, ViewInfo,
     config::DriverKey,
     data::key_value::{
         HashDeleteRequest, HashSetRequest, KeyBulkGetRequest, KeyDeleteRequest, KeyExistsRequest,
@@ -918,6 +918,27 @@ pub trait ObjectStoreConnection: Send + Sync {
     fn delete_bucket(&self, bucket: &str) -> Result<(), DbError>;
 }
 
+/// Factory for isolated execution sessions.
+///
+/// Implementations perform blocking work and must be called from background execution.
+/// `shutdown` closes admission and every child session, including children retained by callers.
+pub trait ExecutionSessionFactory: Send + Sync {
+    fn open(&self) -> Result<Arc<dyn ExecutionSession>, DbError>;
+    fn shutdown(&self) -> Result<(), DbError>;
+}
+
+/// An isolated logical execution session.
+///
+/// Implementations perform blocking work except for `is_closed`, which must be local and
+/// must not perform I/O. Clones represent the same logical session and become unusable
+/// after `close`.
+pub trait ExecutionSession: Send + Sync {
+    fn connection(&self) -> Arc<dyn Connection>;
+    fn close(&self) -> Result<(), DbError>;
+    fn finish_operation(&self) -> Result<(), DbError>;
+    fn is_closed(&self) -> bool;
+}
+
 /// Active database connection.
 ///
 /// The UI interacts exclusively through this trait, never accessing driver internals.
@@ -946,6 +967,23 @@ pub trait Connection: Send + Sync {
 
     /// Close the connection and release resources.
     fn close(&mut self) -> Result<(), DbError>;
+
+    /// Returns a driver-owned planner for catalog-aware table alterations.
+    ///
+    /// Drivers retain their existing generated-statement behavior unless they
+    /// explicitly opt in by returning a planner.
+    fn table_alter_planner(&self) -> Option<&dyn TableAlterPlanner> {
+        None
+    }
+
+    /// Returns the optional factory for isolated execution sessions.
+    ///
+    /// Opening and shutting down sessions are blocking operations and callers must run them
+    /// off the foreground thread. Existing drivers retain their legacy behavior by returning
+    /// `None`.
+    fn execution_session_factory(&self) -> Option<&dyn ExecutionSessionFactory> {
+        None
+    }
 
     /// Execute a SQL query synchronously.
     ///
@@ -1929,6 +1967,12 @@ mod tests {
             "default impl must return NotSupported, got: {:?}",
             result
         );
+    }
+
+    #[test]
+    fn table_alter_planner_defaults_to_none_for_legacy_connections() {
+        let conn = StubConnection;
+        assert!(conn.table_alter_planner().is_none());
     }
 
     #[test]

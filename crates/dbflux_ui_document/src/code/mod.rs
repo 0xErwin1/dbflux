@@ -60,7 +60,9 @@ mod completion;
 mod context_bar;
 mod diagnostics;
 mod execution;
+mod execution_session;
 mod file_ops;
+mod file_persistence;
 mod focus;
 mod live_output;
 pub mod pane;
@@ -68,6 +70,7 @@ mod render;
 
 use code_actions::SqlCodeActionProvider;
 use completion::QueryCompletionProvider;
+use execution_session::ExecutionSessionBinding;
 use live_output::LiveOutputState;
 
 /// A single result tab within the CodeDocument.
@@ -233,6 +236,23 @@ pub(super) struct SourceContext {
     pub(super) _context_subscriptions: Vec<Subscription>,
 }
 
+/// How a document's editor language is bound over its lifetime.
+///
+/// A scratch query tab follows its connection: retargeting the connection
+/// dropdown from a relational profile to a document one has to re-derive
+/// highlighting, time-macro substitution, and dangerous-query classification,
+/// because `connection_id` alone already decides which driver executes the text.
+/// A document whose language came from somewhere the connection cannot speak
+/// for — a file extension, an in-process script language, a read-only routine
+/// body — keeps it instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum LanguageBinding {
+    /// Re-derive the language from whichever connection the tab is bound to.
+    FollowsConnection,
+    /// Keep the document's own language regardless of the bound connection.
+    Pinned,
+}
+
 /// Text editor entity, file-backing metadata, language mode, and diagnostic debounce.
 ///
 /// Groups the `InputState` entity and its subscription together with the fields
@@ -266,7 +286,17 @@ pub(super) struct EditorState {
     pub(super) completion_query_generation: Rc<Cell<u64>>,
     /// Value of `completion_query_generation` at the previous `Change` event.
     pub(super) last_completion_generation: u64,
+    /// The language this document declares for itself: derived from the active
+    /// connection at construction, from a file extension, or passed explicitly.
+    /// Read it through `CodeDocument::effective_language()` rather than
+    /// directly — an unpinned document resolves to its bound connection's
+    /// language instead.
     pub(super) query_language: QueryLanguage,
+    pub(super) language_binding: LanguageBinding,
+    /// Cached `resolve_effective_language` result, refreshed alongside
+    /// `cached_supports_connection_context` whenever the effective language can
+    /// change (construction, connection change, query-mode switch).
+    pub(super) cached_effective_language: QueryLanguage,
 }
 
 /// Auto-save-to-disk machinery and saved-label UI feedback.
@@ -276,6 +306,10 @@ pub(super) struct SessionPersistence {
     pub(super) _auto_save_debounce: Option<Task<()>>,
     pub(super) show_saved_label: bool,
     pub(super) _saved_label_timer: Option<Task<()>>,
+    /// The content the shutdown flush last wrote into this document's session
+    /// artifact. The shutdown loop polls every 50 ms, so this is what keeps one
+    /// quit from rewriting identical bytes dozens of times.
+    pub(super) shutdown_flush_written: Option<String>,
 }
 
 /// History modal entity and its event subscription.
@@ -341,6 +375,11 @@ pub(super) struct PendingActions {
     error: Option<String>,
 }
 
+struct ExecutionSessionContext {
+    root: Arc<dyn dbflux_core::Connection>,
+    database: Option<String>,
+}
+
 pub struct CodeDocument {
     // Identity
     id: DocumentId,
@@ -366,6 +405,8 @@ pub struct CodeDocument {
 
     // Query execution state and result tabs.
     execution: Execution,
+    execution_session: Arc<ExecutionSessionBinding>,
+    execution_session_context: Option<ExecutionSessionContext>,
     result_tabs: ResultTabs,
 
     // History modal, refresh timer, and schema drift modal.
@@ -388,11 +429,19 @@ pub struct CodeDocument {
     // Pending file I/O
     _pending_save: Option<Task<()>>,
 
+    // Serializes writes to the real file (autosave, explicit save, Save As)
+    // and tracks the on-disk baseline for external-change detection.
+    physical_writes: file_persistence::PhysicalWriteQueue,
+
     // Session persistence (auto-save to disk).
     session: SessionPersistence,
 
     /// Deferred action slots drained at the top of each render cycle.
     pending: PendingActions,
+
+    /// Set when a save was started by the interrupted-close flow, so a write
+    /// that lands also asks the workspace to close the tab.
+    close_after_save: bool,
 }
 
 struct PendingQueryResult {
@@ -408,6 +457,7 @@ struct PendingQueryResult {
 pub(super) struct ActiveQueryTask {
     task_id: dbflux_core::TaskId,
     target: TaskTarget,
+    uses_isolated_session: bool,
 }
 
 /// Pending dangerous query confirmation.
@@ -538,6 +588,17 @@ impl CodeDocument {
             Self::resolve_editor_profile(&app_state, connection_id, &query_language, cx);
         let editor_mode = editor_profile.editor_mode.clone();
         let placeholder = editor_profile.placeholder.clone();
+
+        // An in-process script language (Lua/Python/Bash) is pinned on sight: no
+        // connection can turn a script buffer into a query buffer. Every other
+        // language starts out following the bound connection; `with_path` and
+        // `with_read_only` pin it afterwards for the documents whose language
+        // came from a file extension or a routine body.
+        let language_binding = if query_language.supports_connection_context() {
+            LanguageBinding::FollowsConnection
+        } else {
+            LanguageBinding::Pinned
+        };
 
         let input_state = cx.new(|cx| {
             InputState::new(window, cx)
@@ -874,6 +935,7 @@ impl CodeDocument {
             },
         );
         let app_state_sub = cx.subscribe(&app_state, |this, _, _: &AppStateChanged, cx| {
+            this.invalidate_execution_session_if_context_changed(cx);
             this.sync_context_dropdowns(cx);
             this.try_fetch_pending_routine_definition(cx);
         });
@@ -905,6 +967,8 @@ impl CodeDocument {
                 last_change_length: 0,
                 completion_query_generation,
                 last_completion_generation: 0,
+                cached_effective_language: query_language.clone(),
+                language_binding,
                 query_language,
             },
             source: SourceContext {
@@ -937,6 +1001,8 @@ impl CodeDocument {
                 _live_output_drain: None,
                 active_query_task: None,
             },
+            execution_session: ExecutionSessionBinding::new(),
+            execution_session_context: None,
             result_tabs: ResultTabs {
                 result_tabs: Vec::new(),
                 active_result_index: None,
@@ -970,14 +1036,17 @@ impl CodeDocument {
                 preflight_running: false,
             },
             _pending_save: None,
+            physical_writes: file_persistence::PhysicalWriteQueue::new(),
             session: SessionPersistence {
                 scratch_path,
                 shadow_path: None,
                 _auto_save_debounce: None,
                 show_saved_label: false,
                 _saved_label_timer: None,
+                shutdown_flush_written: None,
             },
             pending: PendingActions::default(),
+            close_after_save: false,
         };
 
         document.sync_context_dropdowns(cx);
@@ -1089,9 +1158,28 @@ impl CodeDocument {
     }
 
     /// Attach a file path (used after opening or "Save As").
+    ///
+    /// This pins the language: the file's extension chose it, so retargeting the
+    /// document at another connection must not override it.
     pub fn with_path(mut self, path: PathBuf) -> Self {
         self.editor.path = Some(path);
+        self.editor.language_binding = LanguageBinding::Pinned;
+        self.editor.cached_effective_language = self.editor.query_language.clone();
         self
+    }
+
+    /// Records the raw bytes currently on disk at `path` as this document's
+    /// physical baseline.
+    ///
+    /// Autosave conflict-checks the file against exactly these bytes before
+    /// writing, so the baseline must be what the file holds, paired with the path
+    /// it came from: bytes loaded from one file never authorize a write to
+    /// another. Callers seed it only after a successful create, load, or landed
+    /// write. A document with no baseline refuses to autosave rather than create
+    /// or overwrite a file it never read.
+    pub fn seed_file_baseline(&mut self, path: PathBuf, bytes: String) {
+        self.physical_writes
+            .adopt_baseline(Some(file_persistence::FileBaseline::new(path, bytes)));
     }
 
     /// Mark the document as read-only: blocks query execution, dirty marking,
@@ -1099,6 +1187,11 @@ impl CodeDocument {
     /// popup appears on focus or key events.
     pub fn with_read_only(mut self, cx: &mut Context<Self>) -> Self {
         self.read_only = true;
+
+        // A read-only document shows a fixed body (a routine definition), not a
+        // buffer the user retargets at another connection.
+        self.editor.language_binding = LanguageBinding::Pinned;
+        self.editor.cached_effective_language = self.editor.query_language.clone();
 
         // Disable the LSP completion provider so no autocomplete popup fires
         // when the user focuses or types (which would otherwise happen because
@@ -1204,6 +1297,7 @@ impl CodeDocument {
 
     /// Set the execution context (e.g. parsed from file header).
     pub fn with_exec_ctx(mut self, ctx: ExecutionContext, cx: &mut Context<Self>) -> Self {
+        self.invalidate_execution_session(cx);
         self.pending.source_input_values = ctx
             .source
             .as_ref()
@@ -1212,6 +1306,57 @@ impl CodeDocument {
         self.source.exec_ctx = ctx;
         self.sync_context_dropdowns(cx);
         self
+    }
+
+    fn invalidate_execution_session_if_context_changed(&mut self, cx: &mut Context<Self>) {
+        let Some(bound) = self.execution_session_context.as_ref() else {
+            return;
+        };
+
+        let current = self.connection_id.and_then(|connection_id| {
+            let app_state = self.app_state.read(cx);
+            let connected = app_state.connections().get(&connection_id)?;
+            let database = self
+                .source
+                .exec_ctx
+                .database
+                .clone()
+                .or_else(|| connected.active_database.clone());
+            connected
+                .resolve_connection_for_execution(database.as_deref())
+                .ok()
+                .map(|root| (root, database))
+        });
+        let unchanged = current.is_some_and(|(root, database)| {
+            database == bound.database && Arc::ptr_eq(&bound.root, &root)
+        });
+
+        if !unchanged {
+            self.invalidate_execution_session(cx);
+        }
+    }
+
+    /// Invalidates before detached background cleanup; no document entity is retained.
+    pub(super) fn invalidate_execution_session(&mut self, cx: &mut Context<Self>) {
+        self.execution_session_context = None;
+        let generation = self.execution_session.invalidate();
+        let binding = self.execution_session.clone();
+        let cleanup = cx
+            .background_executor()
+            .spawn(async move { binding.close_invalidated(generation) });
+        cx.spawn(async move |_this, cx| {
+            if let Err(error) = cleanup.await {
+                dbflux_ui_base::user_error::report_error_async(
+                    dbflux_ui_base::user_error::UserFacingError::new(
+                        dbflux_ui_base::user_error::ErrorKind::Driver,
+                        "Could not confirm cleanup of the editor execution session",
+                    )
+                    .with_cause(error.to_string()),
+                    cx,
+                );
+            }
+        })
+        .detach();
     }
 
     // === File backing ===
@@ -1226,7 +1371,18 @@ impl CodeDocument {
 
     #[allow(dead_code)]
     pub fn query_language(&self) -> QueryLanguage {
-        self.editor.query_language.clone()
+        self.effective_language().clone()
+    }
+
+    /// The language this editor currently presents and classifies with.
+    ///
+    /// This is the cached `resolve_effective_language` result, so for an
+    /// unpinned document it tracks the bound connection. Every consumer that
+    /// drives user-visible or governance behaviour — highlighting, time-macro
+    /// substitution, statement counting, dangerous-query classification — must
+    /// read this rather than `editor.query_language`.
+    pub(super) fn effective_language(&self) -> &QueryLanguage {
+        &self.editor.cached_effective_language
     }
 
     /// Returns true if the editor content is empty or whitespace-only.
@@ -1261,6 +1417,27 @@ impl CodeDocument {
             cx.emit(DocumentEvent::MetaChanged);
             cx.notify();
         }
+    }
+
+    /// Marks the buffer clean against the text a finished write captured.
+    ///
+    /// The user can keep typing while a write is in flight, so the buffer may no
+    /// longer match what landed. It then stays dirty against that text — now the
+    /// on-disk baseline — and reports `false`, so a close waiting on the save
+    /// keeps the tab open instead of discarding the newer edits. The debounce
+    /// armed for those newer edits is deliberately left running: cancelling it
+    /// here would strand the latest text until the user typed again.
+    fn mark_clean_against(&mut self, saved_input: &str, cx: &mut Context<Self>) -> bool {
+        if self.editor.input_state.read(cx).value() != saved_input {
+            self.editor.original_content = saved_input.to_string();
+            self.editor.is_dirty = true;
+            cx.emit(DocumentEvent::MetaChanged);
+            cx.notify();
+            return false;
+        }
+
+        self.mark_clean(cx);
+        true
     }
 
     // === Accessors for DocumentHandle ===
@@ -1439,11 +1616,26 @@ impl CodeDocument {
         if self.pending.dangerous_query.is_some() {
             match cmd {
                 Command::Cancel => {
-                    self.cancel_dangerous_query(cx);
+                    self.cancel_dangerous_query(window, cx);
                     return true;
                 }
                 Command::Execute => {
                     self.confirm_dangerous_query(false, window, cx);
+                    return true;
+                }
+                _ => return false,
+            }
+        }
+
+        // Same for the multi-statement script confirmation.
+        if self.pending.script_confirm.is_some() {
+            match cmd {
+                Command::Cancel => {
+                    self.cancel_script_query(window, cx);
+                    return true;
+                }
+                Command::Execute => {
+                    self.confirm_script_query(window, cx);
                     return true;
                 }
                 _ => return false,
@@ -1729,10 +1921,10 @@ impl CodeDocument {
 impl EventEmitter<DocumentEvent> for CodeDocument {}
 
 #[cfg(test)]
-mod tests {
-    use super::{CodeDocument, diff_stats_from_pair, source_input_values_from_context};
+mod language_binding_tests {
+    use super::{CodeDocument, LanguageBinding};
     use dbflux_components::theme;
-    use dbflux_core::{ExecutionSourceContext, QueryLanguage};
+    use dbflux_core::QueryLanguage;
     use dbflux_storage::bootstrap::StorageRuntime;
     use dbflux_ui_base::AppStateEntity;
     use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
@@ -1748,6 +1940,135 @@ mod tests {
                     StorageRuntime::in_memory().expect("isolated storage runtime");
                 AppStateEntity::new_with_storage_runtime(storage_runtime)
                     .expect("test storage setup")
+            })
+        })
+    }
+
+    fn init_test_runtime(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        cx.update(theme::init);
+        cx.update(|cx| {
+            let host = cx.new(|_| ToastHost::new());
+            cx.set_global(ToastGlobal { host });
+        });
+    }
+
+    /// Build a document and report the language binding it ended up with.
+    ///
+    /// `customize` runs the builder steps under test (`with_path`,
+    /// `with_read_only`, or nothing at all).
+    fn binding_for(
+        cx: &mut TestAppContext,
+        language: QueryLanguage,
+        customize: impl Fn(CodeDocument, &mut gpui::Context<CodeDocument>) -> CodeDocument + 'static,
+    ) -> LanguageBinding {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let doc_holder: Rc<RefCell<Option<gpui::Entity<CodeDocument>>>> =
+            Rc::new(RefCell::new(None));
+        let doc_ref = doc_holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let doc = cx.new(|cx| {
+                let document = CodeDocument::new_with_language(
+                    app_state.clone(),
+                    None,
+                    language.clone(),
+                    window,
+                    cx,
+                );
+                customize(document, cx)
+            });
+            doc_ref.replace(Some(doc.clone()));
+            Root::new(doc, window, cx)
+        });
+
+        let doc = doc_holder.borrow().clone().expect("doc should be created");
+
+        window.update(|_, app| doc.read(app).editor.language_binding)
+    }
+
+    /// A plain scratch query tab must follow its connection, so retargeting the
+    /// connection dropdown re-derives the language.
+    #[gpui::test]
+    fn a_scratch_query_tab_follows_its_connection(cx: &mut TestAppContext) {
+        assert_eq!(
+            binding_for(cx, QueryLanguage::Sql, |doc, _cx| doc),
+            LanguageBinding::FollowsConnection
+        );
+    }
+
+    /// An in-process script language is pinned at construction: no connection
+    /// can turn a Lua buffer into a query buffer.
+    #[gpui::test]
+    fn a_script_language_is_pinned_on_sight(cx: &mut TestAppContext) {
+        assert_eq!(
+            binding_for(cx, QueryLanguage::Lua, |doc, _cx| doc),
+            LanguageBinding::Pinned
+        );
+    }
+
+    /// A file's extension chose its language, so attaching a path pins it.
+    #[gpui::test]
+    fn attaching_a_file_path_pins_the_language(cx: &mut TestAppContext) {
+        assert_eq!(
+            binding_for(cx, QueryLanguage::Sql, |doc, _cx| doc
+                .with_path(std::path::PathBuf::from("/tmp/report.sql"))),
+            LanguageBinding::Pinned
+        );
+    }
+
+    /// A read-only document shows a fixed routine body, not a buffer the user
+    /// retargets at another connection.
+    #[gpui::test]
+    fn a_read_only_document_pins_its_language(cx: &mut TestAppContext) {
+        assert_eq!(
+            binding_for(cx, QueryLanguage::Sql, |doc, cx| doc.with_read_only(cx)),
+            LanguageBinding::Pinned
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        CodeDocument, LanguageBinding, diff_stats_from_pair, source_input_values_from_context,
+    };
+    use crate::handle::DocumentEvent;
+    use dbflux_components::theme;
+    use dbflux_core::{ExecutionSourceContext, QueryLanguage};
+    use dbflux_storage::bootstrap::StorageRuntime;
+    use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
+    use dbflux_ui_base::{AppStateEntity, SaveTargetOutcome, SaveTargetProvider};
+    use gpui::{AppContext, TestAppContext};
+    use gpui_component::Root;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use std::sync::Arc;
+
+    fn isolated_test_app_state(cx: &mut TestAppContext) -> gpui::Entity<AppStateEntity> {
+        cx.update(|cx| {
+            cx.new(|_| {
+                let storage_runtime =
+                    StorageRuntime::in_memory().expect("isolated storage runtime");
+                AppStateEntity::new_with_storage_runtime(storage_runtime)
+                    .expect("test storage setup")
+            })
+        })
+    }
+
+    fn isolated_test_app_state_with_picker(
+        cx: &mut TestAppContext,
+        picker: SaveTargetProvider,
+    ) -> gpui::Entity<AppStateEntity> {
+        cx.update(|cx| {
+            cx.new(|_| {
+                let storage_runtime =
+                    StorageRuntime::in_memory().expect("isolated storage runtime");
+                AppStateEntity::new_with_storage_runtime(storage_runtime)
+                    .expect("test storage setup")
+                    .with_save_target_override(picker)
             })
         })
     }
@@ -1958,5 +2279,864 @@ mod tests {
         let es = dbflux_i18n::t!("document.code.title.untitled", locale = "es");
 
         assert_ne!(en, es);
+    }
+
+    /// The document events the workspace acts on, in delivery order.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    enum RecordedEvent {
+        SaveFinished(bool),
+        RequestClose,
+    }
+
+    /// Builds a document with real pending edits and records its events while
+    /// `drive` runs, then reports the recorded events and whether the buffer is
+    /// still dirty.
+    ///
+    /// The fixture edits the buffer rather than forcing the dirty flag, so it
+    /// is dirty by the same `change_summary` predicate the close flow uses to
+    /// decide whether to raise the unsaved-changes dialog at all.
+    fn with_dirty_document(
+        cx: &mut TestAppContext,
+        path: std::path::PathBuf,
+        drive: impl FnOnce(&gpui::Entity<CodeDocument>, &mut gpui::VisualTestContext),
+    ) -> (Vec<RecordedEvent>, bool) {
+        init_test_runtime(cx);
+        let app_state = isolated_test_app_state(cx);
+        with_dirty_document_and_app_state(cx, app_state, Some(path), drive)
+    }
+
+    fn with_dirty_untitled_document_with_picker(
+        cx: &mut TestAppContext,
+        picker: SaveTargetProvider,
+        drive: impl FnOnce(&gpui::Entity<CodeDocument>, &mut gpui::VisualTestContext),
+    ) -> (Vec<RecordedEvent>, bool) {
+        init_test_runtime(cx);
+        let app_state = isolated_test_app_state_with_picker(cx, picker);
+        with_dirty_document_and_app_state(cx, app_state, None, drive)
+    }
+
+    fn with_dirty_document_and_app_state(
+        cx: &mut TestAppContext,
+        app_state: gpui::Entity<AppStateEntity>,
+        path: Option<std::path::PathBuf>,
+        drive: impl FnOnce(&gpui::Entity<CodeDocument>, &mut gpui::VisualTestContext),
+    ) -> (Vec<RecordedEvent>, bool) {
+        let doc_holder: Rc<RefCell<Option<gpui::Entity<CodeDocument>>>> =
+            Rc::new(RefCell::new(None));
+        let doc_ref = doc_holder.clone();
+
+        // A caller that pre-creates the file gives the document a real loaded
+        // baseline; a path that does not exist yet leaves it without one, which is
+        // exactly the no-baseline case autosave must refuse.
+        let baseline_bytes = path
+            .as_ref()
+            .and_then(|path| std::fs::read_to_string(path).ok());
+        let path_for_doc = path.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let doc = cx.new(|cx| {
+                let mut document = CodeDocument::new_with_language(
+                    app_state.clone(),
+                    None,
+                    QueryLanguage::Sql,
+                    window,
+                    cx,
+                );
+                if let Some(path) = path {
+                    document = document.with_path(path);
+                }
+                document.set_content("SELECT 1;", window, cx);
+
+                if let (Some(bytes), Some(path)) = (baseline_bytes, path_for_doc) {
+                    document.seed_file_baseline(path, bytes);
+                }
+
+                document.editor.input_state.update(cx, |state, cx| {
+                    state.set_value("SELECT 2;", window, cx);
+                });
+                document
+            });
+            doc_ref.replace(Some(doc.clone()));
+            Root::new(doc, window, cx)
+        });
+
+        let doc = doc_holder.borrow().clone().expect("doc should be created");
+
+        let summary = window.update(|_, app| doc.read(app).change_summary(app));
+        assert!(
+            summary.is_some(),
+            "the fixture must be dirty by the close flow's own predicate"
+        );
+
+        let events: Rc<RefCell<Vec<RecordedEvent>>> = Rc::new(RefCell::new(Vec::new()));
+        let sink = events.clone();
+        window.update(|_, app| {
+            app.subscribe(&doc, move |_, event: &DocumentEvent, _| match event {
+                DocumentEvent::SaveFinished { succeeded } => {
+                    sink.borrow_mut()
+                        .push(RecordedEvent::SaveFinished(*succeeded));
+                }
+                DocumentEvent::RequestClose => {
+                    sink.borrow_mut().push(RecordedEvent::RequestClose);
+                }
+                _ => {}
+            })
+            .detach();
+        });
+
+        drive(&doc, window);
+        window.run_until_parked();
+
+        let dirty = window.update(|_, app| doc.read(app).editor.is_dirty);
+        let recorded = events.borrow().clone();
+
+        (recorded, dirty)
+    }
+
+    fn temp_save_path() -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("dbflux-save-outcome-{}.sql", uuid::Uuid::new_v4()))
+    }
+
+    /// A landed ordinary save reports success but must not close the tab: only
+    /// the interrupted-close flow may ask for that.
+    #[gpui::test]
+    fn a_landed_save_reports_success_and_clears_the_dirty_flag(cx: &mut TestAppContext) {
+        let path = temp_save_path();
+
+        let (events, dirty) = with_dirty_document(cx, path.clone(), |doc, window| {
+            window.update(|window, cx| {
+                doc.update(cx, |document, cx| document.save_file(window, cx));
+            });
+        });
+
+        assert_eq!(
+            events,
+            vec![RecordedEvent::SaveFinished(true)],
+            "a landed write reports success and does not ask to close"
+        );
+        assert!(!dirty, "a landed write must clear the dirty flag");
+
+        std::fs::remove_file(&path).expect("the temp save file must be removable");
+    }
+
+    /// Regression for the blocking review: the tab closes only once the write
+    /// the interrupted close started actually landed.
+    #[gpui::test]
+    fn a_landed_save_for_close_asks_to_close_the_tab(cx: &mut TestAppContext) {
+        let path = temp_save_path();
+
+        let (events, dirty) = with_dirty_document(cx, path.clone(), |doc, window| {
+            window.update(|window, cx| {
+                doc.update(cx, |document, cx| {
+                    document.save_for_close(window, cx);
+                });
+            });
+        });
+
+        assert_eq!(
+            events,
+            vec![
+                RecordedEvent::SaveFinished(true),
+                RecordedEvent::RequestClose
+            ],
+            "the close the dialog interrupted must finish after the write lands"
+        );
+        assert!(!dirty, "a landed write must clear the dirty flag");
+
+        std::fs::remove_file(&path).expect("the temp save file must be removable");
+    }
+
+    /// Cancelling Save As must leave the tab open with its pending edits. The
+    /// close intent is dropped, so a later ordinary save cannot close it either.
+    #[gpui::test]
+    fn cancelling_save_as_keeps_the_tab_open(cx: &mut TestAppContext) {
+        let retry_path = temp_save_path();
+        let picker: SaveTargetProvider =
+            Arc::new(|_request| gpui::Task::ready(SaveTargetOutcome::Cancelled));
+
+        let retry_path_for_drive = retry_path.clone();
+        let (events, dirty) =
+            with_dirty_untitled_document_with_picker(cx, picker, move |doc, window| {
+                window.update(|window, cx| {
+                    doc.update(cx, |document, cx| {
+                        document.save_for_close(window, cx);
+                    });
+                });
+                window.run_until_parked();
+
+                let (still_dirty, has_close_intent, file_created) = window.update(|_, app| {
+                    let document = doc.read(app);
+                    (
+                        document.editor.is_dirty,
+                        document.close_after_save,
+                        retry_path_for_drive.exists(),
+                    )
+                });
+                assert!(still_dirty, "cancelling Save As must keep the buffer dirty");
+                assert!(
+                    !has_close_intent,
+                    "cancelling Save As must drop the close intent"
+                );
+                assert!(!file_created, "cancelling Save As must not create a file");
+
+                window.update(|window, cx| {
+                    doc.update(cx, |document, cx| {
+                        document.editor.path = Some(retry_path_for_drive.clone());
+                        document.save_file(window, cx);
+                    });
+                });
+            });
+
+        assert_eq!(
+            events,
+            vec![
+                RecordedEvent::SaveFinished(false),
+                RecordedEvent::SaveFinished(true)
+            ],
+            "the cancelled close-driven save reports failure; the retry does not ask to close"
+        );
+        assert!(!dirty, "the retried write must land");
+        assert_eq!(
+            std::fs::read_to_string(&retry_path).expect("the retry must write"),
+            "SELECT 2;"
+        );
+
+        std::fs::remove_file(&retry_path).expect("the retry file must be removable");
+    }
+
+    /// Choosing a path in Save As writes the captured buffer, retargets the
+    /// document at that path, and lets the interrupted close finish.
+    #[gpui::test]
+    fn choosing_a_path_in_save_as_writes_and_closes(cx: &mut TestAppContext) {
+        let path = temp_save_path();
+        let retarget_expected = path.clone();
+        let picker: SaveTargetProvider = {
+            let path = path.clone();
+            Arc::new(move |_request| {
+                gpui::Task::ready(SaveTargetOutcome::Selected {
+                    path: path.clone(),
+                    used_fallback: false,
+                })
+            })
+        };
+
+        let (events, dirty) =
+            with_dirty_untitled_document_with_picker(cx, picker, move |doc, window| {
+                window.update(|window, cx| {
+                    doc.update(cx, |document, cx| {
+                        document.save_for_close(window, cx);
+                    });
+                });
+                window.run_until_parked();
+
+                let retargeted = window.update(|_, app| doc.read(app).path().cloned());
+                assert_eq!(
+                    retargeted,
+                    Some(retarget_expected),
+                    "Save As must retarget the document at the chosen path"
+                );
+            });
+
+        assert_eq!(
+            events,
+            vec![
+                RecordedEvent::SaveFinished(true),
+                RecordedEvent::RequestClose
+            ],
+            "a Save As write that lands must finish the close it started"
+        );
+        assert!(!dirty, "the chosen path must receive the pending buffer");
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("the chosen file must exist"),
+            "SELECT 2;"
+        );
+
+        std::fs::remove_file(&path).expect("the chosen file must be removable");
+    }
+
+    /// Save As from the toolbar is not a close: it retargets the document and
+    /// reports its outcome without asking the workspace to close the tab.
+    #[gpui::test]
+    fn save_as_from_the_toolbar_retargets_without_asking_to_close(cx: &mut TestAppContext) {
+        let path = temp_save_path();
+        let retarget_expected = path.clone();
+        let picker: SaveTargetProvider = {
+            let path = path.clone();
+            Arc::new(move |_request| {
+                gpui::Task::ready(SaveTargetOutcome::Selected {
+                    path: path.clone(),
+                    used_fallback: false,
+                })
+            })
+        };
+
+        let (events, dirty) =
+            with_dirty_untitled_document_with_picker(cx, picker, move |doc, window| {
+                window.update(|window, cx| {
+                    doc.update(cx, |document, cx| {
+                        document.save_file_as(window, cx);
+                    });
+                });
+                window.run_until_parked();
+
+                let retargeted = window.update(|_, app| doc.read(app).path().cloned());
+                assert_eq!(
+                    retargeted,
+                    Some(retarget_expected),
+                    "Save As must retarget the document at the chosen path"
+                );
+            });
+
+        assert_eq!(
+            events,
+            vec![RecordedEvent::SaveFinished(true)],
+            "Save As reports its outcome and never asks to close on its own"
+        );
+        assert!(
+            !dirty,
+            "the captured content landed, so the buffer is clean"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("the chosen file must exist"),
+            "SELECT 2;"
+        );
+
+        std::fs::remove_file(&path).expect("the chosen file must be removable");
+    }
+
+    /// Regression for the blocking review: a save that cannot land reports
+    /// failure, so the tab stays open with its changes.
+    #[gpui::test]
+    fn a_failed_save_reports_failure_and_keeps_the_buffer_dirty(cx: &mut TestAppContext) {
+        // Writing over a directory fails on every platform, which is the same
+        // branch a full disk or a revoked permission takes.
+        let (events, dirty) = with_dirty_document(cx, std::env::temp_dir(), |doc, window| {
+            window.update(|window, cx| {
+                doc.update(cx, |document, cx| {
+                    document.save_for_close(window, cx);
+                });
+            });
+        });
+
+        assert_eq!(
+            events,
+            vec![RecordedEvent::SaveFinished(false)],
+            "a failed write reports failure and never asks to close"
+        );
+        assert!(dirty, "a failed write must keep the buffer dirty");
+    }
+
+    /// Regression for the poisoned-expectation case the review found: a
+    /// cancelled or failed close-driven save must drop its close intent, so the
+    /// user's own later save cannot close the tab behind their back.
+    #[gpui::test]
+    fn a_failed_save_for_close_forgets_the_close_intent(cx: &mut TestAppContext) {
+        let writable = temp_save_path();
+
+        let (events, dirty) = with_dirty_document(cx, std::env::temp_dir(), |doc, window| {
+            window.update(|window, cx| {
+                doc.update(cx, |document, cx| {
+                    document.save_for_close(window, cx);
+                });
+            });
+            window.run_until_parked();
+
+            // The user retries later, at a path that works: that is an
+            // ordinary save, so it must not close the tab.
+            window.update(|window, cx| {
+                doc.update(cx, |document, cx| {
+                    document.editor.path = Some(writable.clone());
+                    document.save_file(window, cx);
+                });
+            });
+        });
+
+        assert_eq!(
+            events,
+            vec![
+                RecordedEvent::SaveFinished(false),
+                RecordedEvent::SaveFinished(true)
+            ],
+            "the failed close-driven save must not arm a later save to close the tab"
+        );
+        assert!(!dirty, "the retried write must land");
+
+        std::fs::remove_file(&writable).expect("the temp save file must be removable");
+    }
+
+    /// Regression: edits made while the close-driven write is in flight are
+    /// neither written nor discarded. The tab stays open and dirty, and the
+    /// file holds exactly the text the write captured.
+    #[gpui::test]
+    fn typing_during_a_save_for_close_keeps_the_tab_open(cx: &mut TestAppContext) {
+        let path = temp_save_path();
+        let path_for_write = path.clone();
+
+        let (events, dirty) = with_dirty_document(cx, path.clone(), |doc, window| {
+            window.update(|window, cx| {
+                doc.update(cx, |document, cx| {
+                    document.save_for_close(window, cx);
+                });
+            });
+
+            // The write is still in flight: the buffer moves on without it.
+            window.update(|window, cx| {
+                doc.update(cx, |document, cx| {
+                    document.editor.input_state.update(cx, |state, cx| {
+                        state.set_value("SELECT 3;", window, cx);
+                    });
+                });
+            });
+        });
+
+        assert_eq!(
+            events,
+            vec![RecordedEvent::SaveFinished(false)],
+            "a save the buffer outgrew must not close the tab"
+        );
+        assert!(dirty, "the newer edits must stay pending");
+
+        let written = std::fs::read_to_string(&path_for_write).expect("the save must land");
+        assert_eq!(
+            written, "SELECT 2;",
+            "the file holds the text the write captured, not the newer edits"
+        );
+
+        std::fs::remove_file(&path_for_write).expect("the temp save file must be removable");
+    }
+
+    /// The workspace only learns about a finished close through this relay: the
+    /// document event becomes a `TabManagerEvent` carrying the tab's own id.
+    #[gpui::test]
+    fn a_close_request_relays_through_the_tab_manager(cx: &mut TestAppContext) {
+        use crate::tab_manager::{Tab, TabManager, TabManagerEvent};
+
+        let path = temp_save_path();
+        init_test_runtime(cx);
+        let app_state = isolated_test_app_state(cx);
+        let doc_holder: Rc<RefCell<Option<gpui::Entity<CodeDocument>>>> =
+            Rc::new(RefCell::new(None));
+        let doc_ref = doc_holder.clone();
+        let path_for_doc = path.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let doc = cx.new(|cx| {
+                let mut document = CodeDocument::new_with_language(
+                    app_state.clone(),
+                    None,
+                    QueryLanguage::Sql,
+                    window,
+                    cx,
+                )
+                .with_path(path_for_doc);
+                document.set_content("SELECT 1;", window, cx);
+                document.editor.input_state.update(cx, |state, cx| {
+                    state.set_value("SELECT 2;", window, cx);
+                });
+                document
+            });
+            doc_ref.replace(Some(doc.clone()));
+            Root::new(doc, window, cx)
+        });
+
+        let doc = doc_holder.borrow().clone().expect("doc should be created");
+        let document_id = window.update(|_, app| doc.read(app).id());
+
+        let manager = window.new(|_| TabManager::new());
+        let events: Rc<RefCell<Vec<TabManagerEvent>>> = Rc::new(RefCell::new(Vec::new()));
+        let sink = events.clone();
+        window.update(|_, app| {
+            app.subscribe(&manager, move |_, event: &TabManagerEvent, _| {
+                sink.borrow_mut().push(event.clone());
+            })
+            .detach();
+
+            let pane = CodeDocument::into_pane(doc.clone(), app);
+            manager.update(app, |manager, cx| {
+                manager.open(Tab::Pane(Box::new(pane)), cx)
+            });
+        });
+
+        window.update(|window, cx| {
+            doc.update(cx, |document, cx| {
+                document.save_for_close(window, cx);
+            });
+        });
+        window.run_until_parked();
+
+        let recorded = events.borrow().clone();
+        assert!(
+            recorded.iter().any(|event| matches!(
+                event,
+                TabManagerEvent::RequestClose { id } if *id == document_id
+            )),
+            "the tab manager must relay the close request for the tab that asked, got {recorded:?}"
+        );
+
+        std::fs::remove_file(&path).expect("the temp save file must be removable");
+    }
+
+    // === Auto-save on the physical file (T1) ===
+
+    /// A file-backed edit must autosave to the real file, not only the shadow:
+    /// reopening the script reads the persisted text. A landed autosave clears
+    /// the dirty flag and, unlike an explicit save, emits no save/close events.
+    #[gpui::test]
+    fn autosave_writes_the_physical_file_and_clears_the_dirty_flag(cx: &mut TestAppContext) {
+        let path = temp_save_path();
+        std::fs::write(&path, "SELECT 1;").expect("seed the preexisting file");
+
+        let (events, dirty) = with_dirty_document(cx, path.clone(), |doc, window| {
+            // The edit armed the 2 s autosave debounce; advance the fake clock
+            // so it fires and its write lands.
+            window
+                .executor()
+                .advance_clock(std::time::Duration::from_secs(3));
+            window.run_until_parked();
+            let _ = doc;
+        });
+
+        let written =
+            std::fs::read_to_string(&path).expect("the autosave must write the real file");
+        assert_eq!(
+            written, "SELECT 2;",
+            "the autosave must land on the physical path, not only the shadow"
+        );
+        assert!(
+            events.is_empty(),
+            "an autosave is not an explicit save: it must not emit save/close events, got {events:?}"
+        );
+        assert!(!dirty, "a landed autosave must clear the dirty flag");
+
+        std::fs::remove_file(&path).expect("the temp save file must be removable");
+    }
+
+    /// A file-backed document that never loaded a trustworthy baseline (for
+    /// example a restore whose physical read failed) must refuse to autosave
+    /// rather than create or blind-overwrite the file. The newer edits stay
+    /// pending, so nothing the user typed is lost.
+    #[gpui::test]
+    fn autosave_refuses_without_a_loaded_baseline(cx: &mut TestAppContext) {
+        let path = temp_save_path();
+
+        let (events, dirty) = with_dirty_document(cx, path.clone(), |doc, window| {
+            window
+                .executor()
+                .advance_clock(std::time::Duration::from_secs(3));
+            window.run_until_parked();
+            let _ = doc;
+        });
+
+        assert!(
+            !path.exists(),
+            "an autosave with no loaded baseline must not create the file"
+        );
+        assert!(
+            events.is_empty(),
+            "a refused autosave reports no save event, got {events:?}"
+        );
+        assert!(dirty, "the unsaved edits must stay pending");
+    }
+
+    /// Edits typed while an explicit save is in flight must still autosave: the
+    /// save only clears the dirty state for the text it captured, so the debounce
+    /// armed for the newer text must survive the save's completion and land it
+    /// without another keystroke.
+    #[gpui::test]
+    fn newer_edits_typed_during_an_explicit_save_still_autosave(cx: &mut TestAppContext) {
+        let path = temp_save_path();
+        std::fs::write(&path, "SELECT 1;").expect("seed the preexisting file");
+
+        let (events, dirty) = with_dirty_document(cx, path.clone(), |doc, window| {
+            // The explicit save captures the buffer as it stands ("SELECT 2;").
+            window.update(|window, cx| {
+                doc.update(cx, |document, cx| document.save_file(window, cx));
+            });
+
+            // The user keeps typing before that write lands, so the buffer is now
+            // newer than the text the save will write.
+            window.update(|window, cx| {
+                doc.update(cx, |document, cx| {
+                    document.editor.input_state.update(cx, |state, cx| {
+                        state.set_value("SELECT 3;", window, cx);
+                    });
+                });
+            });
+
+            window.run_until_parked();
+            assert_eq!(
+                std::fs::read_to_string(&path).expect("the explicit save must land"),
+                "SELECT 2;",
+                "the explicit save writes the text it captured"
+            );
+
+            // No further keystroke: the debounce armed for the newer text must
+            // still be alive after the save's completion.
+            window
+                .executor()
+                .advance_clock(std::time::Duration::from_secs(3));
+            window.run_until_parked();
+        });
+
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("the autosave must land"),
+            "SELECT 3;",
+            "the newer edit must autosave without another keystroke"
+        );
+        assert_eq!(
+            events,
+            vec![RecordedEvent::SaveFinished(false)],
+            "only the explicit save reports an outcome; the autosave stays silent"
+        );
+        assert!(
+            !dirty,
+            "the newer edit autosaved and cleared the dirty flag"
+        );
+
+        std::fs::remove_file(&path).expect("the temp save file must be removable");
+    }
+
+    /// An autosave must never silently overwrite an external change: once the
+    /// document has written the file, foreign bytes on disk make the next
+    /// autosave refuse to write and keep the buffer dirty, with no save event.
+    #[gpui::test]
+    fn autosave_refuses_to_clobber_an_externally_changed_file(cx: &mut TestAppContext) {
+        let path = temp_save_path();
+        let path_for_external = path.clone();
+        std::fs::write(&path, "SELECT 1;").expect("seed the preexisting file");
+
+        let (events, dirty) = with_dirty_document(cx, path.clone(), |doc, window| {
+            // The first autosave lands and seeds the on-disk baseline.
+            window
+                .executor()
+                .advance_clock(std::time::Duration::from_secs(3));
+            window.run_until_parked();
+            assert_eq!(
+                std::fs::read_to_string(&path_for_external).expect("the first autosave lands"),
+                "SELECT 2;",
+                "the first autosave writes the content the document captured"
+            );
+
+            // An external process rewrites the file behind our back.
+            std::fs::write(&path_for_external, "EXTERNAL EDIT;")
+                .expect("the external write must succeed");
+
+            // The user keeps typing; the armed autosave must refuse to clobber.
+            window.update(|window, cx| {
+                doc.update(cx, |document, cx| {
+                    document.editor.input_state.update(cx, |state, cx| {
+                        state.set_value("SELECT 3;", window, cx);
+                    });
+                });
+            });
+            window
+                .executor()
+                .advance_clock(std::time::Duration::from_secs(3));
+            window.run_until_parked();
+        });
+
+        let written = std::fs::read_to_string(&path).expect("the file must still exist");
+        assert_eq!(
+            written, "EXTERNAL EDIT;",
+            "the autosave must not overwrite bytes another process wrote"
+        );
+        assert!(
+            events.is_empty(),
+            "a refused autosave reports no save event"
+        );
+        assert!(dirty, "the unsaved edits must keep the buffer dirty");
+
+        std::fs::remove_file(&path).expect("the temp save file must be removable");
+    }
+
+    /// A file that disappears after the document wrote it must not be silently
+    /// recreated by an autosave: the deletion is an external action the user
+    /// may rely on, so the write is refused and the buffer stays dirty.
+    #[gpui::test]
+    fn autosave_does_not_recreate_an_externally_deleted_file(cx: &mut TestAppContext) {
+        let path = temp_save_path();
+        let path_for_delete = path.clone();
+        std::fs::write(&path, "SELECT 1;").expect("seed the preexisting file");
+
+        let (events, dirty) = with_dirty_document(cx, path.clone(), |doc, window| {
+            // The first autosave lands and seeds the on-disk baseline.
+            window
+                .executor()
+                .advance_clock(std::time::Duration::from_secs(3));
+            window.run_until_parked();
+            assert!(
+                path_for_delete.exists(),
+                "the first autosave must have written the file"
+            );
+
+            // An external process deletes the file.
+            std::fs::remove_file(&path_for_delete).expect("the external delete must succeed");
+
+            // The user keeps typing; the armed autosave must not recreate it.
+            window.update(|window, cx| {
+                doc.update(cx, |document, cx| {
+                    document.editor.input_state.update(cx, |state, cx| {
+                        state.set_value("SELECT 3;", window, cx);
+                    });
+                });
+            });
+            window
+                .executor()
+                .advance_clock(std::time::Duration::from_secs(3));
+            window.run_until_parked();
+        });
+
+        assert!(
+            !path.exists(),
+            "the autosave must not recreate a file another process deleted"
+        );
+        assert!(
+            events.is_empty(),
+            "a refused autosave reports no save event"
+        );
+        assert!(dirty, "the unsaved edits must keep the buffer dirty");
+    }
+
+    /// Sequential autosaves must land in order: each landed write becomes the
+    /// new on-disk baseline, and the final file holds the newest content.
+    #[gpui::test]
+    fn sequential_autosaves_land_in_order_and_keep_the_newest_bytes(cx: &mut TestAppContext) {
+        let path = temp_save_path();
+        let path_for_assert = path.clone();
+        std::fs::write(&path, "SELECT 1;").expect("seed the preexisting file");
+
+        let (events, dirty) = with_dirty_document(cx, path.clone(), |doc, window| {
+            window
+                .executor()
+                .advance_clock(std::time::Duration::from_secs(3));
+            window.run_until_parked();
+            assert_eq!(
+                std::fs::read_to_string(&path_for_assert).expect("the first autosave lands"),
+                "SELECT 2;",
+            );
+
+            window.update(|window, cx| {
+                doc.update(cx, |document, cx| {
+                    document.editor.input_state.update(cx, |state, cx| {
+                        state.set_value("SELECT 3;", window, cx);
+                    });
+                });
+            });
+            window
+                .executor()
+                .advance_clock(std::time::Duration::from_secs(3));
+            window.run_until_parked();
+            assert_eq!(
+                std::fs::read_to_string(&path_for_assert).expect("the second autosave lands"),
+                "SELECT 3;",
+                "each autosave must replace the bytes of the previous one"
+            );
+
+            window.update(|window, cx| {
+                doc.update(cx, |document, cx| {
+                    document.editor.input_state.update(cx, |state, cx| {
+                        state.set_value("SELECT 4;", window, cx);
+                    });
+                });
+            });
+            window
+                .executor()
+                .advance_clock(std::time::Duration::from_secs(3));
+            window.run_until_parked();
+        });
+
+        let written =
+            std::fs::read_to_string(&path).expect("the final autosave must have written the file");
+        assert_eq!(
+            written, "SELECT 4;",
+            "the newest edit must be the one on disk"
+        );
+        assert!(events.is_empty(), "autosaves emit no save/close events");
+        assert!(!dirty, "the final autosave lands the current buffer");
+
+        std::fs::remove_file(&path).expect("the temp save file must be removable");
+    }
+
+    /// A file whose baseline was seeded from its own bytes before any autosave ran
+    /// must still refuse to clobber bytes an external process wrote before the
+    /// first debounce fired. The document keeps its edits pending and reports no
+    /// save event.
+    #[gpui::test]
+    fn autosave_refuses_foreign_change_after_baseline_seeded_before_first_write(
+        cx: &mut TestAppContext,
+    ) {
+        let path = temp_save_path();
+        let path_for_external = path.clone();
+        std::fs::write(&path, "ORIGINAL;").expect("seed the original file");
+
+        let (events, dirty) = with_dirty_document(cx, path.clone(), |doc, window| {
+            // The fixture seeded the baseline from ORIGINAL before any write ran.
+            std::fs::write(&path_for_external, "EXTERNAL EDIT;")
+                .expect("the external write must succeed");
+
+            window.update(|window, cx| {
+                doc.update(cx, |document, cx| {
+                    document.editor.input_state.update(cx, |state, cx| {
+                        state.set_value("SELECT 3;", window, cx);
+                    });
+                });
+            });
+            window
+                .executor()
+                .advance_clock(std::time::Duration::from_secs(3));
+            window.run_until_parked();
+        });
+
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("the file must still exist"),
+            "EXTERNAL EDIT;",
+            "the autosave must not overwrite bytes another process wrote"
+        );
+        assert!(
+            events.is_empty(),
+            "a refused autosave reports no save event"
+        );
+        assert!(dirty, "the unsaved edits must keep the buffer dirty");
+
+        std::fs::remove_file(&path).expect("the temp save file must be removable");
+    }
+
+    /// A file deleted after its baseline was seeded but before the first autosave
+    /// must not be recreated: the deletion is an external action the user may rely
+    /// on, so the write is refused and the buffer stays dirty.
+    #[gpui::test]
+    fn autosave_does_not_recreate_a_file_deleted_after_baseline_seeded_before_first_write(
+        cx: &mut TestAppContext,
+    ) {
+        let path = temp_save_path();
+        let path_for_delete = path.clone();
+        std::fs::write(&path, "ORIGINAL;").expect("seed the original file");
+
+        let (events, dirty) = with_dirty_document(cx, path.clone(), |doc, window| {
+            // The fixture seeded the baseline from ORIGINAL before any write ran.
+            std::fs::remove_file(&path_for_delete).expect("the external delete must succeed");
+
+            window.update(|window, cx| {
+                doc.update(cx, |document, cx| {
+                    document.editor.input_state.update(cx, |state, cx| {
+                        state.set_value("SELECT 3;", window, cx);
+                    });
+                });
+            });
+            window
+                .executor()
+                .advance_clock(std::time::Duration::from_secs(3));
+            window.run_until_parked();
+        });
+
+        assert!(
+            !path.exists(),
+            "the autosave must not recreate a file another process deleted"
+        );
+        assert!(
+            events.is_empty(),
+            "a refused autosave reports no save event"
+        );
+        assert!(dirty, "the unsaved edits must keep the buffer dirty");
     }
 }

@@ -153,7 +153,12 @@ fn parse_connection_scope(
         P_SCHEMA => {
             let profile_id = Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
             let name = parts.get(2).ok_or_else(err)?.to_string();
-            Ok(SchemaNodeId::Schema { profile_id, name })
+            let database = parts.get(3).map(|value| (*value).to_string());
+            Ok(SchemaNodeId::Schema {
+                profile_id,
+                database,
+                name,
+            })
         }
 
         _ => Err(err()),
@@ -169,13 +174,23 @@ fn parse_folder_variants(
         P_TABLES_FOLDER => {
             let profile_id = Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
             let schema = parts.get(2).ok_or_else(err)?.to_string();
-            Ok(SchemaNodeId::TablesFolder { profile_id, schema })
+            let database = parts.get(3).map(|value| (*value).to_string());
+            Ok(SchemaNodeId::TablesFolder {
+                profile_id,
+                database,
+                schema,
+            })
         }
 
         P_VIEWS_FOLDER => {
             let profile_id = Uuid::parse_str(parts.get(1).ok_or_else(err)?).map_err(|_| err())?;
             let schema = parts.get(2).ok_or_else(err)?.to_string();
-            Ok(SchemaNodeId::ViewsFolder { profile_id, schema })
+            let database = parts.get(3).map(|value| (*value).to_string());
+            Ok(SchemaNodeId::ViewsFolder {
+                profile_id,
+                database,
+                schema,
+            })
         }
 
         P_TYPES_FOLDER => {

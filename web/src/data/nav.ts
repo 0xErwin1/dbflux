@@ -103,6 +103,7 @@ export const DOC_TITLES: Readonly<Record<string, string>> = {
   'drivers/sqlite': 'SQLite',
   'drivers/redshift': 'Amazon Redshift',
   'drivers/clickhouse': 'ClickHouse',
+  'drivers/turso': 'TursoDB',
   'drivers/mongodb': 'MongoDB',
   'drivers/redis': 'Redis',
   'drivers/dynamodb': 'DynamoDB',

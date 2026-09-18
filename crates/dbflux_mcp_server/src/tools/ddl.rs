@@ -17,8 +17,9 @@ use crate::{
     state::ServerState,
 };
 use dbflux_core::{
-    AddForeignKeyRequest, CodeGenCapabilities, Connection, CreateTypeRequest, DbKind,
-    DropForeignKeyRequest, QueryRequest, TableRef, TypeAttributeDefinition, TypeDefinition, Value,
+    AddForeignKeyRequest, CodeGenCapabilities, ColumnSnapshot, Connection, CreateTypeRequest,
+    DbKind, DropForeignKeyRequest, QueryRequest, SchemaChange, TableRef, TypeAttributeDefinition,
+    TypeDefinition, Value,
 };
 use rmcp::{
     handler::server::wrapper::Parameters,
@@ -733,6 +734,145 @@ fn non_empty(s: String) -> Option<String> {
     if s.is_empty() { None } else { Some(s) }
 }
 
+fn planner_eligible_alter_operations(operations: &[AlterOperation]) -> bool {
+    !operations.is_empty()
+        && operations.iter().all(|operation| {
+            matches!(
+                operation.action.to_uppercase().as_str(),
+                "ALTER_COLUMN" | "ALTER COLUMN" | "DROP_COLUMN" | "DROP COLUMN"
+            )
+        })
+}
+
+fn column_snapshot(column: &dbflux_core::ColumnInfo) -> ColumnSnapshot {
+    ColumnSnapshot {
+        name: column.name.clone(),
+        type_name: column.type_name.clone(),
+        nullable: column.nullable,
+        is_primary_key: column.is_primary_key,
+        default_value: column.default_value.clone(),
+    }
+}
+
+fn selected_table_alter_request(
+    table: TableRef,
+    operations: &[AlterOperation],
+    columns: &[dbflux_core::ColumnInfo],
+    dialect: &dyn dbflux_core::SqlDialect,
+) -> Result<dbflux_core::TableAlterRequest, String> {
+    let mut selected = Vec::with_capacity(operations.len());
+
+    for (operation_index, operation) in operations.iter().enumerate() {
+        let column_name = operation
+            .column
+            .as_deref()
+            .ok_or_else(|| format!("operation {operation_index} requires a column name"))?;
+        let before = columns
+            .iter()
+            .find(|column| column.name == column_name)
+            .map(column_snapshot)
+            .ok_or_else(|| format!("column {column_name} does not exist"))?;
+
+        match operation.action.to_uppercase().as_str() {
+            "DROP_COLUMN" | "DROP COLUMN" => {
+                selected.push(SchemaChange::ColumnRemoved(before));
+            }
+            "ALTER_COLUMN" | "ALTER COLUMN" => {
+                let definition = operation.definition.as_ref().ok_or_else(|| {
+                    format!("ALTER_COLUMN at operation {operation_index} requires definition")
+                })?;
+                if !definition.is_object() {
+                    return Err(format!(
+                        "ALTER_COLUMN at operation {operation_index} requires an object definition"
+                    ));
+                }
+
+                let mut changed = false;
+                if let Some(value) = definition.get("type") {
+                    let type_name = value.as_str().ok_or_else(|| {
+                        format!("ALTER_COLUMN type at operation {operation_index} must be a string")
+                    })?;
+                    dbflux_core::validate_ddl_fragment(type_name, "column type")
+                        .map_err(|rejection| rejection.reason)?;
+                    let after = ColumnSnapshot {
+                        type_name: type_name.to_string(),
+                        ..before.clone()
+                    };
+                    selected.push(SchemaChange::ColumnTypeChanged {
+                        before: before.clone(),
+                        after,
+                    });
+                    changed = true;
+                }
+                if let Some(value) = definition.get("nullable") {
+                    let nullable = value.as_bool().ok_or_else(|| {
+                        format!(
+                            "ALTER_COLUMN nullable at operation {operation_index} must be a boolean"
+                        )
+                    })?;
+                    selected.push(SchemaChange::NullabilityChanged {
+                        column: before.name.clone(),
+                        before: before.nullable,
+                        after: nullable,
+                    });
+                    changed = true;
+                }
+                if let Some(value) = definition.get("default") {
+                    selected.push(SchemaChange::DefaultChanged {
+                        column: before.name.clone(),
+                        before: before.default_value.clone(),
+                        after: if value.is_null() {
+                            None
+                        } else {
+                            Some(json_to_sql_literal(value, dialect))
+                        },
+                    });
+                    changed = true;
+                }
+                if !changed {
+                    return Err(format!(
+                        "ALTER_COLUMN at operation {operation_index} requires type, nullable, or default"
+                    ));
+                }
+            }
+            _ => unreachable!("planner eligibility checked before normalization"),
+        }
+    }
+
+    dbflux_core::normalize_selected_table_alter(table, &selected).map_err(|error| error.reason)
+}
+
+fn planner_alter_response(
+    table: &str,
+    operations: &[AlterOperation],
+    preview: dbflux_core::TableAlterPreview,
+    outcome: dbflux_core::TableAlterOutcome,
+) -> serde_json::Value {
+    let route = match preview.route {
+        dbflux_core::TableAlterRoute::Native => "native",
+        dbflux_core::TableAlterRoute::Rebuild => "rebuild",
+    };
+    let operations = operations
+        .iter()
+        .map(|operation| serde_json::json!({"action": operation.action, "success": true}))
+        .collect::<Vec<_>>();
+
+    serde_json::json!({
+        "altered": true,
+        "table": table,
+        "atomic": outcome.table_atomic,
+        "driver_managed": preview.driver_managed,
+        "statement_count": outcome.statement_count,
+        "operations": operations,
+        "illustrative_preview": {
+            "route": route,
+            "statements": preview.statements,
+            "warnings": preview.warnings,
+            "table_atomic": preview.table_atomic,
+        },
+    })
+}
+
 /// Build the SQL statement(s) for a single ALTER TABLE operation.
 ///
 /// Returns `Ok(Vec<String>)` where each element is one statement to execute.
@@ -1309,72 +1449,56 @@ impl DbFluxServer {
             all_stmts.push(stmts);
         }
 
-        let begin_req = QueryRequest::new("BEGIN");
-        Self::execute_connection_blocking(connection.clone(), move |c| {
-            c.execute(&begin_req)
-                .map(|_| ())
-                .map_err(|e| format!("BEGIN failed: {}", e))
-        })
-        .await?;
+        let transactional_statements: Vec<(usize, String)> = all_stmts
+            .iter()
+            .enumerate()
+            .flat_map(|(operation_index, statements)| {
+                statements
+                    .iter()
+                    .cloned()
+                    .map(move |statement| (operation_index, statement))
+            })
+            .collect();
+        let operation_names: Vec<String> = ops
+            .iter()
+            .map(|operation| operation.action.clone())
+            .collect();
 
-        for (i, stmts) in all_stmts.iter().enumerate() {
-            for stmt in stmts {
-                let stmt_owned = stmt.clone();
-                let request = QueryRequest::new(&stmt_owned);
-                if let Err(exec_err) =
-                    Self::execute_connection_blocking(connection.clone(), move |c| {
-                        c.execute(&request)
-                            .map(|_| ())
-                            .map_err(|e| format!("ALTER TABLE error: {}", e))
-                    })
-                    .await
-                {
-                    let rollback_req = QueryRequest::new("ROLLBACK");
-                    if let Err(rollback_err) =
-                        Self::execute_connection_blocking(connection.clone(), move |c| {
-                            c.execute(&rollback_req)
-                                .map(|_| ())
-                                .map_err(|e| format!("{}", e))
-                        })
-                        .await
-                    {
-                        log::error!(
-                            "ROLLBACK failed after ALTER TABLE error at op {} ({}): {}",
-                            i,
-                            ops[i].action,
-                            rollback_err
-                        );
-                    }
+        // Keep BEGIN, every ALTER, and COMMIT inside one blocking closure. The helper acquires
+        // exactly one ExecutionSessionScope, so a factory-backed connection retains one child
+        // across the entire transaction while legacy connections keep their existing ordering.
+        Self::execute_connection_blocking(connection, move |connection| {
+            connection
+                .execute(&QueryRequest::new("BEGIN"))
+                .map_err(|error| format!("BEGIN failed: {error}"))?;
 
-                    return Err(format!(
-                        "ALTER TABLE aborted and rolled back at operation {} ({}): {}",
-                        i, ops[i].action, exec_err
-                    ));
+            for (operation_index, statement) in transactional_statements {
+                if let Err(execution_error) = connection.execute(&QueryRequest::new(statement)) {
+                    let message = format!(
+                        "ALTER TABLE aborted at operation {} ({}): {}",
+                        operation_index, operation_names[operation_index], execution_error
+                    );
+                    return match connection.execute(&QueryRequest::new("ROLLBACK")) {
+                        Ok(_) => Err(format!("{message}; rolled back")),
+                        Err(rollback_error) => Err(format!(
+                            "{message}; rollback cleanup also failed: {rollback_error}"
+                        )),
+                    };
                 }
             }
-        }
 
-        let commit_req = QueryRequest::new("COMMIT");
-        if let Err(commit_err) = Self::execute_connection_blocking(connection.clone(), move |c| {
-            c.execute(&commit_req)
-                .map(|_| ())
-                .map_err(|e| format!("COMMIT failed: {}", e))
-        })
-        .await
-        {
-            let rollback_req = QueryRequest::new("ROLLBACK");
-            if let Err(rollback_err) =
-                Self::execute_connection_blocking(connection.clone(), move |c| {
-                    c.execute(&rollback_req)
-                        .map(|_| ())
-                        .map_err(|e| format!("{}", e))
-                })
-                .await
-            {
-                log::error!("ROLLBACK failed after COMMIT failure: {}", rollback_err);
+            if let Err(commit_error) = connection.execute(&QueryRequest::new("COMMIT")) {
+                return match connection.execute(&QueryRequest::new("ROLLBACK")) {
+                    Ok(_) => Err(format!("COMMIT failed: {commit_error}; rollback attempted")),
+                    Err(rollback_error) => Err(format!(
+                        "COMMIT failed: {commit_error}; rollback cleanup also failed: {rollback_error}"
+                    )),
+                };
             }
-            return Err(commit_err);
-        }
+
+            Ok(())
+        })
+        .await?;
 
         let operations: Vec<serde_json::Value> = ops
             .iter()
@@ -1495,6 +1619,48 @@ impl DbFluxServer {
         operations: &[crate::tools::AlterOperation],
     ) -> Result<(serde_json::Value, String), String> {
         let connection = Self::get_or_connect(state, connection_id).await?;
+
+        if planner_eligible_alter_operations(operations)
+            && connection.table_alter_planner().is_some()
+        {
+            let table_ref = TableRef::from_qualified(table);
+            let operations = operations.to_vec();
+            let table_name = table.to_string();
+            let value = Self::execute_connection_blocking(connection, move |connection| {
+                let table_details = connection
+                    .table_details("", table_ref.schema.as_deref(), &table_ref.name)
+                    .map_err(|error| format!("ALTER TABLE metadata lookup failed: {error}"))?;
+                let columns = table_details.columns.ok_or_else(|| {
+                    "ALTER TABLE metadata lookup returned no column details".to_string()
+                })?;
+                let request = selected_table_alter_request(
+                    table_ref,
+                    &operations,
+                    &columns,
+                    connection.dialect(),
+                )?;
+                let planner = connection
+                    .table_alter_planner()
+                    .ok_or_else(|| "ALTER TABLE planner is no longer available".to_string())?;
+                let prepared = planner
+                    .prepare(&request)
+                    .map_err(|error| format!("ALTER TABLE preparation failed: {error}"))?;
+                let preview = prepared.preview().clone();
+                let outcome = prepared
+                    .execute()
+                    .map_err(|error| format!("ALTER TABLE execution failed: {error}"))?;
+
+                Ok(planner_alter_response(
+                    &table_name,
+                    &operations,
+                    preview,
+                    outcome,
+                ))
+            })
+            .await?;
+
+            return Ok((value, String::new()));
+        }
 
         let (value, flat_sql) = if connection.supports_transactional_ddl() {
             Self::run_alter_transactional(connection, operations, table).await?
@@ -2420,6 +2586,127 @@ mod alter_table_integration_tests {
         cols
     }
 
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn alter_table_planner_handles_type_nullability_and_default() {
+        use rusqlite::Connection;
+
+        let db_file = tempfile::NamedTempFile::new().expect("tempfile");
+        let db_path = db_file.path().to_path_buf();
+        let connection_id = uuid::Uuid::new_v4().to_string();
+        let conn = Connection::open(&db_path).expect("open sqlite");
+        conn.execute_batch(
+            "CREATE TABLE planner_alter (id INTEGER PRIMARY KEY, payload TEXT DEFAULT NULL)",
+        )
+        .expect("create test table");
+
+        let state = build_sqlite_state(&connection_id, &db_path);
+        let operations = vec![AlterOperation {
+            action: "ALTER_COLUMN".to_string(),
+            column: Some("payload".to_string()),
+            definition: Some(serde_json::json!({
+                "type": "INTEGER",
+                "nullable": false,
+                "default": "NULL",
+            })),
+        }];
+
+        let result =
+            DbFluxServer::alter_table_impl(state, &connection_id, "planner_alter", &operations)
+                .await;
+
+        let (value, audit_sql) = result.expect("planner-backed SQLite alter should succeed");
+        assert!(
+            audit_sql.is_empty(),
+            "illustrative SQL must not enter the audit query"
+        );
+        assert_eq!(value["statement_count"], 4);
+        assert_eq!(value["illustrative_preview"]["route"], "rebuild");
+
+        let (type_name, not_null, default_value): (String, i64, Option<String>) = conn
+            .query_row(
+                "SELECT type, \"notnull\", dflt_value FROM pragma_table_info('planner_alter') WHERE name = 'payload'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("read rebuilt column definition");
+        assert_eq!(type_name, "INTEGER");
+        assert_eq!(not_null, 1);
+        assert_eq!(default_value.as_deref(), Some("'NULL'"));
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn alter_table_planner_uses_native_drop_without_outer_transaction() {
+        use rusqlite::Connection;
+
+        let db_file = tempfile::NamedTempFile::new().expect("tempfile");
+        let db_path = db_file.path().to_path_buf();
+        let connection_id = uuid::Uuid::new_v4().to_string();
+        let conn = Connection::open(&db_path).expect("open sqlite");
+        conn.execute_batch("CREATE TABLE planner_drop (id INTEGER PRIMARY KEY, obsolete TEXT)")
+            .expect("create test table");
+
+        let state = build_sqlite_state(&connection_id, &db_path);
+        let operations = vec![AlterOperation {
+            action: "DROP_COLUMN".to_string(),
+            column: Some("obsolete".to_string()),
+            definition: None,
+        }];
+        let (value, audit_sql) =
+            DbFluxServer::alter_table_impl(state, &connection_id, "planner_drop", &operations)
+                .await
+                .expect("planner-backed SQLite drop should succeed");
+
+        assert!(
+            audit_sql.is_empty(),
+            "native preview SQL must not enter the audit query"
+        );
+        assert_eq!(value["statement_count"], 1);
+        assert_eq!(value["illustrative_preview"]["route"], "native");
+        assert_eq!(table_columns(&db_path, "planner_drop"), vec!["id"]);
+    }
+
+    #[cfg(feature = "sqlite")]
+    #[tokio::test]
+    async fn alter_table_planner_rejects_conflicting_batch_without_mutation() {
+        use rusqlite::Connection;
+
+        let db_file = tempfile::NamedTempFile::new().expect("tempfile");
+        let db_path = db_file.path().to_path_buf();
+        let connection_id = uuid::Uuid::new_v4().to_string();
+        let conn = Connection::open(&db_path).expect("open sqlite");
+        conn.execute_batch("CREATE TABLE planner_conflict (id INTEGER PRIMARY KEY, payload TEXT)")
+            .expect("create test table");
+
+        let state = build_sqlite_state(&connection_id, &db_path);
+        let operations = vec![
+            AlterOperation {
+                action: "ALTER_COLUMN".to_string(),
+                column: Some("payload".to_string()),
+                definition: Some(serde_json::json!({"type": "INTEGER"})),
+            },
+            AlterOperation {
+                action: "DROP_COLUMN".to_string(),
+                column: Some("payload".to_string()),
+                definition: None,
+            },
+        ];
+        let result =
+            DbFluxServer::alter_table_impl(state, &connection_id, "planner_conflict", &operations)
+                .await;
+
+        assert!(result.is_err(), "conflicting planner batch must reject");
+        let type_name: String = conn
+            .query_row(
+                "SELECT type FROM pragma_table_info('planner_conflict') WHERE name = 'payload'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("conflicting batch must leave the column intact");
+        assert_eq!(type_name, "TEXT");
+    }
+
     // SQLite supports transactional DDL — verifies atomic rollback path
     #[cfg(feature = "sqlite")]
     #[tokio::test]
@@ -2665,6 +2952,74 @@ mod alter_table_integration_tests {
             "should have aborted at op index 1 (second op)"
         );
         assert_eq!(value["altered"], false);
+    }
+}
+
+#[cfg(test)]
+mod planner_alter_request_tests {
+    use super::*;
+    use dbflux_core::{DefaultSqlDialect, OwnedDefaultSpec, TableAlterOperation};
+
+    static DIALECT: DefaultSqlDialect = DefaultSqlDialect;
+
+    fn payload_column() -> dbflux_core::ColumnInfo {
+        dbflux_core::ColumnInfo {
+            name: "payload".to_string(),
+            type_name: "TEXT".to_string(),
+            nullable: true,
+            is_primary_key: false,
+            default_value: Some("NULL".to_string()),
+            enum_values: None,
+        }
+    }
+
+    fn alter_request(definition: serde_json::Value) -> dbflux_core::TableAlterRequest {
+        selected_table_alter_request(
+            TableRef::new("items"),
+            &[AlterOperation {
+                action: "ALTER_COLUMN".to_string(),
+                column: Some("payload".to_string()),
+                definition: Some(definition),
+            }],
+            &[payload_column()],
+            &DIALECT,
+        )
+        .expect("selected alteration should normalize")
+    }
+
+    #[test]
+    fn planner_request_preserves_absent_drop_and_sql_null_default_distinctions() {
+        let absent = alter_request(serde_json::json!({"type": "TEXT"}));
+        let dropped = alter_request(serde_json::json!({"default": null}));
+        let explicit_sql_null = alter_request(serde_json::json!({"default": "NULL"}));
+
+        assert!(matches!(
+            absent.operations.as_slice(),
+            [TableAlterOperation::AlterColumn { default: None, .. }]
+        ));
+        assert_eq!(absent.expected_before[0].default, None);
+        assert!(matches!(
+            dropped.operations.as_slice(),
+            [TableAlterOperation::AlterColumn {
+                default: Some(OwnedDefaultSpec::Drop),
+                ..
+            }]
+        ));
+        assert_eq!(
+            dropped.expected_before[0].default,
+            Some(Some("NULL".to_string()))
+        );
+        assert!(matches!(
+            explicit_sql_null.operations.as_slice(),
+            [TableAlterOperation::AlterColumn {
+                default: Some(OwnedDefaultSpec::Set(value)),
+                ..
+            }] if value == "'NULL'"
+        ));
+        assert_eq!(
+            explicit_sql_null.expected_before[0].default,
+            Some(Some("NULL".to_string()))
+        );
     }
 }
 

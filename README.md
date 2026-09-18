@@ -93,6 +93,7 @@ unsigned macOS and Windows builds, is in [Installing DBFlux](docs/INSTALL.md).
 - **DynamoDB** with table browsing, item CRUD, and AWS authentication
 - **InfluxDB** v1 and v2 (InfluxQL on v1, InfluxQL + Flux on v2)
 - **ClickHouse** and ClickHouse Cloud over HTTP(S), with database/table discovery, visual SELECTs, and explicit raw SQL execution
+- **TursoDB** and libSQL (`sqld`) over HTTP, with schema discovery, typed CRUD, and interactive transactions per editor tab
 - **CloudWatch Logs** with log group/stream browsing and event streaming
 - **Amazon S3** with bucket browsing, object preview/editing, full CRUD, and presigned URLs, including S3-compatible endpoints (Cloudflare R2, MinIO)
 - **External drivers over RPC** (register out-of-process drivers via the [Driver RPC Protocol](docs/DRIVER_RPC_PROTOCOL.md))
@@ -115,7 +116,7 @@ See [docs/DRIVERS.md](docs/DRIVERS.md) for a full capability matrix and per-driv
 - Command palette with fuzzy search
 - Custom toast notification system with auto-dismiss
 - Background task panel
-- Session restore: open tabs are restored on startup with conflict detection for externally modified files
+- Session restore: open tabs are restored on startup, and a recovered draft that differs from its file is never written over it
 
 ### Visual Query Builder
 

@@ -18,9 +18,9 @@ impl CodeDocument {
     /// behind `Box<dyn Fn>` closures capturing `entity` by clone.
     ///
     /// The optional `is_file_backed_empty` and `session_tab_snapshot` helpers
-    /// are populated so that `write_session_manifest` and the empty-file-close
-    /// cleanup in `actions.rs` can operate without pattern-matching on the
-    /// `DocumentHandle::Code` variant.
+    /// are populated so that `write_session_manifest` and the empty-script
+    /// cleanup in `actions/documents.rs` can operate without pattern-matching on
+    /// the `DocumentHandle::Code` variant.
     pub fn into_pane(entity: Entity<Self>, cx: &App) -> PaneHandle {
         let id = entity.read(cx).id();
 
@@ -137,18 +137,55 @@ impl CodeDocument {
             },
         );
 
-        // Populate optional helper: empty file-backed detection used by the
-        // cleanup path in actions.rs that deletes empty script files on close.
+        handle.on_close = Some({
+            let entity = entity.clone();
+            Box::new(move |cx| {
+                entity.update(cx, |document, cx| document.invalidate_execution_session(cx));
+            })
+        });
+
+        // Populate optional helper: the interrupted-close save. The tab closes
+        // only when the document reports that the write landed.
+        handle.save_for_close = Some({
+            let e = entity.clone();
+            Box::new(move |w, cx| e.update(cx, |document, cx| document.save_for_close(w, cx)))
+        });
+
+        // Populate optional helper: the graceful-shutdown flush. It persists the
+        // pending edits without closing the tab, so quitting never drops the
+        // content typed inside the autosave debounce window.
+        handle.flush_for_shutdown = Some({
+            let e = entity.clone();
+            Box::new(move |cx| e.update(cx, |document, cx| document.flush_for_shutdown(cx)))
+        });
+
+        // Populate optional helper: the close policy. Every close route asks the
+        // document what closing means instead of removing the tab over pending
+        // edits: a clean, idle buffer closes now, a pending buffer flushes
+        // (conflict-checked on a file-backed script) and closes once the write
+        // lands, and a buffer that cannot be persisted keeps the tab open.
+        handle.resolve_close = Some({
+            let e = entity.clone();
+            Box::new(move |w, cx| e.update(cx, |document, cx| document.resolve_close(w, cx)))
+        });
+
+        // Populate optional helper: whether the close policy applies right now.
+        // A code document persists its pending edits on close only when it has
+        // a file to persist to; an untitled buffer has no save target short of
+        // Save As, so it keeps the unsaved-changes dialog instead.
+        handle.decides_own_close = Some({
+            let e = entity.clone();
+            Box::new(move |cx| e.read(cx).path().is_some())
+        });
+
+        // Populate optional helper: the only backing file the cleanup path in
+        // actions.rs may delete as it closes a tab — an empty, file-backed script
+        // whose file still holds exactly the document's own last-loaded or
+        // written bytes. A foreign change, a missing or different-path baseline,
+        // or an unreadable file all report `None`, so cleanup keeps the file.
         handle.is_file_backed_empty = Some({
             let e = entity.clone();
-            Box::new(move |cx| {
-                let d = e.read(cx);
-                if d.is_file_backed() && d.is_content_empty(cx) {
-                    d.path().cloned()
-                } else {
-                    None
-                }
-            })
+            Box::new(move |cx| e.read(cx).file_backed_empty_path(cx))
         });
 
         // Populate optional helper: session manifest serialization data.

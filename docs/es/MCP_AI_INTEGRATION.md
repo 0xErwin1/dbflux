@@ -246,7 +246,7 @@ Valores por defecto típicos en Linux:
 | Ruta                              | Contenido                                                                                                       |
 | --------------------------------- | --------------------------------------------------------------------------------------------------------------- |
 | `~/.local/share/dbflux/dbflux.db` | Base de datos unificada: profiles, auth, SSH tunnels, governance, audit events, history, sessions, estado de UI |
-| `~/.local/share/dbflux/sessions/` | Archivos de scratch y shadow para el auto-save de restauración de sesión                                        |
+| `~/.local/share/dbflux/sessions/` | Archivos de scratch y shadow conservados para restaurar y recuperar la sesión |
 | `~/.local/share/dbflux/scripts/`  | Directorio de scripts creados por el usuario                                                                    |
 
 La base de datos `dbflux.db` contiene todas las tablas de dominio bajo schemas

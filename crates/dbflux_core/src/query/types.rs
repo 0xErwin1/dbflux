@@ -121,6 +121,20 @@ pub struct QueryRequest {
     /// Full per-document execution context for drivers that need more than
     /// the compatibility `database` field.
     pub execution_context: Option<ExecutionContext>,
+
+    /// Governance ceiling authorised for this execution.
+    ///
+    /// Set by the caller that obtained authorisation — the editor's one-time
+    /// dangerous-query confirmation, or the MCP policy decision. `None` means
+    /// nothing was authorised and is treated as the restrictive default; it
+    /// is never an escape hatch.
+    ///
+    /// INVARIANT: never populated from parsed document content. No file-header
+    /// annotation maps to it, and `QueryRequest` deliberately does not derive
+    /// `Deserialize` — every instance is constructed in Rust by code that just
+    /// performed the authorisation, so this field cannot be built from
+    /// untrusted bytes.
+    pub confirmed_ceiling: Option<crate::ExecutionClassification>,
 }
 
 impl QueryRequest {
@@ -129,6 +143,13 @@ impl QueryRequest {
             sql: sql.into(),
             ..Default::default()
         }
+    }
+
+    /// Sets the governance ceiling authorised for this execution. See
+    /// [`QueryRequest::confirmed_ceiling`] for the security invariant.
+    pub fn with_confirmed_ceiling(mut self, ceiling: crate::ExecutionClassification) -> Self {
+        self.confirmed_ceiling = Some(ceiling);
+        self
     }
 
     pub fn with_limit(mut self, limit: u32) -> Self {

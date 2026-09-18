@@ -6,10 +6,25 @@
 #
 # IMPORTANT: this applies to ALL builds for this triple, including
 # `cargo build --release`. Linux x86_64 release artifacts are therefore linked
-# with mold (functionally equivalent binary). Other triples — Windows (msvc),
-# macOS, and Linux aarch64 — are unaffected and keep their default linker.
+# with mold (functionally equivalent binary). macOS and Linux aarch64 are
+# unaffected and keep their default linker.
 
 [target.x86_64-unknown-linux-gnu]
 # Use the mold linker through the default cc driver. Drastically reduces link
 # time and peak memory when linking the 60+ workspace crates.
 rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+
+# Link the MSVC C runtime statically into dbflux.exe.
+#
+# The msvc target links the CRT dynamically by default, so the executable
+# imports VCRUNTIME140.dll and only starts on machines that have the Visual
+# C++ Redistributable installed. A clean Windows (the winget validation
+# sandbox, a fresh VM, the portable zip on a new machine) fails with
+# STATUS_DLL_NOT_FOUND (0xC0000135) before main runs. A static CRT removes
+# that runtime dependency; every other import is shipped with Windows 10+.
+#
+# The vendored C libraries stay compatible: the `cc` and `cmake` crates pick
+# `/MT` from this target feature, and the vendored OpenSSL static libraries
+# are built with `/MT /Zl` (no CRT reference), so no mixed-runtime link.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

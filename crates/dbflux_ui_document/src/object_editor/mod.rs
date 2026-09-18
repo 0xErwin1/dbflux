@@ -119,6 +119,9 @@ pub struct ObjectEditorDocument {
     /// Invoked with the key after every successful save so the document that
     /// asked for this tab can refresh its own view of the object.
     on_saved: ObjectSavedCallback,
+    /// Set when a save was started by the interrupted-close flow, so a write
+    /// that lands also asks the workspace to close the tab.
+    close_after_save: bool,
 }
 
 impl EventEmitter<DocumentEvent> for ObjectEditorDocument {}
@@ -148,6 +151,7 @@ impl ObjectEditorDocument {
             size_gate_override: false,
             encoding_override: None,
             on_saved,
+            close_after_save: false,
         };
 
         doc.load_object(cx);
@@ -456,22 +460,73 @@ impl ObjectEditorDocument {
 
     // -- Save ----------------------------------------------------------------
 
+    /// Saves as part of an interrupted close: the tab closes only once the
+    /// `put_object` lands, and keeps its changes otherwise.
+    ///
+    /// Repeating the request while a save is in flight is intentional: that
+    /// save then reports to the close the second request asked for.
+    pub fn save_for_close(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(buffer) = self.buffer.as_ref() else {
+            return false;
+        };
+
+        if !buffer.is_editable() {
+            // The same refusal `save` reports: no write can start, so there is
+            // nothing to arm.
+            return false;
+        }
+
+        self.close_after_save = true;
+        self.save(cx);
+        true
+    }
+
+    /// Reports a finished save to the workspace.
+    ///
+    /// Only a save the interrupted-close flow started, and only one that
+    /// actually landed, asks for the tab to close; every other outcome drops
+    /// that intent so a later manual save cannot close a tab the user kept.
+    fn report_save_outcome(&mut self, succeeded: bool, cx: &mut Context<Self>) {
+        let close_after_save = std::mem::take(&mut self.close_after_save);
+
+        cx.emit(DocumentEvent::SaveFinished { succeeded });
+
+        if succeeded && close_after_save {
+            cx.emit(DocumentEvent::RequestClose);
+        }
+    }
+
     /// Writes the buffer back with `put_object`, preserving the object's
     /// content type and its original line-ending convention.
     pub fn save(&mut self, cx: &mut Context<Self>) {
-        let Some(buffer) = self.buffer.as_ref() else {
+        if self.buffer.is_none() {
             return;
-        };
+        }
+
+        if self.saving {
+            // The save already in flight reports its own outcome.
+            return;
+        }
 
         // A decoded view is never the object's real bytes — writing it back
         // would silently replace the object's actual content with a
         // re-encoding of its decoded form. The footer never offers Save for
         // this state, but the guard stays here too since it is reachable
         // from the Ctrl/Cmd+S shortcut regardless of what is rendered.
-        if !buffer.is_editable() || self.saving {
+        if !self
+            .buffer
+            .as_ref()
+            .is_some_and(|buffer| buffer.is_editable())
+        {
+            // A refused save must report now, or a tab close waiting on it
+            // never resolves.
+            self.report_save_outcome(false, cx);
             return;
         }
 
+        let Some(buffer) = self.buffer.as_ref() else {
+            return;
+        };
         let content_type = buffer.content_type.clone();
         let text = buffer.input.read(cx).value().to_string();
         let bytes = buffer.line_ending.apply(&text).into_bytes();
@@ -485,6 +540,7 @@ impl ObjectEditorDocument {
                 ),
                 cx,
             );
+            self.report_save_outcome(false, cx);
             return;
         };
 
@@ -550,13 +606,22 @@ impl ObjectEditorDocument {
         // The failure was already reported; the buffer stays dirty so the user
         // can retry.
         if !succeeded {
+            self.report_save_outcome(false, cx);
             cx.notify();
             return;
         }
 
+        // The user may have typed while the write was in flight: what landed is
+        // the new baseline, but those newer edits are still pending, and a close
+        // waiting on this save must not discard them.
+        let landed = self
+            .buffer
+            .as_ref()
+            .is_some_and(|buffer| buffer.input.read(cx).value() == saved_text);
+
         if let Some(buffer) = self.buffer.as_mut() {
             buffer.baseline = saved_text;
-            buffer.dirty = false;
+            buffer.dirty = !landed;
             buffer.byte_len = byte_len;
         }
 
@@ -572,6 +637,7 @@ impl ObjectEditorDocument {
         notify_opener(&key, cx);
 
         cx.emit(DocumentEvent::MetaChanged);
+        self.report_save_outcome(landed, cx);
         cx.notify();
     }
 
@@ -584,8 +650,9 @@ impl ObjectEditorDocument {
         cx: &mut Context<Self>,
     ) -> bool {
         match cmd {
-            // Both save paths land here: Ctrl/Cmd+S in the buffer, and the
-            // unsaved-changes modal's save on tab close (`SaveFileAs`).
+            // Ctrl/Cmd+S in the buffer. The unsaved-changes dialog does not come
+            // through here: it calls `save_for_close`, which asks the workspace
+            // to close the tab only after the write lands.
             Command::SaveQuery | Command::SaveFileAs => {
                 self.save(cx);
                 true
@@ -971,8 +1038,17 @@ mod tests {
         window_cx.update(|_window, cx| {
             assert!(doc.read(cx).is_dirty());
 
+            // The write captured the buffer as it stands, so the save resolves
+            // it: nothing changed while `put_object` was in flight.
+            let saved_text = doc
+                .read(cx)
+                .buffer
+                .as_ref()
+                .map(|buffer| buffer.input.read(cx).value().to_string())
+                .expect("the document must have a buffer");
+
             doc.update(cx, |doc, cx| {
-                doc.apply_save_outcome("onetwo".to_string(), 6, true, cx);
+                doc.apply_save_outcome(saved_text, 6, true, cx);
             });
 
             let doc = doc.read(cx);
@@ -981,6 +1057,45 @@ mod tests {
         });
 
         assert_eq!(saved.borrow().as_slice(), ["logs/app.log".to_string()]);
+    }
+
+    /// Regression: edits typed while `put_object` is in flight are neither
+    /// written nor discarded — the baseline moves to what landed and the newer
+    /// edits stay pending, so a close waiting on the save keeps the tab.
+    #[gpui::test]
+    fn typing_during_a_save_keeps_the_edit(cx: &mut gpui::TestAppContext) {
+        let (doc, window_cx, _saved) = new_test_document(cx, "logs/app.log");
+
+        window_cx.update(|window, cx| {
+            doc.update(cx, |doc, cx| {
+                doc.install_buffer_for_test("one", window, cx);
+                doc.type_for_test("two", window, cx);
+            });
+        });
+        window_cx.run_until_parked();
+
+        window_cx.update(|window, cx| {
+            // The write captured the buffer as it stood when it started.
+            let captured = doc
+                .read(cx)
+                .buffer
+                .as_ref()
+                .map(|buffer| buffer.input.read(cx).value().to_string())
+                .expect("the document must have a buffer");
+
+            doc.update(cx, |doc, cx| {
+                doc.type_for_test("three", window, cx);
+            });
+
+            doc.update(cx, |doc, cx| {
+                doc.apply_save_outcome(captured, 6, true, cx);
+            });
+
+            assert!(
+                doc.read(cx).is_dirty(),
+                "edits typed during the write must stay pending"
+            );
+        });
     }
 
     /// A failed save keeps the buffer dirty so the edit can be retried, and

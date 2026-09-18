@@ -125,6 +125,14 @@ charts:
     error:
       create_editable_failed: "No se pudo crear el dashboard editable: %{error}"
 components:
+  value_panel:
+    empty: Ninguna celda seleccionada
+    error:
+      not_xml: No es un documento XML
+    read_only: Solo lectura
+    revert: Revertir
+    title: Valor
+    wrap: Ajuste de línea
   data_table:
     record:
       empty: No hay filas que mostrar
@@ -882,6 +890,9 @@ document:
         dialog_unavailable: "Error al guardar — el selector de archivos no está disponible y no se pudo crear el directorio alternativo: %{error}"
         save_script_failed: "No se pudo guardar el script: %{error}"
         auto_save_failed: "El guardado automático falló para %{path}"
+        close_flush_failed: "No se pudo guardar %{path} antes de cerrar, así que la pestaña quedó abierta"
+        shutdown_flush_failed: "No se pudo guardar %{path} al salir; las ediciones quedan en esta sesión"
+        refusal_suggested_action: Usa Ctrl+S o Guardar como para escribir estos cambios de forma deliberada
       native_picker_fallback: "Selector de archivos nativo no disponible — el script se guardó en %{path}. Instala xdg-desktop-portal, zenity o kdialog para tener un selector de guardado."
     title:
       untitled: Sin título
@@ -1025,6 +1036,7 @@ document:
         set_null: Establecer NULL
         add_row: Agregar fila
         inspect_row: Inspeccionar fila
+        view_value: Ver valor
         duplicate_row: Duplicar fila
         delete_row: Eliminar fila
         chart_this_query: Graficar esta consulta
@@ -2059,6 +2071,8 @@ document:
       schema_not_loaded: "El esquema de \"%{database}\" aún no está cargado. Expande esa base de datos en la barra lateral primero y vuelve a ejecutar Calcular diferencia."
     status:
       computing: "Calculando diferencia…"
+      preparing: "Preparando una vista previa inmutable para aplicar…"
+      preview_warning: Advertencia
       empty: No se encontraron diferencias entre los dos esquemas.
       idle: Elige un origen y ejecuta Calcular diferencia para ver los cambios de esquema.
       unsupported: No compatible
@@ -2422,6 +2436,9 @@ modals:
     save_selected:
       one: "Guardar seleccionado (%{count})"
       many: "Guardar seleccionados (%{count})"
+    cannot_save:
+      one: "Este documento no se puede guardar desde aquí: sus cambios se conservan y la pestaña permanece abierta"
+      many: "%{count} documentos no se pueden guardar desde aquí: sus cambios se conservan y las pestañas permanecen abiertas"
     dont_save: No guardar
     cancel: Cancelar
 palette:
@@ -2710,6 +2727,7 @@ settings:
       results_copy_row: Copiar fila
       results_copy_cell: Copiar celda
       toggle_record_view: Alternar vista de registro
+      toggle_value_panel: Alternar panel de valor
       results_set_null: Establecer celda en NULL
       open_context_menu: Abrir menú contextual
       menu_up: "Menú: arriba"

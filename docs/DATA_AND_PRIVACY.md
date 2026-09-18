@@ -8,7 +8,7 @@ log keeps, and how to back up or fully reset.
 | Your data | Where it lives |
 |-----------|----------------|
 | Connection profiles, settings, history, saved charts/queries, audit log | One SQLite file: `dbflux.db` in the data directory |
-| Open tabs / session | The same `dbflux.db`, plus scratch files in the data directory |
+| Open tabs / session | The same `dbflux.db`, plus script files and scratch/shadow files on disk |
 | Passwords, passphrases, API secrets | Your **OS keyring** — never in `dbflux.db` |
 | IPC/MCP auth token | A `0600` file in the config directory |
 
@@ -32,7 +32,8 @@ The data directory holds:
 
 - **`dbflux.db`** — the unified database (everything below in [What's in the
   database](#whats-in-the-database)).
-- **`st_sessions/`** — scratch/shadow files for open editor tabs.
+- **`sessions/`** — scratch and shadow files for open editor tabs: untitled
+  content, plus a recovery copy of unsaved edits.
 - **`ipc_auth_token`** — the IPC/MCP auth token (see [below](#ipcmcp-auth-token)).
 - **`ssh_known_hosts`** — accepted SSH host keys (TOFU).
 
@@ -110,9 +111,16 @@ only a reference string per secret:
 
 Which tabs you have open — their kind, file paths, order, active tab, and pin
 state — is recorded in `dbflux.db` (`st_sessions` / `st_session_tabs`). The
-actual scratch/shadow file contents live alongside it under `st_sessions/` in the
-data directory. On startup DBFlux restores this session when **Settings → General
-→ Restore session on startup** is on (the default).
+scratch/shadow copies used to restore them live under `sessions/` in the data
+directory. A script backed by a file is saved to that file itself: on the
+auto-save interval, when you close its tab, and when you quit. Unsaved untitled
+content is kept in the sessions folder. Those automatic writes never overwrite
+a script file that changed outside dbflux: such a write is refused, and the
+pending edits stay in the editor (and in the sessions-folder copy). `Ctrl+s`
+and **Save File As** are deliberate: they write the file as you asked. On
+startup DBFlux
+restores this session when **Settings → General → Restore session on startup**
+is on (the default).
 
 ---
 

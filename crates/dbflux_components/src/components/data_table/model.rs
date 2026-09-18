@@ -429,6 +429,13 @@ pub enum EditAction {
         old_value: Option<CellValue>,
         new_value: CellValue,
     },
+    /// A cell was staged with the value the row already holds, so its staged
+    /// value was dropped: (row, col, replaced_value)
+    ClearCell {
+        row: usize,
+        col: usize,
+        replaced_value: CellValue,
+    },
     /// Row marked for deletion
     MarkDelete { row: usize },
     /// Row unmarked from deletion
@@ -520,6 +527,24 @@ impl EditBuffer {
 
         self.overrides.insert((row, col), value);
         self.row_states.insert(row, RowState::Dirty);
+    }
+
+    /// Drop a staged value so the cell shows the row's own value again.
+    pub fn clear_cell(&mut self, row: usize, col: usize) {
+        let Some(replaced_value) = self.overrides.remove(&(row, col)) else {
+            return;
+        };
+
+        self.push_undo(EditAction::ClearCell {
+            row,
+            col,
+            replaced_value,
+        });
+
+        let has_other_overrides = self.overrides.keys().any(|&(r, _)| r == row);
+        if !has_other_overrides && !self.is_pending_delete(row) {
+            self.row_states.remove(&row);
+        }
     }
 
     /// Clear all overrides for a specific row.
@@ -894,6 +919,24 @@ impl EditBuffer {
                 });
             }
 
+            EditAction::ClearCell {
+                row,
+                col,
+                replaced_value,
+            } => {
+                self.overrides.insert((row, col), replaced_value.clone());
+                // Restoring a value must not move a row out of `PendingDelete`:
+                // `clear_cell` and the redo arm both leave that state alone.
+                if !self.is_pending_delete(row) {
+                    self.row_states.insert(row, RowState::Dirty);
+                }
+                self.redo_stack.push(EditAction::ClearCell {
+                    row,
+                    col,
+                    replaced_value,
+                });
+            }
+
             EditAction::MarkDelete { row } => {
                 self.row_states.remove(&row);
                 self.redo_stack.push(EditAction::MarkDelete { row });
@@ -986,6 +1029,23 @@ impl EditBuffer {
                     col,
                     old_value,
                     new_value,
+                });
+            }
+
+            EditAction::ClearCell {
+                row,
+                col,
+                replaced_value,
+            } => {
+                self.overrides.remove(&(row, col));
+                let has_other_overrides = self.overrides.keys().any(|&(r, _)| r == row);
+                if !has_other_overrides && !self.is_pending_delete(row) {
+                    self.row_states.remove(&row);
+                }
+                self.undo_stack.push(EditAction::ClearCell {
+                    row,
+                    col,
+                    replaced_value,
                 });
             }
 
@@ -1085,6 +1145,96 @@ mod tests {
                 VisualRowSource::Base(2),
                 VisualRowSource::Insert(2),
             ]
+        );
+    }
+
+    #[test]
+    fn clear_cell_drops_one_staged_value_and_is_undoable() {
+        let mut buffer = EditBuffer::new();
+        buffer.set_base_row_count(2);
+
+        buffer.set_cell(0, 1, CellValue::text("carol"));
+        buffer.set_cell(0, 0, CellValue::int(9));
+        buffer.clear_cell(0, 1);
+
+        assert!(
+            !buffer.is_cell_dirty(0, 1),
+            "the cleared cell must be back to the value the row holds"
+        );
+        assert!(
+            buffer.is_cell_dirty(0, 0),
+            "other staged cells on the same row must survive"
+        );
+
+        buffer.clear_cell(0, 0);
+        assert!(
+            buffer.row_state(0).is_clean(),
+            "a row with no staged cells must not be reported as modified"
+        );
+
+        assert!(buffer.undo());
+        let restored = buffer.row_changes(0);
+        assert_eq!(
+            restored
+                .iter()
+                .map(|(col, value)| (*col, value.display_text().to_string()))
+                .collect::<Vec<_>>(),
+            vec![(0usize, "9".to_string())],
+            "undo must bring the dropped value back"
+        );
+
+        assert!(buffer.redo());
+        assert!(
+            !buffer.is_cell_dirty(0, 0),
+            "redo must drop the value again"
+        );
+
+        let mut untouched = EditBuffer::new();
+        untouched.set_base_row_count(1);
+        untouched.clear_cell(0, 0);
+        assert!(
+            !untouched.undo(),
+            "clearing a cell with no staged value must not record an undo step"
+        );
+    }
+
+    /// Undoing a cleared cell must not turn a row marked for deletion back into
+    /// an edited one: the row is still going away, and `PendingDelete` is what
+    /// keeps the delete in the batch.
+    #[test]
+    fn undoing_a_cleared_cell_keeps_the_row_pending_delete() {
+        let mut buffer = EditBuffer::new();
+        buffer.set_base_row_count(1);
+
+        buffer.set_cell(0, 0, CellValue::int(9));
+        buffer.mark_for_delete(0);
+        assert!(
+            buffer.is_pending_delete(0),
+            "the row must start out marked for deletion"
+        );
+
+        // Clearing a staged cell on a pending-delete row leaves the delete alone
+        // and records the value it dropped, so undoing it must put the value back
+        // without reviving the row as an edit.
+        buffer.clear_cell(0, 0);
+        assert!(
+            buffer.is_pending_delete(0),
+            "clearing a staged cell must not drop the delete"
+        );
+
+        assert!(buffer.undo());
+        let restored = buffer.row_changes(0);
+        assert_eq!(
+            restored
+                .iter()
+                .map(|(col, value)| (*col, value.display_text().to_string()))
+                .collect::<Vec<_>>(),
+            vec![(0usize, "9".to_string())],
+            "undo must bring the dropped value back"
+        );
+        assert!(
+            buffer.is_pending_delete(0),
+            "undoing the cleared cell must leave the row pending delete"
         );
     }
 
