@@ -266,8 +266,10 @@ impl SessionFacade {
         count
     }
 
-    pub fn close_all_connections(&mut self) {
-        self.connections.close_all_connections(&self.shutdown);
+    pub fn close_all_connections(
+        &mut self,
+    ) -> Vec<std::thread::JoinHandle<Result<(), crate::DbError>>> {
+        self.connections.close_all_connections(&self.shutdown)
     }
 
     pub fn complete_shutdown(&self) {

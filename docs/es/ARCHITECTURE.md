@@ -428,7 +428,7 @@ crates/
       ssh_tunnel_manager.rs # SshTunnelManager
       item_manager.rs       # Generic ItemManager<T>, Identifiable, DefaultFilename traits
     src/storage/            # Persistence and state
-      session.rs            # Session persistence (scratch/shadow files, manifest)
+      session.rs            # Session manifest types and scratch/shadow path helpers
       history.rs            # History persistence
       saved_query.rs        # Saved queries persistence
       recent_files.rs       # Recent files tracking
@@ -488,6 +488,11 @@ crates/
     src/connection.rs       # Query execution and system-catalog discovery
     src/types.rs            # ClickHouse type parsing and value decoding
     src/dialect.rs          # SQL generation dialect
+  dbflux_driver_turso/      # TursoDB / libSQL remote driver over Hrana HTTP
+    src/driver.rs           # Metadata, connection form, URL validation, connect
+    src/connection.rs       # Tokio bridge, batch execution, schema discovery, CRUD, error mapping
+    src/session.rs          # ExecutionSessionFactory/ExecutionSession over per-stream connections
+    src/dialect.rs          # SQLite dialect, value conversion, DDL code generation
   dbflux_driver_cloudwatch/ # AWS CloudWatch Logs driver (DatabaseCategory::LogStream)
     src/driver.rs           # Log group/stream discovery, EventStreamTarget, CollectionPresentation::EventStream
   dbflux_driver_s3/         # AWS S3 object-storage driver (DatabaseCategory::ObjectStorage)
@@ -636,12 +641,13 @@ en tabs con cinco capas:
    mantiene un `Vec<Tab>` más el orden MRU.
 
 2. **`PaneHandle`** (`pane.rs`) — shell que borra closures y reemplaza al
-   antiguo enum cerrado `DocumentHandle`. Cada una de las 22 operaciones
+   antiguo enum cerrado `DocumentHandle`. Cada operación
    (render, focus, dispatch_command, meta_snapshot, tab_title, can_close,
    connection_id, active_context, change_summary, refresh_policy,
    set_active_tab, set_refresh_policy, flush_auto_save, matches_dedup_key,
-   subscribe, más helpers opcionales) es un closure `Box<dyn Fn>` que captura el
-   `Entity<T>` tipado. `PaneHandle` es `!Clone`. Cada tipo de document provee
+   subscribe, más helpers opcionales como `resolve_close`, `save_for_close`,
+   `flush_for_shutdown` e `is_file_backed_empty`) es un closure `Box<dyn Fn>`
+   que captura el `Entity<T>` tipado. `PaneHandle` es `!Clone`. Cada tipo de document provee
    `XxxDocument::into_pane(entity, cx) -> PaneHandle` en su propio archivo
    `pane.rs` (todos bajo `crates/dbflux_ui_document/src/`). Agregar un nuevo
    tipo de document no requiere cambios en `workspace/mod.rs`, `tab_manager.rs`,
@@ -730,6 +736,10 @@ módulo):
 4. Agrega una función `open_<name>` en
    `crates/dbflux_ui/src/ui/views/workspace/actions.rs`.
 
+**Ciclo de vida de sesión del editor**
+
+`CodeDocument` posee una vinculación opcional de sesión de ejecución aislada para los controladores que exponen `Connection::execution_session_factory()`. La vinculación compara la identidad `Arc` de la raíz resuelta y la base de datos, serializa apertura y ejecución en el ejecutor de segundo plano, y avanza la generación antes de que cambios de contexto programen el cierre. La sesión se mantiene en un editor durante `BEGIN`, sentencias, `COMMIT` o `ROLLBACK`, y autocommit posterior. El control transaccional no compatible o multi-sentencia se rechaza antes de E/S; los controladores sin fábrica conservan la ejecución raíz. `PaneHandle::on_close` permite que `TabManager::close` inicie la limpieza antes de retirar el panel.
+
 **Notas de arquitectura**
 
 - `KeyValueView` y `LogStreamView` son boundary structs a nivel de archivo, no
@@ -742,14 +752,25 @@ módulo):
   spec pedía `render` en el trait, pero `impl IntoElement` no es
   trait-object-safe y hacer boxing a `AnyElement` entra en conflicto con los
   idioms de GPUI. El renderizado pasa por `ViewHandle.render` en su lugar.
-- Auto-save: los tabs se auto-guardan en scratch files (sin título) o shadow
-  files (con archivo respaldo) con un debounce de 2 segundos. Ctrl+S escribe al
-  archivo original. Los tabs se cierran sin avisos.
-- Restauración de sesión: `SessionStore` persiste un manifest de los tabs
-  abiertos en `~/.local/share/dbflux/sessions/`. Al iniciar, todos los tabs se
-  restauran con detección de conflictos para archivos modificados externamente.
-  Solo los code documents producen `CodeSessionTabSnapshot`; el resto de tipos
-  de document no se persisten en la sesión.
+- Auto-save y cierre: un code document con archivo respaldo se auto-guarda en su
+  archivo de script en el intervalo configurado, a través de la misma cola de
+  escritura por documento que Ctrl+S y Save As. Las escrituras son
+  stage-then-replace (se preservan los permisos; un destino read-only se
+  rechaza), y una escritura automática que sobrescribiría un archivo cambiado
+  fuera de dbflux se rechaza, dejando el buffer dirty (Ctrl+S y Save As son
+  deliberados y sí escriben). Todas las rutas de cierre guardan
+  las ediciones pendientes antes de remover el tab — el tab queda abierto si la
+  escritura no puede aterrizar — y al salir también se vuelcan, así que el
+  diálogo de cambios sin guardar ya no aplica a los code documents. El contenido
+  sin título se auto-guarda en scratch files, y las ediciones sin guardar
+  conservan una copia shadow en la carpeta `sessions/` como red de recuperación.
+- Restauración de sesión: el manifest de los tabs abiertos vive en `dbflux.db`
+  (`st_sessions` / `st_session_tabs`, vía
+  `crates/dbflux_storage/src/repositories/state/sessions.rs`). La carpeta
+  `sessions/` (`~/.local/share/dbflux/sessions/`) guarda los artifacts
+  scratch/shadow que se usan para restaurar y recuperar contenido. Solo los code
+  documents producen `CodeSessionTabSnapshot`; el resto de tipos de document no
+  se persisten en la sesión.
 - Prevención de duplicados: `tab_manager.find_by_key` verifica
   `PaneHandle::matches_dedup_key` antes de abrir un nuevo tab, enfocando el
   existente si lo encuentra.
@@ -1210,8 +1231,9 @@ profiles (orden de dependencia de FK). Fuentes de import:
 keyring. Los secrets se almacenan en el keyring del sistema operativo, las
 referencias se almacenan en SQLite.
 
-**Persistencia de sesión**: archivos scratch/shadow y el manifest de sesión en
-`~/.local/share/dbflux/sessions/` para la restauración de tabs al iniciar.
+**Persistencia de sesión**: el manifest de sesión vive en `dbflux.db`
+(`st_sessions` / `st_session_tabs`); los archivos scratch/shadow para restaurar
+tabs quedan en `~/.local/share/dbflux/sessions/`.
 
 **Contexto de ejecución**: `crates/dbflux_core/src/connection/context.rs`
 rastrea, por tab, la connection, database, schema y el contexto de fuente
@@ -1329,6 +1351,18 @@ flujo de release/nightly en sí está documentado en `docs/RELEASE.md`.
   - Soporta SQL orientado a lectura y generación visual de SELECT; mutations
     estructuradas, DDL, transactions, SSH tunneling y parámetros de query
     genéricos no están expuestos
+- **TursoDB**: `crates/dbflux_driver_turso/` — driver
+  `DatabaseCategory::Relational` y `QueryLanguage::Sql` para Turso Cloud y
+  `sqld` autoalojado:
+  - Envuelve el SDK asíncrono `turso_serverless` detrás del contrato síncrono
+    `Connection` con un runtime Tokio por perfil; los futures se ejecutan desde
+    un hilo con scope cuando el caller ya está dentro de un contexto Tokio
+  - Implementa `ExecutionSessionFactory` en la conexión raíz: cada sesión
+    aislada es un stream Hrana nuevo, así que las transactions del editor, el
+    CRUD de la grilla y las operaciones MCP nunca comparten estado
+    transaccional del servidor
+  - Reutiliza el dialecto SQLite, el descubrimiento basado en PRAGMA y los
+    builders SQL compartidos; sin cancelación de queries, túnel SSH ni réplicas
 - **CloudWatch Logs**: `crates/dbflux_driver_cloudwatch/` — driver
   `DatabaseCategory::LogStream` para AWS CloudWatch Logs:
   - Descubrimiento de log group/stream expuesto como collections; los log groups
@@ -1490,7 +1524,7 @@ IA con una capa completa de gobernanza:
 ## Flujo de Datos
 
 - Startup: `main` crea `AppState` y `Workspace`, restaura la sesión previa (tabs
-  desde `session.json`), y abre la ventana principal. Si no se restaura ningún
+  desde el manifest de sesión en `dbflux.db`), y abre la ventana principal. Si no se restaura ningún
   tab, el foco por defecto va al sidebar (`crates/dbflux/src/main.rs`,
   `crates/dbflux_ui/src/ui/views/workspace/`).
 - Bootstrap de drivers externos: al iniciar, DBFlux lee `cfg_services` desde
@@ -1602,6 +1636,10 @@ IA con una capa completa de gobernanza:
   JSON, descubrimiento de database/table, y soporte de SQL orientado a lectura
   para ClickHouse self-hosted y ClickHouse Cloud
   (crates/dbflux_driver_clickhouse/src/driver.rs).
+- TursoDB: driver `turso_serverless` sobre Hrana HTTP con puente Tokio por
+  perfil, descubrimiento de schema basado en PRAGMA, CRUD tipado y sesiones de
+  ejecución por stream para transactions interactivas
+  (crates/dbflux_driver_turso/src/connection.rs).
 - Amazon S3: driver `aws-sdk-s3` con AWS profile/SSO o credenciales estáticas,
   override de endpoint y direccionamiento path-style para endpoints compatibles
   con S3 (Cloudflare R2, MinIO), CRUD de bucket/object, URLs presignadas, y
@@ -1671,8 +1709,8 @@ IA con una capa completa de gobernanza:
     con filas legacy por defecto en `service_kind='driver'`
   - El import es idempotente (rastreado en `sys_legacy_imports`)
 - Datos de sesión (directorio de datos):
-  - `sessions/` archivos scratch y shadow para auto-save
-    (crates/dbflux_core/src/storage/session.rs).
+  - `sessions/` archivos scratch y shadow para el auto-save del editor y la
+    recuperación (crates/dbflux_storage/src/artifacts.rs).
   - `scripts/` carpeta de scripts del usuario
     (crates/dbflux_core/src/config/scripts_directory.rs).
 - Secrets: los passwords se almacenan en el keyring del sistema operativo; las

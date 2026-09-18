@@ -125,6 +125,14 @@ charts:
     error:
       create_editable_failed: "Failed to create editable dashboard: %{error}"
 components:
+  value_panel:
+    empty: No cell selected
+    error:
+      not_xml: Not an XML document
+    read_only: Read-only
+    revert: Revert
+    title: Value
+    wrap: Wrap
   data_table:
     record:
       empty: No rows to show
@@ -882,6 +890,9 @@ document:
         dialog_unavailable: "Save failed — file dialog unavailable and fallback directory could not be created: %{error}"
         save_script_failed: "Failed to save script: %{error}"
         auto_save_failed: "Auto-save failed for %{path}"
+        close_flush_failed: "Could not save %{path} before closing, so the tab stayed open"
+        shutdown_flush_failed: "Could not save %{path} while quitting; the edits stay in this session"
+        refusal_suggested_action: Use Ctrl+S or Save File As to write these edits deliberately
       native_picker_fallback: "Native file picker unavailable — script saved to %{path} instead. Install xdg-desktop-portal, zenity, or kdialog for a save dialog."
     title:
       untitled: Untitled
@@ -1025,6 +1036,7 @@ document:
         set_null: Set to NULL
         add_row: Add Row
         inspect_row: Inspect Row
+        view_value: View Value
         duplicate_row: Duplicate Row
         delete_row: Delete Row
         chart_this_query: Chart this query
@@ -2059,6 +2071,8 @@ document:
       schema_not_loaded: "The schema for \"%{database}\" is not loaded yet. Expand that database in the sidebar first, then run Compute Diff again."
     status:
       computing: "Computing diff…"
+      preparing: "Preparing immutable apply preview…"
+      preview_warning: Warning
       empty: No differences found between the two schemas.
       idle: Pick a source and run Compute Diff to see schema changes.
       unsupported: Unsupported
@@ -2422,6 +2436,9 @@ modals:
     save_selected:
       one: "Save selected (%{count})"
       many: "Save selected (%{count})"
+    cannot_save:
+      one: "This document can't be saved from here — its changes are kept and the tab stays open"
+      many: "%{count} documents can't be saved from here — their changes are kept and the tabs stay open"
     dont_save: Don't save
     cancel: Cancel
 palette:
@@ -2710,6 +2727,7 @@ settings:
       results_copy_row: Copy Row
       results_copy_cell: Copy Cell
       toggle_record_view: Toggle Record View
+      toggle_value_panel: Toggle Value Panel
       results_set_null: Set Cell to NULL
       open_context_menu: Open Context Menu
       menu_up: Menu Up

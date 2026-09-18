@@ -94,8 +94,13 @@ impl DataGridPanel {
                 total_rows,
                 ..
             } => {
-                let pk_order =
-                    Self::get_primary_key_columns(&self.app_state, *profile_id, table, cx);
+                let pk_order = Self::get_primary_key_columns(
+                    &self.app_state,
+                    *profile_id,
+                    database.as_deref(),
+                    table,
+                    cx,
+                );
                 Some((
                     *profile_id,
                     database.clone(),
@@ -504,6 +509,17 @@ impl DataGridPanel {
             return self.dispatch_menu_command(cmd, window, cx);
         }
 
+        // A modified value panel owns "save": while its editor holds the
+        // keyboard the panel reports `ContextId::TextInput`, where Cmd+S
+        // resolves to SaveQuery. Saving the script instead would leave what
+        // the user just typed uncommitted.
+        if matches!(cmd, Command::SaveQuery)
+            && let Some(panel) = self.value_panel_pending_save(cx)
+        {
+            panel.update(cx, |panel, cx| panel.save(cx));
+            return true;
+        }
+
         // Handle toolbar mode commands
         if self.focus.focus_mode == GridFocusMode::Toolbar {
             match cmd {
@@ -648,6 +664,10 @@ impl DataGridPanel {
                 if self.record_view_available() {
                     self.set_record_mode(!self.record_mode(), cx);
                 }
+                true
+            }
+            Command::ToggleValuePanel => {
+                self.toggle_value_panel(cx);
                 true
             }
             _ => false,

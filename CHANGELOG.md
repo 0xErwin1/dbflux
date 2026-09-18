@@ -4,6 +4,115 @@ All notable changes to DBFlux will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+* **TursoDB driver** — connect to Turso Cloud and self-hosted libSQL
+  (`sqld`) servers over HTTP with a URL and an auth token. The driver speaks
+  the SQLite dialect and supports schema discovery (tables, views, columns,
+  indexes, foreign keys, CHECK/UNIQUE constraints), typed grid CRUD, bound
+  parameters, multi-statement scripts, the visual query builder, code
+  generation, and CSV/JSON export. Interactive transactions work per editor
+  tab: each tab runs on its own server stream through a new generic
+  execution-session seam, so a `BEGIN` in one tab is never visible to grid
+  edits, other tabs, or MCP calls, and closing the tab or changing its
+  connection rolls the transaction back. Query cancellation, SSH tunnels,
+  embedded replicas, and database switching are not supported yet.
+* **Isolated execution sessions** — drivers can now expose an
+  `ExecutionSessionFactory`; the editor, grid mutation executor, MCP server,
+  and connection teardown route through it so a driver-owned session is
+  opened, finished, and closed explicitly with cleanup failures surfaced.
+  Existing drivers are unchanged.
+
+### Fixed
+
+* **Closing an untitled buffer asks before it drops the edits** — a buffer
+  with no file yet (a new query before its first save, or a restored scratch
+  buffer) could only be closed by completing Save As, so dismissing that
+  dialog left the tab open with no way out. Every close route now asks first:
+  save it, close it without saving, or cancel. "Don't save" removes the tab
+  without saving the edits, matching every other document.
+
+* **A refused save before closing says what failed** — closing a tab or
+  quitting with edits that could not reach their file reported "Auto-save
+  failed", the message for a background autosave the user never asked for. A
+  refused close now says the tab stayed open, a refused quit says the edits
+  stayed in the session, and both point at `Ctrl+s` / **Save File As** as the
+  deliberate overwrite. A file with no trustworthy baseline therefore no
+  longer leaves its tab impossible to close without that hint.
+
+* **Confirm modals are keyboard-accessible** — Enter now confirms and
+  Escape cancels every confirm dialog (multi-statement script
+  confirmation, dangerous query, and any other modal on the shared
+  `ConfirmModal` keymap context), and focus moves off the SQL editor
+  while a confirmation is open, so typing no longer edits the buffer
+  behind it. Focus returns to the editor when the dialog closes; the
+  script-confirm Run button is highlighted as the primary action.
+
+* **"Save" on tab close waits for the save to land** — a tab whose close
+  opened the unsaved-changes dialog now closes only after the write
+  actually succeeded. Dismissing Save As, a failed write, or edits made
+  while the write was in flight keep the tab open with its changes
+  instead of closing over unsaved work; a document that has no save path
+  at all keeps its tab too and says so. "Don't save" discards only the
+  documents the dialog listed, not every open tab.
+
+* **Password save failures are reported** — a failed keyring write while
+  saving or duplicating a connection profile now keeps the form open and
+  shows the error instead of silently committing a profile with no secret.
+
+* **An unresponsive system keyring no longer freezes the app** — every
+  keyring call now runs on its own thread under a five-second bound, so a
+  secret service that never answers (a locked keyring whose unlock prompt
+  is never answered, competing providers on `org.freedesktop.secrets`, a
+  stuck D-Bus session) reports a timeout instead of blocking the caller —
+  the UI thread on the connection save and duplicate paths — forever. After
+  a failed *write* DBFlux stops writing for five seconds, so a burst of
+  clicks on Save fails immediately instead of paying the bound again and
+  leaving another worker behind, and picks writes back up on its own once
+  that passes; stored passwords stay readable throughout.
+
+* **MongoDB multi-statement JavaScript script execution** — a buffer that
+  does not parse as a single `db.` call or JSON query now runs as a
+  mongosh-style script in a sandboxed QuickJS engine, executing every
+  statement in source order and reporting a distinct result per statement.
+  `find()`/`aggregate()` return a real bounded JS `Array` (`.forEach`,
+  `for...of`, `.map`, `.length`, `.toArray()`) capped at 10 000 documents
+  with an explicit error on overflow instead of silent truncation, and
+  `print()` output is captured alongside the results. Every dispatched
+  operation is classified from the constructed operation itself, not from
+  source text, so a computed method name or an operation reached only
+  inside a loop or conditional is still classified correctly; a script that
+  cannot be proven read-only requires one up-front confirmation, and any
+  operation exceeding the confirmed ceiling aborts before it reaches the
+  server. Each dispatched operation gets its own audit row sharing one
+  correlation id. Along the way, MCP/AI-client governance classification of
+  MongoDB queries now delegates to the driver's own `LanguageService`
+  instead of a core text heuristic — source-text classification cannot see
+  past a computed method name or a conditionally-reached operation, which
+  dispatch-boundary classification fixes for both scripts and MCP-driven
+  execution.
+
+* **A reopened table keeps its grid editable** — the primary key was read from
+  the connection's table-details cache under a different database key than the
+  one the fetch wrote it under, so only the first open of a table after
+  connecting had the inline editor and every later open showed the "no primary
+  key" banner until the profile was reconnected. Every reader now builds the
+  key the fetch writes with, and details that are already cached are used
+  instead of being fetched again. A table whose keys were still unknown when
+  its first page loaded is re-queried ordered by those keys, so paging a large
+  table no longer repeats or skips rows, and a table-details fetch that cannot
+  start reports the failure instead of leaving the grid read-only.
+
+* **An inline edit can be taken back by typing the row's own value** — the
+  typed value was compared with the value the row already holds and, on a
+  match, an earlier pending change was neither replaced nor dropped: the cell
+  kept showing the edit, the row stayed marked as modified, and applying the
+  changes wrote the discarded value. Typing the row's own value now drops the
+  pending change, the cell and the row go back to clean, and the drop is
+  undoable. The enum dropdown, the value panel, "Set NULL", "Set default" and
+  paste go through the same path, and paste writes to the row the grid shows
+  when a pending insert sits above the selection instead of one row below it.
+
 ### Changed
 
 * **Language list derived from the translation catalogs (#360)** — the
@@ -57,6 +166,17 @@ All notable changes to DBFlux will be documented in this file.
   managed through Weblate.
 
 ### Fixed
+
+* **Honest errors for MongoDB input that is not a single query (#587)** — the
+  Mongo editor accepts one `db.collection.method(...)` call or a JSON query,
+  and it now says so. Pasting a `mongosh` script used to fail with
+  `Invalid JSON: expected value at line 1 column 1`, blaming JSON for input
+  that was never JSON; it now reports that scripts are not supported yet.
+  Two silent failures are gone with it: a script whose first statement was a
+  `db.` call ran that one statement and discarded the rest, and a chained
+  call such as `db.users.find({}).limit(5)` ran the `find` and dropped the
+  `.limit(5)`, returning more rows than asked for. Both are now refused, the
+  chained case naming the method it cannot honour.
 
 * **Several MCP clients per connection (#542)** — the Connection Manager MCP
   tab is now a master-detail view: a filterable list of every trusted client

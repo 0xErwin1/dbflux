@@ -106,14 +106,15 @@ caracteres; explica el *por qué* en el body cuando no sea obvio.
    [Traducciones](TRANSLATIONS.md).
 
 
-### Los mensajes de commit importan
+### Los mensajes de commit y el changelog
 
-DBFlux usa [git-cliff](https://git-cliff.org) para generar el changelog y las
-release notes directamente desde el historial de git. **No edites a mano
-`CHANGELOG.md` ni `[Unreleased]`.** Tu mensaje de commit es lo que se muestra a
-los usuarios.
+DBFlux mantiene dos artefactos sincronizados a partir del mismo cambio: el
+`CHANGELOG.md` curado de este repositorio, y las release notes de GitHub que
+[git-cliff](https://git-cliff.org) genera a partir del historial de git en CI.
+Agrega tu entrada `## [Unreleased]` en el mismo commit del cambio; el type del
+commit decide qué llevan las release notes generadas.
 
-Reglas sobre qué aparece en el changelog:
+Reglas sobre qué aparece en las release notes generadas:
 
 | Type                                                        | ¿Aparece en el changelog? |
 | ----------------------------------------------------------- | ------------------------- |
@@ -129,10 +130,13 @@ se muestran sin importar el type.
 **Qué significa esto en la práctica:**
 
 - Los cambios visibles para el usuario **deben** usar `feat`, `fix` o `perf`
-  como type. Un commit `chore` o `refactor` es invisible para los usuarios en el
-  changelog.
-- Escribe un subject claro e imperativo — se convierte en el bullet del
-  changelog tal cual.
+  como type, y agregar su bullet bajo `## [Unreleased]` (`### Added`,
+  `### Fixed` o `### Changed`). Un commit `chore` o `refactor` es invisible para
+  los usuarios.
+- Escribe un subject claro e imperativo — es el bullet de las release notes
+  generadas, tal cual.
+- Escribe el bullet de `[Unreleased]` para un usuario, no para un revisor: es lo
+  que dice el changelog del repositorio.
 - Si un solo PR contiene cambios internos y visibles al usuario a la vez,
   sepáralos en commits distintos con los types apropiados.
 - Fixes de seguridad: usa `fix(security): ...` o añade un trailer `Security:

@@ -51,6 +51,15 @@ pub use dbflux_core::{
     FetchSchemaTypesParams, FetchTableDetailsParams, SwitchDatabaseParams,
 };
 
+/// Records that `ScriptsDirectory::new()` failed during startup.
+///
+/// The failure text is retained for internal diagnostics only; the drain
+/// boundary omits it on purpose because it includes filesystem paths.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScriptsDirectoryDiagnostic {
+    pub message: String,
+}
+
 pub struct AppState {
     pub facade: SessionFacade,
     external_driver_diagnostics: HashMap<String, ExternalDriverDiagnostic>,
@@ -59,6 +68,7 @@ pub struct AppState {
     driver_settings: HashMap<DriverKey, FormValues>,
     hook_definitions: HashMap<String, EditableGlobalHook>,
     hook_load_diagnostics: Vec<crate::config_loader::HookLoadDiagnostic>,
+    scripts_directory_diagnostics: Vec<ScriptsDirectoryDiagnostic>,
     protected_hook_rows: Vec<crate::config_loader::ProtectedHookRow>,
     detached_hook_tasks: HashMap<Uuid, HashSet<TaskId>>,
     auth_provider_registry: AuthProviderRegistry,
@@ -169,7 +179,10 @@ impl AppState {
     /// callers can wait for the connection to be fully closed before running
     /// ordered follow-up work (post-disconnect hooks). See
     /// `ConnectionManager::disconnect`.
-    pub fn disconnect(&mut self, profile_id: Uuid) -> Option<std::thread::JoinHandle<()>> {
+    pub fn disconnect(
+        &mut self,
+        profile_id: Uuid,
+    ) -> Option<std::thread::JoinHandle<Result<(), dbflux_core::DbError>>> {
         let teardown = self.facade.connections.disconnect(profile_id);
 
         // Evict stale metric catalog data for this connection.
@@ -729,8 +742,13 @@ impl AppState {
         self.facade.secrets.secret_store_arc()
     }
 
-    pub fn save_password(&self, profile: &ConnectionProfile, password: &SecretString) {
-        self.facade.secrets.save_password(profile, password);
+    #[allow(clippy::result_large_err)]
+    pub fn save_password(
+        &self,
+        profile: &ConnectionProfile,
+        password: &SecretString,
+    ) -> Result<(), dbflux_core::DbError> {
+        self.facade.secrets.save_password(profile, password)
     }
 
     pub fn delete_password(&self, profile: &ConnectionProfile) {
@@ -1578,9 +1596,11 @@ impl AppState {
         self.facade.cancel_all_tasks()
     }
 
-    pub fn close_all_connections(&mut self) {
+    pub fn close_all_connections(
+        &mut self,
+    ) -> Vec<std::thread::JoinHandle<Result<(), dbflux_core::DbError>>> {
         self.cancel_all_detached_hook_tasks();
-        self.facade.close_all_connections();
+        self.facade.close_all_connections()
     }
 
     pub fn complete_shutdown(&self) {
@@ -1944,6 +1964,14 @@ impl AppState {
 
     pub fn take_hook_load_diagnostics(&mut self) -> Vec<crate::config_loader::HookLoadDiagnostic> {
         std::mem::take(&mut self.hook_load_diagnostics)
+    }
+
+    pub fn scripts_directory_diagnostics(&self) -> &[ScriptsDirectoryDiagnostic] {
+        &self.scripts_directory_diagnostics
+    }
+
+    pub fn take_scripts_directory_diagnostics(&mut self) -> Vec<ScriptsDirectoryDiagnostic> {
+        std::mem::take(&mut self.scripts_directory_diagnostics)
     }
 
     pub fn set_hook_definitions(&mut self, definitions: HashMap<String, EditableGlobalHook>) {
@@ -3124,6 +3152,22 @@ mod tests {
             dashboards.is_empty(),
             "fresh DB must return empty dashboards"
         );
+    }
+
+    /// A healthy bootstrap resolves the scripts directory and records no
+    /// scripts-directory diagnostic, so a normal start reports nothing.
+    #[test]
+    fn test_healthy_bootstrap_records_no_scripts_directory_diagnostic() {
+        let storage_runtime =
+            dbflux_storage::bootstrap::StorageRuntime::in_memory().expect("in-memory storage");
+        let state =
+            AppState::new_with_storage_runtime(storage_runtime).expect("test storage setup");
+
+        assert!(
+            state.scripts_directory().is_some(),
+            "the test environment resolves a scripts directory"
+        );
+        assert!(state.scripts_directory_diagnostics().is_empty());
     }
 
     // --- T-3.6: list_auth_profiles() union seam ---

@@ -20,6 +20,7 @@
 
 use super::preview_content::{EncodingChoice, PreviewContentState, TextSource, decode_label};
 use super::{ObjectBrowserDocument, ObjectBrowserFocusMode};
+use crate::handle::DocumentEvent;
 use crate::object_text::{
     FIND_SHORTCUT_HINT, LineEnding, SAVE_SHORTCUT_HINT, TextBody, body_meta_line, build_text_input,
     cursor_label, db_error_to_user_facing, open_find_panel, record_save_audit,
@@ -267,21 +268,75 @@ impl ObjectBrowserDocument {
 
     // -- Save ----------------------------------------------------------------
 
+    /// Saves as part of an interrupted close: the tab closes only once the
+    /// `put_object` lands, and keeps its changes otherwise.
+    ///
+    /// Repeating the request while a save is in flight is intentional: that
+    /// save then reports to the close the second request asked for.
+    pub(super) fn save_for_close(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(editor) = self.editor.as_ref() else {
+            return false;
+        };
+
+        if !editor.is_editable() {
+            // The same refusal `save_object_edits` reports: no write can start,
+            // so there is nothing to arm.
+            return false;
+        }
+
+        self.close_after_save = true;
+        self.save_object_edits(cx);
+        true
+    }
+
+    /// Reports a finished save to the workspace.
+    ///
+    /// Only a save the interrupted-close flow started, and only one that
+    /// actually landed, asks for the tab to close; every other outcome drops
+    /// that intent so a later manual save cannot close a tab the user kept.
+    fn report_save_outcome(&mut self, succeeded: bool, cx: &mut Context<Self>) {
+        let close_after_save = std::mem::take(&mut self.close_after_save);
+
+        cx.emit(DocumentEvent::SaveFinished { succeeded });
+
+        if succeeded && close_after_save {
+            cx.emit(DocumentEvent::RequestClose);
+        }
+    }
+
     /// Writes the buffer back to the object with `put_object`, preserving the
     /// detected content type and line-ending convention.
     pub(super) fn save_object_edits(&mut self, cx: &mut Context<Self>) {
-        let Some(editor) = self.editor.as_ref() else {
+        if self.editor.is_none() {
             return;
-        };
+        }
+
+        if self.editor.as_ref().is_some_and(|editor| editor.saving) {
+            // The save already in flight reports its own outcome.
+            return;
+        }
 
         // A decoded view is never the object's real bytes — writing it back
         // would silently replace the object's actual content with a
         // re-encoding of its decoded form. The footer never offers Save for
         // this state, but the guard stays here too since it is reachable
         // from the Ctrl/Cmd+S shortcut regardless of what is rendered.
-        if !editor.is_editable() || editor.saving {
+        if !self
+            .editor
+            .as_ref()
+            .is_some_and(|editor| editor.is_editable())
+        {
+            // A refused save must report now, or a tab close waiting on it
+            // never resolves. The parked navigation goes with it: the prompt it
+            // waits on cannot be resolved by a save that will never start.
+            self.pending_navigation = None;
+            self.report_save_outcome(false, cx);
             return;
         }
+
+        let Some(editor) = self.editor.as_ref() else {
+            return;
+        };
 
         let key = editor.key.clone();
         let content_type = editor.content_type.clone();
@@ -298,6 +353,7 @@ impl ObjectBrowserDocument {
                 ),
                 cx,
             );
+            self.report_save_outcome(false, cx);
             return;
         };
 
@@ -370,28 +426,41 @@ impl ObjectBrowserDocument {
             millis: elapsed_millis,
         });
 
-        let Some(editor) = self.editor.as_mut() else {
-            return;
-        };
-
-        if editor.key != key {
+        // No buffer, or an outcome that belongs to an object the buffer no
+        // longer shows: the waiting tab keeps its changes rather than closing
+        // on a stale save.
+        if self.editor.as_ref().is_none_or(|editor| editor.key != key) {
+            self.report_save_outcome(false, cx);
             return;
         }
 
-        editor.saving = false;
+        if let Some(editor) = self.editor.as_mut() {
+            editor.saving = false;
+        }
 
         if !succeeded {
             // The failure was already reported; the buffer stays dirty so the
             // user can retry, and any parked navigation is dropped rather than
             // silently carrying the unsaved edits away.
             self.pending_navigation = None;
+            self.report_save_outcome(false, cx);
             cx.notify();
             return;
         }
 
-        editor.baseline = saved_text;
-        editor.dirty = false;
-        editor.byte_len = byte_len;
+        // The user may have typed while the write was in flight: what landed is
+        // the new baseline, but those newer edits are still pending, and a close
+        // waiting on this save must not discard them.
+        let landed = self
+            .editor
+            .as_ref()
+            .is_some_and(|editor| editor.input.read(cx).value() == saved_text);
+
+        if let Some(editor) = self.editor.as_mut() {
+            editor.baseline = saved_text;
+            editor.dirty = !landed;
+            editor.byte_len = byte_len;
+        }
 
         Toast::success(dbflux_i18n::t!(
             "document.object_browser.editor.toast.saved",
@@ -403,8 +472,11 @@ impl ObjectBrowserDocument {
         // Size, last-modified, and ETag all changed server-side.
         self.load_object_metadata(key, cx);
 
-        self.resume_navigation = self.pending_navigation.take();
+        if landed {
+            self.resume_navigation = self.pending_navigation.take();
+        }
 
+        self.report_save_outcome(landed, cx);
         cx.notify();
     }
 

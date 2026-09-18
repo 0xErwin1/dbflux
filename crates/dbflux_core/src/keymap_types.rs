@@ -77,6 +77,7 @@ pub enum Command {
     ResultsCopyRow,
     ResultsCopyCell,
     ToggleRecordView,
+    ToggleValuePanel,
     ResultsSetNull,
     // Context menu
     OpenContextMenu,
@@ -227,6 +228,7 @@ impl Command {
             Command::ResultsCopyRow => "Copy Row",
             Command::ResultsCopyCell => "Copy Cell",
             Command::ToggleRecordView => "Toggle Record View",
+            Command::ToggleValuePanel => "Toggle Value Panel",
             Command::ResultsSetNull => "Set Cell to NULL",
             Command::OpenContextMenu => "Open Context Menu",
             Command::MenuUp => "Menu Up",
@@ -331,6 +333,7 @@ impl Command {
             Command::ResultsCopyRow => "results_copy_row",
             Command::ResultsCopyCell => "results_copy_cell",
             Command::ToggleRecordView => "toggle_record_view",
+            Command::ToggleValuePanel => "toggle_value_panel",
             Command::ResultsSetNull => "results_set_null",
             Command::OpenContextMenu => "open_context_menu",
             Command::MenuUp => "menu_up",
@@ -429,6 +432,7 @@ impl Command {
             Command::ResultsCopyRow,
             Command::ResultsCopyCell,
             Command::ToggleRecordView,
+            Command::ToggleValuePanel,
             Command::ResultsSetNull,
             Command::OpenContextMenu,
             Command::MenuUp,
@@ -528,6 +532,7 @@ impl Command {
             | Command::ResultsCopyRow
             | Command::ResultsCopyCell
             | Command::ToggleRecordView
+            | Command::ToggleValuePanel
             | Command::ResultsSetNull
             | Command::OpenContextMenu
             | Command::MenuUp

@@ -51,6 +51,7 @@ static DEFAULT_KEYMAP: LazyLock<KeymapStack> = LazyLock::new(|| {
     stack.add_layer(text_input_layer());
     stack.add_layer(dropdown_layer());
     stack.add_layer(context_menu_layer());
+    stack.add_layer(confirm_modal_layer());
     stack.add_layer(form_navigation_layer());
     stack.add_layer(context_bar_layer());
     stack.add_layer(audit_layer());
@@ -470,6 +471,10 @@ fn results_layer() -> KeymapLayer {
         KeyChord::new("i", Modifiers::none()),
         Command::ToggleRecordView,
     );
+    layer.bind(
+        KeyChord::new("v", Modifiers::none()),
+        Command::ToggleValuePanel,
+    );
 
     // Copy selected cell(s) to clipboard — Cmd+C on macOS, Ctrl+C elsewhere.
     // GPUI reports cmd vs ctrl on separate modifier fields, so binding only
@@ -522,6 +527,18 @@ fn context_menu_layer() -> KeymapLayer {
     );
     layer.bind(KeyChord::new("h", Modifiers::none()), Command::MenuBack);
     layer.bind(KeyChord::new("left", Modifiers::none()), Command::MenuBack);
+
+    layer
+}
+
+/// Confirm-only modals (dangerous query, script confirm, delete, unsaved
+/// changes) capture the keyboard: Enter confirms and Escape cancels. The
+/// context has no parent, so nothing else resolves while a confirm modal is up.
+fn confirm_modal_layer() -> KeymapLayer {
+    let mut layer = KeymapLayer::new(ContextId::ConfirmModal);
+
+    layer.bind(KeyChord::new("enter", Modifiers::none()), Command::Execute);
+    layer.bind(KeyChord::new("escape", Modifiers::none()), Command::Cancel);
 
     layer
 }
@@ -986,6 +1003,7 @@ mod tests {
             ('r', Command::Rename),
             ('o', Command::ResultsAddRow),
             ('i', Command::ToggleRecordView),
+            ('v', Command::ToggleValuePanel),
             ('x', Command::Delete),
         ];
         for (letter, expected) in expectations {
@@ -1056,5 +1074,42 @@ mod tests {
             ),
             Some(Command::SaveFileAs),
         );
+    }
+
+    /// Confirm-only modals must own exactly two chords: Enter confirms and
+    /// Escape cancels. The context has no parent, so nothing else (including
+    /// the Global escape binding) may resolve while a confirm modal is up.
+    #[test]
+    fn confirm_modal_layer_binds_enter_and_escape_only() {
+        let keymap = default_keymap();
+
+        assert_eq!(
+            keymap.resolve(
+                ContextId::ConfirmModal,
+                &KeyChord::new("enter", Modifiers::none())
+            ),
+            Some(Command::Execute),
+        );
+        assert_eq!(
+            keymap.resolve(
+                ContextId::ConfirmModal,
+                &KeyChord::new("escape", Modifiers::none())
+            ),
+            Some(Command::Cancel),
+        );
+
+        // No fallthrough to document or global shortcuts.
+        for chord in [
+            KeyChord::new("p", Modifiers::primary_shift()),
+            KeyChord::new("s", Modifiers::primary()),
+            KeyChord::new("j", Modifiers::none()),
+            KeyChord::new("h", Modifiers::ctrl()),
+        ] {
+            assert_eq!(
+                keymap.resolve(ContextId::ConfirmModal, &chord),
+                None,
+                "ConfirmModal must not resolve {chord:?}",
+            );
+        }
     }
 }

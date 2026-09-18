@@ -890,14 +890,10 @@ impl DataTableState {
     /// event may have already cleared `editing_cell` via `cancel_enum_edit`
     /// by the time `DropdownSelectionChanged` is delivered (auto-close race).
     fn apply_enum_selection_at(&mut self, coord: CellCoord, value: &str, cx: &mut Context<Self>) {
-        use super::model::VisualRowSource;
-
         // Clear editing state first so a subsequent `cancel_enum_edit` from
         // the dropdown's auto-close becomes a harmless no-op.
         self.editing_cell = None;
         self.enum_dropdown = None;
-
-        let visual_order = self.edit_buffer.compute_visual_order();
 
         let cell_value = if value == Self::NULL_SENTINEL {
             super::model::CellValue::null()
@@ -905,16 +901,7 @@ impl DataTableState {
             super::model::CellValue::text(value)
         };
 
-        match visual_order.get(coord.row).copied() {
-            Some(VisualRowSource::Base(base_idx)) => {
-                self.edit_buffer.set_cell(base_idx, coord.col, cell_value);
-            }
-            Some(VisualRowSource::Insert(insert_idx)) => {
-                self.edit_buffer
-                    .set_insert_cell(insert_idx, coord.col, cell_value);
-            }
-            None => {}
-        }
+        self.stage_cell_value(coord.row, coord.col, cell_value);
 
         cx.notify();
     }
@@ -962,13 +949,65 @@ impl DataTableState {
         self.close_editor(apply, true, cx);
     }
 
+    /// Stage a value typed for a cell of the row set the table already holds.
+    ///
+    /// A value that matches what the row already holds has to drop any staged
+    /// value instead of staging one, or the row keeps showing the edited value
+    /// and stays marked as modified.
+    pub fn stage_base_cell_value(
+        &mut self,
+        base_idx: usize,
+        col: usize,
+        cell_value: super::model::CellValue,
+    ) {
+        let base_text = self
+            .model
+            .cell(base_idx, col)
+            .map(|cell| cell.display_text().to_string())
+            .unwrap_or_default();
+
+        if cell_value.display_text().as_ref() == base_text.as_str() {
+            self.edit_buffer.clear_cell(base_idx, col);
+        } else {
+            self.edit_buffer.set_cell(base_idx, col, cell_value);
+        }
+    }
+
+    /// Stage a value for a cell addressed the way the table displays it.
+    ///
+    /// Callers that hold visual indices — the selection, menus, the editor —
+    /// must not resolve them themselves: the edit buffer is keyed by source
+    /// rows, and a pending insert is written through the insert buffer instead.
+    pub fn stage_cell_value(
+        &mut self,
+        visual_row: usize,
+        col: usize,
+        cell_value: super::model::CellValue,
+    ) {
+        use super::model::VisualRowSource;
+
+        match self
+            .edit_buffer
+            .compute_visual_order()
+            .get(visual_row)
+            .copied()
+        {
+            Some(VisualRowSource::Base(base_idx)) => {
+                self.stage_base_cell_value(base_idx, col, cell_value);
+            }
+            Some(VisualRowSource::Insert(insert_idx)) => {
+                self.edit_buffer
+                    .set_insert_cell(insert_idx, col, cell_value);
+            }
+            None => {}
+        }
+    }
+
     /// Close the inline editor, optionally applying the change and optionally
     /// asking for focus back.
     ///
     /// Note: The stored `editing_cell` uses visual row indices.
     fn close_editor(&mut self, apply: bool, refocus: bool, cx: &mut Context<Self>) {
-        use super::model::VisualRowSource;
-
         let coord = match self.editing_cell.take() {
             Some(c) => c,
             None => return,
@@ -980,30 +1019,11 @@ impl DataTableState {
             if let Some(input) = self.cell_input.take() {
                 let value_str = input.read(cx).value().to_string();
 
-                // Translate visual row to source
-                let visual_order = self.edit_buffer.compute_visual_order();
-
-                match visual_order.get(coord.row).copied() {
-                    Some(VisualRowSource::Base(base_idx)) => {
-                        let original = self
-                            .model
-                            .cell(base_idx, coord.col)
-                            .map(|c| c.display_text().to_string())
-                            .unwrap_or_default();
-
-                        if value_str != original {
-                            let cell_value = super::model::CellValue::text(&value_str);
-                            self.edit_buffer.set_cell(base_idx, coord.col, cell_value);
-                        }
-                    }
-                    Some(VisualRowSource::Insert(insert_idx)) => {
-                        // Apply to pending insert (with undo support)
-                        let cell_value = super::model::CellValue::text(&value_str);
-                        self.edit_buffer
-                            .set_insert_cell(insert_idx, coord.col, cell_value);
-                    }
-                    None => {}
-                }
+                self.stage_cell_value(
+                    coord.row,
+                    coord.col,
+                    super::model::CellValue::text(&value_str),
+                );
             }
         } else {
             self.cell_input = None;
@@ -1049,28 +1069,10 @@ impl DataTableState {
     /// Emits SaveRowRequested for base row edits, CommitInsertRequested for pending inserts,
     /// CommitDeleteRequested for rows marked for deletion.
     pub fn request_save_row(&mut self, cx: &mut Context<Self>) {
-        use super::model::VisualRowSource;
-
-        if let Some(coord) = self.selection.active {
-            let visual_order = self.edit_buffer.compute_visual_order();
-            match visual_order.get(coord.row).copied() {
-                Some(VisualRowSource::Base(base_idx)) => {
-                    let row_state = self.edit_buffer.row_state(base_idx);
-                    if row_state.is_pending_delete() {
-                        cx.emit(DataTableEvent::CommitDeleteRequested(base_idx));
-                        return;
-                    }
-                    if row_state.is_dirty() {
-                        cx.emit(DataTableEvent::SaveRowRequested(base_idx));
-                        return;
-                    }
-                }
-                Some(VisualRowSource::Insert(insert_idx)) => {
-                    cx.emit(DataTableEvent::CommitInsertRequested(insert_idx));
-                    return;
-                }
-                None => {}
-            }
+        if let Some(coord) = self.selection.active
+            && self.request_save_row_at(coord.row, cx)
+        {
+            return;
         }
 
         if let Some(row_idx) = self.edit_buffer.pending_delete_rows().into_iter().next() {
@@ -1080,6 +1082,35 @@ impl DataTableState {
 
         if let Some(row_idx) = self.edit_buffer.dirty_rows().into_iter().next() {
             cx.emit(DataTableEvent::SaveRowRequested(row_idx));
+        }
+    }
+
+    /// Commit one visual row, whatever its pending state is.
+    ///
+    /// Returns whether a commit was actually requested — a clean row has
+    /// nothing to save, which lets `request_save_row` fall back to the first
+    /// pending row elsewhere in the result.
+    pub fn request_save_row_at(&mut self, row: usize, cx: &mut Context<Self>) -> bool {
+        use super::model::VisualRowSource;
+
+        match self.edit_buffer.compute_visual_order().get(row).copied() {
+            Some(VisualRowSource::Base(base_idx)) => {
+                let row_state = self.edit_buffer.row_state(base_idx);
+                if row_state.is_pending_delete() {
+                    cx.emit(DataTableEvent::CommitDeleteRequested(base_idx));
+                    return true;
+                }
+                if row_state.is_dirty() {
+                    cx.emit(DataTableEvent::SaveRowRequested(base_idx));
+                    return true;
+                }
+                false
+            }
+            Some(VisualRowSource::Insert(insert_idx)) => {
+                cx.emit(DataTableEvent::CommitInsertRequested(insert_idx));
+                true
+            }
+            None => false,
         }
     }
 
@@ -1414,6 +1445,91 @@ mod tests {
         );
     }
 
+    /// The enum dropdown hands over the coordinate it was opened for, which is a
+    /// visual row. With a pending insert between the base rows the value has to
+    /// land on the insert the user picked, and the null sentinel has to land as a
+    /// null one row below it.
+    #[gpui::test]
+    fn enum_selection_stages_the_row_the_table_shows(cx: &mut gpui::TestAppContext) {
+        use super::super::model::CellValue;
+        use super::super::selection::CellCoord;
+
+        let state_holder = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let holder_clone = state_holder.clone();
+
+        let (_, window) = cx.add_window_view(move |_window, cx| {
+            let model = two_row_model();
+            let state = cx.new(|cx| {
+                let mut s = super::DataTableState::new(model, cx);
+                s.set_pk_columns(vec![0]);
+                s
+            });
+            holder_clone.replace(Some(state.clone()));
+            StateHarness { state }
+        });
+
+        let state = state_holder
+            .borrow()
+            .clone()
+            .expect("state entity must be created");
+
+        // Visual row 1 becomes the insert, and base row 1 moves down to row 2.
+        let insert_idx = window.update(|_, app| {
+            state.update(app, |s, cx| {
+                let insert_idx = s
+                    .edit_buffer_mut()
+                    .add_pending_insert_after(0, vec![CellValue::text(""), CellValue::text("")]);
+                cx.notify();
+                insert_idx
+            })
+        });
+
+        window.update(|_, app| {
+            state.update(app, |s, cx| {
+                s.apply_enum_selection_at(CellCoord::new(1, 1), "carol", cx);
+            });
+        });
+
+        let insert_value = window.update(|_, app| {
+            state
+                .read(app)
+                .edit_buffer()
+                .get_pending_insert_by_idx(insert_idx)
+                .and_then(|cells| cells.get(1))
+                .map(|cell| cell.display_text().to_string())
+        });
+        assert_eq!(
+            insert_value.as_deref(),
+            Some("carol"),
+            "the chosen value must be staged on the pending insert it was picked for"
+        );
+
+        window.update(|_, app| {
+            state.update(app, |s, cx| {
+                s.apply_enum_selection_at(
+                    CellCoord::new(2, 1),
+                    super::DataTableState::NULL_SENTINEL,
+                    cx,
+                );
+            });
+        });
+
+        let base_changes = window.update(|_, app| {
+            state
+                .read(app)
+                .edit_buffer()
+                .row_changes(1)
+                .into_iter()
+                .map(|(col, value)| (col, value.is_null()))
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(
+            base_changes,
+            vec![(1usize, true)],
+            "the null sentinel must stage a null on the base row below the insert"
+        );
+    }
+
     /// Opens an editor on `coord` and returns the state entity plus its input.
     fn editing_state<'a>(
         cx: &'a mut gpui::TestAppContext,
@@ -1453,6 +1569,65 @@ mod tests {
         });
 
         (state, input, window)
+    }
+
+    /// Regression: typing back the value the row already holds must drop the
+    /// pending change instead of leaving the row marked as modified.
+    #[gpui::test]
+    fn typing_the_rows_own_value_drops_the_staged_edit(cx: &mut gpui::TestAppContext) {
+        use super::super::selection::CellCoord;
+
+        let (state, input, window) = editing_state(cx, CellCoord::new(0, 1));
+
+        window.update(|window, app| {
+            input.update(app, |input, cx| input.set_value("carol", window, cx));
+        });
+        window.update(|_, app| {
+            state.update(app, |s, cx| s.stop_editing(true, cx));
+        });
+
+        let staged = window.update(|_, app| {
+            state
+                .read(app)
+                .edit_buffer()
+                .row_changes(0)
+                .into_iter()
+                .map(|(col, value)| (col, value.display_text().to_string()))
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(
+            staged,
+            vec![(1usize, "carol".to_string())],
+            "the typed value must be staged as a pending change"
+        );
+
+        let input = window.update(|window, app| {
+            state.update(app, |s, cx| {
+                assert!(s.start_editing(CellCoord::new(0, 1), window, cx));
+                s.cell_input()
+                    .cloned()
+                    .expect("cell input for the second edit")
+            })
+        });
+        window.update(|window, app| {
+            input.update(app, |input, cx| input.set_value("alice", window, cx));
+        });
+        window.update(|_, app| {
+            state.update(app, |s, cx| s.stop_editing(true, cx));
+        });
+
+        let (dirty, row_clean) = window.update(|_, app| {
+            let state = state.read(app);
+            (
+                state.edit_buffer().is_cell_dirty(0, 1),
+                state.edit_buffer().row_state(0).is_clean(),
+            )
+        });
+        assert!(
+            !dirty,
+            "typing the value the row already holds must drop the pending change"
+        );
+        assert!(row_clean, "the row must no longer be reported as modified");
     }
 
     /// Regression: clicking another cell while a cell is being edited must keep

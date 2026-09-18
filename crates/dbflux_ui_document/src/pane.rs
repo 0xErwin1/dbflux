@@ -19,6 +19,30 @@ use gpui::{AnyElement, App, Subscription, Window};
 /// Type-erased callback for document events, used by the `subscribe` closure.
 pub type BoxedDocEventCallback = Box<dyn Fn(&DocumentEvent, &mut App) + 'static>;
 
+/// What closing a document means, decided by the document's own close policy.
+///
+/// A pane exposes a policy through [`PaneHandle::resolve_close`]; panes without
+/// one leave the workspace on its existing behaviour, including the
+/// unsaved-changes dialog for a document that reports dirty state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CloseDisposition {
+    /// Nothing is pending: the workspace may remove the tab now.
+    CloseNow,
+    /// The document queued its pending edits to persist and will report
+    /// `DocumentEvent::RequestClose` once they land; the tab stays open until
+    /// then.
+    Deferred,
+    /// The pending edits could not be persisted; the tab stays open. The failure
+    /// has already been reported to the user.
+    ///
+    /// Also the fail-closed answer for a document that has nowhere to persist:
+    /// an untitled code buffer stores nothing on close, so a caller that reaches
+    /// its close policy keeps the tab open rather than forcing a save or
+    /// dropping the edits. The unsaved-changes confirmation is what normally
+    /// resolves that case.
+    KeepOpen,
+}
+
 /// A single document-contributed status-bar segment.
 ///
 /// Modeled directly on `dbflux_components::result_panel::ToolbarSegment` —
@@ -102,6 +126,11 @@ pub struct PaneHandle {
     // --- Side-effect reads (shared &App) ---
     flush_auto_save: Box<dyn Fn(&App)>,
 
+    /// Flushes this document's pending edits for a graceful shutdown without
+    /// closing its tab, and reports whether a physical write is still queued or
+    /// running. `None` for documents with no persistence path.
+    pub flush_for_shutdown: Option<Box<dyn Fn(&mut App) -> bool>>,
+
     // --- Mutations (&mut App) ---
     set_active_tab: Box<dyn Fn(bool, &mut App)>,
     set_refresh_policy: Box<dyn Fn(RefreshPolicy, &mut App)>,
@@ -128,8 +157,11 @@ pub struct PaneHandle {
     pub matches_event_stream:
         Option<Box<dyn Fn(uuid::Uuid, &dbflux_core::EventStreamTarget, &App) -> bool>>,
 
-    /// Returns `Some(path)` when the document is file-backed and empty
-    /// (used by the empty-file-close cleanup in `actions.rs`).
+    /// Returns `Some(path)` when this document's backing file may be deleted on
+    /// close: the buffer is empty and the file still holds exactly the bytes the
+    /// document last loaded or wrote. A file changed outside dbflux, a missing
+    /// baseline, or an unreadable file reports `None` so the file is kept (used
+    /// by the empty-script cleanup in `actions/documents.rs`).
     pub is_file_backed_empty: Option<Box<dyn Fn(&App) -> Option<std::path::PathBuf>>>,
 
     /// Returns a session snapshot for code documents (used by session manifest).
@@ -139,6 +171,16 @@ pub struct PaneHandle {
     /// user (× button or ESC). Documents that own inspector state clear it
     /// here so the rail stays closed on subsequent tab activations.
     pub mark_inspector_closed: Option<Box<dyn Fn(&mut App)>>,
+
+    /// Row-inspector tracking is transferred between table tabs so an open
+    /// inspector follows the active grid instead of showing stale content.
+    pub row_inspector_is_tracking: Option<Box<dyn Fn(&App) -> bool>>,
+    pub set_row_inspector_tracking: Option<Box<dyn Fn(bool, &mut App)>>,
+
+    /// The value panel is transferred the same way, so switching tables keeps
+    /// it open and re-points it at the new grid's cell.
+    pub value_panel_is_open: Option<Box<dyn Fn(&App) -> bool>>,
+    pub set_value_panel_open: Option<Box<dyn Fn(bool, &mut App)>>,
 
     /// Returns the document's contributed status-bar segments (e.g. engine +
     /// region, bucket path, key count, last-operation timing). `None` means
@@ -158,6 +200,32 @@ pub struct PaneHandle {
     /// `take_pending_open_bucket`. Only object-browsing documents populate it.
     pub take_pending_open_object_editor:
         Option<Box<dyn Fn(&mut App) -> Option<ObjectEditorRequest>>>,
+
+    /// Runs document-owned asynchronous teardown before the pane is removed.
+    pub on_close: Option<Box<dyn Fn(&mut App)>>,
+
+    /// Saves the document as part of an interrupted close and asks the
+    /// workspace to close its tab once the write actually lands. `None` means
+    /// the document has no save path, so its tab keeps the pending changes.
+    pub save_for_close: Option<Box<dyn Fn(&mut Window, &mut App) -> bool>>,
+
+    /// Decides what closing this document means, before its tab is removed.
+    ///
+    /// `None` means the document has no close policy of its own: the workspace
+    /// falls back to its existing behaviour. Set only by documents that persist
+    /// their pending edits as part of closing (code documents).
+    pub resolve_close: Option<Box<dyn Fn(&mut Window, &mut App) -> CloseDisposition>>,
+
+    /// Reports whether the document's close policy applies in its current
+    /// state.
+    ///
+    /// A document can have a close policy that does not apply in its current
+    /// state: a code document persists itself only when it has a file to
+    /// persist to, so an untitled buffer reports `false` here and keeps the
+    /// unsaved-changes dialog. `None` means the document has no close policy,
+    /// so its policy never applies; the workspace consults this through
+    /// [`PaneHandle::has_close_policy`] rather than reading the field directly.
+    pub decides_own_close: Option<Box<dyn Fn(&App) -> bool>>,
 }
 
 impl PaneHandle {
@@ -200,6 +268,7 @@ impl PaneHandle {
             change_summary,
             refresh_policy,
             flush_auto_save,
+            flush_for_shutdown: None,
             set_active_tab,
             set_refresh_policy,
             matches_dedup_key,
@@ -210,9 +279,17 @@ impl PaneHandle {
             is_file_backed_empty: None,
             session_tab_snapshot: None,
             mark_inspector_closed: None,
+            row_inspector_is_tracking: None,
+            set_row_inspector_tracking: None,
+            value_panel_is_open: None,
+            set_value_panel_open: None,
             status_segments: None,
             take_pending_open_bucket: None,
             take_pending_open_object_editor: None,
+            on_close: None,
+            save_for_close: None,
+            resolve_close: None,
+            decides_own_close: None,
         }
     }
 
@@ -283,6 +360,18 @@ impl PaneHandle {
         (self.flush_auto_save)(cx)
     }
 
+    /// Flushes this document's pending edits for a graceful shutdown.
+    ///
+    /// Returns `true` while a physical write is still queued or running so a
+    /// shutdown loop can poll. Never closes the tab and never reports through
+    /// the save/close flow. A pane with no persistence path returns `false`.
+    pub fn flush_for_shutdown(&self, cx: &mut App) -> bool {
+        self.flush_for_shutdown
+            .as_ref()
+            .map(|flush| flush(cx))
+            .unwrap_or(false)
+    }
+
     /// Notifies the document that it became (or stopped being) the active tab.
     pub fn set_active_tab(&self, active: bool, cx: &mut App) {
         (self.set_active_tab)(active, cx)
@@ -308,6 +397,53 @@ impl PaneHandle {
         F: Fn(&DocumentEvent, &mut App) + 'static,
     {
         (self.subscribe)(cx, Box::new(callback))
+    }
+
+    /// Invokes the optional close hook before tab removal.
+    pub fn on_close(&self, cx: &mut App) {
+        if let Some(close) = self.on_close.as_ref() {
+            close(cx);
+        }
+    }
+
+    /// Starts a save for an interrupted close.
+    ///
+    /// Returns `false` when the document has no save path: the workspace must
+    /// then leave the tab open with its changes.
+    pub fn save_for_close(&self, window: &mut Window, cx: &mut App) -> bool {
+        if let Some(save) = self.save_for_close.as_ref() {
+            save(window, cx)
+        } else {
+            false
+        }
+    }
+
+    /// Returns `true` when this document currently decides its own close
+    /// policy.
+    ///
+    /// A document can have a close policy that does not apply in its current
+    /// state: a code document persists itself only when it has a file to
+    /// persist to, so an untitled buffer reports `false` and keeps the
+    /// unsaved-changes dialog. The workspace consults this before deferring to
+    /// [`PaneHandle::resolve_close`]; a document whose policy does not apply is
+    /// never closed over its pending edits without an explicit user decision.
+    pub fn has_close_policy(&self, cx: &App) -> bool {
+        self.resolve_close.is_some()
+            && self
+                .decides_own_close
+                .as_ref()
+                .is_none_or(|decides| decides(cx))
+    }
+
+    /// Asks the document what closing means now.
+    ///
+    /// A pane with no close policy reports [`CloseDisposition::CloseNow`], so
+    /// callers keep today's behaviour for every other document type.
+    pub fn resolve_close(&self, window: &mut Window, cx: &mut App) -> CloseDisposition {
+        match self.resolve_close.as_ref() {
+            Some(resolve) => resolve(window, cx),
+            None => CloseDisposition::CloseNow,
+        }
     }
 
     /// Returns the document's contributed status-bar segments.

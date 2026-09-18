@@ -7,6 +7,7 @@ pub mod form_renderer;
 pub mod json_editor_view;
 pub mod multi_select;
 pub mod tree_nav;
+pub mod value_format;
 pub mod value_source_selector;
 
 #[cfg(test)]

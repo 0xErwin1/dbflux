@@ -188,6 +188,9 @@ pub struct ObjectBrowserDocument {
     /// navigation so the selected row is scrolled into view.
     pub(super) listing_scroll: UniformListScrollHandle,
     _subscriptions: Vec<Subscription>,
+    /// Set when a save was started by the interrupted-close flow, so a write
+    /// that lands also asks the workspace to close the tab.
+    close_after_save: bool,
 }
 
 impl EventEmitter<DocumentEvent> for ObjectBrowserDocument {}
@@ -270,6 +273,7 @@ impl ObjectBrowserDocument {
             panel_origin: Point::default(),
             listing_scroll: UniformListScrollHandle::new(),
             _subscriptions: vec![filter_subscription],
+            close_after_save: false,
         };
 
         doc.expand_prefix(String::new(), cx);
@@ -949,11 +953,19 @@ impl ObjectBrowserDocument {
         // While the unsaved-edits confirmation is up it owns every key: the
         // listing must not move under a decision the user has not made yet.
         if self.pending_navigation.is_some() {
-            if cmd == Command::Cancel {
-                self.cancel_guarded_navigation(cx);
-            }
-
-            return true;
+            // Enter takes the overlay's primary action, exactly like its Save
+            // button; Escape cancels the navigation.
+            return match cmd {
+                Command::Execute => {
+                    self.save_and_navigate(cx);
+                    true
+                }
+                Command::Cancel => {
+                    self.cancel_guarded_navigation(cx);
+                    true
+                }
+                _ => true,
+            };
         }
 
         // Same for the row context menu, which navigates and executes with
@@ -1878,6 +1890,47 @@ mod tests {
         doc.update(window, |doc, _cx| {
             assert_eq!(doc.preview_key_for_test(), Some("logs/app.log"));
             assert!(doc.pending_navigation_for_test().is_none());
+            assert_eq!(doc.state(), DocumentState::Modified);
+        });
+    }
+
+    /// The overlay declares the `ConfirmModal` context, so Enter must take its
+    /// primary action (Save) rather than leaving the prompt parked forever.
+    #[gpui::test]
+    fn enter_on_the_unsaved_edits_overlay_takes_the_primary_action(cx: &mut gpui::TestAppContext) {
+        use dbflux_app::keymap::Command;
+
+        let (doc, window) = new_test_entity_with_window(cx);
+
+        doc.update_in(window, |doc, window, cx| {
+            doc.open_preview("logs/app.log".to_string(), cx);
+            doc.install_editor_for_test("logs/app.log", "before", window, cx);
+            doc.type_into_editor_for_test("edited ", window, cx);
+        });
+        window.run_until_parked();
+
+        doc.update(window, |doc, cx| {
+            doc.open_preview("logs/other.log".to_string(), cx);
+        });
+        doc.update(window, |doc, _cx| {
+            assert!(doc.pending_navigation_for_test().is_some());
+        });
+
+        doc.update_in(window, |doc, window, cx| {
+            assert!(
+                doc.dispatch_command(Command::Execute, window, cx),
+                "the overlay owns the command while it is up"
+            );
+        });
+
+        // Without a connection the save is refused and reported, exactly as
+        // the overlay's Save button behaves: the prompt is resolved and the
+        // buffer keeps its edits.
+        doc.update(window, |doc, _cx| {
+            assert!(
+                doc.pending_navigation_for_test().is_none(),
+                "Enter must resolve the overlay, not leave it parked"
+            );
             assert_eq!(doc.state(), DocumentState::Modified);
         });
     }

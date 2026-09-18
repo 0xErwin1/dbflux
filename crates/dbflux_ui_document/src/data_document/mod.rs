@@ -221,6 +221,24 @@ impl DataDocument {
             .update(cx, |grid, cx| grid.clear_inspector_state(cx));
     }
 
+    pub fn row_inspector_is_tracking(&self, cx: &App) -> bool {
+        self.data_grid.read(cx).row_inspector_is_tracking()
+    }
+
+    pub fn value_panel_is_open(&self, cx: &App) -> bool {
+        self.data_grid.read(cx).value_panel_is_open()
+    }
+
+    pub fn set_value_panel_open(&mut self, open: bool, cx: &mut Context<Self>) {
+        self.data_grid
+            .update(cx, |grid, cx| grid.set_value_panel_open(open, cx));
+    }
+
+    pub fn set_row_inspector_tracking(&mut self, tracking: bool, cx: &mut Context<Self>) {
+        self.data_grid
+            .update(cx, |grid, cx| grid.set_row_inspector_tracking(tracking, cx));
+    }
+
     pub fn refresh_policy(&self, cx: &App) -> RefreshPolicy {
         self.data_grid.read(cx).refresh_policy()
     }

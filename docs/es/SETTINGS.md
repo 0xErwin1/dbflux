@@ -53,7 +53,7 @@ y permanece en English por ahora.
 | **Reopen last connections**    | Off     | Reconecta a las conexiones que estaban activas.                  |
 | **Default focus**              | Sidebar | Dónde cae el focus al iniciar (Sidebar o la última tab).         |
 | **Max history entries**        | 1000    | Tope del historial de queries (mínimo 10).                       |
-| **Auto-save interval (ms)**    | 2000    | Cada cuánto se auto-guardan los buffers del editor (mínimo 500). |
+| **Auto-save interval (ms)**    | 2000    | Cada cuánto se auto-guarda el contenido del editor (mínimo 500). Un script respaldado por un archivo se escribe en ese archivo; el contenido sin título se conserva en la carpeta `sessions/`. |
 
 ### Actualización y segundo plano
 

@@ -133,6 +133,21 @@ jobs:
         with:
           fetch-depth: 0
 
+      # CHANGELOG.md is the repository's curated changelog and the release body
+      # is generated separately, so a stable tag is the only place they meet.
+      # A missing section means the promote step was skipped: fail before
+      # publishing rather than shipping a tag with no entry in the log.
+      - name: Check the changelog has a section for this version
+        if: needs.classify.outputs.channel == 'stable'
+        env:
+          RAW_VERSION: ${{ needs.classify.outputs.version }}
+        run: |
+          if ! grep -qE "^## \[${RAW_VERSION}\]" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no '## [${RAW_VERSION}]' section."
+            echo "Rename the '## [Unreleased]' heading on the release branch to '## [${RAW_VERSION}] - <date>', then re-run the release."
+            exit 1
+          fi
+
       - name: Download all artifacts
         if: env.ACT != 'true'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1

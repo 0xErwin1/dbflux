@@ -10,6 +10,16 @@ For project structure, crate boundaries, key files, and subsystem overviews, use
 
 For the branching model, version rules, tag flow, and release procedure, use `docs/RELEASE.md` as the canonical reference. For contributor workflow and the label taxonomy, use `CONTRIBUTING.md`. The automated release skill (`skills/dbflux-release/SKILL.md`) follows the same rules.
 
+## Issues and Pull Requests
+
+Both are created from the repository's own templates — never from a remembered or invented shape:
+
+- An issue uses one of the forms in `.github/ISSUE_TEMPLATE/` — `bug_report.yml` for a defect, `feature_request.yml` for a capability. Fill the form's fields in the order it declares them, and keep the `[bug] ` / `[feature] ` title prefix and the `Labels I plan to apply` checklist it renders.
+- A pull request uses `.github/pull_request_template.md` verbatim: `Summary`, `What does this resolve?`, `How was this solved?`, `Validation`, `Where was this tested?`, `Checklist`, `Labels to apply`. Do not add sections of your own; follow-up work and known limitations belong where the template asks for them.
+- The mechanics (duplicate search, choosing the form, `gh` commands, reading the full branch delta) live in `skills/issue-creation/SKILL.md` and `skills/branch-pr/SKILL.md`.
+- Use only labels from the taxonomy in `CONTRIBUTING.md` § Label Guide, and never invent labels such as `area:*`.
+- A contributor without write access to `0xErwin1/dbflux` cannot apply labels from a fork. State the labels the change needs where the template asks for them and ask a maintainer to apply them during triage — do not drop that part of the template.
+
 ## Build & Run Commands
 
 ```bash
@@ -32,7 +42,9 @@ cargo test --workspace test_name     # Single test
 cargo test -p dbflux_core            # Tests in specific crate
 cargo test -p dbflux_driver_dynamodb --test live_integration -- --ignored  # Docker-backed live tests
 
-# Faster test runner (provided by the Nix dev shell). Does NOT run doctests.
+# Preferred test runner: always use `cargo nextest run` over `cargo test` when
+# available (provided by the Nix dev shell). It is faster and gives clearer
+# output. Note it does NOT run doctests, so run those separately.
 cargo nextest run --workspace        # All tests (unit + integration)
 cargo test --doc --workspace         # Doctests (run separately)
 cargo nextest run -p dbflux_driver_sqlite --run-ignored all  # Include #[ignore]d live tests
@@ -272,12 +284,12 @@ Architecture details live in `ARCHITECTURE.md`. This file only keeps the agent-f
 
 The UI layer is split into six crates (see `ARCHITECTURE.md` § Layered crate map for the full diagram):
 
-- `dbflux_components` — domain-free leaf: theme, tokens, icons, primitives, composites, controls, data_table, document_tree, result_panel, chart engine, modals. No `dbflux_app` dependency.
+- `dbflux_components` — domain-free leaf: theme, tokens, icons, primitives, composites, controls, data_table, document_tree, result_panel, chart engine, modals. No `dbflux_app` dependency. May depend on `dbflux_i18n` for translated UI copy; `dbflux_i18n` has no `dbflux_*` dependencies.
 - `dbflux_ui_base` — AppStateEntity, events, keymap helpers, toast, modal_frame, platform detection, sql_preview_modal, sso_wizard.
 - `dbflux_ui_document` — tab/pane system, all document types (CodeDocument, DataDocument, ChartDocument, DashboardDocument, KeyValueDocument, AuditDocument, InstanceInspectorDocument, BucketsTableDocument, ObjectBrowserDocument, ObjectEditorDocument), data_grid_panel, governance view.
 - `dbflux_ui_sidebar` — connections + scripts sidebar tree.
 - `dbflux_ui_windows` — settings window and connection manager window.
-- `dbflux_ui` — thin integrator (~13.5k LOC): workspace, status_bar, tasks_panel, dock, remaining overlays (command_palette, login_modal, shutdown_overlay), keymap glue, assets, ipc_server. Re-exports moved subsystems via `pub use` shims at the old module paths so internal call-sites still compile against `crate::ui::...`.
+- `dbflux_ui` — thin integrator (~16k LOC): workspace, status_bar, tasks_panel, dock, remaining overlays (command_palette, login_modal, shutdown_overlay), keymap glue, assets, ipc_server. Re-exports moved subsystems via `pub use` shims at the old module paths so internal call-sites still compile against `crate::ui::...`.
 
 `dbflux_ui` has **no per-driver feature flags** and no driver dependencies. Per-driver features live on `dbflux_app` (which registers drivers) and on the `dbflux` binary. The cross-cutting `lua`/`aws`/`mcp` features on UI crates only forward to `dbflux_app` and sibling UI crates.
 
@@ -380,7 +392,7 @@ Key abstractions for UI adaptation:
 8. Add feature flag in `crates/dbflux/Cargo.toml` (binary) and `crates/dbflux_app/Cargo.toml`. No UI crate gains a per-driver feature flag. The feature MUST also be added to `default` in `crates/dbflux/Cargo.toml` — release builds ship default features, so a driver left out of `default` silently ships disabled.
 9. Register in `AppState::new()` under `#[cfg(feature = "name")]`
 10. Register the driver's `live_integration` test suite as its own step in `.github/workflows/tests.yml`'s Driver Live Integration job — it enumerates suites explicitly, so a new driver's Docker-backed tests do not run in CI until added there.
-11. **Set `ColumnMeta::kind` on every column** using the `ColumnKind` enum (Timestamp, Float, Integer, Text, Unknown). The chart engine uses `ColumnKind` exclusively — it never inspects `type_name` strings or driver identifiers. Columns with `kind = Unknown` are excluded from chart auto-detection.
+11. **Set `ColumnMeta::kind` on every column** using the `ColumnKind` enum (Timestamp, Float, Integer, Text, Unknown). The chart engine uses `ColumnKind` exclusively — it never inspects `type_name` strings or driver identifiers. Columns with `kind = Unknown` are excluded from chart auto-detection. Use `ColumnKind::Timestamp` for time columns, `ColumnKind::Float`/`Integer` for numeric columns, and `ColumnKind::Text` for string columns.
 12. Optional: implement `DashboardSource` and/or `DashboardImporter` and advertise `DriverCapabilities::DASHBOARD_SYNC` / `DASHBOARD_IMPORT` to let the UI browse/import upstream dashboards (see `docs/DASHBOARDS.md`).
 13. Optional: implement `InstanceCatalog` (`dbflux_core/src/connection/instance_catalog.rs`) and advertise `DriverCapabilities::INSTANCE_METRICS` (time-series) and/or `INSTANCE_INSPECTOR` (tabular snapshots). The catalog exposes metrics, inspectors, a `DefaultInstanceDashboard` descriptor for the read-only Instance Overview, and optional `InspectorRowAction`s gated by per-driver privilege probes. See `docs/DASHBOARDS.md` § Instance Overview and inspectors.
 
@@ -433,11 +445,11 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 
 **Classification**: Operations are classified by impact level via `ExecutionClassification`:
 - `Metadata` — Schema introspection (list tables, describe object)
-- `Read` — SELECT queries, data browsing
+- `Read` — SELECT queries, data browsing, read-only previews
 - `Write` — INSERT/UPDATE, mutations
 - `Destructive` — DELETE, DROP, TRUNCATE
 - `AdminSafe` — Safe DDL operations (CREATE TABLE, CREATE INDEX, ADD COLUMN with default/nullable)
-- `Admin` — Risky DDL operations (DROP COLUMN, RENAME COLUMN, ALTER COLUMN, DROP INDEX)
+- `Admin` — Risky DDL operations (DROP COLUMN, RENAME COLUMN, ALTER COLUMN, DROP INDEX) and privileged admin flows
 - `AdminDestructive` — Irreversible DDL operations (DROP TABLE, DROP DATABASE, TRUNCATE TABLE)
 
 **Policy Engine** (`dbflux_policy`):
@@ -473,6 +485,10 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
 - `preview_ddl` is intentionally not exposed from the MCP surface until DBFlux has a truly safe schema-preview path
 - `select_data` must reject unsupported `joins` explicitly rather than ignoring them
 
+**Trust model**:
+
+MCP authentication is process-identity only: presenting `--client-id` is the sole authentication signal. Any local process that knows the client ID can connect. This is not a cryptographic guarantee. Do not expose the MCP server beyond localhost without an additional authentication layer. A cryptographic MCP auth layer is a known follow-up item, not yet scheduled.
+
 **Standalone Server** (`dbflux_mcp_server`):
 - Integrated as subcommand: `dbflux mcp --client-id <id>` for AI clients
 - Communicates via JSON-RPC over stdin/stdout
@@ -495,7 +511,7 @@ DBFlux supports the Model Context Protocol (MCP) for AI client integration with 
   - `DashboardSource` (`dbflux_core/src/connection/dashboard_source.rs`) — lists upstream dashboards; gated by `DriverCapabilities::DASHBOARD_SYNC`.
   - `DashboardImporter` (`dbflux_core/src/connection/dashboard_import.rs`) — parses upstream JSON into `WidgetImportSpec`s; gated by `DriverCapabilities::DASHBOARD_IMPORT`.
   - `InstanceCatalog` (`dbflux_core/src/connection/instance_catalog.rs`) — exposes per-driver metrics, inspectors, default-dashboard descriptor, and row actions; gated by `DriverCapabilities::INSTANCE_METRICS` / `INSTANCE_INSPECTOR`.
-  - CloudWatch is the reference implementation for `DashboardSource` / `DashboardImporter`. PostgreSQL, MySQL/MariaDB, MongoDB, Redis, and SQL Server are the reference implementations for `InstanceCatalog`.
+  - CloudWatch is the reference implementation for `DashboardSource` / `DashboardImporter`. PostgreSQL, MySQL/MariaDB, MongoDB, Redis, SQL Server, ClickHouse, and InfluxDB (v2 only) are the reference implementations for `InstanceCatalog`.
 - Remote dashboard listings are session-scoped via `RemoteDashboardCache` (`crates/dbflux_app/src/remote_dashboard_cache.rs`); they do not persist across restart.
 
 Full reference: `docs/DASHBOARDS.md`.

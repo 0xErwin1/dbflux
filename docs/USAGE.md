@@ -114,6 +114,24 @@ Open a new query tab with `Ctrl+n` (`Cmd+n` on macOS), or open a script file wit
 etc.) is determined by the active connection's driver, which also drives syntax
 highlighting and the placeholder text.
 
+### Saving and closing tabs
+
+A new query tab (`Ctrl+n`) is backed by a real file in your scripts folder, the
+same way a script opened with `Ctrl+o` is. Open editors auto-save to that file
+on the configured interval, and `Ctrl+s` / **Save File As** go through the same
+queue. Autosave and closing never overwrite a file that changed outside DBFlux:
+your version stays in the editor and DBFlux reports the refused write. `Ctrl+s`
+and **Save File As** are deliberate and write the file even then.
+
+Closing a tab with pending edits saves them first, then closes; if the write
+cannot land (for example, the file changed outside DBFlux or is read-only), the
+tab stays open with your changes and DBFlux points at `Ctrl+s` / **Save File As**
+as the deliberate overwrite. A buffer with no file yet is the exception: closing
+it asks first, so you can save it, close it without saving, or cancel. Quitting
+DBFlux saves pending edits the same way before it shuts down. If the scripts
+folder could not be created at startup, new queries are kept in the session store
+instead, and **Save File As** is offered when you close them.
+
 ### Executing
 
 - `Ctrl+Enter` (`Cmd+Enter`) — **Run Query**.
@@ -297,6 +315,21 @@ names the row's position in the result. Fields are edited exactly like grid
 cells, so unsaved changes, Save Row and revert work the same in both layouts;
 `Up`/`Down` move between fields and `Left`/`Right` move between rows. Press
 `i` again to return to the grid.
+
+### Column header menu
+
+Right-click a column header for a menu scoped to that column: order ascending
+or descending, clear the ordering, and every filter operator, in one flat
+list. A left click on the header still cycles the sort.
+
+### Value panel
+
+Right-click a cell and choose **View Value**, or press `v`, to open the cell
+in the inspector rail on the right. The panel shows the value as JSON, XML or
+plain text — detected from the content, and only when it really parses — with
+pretty-print, compact and word wrap. You can edit there: **Save** commits the
+row directly, **Revert** discards the edit. The panel follows the selected cell
+as you move through the grid, except while it holds an unsaved change.
 
 ### Filtering results
 
@@ -502,6 +535,7 @@ stay `Ctrl` on all platforms (to avoid clashing with macOS system shortcuts).
 | `o` | Add row |
 | `y` | Copy row |
 | `i` | Toggle the record view (one row, field per line) |
+| `v` | Toggle the value panel for the selected cell |
 | `Ctrl+c` / `Cmd+c` | Copy cell(s) |
 | `z` | Toggle panel collapse |
 | `m` (or `Shift+F10`) | Open context menu |

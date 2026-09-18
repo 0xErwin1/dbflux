@@ -15,6 +15,33 @@ use std::sync::RwLock;
 use std::time::Instant;
 use uuid::Uuid;
 
+pub type ConnectionTeardownHandle = std::thread::JoinHandle<Result<(), DbError>>;
+
+fn teardown_connection(mut connection: Arc<dyn Connection>) -> Result<(), DbError> {
+    if let Some(factory) = connection.execution_session_factory() {
+        return factory.shutdown();
+    }
+    connection.cancel_active().log_err();
+    if let Some(connection) = Arc::get_mut(&mut connection) {
+        connection.close()?;
+    }
+    Ok(())
+}
+
+fn teardown_connected(connected: ConnectedProfile) -> Result<(), DbError> {
+    let mut result = teardown_connection(connected.connection);
+    for database_connection in connected.database_connections.into_values() {
+        if let Err(error) = teardown_connection(database_connection.connection) {
+            if result.is_ok() {
+                result = Err(error);
+            } else {
+                log::warn!("Additional database connection teardown failed: {error}");
+            }
+        }
+    }
+    result
+}
+
 /// Typed cache key for schema-level data (types, indexes, foreign keys).
 ///
 /// Replaces the previous untyped string-based approach. Drivers and UI code
@@ -786,21 +813,15 @@ impl ConnectionManager {
     /// order work after the connection is fully closed — post-disconnect
     /// hooks in particular — can wait for it. Dropping the handle detaches
     /// the thread, preserving the old fire-and-forget behavior.
-    pub fn disconnect(&mut self, profile_id: Uuid) -> Option<std::thread::JoinHandle<()>> {
-        let teardown = self.connections.remove(&profile_id).map(|connected| {
-            std::thread::spawn(move || {
-                connected.connection.cancel_active().log_err();
-                for db_conn in connected.database_connections.values() {
-                    db_conn.connection.cancel_active().log_err();
-                }
-                drop(connected);
-            })
-        });
+    pub fn disconnect(&mut self, profile_id: Uuid) -> Option<ConnectionTeardownHandle> {
+        let teardown = self
+            .connections
+            .remove(&profile_id)
+            .map(|connected| std::thread::spawn(move || teardown_connected(connected)));
 
         if self.active_connection_id == Some(profile_id) {
             self.active_connection_id = self.connections.keys().next().copied();
         }
-
         teardown
     }
 
@@ -808,8 +829,13 @@ impl ConnectionManager {
     pub fn disconnect_all(&mut self) {
         let ids: Vec<Uuid> = self.connections.keys().copied().collect();
         for id in ids {
-            // Bulk teardown stays detached; nothing is ordered after it.
-            let _teardown = self.disconnect(id);
+            if let Some(handle) = self.disconnect(id) {
+                std::thread::spawn(move || match handle.join() {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => log::warn!("Detached connection teardown failed: {error}"),
+                    Err(_) => log::warn!("Detached connection teardown thread panicked"),
+                });
+            }
         }
     }
 
@@ -1603,46 +1629,27 @@ impl ConnectionManager {
 
     // --- Shutdown ---
 
-    pub fn close_all_connections(&mut self, shutdown: &ShutdownCoordinator) {
+    pub fn close_all_connections(
+        &mut self,
+        shutdown: &ShutdownCoordinator,
+    ) -> Vec<ConnectionTeardownHandle> {
         if !shutdown.advance_phase(
             ShutdownPhase::CancellingTasks,
             ShutdownPhase::ClosingConnections,
         ) {
-            return;
+            return Vec::new();
         }
-
-        let ids: Vec<Uuid> = self.connections.keys().copied().collect();
-        let count = ids.len();
-
-        for id in ids {
-            if let Some(mut connected) = self.connections.remove(&id) {
-                let name = connected.profile.name.clone();
-
-                if let Err(e) = connected.connection.cancel_active() {
-                    log::debug!(
-                        "Could not cancel active query for {} (may not have one): {:?}",
-                        name,
-                        e
-                    );
-                }
-
-                if let Some(conn) = Arc::get_mut(&mut connected.connection) {
-                    if let Err(e) = conn.close() {
-                        error!("Failed to close connection for {}: {:?}", name, e);
-                    } else {
-                        info!("Closed connection: {}", name);
-                    }
-                } else {
-                    log::warn!(
-                        "Could not get exclusive access to connection {} for close",
-                        name
-                    );
-                }
-            }
-        }
-
-        info!("Closed {} connections during shutdown", count);
+        let count = self.connections.len();
+        let connections = std::mem::take(&mut self.connections);
         self.active_connection_id = None;
+        info!(
+            "Scheduling teardown for {} connections during shutdown",
+            count
+        );
+        connections
+            .into_values()
+            .map(|connected| std::thread::spawn(move || teardown_connected(connected)))
+            .collect()
     }
 }
 
@@ -3298,7 +3305,125 @@ mod tests {
             condvar.notify_all();
         }
 
-        teardown.join().expect("teardown thread must finish");
+        teardown
+            .join()
+            .expect("teardown thread must finish")
+            .expect("legacy teardown must succeed");
+    }
+
+    struct FactoryTeardownConnection {
+        inner: TestConnection,
+        factory: Arc<FactoryTeardownProbe>,
+    }
+
+    struct FactoryTeardownProbe {
+        shutdowns: std::sync::atomic::AtomicUsize,
+        admission_closed: std::sync::atomic::AtomicBool,
+        fail_shutdown: bool,
+    }
+
+    impl crate::ExecutionSessionFactory for FactoryTeardownProbe {
+        fn open(&self) -> Result<Arc<dyn crate::ExecutionSession>, DbError> {
+            if self
+                .admission_closed
+                .load(std::sync::atomic::Ordering::SeqCst)
+            {
+                return Err(DbError::query_failed("admission closed"));
+            }
+            Err(DbError::NotSupported(
+                "probe does not open sessions".to_string(),
+            ))
+        }
+
+        fn shutdown(&self) -> Result<(), DbError> {
+            self.admission_closed
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            self.shutdowns
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if self.fail_shutdown {
+                Err(DbError::query_failed("factory shutdown failed"))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    impl Connection for FactoryTeardownConnection {
+        fn metadata(&self) -> &DriverMetadata {
+            self.inner.metadata()
+        }
+        fn ping(&self) -> Result<(), DbError> {
+            self.inner.ping()
+        }
+        fn close(&mut self) -> Result<(), DbError> {
+            self.inner.close()
+        }
+        fn execute(&self, request: &crate::QueryRequest) -> Result<crate::QueryResult, DbError> {
+            self.inner.execute(request)
+        }
+        fn cancel(&self, handle: &crate::QueryHandle) -> Result<(), DbError> {
+            self.inner.cancel(handle)
+        }
+        fn schema(&self) -> Result<SchemaSnapshot, DbError> {
+            self.inner.schema()
+        }
+        fn kind(&self) -> DbKind {
+            self.inner.kind()
+        }
+        fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
+            self.inner.schema_loading_strategy()
+        }
+        fn dialect(&self) -> &dyn crate::SqlDialect {
+            self.inner.dialect()
+        }
+        fn execution_session_factory(&self) -> Option<&dyn crate::ExecutionSessionFactory> {
+            Some(self.factory.as_ref())
+        }
+    }
+
+    #[test]
+    fn disconnect_returns_factory_shutdown_error_and_closes_admission() {
+        let factory = Arc::new(FactoryTeardownProbe {
+            shutdowns: std::sync::atomic::AtomicUsize::new(0),
+            admission_closed: std::sync::atomic::AtomicBool::new(false),
+            fail_shutdown: true,
+        });
+        let connection = Arc::new(FactoryTeardownConnection {
+            inner: TestConnection::new(DbKind::Postgres, SchemaLoadingStrategy::SingleDatabase),
+            factory: factory.clone(),
+        });
+        let profile = ConnectionProfile::new("factory", DbConfig::default_postgres());
+        let profile_id = profile.id;
+        let mut manager = ConnectionManager::new(HashMap::new());
+        manager.add_connection(
+            profile,
+            connection,
+            None,
+            None,
+            false,
+            WritePrivilege::Unknown,
+        );
+
+        let error = manager
+            .disconnect(profile_id)
+            .expect("factory-backed profile must schedule teardown")
+            .join()
+            .expect("teardown thread must not panic")
+            .expect_err("factory shutdown failure must reach caller");
+        assert!(error.to_string().contains("factory shutdown failed"));
+        assert_eq!(
+            factory.shutdowns.load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+        assert!(
+            factory
+                .admission_closed
+                .load(std::sync::atomic::Ordering::SeqCst)
+        );
+        assert!(
+            crate::ExecutionSessionFactory::open(factory.as_ref()).is_err(),
+            "shutdown must reject later child admission"
+        );
     }
 
     #[test]

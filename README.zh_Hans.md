@@ -84,6 +84,7 @@ curl -fsSL https://raw.githubusercontent.com/0xErwin1/dbflux/main/scripts/instal
 - **DynamoDB**，支持表浏览、条目增删改查与 AWS 身份验证
 - **InfluxDB** v1 与 v2（v1 为 InfluxQL，v2 为 InfluxQL + Flux）
 - **ClickHouse** 与 ClickHouse Cloud，基于 HTTP(S)，支持数据库 / 表发现、可视化 SELECT 与显式的原始 SQL 执行
+- **TursoDB** 与 libSQL（`sqld`），基于 HTTP，支持 Schema 发现、类型化增删改查以及按编辑器标签页隔离的交互式事务
 - **CloudWatch Logs**，支持日志组 / 流浏览与事件流
 - **Amazon S3**，支持存储桶浏览、对象预览 / 编辑、完整增删改查与预签名 URL，并兼容 S3 端点（Cloudflare R2、MinIO）
 - **基于 RPC 的外部驱动**（通过[驱动 RPC 协议](docs/DRIVER_RPC_PROTOCOL.md)注册进程外驱动）
@@ -104,9 +105,9 @@ curl -fsSL https://raw.githubusercontent.com/0xErwin1/dbflux/main/scripts/instal
 - 「复制为查询」上下文菜单，可将 INSERT / UPDATE / DELETE 复制为 SQL、MongoDB shell 或 Redis 命令
 - 查询预览模态框，按语言提供语法高亮
 - 命令面板，支持模糊搜索
-- 自定义 toast 通知，支持自动消失
+- 自定义 Toast 提示，支持自动消失
 - 后台任务面板
-- 会话恢复：启动时恢复已打开的标签页，并对外部修改过的文件做冲突检测
+- 会话恢复：启动时恢复已打开的标签页，恢复出的草稿若与文件内容不同，绝不会覆盖该文件
 
 ### 可视化查询构建器
 
@@ -146,7 +147,7 @@ curl -fsSL https://raw.githubusercontent.com/0xErwin1/dbflux/main/scripts/instal
 ### 审计与脚本
 
 - 基于 SQLite 的审计日志，记录查询、连接、Hook、脚本、MCP、治理与配置事件，支持脱敏与查询指纹 — 参见 [docs/AUDIT.md](docs/AUDIT.md)
-- 集中式的用户错误上报：失败以 toast 呈现，附带关联 ID 与「在审计中查看」操作，驱动状态栏的错误徽标，并与对应的审计记录相关联
+- 集中式的用户错误上报：失败以 Toast 提示呈现，附带关联 ID 与「在审计中查看」操作，驱动状态栏的错误徽标，并与对应的审计记录相关联
 - Lua、Python 与 Bash 脚本以文档形式执行，输出实时流式呈现 — 参见 [docs/LUA.md](docs/LUA.md)
 
 ### 键盘导航

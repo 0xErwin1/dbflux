@@ -28,7 +28,7 @@ Embedded file-based database.
 
 ### Transactional DDL
 
-SQLite supports **transactional DDL** — all DDL operations can be wrapped in transactions and rolled back:
+SQLite supports **transactional DDL** — manual DDL operations can be wrapped in transactions and rolled back:
 
 ```sql
 BEGIN;
@@ -37,53 +37,44 @@ ALTER TABLE users ADD COLUMN phone TEXT NULL;
 ROLLBACK;  -- Safe to rollback if something goes wrong
 ```
 
-### ALTER TABLE Limitations
+Managed table alterations are different: their planner requires an autocommit
+connection because the driver owns the per-table transaction.
 
-**CRITICAL**: SQLite has **very limited** `ALTER TABLE` support:
+### Managed ALTER TABLE
 
-**Supported operations**:
-- `ADD COLUMN` (at end of table only)
-- `RENAME COLUMN` (SQLite 3.25.0+)
-- `RENAME TABLE`
+For a pure `DROP COLUMN` request, DBFlux uses SQLite's native `DROP COLUMN`
+path first when the linked SQLite version supports it. Native drops keep SQLite's
+own acceptance rules; they are not limited by the rebuild grammar. DBFlux still
+preflights known dependencies and SQLite validates the request again at execution.
 
-**NOT supported**:
-- `DROP COLUMN` (requires table recreation)
-- `ALTER COLUMN` (type change requires table recreation)
-- `ADD COLUMN` in middle of table (requires table recreation)
+For selected type, nullability, or default changes, and for a pure drop when the
+linked SQLite version has no native `DROP COLUMN`, DBFlux uses a conservative
+rebuild of one `main`-schema table. A rebuild request may also combine those
+column changes with drops.
 
-### Table Recreation Pattern
+The rebuild copies retained rows without casts, conversion, or backfill. It
+preserves the proven row identity and stored values exactly; a changed default
+applies only to future inserts. Making a column required can therefore fail when
+existing rows are incompatible.
 
-For unsupported `ALTER TABLE` operations, use the table recreation pattern:
+Preparation is read-only. The preview exposed through the generic UI and MCP is
+an immutable, illustrative lifecycle description, not executable apply SQL. The
+driver manages the private replacement table, copy and exact comparison, source
+replacement, proven explicit-index restoration, and final validation.
 
-```sql
-BEGIN;
+Each rebuild is atomic for its one table. On failure, the driver verifies rollback
+and restoration of connection settings. Cleanup failures remain visible; uncertain
+transaction state or failed connection-setting restoration quarantines the
+connection until reconnection. There is no cross-table atomicity.
 
--- 1. Create new table with desired schema
-CREATE TABLE users_new (
-  id INTEGER PRIMARY KEY,
-  email TEXT NOT NULL,
-  name TEXT,
-  -- phone column dropped, age column added
-  age INTEGER
-);
+#### Rebuild scope
 
--- 2. Copy data from old table
-INSERT INTO users_new (id, email, name, age)
-  SELECT id, email, name, NULL FROM users;
-
--- 3. Drop old table
-DROP TABLE users;
-
--- 4. Rename new table
-ALTER TABLE users_new RENAME TO users;
-
-COMMIT;
-```
-
-**IMPORTANT**: This pattern loses:
-- Foreign key references from other tables
-- Triggers on the original table
-- Indexes on the original table (must recreate)
+The rebuild route accepts only table shapes it can prove safe in the `main`
+schema. It rejects, for example, CHECK constraints, generated columns,
+`AUTOINCREMENT`, `STRICT`, `WITHOUT ROWID`, views or triggers, expression or
+partial indexes, attached schemas, and active caller-owned transactions. These
+limits apply to rebuilds only: an otherwise applicable native pure drop is not
+rejected merely because it is outside the rebuild grammar.
 
 ### Index Operations
 
@@ -109,18 +100,17 @@ COMMIT;
 
 ### Known Limitations
 
-- No `DROP COLUMN` (requires table recreation)
-- No `ALTER COLUMN` (requires table recreation)
-- Cannot add constraints to existing tables
+- The managed table-alter planner changes selected type, nullability, defaults, and drops; it does not add constraints to an existing table.
+- Rebuilds are deliberately limited to the proven table shapes described above.
 - No concurrent index creation (locks database)
 - Dynamic typing (column types are advisory only)
 
 ### Best Practices
 
-1. **Use transactions** — DDL is transactional, always wrap in `BEGIN`/`COMMIT`
-2. **Plan schema ahead** — Difficult to modify later
-3. **Use table recreation pattern** — For unsupported `ALTER TABLE` ops
-4. **Recreate indexes and triggers** — After table recreation
-5. **Test on copy first** — Especially for table recreation pattern
-6. **Enable foreign keys** — `PRAGMA foreign_keys = ON` before altering schema
-7. **Use VACUUM** — Reclaim disk space after `DROP TABLE` or table recreation
+1. **Use transactions for manual DDL** — managed table alterations require autocommit.
+2. **Plan schema ahead** — Difficult to modify later.
+3. **Review the managed ALTER preview** — it is descriptive; apply through DBFlux rather than running its statements.
+4. **Plan unsupported shapes separately** — the rebuild route rejects views, triggers, and other unproven shapes.
+5. **Test on a copy first** — especially before a managed rebuild.
+6. **Enable foreign keys** — `PRAGMA foreign_keys = ON` before altering schema.
+7. **Use VACUUM** — Reclaim disk space after `DROP TABLE` or table recreation.

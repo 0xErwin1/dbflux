@@ -11,7 +11,7 @@
 //! which made them unreachable from the document/sidebar crates that need the
 //! same style (sidebar's `⋯` menu, dashboard panel kebab, tab context menu).
 //! Moving them down to `dbflux_components` lets every UI crate reuse the exact
-//! same chrome — see CLAUDE.md "Generic Deduplication Patterns".
+//! same chrome — see AGENTS.md "Generic Deduplication Patterns".
 
 use crate::composites::menu_item::{
     MenuItem, render_menu_container, render_menu_item, render_separator,

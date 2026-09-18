@@ -87,6 +87,24 @@ impl ModalDeleteDashboardConfirm {
         self.request = None;
         cx.notify();
     }
+
+    /// Resolve the modal as if the confirm button was clicked: emit the
+    /// outcome and close. The keyboard path (ConfirmModal keymap) uses this
+    /// so Enter resolves the modal through the same outcome handler as a
+    /// mouse click.
+    pub fn confirm(&mut self, cx: &mut Context<Self>) {
+        let Some(dashboard_id) = self.request.as_ref().map(|r| r.dashboard_id) else {
+            return;
+        };
+        cx.emit(DeleteDashboardOutcome::Confirmed { dashboard_id });
+        self.close(cx);
+    }
+
+    /// Resolve the modal as if the cancel button was clicked.
+    pub fn cancel(&mut self, cx: &mut Context<Self>) {
+        cx.emit(DeleteDashboardOutcome::Cancelled);
+        self.close(cx);
+    }
 }
 
 impl EventEmitter<DeleteDashboardOutcome> for ModalDeleteDashboardConfirm {}
@@ -231,6 +249,24 @@ impl ModalDeleteSavedChartConfirm {
         self.visible = false;
         self.request = None;
         cx.notify();
+    }
+
+    /// Resolve the modal as if the confirm button was clicked: emit the
+    /// outcome and close. The keyboard path (ConfirmModal keymap) uses this
+    /// so Enter resolves the modal through the same outcome handler as a
+    /// mouse click.
+    pub fn confirm(&mut self, cx: &mut Context<Self>) {
+        let Some(chart_id) = self.request.as_ref().map(|r| r.chart_id) else {
+            return;
+        };
+        cx.emit(DeleteSavedChartOutcome::Confirmed { chart_id });
+        self.close(cx);
+    }
+
+    /// Resolve the modal as if the cancel button was clicked.
+    pub fn cancel(&mut self, cx: &mut Context<Self>) {
+        cx.emit(DeleteSavedChartOutcome::Cancelled);
+        self.close(cx);
     }
 }
 

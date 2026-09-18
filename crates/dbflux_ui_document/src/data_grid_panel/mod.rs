@@ -8,6 +8,7 @@ mod query;
 mod render;
 pub mod row_inspector;
 mod utils;
+pub mod value_panel;
 
 use super::query_builder::completion::{
     CompletionMode, FkLink, SchemaCache, SchemaCompletionProvider,
@@ -354,6 +355,9 @@ struct TableContextMenu {
     submenu_selected_index: usize,
     /// Whether this is a document view context menu (different items shown).
     is_document_view: bool,
+    /// Whether this menu was opened by right-clicking a column header, which
+    /// scopes it to that column's ordering and filtering.
+    is_column_header: bool,
     doc_field_path: Option<Vec<String>>,
     doc_field_value: Option<dbflux_components::components::document_tree::NodeValue>,
     /// Driver-supplied row-level actions (e.g. Kill, Cancel). When non-empty,
@@ -401,6 +405,9 @@ struct PendingActions {
     document_preview: Option<PendingDocumentPreview>,
     context_menu_focus: bool,
     mutation_modal: Option<crate::data_grid_panel::mutation_confirm::PendingMutationModal>,
+    /// Cell the value panel should open on. Deferred to render because
+    /// building the panel's code editor needs a `Window`.
+    value_panel: Option<value_panel::ValuePanelTarget>,
 }
 
 /// The rendered table widget and its in-memory sort state.
@@ -526,6 +533,10 @@ struct ChromeState {
 struct InspectorState {
     row_inspector_content: Option<Entity<row_inspector::RowInspectorContent>>,
 
+    /// Whether row selection should keep driving the shared inspector rail,
+    /// including after switching to a different table tab.
+    follow_selection: bool,
+
     /// Last `(row, col)` opened in the row inspector. `Some` means the inspector
     /// is logically "on" for this panel — it should reappear when the panel's
     /// tab is re-activated, follow the user's cursor on `SelectionChanged`, and
@@ -540,6 +551,16 @@ struct InspectorState {
     /// for the first destructive action the provider returns, instead of the
     /// normal context menu.
     row_action_provider: Option<RowActionProvider>,
+
+    /// Value panel content. Kept alive across closes so the user's format and
+    /// word-wrap choices survive reopening.
+    value_panel: Option<Entity<value_panel::ValuePanelContent>>,
+
+    /// Whether the value panel currently owns the shared rail.
+    value_panel_open: bool,
+
+    /// Subscription to the value panel's save event.
+    _value_panel_subscription: Option<Subscription>,
 }
 
 /// Visual Query Builder cluster.
@@ -589,6 +610,10 @@ pub struct DataGridPanel {
     runner: DocumentTaskRunner,
     focus_handle: FocusHandle,
     panel_origin: Point<Pixels>,
+    /// A table-details fetch for the primary key is in flight. Until it
+    /// answers, the grid is read-only for want of a key it may well have, so
+    /// the "no primary key" banner waits rather than flashing on every open.
+    pk_details_pending: bool,
     view_config: super::data_view::DataViewConfig,
     context_menu: Option<TableContextMenu>,
     is_active_tab: bool,
@@ -626,7 +651,8 @@ impl DataGridPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let order_by = Self::get_primary_key_columns(&app_state, profile_id, &table, cx);
+        let order_by =
+            Self::get_primary_key_columns(&app_state, profile_id, database.as_deref(), &table, cx);
         let pk_columns: Vec<String> = order_by.iter().map(|c| c.column.name.clone()).collect();
         let pagination = Pagination::default();
 
@@ -690,15 +716,44 @@ impl DataGridPanel {
             _ => None,
         };
 
-        let database = source_database.unwrap_or_else(|| {
+        let database = {
             let state = self.app_state.read(cx);
-            state
-                .connections()
-                .get(&profile_id)
-                .and_then(|c| c.active_database.clone())
-                .unwrap_or_else(|| "default".to_string())
-        });
+            let Some(connected) = state.connections().get(&profile_id) else {
+                // `prepare_fetch_table_details` rejects a disconnected profile,
+                // so there is no key to invent and no fetch to attempt.
+                log::warn!(
+                    "[PK] Cannot fetch table details: profile {} is not connected",
+                    profile_id
+                );
+                return;
+            };
+            Self::table_details_database(connected, source_database.as_deref())
+        };
 
+        // Details cached under this key must be used rather than fetched again:
+        // `prepare_fetch_table_details` refuses a second fetch for a key that is
+        // already populated, and treating that refusal as a failure is what left
+        // a reopened table read-only. An entry carrying only `sample_fields` is
+        // such a populated key as well, so its absence of columns is read as
+        // "no primary keys here" rather than as an excuse to fetch again.
+        let cached_pk_names = self
+            .app_state
+            .read(cx)
+            .get_table_details(profile_id, &database, table.schema.as_deref(), &table.name)
+            .map(|details| Self::primary_key_names(details.columns.as_deref().unwrap_or(&[])));
+
+        if let Some(pk_names) = cached_pk_names {
+            log::info!(
+                "[PK] Using cached table details for {}.{}",
+                database,
+                table.qualified_name()
+            );
+            self.apply_pk_details(pk_names, cx);
+            return;
+        }
+
+        // Logged only for a cache miss: printing it above the check made a warm
+        // cache look like a fetch, which is what made #634's evidence ambiguous.
         log::info!(
             "[PK] Fetching table details for PK columns: {}.{}",
             database,
@@ -713,10 +768,21 @@ impl DataGridPanel {
         ) {
             Ok(p) => p,
             Err(e) => {
-                log::warn!("[PK] Failed to prepare fetch_table_details: {}", e);
+                // Returning silently here is how #634 presented: a read-only
+                // grid and nothing but a log line.
+                dbflux_ui_base::user_error::report_error(
+                    dbflux_ui_base::user_error::UserFacingError::new(
+                        dbflux_ui_base::user_error::ErrorKind::Driver,
+                        crate::labels::pk_details_fetch_failed_error(&e.to_string()),
+                    ),
+                    cx,
+                );
                 return;
             }
         };
+
+        self.pk_details_pending = true;
+        cx.notify();
 
         let entity = cx.entity().clone();
         let app_state = self.app_state.clone();
@@ -738,18 +804,17 @@ impl DataGridPanel {
                             ),
                             cx,
                         );
+                        entity.update(cx, |panel, cx| {
+                            panel.pk_details_pending = false;
+                            cx.notify();
+                        });
                         return;
                     }
                 };
 
                 // Extract PK columns
-                let columns = fetch_result.details.columns.as_deref().unwrap_or(&[]);
-
-                let pk_names: Vec<String> = columns
-                    .iter()
-                    .filter(|c| c.is_primary_key)
-                    .map(|c| c.name.clone())
-                    .collect();
+                let pk_names =
+                    Self::primary_key_names(fetch_result.details.columns.as_deref().unwrap_or(&[]));
 
                 // Store in cache
                 app_state.update(cx, |state, _| {
@@ -769,50 +834,124 @@ impl DataGridPanel {
                     );
                 });
 
-                // Update panel with PK info and recompute editable binding.
                 entity.update(cx, |panel, cx| {
-                    if !pk_names.is_empty() {
-                        panel.pk_columns = pk_names;
-                    }
-
-                    // Cold-cache upgrade: if a committed visual spec exists, recompute
-                    // the binding now that details are available. This upgrades a
-                    // previously read-only builder result to editable without requiring
-                    // the user to re-run the query.
-                    if panel.builder.current_visual_spec.is_some() {
-                        let profile_id = match &panel.source {
-                            DataSource::Table { profile_id, .. } => Some(*profile_id),
-                            _ => None,
-                        };
-                        if let Some(pid) = profile_id {
-                            let database = match &panel.source {
-                                DataSource::Table { database, .. } => {
-                                    database.as_deref().map(|s| s.to_string())
-                                }
-                                _ => None,
-                            };
-                            let spec = panel.builder.current_visual_spec.clone();
-                            let binding = panel.compute_builder_binding(
-                                spec.as_ref(),
-                                pid,
-                                database.as_deref(),
-                                cx,
-                            );
-                            panel.pk_columns = binding
-                                .as_ref()
-                                .map(|b| b.pk_columns.clone())
-                                .unwrap_or_else(|| panel.pk_columns.clone());
-                            panel.builder.builder_editable_binding = binding;
-                        }
-                    }
-
-                    panel.pending.rebuild = true;
-                    cx.notify();
+                    panel.apply_pk_details(pk_names, cx);
                 });
             })
             .log_if_dropped();
         })
         .detach();
+    }
+
+    fn primary_key_names(columns: &[dbflux_core::ColumnInfo]) -> Vec<String> {
+        columns
+            .iter()
+            .filter(|column| column.is_primary_key)
+            .map(|column| column.name.clone())
+            .collect()
+    }
+
+    /// Applies primary-key columns the panel just learned about and rebuilds the
+    /// table, so editability and any committed builder binding see them.
+    fn apply_pk_details(&mut self, pk_names: Vec<String>, cx: &mut Context<Self>) {
+        self.pk_details_pending = false;
+        cx.notify();
+        if !pk_names.is_empty() {
+            self.pk_columns = pk_names;
+        }
+
+        // Everything below needs the table this panel reads, so the source is
+        // destructured once and both the binding recompute and the requery
+        // decision work from that.
+        let source_fields = match &self.source {
+            DataSource::Table {
+                profile_id,
+                database,
+                table,
+                pagination,
+                order_by,
+                total_rows,
+            } => Some((
+                *profile_id,
+                database.clone(),
+                table.clone(),
+                pagination.clone(),
+                *total_rows,
+                order_by.is_empty(),
+            )),
+            _ => None,
+        };
+
+        let Some((profile_id, database, table, pagination, total_rows, unordered)) = source_fields
+        else {
+            self.pending.rebuild = true;
+            cx.notify();
+            return;
+        };
+
+        // Cold-cache upgrade: if a committed visual spec exists, recompute
+        // the binding now that details are available. This upgrades a
+        // previously read-only builder result to editable without requiring
+        // the user to re-run the query.
+        if let Some(spec) = self.builder.current_visual_spec.clone() {
+            let binding =
+                self.compute_builder_binding(Some(&spec), profile_id, database.as_deref(), cx);
+            if let Some(binding) = &binding {
+                self.pk_columns = binding.pk_columns.clone();
+            }
+            self.builder.builder_editable_binding = binding;
+        }
+
+        // The first page was issued before these key columns were known, so it
+        // carried no `ORDER BY` and `LIMIT/OFFSET` paging can repeat or skip
+        // rows. Rewrite the source with the order just learned and requery — the
+        // shape `handle_sort_clear` uses for the same reason.
+        if !unordered {
+            self.pending.rebuild = true;
+            cx.notify();
+            return;
+        }
+
+        let order_by = Self::get_primary_key_columns(
+            &self.app_state,
+            profile_id,
+            database.as_deref(),
+            &table,
+            cx,
+        );
+
+        if order_by.is_empty() {
+            self.pending.rebuild = true;
+            cx.notify();
+            return;
+        }
+
+        let filter_value = self.filter_bar.filter_input.read(cx).value();
+        let filter = if filter_value.trim().is_empty() {
+            None
+        } else {
+            Some(filter_value.to_string())
+        };
+
+        self.source = DataSource::Table {
+            profile_id,
+            database: database.clone(),
+            table: table.clone(),
+            pagination: pagination.clone(),
+            order_by: order_by.clone(),
+            total_rows,
+        };
+        self.pending.requery = Some(PendingRequery {
+            profile_id,
+            database,
+            table,
+            pagination,
+            order_by,
+            filter,
+            total_rows,
+        });
+
+        cx.notify();
     }
 
     /// Create a new panel for displaying a query result (in-memory sorting).
@@ -1146,8 +1285,12 @@ impl DataGridPanel {
             },
             inspector: InspectorState {
                 row_inspector_content: None,
+                follow_selection: false,
                 inspector_row: None,
                 row_action_provider: None,
+                value_panel: None,
+                value_panel_open: false,
+                _value_panel_subscription: None,
             },
             builder: BuilderState {
                 fk_cache: FkLoadState::Loading,
@@ -1163,6 +1306,7 @@ impl DataGridPanel {
             runner,
             focus_handle,
             panel_origin: Point::default(),
+            pk_details_pending: false,
             view_config,
             context_menu: None,
             is_active_tab: true,
@@ -1700,10 +1844,31 @@ impl DataGridPanel {
                     title: "Query Builder".into(),
                     content: view,
                 });
-            } else if let Some((row, col)) = self.inspector.inspector_row {
-                self.open_row_inspector(row, col, cx);
+            } else if self.inspector.value_panel_open {
+                // Re-read this grid's own cell. Reusing the cached content
+                // would leave the rail showing a value from the table the
+                // user just switched away from.
+                if !self.mount_value_panel_for_active_cell(cx) {
+                    cx.emit(DataGridEvent::CloseInspector);
+                }
+            } else if self.inspector.follow_selection {
+                let active = self
+                    .grid_table
+                    .table_state
+                    .as_ref()
+                    .and_then(|state| state.read(cx).selection().active);
+                if let Some(coord) = active {
+                    self.open_row_inspector(coord.row, coord.col, cx);
+                } else if let Some((row, col)) = self.inspector.inspector_row {
+                    self.open_row_inspector(row, col, cx);
+                }
+            } else {
+                // This tab owns nothing in the rail. Say so explicitly: the
+                // rail is global, so staying silent leaves the previous tab's
+                // content on screen.
+                cx.emit(DataGridEvent::CloseInspector);
             }
-        } else if self.builder.builder_panel.is_some() || self.inspector.inspector_row.is_some() {
+        } else if self.builder.builder_panel.is_some() || self.inspector.value_panel_open {
             // Hide the rail (without dropping cached state) so the next
             // active tab can take it over.
             cx.emit(DataGridEvent::CloseInspector);
@@ -1714,8 +1879,219 @@ impl DataGridPanel {
     /// explicitly (× button or ESC fallback). Drops the cached coordinates so
     /// the rail does not re-open on tab activation or refresh.
     pub fn clear_inspector_state(&mut self, _cx: &mut Context<Self>) {
+        self.inspector.follow_selection = false;
         self.inspector.inspector_row = None;
         self.inspector.row_inspector_content = None;
+        self.inspector.value_panel_open = false;
+        self.pending.value_panel = None;
+    }
+
+    /// Whether the value panel currently owns the shared inspector rail.
+    pub fn value_panel_is_open(&self) -> bool {
+        self.inspector.value_panel_open
+    }
+
+    /// Open the value panel on the active cell, or close it if already open.
+    pub fn toggle_value_panel(&mut self, cx: &mut Context<Self>) {
+        if self.inspector.value_panel_open {
+            self.close_value_panel(cx);
+            return;
+        }
+
+        let active = self
+            .grid_table
+            .table_state
+            .as_ref()
+            .and_then(|state| state.read(cx).selection().active);
+
+        if let Some(coord) = active {
+            self.request_value_panel(coord.row, coord.col, cx);
+        }
+    }
+
+    /// Queue the value panel to open on `(row, col)`.
+    ///
+    /// The builder and the row inspector share this rail, so taking it means
+    /// the row inspector must stop following the cursor — otherwise the two
+    /// would replace each other on every selection change.
+    pub(super) fn request_value_panel(&mut self, row: usize, col: usize, cx: &mut Context<Self>) {
+        let Some(target) = self.value_panel_target(row, col, cx) else {
+            return;
+        };
+
+        self.inspector.follow_selection = false;
+        self.inspector.inspector_row = None;
+        self.inspector.value_panel_open = true;
+        self.pending.value_panel = Some(target);
+        cx.notify();
+    }
+
+    /// Carry the value panel's open state onto this tab.
+    ///
+    /// Called when the tab becomes active. Opening re-reads *this* grid's
+    /// selection, so the rail shows the new table's cell instead of whatever
+    /// the previous tab left there.
+    pub fn set_value_panel_open(&mut self, open: bool, _cx: &mut Context<Self>) {
+        if open && self.builder.builder_panel.is_none() {
+            self.inspector.value_panel_open = true;
+        } else if !open {
+            self.inspector.value_panel_open = false;
+            self.pending.value_panel = None;
+        }
+    }
+
+    /// Point the value panel at the active cell of this grid.
+    ///
+    /// Returns false when there is nothing to show yet — a tab whose grid has
+    /// not loaded, or one with no selection.
+    fn mount_value_panel_for_active_cell(&mut self, cx: &mut Context<Self>) -> bool {
+        let active = self
+            .grid_table
+            .table_state
+            .as_ref()
+            .and_then(|state| state.read(cx).selection().active);
+
+        let Some(coord) = active else {
+            return false;
+        };
+
+        let Some(target) = self.value_panel_target(coord.row, coord.col, cx) else {
+            return false;
+        };
+
+        self.pending.value_panel = Some(target);
+        cx.notify();
+        true
+    }
+
+    /// The value panel when it is open and holds an unsaved edit.
+    pub(super) fn value_panel_pending_save(
+        &self,
+        cx: &App,
+    ) -> Option<Entity<value_panel::ValuePanelContent>> {
+        if !self.inspector.value_panel_open {
+            return None;
+        }
+
+        let panel = self.inspector.value_panel.as_ref()?;
+        panel.read(cx).is_modified(cx).then(|| panel.clone())
+    }
+
+    fn close_value_panel(&mut self, cx: &mut Context<Self>) {
+        self.inspector.value_panel_open = false;
+        self.pending.value_panel = None;
+        cx.emit(DataGridEvent::CloseInspector);
+        cx.notify();
+    }
+
+    /// Read the cell's current edit-buffer text and editability for the panel.
+    fn value_panel_target(
+        &self,
+        row: usize,
+        col: usize,
+        cx: &App,
+    ) -> Option<value_panel::ValuePanelTarget> {
+        use dbflux_components::components::data_table::model::{CellValue, VisualRowSource};
+
+        let table_state = self.grid_table.table_state.as_ref()?;
+        let state = table_state.read(cx);
+        let model = state.model();
+        let column = model.columns.get(col)?;
+
+        let edit_buffer = state.edit_buffer();
+        let null_cell = CellValue::null();
+
+        let value = match edit_buffer.compute_visual_order().get(row).copied()? {
+            VisualRowSource::Base(base_idx) => {
+                let base = model.cell(base_idx, col).unwrap_or(&null_cell);
+                edit_buffer.get_cell(base_idx, col, base).edit_text()
+            }
+            VisualRowSource::Insert(insert_idx) => edit_buffer
+                .get_pending_insert_by_idx(insert_idx)
+                .and_then(|data| data.get(col))
+                .map(|cell| cell.edit_text())
+                .unwrap_or_default(),
+        };
+
+        Some(value_panel::ValuePanelTarget {
+            row,
+            col,
+            column_name: column.title.to_string(),
+            value,
+            editable: state.is_editable() && !state.readonly_columns().contains(&col),
+        })
+    }
+
+    /// Mount or update the value panel. Called from render, where a `Window`
+    /// is available to build the editor.
+    pub(super) fn apply_pending_value_panel(
+        &mut self,
+        target: value_panel::ValuePanelTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use value_panel::{ValuePanelContent, ValuePanelSaveEvent};
+
+        let content = match &self.inspector.value_panel {
+            Some(existing) => {
+                existing.update(cx, |panel, cx| panel.open(target, window, cx));
+                existing.clone()
+            }
+            None => {
+                let content = cx.new(|cx| ValuePanelContent::new(target, window, cx));
+                self.inspector._value_panel_subscription = Some(cx.subscribe(
+                    &content,
+                    |this, _, event: &ValuePanelSaveEvent, cx| {
+                        // Save in the panel means "write this value to the
+                        // database", not "stage it": having to confirm again in
+                        // the toolbar after pressing Save reads as the panel
+                        // having done nothing. The commit goes through the
+                        // normal row-save path, so mutation policy, approval,
+                        // and the task list all still apply.
+                        this.write_cell_value(event.row, event.col, &event.value, cx);
+
+                        if let Some(table_state) = this.grid_table.table_state.clone() {
+                            table_state.update(cx, |state, cx| {
+                                state.request_save_row_at(event.row, cx);
+                            });
+                        }
+                    },
+                ));
+                self.inspector.value_panel = Some(content.clone());
+                content
+            }
+        };
+
+        cx.emit(DataGridEvent::OpenInspector {
+            title: SharedString::from(dbflux_i18n::t!("components.value_panel.title")),
+            content: AnyView::from(content),
+        });
+    }
+
+    /// Whether the panel may be re-pointed at `(row, col)`.
+    ///
+    /// An edited-but-unsaved panel stays pinned to its cell; following the
+    /// cursor there would throw the user's typing away without asking.
+    fn value_panel_can_follow(&self, row: usize, col: usize, cx: &App) -> bool {
+        let Some(panel) = self.inspector.value_panel.as_ref() else {
+            return true;
+        };
+
+        let panel = panel.read(cx);
+        !panel.is_modified(cx) && panel.target_cell() != (row, col)
+    }
+
+    /// Whether the grid currently renders as a single-row record view.
+    pub fn row_inspector_is_tracking(&self) -> bool {
+        self.inspector.follow_selection
+    }
+
+    pub fn set_row_inspector_tracking(&mut self, tracking: bool, cx: &mut Context<Self>) {
+        if tracking && self.builder.builder_panel.is_none() && !self.is_grouped_result() {
+            self.inspector.follow_selection = true;
+        } else if !tracking {
+            self.clear_inspector_state(cx);
+        }
     }
 
     pub fn refresh_policy(&self) -> RefreshPolicy {
@@ -1857,6 +2233,24 @@ impl DataGridPanel {
         // keeps following the same row position across refreshes.
         if let Some((row, col)) = self.inspector.inspector_row {
             self.open_row_inspector(row, col, cx);
+        }
+
+        // The panel's cached target came from the pre-refresh result, so
+        // re-read it rather than leaving a value the grid no longer holds.
+        // A tab that inherited an open panel but has never shown one yet has
+        // no cached cell, so it starts from the current selection instead.
+        if self.inspector.value_panel_open {
+            match self
+                .inspector
+                .value_panel
+                .as_ref()
+                .map(|panel| panel.read(cx).target_cell())
+            {
+                Some((row, col)) => self.request_value_panel(row, col, cx),
+                None => {
+                    self.mount_value_panel_for_active_cell(cx);
+                }
+            }
         }
 
         cx.notify();
@@ -2051,26 +2445,39 @@ impl DataGridPanel {
                         // When the row inspector is active, follow the user's
                         // cursor so click / arrow-key navigation updates the
                         // rail in place.
-                        if this.inspector.inspector_row.is_some()
+                        if this.inspector.follow_selection
                             && let Some(active) = selection.active
                         {
                             this.open_row_inspector(active.row, active.col, cx);
+                        }
+
+                        if this.inspector.value_panel_open
+                            && let Some(active) = selection.active
+                            && this.value_panel_can_follow(active.row, active.col, cx)
+                        {
+                            this.request_value_panel(active.row, active.col, cx);
                         }
                     }
                     DataTableEvent::SaveRowRequested(row_idx) => {
                         this.handle_save_row(*row_idx, cx);
                     }
-                    DataTableEvent::ContextMenuRequested { row, col, position } => {
+                    DataTableEvent::ContextMenuRequested {
+                        row,
+                        col,
+                        position,
+                        is_column_header,
+                    } => {
                         // Gather any driver-supplied row actions (e.g. Kill, Cancel).
                         // They are injected as extra menu items at the bottom rather
                         // than bypassing the context menu entirely.
-                        let row_actions =
-                            if let Some(provider) = this.inspector.row_action_provider.as_ref() {
-                                let metric_id = this.row_action_metric_id();
-                                provider(metric_id.as_deref().unwrap_or(""))
-                            } else {
-                                Vec::new()
-                            };
+                        let row_actions = if *is_column_header {
+                            Vec::new()
+                        } else if let Some(provider) = this.inspector.row_action_provider.as_ref() {
+                            let metric_id = this.row_action_metric_id();
+                            provider(metric_id.as_deref().unwrap_or(""))
+                        } else {
+                            Vec::new()
+                        };
 
                         this.context_menu = Some(TableContextMenu {
                             row: *row,
@@ -2083,6 +2490,7 @@ impl DataGridPanel {
                             selected_index: 0,
                             submenu_selected_index: 0,
                             is_document_view: false,
+                            is_column_header: *is_column_header,
                             doc_field_path: None,
                             doc_field_value: None,
                             row_actions,
@@ -2225,6 +2633,7 @@ impl DataGridPanel {
                         selected_index: 0,
                         submenu_selected_index: 0,
                         is_document_view: true,
+                        is_column_header: false,
                         doc_field_path: if field_path.is_empty() {
                             None
                         } else {
@@ -2262,9 +2671,25 @@ impl DataGridPanel {
 
     // === Helpers ===
 
+    /// Primary-key columns for `table`, read from the connection's cached table
+    /// details.
+    ///
+    /// `database` is the database the table was opened from. The cache key is
+    /// built by [`DataGridPanel::table_details_database`], the same key
+    /// `fetch_table_details_for_pk` writes the entry under.
+    ///
+    /// That key is not the sidebar's. `ItemIdParts::cache_database`
+    /// (`dbflux_ui_sidebar`) falls back to the schema name for a node that
+    /// carries no database, so one table reaches the cache as `"main"` there and
+    /// as `"default"` here: two entries that can go stale independently. A single
+    /// fallback cannot reconcile them, because the string carries two roles at
+    /// once — a component of the cache key and the database the fetch targets.
+    /// `new_internal`'s filter completion cache is the one reader left on a third
+    /// chain, through `table.schema`.
     fn get_primary_key_columns(
         app_state: &Entity<AppStateEntity>,
         profile_id: Uuid,
+        database: Option<&str>,
         table: &TableRef,
         cx: &Context<Self>,
     ) -> Vec<OrderByColumn> {
@@ -2273,11 +2698,9 @@ impl DataGridPanel {
             return Vec::new();
         };
 
-        let database = connected.active_database.as_deref().unwrap_or("default");
-
         // Check table_details cache first (populated when table is expanded)
         let cache_key = (
-            database.to_string(),
+            Self::table_details_database(connected, database),
             table.schema.clone(),
             table.name.clone(),
         );
@@ -2771,21 +3194,13 @@ impl DataGridPanel {
 
         let app_state = self.app_state.read(cx);
         let connected = app_state.connections().get(&profile_id)?;
-        let db = database
-            .or(connected.active_database.as_deref())
-            .unwrap_or("default");
-        let db = db.to_string();
+        let db = Self::table_details_database(connected, database);
 
         spec.compute_editable_binding(|source| {
             let cache_key = (db.clone(), source.schema.clone(), source.table.clone());
             if let Some(table_info) = connected.table_details.get(&cache_key) {
                 let cols = table_info.columns.as_deref().unwrap_or(&[]);
-                let pk_names: Vec<String> = cols
-                    .iter()
-                    .filter(|c| c.is_primary_key)
-                    .map(|c| c.name.clone())
-                    .collect();
-                return Some(pk_names);
+                return Some(Self::primary_key_names(cols));
             }
 
             // Also check database_schemas (MySQL/MariaDB lazy loading).
@@ -2795,12 +3210,7 @@ impl DataGridPanel {
                 for t in &db_schema.tables {
                     if t.name == source.table {
                         let cols = t.columns.as_deref().unwrap_or(&[]);
-                        let pk_names: Vec<String> = cols
-                            .iter()
-                            .filter(|c| c.is_primary_key)
-                            .map(|c| c.name.clone())
-                            .collect();
-                        return Some(pk_names);
+                        return Some(Self::primary_key_names(cols));
                     }
                 }
             }
@@ -2813,12 +3223,7 @@ impl DataGridPanel {
                         for t in &db_schema.tables {
                             if t.name == source.table {
                                 let cols = t.columns.as_deref().unwrap_or(&[]);
-                                let pk_names: Vec<String> = cols
-                                    .iter()
-                                    .filter(|c| c.is_primary_key)
-                                    .map(|c| c.name.clone())
-                                    .collect();
-                                return Some(pk_names);
+                                return Some(Self::primary_key_names(cols));
                             }
                         }
                     }
@@ -2914,6 +3319,11 @@ impl DataGridPanel {
             }
             DataSource::QueryResult { .. } => return,
         };
+
+        // The builder and row inspector share one rail. Opening the builder
+        // intentionally ends row-follow mode so tab switches cannot replace
+        // the builder with a row snapshot.
+        self.clear_inspector_state(cx);
 
         let source_schema = source.schema.clone();
 
@@ -4394,6 +4804,18 @@ mod tests {
         QueryResult::table(zero_row_columns(), Vec::new(), None, Duration::ZERO)
     }
 
+    /// One-column `id` result: `rebuild_table` maps the panel's key columns onto
+    /// the result by name, so a panel without a matching column stays read-only
+    /// no matter what the cache says.
+    fn id_result() -> QueryResult {
+        QueryResult::table(
+            vec![key_column("id", true)],
+            vec![vec![dbflux_core::Value::Int(1)]],
+            None,
+            Duration::ZERO,
+        )
+    }
+
     fn key_column(name: &str, is_primary_key: bool) -> ColumnMeta {
         ColumnMeta {
             name: name.to_string(),
@@ -4445,6 +4867,87 @@ mod tests {
             let host = cx.new(|_cx| ToastHost::new());
             cx.set_global(ToastGlobal { host });
         });
+    }
+
+    /// Connection stub for tests that only need a connected profile to hang
+    /// cached metadata off; it answers no query.
+    ///
+    /// `dialect()` panics rather than returning a stand-in: the test-only
+    /// dialects live in `dbflux_core` behind `#[cfg(test)]`, so any path that
+    /// reaches a dialect — `new_for_table` does, through `refresh` and
+    /// `run_query` — panics instead of failing an assertion. Tests here drive the
+    /// panel through `new_internal` and call the method under test directly.
+    struct StubConnection;
+
+    impl dbflux_core::Connection for StubConnection {
+        fn metadata(&self) -> &dbflux_core::DriverMetadata {
+            use dbflux_core::{
+                DatabaseCategory, DriverCapabilities, DriverMetadata, Icon as CoreIcon,
+                QueryLanguage, TransferFamily,
+            };
+
+            static META: std::sync::OnceLock<DriverMetadata> = std::sync::OnceLock::new();
+            META.get_or_init(|| DriverMetadata {
+                id: "stub".to_string(),
+                display_name: "Stub".to_string(),
+                description: "test".to_string(),
+                category: DatabaseCategory::Relational,
+                transfer_family: TransferFamily::Sql,
+                deployment_class: None,
+                query_language: QueryLanguage::Sql,
+                capabilities: DriverCapabilities::empty(),
+                default_port: None,
+                uri_scheme: "stub".to_string(),
+                icon: CoreIcon::Database,
+                syntax: None,
+                query: None,
+                mutation: None,
+                ddl: None,
+                transactions: None,
+                limits: None,
+                ssl_modes: None,
+                ssl_cert_fields: None,
+                classification_override: None,
+                default_chunk_size: None,
+                supports_lock_timeout: false,
+                editor_profile: None,
+            })
+        }
+
+        fn kind(&self) -> dbflux_core::DbKind {
+            dbflux_core::DbKind::SQLite
+        }
+
+        fn schema_loading_strategy(&self) -> dbflux_core::SchemaLoadingStrategy {
+            dbflux_core::SchemaLoadingStrategy::SingleDatabase
+        }
+
+        fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
+            unimplemented!()
+        }
+
+        fn ping(&self) -> Result<(), dbflux_core::DbError> {
+            Ok(())
+        }
+
+        fn close(&mut self) -> Result<(), dbflux_core::DbError> {
+            Ok(())
+        }
+
+        fn execute(
+            &self,
+            _: &dbflux_core::QueryRequest,
+        ) -> Result<dbflux_core::QueryResult, dbflux_core::DbError> {
+            Err(dbflux_core::DbError::NotSupported("stub".to_string()))
+        }
+
+        fn cancel(&self, _: &dbflux_core::QueryHandle) -> Result<(), dbflux_core::DbError> {
+            Ok(())
+        }
+
+        fn schema(&self) -> Result<dbflux_core::SchemaSnapshot, dbflux_core::DbError> {
+            Ok(dbflux_core::SchemaSnapshot::default())
+        }
     }
 
     fn make_grouped_spec() -> VisualQuerySpec {
@@ -6391,74 +6894,7 @@ mod tests {
                 );
                 let connected = ConnectedProfile {
                     profile,
-                    connection: {
-                        use dbflux_core::{
-                            Connection, DatabaseCategory, DbError, DbKind, DriverCapabilities,
-                            DriverMetadata, Icon as CoreIcon, QueryLanguage,
-                            QueryResult as CoreQueryResult, SchemaLoadingStrategy, SchemaSnapshot,
-                            SqlDialect, TransferFamily,
-                        };
-                        struct StubConn;
-                        impl Connection for StubConn {
-                            fn metadata(&self) -> &DriverMetadata {
-                                static META: std::sync::OnceLock<DriverMetadata> =
-                                    std::sync::OnceLock::new();
-                                META.get_or_init(|| DriverMetadata {
-                                    id: "stub".to_string(),
-                                    display_name: "Stub".to_string(),
-                                    description: "test".to_string(),
-                                    category: DatabaseCategory::Relational,
-                                    transfer_family: TransferFamily::Sql,
-                                    deployment_class: None,
-                                    query_language: QueryLanguage::Sql,
-                                    capabilities: DriverCapabilities::empty(),
-                                    default_port: None,
-                                    uri_scheme: "stub".to_string(),
-                                    icon: CoreIcon::Database,
-                                    syntax: None,
-                                    query: None,
-                                    mutation: None,
-                                    ddl: None,
-                                    transactions: None,
-                                    limits: None,
-                                    ssl_modes: None,
-                                    ssl_cert_fields: None,
-                                    classification_override: None,
-                                    default_chunk_size: None,
-                                    supports_lock_timeout: false,
-                                    editor_profile: None,
-                                })
-                            }
-                            fn kind(&self) -> DbKind {
-                                DbKind::SQLite
-                            }
-                            fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
-                                SchemaLoadingStrategy::SingleDatabase
-                            }
-                            fn dialect(&self) -> &dyn SqlDialect {
-                                unimplemented!()
-                            }
-                            fn ping(&self) -> Result<(), DbError> {
-                                Ok(())
-                            }
-                            fn close(&mut self) -> Result<(), DbError> {
-                                Ok(())
-                            }
-                            fn execute(
-                                &self,
-                                _: &dbflux_core::QueryRequest,
-                            ) -> Result<CoreQueryResult, DbError> {
-                                Err(DbError::NotSupported("stub".to_string()))
-                            }
-                            fn cancel(&self, _: &dbflux_core::QueryHandle) -> Result<(), DbError> {
-                                Ok(())
-                            }
-                            fn schema(&self) -> Result<SchemaSnapshot, DbError> {
-                                Ok(SchemaSnapshot::default())
-                            }
-                        }
-                        Arc::new(StubConn) as Arc<dyn Connection>
-                    },
+                    connection: Arc::new(StubConnection) as Arc<dyn dbflux_core::Connection>,
                     schema: None,
                     mutation_policy: MutationPolicy::default(),
                     read_only_reason: None,
@@ -6583,6 +7019,392 @@ mod tests {
         assert!(
             binding.insertable,
             "single-table All spec must be insertable"
+        );
+    }
+
+    /// #634 — a table opened from the tree carries its own database while the
+    /// connection may never have recorded an active one. The cached details are
+    /// keyed by the table's database, so both lookups must lead with it: the one
+    /// `new_for_table` makes, and the fetch it falls back to, which must use
+    /// details that are already cached instead of failing on the populated key.
+    /// Leading with `active_database` left the second open of a table read-only
+    /// even though its primary key was cached.
+    #[gpui::test]
+    fn reopened_table_finds_cached_primary_key_without_an_active_database(cx: &mut TestAppContext) {
+        use dbflux_core::{ColumnInfo, TableInfo};
+
+        init_test_runtime(cx);
+
+        let profile_id = uuid::Uuid::new_v4();
+        let app_state = isolated_test_app_state(cx);
+        let users = TableRef::with_schema("public", "users");
+
+        cx.update(|cx| {
+            app_state.update(cx, |app, _| {
+                use dbflux_core::{ConnectedProfile, DbConfig, MutationPolicy};
+                use std::path::PathBuf;
+
+                let profile = dbflux_core::ConnectionProfile::new(
+                    "test",
+                    DbConfig::SQLite {
+                        path: PathBuf::from(":memory:"),
+                        connection_id: None,
+                    },
+                );
+                let connected = ConnectedProfile {
+                    profile,
+                    connection: Arc::new(StubConnection) as Arc<dyn dbflux_core::Connection>,
+                    schema: None,
+                    mutation_policy: MutationPolicy::default(),
+                    read_only_reason: None,
+                    database_schemas: Default::default(),
+                    table_details: Default::default(),
+                    collection_children: Default::default(),
+                    schema_types: Default::default(),
+                    schema_indexes: Default::default(),
+                    schema_foreign_keys: Default::default(),
+                    schema_routines: Default::default(),
+                    dependents_cache: Default::default(),
+                    // Never set: the sidebar expands the current database without a
+                    // click, so opening one of its tables does not record it here.
+                    active_database: None,
+                    redis_key_cache: Default::default(),
+                    database_connections: Default::default(),
+                    proxy_tunnel: None,
+                };
+                app.connections_mut().insert(profile_id, connected);
+
+                // Details written by a previous open, under the table's database.
+                app.set_table_details(
+                    profile_id,
+                    "testdb".to_string(),
+                    Some("public".to_string()),
+                    "users".to_string(),
+                    TableInfo {
+                        name: "users".to_string(),
+                        schema: Some("public".to_string()),
+                        columns: Some(vec![ColumnInfo {
+                            name: "id".to_string(),
+                            type_name: "int4".to_string(),
+                            nullable: false,
+                            is_primary_key: true,
+                            default_value: None,
+                            enum_values: None,
+                        }]),
+                        indexes: None,
+                        foreign_keys: None,
+                        constraints: None,
+                        sample_fields: None,
+                        presentation: Default::default(),
+                        child_items: None,
+                        storage_hints: None,
+                    },
+                );
+            });
+        });
+
+        let found = Rc::new(RefCell::new(Vec::new()));
+        let found_handle = found.clone();
+        let panel_holder = Rc::new(RefCell::new(None));
+        let panel_handle = panel_holder.clone();
+        let fetch_panel_holder = Rc::new(RefCell::new(None));
+        let fetch_panel_handle = fetch_panel_holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            // `new_for_table` builds this panel from the cached details; it cannot
+            // be called here because its refresh needs a driver dialect, so the
+            // lookup it makes is invoked directly.
+            let panel = cx.new(|cx| {
+                let order_by = DataGridPanel::get_primary_key_columns(
+                    &app_state,
+                    profile_id,
+                    Some("testdb"),
+                    &users,
+                    cx,
+                );
+                let pk_columns: Vec<String> = order_by
+                    .iter()
+                    .map(|order| order.column.name.clone())
+                    .collect();
+                found_handle.borrow_mut().extend(pk_columns.clone());
+
+                let source = DataSource::Table {
+                    profile_id,
+                    database: Some("testdb".to_string()),
+                    table: users.clone(),
+                    pagination: Pagination::default(),
+                    order_by,
+                    total_rows: None,
+                };
+                let mut panel =
+                    DataGridPanel::new_internal(source, app_state.clone(), pk_columns, window, cx);
+                panel.result = id_result();
+                panel
+            });
+
+            // The path taken when that lookup comes back empty: with the details
+            // cached, the fetch must use them rather than fail on
+            // `prepare_fetch_table_details`, which refuses a populated key.
+            let fetch_panel = cx.new(|cx| {
+                let source = DataSource::Table {
+                    profile_id,
+                    database: Some("testdb".to_string()),
+                    table: users.clone(),
+                    pagination: Pagination::default(),
+                    order_by: Vec::new(),
+                    total_rows: None,
+                };
+                let mut panel =
+                    DataGridPanel::new_internal(source, app_state.clone(), Vec::new(), window, cx);
+                panel.fetch_table_details_for_pk(profile_id, &users, cx);
+                panel
+            });
+
+            panel_handle.replace(Some(panel.clone()));
+            fetch_panel_handle.replace(Some(fetch_panel.clone()));
+            Root::new(panel, window, cx)
+        });
+
+        assert_eq!(
+            *found.borrow(),
+            vec!["id".to_string()],
+            "cached details must be found under the table's database, not the active one"
+        );
+
+        let panel = panel_holder
+            .borrow()
+            .clone()
+            .expect("panel should be created");
+        let edits_allowed = window.update(|_, app| panel.read(app).mutations_enabled());
+        assert!(
+            edits_allowed,
+            "a table whose cached primary key was found must stay editable"
+        );
+
+        // #634 is about the grid's own gate, which `rebuild_table` fills from the
+        // same PK indices, and about the `ORDER BY` the first page needs.
+        let ordered_columns = window.update(|_, app| match &panel.read(app).source {
+            DataSource::Table { order_by, .. } => order_by
+                .iter()
+                .map(|o| o.column.name.clone())
+                .collect::<Vec<_>>(),
+            _ => Vec::new(),
+        });
+        assert_eq!(
+            ordered_columns,
+            vec!["id".to_string()],
+            "the cached primary key must order the table's pages"
+        );
+
+        let grid_editable = window.update(|_, app| {
+            panel.update(app, |panel, cx| panel.rebuild_table(None, cx));
+            panel
+                .read(app)
+                .grid_table
+                .table_state
+                .as_ref()
+                .expect("table_state must exist after rebuild_table")
+                .read(app)
+                .is_editable()
+        });
+        assert!(
+            grid_editable,
+            "the grid itself must be editable, not just the panel's mutations gate"
+        );
+
+        let fetch_panel = fetch_panel_holder
+            .borrow()
+            .clone()
+            .expect("fetch panel should be created");
+        let (fetched_pk_columns, fetch_pending) = window.update(|_, app| {
+            let panel = fetch_panel.read(app);
+            (panel.pk_columns.clone(), panel.pk_details_pending)
+        });
+        assert_eq!(
+            fetched_pk_columns,
+            vec!["id".to_string()],
+            "details already cached must be used instead of failing the fetch"
+        );
+        assert!(
+            !fetch_pending,
+            "a cache hit must not leave the panel waiting for a fetch"
+        );
+    }
+
+    /// #634 — the cold path. The first page is issued before the primary keys are
+    /// known, so it carries no `ORDER BY` and `LIMIT/OFFSET` paging can repeat or
+    /// skip rows. When the details arrive, the source must be rewritten with the
+    /// order just learned, the page must be re-issued with it, and the grid must
+    /// come out editable.
+    #[gpui::test]
+    fn first_open_requeries_with_the_primary_key_order_it_learned(cx: &mut TestAppContext) {
+        use dbflux_core::{ColumnInfo, TableInfo};
+
+        init_test_runtime(cx);
+
+        let profile_id = uuid::Uuid::new_v4();
+        let app_state = isolated_test_app_state(cx);
+        let users = TableRef::with_schema("public", "users");
+
+        cx.update(|cx| {
+            app_state.update(cx, |app, _| {
+                use dbflux_core::{ConnectedProfile, DbConfig, MutationPolicy};
+                use std::path::PathBuf;
+
+                let profile = dbflux_core::ConnectionProfile::new(
+                    "test",
+                    DbConfig::SQLite {
+                        path: PathBuf::from(":memory:"),
+                        connection_id: None,
+                    },
+                );
+                let connected = ConnectedProfile {
+                    profile,
+                    connection: Arc::new(StubConnection) as Arc<dyn dbflux_core::Connection>,
+                    schema: None,
+                    mutation_policy: MutationPolicy::default(),
+                    read_only_reason: None,
+                    database_schemas: Default::default(),
+                    table_details: Default::default(),
+                    collection_children: Default::default(),
+                    schema_types: Default::default(),
+                    schema_indexes: Default::default(),
+                    schema_foreign_keys: Default::default(),
+                    schema_routines: Default::default(),
+                    dependents_cache: Default::default(),
+                    active_database: None,
+                    redis_key_cache: Default::default(),
+                    database_connections: Default::default(),
+                    proxy_tunnel: None,
+                };
+                app.connections_mut().insert(profile_id, connected);
+            });
+        });
+
+        let panel_holder = Rc::new(RefCell::new(None));
+        let panel_handle = panel_holder.clone();
+
+        // The panel is deliberately kept out of the window's tree: rendering it
+        // would drain `pending.requery` into a real query, which the stub
+        // connection cannot answer.
+        struct Harness;
+
+        impl gpui::Render for Harness {
+            fn render(
+                &mut self,
+                _window: &mut gpui::Window,
+                _cx: &mut gpui::Context<Self>,
+            ) -> impl gpui::IntoElement {
+                gpui::div()
+            }
+        }
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let panel = cx.new(|cx| {
+                // The state `new_for_table` leaves behind on a cold cache: no
+                // order yet, because the key columns are still unknown.
+                let source = DataSource::Table {
+                    profile_id,
+                    database: Some("testdb".to_string()),
+                    table: users.clone(),
+                    pagination: Pagination::default(),
+                    order_by: Vec::new(),
+                    total_rows: None,
+                };
+                let mut panel =
+                    DataGridPanel::new_internal(source, app_state.clone(), Vec::new(), window, cx);
+                panel.result = id_result();
+                panel
+            });
+            panel_handle.replace(Some(panel));
+            Harness
+        });
+
+        let panel = panel_holder
+            .borrow()
+            .clone()
+            .expect("panel should be created");
+
+        // The fetch stores the details and then hands the key columns over.
+        window.update(|_, app| {
+            app_state.update(app, |app, _| {
+                app.set_table_details(
+                    profile_id,
+                    "testdb".to_string(),
+                    Some("public".to_string()),
+                    "users".to_string(),
+                    TableInfo {
+                        name: "users".to_string(),
+                        schema: Some("public".to_string()),
+                        columns: Some(vec![ColumnInfo {
+                            name: "id".to_string(),
+                            type_name: "int4".to_string(),
+                            nullable: false,
+                            is_primary_key: true,
+                            default_value: None,
+                            enum_values: None,
+                        }]),
+                        indexes: None,
+                        foreign_keys: None,
+                        constraints: None,
+                        sample_fields: None,
+                        presentation: Default::default(),
+                        child_items: None,
+                        storage_hints: None,
+                    },
+                );
+            });
+        });
+
+        // Read both straight after the call: a render would already have consumed
+        // the queued requery.
+        let (ordered_columns, requery_order) = window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                panel.apply_pk_details(vec!["id".to_string()], cx);
+
+                let ordered = match &panel.source {
+                    DataSource::Table { order_by, .. } => order_by
+                        .iter()
+                        .map(|o| o.column.name.clone())
+                        .collect::<Vec<_>>(),
+                    _ => Vec::new(),
+                };
+                let requery = panel.pending.requery.as_ref().map(|pending| {
+                    pending
+                        .order_by
+                        .iter()
+                        .map(|o| o.column.name.clone())
+                        .collect::<Vec<_>>()
+                });
+                (ordered, requery)
+            })
+        });
+
+        assert_eq!(
+            ordered_columns,
+            vec!["id".to_string()],
+            "the source must carry the order the panel just learned"
+        );
+        assert_eq!(
+            requery_order,
+            Some(vec!["id".to_string()]),
+            "the unordered first page must be re-issued with that order"
+        );
+
+        let grid_editable = window.update(|_, app| {
+            panel.update(app, |panel, cx| panel.rebuild_table(None, cx));
+            panel
+                .read(app)
+                .grid_table
+                .table_state
+                .as_ref()
+                .expect("table_state must exist after rebuild_table")
+                .read(app)
+                .is_editable()
+        });
+        assert!(
+            grid_editable,
+            "a first open whose primary key arrived late must still end up editable"
         );
     }
 
@@ -6911,6 +7733,280 @@ mod tests {
             patch.changes[0].value,
             dbflux_core::Value::Text("bob".to_string()),
             "change must carry the new cell value"
+        );
+    }
+
+    /// The panel's staging paths are handed *visual* rows while the edit buffer
+    /// is keyed by source rows. This covers the three that reach the buffer
+    /// directly — paste, set-default and set-null — on a grid where a pending
+    /// insert sits between the base rows, so the two index spaces disagree.
+    #[gpui::test]
+    fn staging_paths_write_the_row_the_grid_shows(cx: &mut TestAppContext) {
+        use dbflux_components::components::data_table::model::CellValue;
+        use dbflux_components::components::data_table::selection::CellCoord;
+        use dbflux_core::{ColumnInfo, TableInfo};
+        use dbflux_test_support::fake_driver::FakeDriver;
+
+        init_test_runtime(cx);
+
+        let profile_id = Uuid::new_v4();
+        let app_state = isolated_test_app_state(cx);
+        let fake_driver = FakeDriver::new(dbflux_core::DbKind::SQLite);
+
+        cx.update(|cx| {
+            app_state.update(cx, |app, _| {
+                use dbflux_core::{ConnectedProfile, DbConfig, MutationPolicy};
+
+                let profile = dbflux_core::ConnectionProfile::new(
+                    "test",
+                    DbConfig::SQLite {
+                        path: std::path::PathBuf::from(":memory:"),
+                        connection_id: None,
+                    },
+                );
+                let connection = fake_driver
+                    .connect_arc(&profile)
+                    .expect("FakeDriver connection must succeed");
+                let connected = ConnectedProfile {
+                    profile,
+                    connection,
+                    schema: None,
+                    mutation_policy: MutationPolicy::default(),
+                    read_only_reason: None,
+                    database_schemas: Default::default(),
+                    table_details: Default::default(),
+                    collection_children: Default::default(),
+                    schema_types: Default::default(),
+                    schema_indexes: Default::default(),
+                    schema_foreign_keys: Default::default(),
+                    schema_routines: Default::default(),
+                    dependents_cache: Default::default(),
+                    active_database: Some("testdb".to_string()),
+                    redis_key_cache: Default::default(),
+                    database_connections: Default::default(),
+                    proxy_tunnel: None,
+                };
+                app.connections_mut().insert(profile_id, connected);
+
+                // `handle_set_default` reads the column's default from here.
+                app.set_table_details(
+                    profile_id,
+                    "testdb".to_string(),
+                    Some("public".to_string()),
+                    "users".to_string(),
+                    TableInfo {
+                        name: "users".to_string(),
+                        schema: Some("public".to_string()),
+                        columns: Some(vec![
+                            ColumnInfo {
+                                name: "id".to_string(),
+                                type_name: "int4".to_string(),
+                                nullable: false,
+                                is_primary_key: true,
+                                default_value: None,
+                                enum_values: None,
+                            },
+                            ColumnInfo {
+                                name: "name".to_string(),
+                                type_name: "text".to_string(),
+                                nullable: true,
+                                is_primary_key: false,
+                                default_value: Some("anonymous".to_string()),
+                                enum_values: None,
+                            },
+                        ]),
+                        indexes: None,
+                        foreign_keys: None,
+                        constraints: None,
+                        sample_fields: None,
+                        presentation: Default::default(),
+                        child_items: None,
+                        storage_hints: None,
+                    },
+                );
+            });
+        });
+
+        let panel_holder = Rc::new(RefCell::new(None));
+        let panel_handle = panel_holder.clone();
+
+        // Kept out of the window's tree: rendering the panel would drain its
+        // pending actions into a query the stub connection cannot answer.
+        struct Harness;
+
+        impl gpui::Render for Harness {
+            fn render(
+                &mut self,
+                _window: &mut gpui::Window,
+                _cx: &mut gpui::Context<Self>,
+            ) -> impl gpui::IntoElement {
+                gpui::div()
+            }
+        }
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let panel = cx.new(|cx| {
+                let source = DataSource::Table {
+                    profile_id,
+                    database: Some("testdb".to_string()),
+                    table: TableRef::with_schema("public", "users"),
+                    pagination: Pagination::default(),
+                    order_by: Vec::new(),
+                    total_rows: None,
+                };
+                let mut panel =
+                    DataGridPanel::new_internal(source, app_state.clone(), Vec::new(), window, cx);
+
+                let columns = vec![
+                    ColumnMeta {
+                        name: "id".to_string(),
+                        type_name: "int4".to_string(),
+                        kind: ColumnKind::Integer,
+                        nullable: false,
+                        is_primary_key: false,
+                    },
+                    ColumnMeta {
+                        name: "name".to_string(),
+                        type_name: "text".to_string(),
+                        kind: ColumnKind::Text,
+                        nullable: true,
+                        is_primary_key: false,
+                    },
+                ];
+                let rows = vec![
+                    vec![
+                        dbflux_core::Value::Int(1),
+                        dbflux_core::Value::Text("alice".to_string()),
+                    ],
+                    vec![
+                        dbflux_core::Value::Int(2),
+                        dbflux_core::Value::Text("bob".to_string()),
+                    ],
+                ];
+                panel.result = QueryResult::table(columns, rows, None, Duration::ZERO);
+                panel.pk_columns = vec!["id".to_string()];
+                panel
+            });
+            panel_handle.replace(Some(panel));
+            Harness
+        });
+
+        let panel = panel_holder
+            .borrow()
+            .clone()
+            .expect("panel must be created");
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| panel.rebuild_table(None, cx));
+        });
+
+        let table_state = window.update(|_, app| {
+            panel
+                .read(app)
+                .grid_table
+                .table_state
+                .clone()
+                .expect("table_state must exist after rebuild_table")
+        });
+        assert!(
+            window.update(|_, app| table_state.read(app).is_editable()),
+            "the fixture grid must be editable"
+        );
+
+        let staged = |window: &mut gpui::VisualTestContext, row: usize| -> Vec<(usize, String)> {
+            window.update(|_, app| {
+                table_state
+                    .read(app)
+                    .edit_buffer()
+                    .row_changes(row)
+                    .into_iter()
+                    .map(|(col, value)| (col, value.display_text().to_string()))
+                    .collect()
+            })
+        };
+        let insert_cell =
+            |window: &mut gpui::VisualTestContext, insert_idx: usize, col: usize| -> String {
+                window
+                    .update(|_, app| {
+                        table_state
+                            .read(app)
+                            .edit_buffer()
+                            .get_pending_insert_by_idx(insert_idx)
+                            .and_then(|cells| cells.get(col))
+                            .map(|cell| cell.display_text().to_string())
+                    })
+                    .unwrap_or_default()
+            };
+
+        // Base row 1 is visual row 1 while no insert is staged.
+        window.update(|window, app| {
+            app.write_to_clipboard(gpui::ClipboardItem::new_string("pasted".to_string()));
+            table_state.update(app, |state, cx| state.select_cell(CellCoord::new(1, 1), cx));
+            panel.update(app, |panel, cx| panel.handle_paste(window, cx));
+        });
+        assert_eq!(
+            staged(window, 1),
+            vec![(1usize, "pasted".to_string())],
+            "paste must stage on the selected row"
+        );
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| panel.handle_set_default(1, 1, cx));
+        });
+        assert_eq!(
+            staged(window, 1),
+            vec![(1usize, "anonymous".to_string())],
+            "set-default must stage the column's default on the selected row"
+        );
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| panel.handle_set_null(1, 1, cx));
+        });
+        assert_eq!(
+            staged(window, 1),
+            vec![(1usize, "NULL".to_string())],
+            "set-null must overtake the value staged before it"
+        );
+
+        // The insert takes visual row 1, pushing base row 1 down to visual row 2.
+        let insert_idx = window.update(|_, app| {
+            table_state.update(app, |state, cx| {
+                let insert_idx = state
+                    .edit_buffer_mut()
+                    .add_pending_insert_after(0, vec![CellValue::text(""), CellValue::text("")]);
+                cx.notify();
+                insert_idx
+            })
+        });
+
+        window.update(|window, app| {
+            app.write_to_clipboard(gpui::ClipboardItem::new_string("inserted".to_string()));
+            table_state.update(app, |state, cx| state.select_cell(CellCoord::new(1, 1), cx));
+            panel.update(app, |panel, cx| panel.handle_paste(window, cx));
+        });
+        assert_eq!(
+            insert_cell(window, insert_idx, 1),
+            "inserted",
+            "a row the user added must take the pasted value"
+        );
+        assert_eq!(
+            staged(window, 1),
+            vec![(1usize, "NULL".to_string())],
+            "the base row under the insert must not be written to"
+        );
+
+        // Visual row 2 is base row 1 again, one past the insert.
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| panel.handle_set_default(2, 1, cx));
+        });
+        assert_eq!(
+            staged(window, 1),
+            vec![(1usize, "anonymous".to_string())],
+            "a row below a pending insert must still be reachable by its visual index"
+        );
+        assert!(
+            staged(window, 0).is_empty(),
+            "no staging path may write to a row the user did not pick"
         );
     }
 

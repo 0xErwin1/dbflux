@@ -15,8 +15,8 @@ use dbflux_core::{
     RowIdentity, RowInsert, RowPatch, Value,
 };
 use dbflux_export::ExportFormat;
-use dbflux_ui_base::AsyncUpdateResultExt;
 use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
+use dbflux_ui_base::{AsyncUpdateResultExt, SaveTargetOutcome};
 use gpui::prelude::FluentBuilder;
 use gpui::{deferred, *};
 use gpui_component::ActiveTheme;
@@ -102,6 +102,7 @@ impl DataGridPanel {
             selected_index: 0,
             submenu_selected_index: 0,
             is_document_view: false,
+            is_column_header: false,
             doc_field_path: None,
             doc_field_value: None,
             row_actions: Vec::new(),
@@ -133,6 +134,7 @@ impl DataGridPanel {
             selected_index: 0,
             submenu_selected_index: 0,
             is_document_view: true,
+            is_column_header: false,
             doc_field_path: None,
             doc_field_value: None,
             row_actions: Vec::new(),
@@ -190,6 +192,7 @@ impl DataGridPanel {
             selected_index: 0,
             submenu_selected_index: 0,
             is_document_view: true,
+            is_column_header: false,
             doc_field_path: field_path,
             doc_field_value: field_value,
             row_actions: Vec::new(),
@@ -547,6 +550,16 @@ impl DataGridPanel {
             return ContextId::TextInput;
         }
 
+        // The value panel's editor is a plain text buffer sitting next to the
+        // grid. Without this the results keymap would claim every bare letter
+        // the user types into it as a grid command.
+        if self.inspector.value_panel_open
+            && let Some(panel) = self.inspector.value_panel.as_ref()
+            && panel.read(cx).editor_has_focus()
+        {
+            return ContextId::TextInput;
+        }
+
         let inline_text_input_active = self
             .grid_table
             .table_state
@@ -577,6 +590,14 @@ impl DataGridPanel {
             .as_ref()
             .map(|m| m.is_document_view)
             .unwrap_or(false);
+        let is_column_header = self
+            .context_menu
+            .as_ref()
+            .map(|m| m.is_column_header)
+            .unwrap_or(false);
+        if is_column_header {
+            return self.dispatch_column_header_menu_command(cmd, backend, window, cx);
+        }
         let has_row_target = self
             .context_menu
             .as_ref()
@@ -585,9 +606,9 @@ impl DataGridPanel {
 
         let has_filter = self.has_filter_submenu(backend, is_document_view, cx);
         let has_order = matches!(backend, Some(FilterBackend::Sql)) && !is_document_view;
-        let has_generate_sql = !is_document_view;
-        let has_copy_query = self.has_copy_query_support();
-        let can_chart = self.can_chart_from_context_menu(cx);
+        let has_generate_sql = !is_document_view && !is_column_header;
+        let has_copy_query = !is_column_header && self.has_copy_query_support();
+        let can_chart = !is_column_header && self.can_chart_from_context_menu(cx);
 
         // Layout:
         //   [base items]
@@ -598,13 +619,17 @@ impl DataGridPanel {
         //   [sep + row_action...]?    (if row_actions non-empty)
         let inspect_row_enabled = !self.is_grouped_result();
 
-        let base_items = Self::build_context_menu_items(
-            is_editable,
-            is_document_view,
-            has_row_target,
-            can_chart,
-            inspect_row_enabled,
-        );
+        let base_items = if is_column_header {
+            Vec::new()
+        } else {
+            Self::build_context_menu_items(
+                is_editable,
+                is_document_view,
+                has_row_target,
+                can_chart,
+                inspect_row_enabled,
+            )
+        };
         let base_count = base_items.len();
 
         // Filter: sep(1) + filter(1) = 2; Order adds 1 more
@@ -621,11 +646,14 @@ impl DataGridPanel {
         let after_copy_query = after_gen_sql + copy_query_slots;
 
         // RowActions: sep(1) + N action items
-        let row_action_count = self
-            .context_menu
-            .as_ref()
-            .map(|m| m.row_actions.len())
-            .unwrap_or(0);
+        let row_action_count = if is_column_header {
+            0
+        } else {
+            self.context_menu
+                .as_ref()
+                .map(|m| m.row_actions.len())
+                .unwrap_or(0)
+        };
         let row_actions_slots = if row_action_count > 0 {
             1 + row_action_count
         } else {
@@ -891,6 +919,64 @@ impl DataGridPanel {
         }
     }
 
+    fn dispatch_column_header_menu_command(
+        &mut self,
+        cmd: Command,
+        backend: Option<FilterBackend>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(menu) = self.context_menu.as_ref() else {
+            return false;
+        };
+        let (_, _, filter_items, _) = self.build_filter_items(menu, backend, cx);
+        let mut actions = vec![
+            ContextMenuAction::Order(dbflux_core::SortDirection::Ascending),
+            ContextMenuAction::Order(dbflux_core::SortDirection::Descending),
+            ContextMenuAction::RemoveOrdering,
+        ];
+        actions.extend(filter_items.into_iter().map(|(_, action)| action));
+
+        match cmd {
+            Command::MenuDown => {
+                if let Some(menu) = self.context_menu.as_mut() {
+                    menu.selected_index = (menu.selected_index + 1) % actions.len();
+                    cx.notify();
+                }
+                true
+            }
+            Command::MenuUp => {
+                if let Some(menu) = self.context_menu.as_mut() {
+                    menu.selected_index = if menu.selected_index == 0 {
+                        actions.len() - 1
+                    } else {
+                        menu.selected_index - 1
+                    };
+                    cx.notify();
+                }
+                true
+            }
+            Command::MenuSelect => {
+                let selected = self
+                    .context_menu
+                    .as_ref()
+                    .map(|menu| menu.selected_index)
+                    .unwrap_or(0);
+                if let Some(action) = actions.get(selected).copied() {
+                    self.handle_context_menu_action(action, window, cx);
+                }
+                true
+            }
+            Command::MenuBack | Command::Cancel => {
+                self.context_menu = None;
+                self.restore_focus_after_context_menu(false, window, cx);
+                cx.notify();
+                true
+            }
+            _ => false,
+        }
+    }
+
     fn has_context_menu_row_target(&self, row: usize, is_document_view: bool, cx: &App) -> bool {
         if is_document_view {
             return self
@@ -913,6 +999,7 @@ impl DataGridPanel {
             action,
             ContextMenuAction::Edit
                 | ContextMenuAction::EditInModal
+                | ContextMenuAction::ViewValue
                 | ContextMenuAction::SetDefault
                 | ContextMenuAction::SetNull
                 | ContextMenuAction::DuplicateRow
@@ -966,56 +1053,62 @@ impl DataGridPanel {
 
         let entity = cx.entity().clone();
         let audit_service = self.app_state.read(cx).audit_service().clone();
-        let dialog_available = dbflux_ui_base::file_dialog::is_native_file_dialog_available();
+        let save_target_override = self.app_state.read(cx).save_target_override();
 
         cx.spawn(async move |_this, cx| {
-            let target: Option<(std::path::PathBuf, bool)> = if dialog_available {
-                let file_handle = rfd::AsyncFileDialog::new()
-                    .set_title(crate::labels::context_menu_export_dialog_title(format_name))
-                    .set_file_name(&suggested_name)
-                    .add_filter(format_name, &[extension])
-                    .save_file()
-                    .await;
+            let outcome = dbflux_ui_base::file_dialog::resolve_save_target(
+                save_target_override,
+                dbflux_ui_base::SaveTargetRequest {
+                    suggested_name: &suggested_name,
+                    language_name: format_name,
+                    default_extension: extension,
+                },
+                async {
+                    let file_handle = rfd::AsyncFileDialog::new()
+                        .set_title(crate::labels::context_menu_export_dialog_title(format_name))
+                        .set_file_name(&suggested_name)
+                        .add_filter(format_name, &[extension])
+                        .save_file()
+                        .await;
 
-                file_handle.map(|handle| (handle.path().to_path_buf(), false))
-            } else {
-                match dbflux_ui_base::file_dialog::fallback_export_dir() {
-                    Ok(dir) => Some((
-                        dbflux_ui_base::file_dialog::unique_path_in(&dir, &suggested_name),
-                        true,
-                    )),
-                    Err(err) => {
-                        record_export_audit(
-                            &audit_service,
-                            format_name,
-                            None,
-                            true,
-                            false,
-                            Some(&err),
-                        );
-                        let message =
-                            crate::labels::context_menu_export_dialog_fallback_failed_error(
-                                &err.to_string(),
-                            );
-                        cx.update(|cx| {
-                            entity.update(cx, |panel, cx| {
-                                panel.pending.toast = Some(PendingToast {
-                                    message,
-                                    is_error: true,
-                                });
-                                cx.notify();
-                            });
-                        })
-                        .log_if_dropped();
-                        return;
-                    }
+                    file_handle.map(|handle| handle.path().to_path_buf())
+                },
+            )
+            .await;
+
+            let (target_path, used_fallback) = match outcome {
+                SaveTargetOutcome::Selected {
+                    path,
+                    used_fallback,
+                } => (path, used_fallback),
+                SaveTargetOutcome::Cancelled => {
+                    // Native dialog was available and the user cancelled — no
+                    // toast, no audit. Cancellations are not failures.
+                    return;
                 }
-            };
-
-            let Some((target_path, used_fallback)) = target else {
-                // Native dialog was available and the user cancelled — no
-                // toast, no audit. Cancellations are not failures.
-                return;
+                SaveTargetOutcome::Failed(err) => {
+                    record_export_audit(
+                        &audit_service,
+                        format_name,
+                        None,
+                        true,
+                        false,
+                        Some(err.as_str()),
+                    );
+                    let message =
+                        crate::labels::context_menu_export_dialog_fallback_failed_error(&err);
+                    cx.update(|cx| {
+                        entity.update(cx, |panel, cx| {
+                            panel.pending.toast = Some(PendingToast {
+                                message,
+                                is_error: true,
+                            });
+                            cx.notify();
+                        });
+                    })
+                    .log_if_dropped();
+                    return;
+                }
             };
 
             let export_result = (|| {
@@ -1286,90 +1379,95 @@ impl DataGridPanel {
         theme: &gpui_component::theme::Theme,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let menu_width = px(180.0);
+        let menu_width = if menu.is_column_header {
+            px(300.0)
+        } else {
+            px(180.0)
+        };
 
         // Convert window coordinates to panel-relative coordinates
         let menu_x = menu.position.x - self.panel_origin.x;
         let menu_y = menu.position.y - self.panel_origin.y;
 
-        // Build visible menu items list for keyboard navigation
-        let has_row_target = self.has_context_menu_row_target(menu.row, menu.is_document_view, cx);
-        let can_chart = self.can_chart_from_context_menu(cx);
-        let inspect_row_enabled = !self.is_grouped_result();
-        let visible_items = Self::build_context_menu_items(
-            is_editable,
-            menu.is_document_view,
-            has_row_target,
-            can_chart,
-            inspect_row_enabled,
-        );
         let selected_index = menu.selected_index;
         let is_document_view = menu.is_document_view;
-
-        let mut menu_items: Vec<AnyElement> = Vec::new();
-        let mut visual_index = 0usize;
-
-        Self::render_menu_item_rows(
-            theme,
-            selected_index,
-            &visible_items,
-            &mut menu_items,
-            &mut visual_index,
-            cx,
-        );
-
         let backend = self.filter_backend(cx);
-        let has_filter = self.has_filter_submenu(backend, is_document_view, cx);
-        let has_order = matches!(backend, Some(FilterBackend::Sql)) && !is_document_view;
+        let menu_items = if menu.is_column_header {
+            self.render_column_header_menu_items(menu, backend, theme, cx)
+        } else {
+            let has_row_target =
+                self.has_context_menu_row_target(menu.row, menu.is_document_view, cx);
+            let can_chart = self.can_chart_from_context_menu(cx);
+            let inspect_row_enabled = !self.is_grouped_result();
+            let visible_items = Self::build_context_menu_items(
+                is_editable,
+                menu.is_document_view,
+                has_row_target,
+                can_chart,
+                inspect_row_enabled,
+            );
+            let mut menu_items: Vec<AnyElement> = Vec::new();
+            let mut visual_index = 0usize;
 
-        self.render_filter_submenu_section(
-            menu,
-            backend,
-            has_filter,
-            selected_index,
-            theme,
-            &mut menu_items,
-            &mut visual_index,
-            cx,
-        );
+            Self::render_menu_item_rows(
+                theme,
+                selected_index,
+                &visible_items,
+                &mut menu_items,
+                &mut visual_index,
+                cx,
+            );
 
-        self.render_order_submenu_section(
-            menu,
-            has_order,
-            selected_index,
-            theme,
-            &mut menu_items,
-            &mut visual_index,
-            cx,
-        );
+            let has_filter = self.has_filter_submenu(backend, is_document_view, cx);
+            let has_order = matches!(backend, Some(FilterBackend::Sql)) && !is_document_view;
+            self.render_filter_submenu_section(
+                menu,
+                backend,
+                has_filter,
+                selected_index,
+                theme,
+                &mut menu_items,
+                &mut visual_index,
+                cx,
+            );
+            self.render_order_submenu_section(
+                menu,
+                has_order,
+                selected_index,
+                theme,
+                &mut menu_items,
+                &mut visual_index,
+                cx,
+            );
+            Self::render_generate_sql_submenu_section(
+                is_document_view,
+                menu,
+                selected_index,
+                theme,
+                &mut menu_items,
+                &mut visual_index,
+                cx,
+            );
 
-        Self::render_generate_sql_submenu_section(
-            is_document_view,
-            menu,
-            selected_index,
-            theme,
-            &mut menu_items,
-            &mut visual_index,
-            cx,
-        );
+            self.render_copy_query_submenu_section(
+                menu,
+                selected_index,
+                theme,
+                &mut menu_items,
+                &mut visual_index,
+                cx,
+            );
 
-        self.render_copy_query_submenu_section(
-            menu,
-            selected_index,
-            theme,
-            &mut menu_items,
-            &mut visual_index,
-            cx,
-        );
-
-        Self::render_row_actions_section(
-            menu,
-            selected_index,
-            theme,
-            &mut menu_items,
-            &mut visual_index,
-            cx,
-        );
+            Self::render_row_actions_section(
+                menu,
+                selected_index,
+                theme,
+                &mut menu_items,
+                &mut visual_index,
+                cx,
+            );
+            menu_items
+        };
 
         self.render_context_menu_overlay(menu_x, menu_y, menu_width, menu_items, cx)
     }
@@ -1405,6 +1503,9 @@ impl DataGridPanel {
             }
             ContextMenuAction::Paste => self.handle_paste(window, cx),
             ContextMenuAction::Edit => self.handle_edit(menu.row, menu.col, window, cx),
+            ContextMenuAction::ViewValue => {
+                self.request_value_panel(menu.row, menu.col, cx);
+            }
             ContextMenuAction::EditInModal => {
                 if menu.is_document_view {
                     self.handle_view_document(menu.row, cx);
@@ -1523,6 +1624,7 @@ impl DataGridPanel {
         // the result. Drop the cached state and hide the rail rather than
         // showing a phantom row of nulls.
         if row >= model.row_count() {
+            self.inspector.follow_selection = false;
             self.inspector.inspector_row = None;
             self.inspector.row_inspector_content = None;
             cx.emit(DataGridEvent::CloseInspector);
@@ -1597,6 +1699,7 @@ impl DataGridPanel {
 
         // Remember the active coordinates so refresh / tab activation /
         // selection navigation can rebuild the snapshot from fresh data.
+        self.inspector.follow_selection = true;
         self.inspector.inspector_row = Some((row, col));
 
         // Tell the workspace to mount/replace the inspector rail.
@@ -1622,27 +1725,8 @@ impl DataGridPanel {
         use super::row_inspector::FkReference;
         use dbflux_components::primitives::LoadingState;
 
-        let (profile_id, table_ref) = match &self.source {
-            super::DataSource::Table {
-                profile_id, table, ..
-            } => (*profile_id, table),
-            _ => return Vec::new(),
-        };
-
-        let state = self.app_state.read(cx);
-        let connected = match state.connections().get(&profile_id) {
-            Some(c) => c,
-            None => return Vec::new(),
-        };
-        let database = connected.active_database.as_deref().unwrap_or("default");
-        let cache_key = (
-            database.to_string(),
-            table_ref.schema.clone(),
-            table_ref.name.clone(),
-        );
-        let table_info = match connected.table_details.get(&cache_key) {
-            Some(t) => t,
-            None => return Vec::new(),
+        let Some(table_info) = self.table_details_for(cx) else {
+            return Vec::new();
         };
 
         let fk_list = match table_info.foreign_keys.as_deref() {
@@ -1917,14 +2001,17 @@ impl DataGridPanel {
         };
 
         table_state.update(cx, |state, cx| {
-            if let Some(coord) = state.selection().active {
-                let cell_value =
-                    dbflux_components::components::data_table::model::CellValue::text(&text);
-                state
-                    .edit_buffer_mut()
-                    .set_cell(coord.row, coord.col, cell_value);
-                cx.notify();
-            }
+            let Some(coord) = state.selection().active else {
+                return;
+            };
+
+            state.stage_cell_value(
+                coord.row,
+                coord.col,
+                dbflux_components::components::data_table::model::CellValue::text(&text),
+            );
+
+            cx.notify();
         });
     }
 
@@ -1998,8 +2085,6 @@ impl DataGridPanel {
     }
 
     pub(super) fn handle_set_default(&mut self, row: usize, col: usize, cx: &mut Context<Self>) {
-        use dbflux_components::components::data_table::model::VisualRowSource;
-
         // Get column default value from table details
         let default_value = self.get_column_default(col, cx);
 
@@ -2008,50 +2093,29 @@ impl DataGridPanel {
         };
 
         table_state.update(cx, |state, cx| {
-            let buffer = state.edit_buffer_mut();
-            let visual_order = buffer.compute_visual_order();
-
             let cell_value = if let Some(default) = default_value {
                 dbflux_components::components::data_table::model::CellValue::text(&default)
             } else {
                 dbflux_components::components::data_table::model::CellValue::null()
             };
 
-            match visual_order.get(row).copied() {
-                Some(VisualRowSource::Base(base_idx)) => {
-                    buffer.set_cell(base_idx, col, cell_value);
-                }
-                Some(VisualRowSource::Insert(insert_idx)) => {
-                    buffer.set_insert_cell(insert_idx, col, cell_value);
-                }
-                None => {}
-            }
+            state.stage_cell_value(row, col, cell_value);
 
             cx.notify();
         });
     }
 
     pub(super) fn handle_set_null(&mut self, row: usize, col: usize, cx: &mut Context<Self>) {
-        use dbflux_components::components::data_table::model::VisualRowSource;
-
         let Some(table_state) = &self.grid_table.table_state else {
             return;
         };
 
         table_state.update(cx, |state, cx| {
-            let buffer = state.edit_buffer_mut();
-            let visual_order = buffer.compute_visual_order();
-            let cell_value = dbflux_components::components::data_table::model::CellValue::null();
-
-            match visual_order.get(row).copied() {
-                Some(VisualRowSource::Base(base_idx)) => {
-                    buffer.set_cell(base_idx, col, cell_value);
-                }
-                Some(VisualRowSource::Insert(insert_idx)) => {
-                    buffer.set_insert_cell(insert_idx, col, cell_value);
-                }
-                None => {}
-            }
+            state.stage_cell_value(
+                row,
+                col,
+                dbflux_components::components::data_table::model::CellValue::null(),
+            );
 
             cx.notify();
         });
@@ -2065,32 +2129,35 @@ impl DataGridPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        use dbflux_components::components::data_table::model::VisualRowSource;
+        self.write_cell_value(row, col, value, cx);
+        self.focus_table(window, cx);
+    }
 
+    /// Write `value` into the edit buffer at the given visual coordinates.
+    ///
+    /// Split out of `handle_cell_editor_save` because the value panel saves
+    /// without dismissing itself: pulling focus back to the table after every
+    /// save would eject the user from the editor they are still typing in.
+    pub(super) fn write_cell_value(
+        &mut self,
+        row: usize,
+        col: usize,
+        value: &str,
+        cx: &mut Context<Self>,
+    ) {
         let Some(table_state) = &self.grid_table.table_state else {
             return;
         };
 
         table_state.update(cx, |state, cx| {
-            let buffer = state.edit_buffer_mut();
-            let visual_order = buffer.compute_visual_order();
-            let cell_value =
-                dbflux_components::components::data_table::model::CellValue::text(value);
-
-            match visual_order.get(row).copied() {
-                Some(VisualRowSource::Base(base_idx)) => {
-                    buffer.set_cell(base_idx, col, cell_value);
-                }
-                Some(VisualRowSource::Insert(insert_idx)) => {
-                    buffer.set_insert_cell(insert_idx, col, cell_value);
-                }
-                None => {}
-            }
+            state.stage_cell_value(
+                row,
+                col,
+                dbflux_components::components::data_table::model::CellValue::text(value),
+            );
 
             cx.notify();
         });
-
-        self.focus_table(window, cx);
     }
 
     pub(super) fn handle_document_preview_save(
@@ -3007,20 +3074,9 @@ impl DataGridPanel {
         };
 
         // Get column info including primary keys
-        let state = self.app_state.read(cx);
-        let connected = match state.connections().get(&profile_id) {
-            Some(c) => c,
-            None => return,
-        };
-
-        let database = connected.active_database.as_deref().unwrap_or("default");
-        let cache_key = (
-            database.to_string(),
-            table_ref.schema.clone(),
-            table_ref.name.clone(),
-        );
-        let table_info = connected.table_details.get(&cache_key);
-        let columns_info = table_info.and_then(|t| t.columns.as_deref());
+        let columns_info = self
+            .table_details_for(cx)
+            .and_then(|table_info| table_info.columns.as_deref());
 
         let col_names: Vec<String> = self.result.columns.iter().map(|c| c.name.clone()).collect();
         let ts = table_state.read(cx);
@@ -3673,6 +3729,21 @@ mod tests {
             labels(&items),
             vec![item_label("document.data.context_menu.item.copy")]
         );
+    }
+
+    /// The value panel is a reader as much as an editor, so a read-only
+    /// result still offers it — but only over an actual row.
+    #[test]
+    fn non_editable_table_menu_offers_view_value_over_a_row() {
+        let with_row = labels(&DataGridPanel::build_context_menu_items(
+            false, false, true, false, true,
+        ));
+        assert!(with_row.contains(&item_label("document.data.context_menu.item.view_value")));
+
+        let without_row = labels(&DataGridPanel::build_context_menu_items(
+            false, false, false, false, true,
+        ));
+        assert!(!without_row.contains(&item_label("document.data.context_menu.item.view_value")));
     }
 
     #[test]

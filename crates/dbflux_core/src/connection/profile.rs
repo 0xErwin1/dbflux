@@ -26,6 +26,7 @@ pub enum DbKind {
     Redshift,
     S3,
     ClickHouse,
+    Turso,
 }
 
 impl DbKind {
@@ -44,6 +45,7 @@ impl DbKind {
             DbKind::Redshift => "Amazon Redshift",
             DbKind::S3 => "Amazon S3",
             DbKind::ClickHouse => "ClickHouse",
+            DbKind::Turso => "TursoDB",
         }
     }
 }
@@ -601,6 +603,8 @@ pub enum DbConfig {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         request_timeout_seconds: Option<u64>,
     },
+    /// Remote Turso endpoint; its auth token is only stored in the canonical keyring slot.
+    Turso { url: String },
     /// Generic config for external RPC drivers.
     External {
         kind: DbKind,
@@ -628,6 +632,7 @@ impl DbConfig {
             DbConfig::Redshift { .. } => DbKind::Redshift,
             DbConfig::S3 { .. } => DbKind::S3,
             DbConfig::ClickHouse { .. } => DbKind::ClickHouse,
+            DbConfig::Turso { .. } => DbKind::Turso,
             DbConfig::External { kind, .. } => *kind,
         }
     }
@@ -785,6 +790,10 @@ impl DbConfig {
         }
     }
 
+    pub fn default_turso() -> Self {
+        DbConfig::Turso { url: String::new() }
+    }
+
     pub fn default_clickhouse() -> Self {
         DbConfig::ClickHouse {
             url: "http://localhost:8123".to_string(),
@@ -808,6 +817,7 @@ impl DbConfig {
             | DbConfig::InfluxDB { .. }
             | DbConfig::S3 { .. }
             | DbConfig::ClickHouse { .. }
+            | DbConfig::Turso { .. }
             | DbConfig::External { .. } => None,
         }
     }
@@ -845,7 +855,59 @@ impl DbConfig {
             | DbConfig::InfluxDB { .. }
             | DbConfig::S3 { .. }
             | DbConfig::ClickHouse { .. }
+            | DbConfig::Turso { .. }
             | DbConfig::External { .. } => None,
+        }
+    }
+
+    /// Assigns an inline SSH tunnel or a reusable SSH tunnel profile reference when supported.
+    pub fn assign_ssh_tunnel(
+        &mut self,
+        ssh_tunnel: Option<SshTunnelConfig>,
+        ssh_tunnel_profile_id: Option<Uuid>,
+    ) {
+        match self {
+            DbConfig::Postgres {
+                ssh_tunnel: tunnel,
+                ssh_tunnel_profile_id: profile_id,
+                ..
+            }
+            | DbConfig::MySQL {
+                ssh_tunnel: tunnel,
+                ssh_tunnel_profile_id: profile_id,
+                ..
+            }
+            | DbConfig::MongoDB {
+                ssh_tunnel: tunnel,
+                ssh_tunnel_profile_id: profile_id,
+                ..
+            }
+            | DbConfig::Redis {
+                ssh_tunnel: tunnel,
+                ssh_tunnel_profile_id: profile_id,
+                ..
+            }
+            | DbConfig::SqlServer {
+                ssh_tunnel: tunnel,
+                ssh_tunnel_profile_id: profile_id,
+                ..
+            }
+            | DbConfig::Redshift {
+                ssh_tunnel: tunnel,
+                ssh_tunnel_profile_id: profile_id,
+                ..
+            } => {
+                *tunnel = ssh_tunnel;
+                *profile_id = ssh_tunnel_profile_id;
+            }
+            DbConfig::SQLite { .. }
+            | DbConfig::DynamoDB { .. }
+            | DbConfig::CloudWatchLogs { .. }
+            | DbConfig::InfluxDB { .. }
+            | DbConfig::S3 { .. }
+            | DbConfig::ClickHouse { .. }
+            | DbConfig::Turso { .. }
+            | DbConfig::External { .. } => {}
         }
     }
 
@@ -888,6 +950,7 @@ impl DbConfig {
             | DbConfig::InfluxDB { .. }
             | DbConfig::S3 { .. }
             | DbConfig::ClickHouse { .. }
+            | DbConfig::Turso { .. }
             | DbConfig::External { .. } => false,
         }
     }
@@ -907,6 +970,7 @@ impl DbConfig {
             | DbConfig::InfluxDB { .. }
             | DbConfig::S3 { .. }
             | DbConfig::ClickHouse { .. }
+            | DbConfig::Turso { .. }
             | DbConfig::External { .. } => None,
         }
     }
@@ -960,6 +1024,7 @@ impl DbConfig {
             | DbConfig::InfluxDB { .. }
             | DbConfig::S3 { .. }
             | DbConfig::ClickHouse { .. }
+            | DbConfig::Turso { .. }
             | DbConfig::External { .. } => {}
         }
     }
@@ -993,6 +1058,7 @@ impl DbConfig {
             | DbConfig::InfluxDB { .. }
             | DbConfig::S3 { .. }
             | DbConfig::ClickHouse { .. }
+            | DbConfig::Turso { .. }
             | DbConfig::External { .. } => {
                 return None;
             }
@@ -1027,7 +1093,7 @@ impl DbConfig {
             DbConfig::DynamoDB { .. } | DbConfig::CloudWatchLogs { .. } => None,
             DbConfig::InfluxDB { default_bucket, .. } => default_bucket.clone(),
             DbConfig::ClickHouse { database, .. } => Some(database.clone()),
-            DbConfig::S3 { .. } => None,
+            DbConfig::S3 { .. } | DbConfig::Turso { .. } => None,
             DbConfig::External { .. } => None,
         }
     }
@@ -1558,6 +1624,7 @@ impl ConnectionProfile {
             DbKind::Redshift => "redshift",
             DbKind::S3 => "s3",
             DbKind::ClickHouse => "clickhouse",
+            DbKind::Turso => "turso",
         }
     }
 
@@ -1748,6 +1815,105 @@ mod tests {
             ConnectionProfile::builtin_driver_id_for_kind(DbKind::ClickHouse),
             "clickhouse"
         );
+    }
+
+    #[test]
+    fn assign_ssh_tunnel_updates_and_clears_supported_configs() {
+        let inline_tunnel = SshTunnelConfig {
+            host: "bastion.example.com".to_string(),
+            port: 2222,
+            user: "dbflux".to_string(),
+            auth_method: SshAuthMethod::Password,
+        };
+        let tunnel_profile_id = Uuid::from_u128(1);
+        let mut configs = [
+            DbConfig::default_postgres(),
+            DbConfig::default_mysql(),
+            DbConfig::default_mongodb(),
+            DbConfig::default_redis(),
+            DbConfig::default_sqlserver(),
+            DbConfig::default_redshift(),
+        ];
+
+        for config in &mut configs {
+            config.assign_ssh_tunnel(Some(inline_tunnel.clone()), None);
+            assert!(matches!(
+                config.ssh_tunnel(),
+                Some(SshTunnelConfig { host, port, user, auth_method: SshAuthMethod::Password })
+                    if host == "bastion.example.com" && *port == 2222 && user == "dbflux"
+            ));
+            assert_eq!(config.ssh_tunnel_profile_id(), None);
+
+            config.assign_ssh_tunnel(None, Some(tunnel_profile_id));
+            assert!(config.ssh_tunnel().is_none());
+            assert_eq!(config.ssh_tunnel_profile_id(), Some(tunnel_profile_id));
+
+            config.assign_ssh_tunnel(None, None);
+            assert!(config.ssh_tunnel().is_none());
+            assert_eq!(config.ssh_tunnel_profile_id(), None);
+        }
+    }
+
+    #[test]
+    fn assign_ssh_tunnel_leaves_unsupported_configs_unchanged() {
+        let tunnel = SshTunnelConfig {
+            host: "bastion.example.com".to_string(),
+            port: 2222,
+            user: "dbflux".to_string(),
+            auth_method: SshAuthMethod::Password,
+        };
+        let tunnel_profile_id = Uuid::from_u128(1);
+        let mut configs = [
+            DbConfig::default_sqlite(),
+            DbConfig::default_dynamodb(),
+            DbConfig::default_cloudwatch_logs(),
+            DbConfig::default_influxdb(),
+            DbConfig::default_s3(),
+            DbConfig::default_clickhouse(),
+            DbConfig::default_turso(),
+            DbConfig::External {
+                kind: DbKind::Postgres,
+                values: FormValues::new(),
+            },
+        ];
+
+        for config in &mut configs {
+            let original = serde_json::to_string(config).expect("serialize original config");
+
+            config.assign_ssh_tunnel(Some(tunnel.clone()), Some(tunnel_profile_id));
+
+            assert_eq!(
+                serde_json::to_string(config).expect("serialize assigned config"),
+                original
+            );
+        }
+    }
+
+    #[test]
+    fn turso_config_is_url_only_and_has_no_generic_tunnel_or_database_support() {
+        let config = DbConfig::Turso {
+            url: "https://example.turso.io".to_string(),
+        };
+        let encoded = serde_json::to_string(&config).expect("serialize");
+
+        assert!(encoded.contains("https://example.turso.io"));
+        assert!(!encoded.contains("token"));
+        assert!(matches!(
+            DbConfig::default_turso(),
+            DbConfig::Turso { ref url } if url.is_empty()
+        ));
+        assert_eq!(config.kind(), DbKind::Turso);
+        assert_eq!(DbKind::Turso.display_name(), "TursoDB");
+        assert_eq!(
+            ConnectionProfile::builtin_driver_id_for_kind(DbKind::Turso),
+            "turso"
+        );
+        assert!(config.ssh_tunnel().is_none());
+        assert!(config.ssh_tunnel_profile_id().is_none());
+        assert!(!config.has_ssh_tunnel());
+        assert!(config.host_port().is_none());
+        assert!(config.database().is_none());
+        assert!(config.with_database("other").is_err());
     }
 
     #[test]

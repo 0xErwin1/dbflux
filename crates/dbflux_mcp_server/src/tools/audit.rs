@@ -10,7 +10,7 @@ use dbflux_audit::query::AuditQueryFilter;
 use rmcp::{
     ErrorData,
     handler::server::wrapper::Parameters,
-    model::{CallToolResult, Content},
+    model::{CallToolResult, ContentBlock},
     schemars::JsonSchema,
     tool, tool_router,
 };
@@ -306,7 +306,7 @@ impl DbFluxServer {
                         .map_err(|e| format!("Failed to export audit logs: {}", e))
                         .map_err(|e| e.into_error_data())?;
 
-                    Ok(CallToolResult::success(vec![Content::text(output)]))
+                    Ok(CallToolResult::success(vec![ContentBlock::text(output)]))
                 },
             )
             .await

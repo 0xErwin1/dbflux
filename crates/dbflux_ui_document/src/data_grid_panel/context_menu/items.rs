@@ -85,6 +85,19 @@ pub(super) fn build_context_menu_items(
         is_danger: false,
     }];
 
+    // Offered for read-only results too — the panel is how a long JSON or XML
+    // value gets read at all, whether or not it can be changed. It still needs
+    // a row under the cursor: without one there is no value to show.
+    if has_row_target {
+        items.push(ContextMenuItem {
+            label: dbflux_i18n::t!("document.data.context_menu.item.view_value").into(),
+            action: Some(ContextMenuAction::ViewValue),
+            icon: Some(AppIcon::Maximize2),
+            is_separator: false,
+            is_danger: false,
+        });
+    }
+
     if is_editable {
         if has_row_target {
             items.extend([

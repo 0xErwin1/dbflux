@@ -1,4 +1,48 @@
+use std::collections::BTreeMap;
+
 use super::*;
+
+fn apply_expansion_overrides_to_items(
+    items: Vec<TreeItem>,
+    expansion_overrides: &HashMap<String, bool>,
+    loading_items: &HashSet<String>,
+) -> Vec<TreeItem> {
+    items
+        .into_iter()
+        .map(|item| apply_expansion_override_recursive(item, expansion_overrides, loading_items))
+        .collect()
+}
+
+fn apply_expansion_override_recursive(
+    item: TreeItem,
+    expansion_overrides: &HashMap<String, bool>,
+    loading_items: &HashSet<String>,
+) -> TreeItem {
+    let item_id = item.id.to_string();
+    let default_expanded = item.is_expanded();
+
+    let mut children: Vec<TreeItem> = item
+        .children
+        .into_iter()
+        .map(|child| apply_expansion_override_recursive(child, expansion_overrides, loading_items))
+        .collect();
+
+    if loading_items.contains(&item_id) && children.is_empty() {
+        children.push(TreeItem::new(
+            format!("{}_loading", item_id),
+            dbflux_i18n::t!("sidebar.tree.status.loading"),
+        ));
+    }
+
+    let expanded = expansion_overrides
+        .get(&item_id)
+        .copied()
+        .unwrap_or(default_expanded);
+
+    TreeItem::new(item_id, item.label.clone())
+        .children(children)
+        .expanded(expanded)
+}
 
 impl Sidebar {
     pub(super) fn build_tree_items_with_overrides(&self, cx: &Context<Self>) -> Vec<TreeItem> {
@@ -72,45 +116,13 @@ impl Sidebar {
     }
 
     fn apply_expansion_overrides(&self, items: Vec<TreeItem>) -> Vec<TreeItem> {
-        items
-            .into_iter()
-            .map(|item| self.apply_override_recursive(item))
-            .collect()
+        apply_expansion_overrides_to_items(items, &self.expansion_overrides, &self.loading_items)
     }
 
     /// Public re-export for callers that build their own tree (e.g. scripts)
     /// and need user collapse/expand overrides applied on top.
     pub(super) fn apply_expansion_overrides_public(&self, items: Vec<TreeItem>) -> Vec<TreeItem> {
         self.apply_expansion_overrides(items)
-    }
-
-    fn apply_override_recursive(&self, item: TreeItem) -> TreeItem {
-        let item_id = item.id.to_string();
-        let default_expanded = item.is_expanded();
-
-        let mut children: Vec<TreeItem> = item
-            .children
-            .into_iter()
-            .map(|c| self.apply_override_recursive(c))
-            .collect();
-
-        if self.loading_items.contains(&item_id) && children.is_empty() {
-            children.push(TreeItem::new(
-                format!("{}_loading", item_id),
-                dbflux_i18n::t!("sidebar.tree.status.loading"),
-            ));
-        }
-
-        // Apply override if exists, otherwise keep default
-        let expanded = self
-            .expansion_overrides
-            .get(&item_id)
-            .copied()
-            .unwrap_or(default_expanded);
-
-        TreeItem::new(item_id, item.label.clone())
-            .children(children)
-            .expanded(expanded)
     }
 
     pub(super) fn build_tree_items(state: &AppStateEntity) -> Vec<TreeItem> {
@@ -809,38 +821,65 @@ impl Sidebar {
         supports_routines: bool,
         dependents_cache: &HashMap<(String, Option<String>, String), Vec<RelationRef>>,
     ) -> Vec<TreeItem> {
-        let mut children = Vec::new();
+        Self::build_db_schema_children(
+            profile_id,
+            database_name,
+            target_database,
+            snapshot.schemas(),
+            table_details,
+            schema_types,
+            schema_indexes,
+            schema_foreign_keys,
+            schema_routines,
+            supports_routines,
+            dependents_cache,
+        )
+    }
 
-        for db_schema in snapshot.schemas() {
-            let schema_content = Self::build_db_schema_content(
-                profile_id,
-                database_name,
-                target_database,
-                db_schema,
-                table_details,
-                schema_types,
-                schema_indexes,
-                schema_foreign_keys,
-                schema_routines,
-                supports_routines,
-                dependents_cache,
-            );
+    #[allow(clippy::too_many_arguments)]
+    fn build_db_schema_children(
+        profile_id: Uuid,
+        database_name: &str,
+        target_database: Option<&str>,
+        db_schemas: &[dbflux_core::DbSchemaInfo],
+        table_details: &HashMap<(String, Option<String>, String), TableInfo>,
+        schema_types: &HashMap<SchemaCacheKey, Vec<CustomTypeInfo>>,
+        schema_indexes: &HashMap<SchemaCacheKey, Vec<SchemaIndexInfo>>,
+        schema_foreign_keys: &HashMap<SchemaCacheKey, Vec<SchemaForeignKeyInfo>>,
+        schema_routines: &HashMap<SchemaCacheKey, Vec<RoutineInfo>>,
+        supports_routines: bool,
+        dependents_cache: &HashMap<(String, Option<String>, String), Vec<RelationRef>>,
+    ) -> Vec<TreeItem> {
+        db_schemas
+            .iter()
+            .map(|db_schema| {
+                let schema_content = Self::build_db_schema_content(
+                    profile_id,
+                    database_name,
+                    target_database,
+                    db_schema,
+                    table_details,
+                    schema_types,
+                    schema_indexes,
+                    schema_foreign_keys,
+                    schema_routines,
+                    supports_routines,
+                    dependents_cache,
+                );
 
-            children.push(
                 TreeItem::new(
                     SchemaNodeId::Schema {
                         profile_id,
+                        database: target_database.map(str::to_string),
                         name: db_schema.name.clone(),
                     }
                     .to_string(),
                     db_schema.name.clone(),
                 )
                 .expanded(db_schema.name == "public")
-                .children(schema_content),
-            );
-        }
-
-        children
+                .children(schema_content)
+            })
+            .collect()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1628,10 +1667,9 @@ fn resolve_db_children(
                 // databases route through build_document_db_content.
                 Sidebar::build_time_series_db_content(profile_id, db_name, schema)
             } else {
-                Sidebar::build_db_schema_content(
+                build_lazy_relational_db_children(
                     profile_id,
                     db_name,
-                    None,
                     db_schema,
                     &connected.table_details,
                     &connected.schema_types,
@@ -1744,6 +1782,123 @@ fn resolve_db_children(
     } else {
         Vec::new()
     }
+}
+
+fn group_database_schema_by_namespace(
+    database_name: &str,
+    db_schema: &dbflux_core::DbSchemaInfo,
+) -> Vec<dbflux_core::DbSchemaInfo> {
+    let fallback_schema = if db_schema.name.is_empty() {
+        database_name
+    } else {
+        &db_schema.name
+    };
+    let mut groups = BTreeMap::new();
+
+    for table in &db_schema.tables {
+        let schema_name = table.schema.as_deref().unwrap_or(fallback_schema);
+        groups
+            .entry(schema_name.to_string())
+            .or_insert_with(|| dbflux_core::DbSchemaInfo {
+                name: schema_name.to_string(),
+                tables: Vec::new(),
+                views: Vec::new(),
+                custom_types: None,
+            })
+            .tables
+            .push(table.clone());
+    }
+
+    for view in &db_schema.views {
+        let schema_name = view.schema.as_deref().unwrap_or(fallback_schema);
+        groups
+            .entry(schema_name.to_string())
+            .or_insert_with(|| dbflux_core::DbSchemaInfo {
+                name: schema_name.to_string(),
+                tables: Vec::new(),
+                views: Vec::new(),
+                custom_types: None,
+            })
+            .views
+            .push(view.clone());
+    }
+
+    for custom_type in db_schema.custom_types.iter().flatten() {
+        let schema_name = custom_type.schema.as_deref().unwrap_or(fallback_schema);
+        groups
+            .entry(schema_name.to_string())
+            .or_insert_with(|| dbflux_core::DbSchemaInfo {
+                name: schema_name.to_string(),
+                tables: Vec::new(),
+                views: Vec::new(),
+                custom_types: None,
+            })
+            .custom_types
+            .get_or_insert_with(Vec::new)
+            .push(custom_type.clone());
+    }
+
+    for group in groups.values_mut() {
+        group
+            .tables
+            .sort_by(|left, right| left.name.cmp(&right.name));
+        group
+            .views
+            .sort_by(|left, right| left.name.cmp(&right.name));
+        if let Some(custom_types) = &mut group.custom_types {
+            custom_types.sort_by(|left, right| left.name.cmp(&right.name));
+        }
+    }
+
+    groups.into_values().collect()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_lazy_relational_db_children(
+    profile_id: Uuid,
+    database_name: &str,
+    db_schema: &dbflux_core::DbSchemaInfo,
+    table_details: &HashMap<(String, Option<String>, String), TableInfo>,
+    schema_types: &HashMap<SchemaCacheKey, Vec<CustomTypeInfo>>,
+    schema_indexes: &HashMap<SchemaCacheKey, Vec<SchemaIndexInfo>>,
+    schema_foreign_keys: &HashMap<SchemaCacheKey, Vec<SchemaForeignKeyInfo>>,
+    schema_routines: &HashMap<SchemaCacheKey, Vec<RoutineInfo>>,
+    supports_routines: bool,
+    dependents_cache: &HashMap<(String, Option<String>, String), Vec<RelationRef>>,
+) -> Vec<TreeItem> {
+    let schema_groups = group_database_schema_by_namespace(database_name, db_schema);
+
+    if schema_groups.is_empty()
+        || (schema_groups.len() == 1 && schema_groups[0].name == database_name)
+    {
+        return Sidebar::build_db_schema_content(
+            profile_id,
+            database_name,
+            Some(database_name),
+            schema_groups.first().unwrap_or(db_schema),
+            table_details,
+            schema_types,
+            schema_indexes,
+            schema_foreign_keys,
+            schema_routines,
+            supports_routines,
+            dependents_cache,
+        );
+    }
+
+    Sidebar::build_db_schema_children(
+        profile_id,
+        database_name,
+        Some(database_name),
+        &schema_groups,
+        table_details,
+        schema_types,
+        schema_indexes,
+        schema_foreign_keys,
+        schema_routines,
+        supports_routines,
+        dependents_cache,
+    )
 }
 
 /// Assemble a single database `TreeItem` from its pre-resolved label parts
@@ -2357,6 +2512,7 @@ fn build_schema_tables_folder(
         TreeItem::new(
             SchemaNodeId::TablesFolder {
                 profile_id,
+                database: target_database.map(str::to_string),
                 schema: schema_name.to_string(),
             }
             .to_string(),
@@ -2401,6 +2557,7 @@ fn build_schema_views_folder(
         TreeItem::new(
             SchemaNodeId::ViewsFolder {
                 profile_id,
+                database: target_database.map(str::to_string),
                 schema: schema_name.to_string(),
             }
             .to_string(),
@@ -2788,7 +2945,8 @@ mod tests {
         CollectionChildInfo, CollectionChildrenCache, CollectionPresentation, CustomTypeInfo,
         FieldInfo, TableInfo,
     };
-    use std::collections::HashMap;
+    use gpui_component::tree::TreeItem;
+    use std::collections::{HashMap, HashSet};
     use uuid::Uuid;
 
     #[test]
@@ -3960,6 +4118,430 @@ mod tests {
             database_connections: HashMap::new(),
             proxy_tunnel: None,
         }
+    }
+
+    fn relational_table(name: &str, schema: Option<&str>) -> TableInfo {
+        TableInfo {
+            name: name.to_string(),
+            schema: schema.map(str::to_string),
+            columns: None,
+            indexes: None,
+            foreign_keys: None,
+            constraints: None,
+            sample_fields: None,
+            presentation: CollectionPresentation::DataGrid,
+            child_items: None,
+            storage_hints: None,
+        }
+    }
+
+    fn resolve_lazy_relational_children(
+        profile_id: Uuid,
+        connected: &dbflux_core::ConnectedProfile,
+        initial_schema: &dbflux_core::SchemaSnapshot,
+        database_name: &str,
+    ) -> Vec<super::TreeItem> {
+        let metric_cache = dbflux_app::MetricCatalogCache::new();
+        super::resolve_db_children(
+            profile_id,
+            connected,
+            initial_schema,
+            dbflux_core::DriverCapabilities::empty(),
+            dbflux_core::DatabaseCategory::Relational,
+            &metric_cache,
+            &HashMap::new(),
+            false,
+            false,
+            false,
+            true,
+            false,
+            database_name,
+            false,
+        )
+    }
+
+    #[test]
+    fn lazy_database_expansion_overrides_are_scoped_to_database_schema_parents() {
+        use dbflux_core::{DbSchemaInfo, SchemaNodeId, SchemaSnapshot, ViewInfo};
+
+        fn expansion_state(items: &[TreeItem], item_id: &str) -> Option<bool> {
+            for item in items {
+                if item.id.as_ref() == item_id {
+                    return Some(item.is_expanded());
+                }
+                if let Some(expanded) = expansion_state(&item.children, item_id) {
+                    return Some(expanded);
+                }
+            }
+            None
+        }
+
+        let profile_id = Uuid::new_v4();
+        let mut connected =
+            make_connected_profile(profile_id, dbflux_core::DriverCapabilities::empty());
+        for database_name in ["analytics", "archive"] {
+            connected.database_schemas.insert(
+                database_name.to_string(),
+                DbSchemaInfo {
+                    name: database_name.to_string(),
+                    tables: vec![relational_table("records", Some("dbo"))],
+                    views: vec![ViewInfo {
+                        name: "active_records".to_string(),
+                        schema: Some("dbo".to_string()),
+                    }],
+                    custom_types: None,
+                },
+            );
+        }
+
+        let snapshot = SchemaSnapshot::default();
+        let analytics_children =
+            resolve_lazy_relational_children(profile_id, &connected, &snapshot, "analytics");
+        let archive_children =
+            resolve_lazy_relational_children(profile_id, &connected, &snapshot, "archive");
+        let analytics_schema_id = analytics_children[0].id.to_string();
+        let archive_schema_id = archive_children[0].id.to_string();
+        let analytics_tables_id = analytics_children[0]
+            .children
+            .iter()
+            .find(|item| {
+                matches!(
+                    item.id.as_ref().parse::<SchemaNodeId>(),
+                    Ok(SchemaNodeId::TablesFolder { .. })
+                )
+            })
+            .expect("analytics tables folder")
+            .id
+            .to_string();
+        let archive_tables_id = archive_children[0]
+            .children
+            .iter()
+            .find(|item| {
+                matches!(
+                    item.id.as_ref().parse::<SchemaNodeId>(),
+                    Ok(SchemaNodeId::TablesFolder { .. })
+                )
+            })
+            .expect("archive tables folder")
+            .id
+            .to_string();
+        let analytics_views_id = analytics_children[0]
+            .children
+            .iter()
+            .find(|item| {
+                matches!(
+                    item.id.as_ref().parse::<SchemaNodeId>(),
+                    Ok(SchemaNodeId::ViewsFolder { .. })
+                )
+            })
+            .expect("analytics views folder")
+            .id
+            .to_string();
+        let archive_views_id = archive_children[0]
+            .children
+            .iter()
+            .find(|item| {
+                matches!(
+                    item.id.as_ref().parse::<SchemaNodeId>(),
+                    Ok(SchemaNodeId::ViewsFolder { .. })
+                )
+            })
+            .expect("archive views folder")
+            .id
+            .to_string();
+
+        let overrides = HashMap::from([
+            (analytics_schema_id.clone(), true),
+            (analytics_tables_id.clone(), false),
+            (analytics_views_id.clone(), false),
+        ]);
+        let tree = vec![
+            TreeItem::new(
+                SchemaNodeId::Database {
+                    profile_id,
+                    name: "analytics".to_string(),
+                }
+                .to_string(),
+                "analytics",
+            )
+            .expanded(true)
+            .children(analytics_children),
+            TreeItem::new(
+                SchemaNodeId::Database {
+                    profile_id,
+                    name: "archive".to_string(),
+                }
+                .to_string(),
+                "archive",
+            )
+            .expanded(true)
+            .children(archive_children),
+        ];
+        let tree = super::apply_expansion_overrides_to_items(tree, &overrides, &HashSet::new());
+
+        assert_eq!(expansion_state(&tree, &analytics_schema_id), Some(true));
+        assert_eq!(expansion_state(&tree, &archive_schema_id), Some(false));
+        assert_eq!(expansion_state(&tree, &analytics_tables_id), Some(false));
+        assert_eq!(expansion_state(&tree, &archive_tables_id), Some(true));
+        assert_eq!(expansion_state(&tree, &analytics_views_id), Some(false));
+        assert_eq!(expansion_state(&tree, &archive_views_id), Some(true));
+    }
+
+    #[test]
+    fn lazy_database_children_use_fetched_schema_groups_and_cache_identity() {
+        use dbflux_core::{
+            CustomTypeKind, DbSchemaInfo, RelationalSchema, SchemaCacheKey, SchemaNodeId,
+            SchemaSnapshot, ViewInfo,
+        };
+
+        let profile_id = Uuid::new_v4();
+        let database_name = "analytics";
+        let initial_schema = SchemaSnapshot::relational(RelationalSchema {
+            databases: vec![],
+            current_database: Some("initial".to_string()),
+            schemas: vec![DbSchemaInfo {
+                name: "initial".to_string(),
+                tables: vec![relational_table("wrong_snapshot_table", Some("initial"))],
+                views: vec![],
+                custom_types: None,
+            }],
+            tables: vec![],
+            views: vec![],
+        });
+        let mut connected =
+            make_connected_profile(profile_id, dbflux_core::DriverCapabilities::empty());
+        connected.database_schemas.insert(
+            database_name.to_string(),
+            DbSchemaInfo {
+                name: database_name.to_string(),
+                tables: vec![
+                    relational_table("orders", Some("sales")),
+                    relational_table("stock", Some("inventory")),
+                    relational_table("legacy", None),
+                ],
+                views: vec![
+                    ViewInfo {
+                        name: "open_orders".to_string(),
+                        schema: Some("sales".to_string()),
+                    },
+                    ViewInfo {
+                        name: "daily_summary".to_string(),
+                        schema: Some("reports".to_string()),
+                    },
+                ],
+                custom_types: None,
+            },
+        );
+        connected.schema_types.insert(
+            SchemaCacheKey::new(database_name, Some("sales")),
+            vec![dbflux_core::CustomTypeInfo {
+                name: "order_status".to_string(),
+                schema: Some("sales".to_string()),
+                kind: CustomTypeKind::Enum,
+                enum_values: Some(vec!["open".to_string()]),
+                base_type: None,
+            }],
+        );
+
+        let children = resolve_lazy_relational_children(
+            profile_id,
+            &connected,
+            &initial_schema,
+            database_name,
+        );
+        let schema_labels: Vec<&str> = children.iter().map(|item| item.label.as_ref()).collect();
+        assert_eq!(
+            schema_labels,
+            ["analytics", "inventory", "reports", "sales"]
+        );
+
+        let fallback_table = children
+            .iter()
+            .find(|item| item.label.as_ref() == database_name)
+            .expect("schema-less fallback schema")
+            .children
+            .iter()
+            .find(|item| {
+                item.label.as_ref()
+                    == crate::labels::container_folder_label(
+                        dbflux_core::DatabaseCategory::Relational,
+                        1,
+                    )
+            })
+            .expect("schema-less tables folder")
+            .children
+            .first()
+            .expect("schema-less table");
+        assert!(matches!(
+            fallback_table.id.as_ref().parse::<SchemaNodeId>(),
+            Ok(SchemaNodeId::Table { database: Some(database), schema, name, .. })
+                if database == database_name && schema == database_name && name == "legacy"
+        ));
+
+        let sales = children
+            .iter()
+            .find(|item| item.label.as_ref() == "sales")
+            .expect("fetched sales schema");
+        let sales_table = sales
+            .children
+            .iter()
+            .find(|item| {
+                item.label.as_ref()
+                    == crate::labels::container_folder_label(
+                        dbflux_core::DatabaseCategory::Relational,
+                        1,
+                    )
+            })
+            .expect("sales tables folder")
+            .children
+            .first()
+            .expect("sales table");
+        assert!(matches!(
+            sales_table.id.as_ref().parse::<SchemaNodeId>(),
+            Ok(SchemaNodeId::Table { database: Some(database), schema, name, .. })
+                if database == database_name && schema == "sales" && name == "orders"
+        ));
+        assert!(sales.children.iter().any(|item| {
+            matches!(
+                item.id.as_ref().parse::<SchemaNodeId>(),
+                Ok(SchemaNodeId::TypesFolder { database, schema, .. })
+                    if database == database_name && schema == "sales"
+            ) && item.label.as_ref() == crate::labels::data_types_folder_label(1)
+        }));
+
+        let reports = children
+            .iter()
+            .find(|item| item.label.as_ref() == "reports")
+            .expect("views-only schema");
+        let report_view = reports
+            .children
+            .iter()
+            .find(|item| item.label.as_ref() == crate::labels::views_folder_label(1))
+            .expect("reports views folder")
+            .children
+            .first()
+            .expect("report view");
+        assert!(matches!(
+            report_view.id.as_ref().parse::<SchemaNodeId>(),
+            Ok(SchemaNodeId::View { database: Some(database), schema, name, .. })
+                if database == database_name && schema == "reports" && name == "daily_summary"
+        ));
+    }
+
+    #[test]
+    fn lazy_database_children_keep_empty_database_content() {
+        use dbflux_core::{DbSchemaInfo, RelationalSchema, SchemaNodeId, SchemaSnapshot};
+
+        let profile_id = Uuid::new_v4();
+        let database_name = "empty";
+        let initial_schema = SchemaSnapshot::relational(RelationalSchema {
+            databases: vec![],
+            current_database: Some("initial".to_string()),
+            schemas: vec![DbSchemaInfo {
+                name: "initial".to_string(),
+                tables: vec![relational_table("wrong_snapshot_table", Some("initial"))],
+                views: vec![],
+                custom_types: None,
+            }],
+            tables: vec![],
+            views: vec![],
+        });
+        let mut connected =
+            make_connected_profile(profile_id, dbflux_core::DriverCapabilities::empty());
+        connected.database_schemas.insert(
+            database_name.to_string(),
+            DbSchemaInfo {
+                name: database_name.to_string(),
+                tables: vec![],
+                views: vec![],
+                custom_types: None,
+            },
+        );
+
+        let children = resolve_lazy_relational_children(
+            profile_id,
+            &connected,
+            &initial_schema,
+            database_name,
+        );
+        assert!(children.iter().all(|item| {
+            !matches!(
+                item.id.as_ref().parse::<SchemaNodeId>(),
+                Ok(SchemaNodeId::Schema { .. })
+            )
+        }));
+        assert!(children.iter().any(|item| {
+            matches!(
+                item.id.as_ref().parse::<SchemaNodeId>(),
+                Ok(SchemaNodeId::TypesFolder { database, schema, .. })
+                    if database == database_name && schema == database_name
+            )
+        }));
+    }
+
+    #[test]
+    fn lazy_database_children_keep_database_named_single_schema_flat() {
+        use dbflux_core::{DbSchemaInfo, RelationalSchema, SchemaNodeId, SchemaSnapshot, ViewInfo};
+
+        let profile_id = Uuid::new_v4();
+        let database_name = "app";
+        let initial_schema = SchemaSnapshot::relational(RelationalSchema {
+            databases: vec![],
+            current_database: Some("initial".to_string()),
+            schemas: vec![DbSchemaInfo {
+                name: "initial".to_string(),
+                tables: vec![relational_table("wrong_snapshot_table", Some("initial"))],
+                views: vec![],
+                custom_types: None,
+            }],
+            tables: vec![],
+            views: vec![],
+        });
+        let mut connected =
+            make_connected_profile(profile_id, dbflux_core::DriverCapabilities::empty());
+        connected.database_schemas.insert(
+            database_name.to_string(),
+            DbSchemaInfo {
+                name: database_name.to_string(),
+                tables: vec![relational_table("users", Some(database_name))],
+                views: vec![ViewInfo {
+                    name: "active_users".to_string(),
+                    schema: Some(database_name.to_string()),
+                }],
+                custom_types: None,
+            },
+        );
+
+        let children = resolve_lazy_relational_children(
+            profile_id,
+            &connected,
+            &initial_schema,
+            database_name,
+        );
+        assert!(children.iter().all(|item| {
+            !matches!(
+                item.id.as_ref().parse::<SchemaNodeId>(),
+                Ok(SchemaNodeId::Schema { .. })
+            )
+        }));
+        let table = children
+            .iter()
+            .find(|item| {
+                item.label.as_ref()
+                    == crate::labels::container_folder_label(
+                        dbflux_core::DatabaseCategory::Relational,
+                        1,
+                    )
+            })
+            .expect("flat tables folder")
+            .children
+            .first()
+            .expect("database-named table");
+        assert!(matches!(
+            table.id.as_ref().parse::<SchemaNodeId>(),
+            Ok(SchemaNodeId::Table { database: Some(database), schema, name, .. })
+                if database == database_name && schema == database_name && name == "users"
+        ));
     }
 
     #[test]

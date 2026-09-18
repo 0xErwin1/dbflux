@@ -52,8 +52,48 @@ impl RedshiftErrorFormatter {
 
             formatted
         } else {
-            FormattedError::new(e.to_string())
+            FormattedError::new(Self::flatten_error(e))
         }
+    }
+
+    /// Flattens a `postgres::Error` into text the user-facing formatters can
+    /// match on. tokio-postgres' `Display` names only the error kind — a
+    /// server-rejected startup formats as just "db error" — so the server's
+    /// message (via `as_db_error`) or the underlying cause chain has to be
+    /// appended explicitly.
+    ///
+    /// Verbatim copy of `PostgresErrorFormatter::flatten_error` — `dbflux_core`
+    /// cannot own it because it does not depend on `postgres`; keep the two
+    /// in sync.
+    fn flatten_error(error: &postgres::Error) -> String {
+        use std::error::Error as _;
+
+        if let Some(db_error) = error.as_db_error() {
+            let mut text = format!(
+                "{}: {} (SQLSTATE {})",
+                db_error.severity(),
+                db_error.message(),
+                db_error.code().code()
+            );
+            if let Some(detail) = db_error.detail() {
+                text.push_str("\nDETAIL: ");
+                text.push_str(detail);
+            }
+            if let Some(hint) = db_error.hint() {
+                text.push_str("\nHINT: ");
+                text.push_str(hint);
+            }
+            return text;
+        }
+
+        let mut text = error.to_string();
+        let mut cause = error.source();
+        while let Some(source) = cause {
+            text.push_str(": ");
+            text.push_str(&source.to_string());
+            cause = source.source();
+        }
+        text
     }
 
     fn format_connection_message(source: &str, host: &str, port: u16) -> String {
@@ -105,7 +145,10 @@ impl ConnectionErrorFormatter for RedshiftErrorFormatter {
         host: &str,
         port: u16,
     ) -> FormattedError {
-        let source = error.to_string();
+        let source = error
+            .downcast_ref::<postgres::Error>()
+            .map(Self::flatten_error)
+            .unwrap_or_else(|| error.to_string());
         let message = Self::format_connection_message(&source, host, port);
         FormattedError::new(message)
     }
@@ -115,7 +158,10 @@ impl ConnectionErrorFormatter for RedshiftErrorFormatter {
         error: &(dyn std::error::Error + 'static),
         sanitized_uri: &str,
     ) -> FormattedError {
-        let source = error.to_string();
+        let source = error
+            .downcast_ref::<postgres::Error>()
+            .map(Self::flatten_error)
+            .unwrap_or_else(|| error.to_string());
 
         let message = if source.contains("password authentication failed") {
             "Authentication failed. Check your username and password in the URI.".to_string()
@@ -202,6 +248,19 @@ mod tests {
             RedshiftErrorFormatter::format_connection_message("some odd io failure", "host", 5439);
         assert_eq!(message, "Connection error: some odd io failure");
         assert!(!message.is_empty());
+    }
+
+    #[test]
+    fn flattened_server_text_routes_to_the_does_not_exist_branch() {
+        let message = RedshiftErrorFormatter::format_connection_message(
+            "FATAL: database \"dev\" does not exist (SQLSTATE 3D000)",
+            "cluster.example.com",
+            5439,
+        );
+
+        assert!(message.starts_with("Database or user does not exist:"));
+        assert!(message.contains("FATAL: database \"dev\" does not exist"));
+        assert!(message.contains("3D000"));
     }
 
     /// A genuine `postgres::Error` (client-side statement-timeout kind) with no

@@ -21,6 +21,7 @@ redis = ["dbflux_driver_redis"]
 dynamodb = ["dbflux_driver_dynamodb"]
 redshift = ["dbflux_driver_redshift"]
 clickhouse = ["dbflux_driver_clickhouse"]
+turso = ["dbflux_driver_turso"]
 aws = ["dbflux_aws", "dbflux_ssm"]
 
 [dependencies]
@@ -42,11 +43,12 @@ dbflux_driver_redis = { workspace = true, optional = true }
 dbflux_driver_dynamodb = { workspace = true, optional = true }
 dbflux_driver_redshift = { workspace = true, optional = true }
 dbflux_driver_clickhouse = { workspace = true, optional = true }
+dbflux_driver_turso = { workspace = true, optional = true }
 dbflux_aws = { workspace = true, optional = true }
 dbflux_ssm = { workspace = true, optional = true }
 
 # MCP SDK
-rmcp = { version = "1.2.0", features = ["server", "macros", "transport-io"] }
+rmcp = { version = "2.0.0", features = ["server", "macros", "transport-io"] }
 schemars = "1.0"
 
 # Serialization
@@ -69,6 +71,17 @@ tracing.workspace = true
 [dev-dependencies]
 # Test support
 dbflux_test_support = { workspace = true }
+
+# The MCP client half is test-only: the transport-level end-to-end tests connect
+# to the server as an external agent does, and nothing in the shipped server
+# binary needs the client role or the in-memory transport.
+rmcp = { version = "2.0.0", features = ["client", "transport-async-rw"] }
+
+# Real driver for the end-to-end data path. The crate already carries it as an
+# optional dependency behind the `sqlite` feature; declaring it here keeps the
+# end-to-end tests runnable under a plain `cargo test -p dbflux_mcp_server`.
+dbflux_driver_sqlite = { workspace = true }
+
 tempfile = "3.10"
 
 # Async test runtime

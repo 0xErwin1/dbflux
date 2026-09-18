@@ -1001,10 +1001,60 @@ struct PostgresConnectParams<'a> {
     host: &'a str,
     port: u16,
     user: &'a str,
-    password: &'a str,
+    password: Option<&'a str>,
     database: &'a str,
     /// Postgres native sslmode id (e.g. `"prefer"`, `"verify-ca"`).
     ssl_mode: &'a str,
+}
+
+/// Escapes a value for a libpq keyword/value connection string.
+///
+/// libpq requires values containing whitespace to be enclosed in single
+/// quotes; inside quotes both a backslash and a single quote must be
+/// backslash-escaped. Empty values are quoted as `''` for the same reason:
+/// an unquoted empty value makes libpq swallow the next `key=value` pair.
+/// Values are also quoted when they contain a quote or a backslash even
+/// without whitespace, which is always safe to parse.
+fn escape_keyword_value(value: &str) -> String {
+    if value.is_empty()
+        || value
+            .chars()
+            .any(|c| c.is_whitespace() || c == '\'' || c == '\\')
+    {
+        format!("'{}'", value.replace('\\', "\\\\").replace('\'', "\\'"))
+    } else {
+        value.to_string()
+    }
+}
+
+/// Builds a libpq keyword/value connection string for a direct connection.
+///
+/// A `None` or empty password omits the `password` key entirely: libpq skips
+/// whitespace after `=` and reads an unquoted value up to the next whitespace
+/// run, so a trailing empty `password=` swallows the following pair —
+/// `password= dbname=app` parses the password as `dbname=app` and leaves the
+/// database at its default (the user name).
+fn build_keyword_conn_string(
+    host: &str,
+    port: u16,
+    user: &str,
+    password: Option<&str>,
+    database: &str,
+) -> String {
+    let mut pairs = vec![
+        format!("host={}", escape_keyword_value(host)),
+        format!("port={}", port),
+        format!("user={}", escape_keyword_value(user)),
+    ];
+
+    if let Some(password) = password.filter(|password| !password.is_empty()) {
+        pairs.push(format!("password={}", escape_keyword_value(password)));
+    }
+
+    pairs.push(format!("dbname={}", escape_keyword_value(database)));
+    pairs.push("connect_timeout=30".to_string());
+
+    pairs.join(" ")
 }
 
 /// Establishes a PostgreSQL connection using the native sslmode identifier from the profile.
@@ -1016,9 +1066,12 @@ struct PostgresConnectParams<'a> {
 /// - `"require"` — TLS required, self-signed certs accepted
 /// - `"verify-ca"` / `"verify-full"` — TLS required with certificate validation
 fn connect_postgres(params: &PostgresConnectParams) -> Result<Client, DbError> {
-    let conn_string = with_client_identity(&format!(
-        "host={} port={} user={} password={} dbname={} connect_timeout=30",
-        params.host, params.port, params.user, params.password, params.database
+    let conn_string = with_client_identity(&build_keyword_conn_string(
+        params.host,
+        params.port,
+        params.user,
+        params.password,
+        params.database,
     ));
 
     match params.ssl_mode {
@@ -1168,7 +1221,7 @@ impl PostgresDriver {
             host,
             port,
             user,
-            password: password.unwrap_or(""),
+            password,
             database,
             ssl_mode,
         })?;
@@ -1234,7 +1287,7 @@ impl PostgresDriver {
             host: "127.0.0.1",
             port: local_port,
             user: db_user,
-            password: db_password.unwrap_or(""),
+            password: db_password,
             database,
             ssl_mode,
         })?;
@@ -4415,8 +4468,47 @@ impl PostgresErrorFormatter {
 
             formatted
         } else {
-            FormattedError::new(e.to_string())
+            FormattedError::new(Self::flatten_error(e))
         }
+    }
+
+    /// Flattens a `postgres::Error` into text the user-facing formatters can
+    /// match on. tokio-postgres' `Display` names only the error kind — a
+    /// server-rejected startup formats as just "db error" — so the server's
+    /// message (via `as_db_error`) or the underlying cause chain has to be
+    /// appended explicitly.
+    ///
+    /// `RedshiftErrorFormatter::flatten_error` is a verbatim copy of this
+    /// helper; keep the two in sync.
+    fn flatten_error(error: &postgres::Error) -> String {
+        use std::error::Error as _;
+
+        if let Some(db_error) = error.as_db_error() {
+            let mut text = format!(
+                "{}: {} (SQLSTATE {})",
+                db_error.severity(),
+                db_error.message(),
+                db_error.code().code()
+            );
+            if let Some(detail) = db_error.detail() {
+                text.push_str("\nDETAIL: ");
+                text.push_str(detail);
+            }
+            if let Some(hint) = db_error.hint() {
+                text.push_str("\nHINT: ");
+                text.push_str(hint);
+            }
+            return text;
+        }
+
+        let mut text = error.to_string();
+        let mut cause = error.source();
+        while let Some(source) = cause {
+            text.push_str(": ");
+            text.push_str(&source.to_string());
+            cause = source.source();
+        }
+        text
     }
 
     fn format_connection_message(source: &str, host: &str, port: u16) -> String {
@@ -4473,7 +4565,10 @@ impl ConnectionErrorFormatter for PostgresErrorFormatter {
         host: &str,
         port: u16,
     ) -> FormattedError {
-        let source = error.to_string();
+        let source = error
+            .downcast_ref::<postgres::Error>()
+            .map(Self::flatten_error)
+            .unwrap_or_else(|| error.to_string());
         let message = Self::format_connection_message(&source, host, port);
         FormattedError::new(message)
     }
@@ -4483,7 +4578,10 @@ impl ConnectionErrorFormatter for PostgresErrorFormatter {
         error: &(dyn std::error::Error + 'static),
         sanitized_uri: &str,
     ) -> FormattedError {
-        let source = error.to_string();
+        let source = error
+            .downcast_ref::<postgres::Error>()
+            .map(Self::flatten_error)
+            .unwrap_or_else(|| error.to_string());
 
         let message = if source.contains("password authentication failed") {
             "Authentication failed. Check your username and password in the URI.".to_string()
@@ -5197,22 +5295,24 @@ fn get_schema_routines(
 mod tests {
     use super::{
         POSTGRES_DIALECT, PgTextSearchText, PgUriSslMode, PgVectorText, PostgresCodeGenerator,
-        PostgresDialect, PostgresDriver, TSQUERY_OP_AND, TSQUERY_OP_NOT, TSQUERY_OP_OR,
-        TSQUERY_OP_PHRASE, decode_pgvector_halfvec, decode_pgvector_sparsevec,
-        decode_pgvector_vector, decode_tsquery, decode_tsvector, format_pgvector_dense,
-        format_pgvector_float4, format_pgvector_sparse, inject_password_into_pg_uri,
-        parse_pg_uri_sslmode, pgvector_array_decode_to_value, pgvector_array_values_to_value,
-        plan_postgres_semantic_request, prokind_to_routine_kind, text_search_array_values_to_value,
-        unsupported_type_names, with_client_identity,
+        PostgresDialect, PostgresDriver, PostgresErrorFormatter, TSQUERY_OP_AND, TSQUERY_OP_NOT,
+        TSQUERY_OP_OR, TSQUERY_OP_PHRASE, build_keyword_conn_string, decode_pgvector_halfvec,
+        decode_pgvector_sparsevec, decode_pgvector_vector, decode_tsquery, decode_tsvector,
+        format_pgvector_dense, format_pgvector_float4, format_pgvector_sparse,
+        inject_password_into_pg_uri, parse_pg_uri_sslmode, pgvector_array_decode_to_value,
+        pgvector_array_values_to_value, plan_postgres_semantic_request, prokind_to_routine_kind,
+        text_search_array_values_to_value, unsupported_type_names, with_client_identity,
     };
     use dbflux_core::{
-        AddColumnRequest, AlterColumnRequest, CodeGenerator, ColumnAssignment, CreateTableSpec,
-        CreateTypeRequest, DatabaseCategory, DbConfig, DbDriver, DbError, DdlRejection,
-        DefaultSpec, DropColumnRequest, FormValues, MutationRequest, QueryLanguage, RowInsert,
-        SemanticRequest, SqlDialect, SqlMutationGenerator, SqlQueryBuilder, TableBrowseRequest,
-        TableRef, TransferFamily, TypeAttributeDefinition, TypeDefinition, Value, WhereOperator,
+        AddColumnRequest, AlterColumnRequest, CodeGenerator, ColumnAssignment, ConnectionProfile,
+        CreateTableSpec, CreateTypeRequest, DatabaseCategory, DbConfig, DbDriver, DbError,
+        DdlRejection, DefaultSpec, DropColumnRequest, FormValues, MutationRequest, QueryLanguage,
+        RowInsert, SemanticRequest, SqlDialect, SqlMutationGenerator, SqlQueryBuilder,
+        TableBrowseRequest, TableRef, TransferFamily, TypeAttributeDefinition, TypeDefinition,
+        Value, WhereOperator,
     };
     use postgres::types::{FromSql, Kind, Type};
+    use std::str::FromStr;
 
     fn sparsevec_payload(dimension: i32, indices: &[i32], values: &[f32]) -> Vec<u8> {
         assert_eq!(indices.len(), values.len());
@@ -5697,6 +5797,152 @@ mod tests {
         let result = with_client_identity(conn_str);
 
         assert_eq!(result, conn_str);
+    }
+
+    #[test]
+    fn keyword_conn_string_omits_password_key_when_password_is_none() {
+        let conn_string = build_keyword_conn_string("127.0.0.1", 5432, "testuser", None, "testdb");
+
+        assert_eq!(
+            conn_string,
+            "host=127.0.0.1 port=5432 user=testuser dbname=testdb connect_timeout=30"
+        );
+    }
+
+    #[test]
+    fn keyword_conn_string_omits_password_key_when_password_is_empty() {
+        let conn_string =
+            build_keyword_conn_string("127.0.0.1", 5432, "testuser", Some(""), "testdb");
+
+        assert!(!conn_string.contains("password="));
+        assert!(conn_string.contains("dbname=testdb"));
+    }
+
+    #[test]
+    fn keyword_conn_string_includes_password_key_when_password_is_set() {
+        let conn_string =
+            build_keyword_conn_string("127.0.0.1", 5432, "testuser", Some("secret"), "testdb");
+
+        assert_eq!(
+            conn_string,
+            "host=127.0.0.1 port=5432 user=testuser password=secret dbname=testdb connect_timeout=30"
+        );
+    }
+
+    #[test]
+    fn keyword_conn_string_quotes_and_escapes_password_with_special_characters() {
+        let conn_string = build_keyword_conn_string(
+            "127.0.0.1",
+            5432,
+            "testuser",
+            Some("pa ss'wo\\rd"),
+            "testdb",
+        );
+
+        assert!(conn_string.contains("password='pa ss\\'wo\\\\rd'"));
+    }
+
+    #[test]
+    fn keyword_conn_string_without_password_parses_with_expected_dbname() {
+        // Regression: an empty `password=` used to be emitted between `user=`
+        // and `dbname=`, and libpq's parser consumed `dbname=testdb` as the
+        // password value, leaving the database at its default (the user name).
+        let conn_string = build_keyword_conn_string("127.0.0.1", 5432, "testuser", None, "testdb");
+        let config = postgres::Config::from_str(&conn_string)
+            .expect("keyword string without password should parse");
+
+        assert_eq!(config.get_user(), Some("testuser"));
+        assert_eq!(config.get_password(), None);
+        assert_eq!(config.get_dbname(), Some("testdb"));
+    }
+
+    #[test]
+    fn keyword_conn_string_carries_quoted_password_opaquely() {
+        let conn_string = build_keyword_conn_string(
+            "127.0.0.1",
+            5432,
+            "testuser",
+            Some("pa ss'wo\\rd"),
+            "testdb",
+        );
+        let config = postgres::Config::from_str(&conn_string)
+            .expect("keyword string with quoted password should parse");
+
+        assert_eq!(config.get_password(), Some("pa ss'wo\\rd".as_bytes()));
+        assert_eq!(config.get_dbname(), Some("testdb"));
+    }
+
+    #[test]
+    fn keyword_conn_string_quotes_empty_values_so_pairs_survive_parsing() {
+        let conn_string = build_keyword_conn_string("", 5432, "", Some("secret"), "testdb");
+        let config = postgres::Config::from_str(&conn_string)
+            .expect("keyword string with empty host and user should parse");
+
+        assert!(conn_string.contains("host=''"));
+        assert!(conn_string.contains("user=''"));
+        assert_eq!(config.get_user(), Some(""));
+        assert_eq!(config.get_dbname(), Some("testdb"));
+    }
+
+    #[test]
+    fn connection_error_message_includes_flattened_server_text() {
+        let message = PostgresErrorFormatter::format_connection_message(
+            "FATAL: database \"testuser\" does not exist (SQLSTATE 3D000)",
+            "127.0.0.1",
+            5432,
+        );
+
+        assert!(message.starts_with("Database or user does not exist:"));
+        assert!(message.contains("FATAL: database \"testuser\" does not exist"));
+        assert!(message.contains("3D000"));
+    }
+
+    #[test]
+    fn flatten_error_keeps_display_for_non_db_errors() {
+        let error = postgres::Error::__private_api_timeout();
+
+        let flattened = PostgresErrorFormatter::flatten_error(&error);
+
+        assert_eq!(flattened, "timeout waiting for server");
+    }
+
+    #[test]
+    fn connection_error_carries_io_cause_for_a_closed_port() {
+        // Bind and drop a listener to get a guaranteed-closed local port: the
+        // io cause ("Connection refused") must reach the user-facing message
+        // instead of the opaque kind text.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind an ephemeral port");
+        let closed_port = listener.local_addr().expect("bound address").port();
+        drop(listener);
+
+        let driver = PostgresDriver::new();
+        let profile = ConnectionProfile::new(
+            "closed-port",
+            DbConfig::Postgres {
+                use_uri: false,
+                uri: None,
+                host: "127.0.0.1".to_string(),
+                port: closed_port,
+                user: "testuser".to_string(),
+                database: "testdb".to_string(),
+                ssl_mode: Some("disable".to_string()),
+                ssl_root_cert_path: None,
+                ssl_client_cert_path: None,
+                ssl_client_key_path: None,
+                ssh_tunnel: None,
+                ssh_tunnel_profile_id: None,
+            },
+        );
+
+        let Err(DbError::ConnectionFailed(formatted)) = driver.connect(&profile) else {
+            panic!("expected ConnectionFailed for a closed port");
+        };
+
+        let message = formatted.to_display_string();
+        assert!(
+            message.contains("Connection refused"),
+            "message should carry the io cause: {message}"
+        );
     }
 
     #[test]
