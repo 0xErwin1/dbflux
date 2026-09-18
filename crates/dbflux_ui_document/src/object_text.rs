@@ -7,10 +7,11 @@
 //! error mapping — so the two surfaces cannot drift apart in how they read,
 //! render, or write an object.
 
-use dbflux_components::controls::{InputSearch, InputState};
+use dbflux_components::controls::InputSearch;
 use dbflux_core::DbError;
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError};
 use gpui::{AppContext, Context, Entity, Window};
+use gpui_component::input::EditorState;
 use uuid::Uuid;
 
 /// Save shortcut label, matching the `SaveQuery` binding (Cmd+S on macOS,
@@ -142,22 +143,15 @@ pub fn build_text_input<T: 'static>(
     body: &str,
     window: &mut Window,
     cx: &mut Context<T>,
-) -> Entity<InputState> {
+) -> Entity<EditorState> {
     let language = highlight_language(key, body);
 
     cx.new(|cx| {
-        let state = InputState::new(window, cx);
+        let state = EditorState::new(window, cx);
 
         match language {
-            Some(language) => state
-                .code_editor(language)
-                .line_number(true)
-                .soft_wrap(false),
-            None => state
-                .multi_line(true)
-                .searchable(true)
-                .line_number(true)
-                .soft_wrap(true),
+            Some(language) => state.language(language).line_number(true).soft_wrap(false),
+            None => state.line_number(true).soft_wrap(true),
         }
     })
 }
@@ -167,7 +161,7 @@ pub fn build_text_input<T: 'static>(
 /// The panel is owned by `gpui-component` and is only reachable through its
 /// `Search` action, so the button path focuses the buffer first and then
 /// dispatches the same action its `cmd-f` / `ctrl-f` binding raises.
-pub fn open_find_panel(input: &Entity<InputState>, window: &mut Window, cx: &mut gpui::App) {
+pub fn open_find_panel(input: &Entity<EditorState>, window: &mut Window, cx: &mut gpui::App) {
     input.update(cx, |state, cx| state.focus(window, cx));
     window.dispatch_action(Box::new(InputSearch), cx);
 }

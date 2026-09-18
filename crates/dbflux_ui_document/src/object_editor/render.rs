@@ -101,7 +101,7 @@ impl ObjectEditorDocument {
                 .overflow_hidden()
                 .bg(theme.background)
                 .child(
-                    GpuiInput::new(&buffer.input)
+                    gpui_component::input::Editor::new(&buffer.input)
                         .appearance(false)
                         .disabled(!buffer.is_editable())
                         .w_full()

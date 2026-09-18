@@ -19,9 +19,9 @@ const SUBMENU_OFFSET: Pixels = px(172.0);
 /// row near the bottom of the window is shifted up rather than cut off.
 fn submenu_frame(open_left: bool, flyout: Div) -> Div {
     let (frame, corner) = if open_left {
-        (div().absolute().right(SUBMENU_OFFSET), Corner::TopRight)
+        (div().absolute().right(SUBMENU_OFFSET), Anchor::TopRight)
     } else {
-        (div().absolute().left(SUBMENU_OFFSET), Corner::TopLeft)
+        (div().absolute().left(SUBMENU_OFFSET), Anchor::TopLeft)
     };
     frame.top(px(-4.0)).child(
         anchored()

@@ -13,7 +13,6 @@ use gpui::prelude::*;
 use gpui::{App, Context, Entity, Global, Hsla, SharedString, Window, px, rems};
 use gpui_component::ActiveTheme;
 
-use crate::AsyncUpdateResultExt;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
 
@@ -370,8 +369,7 @@ impl ToastHost {
                         host.dismiss(id, cx);
                     });
                 }
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
     }

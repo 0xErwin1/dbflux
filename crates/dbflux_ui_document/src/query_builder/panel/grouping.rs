@@ -49,13 +49,17 @@ impl QueryBuilderPanel {
             };
 
             let col_input = cx.new(|cx| {
-                let mut state = InputState::new(window, cx).placeholder("alias.column");
+                let mut state = crate::completion_support::new_single_line_completion_state(
+                    window,
+                    cx,
+                    "alias.column",
+                );
                 state.set_value(&col_text, window, cx);
                 state
             });
 
             col_input.update(cx, |s, _| {
-                s.lsp.completion_provider = Some(alias_provider.clone());
+                s.lsp_mut().completion_provider = Some(alias_provider.clone());
             });
 
             let sub = cx.subscribe_in(
@@ -122,13 +126,17 @@ impl QueryBuilderPanel {
             };
 
             let col_input = cx.new(|cx| {
-                let mut state = InputState::new(window, cx).placeholder("alias.column");
+                let mut state = crate::completion_support::new_single_line_completion_state(
+                    window,
+                    cx,
+                    "alias.column",
+                );
                 state.set_value(&col_text, window, cx);
                 state
             });
 
             col_input.update(cx, |s, _| {
-                s.lsp.completion_provider = Some(alias_provider.clone());
+                s.lsp_mut().completion_provider = Some(alias_provider.clone());
             });
 
             let col_sub = cx.subscribe_in(

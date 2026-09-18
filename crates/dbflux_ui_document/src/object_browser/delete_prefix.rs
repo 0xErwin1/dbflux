@@ -236,15 +236,13 @@ impl ObjectBrowserDocument {
             queue.push_back((target, None));
 
             while let Some((prefix, token)) = queue.pop_front() {
-                let still_current = cx
-                    .update(|cx| {
-                        entity
-                            .read(cx)
-                            .delete_prefix_confirm
-                            .as_ref()
-                            .is_some_and(|confirm| confirm.probe.is_current(generation))
-                    })
-                    .unwrap_or(false);
+                let still_current = cx.update(|cx| {
+                    entity
+                        .read(cx)
+                        .delete_prefix_confirm
+                        .as_ref()
+                        .is_some_and(|confirm| confirm.probe.is_current(generation))
+                });
 
                 if !still_current {
                     return;
@@ -279,25 +277,21 @@ impl ObjectBrowserDocument {
                                 doc.mark_probe_error(generation, err.to_string());
                                 cx.notify();
                             });
-                        })
-                        .ok();
+                        });
                         return;
                     }
                 };
 
-                let outcome = cx
-                    .update(|cx| {
-                        entity.update(cx, |doc, cx| {
-                            let outcome = doc
-                                .delete_prefix_confirm
-                                .as_mut()
-                                .map(|confirm| confirm.probe.apply_page(generation, page));
-                            cx.notify();
-                            outcome
-                        })
+                let outcome = cx.update(|cx| {
+                    entity.update(cx, |doc, cx| {
+                        let outcome = doc
+                            .delete_prefix_confirm
+                            .as_mut()
+                            .map(|confirm| confirm.probe.apply_page(generation, page));
+                        cx.notify();
+                        outcome
                     })
-                    .ok()
-                    .flatten();
+                });
 
                 let Some(outcome) = outcome else { return };
 
@@ -321,8 +315,7 @@ impl ObjectBrowserDocument {
                     }
                     cx.notify();
                 });
-            })
-            .ok();
+            });
         })
         .detach();
     }
@@ -408,16 +401,14 @@ impl ObjectBrowserDocument {
                         ))
                         .meta_right(now_hms())
                         .push(cx);
-                    })
-                    .ok();
+                    });
                 }
                 Err(err) => report_error_async(db_error_to_user_facing(err), cx),
             }
 
             cx.update(|cx| {
                 entity.update(cx, |doc, cx| doc.reload_current_prefix(cx));
-            })
-            .ok();
+            });
         })
         .detach();
     }

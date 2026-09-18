@@ -9,7 +9,7 @@ use dbflux_ui_base::platform;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
-use gpui_component::dialog::Dialog;
+use gpui_component::dialog::{Dialog, DialogButtonProps};
 
 use super::{
     SETTINGS_SIDEBAR_GRIP_WIDTH, SETTINGS_SIDEBAR_MAX_WIDTH, SETTINGS_SIDEBAR_MIN_WIDTH,
@@ -221,7 +221,7 @@ impl Render for SettingsCoordinator {
             self.pending_focus_return = false;
             self.focus_area = SettingsFocus::Content;
             self.active_section_entity.focus_in(_window, cx);
-            self.focus_handle.focus(_window);
+            self.focus_handle.focus(_window, cx);
         }
 
         // A section asked to open a portability overlay; do it here where a
@@ -287,9 +287,11 @@ impl Render for SettingsCoordinator {
                 let section_name = Self::section_display_name(target_section);
 
                 element.child(
-                    Dialog::new(_window, cx)
+                    Dialog::new(cx)
                         .title(dbflux_i18n::t!("settings.discard.title"))
-                        .confirm()
+                        .button_props(DialogButtonProps::default().show_cancel(true))
+                        .overlay_closable(false)
+                        .close_button(false)
                         .on_ok(move |_, window, cx| {
                             confirm_entity.update(cx, |this, cx| {
                                 this.confirm_section_transition(window, cx);

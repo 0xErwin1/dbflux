@@ -583,7 +583,13 @@ impl ChartDocument {
                         .border_color(theme.border)
                         .bg(theme.popover)
                         .occlude()
-                        .child(div().flex_grow().min_h_0().overflow_hidden().child(element))
+                        .child(
+                            div()
+                                .flex_grow(1.0)
+                                .min_h_0()
+                                .overflow_hidden()
+                                .child(element),
+                        )
                         .into_any_element()
                 })
             } else {
@@ -959,7 +965,7 @@ impl ChartDocument {
             .bg(theme.popover)
             .occlude()
             .child(header)
-            .child(div().flex_grow().min_h_0().overflow_hidden().child(body))
+            .child(div().flex_grow(1.0).min_h_0().overflow_hidden().child(body))
             .into_any_element()
     }
 }

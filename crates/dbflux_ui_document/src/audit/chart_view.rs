@@ -141,7 +141,7 @@ impl AuditDocument {
         cx.spawn(async move |this, cx| {
             let result = agg_task.await;
 
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 let Some(entity) = this.upgrade() else {
                     return;
                 };

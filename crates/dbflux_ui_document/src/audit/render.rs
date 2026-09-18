@@ -11,9 +11,7 @@ use super::filters::{TimeRange, format_timestamp_ms};
 use super::{AuditContextMenuAction, AuditDocument, AuditDocumentSource, ToolbarSlot};
 use crate::handle::DocumentEvent;
 use dbflux_components::chart::YScale;
-use dbflux_components::controls::{
-    GpuiInput as Input, InputState, ReadonlyTextView, SelectableText,
-};
+use dbflux_components::controls::{GpuiInput as Input, InputState};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Label, Text, surface_raised};
 use dbflux_components::semantic::BannerColors as SemBannerColors;
@@ -24,6 +22,9 @@ use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::Sizable;
 use gpui_component::button::ButtonVariants;
+use gpui_component::input::{
+    Editor as GpuiEditor, EditorState as GpuiEditorState, Textarea, TextareaState,
+};
 use gpui_component::scroll::ScrollableElement;
 
 use super::super::chrome::{
@@ -665,7 +666,7 @@ impl AuditDocument {
                             cx.emit(DocumentEvent::RequestFocus);
                             this.select_row(row_index, cx);
                             this.toggle_event_expanded(event_id, cx);
-                            this.focus_handle.focus(window);
+                            this.focus_handle.focus(window, cx);
                         }),
                     )
                     .on_mouse_down(
@@ -1055,7 +1056,12 @@ impl AuditDocument {
                         .flex_col()
                         .gap_1p5()
                         .child(Label::new(dbflux_i18n::t!("document.audit.detail.message")))
-                        .child(SelectableText::new(&message_input).w_full()),
+                        .child(
+                            Textarea::new(&message_input)
+                                .appearance(false)
+                                .disabled(true)
+                                .w_full(),
+                        ),
                 )
             })
             .when_some(details_json, |root, value| {
@@ -1071,7 +1077,9 @@ impl AuditDocument {
                         .child(Label::new(dbflux_i18n::t!("document.audit.detail.details")))
                         .child(
                             div().bg(theme.secondary).p_2().rounded(Radii::SM).child(
-                                ReadonlyTextView::new(&details_input)
+                                GpuiEditor::new(&details_input)
+                                    .readonly(true)
+                                    .appearance(false)
                                     .w_full()
                                     .h(Self::event_text_height(details_rows)),
                             ),
@@ -1301,6 +1309,73 @@ impl AuditDocument {
 
     // ── Input entity helpers ──────────────────────────────────────────────
 
+    fn ensure_event_editor_input(
+        cache: &mut HashMap<i64, Entity<GpuiEditorState>>,
+        event_id: i64,
+        value: &str,
+        editor_mode: Option<&'static str>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<GpuiEditorState> {
+        let value = value.to_string();
+
+        let input = cache
+            .entry(event_id)
+            .or_insert_with(|| {
+                let initial_value = value.clone();
+
+                cx.new(|cx| {
+                    let mut state = GpuiEditorState::new(window, cx)
+                        .language(editor_mode.unwrap_or("plaintext"))
+                        .line_number(false)
+                        .soft_wrap(true);
+
+                    state.set_value(&initial_value, window, cx);
+                    state
+                })
+            })
+            .clone();
+
+        if input.read(cx).value() != value {
+            input.update(cx, |state, cx| state.set_value(value, window, cx));
+        }
+
+        input
+    }
+
+    fn ensure_event_textarea(
+        cache: &mut HashMap<i64, Entity<TextareaState>>,
+        event_id: i64,
+        value: &str,
+        rows: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<TextareaState> {
+        let value = value.to_string();
+
+        let input = cache
+            .entry(event_id)
+            .or_insert_with(|| {
+                let initial_value = value.clone();
+
+                cx.new(|cx| {
+                    let mut state = TextareaState::new(window, cx)
+                        .auto_grow(rows, usize::MAX)
+                        .soft_wrap(true);
+
+                    state.set_value(&initial_value, window, cx);
+                    state
+                })
+            })
+            .clone();
+
+        if input.read(cx).value() != value {
+            input.update(cx, |state, cx| state.set_value(value, window, cx));
+        }
+
+        input
+    }
+
     /// Returns (or lazily creates) the `InputState` entity used to display an
     /// external event's message field as an editable read-only text area.
     pub(super) fn ensure_external_message_input(
@@ -1309,12 +1384,13 @@ impl AuditDocument {
         message: &str,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Entity<InputState> {
-        Self::ensure_event_text_input(
+    ) -> Entity<TextareaState> {
+        let rows = Self::event_message_rows(message, 2);
+        Self::ensure_event_textarea(
             &mut self.external_message_inputs,
             event_id,
             message,
-            None,
+            rows,
             window,
             cx,
         )
@@ -1328,8 +1404,8 @@ impl AuditDocument {
         details_json: &str,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Entity<InputState> {
-        Self::ensure_event_text_input(
+    ) -> Entity<GpuiEditorState> {
+        Self::ensure_event_editor_input(
             &mut self.external_details_inputs,
             event_id,
             details_json,
@@ -1337,53 +1413,6 @@ impl AuditDocument {
             window,
             cx,
         )
-    }
-
-    fn ensure_event_text_input(
-        cache: &mut HashMap<i64, Entity<InputState>>,
-        event_id: i64,
-        value: &str,
-        editor_mode: Option<&'static str>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Entity<InputState> {
-        let value = value.to_string();
-        let rows = if editor_mode.is_some() {
-            Self::event_code_rows(&value, 4)
-        } else {
-            Self::event_message_rows(&value, 2)
-        };
-
-        let input = cache
-            .entry(event_id)
-            .or_insert_with(|| {
-                let initial_value = value.clone();
-                let initial_rows = rows;
-
-                cx.new(|cx| {
-                    let mut state = if let Some(editor_mode) = editor_mode {
-                        InputState::new(window, cx)
-                            .code_editor(editor_mode)
-                            .line_number(false)
-                            .rows(initial_rows)
-                            .soft_wrap(true)
-                    } else {
-                        InputState::new(window, cx)
-                            .auto_grow(initial_rows, usize::MAX)
-                            .soft_wrap(true)
-                    };
-
-                    state.set_value(&initial_value, window, cx);
-                    state
-                })
-            })
-            .clone();
-
-        if input.read(cx).value() != value {
-            input.update(cx, |state, cx| state.set_value(value, window, cx));
-        }
-
-        input
     }
 
     // ── Row sizing helpers ────────────────────────────────────────────────

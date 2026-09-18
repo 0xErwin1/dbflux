@@ -11,7 +11,8 @@ use dbflux_core::{HookExecutionMode, ScriptLanguage};
 use dbflux_ui_base::{AppStateChanged, AppStateEntity};
 use gpui::prelude::*;
 use gpui::*;
-use gpui_component::dialog::Dialog;
+use gpui_component::dialog::{Dialog, DialogButtonProps};
+use gpui_component::input::EditorState;
 use std::collections::HashMap;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -218,7 +219,7 @@ pub(super) struct HooksSection {
     pub(super) script_language_dropdown: Entity<Dropdown>,
     pub(super) script_source_dropdown: Entity<Dropdown>,
     pub(super) input_hook_script_file_path: Entity<InputState>,
-    pub(super) input_hook_script_content: Entity<InputState>,
+    pub(super) input_hook_script_content: Entity<EditorState>,
     pub(super) hook_script_content_subscription: Option<Subscription>,
     pub(super) input_hook_interpreter: Entity<InputState>,
     pub(super) hook_execution_mode_dropdown: Entity<Dropdown>,
@@ -326,10 +327,10 @@ impl HooksSection {
         let input_hook_script_file_path =
             cx.new(|cx| InputState::new(window, cx).placeholder("/path/to/script.py"));
         let input_hook_script_content = cx.new(|cx| {
-            InputState::new(window, cx)
-                .code_editor("python")
+            // soft_wrap defaults to true in 0.6.1, so the old explicit builder is gone.
+            EditorState::new(window, cx)
+                .language("python")
                 .line_number(true)
-                .soft_wrap(true)
                 .placeholder(dbflux_i18n::t!("hooks.script.placeholder"))
         });
         let input_hook_interpreter = cx.new(|cx| InputState::new(window, cx).placeholder("auto"));
@@ -677,7 +678,7 @@ impl EventEmitter<SectionFocusEvent> for HooksSection {}
 impl EventEmitter<SettingsEvent> for HooksSection {}
 
 impl Render for HooksSection {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let show_hook_delete = self.pending_delete_hook_id.is_some();
         let hook_delete_name = self.pending_delete_hook_id.clone().unwrap_or_default();
         let show_protected_delete = self.pending_delete_protected_row_id.is_some();
@@ -706,9 +707,11 @@ impl Render for HooksSection {
                 let entity_cancel = entity.clone();
 
                 element.child(
-                    Dialog::new(window, cx)
+                    Dialog::new(cx)
                         .title(dbflux_i18n::t!("hooks.delete.title"))
-                        .confirm()
+                        .button_props(DialogButtonProps::default().show_cancel(true))
+                        .overlay_closable(false)
+                        .close_button(false)
                         .on_ok(move |_, window, cx| {
                             entity.update(cx, |section, cx| {
                                 section.confirm_delete_hook(window, cx);
@@ -733,9 +736,11 @@ impl Render for HooksSection {
                 let entity_cancel = entity.clone();
 
                 element.child(
-                    Dialog::new(window, cx)
+                    Dialog::new(cx)
                         .title(dbflux_i18n::t!("hooks.delete_unreadable.title"))
-                        .confirm()
+                        .button_props(DialogButtonProps::default().show_cancel(true))
+                        .overlay_closable(false)
+                        .close_button(false)
                         .on_ok(move |_, _, cx| {
                             entity.update(cx, |section, cx| {
                                 section.confirm_delete_protected_row(cx);

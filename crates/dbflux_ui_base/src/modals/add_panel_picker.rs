@@ -3,7 +3,8 @@ use dbflux_components::controls::{Button, GpuiInput as Input, InputEvent, InputS
 use dbflux_components::modals::shell::ModalShell;
 use dbflux_components::primitives::Text;
 use dbflux_components::saved_chart::SavedChart;
-use dbflux_components::tokens::{Heights, Radii, Spacing};
+use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
+use dbflux_components::typography::AppFonts;
 use dbflux_core::MetricDescriptor;
 use gpui::prelude::*;
 use gpui::{
@@ -11,6 +12,7 @@ use gpui::{
     MouseButton, Render, SharedString, Subscription, Window, div, px,
 };
 use gpui_component::ActiveTheme;
+use gpui_component::input::{Editor, EditorState};
 use gpui_component::scroll::ScrollableElement;
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -164,7 +166,7 @@ pub struct ModalAddPanelPicker {
 
     // Query-tab state.
     query_name_input: Entity<InputState>,
-    query_input: Entity<InputState>,
+    query_input: Entity<EditorState>,
     query_chart_kind: ChartKind,
 
     // Metric-tab state.
@@ -195,10 +197,10 @@ impl ModalAddPanelPicker {
                 .placeholder(dbflux_i18n::t!("modals.add_panel_picker.name_placeholder"))
         });
         let query_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .code_editor("sql")
+            // soft_wrap defaults to true in 0.6.1, so the old explicit builder is gone.
+            EditorState::new(window, cx)
+                .language("sql")
                 .line_number(true)
-                .soft_wrap(true)
                 .placeholder(dbflux_i18n::t!("modals.add_panel_picker.query.placeholder"))
         });
         let metric_name_input = cx.new(|cx| {
@@ -297,7 +299,6 @@ impl ModalAddPanelPicker {
         for input in [
             &self.search_input,
             &self.query_name_input,
-            &self.query_input,
             &self.metric_name_input,
             &self.metric_namespace_filter_input,
             &self.metric_metric_filter_input,
@@ -310,9 +311,21 @@ impl ModalAddPanelPicker {
             });
             subs.push(sub);
         }
+        // EditorState is a distinct entity type in 0.6.1, so the query input
+        // subscribes separately with the same handler.
+        subs.push(cx.subscribe_in(
+            &self.query_input,
+            window,
+            |_this, _, event: &InputEvent, _, cx| {
+                if matches!(event, InputEvent::Change) {
+                    cx.notify();
+                }
+            },
+        ));
         self._subscriptions = subs;
 
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
+        let _ = has_metric_catalog;
         let _ = has_metric_catalog;
         cx.notify();
     }
@@ -718,7 +731,14 @@ impl ModalAddPanelPicker {
                     .h(px(320.0))
                     .p(Spacing::SM)
                     .overflow_hidden()
-                    .child(Input::new(&self.query_input).w_full().h_full())
+                    .child(
+                        Editor::new(&self.query_input)
+                            .w_full()
+                            .h_full()
+                            .font_family(AppFonts::BODY)
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_size(FontSizes::BASE),
+                    )
                     .into_any_element(),
             )
             .into_any_element();

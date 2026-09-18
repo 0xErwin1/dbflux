@@ -61,6 +61,14 @@ must be on `PATH` for any local `cargo build`/`test`/`check`. The Nix dev shell
 and CI provide it; non-Nix Linux setups must install `mold` via their package
 manager. Windows and macOS use their default linker and are unaffected.
 
+The renderer's font stack needs no fontconfig development headers:
+`.cargo/config.toml` sets `RUST_FONTCONFIG_DLOPEN`, so `libfontconfig` is loaded
+at runtime instead of linked, and a machine without it loses font discovery
+rather than failing to start the binary. freetype follows its own build script,
+which uses the system library when a `freetype2.pc` of at least the required
+version is present and otherwise compiles its vendored sources, so a missing
+development package costs build time rather than breaking the build.
+
 ## Rust Guidelines
 
 ### General Principles

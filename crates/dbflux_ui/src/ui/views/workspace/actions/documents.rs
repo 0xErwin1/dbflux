@@ -633,7 +633,7 @@ impl Workspace {
         self.modal_unsaved_changes.update(cx, |modal, cx| {
             modal.open(UnsavedChangesRequest { entries }, cx);
         });
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
     }
 
     /// Routes one close through the document's own close policy.

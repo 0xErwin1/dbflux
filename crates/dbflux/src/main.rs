@@ -349,7 +349,8 @@ fn run_gui() {
 
     info!("IPC socket bound successfully");
 
-    Application::new().with_assets(Assets).run(|cx: &mut App| {
+    let application = gpui_platform::application().with_assets(Assets);
+    application.run(|cx: &mut App| {
         dbflux_ui::theme::init(cx);
         dbflux_ui::ui::components::data_table::init(cx);
         dbflux_ui::ui::components::document_tree::init(cx);
@@ -485,11 +486,9 @@ fn run_gui() {
 
                     info!("Received shutdown signal from terminal");
 
-                    if let Err(error) = cx.update(|cx| {
+                    cx.update(|cx| {
                         initiate_graceful_shutdown(&app_state_for_signal, cx);
-                    }) {
-                        log::warn!("Failed to start shutdown from signal: {:?}", error);
-                    }
+                    });
 
                     break;
                 }
@@ -539,13 +538,11 @@ async fn flush_document_edits(cx: &mut AsyncApp) {
     info!("Shutdown phase: Flushing document edits...");
 
     let finished = await_document_flush(cx, DOCUMENT_FLUSH_TIMEOUT, POLL_INTERVAL, |app_cx| {
-        app_cx
-            .update(|cx| {
-                workspace.update(cx, |workspace, cx| {
-                    workspace.flush_pending_document_edits(cx)
-                })
+        app_cx.update(|cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.flush_pending_document_edits(cx)
             })
-            .unwrap_or(false)
+        })
     })
     .await;
 
@@ -567,15 +564,11 @@ async fn run_shutdown_sequence(app_state: Entity<AppStateEntity>, cx: &mut Async
     flush_document_edits(cx).await;
 
     info!("Shutdown phase: Cancelling tasks...");
-    let task_cancel_result = cx.update(|cx| {
+    cx.update(|cx| {
         app_state.update(cx, |state, _| {
             state.cancel_all_tasks();
         });
     });
-
-    if task_cancel_result.is_err() {
-        log::error!("Failed to cancel tasks during shutdown");
-    }
 
     let task_deadline = Instant::now() + TASK_CANCEL_TIMEOUT;
     loop {
@@ -592,13 +585,11 @@ async fn run_shutdown_sequence(app_state: Entity<AppStateEntity>, cx: &mut Async
                     auth_stopped
                 );
             }
-            let _ = cx.update(|cx| cx.quit());
+            cx.update(|cx| cx.quit());
             return;
         }
 
-        let still_running = cx
-            .update(|cx| app_state.read(cx).has_running_tasks())
-            .unwrap_or(false);
+        let still_running = cx.update(|cx| app_state.read(cx).has_running_tasks());
 
         if !still_running {
             info!("All tasks finished");
@@ -614,16 +605,8 @@ async fn run_shutdown_sequence(app_state: Entity<AppStateEntity>, cx: &mut Async
     }
 
     info!("Shutdown phase: Closing connections...");
-    let close_result =
+    let teardown_handles =
         cx.update(|cx| app_state.update(cx, |state, _| state.close_all_connections()));
-
-    let teardown_handles = match close_result {
-        Ok(handles) => handles,
-        Err(error) => {
-            log::error!("Failed to schedule connection shutdown: {:?}", error);
-            Vec::new()
-        }
-    };
     for teardown in teardown_handles {
         let join_result = cx
             .background_executor()
@@ -651,13 +634,11 @@ async fn run_shutdown_sequence(app_state: Entity<AppStateEntity>, cx: &mut Async
                     auth_stopped
                 );
             }
-            let _ = cx.update(|cx| cx.quit());
+            cx.update(|cx| cx.quit());
             return;
         }
 
-        let has_connections = cx
-            .update(|cx| app_state.read(cx).has_connections())
-            .unwrap_or(false);
+        let has_connections = cx.update(|cx| app_state.read(cx).has_connections());
 
         if !has_connections {
             info!("All connections closed");
@@ -673,7 +654,7 @@ async fn run_shutdown_sequence(app_state: Entity<AppStateEntity>, cx: &mut Async
     }
 
     info!("Shutdown phase: Flushing logs...");
-    let _ = cx.update(|cx| {
+    cx.update(|cx| {
         app_state.update(cx, |state, _| {
             state.shutdown().advance_phase(
                 ShutdownPhase::ClosingConnections,
@@ -704,7 +685,7 @@ async fn run_shutdown_sequence(app_state: Entity<AppStateEntity>, cx: &mut Async
         .await;
 
     info!("Shutdown complete in {:?}", start.elapsed());
-    let _ = cx.update(|cx| {
+    cx.update(|cx| {
         app_state.update(cx, |state, _| {
             state.complete_shutdown();
         });
@@ -723,7 +704,7 @@ async fn run_shutdown_sequence(app_state: Entity<AppStateEntity>, cx: &mut Async
         );
     }
 
-    let _ = cx.update(|cx| {
+    cx.update(|cx| {
         cx.quit();
     });
 }

@@ -4,7 +4,7 @@ use crate::completion_support::{
 };
 use dbflux_components::controls::{CompletionProvider, InputState, Rope};
 use dbflux_core::ColumnInfo;
-use gpui::{Context, Task, WeakEntity, Window};
+use gpui::{App, Context, Task, WeakEntity, Window};
 use lsp_types::{
     CompletionContext, CompletionItem, CompletionItemKind, CompletionResponse, CompletionTextEdit,
     InsertTextFormat, Range as LspRange, TextEdit,
@@ -372,7 +372,7 @@ impl CompletionProvider for SchemaCompletionProvider {
         offset: usize,
         _trigger: CompletionContext,
         _window: &mut Window,
-        _cx: &mut Context<InputState>,
+        _cx: &mut App,
     ) -> Task<anyhow::Result<CompletionResponse>> {
         let source = text.to_string();
         let cursor = offset.min(source.len());
@@ -392,12 +392,7 @@ impl CompletionProvider for SchemaCompletionProvider {
         Task::ready(Ok(CompletionResponse::Array(items)))
     }
 
-    fn is_completion_trigger(
-        &self,
-        _offset: usize,
-        new_text: &str,
-        _cx: &mut Context<InputState>,
-    ) -> bool {
+    fn is_completion_trigger(&self, _offset: usize, new_text: &str, _cx: &mut App) -> bool {
         // Empty `new_text` covers both backspace (deleted text) and the
         // manual Ctrl+Space trigger (replace_text_in_range(None, "", ...)).
         // In both cases the popover should re-evaluate against the current

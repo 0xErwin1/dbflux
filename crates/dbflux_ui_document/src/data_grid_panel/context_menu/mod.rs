@@ -105,12 +105,12 @@ impl DataGridPanel {
 
         if is_document_view {
             if let Some(tree_state) = &self.document_view.document_tree_state {
-                tree_state.update(cx, |state, _| state.focus(window));
+                tree_state.update(cx, |state, cx| state.focus(window, cx));
             } else {
-                self.focus_handle.focus(window);
+                self.focus_handle.focus(window, cx);
             }
         } else {
-            self.focus_handle.focus(window);
+            self.focus_handle.focus(window, cx);
         }
 
         cx.emit(DataGridEvent::Focused);
@@ -170,7 +170,7 @@ impl DataGridPanel {
         });
 
         // Focus the context menu to receive keyboard events
-        self.focus.context_menu_focus.focus(window);
+        self.focus.context_menu_focus.focus(window, cx);
         cx.emit(DataGridEvent::Focused);
         cx.notify();
     }
@@ -201,7 +201,7 @@ impl DataGridPanel {
             row_actions: Vec::new(),
         });
 
-        self.focus.context_menu_focus.focus(window);
+        self.focus.context_menu_focus.focus(window, cx);
         cx.emit(DataGridEvent::Focused);
         cx.notify();
     }
@@ -259,7 +259,7 @@ impl DataGridPanel {
             row_actions: Vec::new(),
         });
 
-        self.focus.context_menu_focus.focus(window);
+        self.focus.context_menu_focus.focus(window, cx);
         cx.emit(DataGridEvent::Focused);
         cx.notify();
     }
@@ -1166,8 +1166,7 @@ impl DataGridPanel {
                             });
                             cx.notify();
                         });
-                    })
-                    .log_if_dropped();
+                    });
                     return;
                 }
             };
@@ -1216,8 +1215,7 @@ impl DataGridPanel {
                     panel.pending.toast = Some(PendingToast { message, is_error });
                     cx.notify();
                 });
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
     }
@@ -1954,8 +1952,7 @@ impl DataGridPanel {
                             insp.resolve_reference(index, Err(e.to_string()), cx);
                         }
                     })
-                })
-                .ok();
+                });
             })
             .detach();
         }
@@ -2351,8 +2348,7 @@ impl DataGridPanel {
                         }
                         cx.notify();
                     });
-                })
-                .log_if_dropped();
+                });
             })
             .detach();
 
@@ -2481,8 +2477,7 @@ impl DataGridPanel {
                     }
                     cx.notify();
                 });
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
     }

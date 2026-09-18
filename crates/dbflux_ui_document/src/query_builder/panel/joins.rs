@@ -46,9 +46,11 @@ impl QueryBuilderPanel {
                 };
 
                 let to_table_state = cx.new(|cx| {
-                    let mut state = InputState::new(window, cx).placeholder(dbflux_i18n::t!(
-                        "document.query_builder.joins.table_placeholder"
-                    ));
+                    let mut state = crate::completion_support::new_single_line_completion_state(
+                        window,
+                        cx,
+                        dbflux_i18n::t!("document.query_builder.joins.table_placeholder"),
+                    );
                     state.set_value(&to_table_val, window, cx);
                     state
                 });
@@ -101,7 +103,7 @@ impl QueryBuilderPanel {
                     ));
 
                 to_table_state.update(cx, |state, _| {
-                    state.lsp.completion_provider = Some(tables_provider);
+                    state.lsp_mut().completion_provider = Some(tables_provider);
                 });
 
                 if !to_table_val.is_empty() {
@@ -201,12 +203,12 @@ impl QueryBuilderPanel {
 
         if let Some(col_input) = &self.add_column_input_state {
             let p = refreshed_provider.clone();
-            col_input.update(cx, |s, _| s.lsp.completion_provider = Some(p));
+            col_input.update(cx, |s, _| s.lsp_mut().completion_provider = Some(p));
         }
 
         if let Some(sort_input) = &self.add_sort_input_state {
             let p = refreshed_provider.clone();
-            sort_input.update(cx, |s, _| s.lsp.completion_provider = Some(p));
+            sort_input.update(cx, |s, _| s.lsp_mut().completion_provider = Some(p));
         }
     }
 
@@ -416,7 +418,11 @@ impl QueryBuilderPanel {
         if !self.join_cond_left_inputs.contains_key(&node_id) {
             let left_owned = left.to_string();
             let state = cx.new(|cx| {
-                let mut s = InputState::new(window, cx).placeholder("alias.column");
+                let mut s = crate::completion_support::new_single_line_completion_state(
+                    window,
+                    cx,
+                    "alias.column",
+                );
                 s.set_value(&left_owned, window, cx);
                 s
             });
@@ -430,7 +436,7 @@ impl QueryBuilderPanel {
                 self.schema_cache.clone(),
             ));
             state.update(cx, |s, _| {
-                s.lsp.completion_provider = Some(left_provider);
+                s.lsp_mut().completion_provider = Some(left_provider);
             });
 
             let id_for_sub = node_id;
@@ -452,7 +458,11 @@ impl QueryBuilderPanel {
         if !self.join_cond_right_inputs.contains_key(&node_id) {
             let right_owned = right.to_string();
             let state = cx.new(|cx| {
-                let mut s = InputState::new(window, cx).placeholder("alias.column");
+                let mut s = crate::completion_support::new_single_line_completion_state(
+                    window,
+                    cx,
+                    "alias.column",
+                );
                 s.set_value(&right_owned, window, cx);
                 s
             });
@@ -467,7 +477,7 @@ impl QueryBuilderPanel {
                     self.schema_cache.clone(),
                 ));
             state.update(cx, |s, _| {
-                s.lsp.completion_provider = Some(right_provider);
+                s.lsp_mut().completion_provider = Some(right_provider);
             });
 
             let id_for_sub = node_id;

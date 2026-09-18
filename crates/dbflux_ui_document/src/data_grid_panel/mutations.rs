@@ -284,15 +284,13 @@ impl DataGridPanel {
         let profile_id = *profile_id;
 
         cx.spawn(async move |_this, cx| {
-            let conn = cx
-                .update(|cx| {
-                    app_state
-                        .read(cx)
-                        .connections()
-                        .get(&profile_id)
-                        .map(|c| c.connection.clone())
-                })
-                .unwrap_or_log_dropped();
+            let conn = cx.update(|cx| {
+                app_state
+                    .read(cx)
+                    .connections()
+                    .get(&profile_id)
+                    .map(|c| c.connection.clone())
+            });
 
             let Some(conn) = conn else {
                 log::error!("[SAVE] No connection for profile {}", profile_id);
@@ -300,8 +298,7 @@ impl DataGridPanel {
                     entity.update(cx, |panel, cx| {
                         panel.runner.fail_mutation(task_id, "No connection", cx);
                     });
-                })
-                .log_if_dropped();
+                });
                 return;
             };
 
@@ -356,8 +353,7 @@ impl DataGridPanel {
                     }
                     cx.notify();
                 });
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
     }
@@ -533,19 +529,17 @@ impl DataGridPanel {
         let entity = cx.entity().clone();
 
         cx.spawn(async move |_this, cx| {
-            let conn = cx
-                .update(|cx| {
-                    app_state
-                        .read(cx)
-                        .connections()
-                        .get(&profile_id)
-                        .and_then(|connected| {
-                            connected
-                                .resolve_connection_for_execution(database.as_deref())
-                                .ok()
-                        })
-                })
-                .unwrap_or_log_dropped();
+            let conn = cx.update(|cx| {
+                app_state
+                    .read(cx)
+                    .connections()
+                    .get(&profile_id)
+                    .and_then(|connected| {
+                        connected
+                            .resolve_connection_for_execution(database.as_deref())
+                            .ok()
+                    })
+            });
 
             let Some(conn) = conn else {
                 log::error!("[SAVE] No connection for profile {}", profile_id);
@@ -553,8 +547,7 @@ impl DataGridPanel {
                     entity.update(cx, |panel, cx| {
                         panel.runner.fail_mutation(task_id, "No connection", cx);
                     });
-                })
-                .log_if_dropped();
+                });
                 return;
             };
 
@@ -571,8 +564,7 @@ impl DataGridPanel {
                     }
                     panel.handle_save_result(row_idx, result, cx);
                 });
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
     }
@@ -673,15 +665,13 @@ impl DataGridPanel {
         let entity = cx.entity().clone();
 
         cx.spawn(async move |_this, cx| {
-            let conn = cx
-                .update(|cx| {
-                    app_state
-                        .read(cx)
-                        .connections()
-                        .get(&profile_id)
-                        .map(|c| c.connection.clone())
-                })
-                .unwrap_or_log_dropped();
+            let conn = cx.update(|cx| {
+                app_state
+                    .read(cx)
+                    .connections()
+                    .get(&profile_id)
+                    .map(|c| c.connection.clone())
+            });
 
             let Some(conn) = conn else {
                 log::error!("[SAVE] No connection for profile {}", profile_id);
@@ -699,8 +689,7 @@ impl DataGridPanel {
                             });
                         }
                     });
-                })
-                .log_if_dropped();
+                });
                 return;
             };
 
@@ -717,8 +706,7 @@ impl DataGridPanel {
                     }
                     panel.handle_save_result(row_idx, result, cx);
                 });
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
     }
@@ -851,15 +839,13 @@ impl DataGridPanel {
         let table_state_clone = table_state.clone();
 
         cx.spawn(async move |_this, cx| {
-            let conn = cx
-                .update(|cx| {
-                    app_state
-                        .read(cx)
-                        .connections()
-                        .get(&profile_id)
-                        .map(|c| c.connection.clone())
-                })
-                .unwrap_or_log_dropped();
+            let conn = cx.update(|cx| {
+                app_state
+                    .read(cx)
+                    .connections()
+                    .get(&profile_id)
+                    .map(|c| c.connection.clone())
+            });
 
             let Some(conn) = conn else {
                 log::error!("[INSERT] No connection for profile {}", profile_id);
@@ -867,8 +853,7 @@ impl DataGridPanel {
                     entity.update(cx, |panel, cx| {
                         panel.runner.fail_mutation(task_id, "No connection", cx);
                     });
-                })
-                .log_if_dropped();
+                });
                 return;
             };
 
@@ -917,8 +902,7 @@ impl DataGridPanel {
                     }
                     cx.notify();
                 });
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
     }
@@ -1000,19 +984,17 @@ impl DataGridPanel {
         let table_state_clone = table_state.clone();
 
         cx.spawn(async move |_this, cx| {
-            let conn = cx
-                .update(|cx| {
-                    app_state
-                        .read(cx)
-                        .connections()
-                        .get(&profile_id)
-                        .and_then(|connected| {
-                            connected
-                                .resolve_connection_for_execution(database.as_deref())
-                                .ok()
-                        })
-                })
-                .unwrap_or_log_dropped();
+            let conn = cx.update(|cx| {
+                app_state
+                    .read(cx)
+                    .connections()
+                    .get(&profile_id)
+                    .and_then(|connected| {
+                        connected
+                            .resolve_connection_for_execution(database.as_deref())
+                            .ok()
+                    })
+            });
 
             let Some(conn) = conn else {
                 log::error!("[INSERT] No connection for profile {}", profile_id);
@@ -1020,8 +1002,7 @@ impl DataGridPanel {
                     entity.update(cx, |panel, cx| {
                         panel.runner.fail_mutation(task_id, "No connection", cx);
                     });
-                })
-                .log_if_dropped();
+                });
                 return;
             };
 
@@ -1070,8 +1051,7 @@ impl DataGridPanel {
                     }
                     cx.notify();
                 });
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
     }
@@ -1226,15 +1206,13 @@ impl DataGridPanel {
         let table_state_clone = table_state.clone();
 
         cx.spawn(async move |_this, cx| {
-            let conn = cx
-                .update(|cx| {
-                    app_state
-                        .read(cx)
-                        .connections()
-                        .get(&profile_id)
-                        .map(|c| c.connection.clone())
-                })
-                .unwrap_or_log_dropped();
+            let conn = cx.update(|cx| {
+                app_state
+                    .read(cx)
+                    .connections()
+                    .get(&profile_id)
+                    .map(|c| c.connection.clone())
+            });
 
             let Some(conn) = conn else {
                 log::error!("[DELETE] No connection for profile {}", profile_id);
@@ -1242,8 +1220,7 @@ impl DataGridPanel {
                     entity.update(cx, |panel, cx| {
                         panel.runner.fail_mutation(task_id, "No connection", cx);
                     });
-                })
-                .log_if_dropped();
+                });
                 return;
             };
 
@@ -1290,8 +1267,7 @@ impl DataGridPanel {
                     }
                     cx.notify();
                 });
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
     }
@@ -1370,19 +1346,17 @@ impl DataGridPanel {
         let table_state_clone = table_state.clone();
 
         cx.spawn(async move |_this, cx| {
-            let conn = cx
-                .update(|cx| {
-                    app_state
-                        .read(cx)
-                        .connections()
-                        .get(&profile_id)
-                        .and_then(|connected| {
-                            connected
-                                .resolve_connection_for_execution(database.as_deref())
-                                .ok()
-                        })
-                })
-                .unwrap_or_log_dropped();
+            let conn = cx.update(|cx| {
+                app_state
+                    .read(cx)
+                    .connections()
+                    .get(&profile_id)
+                    .and_then(|connected| {
+                        connected
+                            .resolve_connection_for_execution(database.as_deref())
+                            .ok()
+                    })
+            });
 
             let Some(conn) = conn else {
                 log::error!("[DELETE] No connection for profile {}", profile_id);
@@ -1390,8 +1364,7 @@ impl DataGridPanel {
                     entity.update(cx, |panel, cx| {
                         panel.runner.fail_mutation(task_id, "No connection", cx);
                     });
-                })
-                .log_if_dropped();
+                });
                 return;
             };
 
@@ -1438,8 +1411,7 @@ impl DataGridPanel {
                     }
                     cx.notify();
                 });
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
     }
@@ -1631,19 +1603,17 @@ impl DataGridPanel {
         let schema_name = table_ref.schema.clone();
 
         cx.spawn(async move |_this, cx| {
-            let conn = cx
-                .update(|cx| {
-                    app_state
-                        .read(cx)
-                        .connections()
-                        .get(&profile_id)
-                        .and_then(|connected| {
-                            connected
-                                .resolve_connection_for_execution(database.as_deref())
-                                .ok()
-                        })
-                })
-                .unwrap_or_log_dropped();
+            let conn = cx.update(|cx| {
+                app_state
+                    .read(cx)
+                    .connections()
+                    .get(&profile_id)
+                    .and_then(|connected| {
+                        connected
+                            .resolve_connection_for_execution(database.as_deref())
+                            .ok()
+                    })
+            });
 
             let Some(conn) = conn else {
                 log::error!("[BULK DELETE] No connection for profile {}", profile_id);
@@ -1651,8 +1621,7 @@ impl DataGridPanel {
                     entity.update(cx, |panel, cx| {
                         panel.runner.fail_mutation(task_id, "No connection", cx);
                     });
-                })
-                .log_if_dropped();
+                });
                 return;
             };
 
@@ -1730,8 +1699,7 @@ impl DataGridPanel {
                     }
                     cx.notify();
                 });
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
     }
@@ -1829,15 +1797,13 @@ impl DataGridPanel {
         let collection_db = collection.database.clone();
 
         cx.spawn(async move |_this, cx| {
-            let conn = cx
-                .update(|cx| {
-                    app_state
-                        .read(cx)
-                        .connections()
-                        .get(&profile_id)
-                        .map(|c| c.connection.clone())
-                })
-                .unwrap_or_log_dropped();
+            let conn = cx.update(|cx| {
+                app_state
+                    .read(cx)
+                    .connections()
+                    .get(&profile_id)
+                    .map(|c| c.connection.clone())
+            });
 
             let Some(conn) = conn else {
                 log::error!("[BULK DELETE] No connection for profile {}", profile_id);
@@ -1845,8 +1811,7 @@ impl DataGridPanel {
                     entity.update(cx, |panel, cx| {
                         panel.runner.fail_mutation(task_id, "No connection", cx);
                     });
-                })
-                .log_if_dropped();
+                });
                 return;
             };
 
@@ -1923,8 +1888,7 @@ impl DataGridPanel {
                     }
                     cx.notify();
                 });
-            })
-            .log_if_dropped();
+            });
         })
         .detach();
     }

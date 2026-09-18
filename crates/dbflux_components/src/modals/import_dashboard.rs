@@ -4,11 +4,13 @@ use crate::icons::AppIcon;
 use crate::modals::shell::{ModalShell, ModalVariant};
 use crate::primitives::{Icon, Text};
 use crate::tokens::{FontSizes, Heights, Spacing};
+use crate::typography::AppFonts;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::Sizable;
 use gpui_component::button::{Button, ButtonVariant, ButtonVariants};
+use gpui_component::input::{Editor, EditorState};
 
 /// Event emitted when the user clicks "Import" with valid JSON.
 #[derive(Clone)]
@@ -34,7 +36,7 @@ pub const DEFAULT_IMPORT_NAME: &str = "Imported Dashboard";
 pub struct ModalImportDashboard {
     visible: bool,
     /// JSON editor for the raw dashboard payload.
-    input: gpui::Entity<InputState>,
+    input: gpui::Entity<EditorState>,
     /// Text input for the dashboard name, pre-filled from pasted JSON.
     name_input: gpui::Entity<InputState>,
     focus_handle: gpui::FocusHandle,
@@ -44,11 +46,11 @@ pub struct ModalImportDashboard {
 
 impl ModalImportDashboard {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        // soft_wrap defaults to true in 0.6.1, so the old explicit builder is gone.
         let input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .code_editor("json")
+            EditorState::new(window, cx)
+                .language("json")
                 .line_number(true)
-                .soft_wrap(true)
                 .placeholder(dbflux_i18n::t!("modals.import_dashboard.json_placeholder"))
         });
 
@@ -90,7 +92,7 @@ impl ModalImportDashboard {
             state.set_value(DEFAULT_IMPORT_NAME, window, cx);
         });
 
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
         cx.notify();
     }
 
@@ -246,7 +248,14 @@ impl Render for ModalImportDashboard {
                     .h(px(360.0))
                     .p(Spacing::SM)
                     .overflow_hidden()
-                    .child(Input::new(&self.input).w_full().h_full()),
+                    .child(
+                        Editor::new(&self.input)
+                            .w_full()
+                            .h_full()
+                            .font_family(AppFonts::BODY)
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_size(FontSizes::BASE),
+                    ),
             );
 
         // Validation banner (only when there is an error).

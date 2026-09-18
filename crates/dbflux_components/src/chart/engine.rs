@@ -23,7 +23,7 @@ use crate::chart::stats::{
 };
 use crate::semantic::ChartColors;
 use crate::tokens::FontSizes;
-use dbflux_core::{ColumnKind, QueryResult, Value};
+use dbflux_core::{ColumnKind, LogErr, QueryResult, Value};
 
 // ---------------------------------------------------------------------------
 // Error type
@@ -1174,7 +1174,7 @@ impl Render for ChartView {
             .overflow_hidden()
             .child(
                 div()
-                    .flex_grow()
+                    .flex_grow(1.0)
                     .relative()
                     .overflow_hidden()
                     .on_mouse_move(cx.listener(
@@ -1869,12 +1869,16 @@ fn paint_y_tick_labels(
         let label_w = f32::from(shaped.width);
         let label_x = ox + (left_pad - 4.0) - label_w;
         let label_y = sy - f32::from(line_height) / 2.0;
-        let _ = shaped.paint(
-            point(gpui::px(label_x), gpui::px(label_y)),
-            line_height,
-            window,
-            cx,
-        );
+        shaped
+            .paint(
+                point(gpui::px(label_x), gpui::px(label_y)),
+                line_height,
+                gpui::TextAlign::default(),
+                None,
+                window,
+                cx,
+            )
+            .log_err();
     }
 }
 
@@ -1895,12 +1899,16 @@ fn paint_x_tick_labels(
         let sx = data_to_screen_x(*value);
         let label_w = f32::from(shaped.width);
         let label_x = sx - label_w / 2.0;
-        let _ = shaped.paint(
-            point(gpui::px(label_x), gpui::px(x_baseline_y)),
-            line_height,
-            window,
-            cx,
-        );
+        shaped
+            .paint(
+                point(gpui::px(label_x), gpui::px(x_baseline_y)),
+                line_height,
+                gpui::TextAlign::default(),
+                None,
+                window,
+                cx,
+            )
+            .log_err();
     }
 }
 

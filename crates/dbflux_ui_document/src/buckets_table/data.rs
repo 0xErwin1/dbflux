@@ -145,8 +145,7 @@ impl BucketsTableDocument {
                     });
                     doc.apply_bucket_list(result, cx);
                 });
-            })
-            .ok();
+            });
         })
         .detach();
     }
@@ -241,8 +240,7 @@ impl BucketsTableDocument {
                 entity.update(cx, |doc, cx| {
                     doc.apply_bucket_details(&bucket_name, result, cx);
                 });
-            })
-            .ok();
+            });
         })
         .detach();
     }
@@ -328,8 +326,7 @@ impl BucketsTableDocument {
                 entity.update(cx, |doc, cx| {
                     doc.apply_bucket_size_estimate(&bucket_name, result, cx);
                 });
-            })
-            .ok();
+            });
         })
         .detach();
     }
@@ -419,8 +416,7 @@ impl BucketsTableDocument {
                 entity.update(cx, |doc, cx| {
                     doc.apply_delete_probe(&bucket_name, result, cx);
                 });
-            })
-            .ok();
+            });
         })
         .detach();
     }
@@ -505,8 +501,7 @@ impl BucketsTableDocument {
                 entity.update(cx, |doc, cx| {
                     doc.apply_bucket_deleted(&bucket_name, result, cx);
                 });
-            })
-            .ok();
+            });
         })
         .detach();
     }

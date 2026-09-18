@@ -5,6 +5,7 @@ use gpui::{AnyElement, Context, Entity, IntoElement, SharedString, div};
 use crate::labels::bool_op_label;
 use crate::query_builder::panel::{FkLoadState, QueryBuilderPanel};
 use dbflux_components::controls::{Dropdown, InputState};
+use gpui_component::input::EditorState;
 
 /// Renders the Joins section of the Query Builder.
 ///
@@ -18,11 +19,12 @@ pub fn render_joins(
     panel: &mut QueryBuilderPanel,
     cx: &mut Context<QueryBuilderPanel>,
 ) -> impl IntoElement {
-    use dbflux_components::controls::{Button, Input, completion_input_keys_wrapper};
+    use dbflux_components::controls::{Button, Input};
     use dbflux_core::JoinOn;
     use gpui::SharedString;
     use gpui::prelude::*;
     use gpui_component::ActiveTheme;
+    use gpui_component::input::EditorState;
 
     let show_banner =
         matches!(panel.fk_state, FkLoadState::Unavailable) && !panel.fk_banner_dismissed;
@@ -96,12 +98,10 @@ pub fn render_joins(
 
         if let Some((to_table_state, _on_expr_state)) = join_states.get(i) {
             header = header.child(
-                completion_input_keys_wrapper(to_table_state)
+                crate::completion_support::single_line_completion_editor(to_table_state)
                     .flex_1()
                     .min_w(gpui::px(0.0))
-                    .child(Input::new(to_table_state).small().w_full().placeholder(
-                        dbflux_i18n::t!("document.query_builder.joins.table_placeholder"),
-                    )),
+                    .w_full(),
             );
         } else {
             header = header.child(
@@ -202,16 +202,17 @@ fn render_join_tree(
     node: &dbflux_core::JoinFilterNode,
     path: Vec<usize>,
     is_root: bool,
-    cond_lefts: &HashMap<u64, Entity<InputState>>,
-    cond_rights: &HashMap<u64, Entity<InputState>>,
+    cond_lefts: &HashMap<u64, Entity<EditorState>>,
+    cond_rights: &HashMap<u64, Entity<EditorState>>,
     cond_ops: &HashMap<u64, Entity<Dropdown>>,
     cx: &mut Context<QueryBuilderPanel>,
 ) -> AnyElement {
-    use dbflux_components::controls::{Button, Input, completion_input_keys_wrapper};
+    use dbflux_components::controls::{Button, Input};
     use dbflux_components::tokens::{Heights, Radii};
     use dbflux_core::JoinFilterNode;
     use gpui::prelude::*;
     use gpui_component::ActiveTheme;
+    use gpui_component::input::EditorState;
 
     match node {
         JoinFilterNode::Predicate(pred) => {
@@ -225,15 +226,10 @@ fn render_join_tree(
 
             if let Some(state) = left {
                 row = row.child(
-                    completion_input_keys_wrapper(&state)
+                    crate::completion_support::single_line_completion_editor(&state)
                         .flex_1()
                         .min_w(gpui::px(0.0))
-                        .child(
-                            Input::new(&state)
-                                .small()
-                                .w_full()
-                                .placeholder("alias.column"),
-                        ),
+                        .w_full(),
                 );
             }
 
@@ -254,15 +250,10 @@ fn render_join_tree(
 
             if let Some(state) = right {
                 row = row.child(
-                    completion_input_keys_wrapper(&state)
+                    crate::completion_support::single_line_completion_editor(&state)
                         .flex_1()
                         .min_w(gpui::px(0.0))
-                        .child(
-                            Input::new(&state)
-                                .small()
-                                .w_full()
-                                .placeholder("alias.column"),
-                        ),
+                        .w_full(),
                 );
             }
 

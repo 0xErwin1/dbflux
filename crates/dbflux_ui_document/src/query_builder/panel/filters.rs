@@ -225,7 +225,11 @@ impl QueryBuilderPanel {
 
         let value = current_text.to_string();
         let state = cx.new(|cx| {
-            let mut s = InputState::new(window, cx).placeholder("alias.column");
+            let mut s = crate::completion_support::new_single_line_completion_state(
+                window,
+                cx,
+                "alias.column",
+            );
             s.set_value(&value, window, cx);
             s
         });
@@ -240,7 +244,7 @@ impl QueryBuilderPanel {
                 self.schema_cache.clone(),
             ));
         state.update(cx, |s, _| {
-            s.lsp.completion_provider = Some(predicate_col_provider);
+            s.lsp_mut().completion_provider = Some(predicate_col_provider);
         });
 
         let sub = cx.subscribe_in(
@@ -616,7 +620,11 @@ impl QueryBuilderPanel {
 
         let value = current_text.to_string();
         let state = cx.new(|cx| {
-            let mut s = InputState::new(window, cx).placeholder("alias.column");
+            let mut s = crate::completion_support::new_single_line_completion_state(
+                window,
+                cx,
+                "alias.column",
+            );
             s.set_value(&value, window, cx);
             s
         });

@@ -379,7 +379,7 @@ impl ObjectBrowserDocument {
     }
 
     pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
         self.focus_mode = ObjectBrowserFocusMode::Listing;
         cx.notify();
     }
@@ -905,11 +905,12 @@ impl ObjectBrowserDocument {
         };
 
         // A real edit, not `set_value`: the component replaces text silently
-        // in `set_value`, so only this path emits the `Change` the dirty
-        // tracking listens for.
+        // in `set_value`, so only the typed-text paths emit the `Change` the
+        // dirty tracking listens for. `insert` is the public user-typing
+        // primitive on 0.6.1.
         let text = text.to_string();
         input.update(cx, |state, cx| {
-            state.replace_text_in_range(None, &text, window, cx)
+            state.insert(&text, window, cx);
         });
     }
 
@@ -1074,7 +1075,7 @@ impl ObjectBrowserDocument {
             // key here would leave the panel open and unreachable.
             if cmd == Command::Cancel && self.editor_input_is_focused(window, cx) {
                 self.focus_mode = ObjectBrowserFocusMode::Listing;
-                self.focus_handle.focus(window);
+                self.focus_handle.focus(window, cx);
                 cx.notify();
                 return true;
             }
@@ -1151,7 +1152,7 @@ impl ObjectBrowserDocument {
                 }
 
                 self.focus_mode = ObjectBrowserFocusMode::Listing;
-                self.focus_handle.focus(window);
+                self.focus_handle.focus(window, cx);
                 cx.notify();
                 true
             }

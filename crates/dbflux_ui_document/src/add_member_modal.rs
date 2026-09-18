@@ -120,7 +120,7 @@ impl AddMemberModal {
         self.add_value_row(window, cx);
         self.form_focus = AddMemberFocus::RowField(0);
 
-        self.focus_handle.focus(window);
+        self.focus_handle.focus(window, cx);
         cx.notify();
     }
 

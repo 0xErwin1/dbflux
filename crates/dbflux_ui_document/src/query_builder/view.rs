@@ -562,7 +562,13 @@ fn render_preview_body(panel: &mut QueryBuilderPanel, theme: &Theme) -> impl Int
                     .rounded(Radii::SM)
                     .border_1()
                     .border_color(theme.border)
-                    .child(ReadonlyTextView::new(state).w_full().h(px(140.0))),
+                    .child(
+                        gpui_component::input::Editor::new(state)
+                            .readonly(true)
+                            .appearance(false)
+                            .w_full()
+                            .h(px(140.0)),
+                    ),
             )
         })
 }
