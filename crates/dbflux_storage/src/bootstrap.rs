@@ -51,6 +51,21 @@ pub struct StorageRuntime {
     artifacts: ArtifactStore,
 }
 
+/// The directory name for one test runtime.
+///
+/// Uniqueness must not come from the wall clock. `SystemTime::now()` is only as
+/// fine grained as the platform's clock, so on a coarse one two test threads can
+/// read the same value and be handed the same directory. A random identifier has
+/// no such dependency, and the process id keeps the name readable when several
+/// test binaries run at once.
+fn unique_test_runtime_dir_name() -> String {
+    format!(
+        "dbflux_storage_test_{}_{}",
+        std::process::id(),
+        uuid::Uuid::new_v4()
+    )
+}
+
 impl StorageRuntime {
     /// Creates a runtime pointing at the given unified database path.
     ///
@@ -102,20 +117,18 @@ impl StorageRuntime {
     /// Creates a runtime with the database in a temporary directory.
     ///
     /// Useful for tests. The directory is created under `std::env::temp_dir()`
-    /// with a unique name to avoid collisions between parallel test runs.
+    /// with a name no other call can repeat, so each runtime owns its own SQLite
+    /// file.
     #[allow(clippy::result_large_err)]
     pub fn in_memory() -> Result<Self, StorageError> {
-        let temp_label = format!(
-            "dbflux_storage_test_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        );
+        let temp_dir = std::env::temp_dir().join(unique_test_runtime_dir_name());
 
-        let temp_dir = std::env::temp_dir().join(&temp_label);
-        std::fs::create_dir_all(&temp_dir).map_err(|source| StorageError::Io {
+        // `create_dir`, not `create_dir_all`: a directory that already exists
+        // means another runtime owns this path, and silently sharing it is how
+        // two test runtimes end up migrating one SQLite file until one of them
+        // fails with `DatabaseBusy` ("database is locked"). Failing here keeps
+        // that from ever being silent.
+        std::fs::create_dir(&temp_dir).map_err(|source| StorageError::Io {
             path: temp_dir.clone(),
             source,
         })?;
@@ -357,17 +370,15 @@ mod tests {
     use std::path::Path;
 
     fn unique_temp_dir(label: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
+        // Same uniqueness rule as `in_memory`: the clock is not a uniqueness
+        // source, so a fixed label plus the pid plus a fresh identifier is what
+        // makes two directories distinguishable.
+        std::env::temp_dir().join(format!(
             "dbflux_storage_{}_{}_{}",
             label,
             std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        dir
+            uuid::Uuid::new_v4()
+        ))
     }
 
     #[test]
@@ -375,6 +386,55 @@ mod tests {
         // Use in-memory storage for tests to avoid polluting ~/.local/share/dbflux
         let runtime = StorageRuntime::in_memory().expect("bootstrap should succeed");
         assert!(runtime.dbflux_db_path().exists());
+    }
+
+    /// Two test runtimes must never own the same database file.
+    ///
+    /// A shared path is what turns a parallel test run into an intermittent
+    /// `DatabaseBusy` ("database is locked"): both runtimes open the same file
+    /// and both try to migrate it, and the second one loses. Every construction
+    /// is released together here because a test binary starts its threads the
+    /// same way.
+    #[test]
+    fn in_memory_runtimes_never_share_a_database_path() {
+        const RUNTIMES: usize = 32;
+
+        let barrier = std::sync::Barrier::new(RUNTIMES);
+        let results: Vec<Result<PathBuf, StorageError>> = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..RUNTIMES)
+                .map(|_| {
+                    let barrier = &barrier;
+                    scope.spawn(move || {
+                        barrier.wait();
+                        StorageRuntime::in_memory()
+                            .map(|runtime| runtime.dbflux_db_path().to_path_buf())
+                    })
+                })
+                .collect();
+
+            handles
+                .into_iter()
+                .map(|handle| handle.join().expect("runtime thread"))
+                .collect()
+        });
+
+        let paths: Vec<PathBuf> = results
+            .into_iter()
+            .map(|result| result.expect("in-memory storage"))
+            .collect();
+
+        let distinct: std::collections::HashSet<&PathBuf> = paths.iter().collect();
+        assert_eq!(
+            distinct.len(),
+            paths.len(),
+            "every test runtime must own its own database path, but {RUNTIMES} concurrent runtimes produced {} distinct paths: {}",
+            distinct.len(),
+            paths
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
     }
 
     #[test]
