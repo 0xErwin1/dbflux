@@ -1,5 +1,5 @@
-use dbflux_components::tokens::FontSizes;
-use gpui::{Entity, FontWeight, Styled as _};
+use dbflux_components::tokens::{Borders, FontSizes};
+use gpui::{Entity, FontWeight, Pixels, Styled as _, px};
 use gpui_component::input::EditorState;
 use lsp_types::{
     CompletionItem, CompletionItemKind, CompletionTextEdit, InsertTextFormat,
@@ -148,9 +148,117 @@ pub(crate) fn new_single_line_completion_state(
 pub(crate) fn single_line_completion_editor(
     state: &Entity<EditorState>,
 ) -> gpui_component::input::Editor {
+    // gpui-component builds every `Editor` frame as `Size::Medium` and gives a
+    // multi-line code editor `Size::Medium::input_py()` of padding inside it.
+    // The frame exposes no size setter, so in a `ROW_COMPACT` row that padding
+    // pushes the single line of text past the bottom edge. A negative vertical
+    // padding cancels all but the leading the line box needs, plus the frame's
+    // border, which offsets the content box as well. That moves the content —
+    // text, caret, selection — back to the middle of the row while the frame's
+    // border and background stay on the row.
+    //
+    // The same negative padding grows the editor's hitbox past the visible row,
+    // so a click just above or below the field still focuses it. The controls
+    // sharing these rows sit beside the field, never over it, so the reachable
+    // area stays inside the toolbar.
+    let leading = (dbflux_components::tokens::Heights::ROW_COMPACT
+        - FontSizes::SM * EDITOR_LINE_HEIGHT)
+        / 2.0;
+
     gpui_component::input::Editor::new(state)
         .h(dbflux_components::tokens::Heights::ROW_COMPACT)
+        .py(leading - EDITOR_INPUT_PADDING_Y - Borders::THIN)
         .font_family(dbflux_components::typography::AppFonts::BODY)
         .font_weight(gpui::FontWeight::MEDIUM)
-        .text_size(dbflux_components::tokens::FontSizes::SM)
+        .text_size(FontSizes::SM)
+}
+
+/// The line height gpui-component's `Editor::render` applies, relative to the
+/// font size.
+const EDITOR_LINE_HEIGHT: f32 = 1.5;
+
+/// The vertical padding gpui-component's `Size::Medium` input frame adds.
+const EDITOR_INPUT_PADDING_Y: Pixels = px(8.0); // guardrail-allow: gpui-component's input padding, not a DBFlux token
+
+#[cfg(test)]
+mod single_line_editor_geometry_tests {
+    use super::*;
+    use gpui::prelude::*;
+    use gpui::{Context, Render, TestAppContext, Window, div, px};
+
+    struct GeometryHarness {
+        state: Entity<EditorState>,
+    }
+
+    impl GeometryHarness {
+        fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+            Self {
+                state: cx.new(|cx| new_single_line_completion_state(window, cx, "e.g. id > 10")),
+            }
+        }
+    }
+
+    impl Render for GeometryHarness {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().flex().flex_col().child(
+                div()
+                    .id("completion-row")
+                    .debug_selector(|| "completion-row".to_string())
+                    .w(px(300.0))
+                    .h(dbflux_components::tokens::Heights::ROW_COMPACT)
+                    .child(single_line_completion_editor(&self.state)),
+            )
+        }
+    }
+
+    // The code editor's frame padding used to push the placeholder below the
+    // row's bottom edge; the caret must sit inside the row and near its middle.
+    #[gpui::test]
+    fn single_line_editor_centers_its_text_in_a_compact_row(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        cx.update(dbflux_components::theme::init);
+
+        let state_holder = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let (_, window) = cx.add_window_view({
+            let state_holder = state_holder.clone();
+            move |window, cx| {
+                let harness = cx.new(|cx| GeometryHarness::new(window, cx));
+                state_holder.replace(Some(harness.read(cx).state.clone()));
+                gpui_component::Root::new(harness, window, cx)
+            }
+        });
+
+        let row = window
+            .debug_bounds("completion-row")
+            .expect("the row should render");
+        let state = state_holder
+            .borrow()
+            .clone()
+            .expect("the harness should build its editor state");
+
+        window.update(|window, cx| {
+            state.update(cx, |state, cx| state.focus(window, cx));
+        });
+        window.update(|_, _| {});
+
+        let (caret, _) = window
+            .update(|_, cx| state.read(cx).cursor_layout())
+            .expect("a focused editor should lay out its caret");
+
+        assert!(
+            caret.origin.y >= row.origin.y,
+            "caret {caret:?} starts above the row {row:?}"
+        );
+        assert!(
+            caret.origin.y + caret.size.height <= row.origin.y + row.size.height,
+            "caret {caret:?} overflows the row {row:?}"
+        );
+
+        let caret_center = caret.origin.y + caret.size.height / 2.0;
+        let row_center = row.origin.y + row.size.height / 2.0;
+        assert!(
+            (f32::from(caret_center) - f32::from(row_center)).abs() <= 1.0,
+            "caret center {caret_center:?} is not centered in the row {row:?}"
+        );
+    }
 }

@@ -25,6 +25,13 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **Single-line completion fields keep their text on the row** — the DataView
+  `WHERE` filter and the query builder's row inputs (filter, sort, group by,
+  join, projected columns) moved to a code-editor widget in the gpui-pre
+  migration, and its frame adds code-editor padding inside the 24 px row. The
+  placeholder and value were pushed onto the field's bottom edge and clipped
+  by its border; they are centered again.
+
 * **Resized data-grid columns survive a sort or refresh** — column widths,
   selection, and scroll position were discarded by every reload (header sort,
   pagination, filter, manual and auto refresh) because the grid state was
