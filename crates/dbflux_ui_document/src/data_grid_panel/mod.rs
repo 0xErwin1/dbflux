@@ -43,7 +43,8 @@ use dbflux_components::modals::{
 };
 use dbflux_core::{
     CollectionRef, ColumnMeta, DatabaseCategory, OrderByColumn, Pagination, QueryResult,
-    RefreshPolicy, SelectQuery, SortDirection, TableRef, Value, VisualQuerySpec, WhereOperator,
+    RefreshPolicy, SelectQuery, SortDirection, TableRef, TaskId, Value, VisualQuerySpec,
+    WhereOperator,
 };
 use dbflux_ui_base::AppStateEntity;
 use dbflux_ui_base::AsyncUpdateResultExt;
@@ -227,6 +228,17 @@ pub enum DataGridEvent {
     /// Carries the profile the query should run against and the fully
     /// materialized SQL (literals inlined, no placeholders).
     OpenEditorWithContent { profile_id: Uuid, sql: String },
+
+    /// A visual-mutation run finished, and whether its edits reached the database.
+    ///
+    /// `landed: false` covers a failed run, a cancelled run, and a statement the
+    /// database matched no rows for — the case a close waiting on the apply has to
+    /// tell apart from a successful one.
+    MutationFinished { landed: bool },
+
+    /// The panel wants to close itself, because the mutation a close was waiting
+    /// on landed.
+    RequestClose,
 }
 
 // Re-export the rail tab enum from the chart module so DataGridPanel's render
@@ -708,6 +720,34 @@ pub(crate) struct PendingMutationExec {
     pub(crate) spec: dbflux_core::VisualMutationSpec,
     pub(crate) opts: crate::data_grid_panel::mutation_executor::MutationExecOptions,
     pub(crate) profile_id: uuid::Uuid,
+    pub(crate) intent: MutationIntent,
+}
+
+/// Why a visual-mutation run was started.
+///
+/// The run itself does not change: the intent decides what finishing it means. A
+/// run started from the apply affordance reports its outcome and stops; a run a
+/// close is waiting on has to report back to that close, which is what
+/// [`DataGridEvent::RequestClose`] does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MutationIntent {
+    /// Started from the grid's own apply affordance.
+    Direct,
+    /// A close is waiting: close the tab when this run lands.
+    CloseAfterApply,
+}
+
+/// One finished-or-running visual mutation, as its completion needs to report it.
+///
+/// Bundles what the completion path reports under (the task slot, the failure
+/// label, the table) with why it was started, so the completion is one call
+/// instead of one arm per execution mode.
+#[derive(Clone, Debug)]
+pub(crate) struct MutationRun {
+    pub(crate) task_id: TaskId,
+    pub(crate) mode: crate::labels::VisualMutationTaskMode,
+    pub(crate) table_name: String,
+    pub(crate) intent: MutationIntent,
 }
 
 /// State held while the "Save chart" name-prompt overlay is visible for a
@@ -4435,6 +4475,7 @@ impl DataGridPanel {
             spec,
             opts,
             profile_id,
+            intent: MutationIntent::Direct,
         });
         self.pending.mutation_modal = Some(modal);
         cx.notify();
@@ -4532,6 +4573,7 @@ impl DataGridPanel {
 
         let spec = pending.spec;
         let mut opts = pending.opts;
+        let intent = pending.intent;
 
         let is_chunked = matches!(
             opts.mode,
@@ -4540,13 +4582,27 @@ impl DataGridPanel {
 
         let table_name = spec.from.name.clone();
 
-        if is_chunked {
-            let pk_columns: Vec<String> = match &self.source {
+        let mode = if is_chunked {
+            crate::labels::VisualMutationTaskMode::Chunked
+        } else if matches!(
+            opts.mode,
+            crate::data_grid_panel::mutation_executor::ExecutionMode::DirectAutocommit
+        ) {
+            crate::labels::VisualMutationTaskMode::Direct
+        } else {
+            crate::labels::VisualMutationTaskMode::SingleTransaction
+        };
+
+        // A chunked run walks the primary key and has to stay under the driver's
+        // parameter limit, so both are resolved before the run starts — while a
+        // refusal can still be shown instead of a finished task that did nothing.
+        let pk_columns: Vec<String> = if is_chunked {
+            let columns: Vec<String> = match &self.source {
                 DataSource::Table { .. } => self.pk_columns.clone(),
                 _ => vec![],
             };
 
-            if pk_columns.is_empty() {
+            if columns.is_empty() {
                 dbflux_ui_base::user_error::report_error(
                     dbflux_ui_base::user_error::UserFacingError::new(
                         dbflux_ui_base::user_error::ErrorKind::User,
@@ -4599,7 +4655,7 @@ impl DataGridPanel {
                         max_params,
                         filter_param_count,
                         assignment_param_count,
-                        pk_columns.len() as u32,
+                        columns.len() as u32,
                     );
 
                     if let Some(original) = reduced_from {
@@ -4624,265 +4680,137 @@ impl DataGridPanel {
                 }
             }
 
-            let (task_id, cancel_handle) = self.runner.start_mutation(
-                dbflux_core::TaskKind::Query,
-                crate::labels::visual_mutation_task_label(
-                    crate::labels::VisualMutationTaskMode::Chunked,
-                ),
-                cx,
-            );
-
-            cx.spawn(async move |this, cx| {
-                use crate::data_grid_panel::mutation_executor::{
-                    MutationExecutor, MutationOutcome,
-                };
-                use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error_async};
-
-                let result = cx
-                    .background_executor()
-                    .spawn(async move {
-                        let executor = MutationExecutor::new(spec, opts, deps);
-                        let pk_refs: Vec<&str> = pk_columns.iter().map(|s| s.as_str()).collect();
-                        executor.run_chunked_tx(&pk_refs, &cancel_handle)
-                    })
-                    .await;
-
-                match result {
-                    Err(e) => {
-                        cx.update(|cx| {
-                            this.update(cx, |grid, cx| {
-                                grid.runner.fail_mutation(task_id, e.to_string(), cx);
-                            })
-                            .ok();
-                        });
-                        report_error_async(
-                            UserFacingError::new(
-                                ErrorKind::Driver,
-                                crate::labels::mutation_chunked_execution_failed_error(
-                                    &table_name,
-                                    &e.to_string(),
-                                ),
-                            ),
-                            cx,
-                        );
-                    }
-                    Ok(MutationOutcome::Success { rows_affected }) => {
-                        cx.update(|cx| {
-                            this.update(cx, |grid, cx| {
-                                grid.runner.complete_mutation(task_id, cx);
-                            })
-                            .ok();
-                            dbflux_ui_base::toast::Toast::success(
-                                crate::labels::mutation_execution_completed_toast(rows_affected),
-                            )
-                            .push(cx);
-                        });
-                    }
-                    Ok(MutationOutcome::Cancelled { rows_affected }) => {
-                        cx.update(|cx| {
-                            this.update(cx, |grid, cx| {
-                                grid.runner.cancel_mutation(task_id, cx);
-                            })
-                            .ok();
-                            dbflux_ui_base::toast::Toast::info(
-                                crate::labels::mutation_execution_cancelled_toast(rows_affected),
-                            )
-                            .push(cx);
-                        });
-                    }
-                    Ok(MutationOutcome::Failed { error }) => {
-                        cx.update(|cx| {
-                            this.update(cx, |grid, cx| {
-                                grid.runner.fail_mutation(task_id, error.clone(), cx);
-                            })
-                            .ok();
-                        });
-                        report_error_async(
-                            UserFacingError::new(
-                                ErrorKind::Driver,
-                                crate::labels::mutation_chunked_execution_failed_error(
-                                    &table_name,
-                                    &error,
-                                ),
-                            ),
-                            cx,
-                        );
-                    }
-                }
-            })
-            .detach();
-        } else if matches!(
-            opts.mode,
-            crate::data_grid_panel::mutation_executor::ExecutionMode::DirectAutocommit
-        ) {
-            let (task_id, cancel_handle) = self.runner.start_mutation(
-                dbflux_core::TaskKind::Query,
-                crate::labels::visual_mutation_task_label(
-                    crate::labels::VisualMutationTaskMode::Direct,
-                ),
-                cx,
-            );
-
-            cx.spawn(async move |this, cx| {
-                use crate::data_grid_panel::mutation_executor::{
-                    MutationExecutor, MutationOutcome,
-                };
-                use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error_async};
-
-                let result = cx
-                    .background_executor()
-                    .spawn(async move {
-                        let executor = MutationExecutor::new(spec, opts, deps);
-                        executor.run_direct(&cancel_handle)
-                    })
-                    .await;
-
-                match result {
-                    Err(e) => {
-                        cx.update(|cx| {
-                            this.update(cx, |grid, cx| {
-                                grid.runner.fail_mutation(task_id, e.to_string(), cx);
-                            })
-                            .ok();
-                        });
-                        report_error_async(
-                            UserFacingError::new(
-                                ErrorKind::Driver,
-                                crate::labels::mutation_execution_failed_error(
-                                    &table_name,
-                                    &e.to_string(),
-                                ),
-                            ),
-                            cx,
-                        );
-                    }
-                    Ok(MutationOutcome::Success { rows_affected }) => {
-                        cx.update(|cx| {
-                            this.update(cx, |grid, cx| {
-                                grid.runner.complete_mutation(task_id, cx);
-                            })
-                            .ok();
-                            dbflux_ui_base::toast::Toast::success(
-                                crate::labels::mutation_execution_completed_toast(rows_affected),
-                            )
-                            .push(cx);
-                        });
-                    }
-                    Ok(MutationOutcome::Cancelled { rows_affected }) => {
-                        cx.update(|cx| {
-                            this.update(cx, |grid, cx| {
-                                grid.runner.cancel_mutation(task_id, cx);
-                            })
-                            .ok();
-                            dbflux_ui_base::toast::Toast::info(
-                                crate::labels::mutation_execution_cancelled_toast(rows_affected),
-                            )
-                            .push(cx);
-                        });
-                    }
-                    Ok(MutationOutcome::Failed { error }) => {
-                        cx.update(|cx| {
-                            this.update(cx, |grid, cx| {
-                                grid.runner.fail_mutation(task_id, error.clone(), cx);
-                            })
-                            .ok();
-                        });
-                        report_error_async(
-                            UserFacingError::new(
-                                ErrorKind::Driver,
-                                crate::labels::mutation_execution_failed_error(&table_name, &error),
-                            ),
-                            cx,
-                        );
-                    }
-                }
-            })
-            .detach();
+            columns
         } else {
-            let (task_id, cancel_handle) = self.runner.start_mutation(
-                dbflux_core::TaskKind::Query,
-                crate::labels::visual_mutation_task_label(
-                    crate::labels::VisualMutationTaskMode::SingleTransaction,
-                ),
-                cx,
-            );
+            vec![]
+        };
 
-            cx.spawn(async move |this, cx| {
-                use crate::data_grid_panel::mutation_executor::{
-                    MutationExecutor, MutationOutcome,
-                };
-                use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error_async};
+        let (task_id, cancel_handle) = self.runner.start_mutation(
+            dbflux_core::TaskKind::Query,
+            crate::labels::visual_mutation_task_label(mode),
+            cx,
+        );
 
-                let result = cx
-                    .background_executor()
-                    .spawn(async move {
-                        let executor = MutationExecutor::new(spec, opts, deps);
-                        executor.run_single_tx(&cancel_handle)
-                    })
-                    .await;
+        let run = MutationRun {
+            task_id,
+            mode,
+            table_name,
+            intent,
+        };
 
-                match result {
-                    Err(e) => {
-                        cx.update(|cx| {
-                            this.update(cx, |grid, cx| {
-                                grid.runner.fail_mutation(task_id, e.to_string(), cx);
-                            })
-                            .ok();
-                        });
-                        report_error_async(
-                            UserFacingError::new(
-                                ErrorKind::Driver,
-                                crate::labels::mutation_execution_failed_error(
-                                    &table_name,
-                                    &e.to_string(),
-                                ),
-                            ),
-                            cx,
-                        );
+        cx.spawn(async move |this, cx| {
+            use crate::data_grid_panel::mutation_executor::MutationExecutor;
+            use dbflux_ui_base::user_error::report_error_async;
+
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    let executor = MutationExecutor::new(spec, opts, deps);
+                    match mode {
+                        crate::labels::VisualMutationTaskMode::Chunked => {
+                            let pk_refs: Vec<&str> =
+                                pk_columns.iter().map(String::as_str).collect();
+                            executor.run_chunked_tx(&pk_refs, &cancel_handle)
+                        }
+                        crate::labels::VisualMutationTaskMode::Direct => {
+                            executor.run_direct(&cancel_handle)
+                        }
+                        crate::labels::VisualMutationTaskMode::SingleTransaction => {
+                            executor.run_single_tx(&cancel_handle)
+                        }
                     }
-                    Ok(MutationOutcome::Success { rows_affected }) => {
-                        cx.update(|cx| {
-                            this.update(cx, |grid, cx| {
-                                grid.runner.complete_mutation(task_id, cx);
-                            })
-                            .ok();
-                            dbflux_ui_base::toast::Toast::success(
-                                crate::labels::mutation_execution_completed_toast(rows_affected),
-                            )
-                            .push(cx);
-                        });
-                    }
-                    Ok(MutationOutcome::Cancelled { rows_affected }) => {
-                        cx.update(|cx| {
-                            this.update(cx, |grid, cx| {
-                                grid.runner.cancel_mutation(task_id, cx);
-                            })
-                            .ok();
-                            dbflux_ui_base::toast::Toast::info(
-                                crate::labels::mutation_execution_cancelled_toast(rows_affected),
-                            )
-                            .push(cx);
-                        });
-                    }
-                    Ok(MutationOutcome::Failed { error }) => {
-                        cx.update(|cx| {
-                            this.update(cx, |grid, cx| {
-                                grid.runner.fail_mutation(task_id, error.clone(), cx);
-                            })
-                            .ok();
-                        });
-                        report_error_async(
-                            UserFacingError::new(
-                                ErrorKind::Driver,
-                                crate::labels::mutation_execution_failed_error(&table_name, &error),
-                            ),
-                            cx,
-                        );
-                    }
-                }
-            })
-            .detach();
+                })
+                .await;
+
+            // Raising the failure needs an `AsyncApp` and recording it needs the
+            // entity, so the report travels back out instead of being raised here.
+            let failure = cx.update(|cx| {
+                this.update(cx, |grid, cx| grid.finish_mutation(run, result, cx))
+                    .ok()
+                    .flatten()
+            });
+
+            if let Some(failure) = failure {
+                report_error_async(failure, cx);
+            }
+        })
+        .detach();
+    }
+
+    /// Records a finished visual-mutation run, and tells the platform whether a
+    /// close that was waiting on it may proceed.
+    ///
+    /// Returns the user-facing error of a failed run, so the caller can raise it
+    /// with an `AsyncApp` handle this method does not have.
+    ///
+    /// The run counts as landed only when the executor wrote at least one row.
+    /// `MutationOutcome::Success { rows_affected: 0 }` means the statement matched
+    /// nothing — the row is gone, or its key changed — so a close waiting on this
+    /// apply must not read it as a landed write.
+    fn finish_mutation(
+        &mut self,
+        run: MutationRun,
+        result: Result<
+            crate::data_grid_panel::mutation_executor::MutationOutcome,
+            crate::data_grid_panel::mutation_executor::ExecutorError,
+        >,
+        cx: &mut Context<Self>,
+    ) -> Option<dbflux_ui_base::user_error::UserFacingError> {
+        use crate::data_grid_panel::mutation_executor::MutationOutcome;
+        use dbflux_ui_base::user_error::{ErrorKind, UserFacingError};
+
+        let MutationRun {
+            task_id,
+            mode,
+            table_name,
+            intent,
+        } = run;
+
+        let failure_text = |error: &str| match mode {
+            crate::labels::VisualMutationTaskMode::Chunked => {
+                crate::labels::mutation_chunked_execution_failed_error(&table_name, error)
+            }
+            crate::labels::VisualMutationTaskMode::Direct
+            | crate::labels::VisualMutationTaskMode::SingleTransaction => {
+                crate::labels::mutation_execution_failed_error(&table_name, error)
+            }
+        };
+
+        let (failure, landed) = match result {
+            Err(error) => {
+                let text = error.to_string();
+                self.runner.fail_mutation(task_id, text.clone(), cx);
+                (Some(failure_text(&text)), false)
+            }
+            Ok(MutationOutcome::Success { rows_affected }) => {
+                self.runner.complete_mutation(task_id, cx);
+                dbflux_ui_base::toast::Toast::success(
+                    crate::labels::mutation_execution_completed_toast(rows_affected),
+                )
+                .push(cx);
+                (None, rows_affected > 0)
+            }
+            Ok(MutationOutcome::Cancelled { rows_affected }) => {
+                self.runner.cancel_mutation(task_id, cx);
+                dbflux_ui_base::toast::Toast::info(
+                    crate::labels::mutation_execution_cancelled_toast(rows_affected),
+                )
+                .push(cx);
+                (None, false)
+            }
+            Ok(MutationOutcome::Failed { error }) => {
+                self.runner.fail_mutation(task_id, error.clone(), cx);
+                (Some(failure_text(&error)), false)
+            }
+        };
+
+        cx.emit(DataGridEvent::MutationFinished { landed });
+
+        if intent == MutationIntent::CloseAfterApply && landed {
+            cx.emit(DataGridEvent::RequestClose);
         }
+
+        failure.map(|message| UserFacingError::new(ErrorKind::Driver, message))
     }
 }
 
@@ -4890,7 +4818,7 @@ impl EventEmitter<DataGridEvent> for DataGridPanel {}
 
 #[cfg(test)]
 mod tests {
-    use super::{DataGridPanel, DataSource};
+    use super::{DataGridEvent, DataGridPanel, DataSource, MutationIntent, MutationRun};
     use dbflux_components::theme;
     use dbflux_core::{
         AggFn, CollectionRef, ColumnKind, ColumnMeta, GroupByEntry, Pagination, Projection,
@@ -4899,7 +4827,7 @@ mod tests {
     use dbflux_storage::bootstrap::StorageRuntime;
     use dbflux_ui_base::AppStateEntity;
     use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
-    use gpui::{AppContext, TestAppContext};
+    use gpui::{AppContext, TestAppContext, VisualTestContext};
     use gpui_component::Root;
     use std::cell::RefCell;
     use std::rc::Rc;
@@ -8766,5 +8694,275 @@ mod tests {
             );
             assert_eq!(state.selection().active, None);
         });
+    }
+    // === #629 — the completion path a close waits on ===
+
+    /// A grid with no connection behind it, for driving the mutation completion
+    /// path directly, plus every event it emitted.
+    ///
+    /// The completion path only touches the task slot, the toast host and the
+    /// document events, so no connection is needed to reach it — which is what
+    /// makes it testable at all: the run itself is started by a `cx.spawn` the
+    /// panel does not expose.
+    fn mutation_completion_panel(
+        cx: &mut TestAppContext,
+    ) -> (
+        gpui::Entity<DataGridPanel>,
+        &mut VisualTestContext,
+        Rc<RefCell<Vec<DataGridEvent>>>,
+    ) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let holder: Rc<RefCell<Option<gpui::Entity<DataGridPanel>>>> = Rc::new(RefCell::new(None));
+        let handle = holder.clone();
+        let seen: Rc<RefCell<Vec<DataGridEvent>>> = Rc::new(RefCell::new(Vec::new()));
+        let sink = seen.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let panel = cx.new(|cx| {
+                let source = DataSource::Table {
+                    profile_id: Uuid::nil(),
+                    database: Some("app".to_string()),
+                    table: TableRef::with_schema("public", "orders"),
+                    pagination: Pagination::default(),
+                    order_by: Vec::new(),
+                    total_rows: None,
+                };
+
+                DataGridPanel::new_internal(source, app_state.clone(), vec![], window, cx)
+            });
+
+            handle.replace(Some(panel.clone()));
+            Root::new(panel, window, cx)
+        });
+
+        let panel = holder.borrow().clone().expect("panel should be created");
+
+        // Subscribed through the app, not the view's own context: the events this
+        // test reads are the panel's, and the subscriber is the test itself.
+        window.update(|_, cx| {
+            cx.subscribe(
+                &panel,
+                move |_panel: gpui::Entity<DataGridPanel>, event: &DataGridEvent, _| {
+                    sink.borrow_mut().push(event.clone());
+                },
+            )
+            .detach();
+        });
+
+        (panel, window, seen)
+    }
+
+    /// One mutation run, as its completion needs to report it.
+    fn mutation_run(intent: MutationIntent) -> MutationRun {
+        MutationRun {
+            task_id: Uuid::new_v4(),
+            mode: crate::labels::VisualMutationTaskMode::SingleTransaction,
+            table_name: "orders".to_string(),
+            intent,
+        }
+    }
+
+    fn reported_landing(seen: &Rc<RefCell<Vec<DataGridEvent>>>) -> Option<bool> {
+        seen.borrow().iter().find_map(|event| match event {
+            DataGridEvent::MutationFinished { landed } => Some(*landed),
+            _ => None,
+        })
+    }
+
+    fn asked_to_close(seen: &Rc<RefCell<Vec<DataGridEvent>>>) -> bool {
+        seen.borrow()
+            .iter()
+            .any(|event| matches!(event, DataGridEvent::RequestClose))
+    }
+
+    /// A run started from the grid's own apply affordance reports its outcome and
+    /// leaves the close flow alone: nothing is waiting on it.
+    #[gpui::test]
+    fn a_direct_run_reports_landing_without_asking_to_close(cx: &mut TestAppContext) {
+        use crate::data_grid_panel::mutation_executor::MutationOutcome;
+
+        let (panel, window, seen) = mutation_completion_panel(cx);
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                let failure = panel.finish_mutation(
+                    mutation_run(MutationIntent::Direct),
+                    Ok(MutationOutcome::Success { rows_affected: 2 }),
+                    cx,
+                );
+
+                assert!(failure.is_none(), "a successful run reports no failure");
+            });
+        });
+
+        assert_eq!(reported_landing(&seen), Some(true));
+        assert!(
+            !asked_to_close(&seen),
+            "a run nobody is waiting on must not ask the tab to close"
+        );
+    }
+
+    /// A close that is waiting on the apply closes the tab, and only that run
+    /// asks for it.
+    #[gpui::test]
+    fn an_apply_that_landed_asks_the_close_to_proceed(cx: &mut TestAppContext) {
+        use crate::data_grid_panel::mutation_executor::MutationOutcome;
+
+        let (panel, window, seen) = mutation_completion_panel(cx);
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                let failure = panel.finish_mutation(
+                    mutation_run(MutationIntent::CloseAfterApply),
+                    Ok(MutationOutcome::Success { rows_affected: 1 }),
+                    cx,
+                );
+
+                assert!(failure.is_none(), "a successful run reports no failure");
+            });
+        });
+
+        assert_eq!(reported_landing(&seen), Some(true));
+        assert!(
+            asked_to_close(&seen),
+            "a landed apply must let the tab it was closing go"
+        );
+    }
+
+    /// `MutationOutcome::Success { rows_affected: 0 }` is what the executor reports
+    /// when the statement ran and matched nothing — the row is gone, or its key
+    /// changed. A close waiting on that apply must not read it as a landed write
+    /// and close the tab over edits that never reached the database.
+    #[gpui::test]
+    fn an_apply_that_matched_no_rows_does_not_ask_the_close_to_proceed(cx: &mut TestAppContext) {
+        use crate::data_grid_panel::mutation_executor::MutationOutcome;
+
+        let (panel, window, seen) = mutation_completion_panel(cx);
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                let failure = panel.finish_mutation(
+                    mutation_run(MutationIntent::CloseAfterApply),
+                    Ok(MutationOutcome::Success { rows_affected: 0 }),
+                    cx,
+                );
+
+                assert!(
+                    failure.is_none(),
+                    "a statement that matched nothing is not an execution failure"
+                );
+            });
+        });
+
+        assert_eq!(reported_landing(&seen), Some(false));
+        assert!(
+            !asked_to_close(&seen),
+            "a statement that matched no rows leaves the tab open with its edits"
+        );
+    }
+
+    /// A failed apply keeps the tab, reports the cause, and names the table so the
+    /// report is useful after the grid is gone.
+    #[gpui::test]
+    fn a_failed_apply_keeps_the_tab_and_reports_the_cause(cx: &mut TestAppContext) {
+        use crate::data_grid_panel::mutation_executor::ExecutorError;
+
+        let (panel, window, seen) = mutation_completion_panel(cx);
+
+        let summary = window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                panel
+                    .finish_mutation(
+                        mutation_run(MutationIntent::CloseAfterApply),
+                        Err(ExecutorError::Transaction("deadlock detected".to_string())),
+                        cx,
+                    )
+                    .expect("a failed run reports a failure")
+                    .summary
+            })
+        });
+
+        assert!(
+            summary.contains("orders"),
+            "the report names the table: {summary}"
+        );
+        assert!(
+            summary.contains("deadlock detected"),
+            "the report carries the cause: {summary}"
+        );
+        assert_eq!(reported_landing(&seen), Some(false));
+        assert!(
+            !asked_to_close(&seen),
+            "a failed apply must not close the tab"
+        );
+    }
+
+    /// The failure report is chosen by the execution mode, so a chunked run's
+    /// partial-application wording is not lost now that one path serves all three.
+    #[gpui::test]
+    fn a_chunked_failure_reports_through_the_chunked_label(cx: &mut TestAppContext) {
+        use crate::data_grid_panel::mutation_executor::ExecutorError;
+
+        let (panel, window, _) = mutation_completion_panel(cx);
+
+        let (chunked, single) = window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                let mut chunked_run = mutation_run(MutationIntent::Direct);
+                chunked_run.mode = crate::labels::VisualMutationTaskMode::Chunked;
+                let chunked = panel
+                    .finish_mutation(
+                        chunked_run,
+                        Err(ExecutorError::Transaction("chunk 4 failed".to_string())),
+                        cx,
+                    )
+                    .expect("a failed run reports a failure")
+                    .summary;
+
+                let single = panel
+                    .finish_mutation(
+                        mutation_run(MutationIntent::Direct),
+                        Err(ExecutorError::Transaction("chunk 4 failed".to_string())),
+                        cx,
+                    )
+                    .expect("a failed run reports a failure")
+                    .summary;
+
+                (chunked, single)
+            })
+        });
+
+        assert_ne!(
+            chunked, single,
+            "a chunked run reports through its own label"
+        );
+        assert!(chunked.contains("chunk 4 failed"));
+    }
+
+    /// A cancelled apply is not a landed one: the tab keeps its edits.
+    #[gpui::test]
+    fn a_cancelled_apply_does_not_ask_the_close_to_proceed(cx: &mut TestAppContext) {
+        use crate::data_grid_panel::mutation_executor::MutationOutcome;
+
+        let (panel, window, seen) = mutation_completion_panel(cx);
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                let failure = panel.finish_mutation(
+                    mutation_run(MutationIntent::CloseAfterApply),
+                    Ok(MutationOutcome::Cancelled { rows_affected: 0 }),
+                    cx,
+                );
+
+                assert!(failure.is_none(), "a cancellation is not a failure");
+            });
+        });
+
+        assert_eq!(reported_landing(&seen), Some(false));
+        assert!(
+            !asked_to_close(&seen),
+            "a cancelled apply leaves the tab open with its edits"
+        );
     }
 }

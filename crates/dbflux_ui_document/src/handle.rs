@@ -18,6 +18,15 @@ pub enum DocumentEvent {
     SaveFinished {
         succeeded: bool,
     },
+    /// A mutation the document ran finished, and whether its edits landed.
+    ///
+    /// `landed: false` covers a failed run, a cancelled run, and a statement the
+    /// database matched no rows for. A close waiting on this apply must not take
+    /// it as permission to close, and the workspace uses it to give the keyboard
+    /// back when the close it was waiting on did not happen.
+    MutationFinished {
+        landed: bool,
+    },
     /// The document wants to close itself.
     ///
     /// Emitted only for a save the unsaved-changes dialog interrupted that

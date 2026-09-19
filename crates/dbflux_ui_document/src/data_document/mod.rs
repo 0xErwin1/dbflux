@@ -165,6 +165,12 @@ impl DataDocument {
                     sql: sql.clone(),
                 });
             }
+            DataGridEvent::MutationFinished { landed } => {
+                cx.emit(DocumentEvent::MutationFinished { landed: *landed });
+            }
+            DataGridEvent::RequestClose => {
+                cx.emit(DocumentEvent::RequestClose);
+            }
             _ => {}
         }
     }
