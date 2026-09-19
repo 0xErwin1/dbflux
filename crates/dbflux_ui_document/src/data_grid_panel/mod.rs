@@ -709,6 +709,13 @@ pub struct DataGridPanel {
     pending: PendingActions,
     pending_delete_confirm: Option<PendingDeleteConfirm>,
     pending_batch_remaining: Option<PendingBatchRemaining>,
+    /// A close is waiting on the staged edits being applied.
+    ///
+    /// Armed by [`DataGridPanel::apply_for_close`] and dropped by the first
+    /// operation that fails, or by the batch draining. While it is armed, the
+    /// grid owns the close gesture: the tab must not go before the edits land,
+    /// and must not go if they did not.
+    close_after_apply: bool,
     /// Pending "Save chart from collection" state.
     pub(super) pending_collection_chart_save: Option<CollectionChartSaveState>,
     pub(crate) pending_mutation_exec: Option<PendingMutationExec>,
@@ -1443,6 +1450,7 @@ impl DataGridPanel {
             pending: PendingActions::default(),
             pending_delete_confirm: None,
             pending_batch_remaining: None,
+            close_after_apply: false,
             pending_collection_chart_save: None,
             pending_mutation_exec: None,
         }
@@ -2998,6 +3006,55 @@ impl DataGridPanel {
         let (inserts, updates, deletes) = self.pending_edit_counts(cx);
 
         crate::labels::pending_edits_summary(inserts, updates, deletes)
+    }
+
+    /// Starts applying the staged edits because a close is waiting on them.
+    ///
+    /// Returns `true` when an apply is in flight, which is also when the caller
+    /// must leave the tab open: the grid asks for the close itself once the edits
+    /// land (`DataGridEvent::RequestClose`). `false` means there was nothing to
+    /// apply, so the caller may close the tab now.
+    pub fn apply_for_close(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.pending_edit_counts(cx) == (0, 0, 0) {
+            return false;
+        }
+
+        // Armed before the apply starts: a source that answers synchronously can
+        // drain the whole batch inside `request_save_all`.
+        self.close_after_apply = true;
+
+        // A live delete confirmation resumes the batch it was held for, and a
+        // batch already in flight is the same apply. Re-requesting either would
+        // duplicate the rows they already carry.
+        if self.pending_delete_confirm.is_some() {
+            return true;
+        }
+        if self.pending_batch_remaining.is_some() {
+            self.process_next_batch_op(cx);
+            return true;
+        }
+
+        let Some(table_state) = self.grid_table.table_state.clone() else {
+            self.close_after_apply = false;
+            return false;
+        };
+
+        table_state.update(cx, |state, cx| state.request_save_all(cx));
+        true
+    }
+
+    /// Gives up on the apply a close is waiting on, because one of its operations
+    /// failed.
+    ///
+    /// The batch never chains past a failure, so waiting for it to drain would
+    /// leave the intent armed over a batch that can never finish — and the next
+    /// unrelated row save would drain that batch and close a tab nobody asked to
+    /// close. Reporting the run as not landed here is what keeps the tab open with
+    /// the rows that did not land.
+    fn abandon_close_apply(&mut self, cx: &mut Context<Self>) {
+        if std::mem::take(&mut self.close_after_apply) {
+            cx.emit(DataGridEvent::MutationFinished { landed: false });
+        }
     }
 
     // === Filter bar presentation helpers ===
@@ -8711,6 +8768,37 @@ mod tests {
         &mut VisualTestContext,
         Rc<RefCell<Vec<DataGridEvent>>>,
     ) {
+        panel_with_events(cx, vec![], false)
+    }
+
+    /// A grid that can stage edits: it carries the primary key the batch pipeline
+    /// needs and a loaded result to stage against, plus one row of data so a row
+    /// edit has something to address.
+    fn staged_edit_panel(
+        cx: &mut TestAppContext,
+    ) -> (
+        gpui::Entity<DataGridPanel>,
+        &mut VisualTestContext,
+        Rc<RefCell<Vec<DataGridEvent>>>,
+    ) {
+        panel_with_events(cx, vec!["id".to_string()], true)
+    }
+
+    /// A grid panel in a real window, plus every event it emitted.
+    ///
+    /// The completion and the batch paths only touch the task slot, the toast host
+    /// and the document events, so no connection is needed to reach them — which is
+    /// what makes them testable at all: a run that succeeds needs one, and takes it
+    /// through `app_state`.
+    fn panel_with_events(
+        cx: &mut TestAppContext,
+        pk_columns: Vec<String>,
+        with_result: bool,
+    ) -> (
+        gpui::Entity<DataGridPanel>,
+        &mut VisualTestContext,
+        Rc<RefCell<Vec<DataGridEvent>>>,
+    ) {
         init_test_runtime(cx);
 
         let app_state = isolated_test_app_state(cx);
@@ -8730,7 +8818,14 @@ mod tests {
                     total_rows: None,
                 };
 
-                DataGridPanel::new_internal(source, app_state.clone(), vec![], window, cx)
+                let mut panel =
+                    DataGridPanel::new_internal(source, app_state.clone(), pk_columns, window, cx);
+
+                if with_result {
+                    panel.set_result(id_result(), cx);
+                }
+
+                panel
             });
 
             handle.replace(Some(panel.clone()));
@@ -8963,6 +9058,136 @@ mod tests {
         assert!(
             !asked_to_close(&seen),
             "a cancelled apply leaves the tab open with its edits"
+        );
+    }
+
+    // === #629 — the close that waits on the staged edits ===
+
+    /// Stages one edited cell in the first row, which is what the grid's own
+    /// "save all" action applies.
+    fn stage_row_edit(panel: &mut DataGridPanel, cx: &mut gpui::Context<DataGridPanel>) {
+        let table_state = panel
+            .grid_table
+            .table_state
+            .clone()
+            .expect("a table source builds a table state");
+
+        table_state.update(cx, |state, cx| {
+            state.edit_buffer_mut().set_cell(
+                0,
+                0,
+                dbflux_components::components::data_table::model::CellValue::int(7),
+            );
+            cx.notify();
+        });
+    }
+
+    /// Nothing staged means nothing to apply, so the caller may close the tab.
+    #[gpui::test]
+    fn a_grid_with_nothing_staged_lets_the_close_proceed(cx: &mut TestAppContext) {
+        let (panel, window, seen) = staged_edit_panel(cx);
+
+        let started =
+            window.update(|_, app| panel.update(app, |panel, cx| panel.apply_for_close(cx)));
+
+        assert!(!started, "a clean grid has no apply to wait on");
+        assert_eq!(reported_landing(&seen), None);
+        assert!(!asked_to_close(&seen));
+    }
+
+    /// The staged edit never reaches the database, so the apply did not land: the
+    /// tab keeps its edits instead of closing over them.
+    #[gpui::test]
+    fn an_apply_that_did_not_reach_the_database_keeps_the_tab(cx: &mut TestAppContext) {
+        let (panel, window, seen) = staged_edit_panel(cx);
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                stage_row_edit(panel, cx);
+                assert!(
+                    panel.apply_for_close(cx),
+                    "a grid with a staged row has an apply to wait on"
+                );
+            });
+        });
+
+        // The write runs on the background executor.
+        window.run_until_parked();
+
+        assert_eq!(reported_landing(&seen), Some(false));
+        assert!(
+            !asked_to_close(&seen),
+            "an apply that did not land must not take the tab away"
+        );
+    }
+
+    /// A staged edit that lands is what lets the close through.
+    #[gpui::test]
+    fn a_staged_edit_that_lands_asks_the_close_to_proceed(cx: &mut TestAppContext) {
+        use dbflux_core::{ConnectedProfile, DbConfig, DbKind, MutationPolicy};
+        use dbflux_test_support::fake_driver::FakeDriver;
+        use std::path::PathBuf;
+
+        let (panel, window, seen) = staged_edit_panel(cx);
+
+        // Registered after the panel exists: the batch reads the connection when
+        // the write runs, not when the grid is built.
+        window.update(|_, app| {
+            let app_state = panel.read(app).app_state.clone();
+
+            app_state.update(app, |state, _| {
+                let profile = dbflux_core::ConnectionProfile::new(
+                    "staged-edits",
+                    DbConfig::SQLite {
+                        path: PathBuf::from(":memory:"),
+                        connection_id: None,
+                    },
+                );
+                let connection = FakeDriver::new(DbKind::SQLite)
+                    .connect_arc(&profile)
+                    .expect("the fake driver connects");
+
+                state.connections_mut().insert(
+                    Uuid::nil(),
+                    ConnectedProfile {
+                        profile,
+                        connection,
+                        schema: None,
+                        mutation_policy: MutationPolicy::Allowed,
+                        read_only_reason: None,
+                        database_schemas: Default::default(),
+                        table_details: Default::default(),
+                        collection_children: Default::default(),
+                        schema_types: Default::default(),
+                        schema_indexes: Default::default(),
+                        schema_foreign_keys: Default::default(),
+                        schema_routines: Default::default(),
+                        dependents_cache: Default::default(),
+                        active_database: None,
+                        redis_key_cache: Default::default(),
+                        database_connections: Default::default(),
+                        proxy_tunnel: None,
+                    },
+                );
+            });
+        });
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                stage_row_edit(panel, cx);
+                assert!(
+                    panel.apply_for_close(cx),
+                    "a grid with a staged row has an apply to wait on"
+                );
+            });
+        });
+
+        window.run_until_parked();
+
+        assert_eq!(reported_landing(&seen), Some(true));
+        assert!(
+            asked_to_close(&seen),
+            "a landed apply must let the tab it was closing go"
         );
     }
 }
