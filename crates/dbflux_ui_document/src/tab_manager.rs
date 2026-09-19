@@ -5,6 +5,7 @@ use super::handle::DocumentEvent;
 use super::pane::{EmptyScriptCleanup, PaneHandle};
 use super::types::{DocumentId, DocumentKind, DocumentMetaSnapshot};
 use dbflux_app::keymap::{Command, ContextId};
+use dbflux_components::modals::CloseAction;
 use dbflux_core::RefreshPolicy;
 use gpui::{AnyElement, App, Context, EventEmitter, Subscription, Window};
 use std::collections::HashMap;
@@ -664,13 +665,15 @@ impl TabManager {
     /// Returns `(DocumentId, summary)` for every document that reports pending changes.
     ///
     /// Used for dirty-dot tooltips and the unsaved-changes modal.
-    pub fn dirty_summaries(&self, cx: &App) -> Vec<(DocumentId, String)> {
+    pub fn dirty_summaries(&self, cx: &App) -> Vec<(DocumentId, String, CloseAction)> {
         self.documents
             .iter()
-            .filter_map(|doc| doc.change_summary(cx).map(|summary| (doc.id(), summary)))
+            .filter_map(|doc| {
+                doc.change_summary(cx)
+                    .map(|summary| (doc.id(), summary, doc.as_pane().close_action()))
+            })
             .collect()
     }
-
     pub fn is_empty(&self) -> bool {
         self.documents.is_empty()
     }

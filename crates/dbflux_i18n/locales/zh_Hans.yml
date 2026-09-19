@@ -2441,9 +2441,15 @@ modals:
   unsaved_changes:
     title: 未保存的更改
     prompt: 以下文档中有未保存的更改。您想怎么做？
+    action:
+      save: 保存
+      apply: 应用
     save_selected:
       one: "保存所选（%{count}）"
       many: "保存所选（%{count}）"
+    apply_selected:
+      one: "应用所选（%{count}）"
+      many: "应用所选（%{count}）"
     cannot_save:
       one: "此文档无法在此处保存：更改已保留，标签页保持打开"
       many: "%{count} 个文档无法在此处保存：更改已保留，标签页保持打开"

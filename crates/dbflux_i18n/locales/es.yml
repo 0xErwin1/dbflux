@@ -2441,9 +2441,15 @@ modals:
   unsaved_changes:
     title: Cambios sin guardar
     prompt: Tienes cambios sin guardar en los siguientes documentos. ¿Qué quieres hacer?
+    action:
+      save: Guardar
+      apply: Aplicar
     save_selected:
       one: "Guardar seleccionado (%{count})"
       many: "Guardar seleccionados (%{count})"
+    apply_selected:
+      one: "Aplicar seleccionado (%{count})"
+      many: "Aplicar seleccionados (%{count})"
     cannot_save:
       one: "Este documento no se puede guardar desde aquí: sus cambios se conservan y la pestaña permanece abierta"
       many: "%{count} documentos no se pueden guardar desde aquí: sus cambios se conservan y las pestañas permanecen abiertas"

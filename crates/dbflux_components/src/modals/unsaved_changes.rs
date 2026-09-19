@@ -21,12 +21,28 @@ pub enum UnsavedChangesOutcome {
     SaveSelected(Vec<DocumentId>),
 }
 
+/// What closing a document does with its pending edits.
+///
+/// The dialog names the action per entry: saving a document's own file and
+/// applying a table's staged edits are not the same thing to the reader, even
+/// when both mean "keep my work".
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CloseAction {
+    /// Write the document's own file.
+    Save,
+    /// Run the grid's staged edits against the database.
+    Apply,
+}
+
 /// One dirty document entry passed when opening the modal.
 #[derive(Clone, Debug)]
 pub struct DirtySummaryEntry {
     pub id: DocumentId,
     pub name: String,
     pub summary: String,
+    /// What this entry's pending edits are brought to when the dialog's confirm
+    /// action runs.
+    pub action: CloseAction,
 }
 
 /// Request payload for `pending_modal_open` on the workspace.
@@ -110,17 +126,49 @@ impl ModalUnsavedChanges {
             .filter_map(|(id, &checked)| if checked { Some(*id) } else { None })
             .collect()
     }
+
+    /// The action of every selected entry, in no particular order.
+    fn selected_actions(&self) -> Vec<CloseAction> {
+        self.entries
+            .iter()
+            .filter(|entry| self.selected.get(&entry.id).copied().unwrap_or(false))
+            .map(|entry| entry.action)
+            .collect()
+    }
 }
 
-/// Label for the "Save selected" button, with the selected count interpolated.
+/// What an entry's pending edits are, with the verb that names the action.
+fn action_summary(action: CloseAction, summary: &str) -> String {
+    let verb = match action {
+        CloseAction::Save => dbflux_i18n::t!("modals.unsaved_changes.action.save"),
+        CloseAction::Apply => dbflux_i18n::t!("modals.unsaved_changes.action.apply"),
+    };
+
+    format!("{verb} · {summary}")
+}
+
+/// Label for the confirm button, with the selected count interpolated.
+///
+/// The verb follows what the selected entries do: a selection of grids is
+/// applied, not saved. Any other selection keeps the save wording the footer has
+/// always used, including a mixed one, because each entry's own line is what
+/// names the action it takes.
 ///
 /// Uses the singular catalog bucket only for exactly one selected document;
 /// every other count, including zero, uses the plural bucket.
-fn save_selected_label(count: usize) -> String {
-    if count == 1 {
-        dbflux_i18n::t!("modals.unsaved_changes.save_selected.one", count = count)
-    } else {
-        dbflux_i18n::t!("modals.unsaved_changes.save_selected.many", count = count)
+fn confirm_label(actions: &[CloseAction]) -> String {
+    let count = actions.len();
+    let applies = !actions.is_empty() && actions.iter().all(|action| *action == CloseAction::Apply);
+
+    match (applies, count == 1) {
+        (true, true) => dbflux_i18n::t!("modals.unsaved_changes.apply_selected.one", count = count),
+        (true, false) => {
+            dbflux_i18n::t!("modals.unsaved_changes.apply_selected.many", count = count)
+        }
+        (false, true) => dbflux_i18n::t!("modals.unsaved_changes.save_selected.one", count = count),
+        (false, false) => {
+            dbflux_i18n::t!("modals.unsaved_changes.save_selected.many", count = count)
+        }
     }
 }
 
@@ -141,7 +189,7 @@ impl Render for ModalUnsavedChanges {
             let id = entry.id;
             let is_checked = self.selected.get(&id).copied().unwrap_or(false);
             let name = entry.name.clone();
-            let summary = entry.summary.clone();
+            let summary = action_summary(entry.action, &entry.summary);
             let check_color = if is_checked {
                 theme.primary
             } else {
@@ -224,7 +272,7 @@ impl Render for ModalUnsavedChanges {
             this.close(cx);
         });
 
-        let save_label = save_selected_label(selected_count);
+        let save_label = confirm_label(&self.selected_actions());
         let save_disabled = selected_count == 0;
 
         let on_save = cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
@@ -302,6 +350,7 @@ mod tests {
             id,
             name: name.to_string(),
             summary: "+3/-1 lines".to_string(),
+            action: CloseAction::Save,
         }
     }
 
@@ -393,8 +442,8 @@ mod tests {
     }
 
     #[test]
-    fn save_selected_label_uses_singular_bucket_for_one() {
-        let label = save_selected_label(1);
+    fn confirm_label_uses_singular_bucket_for_one() {
+        let label = confirm_label(&[CloseAction::Save]);
         assert!(label.contains('1'));
         assert_eq!(
             label,
@@ -403,20 +452,68 @@ mod tests {
     }
 
     #[test]
-    fn save_selected_label_uses_plural_bucket_for_zero_and_many() {
-        let zero = save_selected_label(0);
+    fn confirm_label_uses_the_plural_bucket_for_zero_and_many() {
+        let zero = confirm_label(&[]);
         assert!(zero.contains('0'));
-        assert_eq!(
-            zero,
-            dbflux_i18n::t!("modals.unsaved_changes.save_selected.many", count = 0)
-        );
 
-        let many = save_selected_label(2);
+        let many = confirm_label(&[CloseAction::Save, CloseAction::Save]);
         assert!(many.contains('2'));
         assert_eq!(
             many,
             dbflux_i18n::t!("modals.unsaved_changes.save_selected.many", count = 2)
         );
+    }
+
+    /// A selection of grids is applied, and the footer is where that verb shows.
+    #[test]
+    fn confirm_label_uses_the_apply_verb_for_a_selection_of_grids() {
+        let label = confirm_label(&[CloseAction::Apply, CloseAction::Apply]);
+
+        assert_eq!(
+            label,
+            dbflux_i18n::t!("modals.unsaved_changes.apply_selected.many", count = 2),
+            "two grids are applied, not saved"
+        );
+        assert_eq!(
+            confirm_label(&[CloseAction::Apply]),
+            dbflux_i18n::t!("modals.unsaved_changes.apply_selected.one", count = 1)
+        );
+    }
+
+    /// A file-backed document keeps the save wording, and a mixed selection keeps
+    /// it too: each entry's own line is what names its action.
+    #[test]
+    fn confirm_label_keeps_the_save_verb_for_every_other_selection() {
+        let saved = confirm_label(&[CloseAction::Save]);
+        let mixed = confirm_label(&[CloseAction::Save, CloseAction::Apply]);
+
+        assert_eq!(
+            saved,
+            dbflux_i18n::t!("modals.unsaved_changes.save_selected.one", count = 1)
+        );
+        assert_eq!(
+            mixed,
+            dbflux_i18n::t!("modals.unsaved_changes.save_selected.many", count = 2)
+        );
+    }
+
+    /// The entry's own line carries the verb, so a reader can tell a grid from a
+    /// file without opening either.
+    #[test]
+    fn an_entry_line_names_the_action_before_what_is_pending() {
+        let applied = action_summary(CloseAction::Apply, "3 edits · 1 delete");
+        let saved = action_summary(CloseAction::Save, "1 statement");
+
+        assert!(
+            applied.starts_with(&dbflux_i18n::t!("modals.unsaved_changes.action.apply")),
+            "a grid's line starts with its own verb: {applied}"
+        );
+        assert!(applied.ends_with("3 edits · 1 delete"), "{applied}");
+        assert!(
+            saved.starts_with(&dbflux_i18n::t!("modals.unsaved_changes.action.save")),
+            "a file's line starts with its own verb: {saved}"
+        );
+        assert_ne!(applied, saved);
     }
 }
 
@@ -426,7 +523,8 @@ mod confirm_keyboard_tests {
     // with `#[gpui::test]` sends the gpui_macros expansion into unbounded
     // recursion.
     use super::{
-        DirtySummaryEntry, ModalUnsavedChanges, UnsavedChangesOutcome, UnsavedChangesRequest,
+        CloseAction, DirtySummaryEntry, ModalUnsavedChanges, UnsavedChangesOutcome,
+        UnsavedChangesRequest,
     };
     use dbflux_core::document_id::DocumentId;
     use gpui::{AppContext, TestAppContext};
@@ -450,6 +548,7 @@ mod confirm_keyboard_tests {
                             id,
                             name: "query.sql".to_string(),
                             summary: "+1/-1 lines".to_string(),
+                            action: CloseAction::Save,
                         }],
                     },
                     cx,

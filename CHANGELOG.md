@@ -6,6 +6,18 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Added
 
+* **Applying a table's pending edits before its tab closes** — closing a table
+  tab that holds staged, unapplied grid edits used to be a dead end: the
+  unsaved-changes dialog listed the tab, but its action could not do anything
+  with a data document, so the tab stayed open with a warning. The dialog now
+  names what each entry's pending edits need — save for a file-backed document,
+  apply for a table — and its apply action runs the grid's own Save all, so the
+  mutations pass through the same mutation policy, table delete confirmation and
+  error reporting as the button. The tab closes only once every staged edit has
+  landed; a failed statement, a missing connection, or a dismissed delete
+  confirmation leaves the tab open with its edits. Until quitting asks too, a
+  quit still drops staged grid edits.
+
 * **TursoDB driver** — connect to Turso Cloud and self-hosted libSQL
   (`sqld`) servers over HTTP with a URL and an auth token. The driver speaks
   the SQLite dialect and supports schema discovery (tables, views, columns,

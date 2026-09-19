@@ -581,17 +581,27 @@ impl Workspace {
                             .update(cx, |mgr, cx| mgr.focus_active(window, cx));
                     }
                     UnsavedChangesOutcome::SaveSelected(ids) => {
+                        use crate::ui::overlays::modals::CloseAction;
+
                         let ids = ids.clone();
                         let mut unsaveable = 0;
                         for id in &ids {
-                            // `save_for_close` writes file-backed documents in
-                            // place and only opens Save As for untitled ones; it
-                            // reports back through `RequestClose` once the write
-                            // lands, so a dismissed dialog or a failed write
-                            // leaves the tab open with its changes.
+                            // Each document says which action its pending edits
+                            // need: a code document writes its own file in place
+                            // (and only opens Save As for an untitled buffer),
+                            // while a grid applies its staged edits to the
+                            // database. Both report back through `RequestClose`
+                            // once the work lands, so a dismissed dialog or a
+                            // failed write leaves the tab open with its changes.
                             let started = this.tab_manager.update(cx, |mgr, cx| {
-                                mgr.document(*id)
-                                    .is_some_and(|tab| tab.save_for_close(window, cx))
+                                let Some(tab) = mgr.document(*id) else {
+                                    return false;
+                                };
+
+                                match tab.as_pane().close_action() {
+                                    CloseAction::Apply => tab.as_pane().apply_for_close(window, cx),
+                                    CloseAction::Save => tab.as_pane().save_for_close(window, cx),
+                                }
                             });
 
                             if !started {
@@ -2187,7 +2197,7 @@ mod tab_close_request_tests {
     use crate::ui::document::pane::CloseDisposition;
     use crate::ui::document::{CodeDocument, InspectorPanel, Tab, TabBarEvent, TabManagerEvent};
     use crate::ui::overlays::modals::{
-        DirtySummaryEntry, UnsavedChangesOutcome, UnsavedChangesRequest,
+        CloseAction, DirtySummaryEntry, UnsavedChangesOutcome, UnsavedChangesRequest,
     };
     use crate::ui::views::workspace::{DocumentFlushOutcome, Workspace, await_document_flush};
     use dbflux_core::QueryLanguage;
@@ -2357,6 +2367,7 @@ mod tab_close_request_tests {
                                 id: document_id,
                                 name: "query.sql".to_string(),
                                 summary: "1 pending change".to_string(),
+                                action: CloseAction::Save,
                             }],
                         },
                         cx,

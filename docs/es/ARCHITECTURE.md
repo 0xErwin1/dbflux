@@ -764,6 +764,15 @@ módulo):
   diálogo de cambios sin guardar ya no aplica a los code documents. El contenido
   sin título se auto-guarda en scratch files, y las ediciones sin guardar
   conservan una copia shadow en la carpeta `sessions/` como red de recuperación.
+- Aplicar las ediciones de grilla al cerrar: una pestaña de tabla con ediciones
+  preparadas sin aplicar se consulta a través del mismo diálogo de cambios sin
+  guardar que protege a un buffer sin título. Cada entrada nombra su propio verbo
+  — guardar para un documento respaldado por archivo, aplicar para una tabla — y
+  la acción de aplicar ejecuta el mismo **Save all** de la grilla, así que las
+  mutaciones pasan por la misma política y la misma confirmación de borrado que
+  el botón. La pestaña se cierra sólo cuando aterrizó cada edición preparada; una
+  sentencia fallida, una conexión ausente o una confirmación de borrado
+  descartada la dejan abierta con sus ediciones, y al salir no se pregunta nada.
 - Restauración de sesión: el manifest de los tabs abiertos vive en `dbflux.db`
   (`st_sessions` / `st_session_tabs`, vía
   `crates/dbflux_storage/src/repositories/state/sessions.rs`). La carpeta
