@@ -400,7 +400,7 @@ fn start_detached_hook_task(
     profile_id: Uuid,
     profile_name: &str,
     phase: HookPhase,
-    handle: DetachedProcessHandle,
+    mut handle: DetachedProcessHandle,
     parent_cancel_token: Option<CancelToken>,
     scope: DetachedHookScope,
     cx: &mut AsyncApp,
@@ -456,9 +456,11 @@ fn start_detached_hook_task(
         let result = cx
             .background_executor()
             .spawn(async move {
+                let containment = handle.take_containment();
                 let mut child = handle.child;
                 execute_streaming_process(
                     &mut child,
+                    containment.as_ref(),
                     &cancel_token,
                     parent_cancel_for_task.as_ref(),
                     handle.timeout,
