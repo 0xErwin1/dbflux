@@ -1,0 +1,12 @@
+access:
+  tab_label: 접속 설정
+  method_label: 접속 방식
+  direct_hint: 직접 접속은 메인 탭의 데이터베이스 설정들을 사용하여 연결합니다.
+  auth_profile_optional: 인증 프로파일(선택)
+  manage: 관리
+  login: 로그인
+  refresh: 새로고침
+  auth_profile_hint: 직접 접속 중 비밀번호, 파라미터, 인증 정보를 불러오는 데 사용합니다.
+chart:
+  axis_bar:
+    group: 그룹
