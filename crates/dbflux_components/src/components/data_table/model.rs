@@ -560,6 +560,22 @@ impl EditBuffer {
         self.pending_inserts.clear();
     }
 
+    /// Drop every edit and the history that addresses the old base rows, and
+    /// rebase onto a model of `base_row_count` rows.
+    ///
+    /// Used when the table swaps in a new model: overrides, pending inserts,
+    /// deletes and the undo/redo stacks all reference row indices of the model
+    /// being replaced, so keeping any of them would apply them to unrelated
+    /// rows.
+    pub fn reset_for_base(&mut self, base_row_count: usize) {
+        self.overrides.clear();
+        self.row_states.clear();
+        self.pending_inserts.clear();
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+        self.base_row_count = base_row_count;
+    }
+
     /// Check if there are any pending changes.
     pub fn has_changes(&self) -> bool {
         !self.overrides.is_empty()
