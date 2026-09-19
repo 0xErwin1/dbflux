@@ -1741,6 +1741,10 @@ impl DataGridPanel {
                         if panel.pending_batch_remaining.is_some() {
                             panel.process_next_batch_op(cx);
                         } else {
+                            // A batch of deletes parks on the confirmation instead
+                            // of staging remaining work, so the pump never runs
+                            // and this tail is what reports the batch.
+                            panel.finish_close_after_apply(cx);
                             panel.pending.refresh = true;
                         }
                     }
@@ -1933,6 +1937,10 @@ impl DataGridPanel {
                         if panel.pending_batch_remaining.is_some() {
                             panel.process_next_batch_op(cx);
                         } else {
+                            // A batch of deletes parks on the confirmation instead
+                            // of staging remaining work, so the pump never runs
+                            // and this tail is what reports the batch.
+                            panel.finish_close_after_apply(cx);
                             panel.pending.refresh = true;
                         }
                     }

@@ -8872,6 +8872,20 @@ mod tests {
             .any(|event| matches!(event, DataGridEvent::RequestClose))
     }
 
+    /// What a panel emitted, in a shape a failed assertion can print.
+    fn event_kinds(seen: &Rc<RefCell<Vec<DataGridEvent>>>) -> Vec<&'static str> {
+        seen.borrow()
+            .iter()
+            .map(|event| match event {
+                DataGridEvent::MutationFinished { landed: true } => "finished:landed",
+                DataGridEvent::MutationFinished { landed: false } => "finished:not-landed",
+                DataGridEvent::RequestClose => "request-close",
+                DataGridEvent::Focused => "focused",
+                _ => "other",
+            })
+            .collect()
+    }
+
     /// A run started from the grid's own apply affordance reports its outcome and
     /// leaves the close flow alone: nothing is waiting on it.
     #[gpui::test]
@@ -9082,6 +9096,21 @@ mod tests {
         });
     }
 
+    /// Stages one deleted row, which is the batch's other shape: it is parked on
+    /// the delete confirmation rather than pumped one operation at a time.
+    fn stage_row_delete(panel: &mut DataGridPanel, cx: &mut gpui::Context<DataGridPanel>) {
+        let table_state = panel
+            .grid_table
+            .table_state
+            .clone()
+            .expect("a table source builds a table state");
+
+        table_state.update(cx, |state, cx| {
+            state.edit_buffer_mut().mark_for_delete(0);
+            cx.notify();
+        });
+    }
+
     /// Nothing staged means nothing to apply, so the caller may close the tab.
     #[gpui::test]
     fn a_grid_with_nothing_staged_lets_the_close_proceed(cx: &mut TestAppContext) {
@@ -9121,17 +9150,19 @@ mod tests {
         );
     }
 
-    /// A staged edit that lands is what lets the close through.
-    #[gpui::test]
-    fn a_staged_edit_that_lands_asks_the_close_to_proceed(cx: &mut TestAppContext) {
+    /// Registers a connection the batch can write through, under the profile the
+    /// test panels are built against.
+    ///
+    /// Registered after the panel exists because the batch reads the connection
+    /// when the write runs, not when the grid is built.
+    fn register_writable_connection(
+        panel: &gpui::Entity<DataGridPanel>,
+        window: &mut VisualTestContext,
+    ) {
         use dbflux_core::{ConnectedProfile, DbConfig, DbKind, MutationPolicy};
         use dbflux_test_support::fake_driver::FakeDriver;
         use std::path::PathBuf;
 
-        let (panel, window, seen) = staged_edit_panel(cx);
-
-        // Registered after the panel exists: the batch reads the connection when
-        // the write runs, not when the grid is built.
         window.update(|_, app| {
             let app_state = panel.read(app).app_state.clone();
 
@@ -9171,6 +9202,13 @@ mod tests {
                 );
             });
         });
+    }
+
+    /// One staged row edit that lands is what lets the close through.
+    #[gpui::test]
+    fn a_staged_edit_that_lands_asks_the_close_to_proceed(cx: &mut TestAppContext) {
+        let (panel, window, seen) = staged_edit_panel(cx);
+        register_writable_connection(&panel, window);
 
         window.update(|_, app| {
             panel.update(app, |panel, cx| {
@@ -9188,6 +9226,54 @@ mod tests {
         assert!(
             asked_to_close(&seen),
             "a landed apply must let the tab it was closing go"
+        );
+    }
+
+    /// A batch of deletes takes its own tail: it parks on the delete
+    /// confirmation instead of staging remaining work, so the pump never runs and
+    /// the completion has to be reported by the delete's own success path.
+    #[gpui::test]
+    fn a_delete_only_apply_that_lands_asks_the_close_to_proceed(cx: &mut TestAppContext) {
+        let (panel, window, seen) = staged_edit_panel(cx);
+        register_writable_connection(&panel, window);
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                stage_row_delete(panel, cx);
+                let counts = panel.pending_edit_counts(cx);
+                assert_eq!(counts.2, 1, "one staged delete, got {counts:?}");
+                assert!(
+                    panel.apply_for_close(cx),
+                    "a grid with a staged delete has an apply to wait on"
+                );
+            });
+        });
+
+        // Applying reports through `cx.emit`, which this gpui queues: the batch is
+        // only visible to the panel once the deferred effects are flushed.
+        window.run_until_parked();
+
+        window.update(|window, app| {
+            panel.update(app, |panel, cx| {
+                assert!(
+                    panel.has_delete_confirm(),
+                    "a table delete parks the batch on its confirmation"
+                );
+                panel.confirm_delete(window, cx);
+            });
+        });
+
+        window.run_until_parked();
+
+        assert_eq!(
+            reported_landing(&seen),
+            Some(true),
+            "a landed delete must report it; emitted {:?}",
+            event_kinds(&seen)
+        );
+        assert!(
+            asked_to_close(&seen),
+            "a landed delete must let the tab it was closing go"
         );
     }
 }
