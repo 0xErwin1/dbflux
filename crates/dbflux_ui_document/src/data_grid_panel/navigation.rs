@@ -1,6 +1,6 @@
 use super::{
     DataGridPanel, DataSource, EditState, GridFocusMode, LocalSortState, PendingRequery,
-    ToolbarFocus,
+    TableReload, ToolbarFocus,
 };
 use dbflux_app::keymap::Command;
 use dbflux_components::components::data_table::{Direction, Edge, SortState as TableSortState};
@@ -229,6 +229,10 @@ impl DataGridPanel {
                 order_by,
                 total_rows,
             } => {
+                // Another page is a different row set: the cursor belongs to
+                // the page being left. Marked only where a request is issued,
+                // so an arm that asks for nothing cannot leave the mark behind.
+                self.grid_table.reload = TableReload::ResetRows;
                 self.run_table_query(
                     *profile_id,
                     database.clone(),
@@ -246,6 +250,7 @@ impl DataGridPanel {
                 pagination,
                 total_docs,
             } => {
+                self.grid_table.reload = TableReload::ResetRows;
                 self.run_collection_query(
                     *profile_id,
                     collection.clone(),
@@ -273,6 +278,7 @@ impl DataGridPanel {
                 total_rows,
                 ..
             } => {
+                self.grid_table.reload = TableReload::ResetRows;
                 self.run_table_query(
                     *profile_id,
                     database.clone(),
@@ -290,6 +296,7 @@ impl DataGridPanel {
                 total_docs,
                 ..
             } => {
+                self.grid_table.reload = TableReload::ResetRows;
                 self.run_collection_query(
                     *profile_id,
                     collection.clone(),

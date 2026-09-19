@@ -1,10 +1,10 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 use crate::controls::{InputEvent, InputState};
 use gpui::{
     AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, Pixels, Point, ScrollHandle,
-    Size, Subscription, UniformListScrollHandle, Window, px,
+    ScrollStrategy, Size, Subscription, UniformListScrollHandle, Window, px,
 };
 
 use super::clipboard;
@@ -13,6 +13,17 @@ use super::model::{EditBuffer, TableModel};
 use super::selection::{CellCoord, SelectionState};
 use super::theme::{DEFAULT_COLUMN_WIDTH, MIN_COLUMN_WIDTH, SCROLLBAR_WIDTH};
 use crate::controls::{Dropdown, DropdownDismissed, DropdownItem, DropdownSelectionChanged};
+
+/// How a model swap treats the state that is scoped to the rows being replaced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelSwap {
+    /// The new model holds the same row set, reordered or re-fetched (sort,
+    /// refresh, in-memory re-sort): keep the cursor where it is.
+    KeepCursor,
+    /// The new model holds a different row set (another page, another query
+    /// result): drop the cursor and return to the top.
+    ResetCursor,
+}
 
 /// Main state for the DataTable component.
 pub struct DataTableState {
@@ -189,18 +200,104 @@ impl DataTableState {
         &self.model
     }
 
-    /// Replace the model (e.g., after a new query loads new rows).
-    /// Emits SelectionChanged so subscribers can validate that the preserved selection
-    /// is still valid in the new model (row index might be out of bounds or point to
-    /// different data).
-    #[allow(dead_code)]
-    pub fn set_model(&mut self, model: Arc<TableModel>, cx: &mut Context<Self>) {
+    /// Replace the model in place, so the state built around it survives the
+    /// reload: user-adjusted column widths (matched by column title), sort,
+    /// scroll, focus and the record-mode flag all stay as they were.
+    ///
+    /// Everything the row indices point at is dropped instead: an open inline
+    /// editor and its staged value, pending edits, pending inserts/deletes,
+    /// undo history and the enum options keyed by column index. `swap` decides
+    /// whether the cursor survives too.
+    ///
+    /// Emits SelectionChanged because the swap can move or drop the cursor:
+    /// `clamp_selection` shortens it to the new bounds, and `ResetCursor`
+    /// clears it. Subscribers that mirror the selection — the panel's inspector
+    /// rail, for one — use the event to re-snapshot their content against the
+    /// rows that were just installed.
+    pub fn set_model(&mut self, model: Arc<TableModel>, swap: ModelSwap, cx: &mut Context<Self>) {
+        let previous_widths = self.column_widths_by_title();
+
+        self.close_editor(false, false, cx);
         self.model = model;
-        // Emit SelectionChanged so the audit viewer's subscription can validate
-        // that the selected row is still valid in the new model. If the row count
-        // decreased, the selection may now be out of bounds.
+        self.reload_column_widths(previous_widths);
+        self.edit_buffer.reset_for_base(self.model.row_count());
+        self.enum_options.clear();
+
+        match swap {
+            ModelSwap::KeepCursor => self.clamp_selection(),
+            ModelSwap::ResetCursor => {
+                self.selection.clear();
+                self.scroll_to_first_row();
+            }
+        }
+
         cx.emit(DataTableEvent::SelectionChanged(self.selection.clone()));
         cx.notify();
+    }
+
+    /// Width of every column, keyed by title so a reload can match columns
+    /// across models. Titles repeated within one model queue up, and a new
+    /// model consumes them in column order.
+    fn column_widths_by_title(&self) -> HashMap<Arc<str>, VecDeque<f32>> {
+        let mut widths: HashMap<Arc<str>, VecDeque<f32>> = HashMap::new();
+        for (column, width) in self.model.columns.iter().zip(&self.column_widths) {
+            widths
+                .entry(column.title.clone())
+                .or_default()
+                .push_back(*width);
+        }
+        widths
+    }
+
+    fn reload_column_widths(&mut self, mut previous: HashMap<Arc<str>, VecDeque<f32>>) {
+        self.column_widths = self
+            .model
+            .columns
+            .iter()
+            .map(|column| {
+                previous
+                    .get_mut(&column.title)
+                    .and_then(VecDeque::pop_front)
+                    .unwrap_or_else(|| Self::initial_column_width(column.title.chars().count()))
+            })
+            .collect();
+        self.column_offsets = Self::calculate_offsets(&self.column_widths);
+    }
+
+    /// Keep the cursor inside the new model's bounds. A model with no rows (or
+    /// no columns) has nowhere to point, so the selection is dropped.
+    fn clamp_selection(&mut self) {
+        let row_count = self.row_count();
+        let col_count = self.col_count();
+        if row_count == 0 || col_count == 0 {
+            self.selection.clear();
+            return;
+        }
+
+        let clamp = |coord: CellCoord| {
+            CellCoord::new(coord.row.min(row_count - 1), coord.col.min(col_count - 1))
+        };
+        self.selection.active = self.selection.active.map(clamp);
+        self.selection.anchor = self.selection.anchor.map(clamp);
+    }
+
+    /// Return to the first row without touching the column scroll: a row set
+    /// that moved on (another page, another filter) still has the same columns
+    /// on screen, and dragging the user back to the first column as well would
+    /// be collateral.
+    fn scroll_to_first_row(&mut self) {
+        self.vertical_scroll_handle
+            .scroll_to_item(0, ScrollStrategy::Top);
+        self.record_scroll_handle
+            .scroll_to_item(0, ScrollStrategy::Top);
+    }
+
+    /// Return to the first column. Used when the columns themselves are new, so
+    /// a pixel offset from the previous result means nothing.
+    pub fn scroll_columns_to_start(&mut self) {
+        self.horizontal_scroll_handle
+            .set_offset(Point::new(px(0.0), px(0.0)));
+        self.horizontal_offset = px(0.0);
     }
 
     pub fn row_count(&self) -> usize {
@@ -267,6 +364,12 @@ impl DataTableState {
     /// Set sort state without emitting an event (for initial state).
     pub fn set_sort_without_emit(&mut self, sort: SortState) {
         self.sort = Some(sort);
+    }
+
+    /// Drop sort state without emitting an event, for a reload that replaces
+    /// the columns the sort index points at.
+    pub fn clear_sort_without_emit(&mut self) {
+        self.sort = None;
     }
 
     /// Cycle sort state for a column: none -> asc -> desc -> none
@@ -1028,6 +1131,10 @@ impl DataTableState {
         } else {
             self.cell_input = None;
         }
+
+        // The input and dropdown these watch are gone; they are re-subscribed
+        // when the next edit starts.
+        self._editing_subs.clear();
 
         self.pending_refocus |= refocus;
 
@@ -1967,5 +2074,299 @@ mod tests {
             Some(CellCoord::new(0, 0)),
             "record mode highlights and edits the active field, so it must select one"
         );
+    }
+
+    // =========================================================================
+    // set_model — reload the rows without rebuilding the state
+    // =========================================================================
+
+    use super::ModelSwap;
+    use crate::components::data_table::model::{
+        CellValue, ColumnKind, ColumnSpec, RowData, TableModel,
+    };
+    use crate::components::data_table::selection::CellCoord;
+    use gpui::{TextAlign, px};
+
+    /// A model whose columns are named by `titles`, every cell carrying the
+    /// same text. Enough to exercise the column-identity matching in
+    /// `set_model`.
+    fn model_of(titles: &[&str], row_count: usize) -> std::sync::Arc<TableModel> {
+        let columns = titles
+            .iter()
+            .map(|title| ColumnSpec {
+                id: (*title).into(),
+                title: (*title).into(),
+                kind: ColumnKind::Text,
+                align: TextAlign::Left,
+                type_name: "text".into(),
+            })
+            .collect();
+        let rows = (0..row_count)
+            .map(|_| RowData {
+                cells: vec![CellValue::text("v"); titles.len()],
+            })
+            .collect();
+
+        std::sync::Arc::new(TableModel::new(columns, rows))
+    }
+
+    fn state_of(
+        cx: &mut gpui::TestAppContext,
+        model: std::sync::Arc<TableModel>,
+    ) -> gpui::Entity<super::DataTableState> {
+        cx.update(|cx| cx.new(|cx| super::DataTableState::new(model, cx)))
+    }
+
+    #[gpui::test]
+    fn set_model_carries_column_widths_by_title(cx: &mut gpui::TestAppContext) {
+        let state = state_of(cx, model_of(&["id", "name", "email"], 1));
+
+        cx.update(|cx| {
+            state.update(cx, |s, cx| {
+                s.set_column_width(0, 210.0, cx);
+                s.set_column_width(2, 300.0, cx);
+                s.set_model(
+                    model_of(&["name", "id", "email"], 1),
+                    ModelSwap::KeepCursor,
+                    cx,
+                );
+            });
+        });
+
+        cx.update(|cx| {
+            let widths = state.read(cx).column_widths().to_vec();
+            assert_eq!(
+                widths,
+                vec![
+                    super::DataTableState::initial_column_width("name".len()),
+                    210.0,
+                    300.0,
+                ],
+                "a reordered column must keep its own width, not the width of its old index"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn set_model_drops_columns_the_new_model_lacks(cx: &mut gpui::TestAppContext) {
+        let state = state_of(cx, model_of(&["id", "name", "email"], 1));
+
+        cx.update(|cx| {
+            state.update(cx, |s, cx| {
+                s.set_column_width(1, 333.0, cx);
+                s.set_column_width(2, 444.0, cx);
+                s.set_model(model_of(&["id", "email"], 1), ModelSwap::KeepCursor, cx);
+            });
+        });
+
+        cx.update(|cx| {
+            let widths = state.read(cx).column_widths().to_vec();
+            assert_eq!(
+                widths,
+                vec![super::DataTableState::initial_column_width(2), 444.0],
+                "dropping a column must not shift another column's width into its place"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn set_model_gives_new_columns_the_heuristic_width(cx: &mut gpui::TestAppContext) {
+        let state = state_of(cx, model_of(&["id", "name"], 1));
+
+        cx.update(|cx| {
+            state.update(cx, |s, cx| {
+                s.set_column_width(1, 333.0, cx);
+                s.set_model(
+                    model_of(&["id", "name", "extra"], 1),
+                    ModelSwap::KeepCursor,
+                    cx,
+                );
+            });
+        });
+
+        cx.update(|cx| {
+            let widths = state.read(cx).column_widths().to_vec();
+            assert_eq!(
+                widths,
+                vec![
+                    super::DataTableState::initial_column_width(2),
+                    333.0,
+                    super::DataTableState::initial_column_width("extra".len()),
+                ],
+                "a column the previous model did not have falls back to the heuristic"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn set_model_keep_cursor_clamps_to_the_new_bounds(cx: &mut gpui::TestAppContext) {
+        let state = state_of(cx, model_of(&["id", "name"], 3));
+
+        cx.update(|cx| {
+            state.update(cx, |s, cx| {
+                s.select_cell(CellCoord::new(2, 1), cx);
+                s.set_model(model_of(&["id", "name"], 1), ModelSwap::KeepCursor, cx);
+            });
+        });
+
+        cx.update(|cx| {
+            let selection = state.read(cx).selection().clone();
+            assert_eq!(
+                selection.active,
+                Some(CellCoord::new(0, 1)),
+                "the cursor stays on the same column but cannot point past the last row"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn set_model_reset_cursor_drops_the_selection(cx: &mut gpui::TestAppContext) {
+        let state = state_of(cx, model_of(&["id", "name"], 3));
+
+        cx.update(|cx| {
+            state.update(cx, |s, cx| {
+                s.select_cell(CellCoord::new(1, 1), cx);
+                s.set_model(model_of(&["id", "name"], 3), ModelSwap::ResetCursor, cx);
+            });
+        });
+
+        cx.update(|cx| {
+            let selection = state.read(cx).selection().clone();
+            assert_eq!(selection.active, None);
+            assert_eq!(selection.anchor, None);
+        });
+    }
+
+    #[gpui::test]
+    fn set_model_reset_cursor_keeps_the_column_scroll(cx: &mut gpui::TestAppContext) {
+        let state = state_of(cx, model_of(&["id", "name"], 3));
+
+        cx.update(|cx| {
+            state.update(cx, |s, cx| {
+                s.horizontal_offset = px(120.0);
+                s.set_model(model_of(&["id", "name"], 3), ModelSwap::ResetCursor, cx);
+            });
+        });
+
+        cx.update(|cx| {
+            let s = state.read(cx);
+            assert_eq!(
+                s.horizontal_offset(),
+                px(120.0),
+                "a new page keeps the same columns, so it must not scroll back to column zero"
+            );
+        });
+
+        cx.update(|cx| {
+            state.update(cx, |s, _cx| s.scroll_columns_to_start());
+        });
+
+        cx.update(|cx| {
+            assert_eq!(state.read(cx).horizontal_offset(), px(0.0));
+        });
+    }
+
+    #[gpui::test]
+    fn set_model_clears_enum_options(cx: &mut gpui::TestAppContext) {
+        let state = state_of(cx, model_of(&["id", "name"], 1));
+
+        cx.update(|cx| {
+            state.update(cx, |s, cx| {
+                s.set_enum_options(1, vec!["a".to_string(), "b".to_string()]);
+                s.set_model(model_of(&["name", "id"], 1), ModelSwap::KeepCursor, cx);
+            });
+        });
+
+        cx.update(|cx| {
+            let s = state.read(cx);
+            assert!(
+                s.enum_options(0).is_none() && s.enum_options(1).is_none(),
+                "enum choices are keyed by column index, so they must not survive a model swap"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn set_model_keeps_sort_and_record_mode(cx: &mut gpui::TestAppContext) {
+        let state = state_of(cx, model_of(&["id", "name"], 3));
+
+        cx.update(|cx| {
+            state.update(cx, |s, cx| {
+                s.set_sort_without_emit(SortState::ascending(1));
+                s.set_record_mode(true, cx);
+                s.set_model(model_of(&["id", "name"], 3), ModelSwap::KeepCursor, cx);
+            });
+        });
+
+        cx.update(|cx| {
+            let s = state.read(cx);
+            assert_eq!(s.sort(), Some(&SortState::ascending(1)));
+            assert!(s.record_mode());
+        });
+    }
+
+    #[gpui::test]
+    fn clear_sort_without_emit_drops_the_sort(cx: &mut gpui::TestAppContext) {
+        let state = state_of(cx, model_of(&["id", "name"], 3));
+
+        cx.update(|cx| {
+            state.update(cx, |s, cx| {
+                s.set_sort_without_emit(SortState::ascending(1));
+                s.clear_sort_without_emit();
+                s.set_model(model_of(&["id", "name"], 3), ModelSwap::ResetCursor, cx);
+            });
+        });
+
+        cx.update(|cx| {
+            assert_eq!(state.read(cx).sort(), None);
+        });
+    }
+
+    #[gpui::test]
+    fn set_model_closes_the_editor_and_drops_pending_edits(cx: &mut gpui::TestAppContext) {
+        let state_holder = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let holder_clone = state_holder.clone();
+
+        let (_, window) = cx.add_window_view(move |_window, cx| {
+            let state = cx.new(|cx| {
+                let mut s = super::DataTableState::new(two_row_model(), cx);
+                s.set_pk_columns(vec![0]);
+                s
+            });
+            holder_clone.replace(Some(state.clone()));
+            StateHarness { state }
+        });
+
+        let state = state_holder
+            .borrow()
+            .clone()
+            .expect("state entity must be created");
+
+        window.update(|window, app| {
+            state.update(app, |s, cx| {
+                assert!(s.start_editing(CellCoord::new(0, 1), window, cx));
+                s.stage_base_cell_value(0, 1, CellValue::text("carol"));
+                assert!(s.has_pending_changes());
+            });
+        });
+
+        window.update(|_, app| {
+            state.update(app, |s, cx| {
+                s.set_model(model_of(&["id", "name"], 1), ModelSwap::KeepCursor, cx);
+            });
+        });
+
+        window.update(|_, app| {
+            let s = state.read(app);
+            assert!(
+                s.editing_cell().is_none() && !s.is_editing_text_input(),
+                "an open editor addresses a cell of the model being replaced"
+            );
+            assert!(
+                !s.has_pending_changes(),
+                "a staged value is keyed by the old row index and must not carry over"
+            );
+            assert_eq!(s.edit_buffer().base_row_count(), 1);
+        });
     }
 }
