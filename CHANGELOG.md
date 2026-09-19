@@ -22,6 +22,14 @@ All notable changes to DBFlux will be documented in this file.
   and connection teardown route through it so a driver-owned session is
   opened, finished, and closed explicitly with cleanup failures surfaced.
   Existing drivers are unchanged.
+* **Grammar-derived SQL keyword completion** — the SQL editor now completes
+  the keywords its bundled tree-sitter grammar declares instead of a hand-kept
+  list, so words the static list never carried (`EXPLAIN`, `VACUUM`, `WITH`,
+  `RETURNING`, …) are suggested on every SQL-style language. A small hand-kept
+  supplement covers what the grammar cannot supply: multi-word keywords
+  (`GROUP BY`, `ORDER BY`), the aggregate function names, spelling variants
+  hidden behind a shared rule (`ILIKE`, `INTEGER`, `INT4`, …), and statements
+  the grammar never defines (`GRANT`, `REVOKE`, `FETCH`, …).
 
 ### Fixed
 
