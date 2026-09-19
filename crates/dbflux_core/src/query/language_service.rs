@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::sync::OnceLock;
 
 use crate::QueryLanguage;
 use dbflux_policy::ExecutionClassification;
@@ -782,6 +783,38 @@ fn format_statement_action(statement: &str, range: std::ops::Range<usize>) -> Op
             },
             new_text: formatted,
         },
+    })
+}
+
+/// The SQL keyword vocabulary, derived from the bundled tree-sitter grammar.
+///
+/// Grammar keywords are rules named `keyword_<word>`, and the parse language
+/// exposes those names through `tree_sitter::Language::node_kind_for_id`, so
+/// the set follows the grammar crate instead of a hand-kept list. Only named,
+/// visible symbols are collected: a `choice` over synonyms (for example
+/// `keyword_int` covering `int`, `integer`, and `int4`) contributes its rule
+/// name alone, because the anonymous arms carry no literal text reachable
+/// through the tree-sitter API. Multi-word keywords are two separate rules and
+/// are not joined here.
+///
+/// The result is sorted and deduplicated, so callers and tests never depend on
+/// the grammar-internal symbol order.
+pub fn sql_statement_keywords() -> &'static [&'static str] {
+    static KEYWORDS: OnceLock<Vec<&'static str>> = OnceLock::new();
+
+    KEYWORDS.get_or_init(|| {
+        let language = tree_sitter::Language::new(tree_sitter_sequel::LANGUAGE);
+        let mut words: Vec<&'static str> = (1..language.node_kind_count())
+            .filter_map(|id| u16::try_from(id).ok())
+            .filter(|id| language.node_kind_is_named(*id))
+            .filter_map(|id| language.node_kind_for_id(id))
+            .filter_map(|name| name.strip_prefix("keyword_"))
+            .map(|word| &*Box::leak(word.to_uppercase().into_boxed_str()))
+            .collect();
+
+        words.sort_unstable();
+        words.dedup();
+        words
     })
 }
 
@@ -2358,6 +2391,55 @@ END $$;"#;
             let query = "SELECT id FROM users WHERE id = 1 LIMIT 10";
             let titles = action_titles(query, query.len());
             assert_eq!(titles, vec!["Format statement".to_string()]);
+        }
+    }
+
+    // ==================== keyword vocabulary tests ====================
+
+    #[test]
+    fn sql_statement_keywords_include_grammar_only_words() {
+        let keywords = sql_statement_keywords();
+
+        for expected in ["EXPLAIN", "VACUUM", "WITH", "RETURNING"] {
+            assert!(
+                keywords.contains(&expected),
+                "{expected} must be derived from the grammar"
+            );
+        }
+    }
+
+    #[test]
+    fn sql_statement_keywords_are_sorted_and_deduplicated() {
+        let keywords = sql_statement_keywords();
+
+        assert!(keywords.is_sorted(), "grammar symbol order must not leak");
+        assert!(
+            keywords.windows(2).all(|pair| pair[0] != pair[1]),
+            "duplicate keywords must be removed"
+        );
+    }
+
+    #[test]
+    fn sql_statement_keywords_are_display_words() {
+        let keywords = sql_statement_keywords();
+
+        assert!(
+            keywords.len() > 300,
+            "the grammar carries hundreds of keywords, got {}",
+            keywords.len()
+        );
+
+        for keyword in keywords {
+            assert!(
+                !keyword.contains("_TOKEN"),
+                "`{keyword}` is a hidden synonym arm, not a display word"
+            );
+            assert!(
+                keyword
+                    .chars()
+                    .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_'),
+                "`{keyword}` is not a display word"
+            );
         }
     }
 }

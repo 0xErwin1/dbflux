@@ -6,6 +6,7 @@ use crate::completion_support::{
 };
 use dbflux_core::{SqlCompletionContext, SqlContextEngine, SqlCursorAnalysis};
 use std::cell::{Cell, RefCell};
+use std::sync::OnceLock;
 
 /// Rank groups for context-aware SQL completion (`sort_text` prefix): the
 /// items the context asks for come first, keywords last.
@@ -99,7 +100,7 @@ impl QueryCompletionProvider {
             dbflux_core::QueryLanguage::Sql
             | dbflux_core::QueryLanguage::OpenSearchSql
             | dbflux_core::QueryLanguage::Cql
-            | dbflux_core::QueryLanguage::InfluxQuery => SQL_KEYWORDS,
+            | dbflux_core::QueryLanguage::InfluxQuery => sql_keyword_candidates(),
             dbflux_core::QueryLanguage::CloudWatchLogsInsightsQl => &[
                 "fields", "filter", "parse", "stats", "sort", "limit", "display", "dedup",
                 "pattern", "diff", "anomaly", "unnest", "unmask", "SOURCE",
@@ -802,7 +803,7 @@ impl SqlItemSink<'_> {
         }
 
         self.push_all(
-            SQL_KEYWORDS.iter().copied(),
+            sql_keyword_candidates().iter().copied(),
             CompletionItemKind::KEYWORD,
             Some(RANK_KEYWORD),
         );
@@ -878,7 +879,7 @@ impl SqlItemSink<'_> {
         }
 
         self.push_all(
-            SQL_KEYWORDS.iter().copied(),
+            sql_keyword_candidates().iter().copied(),
             CompletionItemKind::KEYWORD,
             Some(RANK_KEYWORD),
         );
@@ -895,7 +896,7 @@ impl SqlItemSink<'_> {
     ) -> Vec<CompletionItem> {
         if self.has_prefix() {
             self.push_all(
-                SQL_KEYWORDS.iter().copied(),
+                sql_keyword_candidates().iter().copied(),
                 CompletionItemKind::KEYWORD,
                 None,
             );
@@ -1513,13 +1514,40 @@ enum MongoCompletionContext {
     General,
 }
 
-const SQL_KEYWORDS: &[&str] = &[
-    "SELECT", "FROM", "WHERE", "JOIN", "LEFT", "RIGHT", "INNER", "OUTER", "ON", "GROUP BY",
-    "ORDER BY", "HAVING", "LIMIT", "OFFSET", "INSERT", "INTO", "VALUES", "UPDATE", "SET", "DELETE",
-    "CREATE", "ALTER", "DROP", "TRUNCATE", "BEGIN", "COMMIT", "ROLLBACK", "COUNT", "SUM", "AVG",
-    "MIN", "MAX", "DISTINCT", "AND", "OR", "NOT", "NULL", "IS", "LIKE", "IN", "BETWEEN", "EXISTS",
-    "ASC", "DESC",
+/// SQL completion words the grammar cannot supply, kept by hand.
+///
+/// Multi-word keywords are two separate rules (`keyword_group` + `keyword_by`)
+/// and no rule pattern contains a space, so the pairing is not derivable. The
+/// rest are words the grammar never exposes as a rule name: aggregate function
+/// names, which it matches as plain identifiers; spellings hidden inside a
+/// `choice` over synonyms (`keyword_like` covers `like|ilike`, `keyword_int`
+/// covers `int|integer|int4`), whose anonymous arms carry no literal text
+/// through the tree-sitter API; and statements the grammar does not define at
+/// all. Every one of them completes today, so dropping them would be a
+/// regression rather than a simplification.
+const SQL_CURATED_KEYWORDS: &[&str] = &[
+    // Multi-word keywords.
+    "GROUP BY", "ORDER BY",
+    // Aggregate functions, matched by the grammar as identifiers.
+    "COUNT", "SUM", "AVG", "MIN", "MAX",
+    // Spellings hidden inside a grammar `choice` over synonyms.
+    "ILIKE", "INTEGER", "INT1", "INT2", "INT3", "INT4", "INT8", "SERIAL2", "SERIAL4", "SERIAL8",
+    "FLOAT4", // Statements the bundled grammar does not define.
+    "GRANT", "REVOKE", "IDENTITY", "FETCH", "CUBE", "ROLLUP", "GROUPING",
 ];
+
+/// Grammar-derived SQL keywords plus the curated words, merged once.
+fn sql_keyword_candidates() -> &'static [&'static str] {
+    static MERGED: OnceLock<Vec<&'static str>> = OnceLock::new();
+
+    MERGED.get_or_init(|| {
+        let mut words = dbflux_core::sql_statement_keywords().to_vec();
+        words.extend_from_slice(SQL_CURATED_KEYWORDS);
+        words.sort_unstable();
+        words.dedup();
+        words
+    })
+}
 
 const MONGO_METHODS: &[&str] = &[
     "find",
@@ -2088,6 +2116,65 @@ mod tests {
         let where_source = "SELECT * FROM Orders WHE";
         let where_items = sql_completion_items(&metadata, where_source, where_source.len());
         assert!(labels(&where_items).contains(&"WHERE".to_string()));
+    }
+
+    #[test]
+    fn sql_completion_offers_grammar_derived_keywords() {
+        // The SQL arm reads the grammar-derived vocabulary, not a static list:
+        // `EXPLAIN` was never in it, and the curated words still merge.
+        let metadata = SqlCompletionMetadata::default();
+
+        let source = "EXPL";
+        let items = sql_completion_items(&metadata, source, source.len());
+        let explain_labels = labels(&items);
+        assert!(
+            explain_labels.contains(&"EXPLAIN".to_string()),
+            "EXPLAIN must come from the grammar"
+        );
+        assert!(
+            !explain_labels.iter().any(|label| label.contains("_TOKEN")),
+            "hidden grammar symbol arms must not reach completion"
+        );
+
+        let group_source = "GRO";
+        let group_items = sql_completion_items(&metadata, group_source, group_source.len());
+        let group_labels = labels(&group_items);
+        assert!(group_labels.contains(&"GROUP".to_string()));
+        assert!(
+            group_labels.contains(&"GROUP BY".to_string()),
+            "the multi-word keyword must survive the merge"
+        );
+
+        let count_source = "COU";
+        let count_items = sql_completion_items(&metadata, count_source, count_source.len());
+        assert!(
+            labels(&count_items).contains(&"COUNT".to_string()),
+            "the grammar carries no aggregate function names, so COUNT stays curated"
+        );
+
+        let ilike_source = "ILI";
+        let ilike_items = sql_completion_items(&metadata, ilike_source, ilike_source.len());
+        assert!(
+            labels(&ilike_items).contains(&"ILIKE".to_string()),
+            "a spelling hidden inside a grammar `choice` stays curated"
+        );
+    }
+
+    #[test]
+    fn sql_keyword_candidates_merge_grammar_and_curated_words() {
+        let keywords = super::sql_keyword_candidates();
+
+        assert!(keywords.contains(&"EXPLAIN"));
+        let curated = [
+            "GROUP BY", "ORDER BY", "COUNT", "SUM", "AVG", "MIN", "MAX", "ILIKE", "INTEGER",
+            "INT1", "INT2", "INT3", "INT4", "INT8", "SERIAL2", "SERIAL4", "SERIAL8", "FLOAT4",
+            "GRANT", "REVOKE", "IDENTITY", "FETCH", "CUBE", "ROLLUP", "GROUPING",
+        ];
+        for word in curated {
+            assert!(keywords.contains(&word), "{word} must stay curated");
+        }
+        assert!(keywords.is_sorted());
+        assert!(keywords.windows(2).all(|pair| pair[0] != pair[1]));
     }
 
     #[test]

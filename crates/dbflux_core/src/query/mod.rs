@@ -27,7 +27,7 @@ pub use language_service::{
     DiagnosticSeverity, EditorDiagnostic, LanguageService, SchemaColumns, SqlLanguageService,
     TextPosition, TextPositionRange, TextRange, ValidationResult, classify_query_for_language,
     classify_query_for_language_with_service, classify_visual_mutation, detect_dangerous_query,
-    detect_dangerous_sql, strip_leading_comments,
+    detect_dangerous_sql, sql_statement_keywords, strip_leading_comments,
 };
 pub use safety::{classify_query_for_governance, classify_sql_execution, is_safe_read_query};
 pub use script_operation::{

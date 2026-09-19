@@ -154,7 +154,8 @@ pub use query::{
     classify_visual_mutation, contains_time_macros, detect_dangerous_query, detect_dangerous_sql,
     infer_column_kind, inline_params, is_safe_read_query, lower_keyset_predicate,
     parse_semantic_filter_json, project_aggregate_kinds, render_filter_node_sql,
-    render_semantic_filter_sql, strip_leading_comments, substitute_time_macros,
+    render_semantic_filter_sql, sql_statement_keywords, strip_leading_comments,
+    substitute_time_macros,
 };
 
 pub use query::relational_filter::{
