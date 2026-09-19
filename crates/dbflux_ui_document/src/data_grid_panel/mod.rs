@@ -2158,6 +2158,21 @@ impl DataGridPanel {
         });
     }
 
+    /// Whether the reload's own `SelectionChanged` emission has already
+    /// re-snapshotted the inspector rail.
+    ///
+    /// The handler runs on a cursor that the rail follows, so it needs an active
+    /// selection to have done the work; a cursor a reload cleared (paging) or a
+    /// rail that is not tracking leaves it to the caller.
+    fn reload_refreshed_the_rail(&self, cx: &App) -> bool {
+        self.inspector.follow_selection
+            && self
+                .grid_table
+                .table_state
+                .as_ref()
+                .is_some_and(|state| state.read(cx).selection().active.is_some())
+    }
+
     /// Whether the panel may be re-pointed at `(row, col)`.
     ///
     /// An edited-but-unsaved panel stays pinned to its cell; following the
@@ -2320,8 +2335,14 @@ impl DataGridPanel {
         self.refresh.state = GridState::Ready;
 
         // Re-snapshot the row inspector against the fresh data so the rail
-        // keeps following the same row position across refreshes.
-        if let Some((row, col)) = self.inspector.inspector_row {
+        // keeps following the same row position across refreshes. The reload
+        // already emitted `SelectionChanged`, whose handler re-snapshots a rail
+        // that follows the cursor — this pass covers what that emission cannot:
+        // a rail still pointed at its own row while the cursor sits elsewhere,
+        // and one that must be dropped because the new result is shorter.
+        if !self.reload_refreshed_the_rail(cx)
+            && let Some((row, col)) = self.inspector.inspector_row
+        {
             self.open_row_inspector(row, col, cx);
         }
 
@@ -2504,6 +2525,11 @@ impl DataGridPanel {
                 }
 
                 state.set_model(table_model, reload.cursor_swap(), cx);
+                if reload == TableReload::NewColumns {
+                    // The columns are new, so a pixel offset from the previous
+                    // projection points at nothing meaningful.
+                    state.scroll_columns_to_start();
+                }
                 state.set_pk_columns(pk_indices);
                 state.set_insertable(is_insertable);
                 state.set_fk_columns(fk_indices);
@@ -8429,6 +8455,33 @@ mod tests {
                 260.0,
                 "dropping the sort must not touch the column widths"
             );
+        });
+    }
+
+    #[gpui::test]
+    fn a_rail_that_follows_the_cursor_is_left_to_the_reload(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let window = cx.add_empty_window();
+        let panel = table_panel(window, app_state);
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                widen_name_and_select(panel, cx);
+
+                // The reload's SelectionChanged handler runs open_row_inspector
+                // itself when the rail follows a live cursor, so the explicit
+                // pass after it must stand down.
+                panel.inspector.follow_selection = true;
+                assert!(panel.reload_refreshed_the_rail(cx));
+
+                panel.inspector.follow_selection = false;
+                assert!(
+                    !panel.reload_refreshed_the_rail(cx),
+                    "a rail that is not tracking needs the explicit re-snapshot"
+                );
+            });
         });
     }
 

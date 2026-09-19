@@ -220,10 +220,6 @@ impl DataGridPanel {
     // === Pagination ===
 
     pub fn go_to_next_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // Another page is a different row set: the cursor belongs to the page
-        // being left.
-        self.grid_table.reload = TableReload::ResetRows;
-
         match &self.source {
             DataSource::Table {
                 profile_id,
@@ -233,6 +229,10 @@ impl DataGridPanel {
                 order_by,
                 total_rows,
             } => {
+                // Another page is a different row set: the cursor belongs to
+                // the page being left. Marked only where a request is issued,
+                // so an arm that asks for nothing cannot leave the mark behind.
+                self.grid_table.reload = TableReload::ResetRows;
                 self.run_table_query(
                     *profile_id,
                     database.clone(),
@@ -250,6 +250,7 @@ impl DataGridPanel {
                 pagination,
                 total_docs,
             } => {
+                self.grid_table.reload = TableReload::ResetRows;
                 self.run_collection_query(
                     *profile_id,
                     collection.clone(),
@@ -268,8 +269,6 @@ impl DataGridPanel {
             return;
         };
 
-        self.grid_table.reload = TableReload::ResetRows;
-
         match &self.source {
             DataSource::Table {
                 profile_id,
@@ -279,6 +278,7 @@ impl DataGridPanel {
                 total_rows,
                 ..
             } => {
+                self.grid_table.reload = TableReload::ResetRows;
                 self.run_table_query(
                     *profile_id,
                     database.clone(),
@@ -296,6 +296,7 @@ impl DataGridPanel {
                 total_docs,
                 ..
             } => {
+                self.grid_table.reload = TableReload::ResetRows;
                 self.run_collection_query(
                     *profile_id,
                     collection.clone(),

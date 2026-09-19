@@ -209,9 +209,11 @@ impl DataTableState {
     /// undo history and the enum options keyed by column index. `swap` decides
     /// whether the cursor survives too.
     ///
-    /// Emits SelectionChanged so subscribers can validate that the preserved
-    /// selection is still valid in the new model (row index might be out of
-    /// bounds or point to different data).
+    /// Emits SelectionChanged because the swap can move or drop the cursor:
+    /// `clamp_selection` shortens it to the new bounds, and `ResetCursor`
+    /// clears it. Subscribers that mirror the selection — the panel's inspector
+    /// rail, for one — use the event to re-snapshot their content against the
+    /// rows that were just installed.
     pub fn set_model(&mut self, model: Arc<TableModel>, swap: ModelSwap, cx: &mut Context<Self>) {
         let previous_widths = self.column_widths_by_title();
 
@@ -225,7 +227,7 @@ impl DataTableState {
             ModelSwap::KeepCursor => self.clamp_selection(),
             ModelSwap::ResetCursor => {
                 self.selection.clear();
-                self.reset_scroll_position();
+                self.scroll_to_first_row();
             }
         }
 
@@ -279,11 +281,20 @@ impl DataTableState {
         self.selection.anchor = self.selection.anchor.map(clamp);
     }
 
-    fn reset_scroll_position(&mut self) {
+    /// Return to the first row without touching the column scroll: a row set
+    /// that moved on (another page, another filter) still has the same columns
+    /// on screen, and dragging the user back to the first column as well would
+    /// be collateral.
+    fn scroll_to_first_row(&mut self) {
         self.vertical_scroll_handle
             .scroll_to_item(0, ScrollStrategy::Top);
         self.record_scroll_handle
             .scroll_to_item(0, ScrollStrategy::Top);
+    }
+
+    /// Return to the first column. Used when the columns themselves are new, so
+    /// a pixel offset from the previous result means nothing.
+    pub fn scroll_columns_to_start(&mut self) {
         self.horizontal_scroll_handle
             .set_offset(Point::new(px(0.0), px(0.0)));
         self.horizontal_offset = px(0.0);
@@ -1120,6 +1131,10 @@ impl DataTableState {
         } else {
             self.cell_input = None;
         }
+
+        // The input and dropdown these watch are gone; they are re-subscribed
+        // when the next edit starts.
+        self._editing_subs.clear();
 
         self.pending_refocus |= refocus;
 
@@ -2070,7 +2085,7 @@ mod tests {
         CellValue, ColumnKind, ColumnSpec, RowData, TableModel,
     };
     use crate::components::data_table::selection::CellCoord;
-    use gpui::TextAlign;
+    use gpui::{TextAlign, px};
 
     /// A model whose columns are named by `titles`, every cell carrying the
     /// same text. Enough to exercise the column-identity matching in
@@ -2219,6 +2234,35 @@ mod tests {
             let selection = state.read(cx).selection().clone();
             assert_eq!(selection.active, None);
             assert_eq!(selection.anchor, None);
+        });
+    }
+
+    #[gpui::test]
+    fn set_model_reset_cursor_keeps_the_column_scroll(cx: &mut gpui::TestAppContext) {
+        let state = state_of(cx, model_of(&["id", "name"], 3));
+
+        cx.update(|cx| {
+            state.update(cx, |s, cx| {
+                s.horizontal_offset = px(120.0);
+                s.set_model(model_of(&["id", "name"], 3), ModelSwap::ResetCursor, cx);
+            });
+        });
+
+        cx.update(|cx| {
+            let s = state.read(cx);
+            assert_eq!(
+                s.horizontal_offset(),
+                px(120.0),
+                "a new page keeps the same columns, so it must not scroll back to column zero"
+            );
+        });
+
+        cx.update(|cx| {
+            state.update(cx, |s, _cx| s.scroll_columns_to_start());
+        });
+
+        cx.update(|cx| {
+            assert_eq!(state.read(cx).horizontal_offset(), px(0.0));
         });
     }
 
