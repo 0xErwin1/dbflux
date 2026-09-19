@@ -25,6 +25,15 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **Column widths survive a data reload** — sorting a column, paging, refreshing
+  or changing a filter rebuilt the grid's whole table state, so every width the
+  user had dragged came back at the header-length default. A reload now swaps
+  the model on the live state instead of building a new one, which keeps the
+  widths, the selection and the scroll position. Widths are carried by column
+  name, so a projection that gained, lost or reordered columns starts the
+  affected columns at the default rather than inheriting another column's
+  width. Pending edits are still dropped by a reload, as before.
+
 * **Closing an empty script no longer waits on its own file** — the close that
   removes an emptied script's backing file used to read the whole file, then
   delete it and rescan the scripts directory, all on the UI thread, so a slow

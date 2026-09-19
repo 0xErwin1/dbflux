@@ -25,6 +25,12 @@ pub struct DataTableState {
     /// Prefix sums of column widths for hit-testing: [0, w0, w0+w1, ...].
     column_offsets: Vec<f32>,
 
+    /// Name of the column each width in `column_widths` belongs to, in
+    /// lockstep with it. A reload carries widths across by column name — the
+    /// only stable identity between two result projections — so the state has
+    /// to remember which name every width was sized for.
+    width_column_names: Vec<Arc<str>>,
+
     /// Current sort state.
     sort: Option<SortState>,
 
@@ -125,6 +131,8 @@ impl DataTableState {
             })
             .collect();
         let column_offsets = Self::calculate_offsets(&column_widths);
+        let width_column_names: Vec<Arc<str>> =
+            model.columns.iter().map(|c| c.title.clone()).collect();
 
         let mut edit_buffer = EditBuffer::new();
         edit_buffer.set_base_row_count(row_count);
@@ -133,6 +141,7 @@ impl DataTableState {
             model,
             column_widths,
             column_offsets,
+            width_column_names,
             sort: None,
             viewport_size: Size::default(),
             selection: SelectionState::new(),
@@ -203,6 +212,77 @@ impl DataTableState {
         cx.notify();
     }
 
+    /// Reshape the per-column and per-row view state onto a new model without
+    /// replacing the entity.
+    ///
+    /// A user-resized width is carried over when the column NAME matches a
+    /// still-unused name in the previous set (first unused match, so duplicate
+    /// names pair in order); every other column starts from the
+    /// header-length heuristic. Names are the only stable identity across a
+    /// reload: sort, pagination and filter return the same projection in the
+    /// same order, but a changed projection must not inherit a width by
+    /// position.
+    ///
+    /// Pending edits, any open inline editor and the `enum_options` map are
+    /// dropped, and the selection is clamped into the new bounds (cleared when
+    /// the model is empty) — all of it parity with the fresh-entity behavior
+    /// this method replaces. Sort is left untouched: the caller decides it per
+    /// rebuild. Does not emit `SelectionChanged`.
+    pub fn reload_model(&mut self, model: Arc<TableModel>, cx: &mut Context<Self>) {
+        let mut carried: Vec<(Arc<str>, f32)> = self
+            .width_column_names
+            .iter()
+            .cloned()
+            .zip(self.column_widths.iter().copied())
+            .collect();
+
+        self.column_widths = model
+            .columns
+            .iter()
+            .map(|column| {
+                let name_len = column.title.chars().count();
+                match carried.iter().position(|(name, _)| name == &column.title) {
+                    Some(ix) => carried.remove(ix).1,
+                    None => Self::initial_column_width(name_len),
+                }
+            })
+            .collect();
+        self.width_column_names = model.columns.iter().map(|c| c.title.clone()).collect();
+        self.column_offsets = Self::calculate_offsets(&self.column_widths);
+
+        self.model = model;
+
+        let row_count = self.model.row_count();
+        let col_count = self.model.col_count();
+
+        // Drop pending edits and any open editor: a fresh entity had neither.
+        self.edit_buffer = EditBuffer::new();
+        self.edit_buffer.set_base_row_count(row_count);
+        self.editing_cell = None;
+        self.cell_input = None;
+        self.enum_dropdown = None;
+        self._editing_subs.clear();
+
+        // Nothing downstream clamps: `request_save_row_at` and the panel's row
+        // handlers take the stored cell at face value, so a preserved
+        // out-of-range cell would be a live defect.
+        if row_count == 0 || col_count == 0 {
+            self.selection.clear();
+        } else {
+            let clamp_cell = |coord: Option<CellCoord>| {
+                coord.map(|c| CellCoord::new(c.row.min(row_count - 1), c.col.min(col_count - 1)))
+            };
+            self.selection.active = clamp_cell(self.selection.active);
+            self.selection.anchor = clamp_cell(self.selection.anchor);
+        }
+
+        // Keyed by column index and re-populated by the caller; a stale entry
+        // would offer a dropdown on a column that no longer has one.
+        self.enum_options.clear();
+
+        cx.notify();
+    }
+
     pub fn row_count(&self) -> usize {
         // Include pending inserts in the row count
         self.model.row_count() + self.edit_buffer.pending_insert_rows().len()
@@ -222,6 +302,11 @@ impl DataTableState {
 
     pub fn column_widths(&self) -> &[f32] {
         &self.column_widths
+    }
+
+    /// Prefix sums of `column_widths` (length + 1, starting at 0).
+    pub fn column_offsets(&self) -> &[f32] {
+        &self.column_offsets
     }
 
     pub fn set_column_width(&mut self, col: usize, width: f32, cx: &mut Context<Self>) {
@@ -267,6 +352,13 @@ impl DataTableState {
     /// Set sort state without emitting an event (for initial state).
     pub fn set_sort_without_emit(&mut self, sort: SortState) {
         self.sort = Some(sort);
+    }
+
+    /// Clear sort state without emitting an event (for a rebuild that carries
+    /// no sort). `set_sort(None)` would emit `SortChanged` and loop back into
+    /// the panel's sort handlers.
+    pub fn clear_sort_without_emit(&mut self) {
+        self.sort = None;
     }
 
     /// Cycle sort state for a column: none -> asc -> desc -> none
@@ -1204,6 +1296,247 @@ mod tests {
         let current = Some(SortState::descending(1));
         let next = next_sort_state(current, 5);
         assert_eq!(next, Some(SortState::ascending(5)));
+    }
+
+    #[gpui::test]
+    fn clear_sort_without_emit_leaves_no_sort_state(cx: &mut gpui::TestAppContext) {
+        let state = named_state(cx, &["a"], 1);
+
+        cx.update(|cx| {
+            state.update(cx, |state, _cx| {
+                state.set_sort_without_emit(SortState::descending(2));
+                state.clear_sort_without_emit();
+                assert!(state.sort().is_none());
+            });
+        });
+    }
+
+    // =========================================================================
+    // reload_model
+    // =========================================================================
+    //
+    // These only need App-level context (no window): the exercised methods
+    // take a `Context<Self>` and never touch a `Window`.
+
+    fn named_model(
+        titles: &[&str],
+        rows: usize,
+    ) -> std::sync::Arc<super::super::model::TableModel> {
+        use crate::components::data_table::model::{
+            CellValue, ColumnKind, ColumnSpec, RowData, TableModel,
+        };
+        use gpui::TextAlign;
+
+        let columns = titles
+            .iter()
+            .map(|title| ColumnSpec {
+                id: (*title).into(),
+                title: (*title).into(),
+                kind: ColumnKind::Text,
+                align: TextAlign::Left,
+                type_name: "text".into(),
+            })
+            .collect();
+        let rows = (0..rows)
+            .map(|_| RowData {
+                cells: titles.iter().map(|_| CellValue::text("v")).collect(),
+            })
+            .collect();
+        std::sync::Arc::new(TableModel::new(columns, rows))
+    }
+
+    fn named_state(
+        cx: &mut gpui::TestAppContext,
+        titles: &[&str],
+        rows: usize,
+    ) -> gpui::Entity<super::DataTableState> {
+        cx.new(|cx| super::DataTableState::new(named_model(titles, rows), cx))
+    }
+
+    /// A resized width must follow the column NAME across a reload, even when
+    /// the column moved to a later position.
+    #[gpui::test]
+    fn reload_model_carries_the_width_of_a_matching_column_name(cx: &mut gpui::TestAppContext) {
+        let state = named_state(cx, &["id", "name"], 2);
+
+        cx.update(|cx| {
+            state.update(cx, |state, cx| {
+                state.set_column_width(1, 250.0, cx);
+                state.reload_model(named_model(&["extra", "id", "name"], 2), cx);
+            });
+        });
+
+        let widths = state.read_with(cx, |state, _app| state.column_widths().to_vec());
+        assert_eq!(
+            widths.get(2).copied(),
+            Some(250.0),
+            "the resized width must follow the column name across the reload"
+        );
+        assert_eq!(
+            widths.get(1).copied(),
+            Some(super::DataTableState::initial_column_width(2)),
+            "a column with no matching name must start from the header heuristic"
+        );
+    }
+
+    /// A column that disappears must not keep carrying a width: the next model
+    /// that reuses the name by coincidence is a different projection.
+    #[gpui::test]
+    fn reload_model_resets_the_width_of_a_column_that_disappeared(cx: &mut gpui::TestAppContext) {
+        let state = named_state(cx, &["id", "name"], 2);
+
+        cx.update(|cx| {
+            state.update(cx, |state, cx| {
+                state.set_column_width(1, 250.0, cx);
+                state.reload_model(named_model(&["id"], 2), cx);
+            });
+        });
+
+        let widths = state.read_with(cx, |state, _app| state.column_widths().to_vec());
+        assert_eq!(
+            widths,
+            vec![super::DataTableState::initial_column_width(2)],
+            "a column that disappeared must leave with its width"
+        );
+    }
+
+    /// Offsets feed header/body hit-testing, so they must stay prefix sums of
+    /// the carried widths after a swap.
+    #[gpui::test]
+    fn reload_model_keeps_offsets_and_total_width_consistent_with_widths(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let state = named_state(cx, &["a", "b", "c"], 2);
+
+        cx.update(|cx| {
+            state.update(cx, |state, cx| {
+                state.set_column_width(1, 200.0, cx);
+                state.reload_model(named_model(&["c", "b"], 2), cx);
+            });
+        });
+
+        let (widths, offsets, total) = state.read_with(cx, |state, _app| {
+            (
+                state.column_widths().to_vec(),
+                state.column_offsets().to_vec(),
+                state.total_content_width(),
+            )
+        });
+        let expected: Vec<f32> = std::iter::once(0.0)
+            .chain(widths.iter().scan(0.0, |acc, w| {
+                *acc += w;
+                Some(*acc)
+            }))
+            .collect();
+        assert_eq!(offsets, expected, "offsets must stay prefix sums of widths");
+        assert_eq!(
+            total,
+            widths.iter().sum::<f32>(),
+            "total content width must equal the sum of the widths"
+        );
+    }
+
+    /// Nothing downstream clamps the selection, so shrinking the row set must
+    /// clamp the stored cell — and navigation right after must not panic.
+    #[gpui::test]
+    fn reload_model_clamps_the_selection_to_the_shrunken_bounds(cx: &mut gpui::TestAppContext) {
+        use crate::components::data_table::events::Direction;
+        use crate::components::data_table::selection::CellCoord;
+
+        let state = named_state(cx, &["a", "b"], 4);
+
+        cx.update(|cx| {
+            state.update(cx, |state, cx| {
+                state.select_cell(CellCoord::new(3, 1), cx);
+                state.reload_model(named_model(&["a", "b"], 2), cx);
+            });
+        });
+
+        let active = state
+            .read_with(cx, |state, _app| state.selection().active)
+            .expect("a selection inside the old bounds must survive clamped");
+        assert!(
+            active.row < 2 && active.col < 2,
+            "the clamped cell must be inside the new bounds, got {active:?}"
+        );
+
+        cx.update(|cx| {
+            state.update(cx, |state, cx| {
+                state.move_active(Direction::Down, false, cx);
+            });
+        });
+    }
+
+    /// A reload that empties the model must drop the selection entirely; a
+    /// fresh entity never carried one.
+    #[gpui::test]
+    fn reload_model_clears_the_selection_when_the_model_becomes_empty(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use crate::components::data_table::selection::CellCoord;
+
+        let state = named_state(cx, &["a"], 2);
+
+        cx.update(|cx| {
+            state.update(cx, |state, cx| {
+                state.select_cell(CellCoord::new(0, 0), cx);
+                state.reload_model(named_model(&["a"], 0), cx);
+            });
+        });
+
+        let empty = state.read_with(cx, |state, _app| state.selection().is_empty());
+        assert!(empty, "an empty model must leave no selection behind");
+    }
+
+    /// Pending edits die with the model they were staged against; parity with
+    /// the fresh entity this replaces.
+    #[gpui::test]
+    fn reload_model_drops_pending_edits(cx: &mut gpui::TestAppContext) {
+        use crate::components::data_table::model::CellValue;
+
+        let state = named_state(cx, &["a", "b"], 2);
+
+        cx.update(|cx| {
+            state.update(cx, |state, _cx| {
+                state.stage_base_cell_value(0, 1, CellValue::text("edited"));
+            });
+        });
+        let staged = state.read_with(cx, |state, _app| state.has_pending_changes());
+        assert!(staged, "the staged edit must exist before the reload");
+
+        cx.update(|cx| {
+            state.update(cx, |state, cx| {
+                state.reload_model(named_model(&["a", "b"], 2), cx);
+            });
+        });
+
+        let clean = state.read_with(cx, |state, _app| state.has_pending_changes());
+        assert!(
+            !clean,
+            "a reload must drop pending edits staged against the old model"
+        );
+    }
+
+    /// Duplicate names have no other identity than order: widths must pair
+    /// first-unused, so distinct resized widths stay distinct.
+    #[gpui::test]
+    fn reload_model_pairs_duplicate_column_names_in_order(cx: &mut gpui::TestAppContext) {
+        let state = named_state(cx, &["value", "value"], 2);
+
+        cx.update(|cx| {
+            state.update(cx, |state, cx| {
+                state.set_column_width(0, 111.0, cx);
+                state.set_column_width(1, 222.0, cx);
+                state.reload_model(named_model(&["value", "value"], 2), cx);
+            });
+        });
+
+        let widths = state.read_with(cx, |state, _app| state.column_widths().to_vec());
+        assert_eq!(
+            widths,
+            vec![111.0, 222.0],
+            "duplicate names must pair in order and keep distinct widths"
+        );
     }
 
     // =========================================================================

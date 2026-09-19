@@ -2420,21 +2420,21 @@ impl DataGridPanel {
             };
 
         let table_model = Arc::new(TableModel::from(&self.result));
-        let table_state = cx.new(|cx| {
-            let mut state = DataTableState::new(table_model, cx);
-            if let Some(sort) = initial_sort {
-                state.set_sort_without_emit(sort);
+
+        // Schema-derived fields for the new result. Applied to BOTH paths: a
+        // reused state starts from the previous result's sets, so the FK and
+        // read-only setters are unconditional — skipping an empty set would
+        // leak stale FK badges and stale read-only columns across a reload.
+        // `reload_model` clears `enum_options`, and this re-populates them.
+        let apply_result_state = |state: &mut DataTableState| {
+            match initial_sort {
+                Some(sort) => state.set_sort_without_emit(sort),
+                None => state.clear_sort_without_emit(),
             }
             state.set_pk_columns(pk_indices.clone());
             state.set_insertable(is_insertable);
-
-            if !fk_indices.is_empty() {
-                state.set_fk_columns(fk_indices);
-            }
-
-            if !readonly_indices.is_empty() {
-                state.set_readonly_columns(readonly_indices);
-            }
+            state.set_fk_columns(fk_indices.clone());
+            state.set_readonly_columns(readonly_indices.clone());
 
             if let Some(columns) = &column_details {
                 for (col_ix, result_col) in self.result.columns.iter().enumerate() {
@@ -2449,9 +2449,22 @@ impl DataGridPanel {
                     }
                 }
             }
+        };
 
-            state
-        });
+        let table_state = match self.grid_table.table_state.clone() {
+            Some(live_state) => {
+                live_state.update(cx, |state, cx| {
+                    state.reload_model(table_model, cx);
+                    apply_result_state(state);
+                });
+                live_state
+            }
+            None => cx.new(|cx| {
+                let mut state = DataTableState::new(table_model, cx);
+                apply_result_state(&mut state);
+                state
+            }),
+        };
         let data_table = cx.new(|cx| DataTable::new("data-grid-table", table_state.clone(), cx));
 
         let subscription =
@@ -2585,9 +2598,12 @@ impl DataGridPanel {
         self.grid_table.data_table = Some(data_table);
         self.grid_table.table_subscription = Some(subscription);
 
-        // Every rebuild — refresh, requery, sort, filter — creates a fresh
-        // DataTableState, so the panel's presentation flag has to be pushed
-        // back onto it here rather than at any one call site.
+        // The state entity now survives a rebuild — only the first load
+        // creates it, and `reload_model` re-shapes widths, pending edits and
+        // the selection onto the new model while the entity and its
+        // subscription stay put. The panel's presentation flag is still pushed
+        // back here: it lives on the panel, and no single call site owns the
+        // mode. `set_record_mode` no-ops when the mode already matches.
         self.apply_record_mode(cx);
 
         // Build document tree for collections OR JSON-shaped query results
@@ -6801,6 +6817,349 @@ mod tests {
         assert!(
             !is_insertable,
             "is_insertable must be false when binding.insertable=false"
+        );
+    }
+
+    /// Regression (#620): a width the user set on a column must survive a
+    /// reload through the panel's own rebuild path. The state entity is
+    /// reused — not recreated — so the width carries over by column name.
+    #[gpui::test]
+    fn rebuild_table_keeps_user_resized_column_width(cx: &mut TestAppContext) {
+        use dbflux_components::components::data_table::SortState;
+
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let panel_holder = Rc::new(RefCell::new(None));
+        let panel_handle = panel_holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let panel = cx.new(|cx| {
+                let source = DataSource::Table {
+                    profile_id: Uuid::nil(),
+                    database: Some("app".to_string()),
+                    table: TableRef::with_schema("public", "users"),
+                    pagination: Pagination::default(),
+                    order_by: Vec::new(),
+                    total_rows: None,
+                };
+
+                let mut panel = DataGridPanel::new_internal(
+                    source,
+                    app_state.clone(),
+                    vec!["id".to_string()],
+                    window,
+                    cx,
+                );
+
+                let columns = vec![
+                    ColumnMeta {
+                        name: "id".to_string(),
+                        type_name: "int4".to_string(),
+                        kind: ColumnKind::Unknown,
+                        nullable: false,
+                        is_primary_key: true,
+                    },
+                    ColumnMeta {
+                        name: "name".to_string(),
+                        type_name: "text".to_string(),
+                        kind: ColumnKind::Unknown,
+                        nullable: true,
+                        is_primary_key: false,
+                    },
+                ];
+                panel.result = QueryResult::table(columns, Vec::new(), None, Duration::ZERO);
+                panel.pk_columns = vec!["id".to_string()];
+                panel
+            });
+
+            panel_handle.replace(Some(panel.clone()));
+            Root::new(panel, window, cx)
+        });
+
+        let panel = panel_holder
+            .borrow()
+            .clone()
+            .expect("panel should be created");
+
+        // First load: creates the state entity.
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                panel.rebuild_table(None, cx);
+            });
+        });
+
+        let state_entity_id = window.update(|_, app| {
+            panel
+                .read(app)
+                .grid_table
+                .table_state
+                .as_ref()
+                .expect("table state must exist after the first rebuild")
+                .entity_id()
+        });
+
+        // The user widens the "name" column.
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                let state = panel
+                    .grid_table
+                    .table_state
+                    .as_ref()
+                    .expect("table state must exist")
+                    .clone();
+                state.update(cx, |state, cx| state.set_column_width(1, 250.0, cx));
+            });
+        });
+
+        // A later reload carries a sort (the server-sort path does) and must
+        // keep the width.
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                panel.rebuild_table(Some(SortState::ascending(0)), cx);
+            });
+        });
+
+        let (same_entity, name_width, sort_applied) = window.update(|_, app| {
+            let panel = panel.read(app);
+            let state = panel
+                .grid_table
+                .table_state
+                .as_ref()
+                .expect("table state must exist after the second rebuild");
+            let state_ref = state.read(app);
+            (
+                state.entity_id() == state_entity_id,
+                state_ref.column_widths().get(1).copied(),
+                state_ref.sort().copied(),
+            )
+        });
+
+        assert!(
+            same_entity,
+            "a rebuild must reuse the live DataTableState entity, not recreate it"
+        );
+        assert_eq!(
+            name_width,
+            Some(250.0),
+            "the user-resized width must survive the rebuild"
+        );
+        assert_eq!(
+            sort_applied,
+            Some(SortState::ascending(0)),
+            "the rebuild must still apply the initial sort it was given"
+        );
+    }
+
+    /// Regression (#620): a rebuild that drops the last FK must CLEAR the
+    /// stale FK set. With a reused entity the setter call is unconditional;
+    /// the old fresh-entity construction cleared it by starting from empty.
+    #[gpui::test]
+    fn rebuild_table_clears_fk_columns_when_the_fk_disappears(cx: &mut TestAppContext) {
+        use dbflux_core::{ForeignKeyInfo, TableInfo};
+
+        init_test_runtime(cx);
+
+        let profile_id = Uuid::new_v4();
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                let storage_runtime =
+                    StorageRuntime::in_memory().expect("isolated storage runtime");
+                AppStateEntity::new_with_storage_runtime(storage_runtime)
+                    .expect("test storage setup")
+            })
+        });
+
+        cx.update(|cx| {
+            app_state.update(cx, |app, _| {
+                use dbflux_core::{ConnectedProfile, DbConfig, MutationPolicy};
+                use std::path::PathBuf;
+
+                let profile = dbflux_core::ConnectionProfile::new(
+                    "test",
+                    DbConfig::SQLite {
+                        path: PathBuf::from(":memory:"),
+                        connection_id: None,
+                    },
+                );
+                let connected = ConnectedProfile {
+                    profile,
+                    connection: Arc::new(StubConnection) as Arc<dyn dbflux_core::Connection>,
+                    schema: None,
+                    mutation_policy: MutationPolicy::default(),
+                    read_only_reason: None,
+                    database_schemas: Default::default(),
+                    table_details: Default::default(),
+                    collection_children: Default::default(),
+                    schema_types: Default::default(),
+                    schema_indexes: Default::default(),
+                    schema_foreign_keys: Default::default(),
+                    schema_routines: Default::default(),
+                    dependents_cache: Default::default(),
+                    active_database: Some("app".to_string()),
+                    redis_key_cache: Default::default(),
+                    database_connections: Default::default(),
+                    proxy_tunnel: None,
+                };
+                app.connections_mut().insert(profile_id, connected);
+            });
+        });
+
+        // Table details cache the panel reads: "user_role" is an FK source column.
+        let details_with_fk = TableInfo {
+            name: "users".to_string(),
+            schema: Some("public".to_string()),
+            columns: Some(vec![dbflux_core::ColumnInfo {
+                name: "user_role".to_string(),
+                type_name: "int4".to_string(),
+                nullable: true,
+                is_primary_key: false,
+                default_value: None,
+                enum_values: None,
+            }]),
+            indexes: None,
+            foreign_keys: Some(vec![ForeignKeyInfo {
+                name: "fk_users_role".to_string(),
+                columns: vec!["user_role".to_string()],
+                referenced_table: "roles".to_string(),
+                referenced_schema: Some("public".to_string()),
+                referenced_columns: vec!["id".to_string()],
+                on_delete: None,
+                on_update: None,
+            }]),
+            constraints: None,
+            sample_fields: None,
+            presentation: Default::default(),
+            child_items: None,
+            storage_hints: None,
+        };
+        let panel_holder = Rc::new(RefCell::new(None));
+        let panel_handle = panel_holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let panel = cx.new(|cx| {
+                let source = DataSource::Table {
+                    profile_id,
+                    database: Some("app".to_string()),
+                    table: TableRef::with_schema("public", "users"),
+                    pagination: Pagination::default(),
+                    order_by: Vec::new(),
+                    total_rows: None,
+                };
+
+                let mut panel =
+                    DataGridPanel::new_internal(source, app_state.clone(), vec![], window, cx);
+
+                let columns = vec![
+                    ColumnMeta {
+                        name: "id".to_string(),
+                        type_name: "int4".to_string(),
+                        kind: ColumnKind::Unknown,
+                        nullable: false,
+                        is_primary_key: true,
+                    },
+                    ColumnMeta {
+                        name: "user_role".to_string(),
+                        type_name: "int4".to_string(),
+                        kind: ColumnKind::Unknown,
+                        nullable: true,
+                        is_primary_key: false,
+                    },
+                ];
+                panel.result = QueryResult::table(columns, Vec::new(), None, Duration::ZERO);
+                panel
+            });
+
+            panel_handle.replace(Some(panel.clone()));
+            Root::new(panel, window, cx)
+        });
+
+        let panel = panel_holder
+            .borrow()
+            .clone()
+            .expect("panel should be created");
+
+        // Seed the details cache the panel's FK lookup reads: "user_role" is
+        // an FK source column.
+        window.update(|_, app| {
+            app_state.update(app, |app, _| {
+                app.set_table_details(
+                    profile_id,
+                    "app".to_string(),
+                    Some("public".to_string()),
+                    "users".to_string(),
+                    details_with_fk.clone(),
+                );
+            });
+        });
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                panel.rebuild_table(None, cx);
+            });
+        });
+
+        let role_col_ix = 1usize;
+        let (has_fk, fk_state_id) = window.update(|_, app| {
+            let table_state = panel
+                .read(app)
+                .grid_table
+                .table_state
+                .clone()
+                .expect("table state must exist");
+            (
+                table_state.read(app).fk_columns().contains(&role_col_ix),
+                table_state.entity_id(),
+            )
+        });
+        assert!(
+            has_fk,
+            "the FK source column must be marked before the details drop it"
+        );
+
+        // The schema no longer reports the FK; the next rebuild must clear it.
+        let details_without_fk = TableInfo {
+            foreign_keys: None,
+            ..details_with_fk
+        };
+        window.update(|_, app| {
+            app_state.update(app, |app, _| {
+                app.set_table_details(
+                    profile_id,
+                    "app".to_string(),
+                    Some("public".to_string()),
+                    "users".to_string(),
+                    details_without_fk,
+                );
+            });
+        });
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                panel.rebuild_table(None, cx);
+            });
+        });
+
+        let (still_has_fk, after_state_id) = window.update(|_, app| {
+            let table_state = panel
+                .read(app)
+                .grid_table
+                .table_state
+                .clone()
+                .expect("table state must exist");
+            (
+                table_state.read(app).fk_columns().contains(&role_col_ix),
+                table_state.entity_id(),
+            )
+        });
+        assert!(
+            !still_has_fk,
+            "a rebuild that drops the last FK must clear the stale FK badge set"
+        );
+        assert_eq!(
+            after_state_id, fk_state_id,
+            "the stale FK set is only reachable if the state entity survives the \
+             rebuild, so the clearing must be asserted against the same entity"
         );
     }
 
