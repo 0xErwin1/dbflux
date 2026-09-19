@@ -25,6 +25,13 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **Single-line completion fields keep their text on the row** — the DataView
+  `WHERE` filter and the query builder's row inputs (filter, sort, group by,
+  join, projected columns) moved to a code-editor widget in the gpui-pre
+  migration, and its frame adds code-editor padding inside the 24 px row. The
+  placeholder and value were pushed onto the field's bottom edge and clipped
+  by its border; they are centered again.
+
 * **Closing an empty script no longer waits on its own file** — the close that
   removes an emptied script's backing file used to read the whole file, then
   delete it and rescan the scripts directory, all on the UI thread, so a slow
