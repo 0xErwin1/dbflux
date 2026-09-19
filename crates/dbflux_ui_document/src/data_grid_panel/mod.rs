@@ -23,8 +23,8 @@ use dbflux_components::chart::{
     ChartDetection, ChartView, DataPointRef, SourceRowRef, detect_chart_columns,
 };
 use dbflux_components::components::data_table::{
-    ContextMenuAction, DataTable, DataTableEvent, DataTableState, SortState as TableSortState,
-    TableModel,
+    ContextMenuAction, DataTable, DataTableEvent, DataTableState, ModelSwap,
+    SortState as TableSortState, TableModel,
 };
 use dbflux_components::components::document_tree::{
     DocumentTree, DocumentTreeEvent, DocumentTreeState,
@@ -429,17 +429,73 @@ struct PendingActions {
     value_panel: Option<value_panel::ValuePanelTarget>,
 }
 
+/// How the grid should treat the state held by an existing `DataTableState`
+/// when a result is applied to it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum TableReload {
+    /// The result holds the same rows, reordered or re-fetched (sort, refresh,
+    /// in-memory re-sort): the cursor stays where it is.
+    #[default]
+    Preserve,
+    /// The result holds a different row set (another page, another filter):
+    /// the cursor belongs to rows that are gone, so it is dropped.
+    ResetRows,
+    /// The result may hold different columns (a new query result): the cursor
+    /// and the sort column index both point at the old shape and are dropped.
+    NewColumns,
+}
+
+impl TableReload {
+    fn cursor_swap(self) -> ModelSwap {
+        match self {
+            TableReload::Preserve => ModelSwap::KeepCursor,
+            TableReload::ResetRows | TableReload::NewColumns => ModelSwap::ResetCursor,
+        }
+    }
+}
+
+/// Enum/set choices per result column index, with the NULL sentinel prepended
+/// for a nullable column. Indexed the same way in a freshly built state and in
+/// one reused across a reload.
+fn enum_options_for_result(
+    result: &QueryResult,
+    column_details: Option<&[dbflux_core::ColumnInfo]>,
+) -> Vec<(usize, Vec<String>)> {
+    let Some(columns) = column_details else {
+        return Vec::new();
+    };
+
+    result
+        .columns
+        .iter()
+        .enumerate()
+        .filter_map(|(col_ix, result_col)| {
+            let info = columns.iter().find(|c| c.name == result_col.name)?;
+            let enum_vals = info.enum_values.as_ref()?;
+
+            let mut options = enum_vals.clone();
+            if info.nullable {
+                options.insert(0, DataTableState::NULL_SENTINEL.to_string());
+            }
+            Some((col_ix, options))
+        })
+        .collect()
+}
+
 /// The rendered table widget and its in-memory sort state.
 ///
-/// All five fields describe the current `DataTable` entity instance and the
-/// `QueryResult`-source local sort; they are created and destroyed together in
-/// `rebuild_table`.
+/// `data_table`, `table_state` and `table_subscription` are created together on
+/// the first result and then reused across reloads so that user adjustments to
+/// the grid survive them; the two local-sort fields track the `QueryResult`
+/// in-memory sort.
 struct GridTableState {
     data_table: Option<Entity<DataTable>>,
     table_state: Option<Entity<DataTableState>>,
     table_subscription: Option<Subscription>,
     local_sort_state: Option<LocalSortState>,
     original_row_order: Option<Vec<usize>>,
+    /// Read by the next `rebuild_table` and reset to `Preserve` there.
+    reload: TableReload,
 }
 
 /// The WHERE/LIMIT inputs and refresh-policy dropdown.
@@ -1076,6 +1132,8 @@ impl DataGridPanel {
                 InputEvent::PressEnter {
                     secondary: false, ..
                 } => {
+                    // A new filter selects a different row set.
+                    this.grid_table.reload = TableReload::ResetRows;
                     this.refresh(window, cx);
                     this.focus_table(window, cx);
                 }
@@ -1266,6 +1324,7 @@ impl DataGridPanel {
                 table_subscription: None,
                 local_sort_state: None,
                 original_row_order: None,
+                reload: TableReload::default(),
             },
             filter_bar: FilterBarState {
                 filter_input,
@@ -2311,6 +2370,9 @@ impl DataGridPanel {
         };
         self.grid_table.local_sort_state = None;
         self.grid_table.original_row_order = None;
+        // The new result may have a different shape, so the sort column index
+        // and cursor address the previous result and are dropped.
+        self.grid_table.reload = TableReload::NewColumns;
         self.set_result((*result).clone(), cx);
     }
 
@@ -2333,6 +2395,10 @@ impl DataGridPanel {
     }
 
     fn rebuild_table(&mut self, initial_sort: Option<TableSortState>, cx: &mut Context<Self>) {
+        // Consumed here so a reload without an explicit reason defaults to
+        // keeping the cursor on the next one.
+        let reload = std::mem::take(&mut self.grid_table.reload);
+
         // For collections, update pk_columns from result metadata (is_primary_key flag)
         // This allows DynamoDB and other drivers to use their actual primary keys
         // instead of hardcoded "_id"
@@ -2420,6 +2486,38 @@ impl DataGridPanel {
             };
 
         let table_model = Arc::new(TableModel::from(&self.result));
+        let enum_options = enum_options_for_result(&self.result, column_details.as_deref());
+
+        if let Some(table_state) = self.grid_table.table_state.clone() {
+            // A reload reuses the state entity, so column widths, sort, scroll
+            // and the record-mode flag survive it. Only the state that
+            // addresses the rows being replaced is rebuilt here.
+            table_state.update(cx, |state, cx| {
+                // `initial_sort` describes the sort the incoming rows carry,
+                // so an absent one means "unsorted": leaving the previous sort
+                // in place would light up a header arrow the new rows do not
+                // honour. This covers `TableReload::NewColumns` too, which
+                // arrives with no sort.
+                match initial_sort {
+                    Some(sort) => state.set_sort_without_emit(sort),
+                    None => state.clear_sort_without_emit(),
+                }
+
+                state.set_model(table_model, reload.cursor_swap(), cx);
+                state.set_pk_columns(pk_indices);
+                state.set_insertable(is_insertable);
+                state.set_fk_columns(fk_indices);
+                state.set_readonly_columns(readonly_indices);
+
+                for (col_ix, options) in enum_options {
+                    state.set_enum_options(col_ix, options);
+                }
+            });
+
+            self.rebuild_result_views(cx);
+            return;
+        }
+
         let table_state = cx.new(|cx| {
             let mut state = DataTableState::new(table_model, cx);
             if let Some(sort) = initial_sort {
@@ -2436,18 +2534,8 @@ impl DataGridPanel {
                 state.set_readonly_columns(readonly_indices);
             }
 
-            if let Some(columns) = &column_details {
-                for (col_ix, result_col) in self.result.columns.iter().enumerate() {
-                    if let Some(info) = columns.iter().find(|c| c.name == result_col.name)
-                        && let Some(enum_vals) = &info.enum_values
-                    {
-                        let mut options = enum_vals.clone();
-                        if info.nullable {
-                            options.insert(0, DataTableState::NULL_SENTINEL.to_string());
-                        }
-                        state.set_enum_options(col_ix, options);
-                    }
-                }
+            for (col_ix, options) in enum_options {
+                state.set_enum_options(col_ix, options);
             }
 
             state
@@ -2585,9 +2673,16 @@ impl DataGridPanel {
         self.grid_table.data_table = Some(data_table);
         self.grid_table.table_subscription = Some(subscription);
 
-        // Every rebuild — refresh, requery, sort, filter — creates a fresh
-        // DataTableState, so the panel's presentation flag has to be pushed
-        // back onto it here rather than at any one call site.
+        self.rebuild_result_views(cx);
+    }
+
+    /// Rebuild the views derived from `self.result` that are not the grid
+    /// itself: the document tree for collection/JSON results and the
+    /// variable-height card list. Called from both arms of `rebuild_table`.
+    fn rebuild_result_views(&mut self, cx: &mut Context<Self>) {
+        // The grid keeps its presentation flag across a reload, but a result
+        // that cannot be shown as a record (a grouped aggregate) still has to
+        // push the panel out of record mode.
         self.apply_record_mode(cx);
 
         // Build document tree for collections OR JSON-shaped query results
@@ -8140,6 +8235,483 @@ mod tests {
                 panel.set_result_view_mode(super::ResultViewMode::Table, cx);
                 assert!(panel.record_view_available());
             });
+        });
+    }
+
+    // =========================================================================
+    // Reload keeps the grid state (#620)
+    // =========================================================================
+
+    use dbflux_components::components::data_table::SortState as TableSortState;
+    use dbflux_components::components::data_table::selection::CellCoord;
+
+    fn reload_columns(names: &[&str]) -> Vec<ColumnMeta> {
+        names
+            .iter()
+            .map(|name| ColumnMeta {
+                name: (*name).to_string(),
+                type_name: "text".to_string(),
+                kind: ColumnKind::Text,
+                nullable: true,
+                is_primary_key: *name == "id",
+            })
+            .collect()
+    }
+
+    fn reload_result(names: &[&str], row_count: usize) -> QueryResult {
+        let rows = (0..row_count)
+            .map(|_| {
+                (0..names.len())
+                    .map(|_| dbflux_core::Value::Text("v".to_string()))
+                    .collect()
+            })
+            .collect();
+
+        QueryResult::table(reload_columns(names), rows, None, Duration::ZERO)
+    }
+
+    /// Widen `name` and put the cursor on it, then hand back the state so the
+    /// caller can reload and check what survived.
+    fn widen_name_and_select(panel: &mut DataGridPanel, cx: &mut gpui::Context<DataGridPanel>) {
+        let table_state = panel
+            .grid_table
+            .table_state
+            .clone()
+            .expect("table state must exist after the first result");
+
+        table_state.update(cx, |state, cx| {
+            state.set_column_width(1, 260.0, cx);
+            state.select_cell(CellCoord::new(1, 1), cx);
+        });
+    }
+
+    fn name_width(panel: &DataGridPanel, cx: &gpui::App) -> f32 {
+        panel
+            .grid_table
+            .table_state
+            .as_ref()
+            .expect("table state must exist")
+            .read(cx)
+            .column_widths()[1]
+    }
+
+    fn table_panel(
+        window: &mut gpui::VisualTestContext,
+        app_state: gpui::Entity<AppStateEntity>,
+    ) -> gpui::Entity<DataGridPanel> {
+        window.update(|window, app| {
+            let source = DataSource::Table {
+                profile_id: Uuid::nil(),
+                database: Some("app".to_string()),
+                table: TableRef::with_schema("public", "users"),
+                pagination: Pagination::default(),
+                order_by: Vec::new(),
+                total_rows: Some(2),
+            };
+
+            let panel = app.new(|cx| {
+                DataGridPanel::new_internal(source, app_state, vec!["id".to_string()], window, cx)
+            });
+            panel.update(app, |panel, cx| {
+                panel.set_result(reload_result(&["id", "name", "email"], 2), cx);
+            });
+            panel
+        })
+    }
+
+    #[gpui::test]
+    fn server_sort_keeps_column_widths_and_cursor(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let window = cx.add_empty_window();
+        let panel = table_panel(window, app_state);
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                widen_name_and_select(panel, cx);
+                panel.apply_table_result(
+                    Uuid::nil(),
+                    TableRef::with_schema("public", "users"),
+                    Pagination::default(),
+                    vec![dbflux_core::OrderByColumn::from_name(
+                        "name",
+                        dbflux_core::SortDirection::Ascending,
+                    )],
+                    Some(2),
+                    reload_result(&["id", "name", "email"], 2),
+                    cx,
+                );
+            });
+        });
+
+        window.update(|_, app| {
+            let panel = panel.read(app);
+            assert_eq!(
+                name_width(panel, app),
+                260.0,
+                "a server-side sort must not reset a user-adjusted column width"
+            );
+            assert_eq!(
+                panel
+                    .grid_table
+                    .table_state
+                    .as_ref()
+                    .expect("table state")
+                    .read(app)
+                    .selection()
+                    .active,
+                Some(CellCoord::new(1, 1)),
+                "a sort reorders the same rows, so the cursor stays put"
+            );
+            assert_eq!(
+                panel
+                    .grid_table
+                    .table_state
+                    .as_ref()
+                    .expect("table state")
+                    .read(app)
+                    .sort()
+                    .map(|sort| sort.column_ix),
+                Some(1),
+                "the result carries the server order, so the header shows it"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn an_unsorted_reload_drops_the_stale_header_indicator(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let window = cx.add_empty_window();
+        let panel = table_panel(window, app_state);
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                widen_name_and_select(panel, cx);
+                let table_state = panel.grid_table.table_state.clone().expect("table state");
+                table_state.update(cx, |state, _cx| {
+                    state.set_sort_without_emit(TableSortState::ascending(1));
+                });
+
+                // A result with no `order_by` is unsorted. Keeping the previous
+                // sort here would light up an arrow the new rows do not honour
+                // (collection refreshes and instance snapshots reset their
+                // local sort on every reload).
+                panel.apply_table_result(
+                    Uuid::nil(),
+                    TableRef::with_schema("public", "users"),
+                    Pagination::default(),
+                    Vec::new(),
+                    Some(2),
+                    reload_result(&["id", "name", "email"], 2),
+                    cx,
+                );
+            });
+        });
+
+        window.update(|_, app| {
+            let panel = panel.read(app);
+            assert_eq!(
+                panel
+                    .grid_table
+                    .table_state
+                    .as_ref()
+                    .expect("table state")
+                    .read(app)
+                    .sort(),
+                None,
+                "an unsorted reload must drop the previous sort indicator"
+            );
+            assert_eq!(
+                name_width(panel, app),
+                260.0,
+                "dropping the sort must not touch the column widths"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn a_reload_that_cannot_run_does_not_leak_its_intent(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let window = cx.add_empty_window();
+        let panel = table_panel(window, app_state);
+
+        window.update(|window, app| {
+            panel.update(app, |panel, cx| {
+                panel.grid_table.reload = super::TableReload::ResetRows;
+
+                // The test profile is not connected, so this request never
+                // reaches a driver. Its intent must not stay behind for the
+                // next, unrelated reload to pick up.
+                panel.run_table_query(
+                    Uuid::nil(),
+                    None,
+                    TableRef::with_schema("public", "users"),
+                    Pagination::default(),
+                    Vec::new(),
+                    None,
+                    window,
+                    cx,
+                );
+
+                assert_eq!(panel.grid_table.reload, super::TableReload::Preserve);
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn pagination_keeps_column_widths_but_drops_the_cursor(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let window = cx.add_empty_window();
+        let panel = table_panel(window, app_state);
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                widen_name_and_select(panel, cx);
+
+                // What `go_to_next_page` marks before it issues the query.
+                // `run_table_query` takes the mark and restores it on the
+                // applying side; that restored state is what is modelled here.
+                panel.grid_table.reload = super::TableReload::ResetRows;
+                panel.apply_table_result(
+                    Uuid::nil(),
+                    TableRef::with_schema("public", "users"),
+                    Pagination::default().next_page(),
+                    Vec::new(),
+                    Some(2),
+                    reload_result(&["id", "name", "email"], 2),
+                    cx,
+                );
+            });
+        });
+
+        window.update(|_, app| {
+            let panel = panel.read(app);
+            assert_eq!(
+                name_width(panel, app),
+                260.0,
+                "a page change must not reset a user-adjusted column width"
+            );
+            assert_eq!(
+                panel
+                    .grid_table
+                    .table_state
+                    .as_ref()
+                    .expect("table state")
+                    .read(app)
+                    .selection()
+                    .active,
+                None,
+                "a row index on the old page points at unrelated data on the new one"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn reload_reuses_the_table_state_entity(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let window = cx.add_empty_window();
+        let panel = table_panel(window, app_state);
+
+        let before = window.update(|_, app| {
+            panel
+                .read(app)
+                .grid_table
+                .table_state
+                .clone()
+                .expect("table state")
+                .entity_id()
+        });
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                panel.apply_table_result(
+                    Uuid::nil(),
+                    TableRef::with_schema("public", "users"),
+                    Pagination::default(),
+                    Vec::new(),
+                    Some(2),
+                    reload_result(&["id", "name", "email"], 2),
+                    cx,
+                );
+            });
+        });
+
+        let after = window.update(|_, app| {
+            panel
+                .read(app)
+                .grid_table
+                .table_state
+                .clone()
+                .expect("table state")
+                .entity_id()
+        });
+
+        assert_eq!(
+            before, after,
+            "a reload must update the existing state rather than rebuild it"
+        );
+    }
+
+    #[gpui::test]
+    fn reload_drops_pending_edits(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let window = cx.add_empty_window();
+        let panel = table_panel(window, app_state);
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                let table_state = panel.grid_table.table_state.clone().expect("table state");
+                table_state.update(cx, |state, _cx| {
+                    state.stage_base_cell_value(
+                        0,
+                        1,
+                        dbflux_components::components::data_table::model::CellValue::text("carol"),
+                    );
+                    assert!(state.has_pending_changes());
+                });
+
+                panel.apply_table_result(
+                    Uuid::nil(),
+                    TableRef::with_schema("public", "users"),
+                    Pagination::default(),
+                    Vec::new(),
+                    Some(2),
+                    reload_result(&["id", "name", "email"], 2),
+                    cx,
+                );
+            });
+        });
+
+        window.update(|_, app| {
+            let panel = panel.read(app);
+            let table_state = panel.grid_table.table_state.as_ref().expect("table state");
+            assert!(
+                !table_state.read(app).has_pending_changes(),
+                "a staged edit is keyed by a row index of the replaced result"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn reload_keeps_record_mode_and_widths(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let window = cx.add_empty_window();
+        let panel = table_panel(window, app_state);
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                assert!(panel.record_view_available());
+                panel.set_record_mode(true, cx);
+                widen_name_and_select(panel, cx);
+
+                panel.apply_table_result(
+                    Uuid::nil(),
+                    TableRef::with_schema("public", "users"),
+                    Pagination::default(),
+                    Vec::new(),
+                    Some(2),
+                    reload_result(&["id", "name", "email"], 2),
+                    cx,
+                );
+            });
+        });
+
+        window.update(|_, app| {
+            let panel = panel.read(app);
+            assert!(panel.record_mode(), "the chosen presentation must survive");
+            assert_eq!(name_width(panel, app), 260.0);
+            assert!(
+                panel
+                    .grid_table
+                    .table_state
+                    .as_ref()
+                    .expect("table state")
+                    .read(app)
+                    .record_mode(),
+                "the grid entity itself must stay in record mode"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn new_query_result_remaps_widths_by_name_and_drops_sort(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let panel_holder = Rc::new(RefCell::new(None));
+        let panel_handle = panel_holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let panel = cx.new(|cx| {
+                DataGridPanel::new_for_result(
+                    Arc::new(reload_result(&["id", "name"], 2)),
+                    "SELECT id, name FROM users".to_string(),
+                    None,
+                    app_state.clone(),
+                    window,
+                    cx,
+                )
+            });
+            panel_handle.replace(Some(panel.clone()));
+            Root::new(panel, window, cx)
+        });
+
+        let panel = panel_holder
+            .borrow()
+            .clone()
+            .expect("panel should be created");
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                widen_name_and_select(panel, cx);
+                let table_state = panel.grid_table.table_state.clone().expect("table state");
+                table_state.update(cx, |state, _cx| {
+                    state.set_sort_without_emit(TableSortState::ascending(1));
+                });
+
+                panel.set_query_result(
+                    Arc::new(reload_result(&["name", "extra"], 2)),
+                    "SELECT name, extra FROM users".to_string(),
+                    None,
+                    cx,
+                );
+            });
+        });
+
+        window.update(|_, app| {
+            let panel = panel.read(app);
+            let table_state = panel.grid_table.table_state.as_ref().expect("table state");
+            let state = table_state.read(app);
+
+            assert_eq!(
+                state.column_widths()[0],
+                260.0,
+                "`name` moved to index 0 and must carry its width with it"
+            );
+            assert_eq!(
+                state.column_widths().len(),
+                2,
+                "widths must be sized to the new column count"
+            );
+            assert_eq!(
+                state.sort(),
+                None,
+                "the old sort column index addresses a shape that is gone"
+            );
+            assert_eq!(state.selection().active, None);
         });
     }
 }

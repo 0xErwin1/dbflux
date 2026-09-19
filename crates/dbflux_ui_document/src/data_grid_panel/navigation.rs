@@ -1,6 +1,6 @@
 use super::{
     DataGridPanel, DataSource, EditState, GridFocusMode, LocalSortState, PendingRequery,
-    ToolbarFocus,
+    TableReload, ToolbarFocus,
 };
 use dbflux_app::keymap::Command;
 use dbflux_components::components::data_table::{Direction, Edge, SortState as TableSortState};
@@ -220,6 +220,10 @@ impl DataGridPanel {
     // === Pagination ===
 
     pub fn go_to_next_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Another page is a different row set: the cursor belongs to the page
+        // being left.
+        self.grid_table.reload = TableReload::ResetRows;
+
         match &self.source {
             DataSource::Table {
                 profile_id,
@@ -263,6 +267,8 @@ impl DataGridPanel {
         let Some(prev) = self.source.pagination().and_then(|p| p.prev_page()) else {
             return;
         };
+
+        self.grid_table.reload = TableReload::ResetRows;
 
         match &self.source {
             DataSource::Table {

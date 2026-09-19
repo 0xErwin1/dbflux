@@ -25,6 +25,15 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **Resized data-grid columns survive a sort or refresh** — column widths,
+  selection, and scroll position were discarded by every reload (header sort,
+  pagination, filter, manual and auto refresh) because the grid state was
+  rebuilt from scratch each time. A reload now updates the existing table
+  state, so a width follows its column even when the result is reordered or
+  re-projected; the cursor is dropped only when the rows themselves are a
+  different set (another page, another filter or page size), and the sort
+  indicator no longer claims an order the new rows do not have.
+
 * **Closing an empty script no longer waits on its own file** — the close that
   removes an emptied script's backing file used to read the whole file, then
   delete it and rescan the scripts directory, all on the UI thread, so a slow

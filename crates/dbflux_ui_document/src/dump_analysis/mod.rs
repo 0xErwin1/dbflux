@@ -13,7 +13,9 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use dbflux_components::components::data_table::{DataTable, DataTableEvent, DataTableState};
+use dbflux_components::components::data_table::{
+    DataTable, DataTableEvent, DataTableState, ModelSwap,
+};
 use dbflux_core::{
     DumpAnalysisError, DumpAnalysisReport, DumpAnalyzer, SortDirection, TaskKind, TaskStatus,
 };
@@ -359,7 +361,9 @@ impl DumpAnalysisDocument {
         let model = Arc::new(render::largest_keys_table_model(&report.largest_keys));
 
         if let Some(state) = &self.largest_keys_state {
-            state.update(cx, |state, cx| state.set_model(model, cx));
+            state.update(cx, |state, cx| {
+                state.set_model(model, ModelSwap::KeepCursor, cx)
+            });
         }
     }
 
@@ -377,7 +381,9 @@ impl DumpAnalysisDocument {
         let model = Arc::new(render::prefix_rollup_table_model(&report.prefix_rollup));
 
         if let Some(state) = &self.prefix_rollup_state {
-            state.update(cx, |state, cx| state.set_model(model, cx));
+            state.update(cx, |state, cx| {
+                state.set_model(model, ModelSwap::KeepCursor, cx)
+            });
         }
     }
 }

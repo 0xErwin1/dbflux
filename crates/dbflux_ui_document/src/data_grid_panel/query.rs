@@ -1,5 +1,5 @@
 use super::filter_bar::{FilterMode, RelationalFilterState, classify_filter_input};
-use super::{DataGridPanel, DataSource, GridState, PendingToast, PendingTotalCount};
+use super::{DataGridPanel, DataSource, GridState, PendingToast, PendingTotalCount, TableReload};
 use dbflux_components::components::data_table::SortState as TableSortState;
 use dbflux_core::{
     CollectionBrowseRequest, CollectionCountRequest, CollectionRef, EditableBinding, OrderByColumn,
@@ -94,6 +94,7 @@ impl DataGridPanel {
 
         let limit_value = self.filter_bar.limit_input.read(cx).value();
         let limit_str = limit_value.trim();
+        let previous_limit = pagination.limit();
         let pagination = match limit_str.parse::<u32>() {
             Ok(0) => {
                 Toast::warning(dbflux_i18n::t!(
@@ -103,7 +104,11 @@ impl DataGridPanel {
                 .push(cx);
                 pagination
             }
-            Ok(limit) if limit != pagination.limit() => pagination.with_limit(limit).reset_offset(),
+            Ok(limit) if limit != previous_limit => {
+                // A new page size makes every row index refer somewhere else.
+                self.grid_table.reload = TableReload::ResetRows;
+                pagination.with_limit(limit).reset_offset()
+            }
             Ok(_) => pagination,
             Err(_) if !limit_str.is_empty() => {
                 Toast::warning(dbflux_i18n::t!("document.data.grid.error.invalid_limit"))
@@ -113,6 +118,10 @@ impl DataGridPanel {
             }
             Err(_) => pagination,
         };
+
+        // Taken here so a request that never lands (cancelled or failed) does
+        // not leave the next reload with this one's intent.
+        let reload = std::mem::take(&mut self.grid_table.reload);
 
         // --- Relational filter gate (FR-GATE-1 to FR-GATE-3) ---
         //
@@ -131,6 +140,11 @@ impl DataGridPanel {
                     _window,
                     cx,
                 ) {
+                    // The visual query applies its result through the
+                    // pending-rebuild route, which reads this same field, so
+                    // the intent taken above is handed back instead of being
+                    // dropped on the way out.
+                    self.grid_table.reload = reload;
                     return;
                 }
             } else {
@@ -265,6 +279,7 @@ impl DataGridPanel {
 
                         entity.update(cx, |panel, cx| {
                             panel.runner.complete_primary(task_id, cx);
+                            panel.grid_table.reload = reload;
                             panel.apply_table_result(
                                 profile_id,
                                 table_for_spawn,
@@ -458,6 +473,7 @@ impl DataGridPanel {
     ) {
         let limit_value = self.filter_bar.limit_input.read(cx).value();
         let limit_str = limit_value.trim();
+        let previous_limit = pagination.limit();
         let pagination = match limit_str.parse::<u32>() {
             Ok(0) => {
                 Toast::warning(dbflux_i18n::t!(
@@ -467,7 +483,11 @@ impl DataGridPanel {
                 .push(cx);
                 pagination
             }
-            Ok(limit) if limit != pagination.limit() => pagination.with_limit(limit).reset_offset(),
+            Ok(limit) if limit != previous_limit => {
+                // A new page size makes every row index refer somewhere else.
+                self.grid_table.reload = TableReload::ResetRows;
+                pagination.with_limit(limit).reset_offset()
+            }
             Ok(_) => pagination,
             Err(_) if !limit_str.is_empty() => {
                 Toast::warning(dbflux_i18n::t!("document.data.grid.error.invalid_limit"))
@@ -477,6 +497,10 @@ impl DataGridPanel {
             }
             Err(_) => pagination,
         };
+
+        // Taken here so a request that never lands (cancelled or failed) does
+        // not leave the next reload with this one's intent.
+        let reload = std::mem::take(&mut self.grid_table.reload);
 
         let conn = {
             let state = self.app_state.read(cx);
@@ -590,6 +614,7 @@ impl DataGridPanel {
 
                         entity.update(cx, |panel, cx| {
                             panel.runner.complete_primary(task_id, cx);
+                            panel.grid_table.reload = reload;
                             panel.apply_collection_result(
                                 profile_id,
                                 collection_for_spawn,
