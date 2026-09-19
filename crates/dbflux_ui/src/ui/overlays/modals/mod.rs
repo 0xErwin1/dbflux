@@ -21,5 +21,6 @@ pub use schema_drift::ModalSchemaDrift;
 pub use shell::{ModalShell, ModalVariant};
 pub use tunnel_auth::{ModalTunnelAuth, TunnelAuthOutcome, TunnelAuthRequest};
 pub use unsaved_changes::{
-    DirtySummaryEntry, ModalUnsavedChanges, UnsavedChangesOutcome, UnsavedChangesRequest,
+    CloseAction, DirtySummaryEntry, ModalUnsavedChanges, UnsavedChangesOutcome,
+    UnsavedChangesRequest,
 };

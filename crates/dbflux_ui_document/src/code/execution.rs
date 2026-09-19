@@ -1571,6 +1571,12 @@ impl CodeDocument {
                     // Row actions are only emitted from InspectorPanel grids.
                     // CodeDocument result grids never set a row_action_provider.
                 }
+                DataGridEvent::MutationFinished { .. } | DataGridEvent::RequestClose => {
+                    // A result grid has no primary key, so it is never editable
+                    // and never runs a staged mutation; neither event can come
+                    // from it. A code document's own close flow decides when its
+                    // result tab goes, so `RequestClose` is not forwarded here.
+                }
                 DataGridEvent::ApplyVisualQuery(_)
                 | DataGridEvent::ClearVisualQuery
                 | DataGridEvent::OpenEditorWithContent { .. } => {

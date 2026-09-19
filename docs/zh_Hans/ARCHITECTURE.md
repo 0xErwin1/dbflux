@@ -606,6 +606,7 @@ crates/
 - `KeyValueView` 与 `LogStreamView` 是文件级边界结构体，而非独立的 GPUI 实体。当一个文档里有 40 多个 `cx.listener()` 闭包捕获 `Self` 时，GPUI 单一 `Context<T>` 的借用模型会让跨实体的 `impl Render` 拆分不可行；要拆分就必须把所有领域状态迁到视图实体上。最终实现的边界是文件级的。
 - `DataView` trait（`data_view_trait.rs`）不包含 `render` 方法。规范原本要求在 trait 上提供 `render`，但 `impl IntoElement` 不是 trait 对象安全的，而装箱成 `AnyElement` 又与 GPUI 的惯用法冲突。渲染改由 `ViewHandle.render` 承担。
 - 自动保存与关闭：有文件支撑的代码文档按配置的间隔自动保存到其脚本文件，经由与 Ctrl+S 和 Save As 相同的按文档写队列。写入采用先暂存再替换的方式（保留文件权限；只读目标会被拒绝），会覆盖在 dbflux 之外被修改过的文件的自动写入会被拒绝，缓冲区保持未保存状态（Ctrl+S 与 Save As 是刻意操作，仍会写入）。所有关闭路径都会在移除标签页之前先保存未保存的编辑 —— 如果写入无法落盘，标签页保持打开 —— 退出时也会写入；未保存更改对话框不再适用于代码文档。未命名内容自动保存到临时文件，未保存的编辑会在 `sessions/` 文件夹中保留一份影子副本作为恢复保障。
+- 关闭时应用网格中暂存的编辑：持有已暂存但未应用编辑的表标签页，会通过与未命名缓冲区相同的未保存更改对话框进行询问。每个条目标明自己的动词 —— 有文件支撑的文档为保存，表格为应用 —— 应用操作运行网格自身的 **Save all**，因此这些变更与按钮经过相同的策略校验与删除确认。只有当每条暂存的编辑都已落盘后标签页才会关闭；语句失败、连接缺失或删除确认被放弃时，标签页会带着这些编辑保持打开，而退出应用时不会询问。
 - 会话恢复：已打开标签页的清单（manifest）存放在 `dbflux.db` 中（`st_sessions` / `st_session_tabs`，经由 `crates/dbflux_storage/src/repositories/state/sessions.rs`）。`sessions/` 文件夹（`~/.local/share/dbflux/sessions/`）保存用于恢复和找回内容的临时/影子文件。只有代码文档会产生 `CodeSessionTabSnapshot`；其他文档类型不做会话持久化。
 - 重复预防：`tab_manager.find_by_key` 在打开新标签页之前先检查 `PaneHandle::matches_dedup_key`，若命中则聚焦已有的标签页。
 

@@ -2441,9 +2441,15 @@ modals:
   unsaved_changes:
     title: Unsaved changes
     prompt: You have unsaved changes in the following documents. What would you like to do?
+    action:
+      save: Save
+      apply: Apply
     save_selected:
       one: "Save selected (%{count})"
       many: "Save selected (%{count})"
+    apply_selected:
+      one: "Apply selected (%{count})"
+      many: "Apply selected (%{count})"
     cannot_save:
       one: "This document can't be saved from here — its changes are kept and the tab stays open"
       many: "%{count} documents can't be saved from here — their changes are kept and the tabs stay open"

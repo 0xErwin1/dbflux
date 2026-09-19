@@ -396,7 +396,8 @@ pub(crate) fn mutation_delete_task_label(kind: MutationItemKind, count: usize) -
 }
 
 /// Kind of single-item visual mutation run through the query builder, used to
-/// select the task-panel description.
+/// select the task-panel description and the failure report.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum VisualMutationTaskMode {
     Chunked,
     Direct,

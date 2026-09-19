@@ -171,6 +171,131 @@ impl DataDocument {
             })
         });
 
+        // Populate optional helper: applying the grid's staged edits for an
+        // interrupted close. The tab closes only once every staged edit landed,
+        // which the grid reports back as `DocumentEvent::RequestClose`.
+        handle.apply_for_close = Some({
+            let grid = entity.read(cx).data_grid.clone();
+            Box::new(move |_w, cx| grid.update(cx, |grid, cx| grid.apply_for_close(cx)))
+        });
+
         handle
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // Explicit imports rather than a glob: combining one with `#[gpui::test]`
+    // sends the macro expansion into unbounded recursion.
+    use super::*;
+    use crate::code::CodeDocument;
+    use crate::data_document::DataDocument;
+    use dbflux_components::theme;
+    use dbflux_core::{Pagination, QueryLanguage, TableRef};
+    use dbflux_storage::bootstrap::StorageRuntime;
+    use dbflux_ui_base::AppStateEntity;
+    use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
+    use gpui::{AppContext, TestAppContext};
+    use gpui_component::Root;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use uuid::Uuid;
+
+    fn init_test_runtime(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        cx.update(theme::init);
+        cx.update(|cx| {
+            let host = cx.new(|_cx| ToastHost::new());
+            cx.set_global(ToastGlobal { host });
+        });
+    }
+
+    fn isolated_test_app_state(cx: &mut TestAppContext) -> gpui::Entity<AppStateEntity> {
+        cx.update(|cx| {
+            cx.new(|_| {
+                let storage_runtime =
+                    StorageRuntime::in_memory().expect("isolated storage runtime");
+                AppStateEntity::new_with_storage_runtime(storage_runtime)
+                    .expect("test storage setup")
+            })
+        })
+    }
+
+    /// A table tab's pending edits are applied to the database, so the dialog
+    /// that asks about them says so — and, with nothing staged, the pane reports
+    /// that there is nothing to wait on.
+    #[gpui::test]
+    fn a_table_pane_applies_its_pending_edits(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let holder: Rc<RefCell<Option<PaneHandle>>> = Rc::new(RefCell::new(None));
+        let handle = holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let document = cx.new(|cx| {
+                DataDocument::new_for_table(
+                    Uuid::nil(),
+                    TableRef::with_schema("public", "orders"),
+                    Some("app".to_string()),
+                    app_state.clone(),
+                    window,
+                    cx,
+                )
+            });
+
+            handle.replace(Some(DataDocument::into_pane(document.clone(), cx)));
+            Root::new(document, window, cx)
+        });
+
+        let pane = holder.borrow_mut().take().expect("the pane is built");
+
+        assert_eq!(
+            pane.close_action(),
+            dbflux_components::modals::CloseAction::Apply,
+            "a grid's pending edits are applied, not saved to a file"
+        );
+        assert!(
+            !window.update(|window, cx| pane.apply_for_close(window, cx)),
+            "a grid with nothing staged has no apply to wait on"
+        );
+    }
+
+    /// A code document's pending edits are written to its own file, and the
+    /// dialog keeps saying so.
+    #[gpui::test]
+    fn a_code_pane_saves_its_pending_edits(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let holder: Rc<RefCell<Option<PaneHandle>>> = Rc::new(RefCell::new(None));
+        let handle = holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let document = cx.new(|cx| {
+                CodeDocument::new_with_language(
+                    app_state.clone(),
+                    None,
+                    QueryLanguage::Sql,
+                    window,
+                    cx,
+                )
+            });
+
+            handle.replace(Some(CodeDocument::into_pane(document.clone(), cx)));
+            Root::new(document, window, cx)
+        });
+
+        let pane = holder.borrow_mut().take().expect("the pane is built");
+
+        assert_eq!(
+            pane.close_action(),
+            dbflux_components::modals::CloseAction::Save,
+            "a script writes its own file, so its verb is save"
+        );
+        assert!(
+            !window.update(|window, cx| pane.apply_for_close(window, cx)),
+            "a script has no staged edits to apply"
+        );
     }
 }

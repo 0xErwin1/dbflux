@@ -18,11 +18,21 @@ pub enum DocumentEvent {
     SaveFinished {
         succeeded: bool,
     },
+    /// A mutation the document ran finished, and whether its edits landed.
+    ///
+    /// `landed: false` covers a failed run, a cancelled run, and a statement the
+    /// database matched no rows for. `landed: true` is what a close waiting on the
+    /// run turns into [`DocumentEvent::RequestClose`]; there is no other consumer
+    /// yet, so a document that reports this and nothing else has closed nothing.
+    MutationFinished {
+        landed: bool,
+    },
     /// The document wants to close itself.
     ///
-    /// Emitted only for a save the unsaved-changes dialog interrupted that
-    /// actually landed, and only by documents that can save: it is what lets a
-    /// tab close after its asynchronous write instead of over it.
+    /// Emitted only for work the unsaved-changes dialog asked for that actually
+    /// landed: a save a code document wrote, or the staged edits a grid applied.
+    /// It is what lets a tab close after its asynchronous write instead of over
+    /// it, and only documents that report their own completion emit it.
     RequestClose,
     /// The document area was clicked and wants focus.
     RequestFocus,

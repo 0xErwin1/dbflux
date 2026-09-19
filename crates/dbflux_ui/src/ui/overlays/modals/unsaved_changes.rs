@@ -1,3 +1,4 @@
 pub use dbflux_components::modals::unsaved_changes::{
-    DirtySummaryEntry, ModalUnsavedChanges, UnsavedChangesOutcome, UnsavedChangesRequest,
+    CloseAction, DirtySummaryEntry, ModalUnsavedChanges, UnsavedChangesOutcome,
+    UnsavedChangesRequest,
 };

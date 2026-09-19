@@ -580,7 +580,7 @@ impl Workspace {
 
         ids.into_iter()
             .filter_map(|doc_id| {
-                let (_, summary) = dirty.iter().find(|(id, _)| *id == doc_id)?;
+                let (_, summary, action) = dirty.iter().find(|(id, _, _)| *id == doc_id)?;
 
                 let decides_own_close = manager
                     .document(doc_id)
@@ -599,6 +599,7 @@ impl Workspace {
                     id: doc_id,
                     name,
                     summary: summary.clone(),
+                    action: *action,
                 })
             })
             .collect()

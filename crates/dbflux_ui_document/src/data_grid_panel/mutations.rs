@@ -1,5 +1,8 @@
 use super::utils::{extract_pk_columns, value_to_json};
-use super::{DataGridPanel, DataSource, PendingBatchRemaining, PendingDeleteConfirm, PendingToast};
+use super::{
+    DataGridEvent, DataGridPanel, DataSource, PendingBatchRemaining, PendingDeleteConfirm,
+    PendingToast,
+};
 use dbflux_components::components::document_tree::NodeId;
 use dbflux_core::{
     CollectionRef, ColumnAssignment, DocumentFilter, DocumentUpdate, Pagination, QueryResult,
@@ -144,6 +147,7 @@ impl DataGridPanel {
         if self.pending_batch_remaining.is_some() {
             self.process_next_batch_op(cx);
         } else {
+            self.finish_close_after_apply(cx);
             self.pending.refresh = true;
         }
     }
@@ -297,6 +301,7 @@ impl DataGridPanel {
                 cx.update(|cx| {
                     entity.update(cx, |panel, cx| {
                         panel.runner.fail_mutation(task_id, "No connection", cx);
+                        panel.abandon_close_apply(cx);
                     });
                 });
                 return;
@@ -458,11 +463,13 @@ impl DataGridPanel {
                 cx.notify();
             });
 
+            self.abandon_close_apply(cx);
             report_error(UserFacingError::new(ErrorKind::Driver, message), cx);
             return;
         }
 
         if pk_columns.len() != pk_indices.len() || pk_values.len() != pk_indices.len() {
+            self.abandon_close_apply(cx);
             report_error(
                 UserFacingError::new(
                     ErrorKind::User,
@@ -500,6 +507,7 @@ impl DataGridPanel {
                 cx.notify();
             });
 
+            self.abandon_close_apply(cx);
             report_error(UserFacingError::new(ErrorKind::Driver, message), cx);
             return;
         }
@@ -546,6 +554,7 @@ impl DataGridPanel {
                 cx.update(|cx| {
                     entity.update(cx, |panel, cx| {
                         panel.runner.fail_mutation(task_id, "No connection", cx);
+                        panel.abandon_close_apply(cx);
                     });
                 });
                 return;
@@ -610,6 +619,7 @@ impl DataGridPanel {
                 }
                 Value::Text(s) => DocumentFilter::new(serde_json::json!({"_id": s})),
                 _ => {
+                    self.abandon_close_apply(cx);
                     report_error(
                         UserFacingError::new(
                             ErrorKind::User,
@@ -678,6 +688,7 @@ impl DataGridPanel {
                 cx.update(|cx| {
                     entity.update(cx, |panel, cx| {
                         panel.runner.fail_mutation(task_id, "No connection", cx);
+                        panel.abandon_close_apply(cx);
 
                         if let Some(table_state) = &panel.grid_table.table_state {
                             table_state.update(cx, |state, cx| {
@@ -747,6 +758,7 @@ impl DataGridPanel {
                         .set_row_state(row_idx, RowState::Error(e.to_string()));
                     cx.notify();
                 });
+                self.abandon_close_apply(cx);
                 report_error(
                     UserFacingError::new(
                         ErrorKind::Driver,
@@ -760,6 +772,9 @@ impl DataGridPanel {
         // Chain to the next batch operation if in a pipeline
         if self.pending_batch_remaining.is_some() {
             self.process_next_batch_op(cx);
+        } else {
+            // The row that just landed was the batch's last one.
+            self.finish_close_after_apply(cx);
         }
 
         cx.notify();
@@ -852,6 +867,7 @@ impl DataGridPanel {
                 cx.update(|cx| {
                     entity.update(cx, |panel, cx| {
                         panel.runner.fail_mutation(task_id, "No connection", cx);
+                        panel.abandon_close_apply(cx);
                     });
                 });
                 return;
@@ -888,6 +904,7 @@ impl DataGridPanel {
                         }
                         Err(e) => {
                             panel.runner.fail_mutation(task_id, e.to_string(), cx);
+                            panel.abandon_close_apply(cx);
                             report_error(
                                 UserFacingError::new(
                                     ErrorKind::Driver,
@@ -957,6 +974,7 @@ impl DataGridPanel {
         };
 
         if assignments.is_empty() {
+            self.abandon_close_apply(cx);
             report_error(
                 UserFacingError::new(
                     ErrorKind::Driver,
@@ -1001,6 +1019,7 @@ impl DataGridPanel {
                 cx.update(|cx| {
                     entity.update(cx, |panel, cx| {
                         panel.runner.fail_mutation(task_id, "No connection", cx);
+                        panel.abandon_close_apply(cx);
                     });
                 });
                 return;
@@ -1037,6 +1056,7 @@ impl DataGridPanel {
                         }
                         Err(e) => {
                             panel.runner.fail_mutation(task_id, e.to_string(), cx);
+                            panel.abandon_close_apply(cx);
                             report_error(
                                 UserFacingError::new(
                                     ErrorKind::Driver,
@@ -1119,6 +1139,9 @@ impl DataGridPanel {
     pub fn cancel_delete(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.pending_delete_confirm.is_some() {
             self.pending_delete_confirm = None;
+            // A close waiting on these deletes cannot be satisfied by a
+            // confirmation the user dismissed: the tab stays open with its edits.
+            self.abandon_close_apply(cx);
             self.focus_active_view(window, cx);
             cx.notify();
         }
@@ -1219,6 +1242,7 @@ impl DataGridPanel {
                 cx.update(|cx| {
                     entity.update(cx, |panel, cx| {
                         panel.runner.fail_mutation(task_id, "No connection", cx);
+                        panel.abandon_close_apply(cx);
                     });
                 });
                 return;
@@ -1363,6 +1387,7 @@ impl DataGridPanel {
                 cx.update(|cx| {
                     entity.update(cx, |panel, cx| {
                         panel.runner.fail_mutation(task_id, "No connection", cx);
+                        panel.abandon_close_apply(cx);
                     });
                 });
                 return;
@@ -1509,8 +1534,26 @@ impl DataGridPanel {
         }
 
         // All batch operations complete
+        self.finish_close_after_apply(cx);
+
         self.pending.refresh = true;
         cx.notify();
+    }
+
+    /// Reports a close that was waiting on the staged edits, once the batch has
+    /// nothing left to run.
+    ///
+    /// Called from every place a successful operation can find the batch empty,
+    /// because the last operation of a batch is not reached through the drain: a
+    /// batch of one parks no remaining work at all, so the save's own tail is what
+    /// has to report it. A no-op when no close is waiting.
+    fn finish_close_after_apply(&mut self, cx: &mut Context<Self>) {
+        // Only reached with the intent still armed when no operation abandoned it,
+        // so nothing failed by the time the batch ran out of work.
+        if std::mem::take(&mut self.close_after_apply) {
+            cx.emit(DataGridEvent::MutationFinished { landed: true });
+            cx.emit(DataGridEvent::RequestClose);
+        }
     }
 
     /// Execute multiple row deletes for a SQL table in a single async block.
@@ -1535,6 +1578,7 @@ impl DataGridPanel {
         };
 
         if pk_indices.is_empty() {
+            self.abandon_close_apply(cx);
             report_error(
                 UserFacingError::new(
                     ErrorKind::Driver,
@@ -1577,6 +1621,7 @@ impl DataGridPanel {
         }
 
         if identities.is_empty() {
+            self.abandon_close_apply(cx);
             report_error(
                 UserFacingError::new(
                     ErrorKind::Driver,
@@ -1620,6 +1665,7 @@ impl DataGridPanel {
                 cx.update(|cx| {
                     entity.update(cx, |panel, cx| {
                         panel.runner.fail_mutation(task_id, "No connection", cx);
+                        panel.abandon_close_apply(cx);
                     });
                 });
                 return;
@@ -1660,6 +1706,7 @@ impl DataGridPanel {
                     let success_count = successful_results.len();
                     if let Some(e) = last_error {
                         panel.runner.fail_mutation(task_id, e.to_string(), cx);
+                        panel.abandon_close_apply(cx);
                         report_error(
                             UserFacingError::new(
                                 ErrorKind::Driver,
@@ -1694,6 +1741,10 @@ impl DataGridPanel {
                         if panel.pending_batch_remaining.is_some() {
                             panel.process_next_batch_op(cx);
                         } else {
+                            // A batch of deletes parks on the confirmation instead
+                            // of staging remaining work, so the pump never runs
+                            // and this tail is what reports the batch.
+                            panel.finish_close_after_apply(cx);
                             panel.pending.refresh = true;
                         }
                     }
@@ -1769,6 +1820,7 @@ impl DataGridPanel {
         }
 
         if filters.is_empty() {
+            self.abandon_close_apply(cx);
             report_error(
                 UserFacingError::new(
                     ErrorKind::Driver,
@@ -1810,6 +1862,7 @@ impl DataGridPanel {
                 cx.update(|cx| {
                     entity.update(cx, |panel, cx| {
                         panel.runner.fail_mutation(task_id, "No connection", cx);
+                        panel.abandon_close_apply(cx);
                     });
                 });
                 return;
@@ -1850,6 +1903,7 @@ impl DataGridPanel {
                     let success_count = successful_results.len();
                     if let Some(e) = last_error {
                         panel.runner.fail_mutation(task_id, e.to_string(), cx);
+                        panel.abandon_close_apply(cx);
                         report_error(
                             UserFacingError::new(
                                 ErrorKind::Driver,
@@ -1883,6 +1937,10 @@ impl DataGridPanel {
                         if panel.pending_batch_remaining.is_some() {
                             panel.process_next_batch_op(cx);
                         } else {
+                            // A batch of deletes parks on the confirmation instead
+                            // of staging remaining work, so the pump never runs
+                            // and this tail is what reports the batch.
+                            panel.finish_close_after_apply(cx);
                             panel.pending.refresh = true;
                         }
                     }

@@ -241,8 +241,8 @@ mod confirm_modal_routing_tests {
     use super::route_confirm_modal_command;
     use crate::keymap::Command;
     use crate::ui::overlays::modals::{
-        DeleteConnectionOutcome, DeleteConnectionRequest, DirtySummaryEntry, ModalDeleteConnection,
-        ModalUnsavedChanges, UnsavedChangesOutcome, UnsavedChangesRequest,
+        CloseAction, DeleteConnectionOutcome, DeleteConnectionRequest, DirtySummaryEntry,
+        ModalDeleteConnection, ModalUnsavedChanges, UnsavedChangesOutcome, UnsavedChangesRequest,
     };
     use dbflux_core::document_id::DocumentId;
     use dbflux_ui_base::modals::{
@@ -359,6 +359,7 @@ mod confirm_modal_routing_tests {
                             id: entry_id,
                             name: "query.sql".to_string(),
                             summary: "1 statement".to_string(),
+                            action: CloseAction::Save,
                         }],
                     },
                     cx,

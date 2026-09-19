@@ -13,6 +13,7 @@ use super::dedup::DocumentKey;
 use super::handle::DocumentEvent;
 use super::types::{DocumentId, DocumentKind, DocumentMetaSnapshot};
 use dbflux_app::keymap::{Command, ContextId};
+use dbflux_components::modals::CloseAction;
 use dbflux_core::RefreshPolicy;
 use gpui::{AnyElement, App, Subscription, Window};
 
@@ -231,6 +232,11 @@ pub struct PaneHandle {
     /// the document has no save path, so its tab keeps the pending changes.
     pub save_for_close: Option<Box<dyn Fn(&mut Window, &mut App) -> bool>>,
 
+    /// Applies the document's pending edits as part of an interrupted close and
+    /// asks the workspace to close its tab once they actually land. `None` for
+    /// every document whose pending edits are not a database write.
+    pub apply_for_close: Option<Box<dyn Fn(&mut Window, &mut App) -> bool>>,
+
     /// Decides what closing this document means, before its tab is removed.
     ///
     /// `None` means the document has no close policy of its own: the workspace
@@ -310,6 +316,7 @@ impl PaneHandle {
             take_pending_open_object_editor: None,
             on_close: None,
             save_for_close: None,
+            apply_for_close: None,
             resolve_close: None,
             decides_own_close: None,
         }
@@ -437,6 +444,30 @@ impl PaneHandle {
             save(window, cx)
         } else {
             false
+        }
+    }
+
+    /// Starts applying this document's pending edits for an interrupted close.
+    ///
+    /// Returns `false` when the document has no apply path: the workspace must
+    /// then leave the tab open with its changes.
+    pub fn apply_for_close(&self, window: &mut Window, cx: &mut App) -> bool {
+        if let Some(apply) = self.apply_for_close.as_ref() {
+            apply(window, cx)
+        } else {
+            false
+        }
+    }
+
+    /// What this document's pending edits are brought to when a close keeps them.
+    ///
+    /// Derived from which close action the pane provides rather than stored, so
+    /// the word the dialog shows cannot disagree with the work the action does.
+    pub fn close_action(&self) -> CloseAction {
+        if self.apply_for_close.is_some() {
+            CloseAction::Apply
+        } else {
+            CloseAction::Save
         }
     }
 
