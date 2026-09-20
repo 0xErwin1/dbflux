@@ -25,6 +25,7 @@ export const LOCALE_REGISTRY = validateLocaleRegistry(
   [
     { id: 'en', name: 'English', docsDirectory: null },
     { id: 'es', name: 'Español', docsDirectory: 'es' },
+    { id: 'ko', name: '한국어', docsDirectory: 'ko' },
     { id: 'zh-Hans', name: '简体中文', docsDirectory: 'zh_Hans' },
   ],
   DEFAULT_LOCALE,
