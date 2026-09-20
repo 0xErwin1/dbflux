@@ -48,7 +48,7 @@ understand than the English one they already know.
 
 The site renders the repository's own markdown, so translating a page is
 adding one file in the right place. Each language has a directory under
-`docs/` (`docs/es/`, `docs/zh_Hans/`) that mirrors the English layout:
+`docs/` (`docs/es/`, `docs/ko/`, `docs/zh_Hans/`) that mirrors the English layout:
 
 | English page | Translated file |
 |---|---|
@@ -81,7 +81,7 @@ TypeScript dictionaries under `web/src/i18n/`. Translating them for an
 existing language is editing that language's dictionary; adding a **new**
 language to the website is two changes:
 
-1. Register the locale in `web/src/i18n/locale-registry.mjs`. The `id` is the
+1. Register the locale in `web/src/i18n/locale-registry.ts`. The `id` is the
    public identity — it becomes the URL prefix (`/es/`, `/zh-Hans/`) and the
    HTML `lang`/`hreflang` value, so it must be a valid
    [BCP-47](https://en.wikipedia.org/wiki/IETF_language_tag) tag (hyphens,
