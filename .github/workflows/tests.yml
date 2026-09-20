@@ -1,14 +1,20 @@
 name: Tests
 
 # Prose and the site cannot break a Rust build, and a change confined to them
-# would otherwise run the full matrix including the Docker-backed driver suites.
+# does not need the full matrix including the Docker-backed driver suites.
 #
-# Markdown is safe to ignore here because no crate pulls it into the build: there
-# is no `include_str!` of a .md file, no `#[doc = include_str!]`, and no `readme`
+# That rule used to live in the `pull_request` trigger's paths-ignore. It moved
+# into the `changes` job below on purpose: a workflow skipped by path filtering
+# never starts, so its required status checks stay "Pending" forever and the
+# pull request is unmergeable (see GitHub's "Troubleshooting required status
+# checks"). A job skipped by a conditional reports "Success", so the workflow
+# now always triggers and the jobs decide whether the Rust checks apply. The
+# `push` trigger keeps its paths-ignore: a push run has no required checks to
+# satisfy, so skipping it entirely still saves the compute.
+#
+# Markdown is safe to skip because no crate pulls it into the build: there is
+# no `include_str!` of a .md file, no `#[doc = include_str!]`, and no `readme`
 # key in any manifest. Re-check that before assuming it still holds.
-#
-# paths-ignore skips only when *every* changed file matches, so a pull request
-# touching code and docs together still runs.
 on:
   push:
     branches: [main, dev]
@@ -18,10 +24,6 @@ on:
       - '.github/workflows/web.yml'
   pull_request:
     branches: [main, dev]
-    paths-ignore:
-      - '**/*.md'
-      - 'web/**'
-      - '.github/workflows/web.yml'
   workflow_call:
   workflow_dispatch:
 
@@ -37,8 +39,70 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: Detect change scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      rust: ${{ steps.scope.outputs.rust }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          # The base commit of the pull request has to be in the object store for
+          # the diff below to resolve, and a shallow clone does not have it.
+          fetch-depth: 0
+
+      - name: Decide whether the Rust checks apply
+        id: scope
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          # Decide first, write once. The output file is a list of name=value
+          # lines, and writing the same name twice would make the result depend
+          # on which duplicate the parser keeps, which the workflow-commands
+          # reference does not specify. So this computes a single value and
+          # appends a single line.
+          #
+          # The default is to run the Rust checks, and it is overridden only by
+          # a confirmed finding that every changed path is prose or the site.
+          # A broken resolver or a failed diff therefore costs extra CI time
+          # rather than silently disabling the checks that gate this branch.
+          rust=true
+
+          # Everything that is not a pull request must run the Rust checks: this
+          # workflow is also invoked through workflow_call from release.yml, where
+          # there is no pull request to scope against.
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            if changed=$(git diff --name-only "$BASE_SHA" HEAD) && [ -n "$changed" ]; then
+              # The rule the path filter used to apply, in one place: the Rust
+              # checks are unnecessary only when every changed path is prose or
+              # the site.
+              if ! printf '%s\n' "$changed" | grep -qvE '^(web/|.*\.md$|\.github/workflows/web\.yml$)'; then
+                rust=false
+              fi
+            else
+              echo "::warning::cannot scope the change against $BASE_SHA; running the Rust checks"
+            fi
+          fi
+
+          echo "rust=$rust" >> "$GITHUB_OUTPUT"
+
+  # NOTE: this job is duplicated in style.yml. GitHub offers no way to share an
+  # output between two workflows without a reusable workflow, and neither file
+  # can be one (both are already workflow_call targets for release.yml). The two
+  # copies must stay byte-identical except for surrounding indentation.
+
+  # Fail-open gate: `always()` stops a failed `changes` job from skipping this
+  # required check, and an unset output means "run the checks", not skip them.
+  # On a confirmed docs-only change the job skips deliberately and reports
+  # "Success", which satisfies the required "Deterministic Tests" context.
   deterministic-tests:
     name: Deterministic Tests
+    needs: changes
+    if: always() && needs.changes.outputs.rust != 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -76,8 +140,11 @@ jobs:
       - name: Run deterministic workspace tests
         run: cargo test --workspace --locked --features "sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,clickhouse,turso,aws"
 
+  # Same fail-open rationale as deterministic-tests above.
   driver-live-integration:
     name: Driver Live Integration
+    needs: changes
+    if: always() && needs.changes.outputs.rust != 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
@@ -240,8 +307,18 @@ jobs:
           DBFLUX_TEST_REDSHIFT_DATABASE: ${{ secrets.DBFLUX_TEST_REDSHIFT_DATABASE }}
         run: cargo test -p dbflux_driver_redshift --locked --test live_integration -- --ignored
 
+  # The required contexts here are "Cross-platform check macos-14" and
+  # "Cross-platform check windows-latest", one per matrix leg. A job-level
+  # scope `if` would prevent matrix expansion entirely, so both contexts would
+  # never report; `always()` keeps the matrix expanding even when the `changes`
+  # job fails. The job either runs the checks or skips them deliberately on a
+  # confirmed docs-only change; it never stops reporting. The expensive steps
+  # carry the scope condition; the cheap ones (checkout, toolchain, cache)
+  # always run: that is the accepted cost of always-reporting checks.
   cross-platform-check:
     name: Cross-platform check ${{ matrix.os }}
+    needs: changes
+    if: always()
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
 
@@ -279,6 +356,7 @@ jobs:
           cache-on-failure: true
 
       - name: Cargo check
+        if: needs.changes.outputs.rust != 'false'
         run: cargo check --workspace --locked --features "sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,clickhouse,turso,aws${{ matrix.extra_features }}"
 
       # Compiling the Windows process-containment path (Job Objects) does not prove
@@ -287,5 +365,5 @@ jobs:
       # the workspace has ever run on Windows, so a broader filter would put
       # unrelated breakage in front of every PR.
       - name: Run hook process containment tests (Windows)
-        if: matrix.os == 'windows-latest'
+        if: matrix.os == 'windows-latest' && needs.changes.outputs.rust != 'false'
         run: cargo test -p dbflux_core --locked --lib connection::hook
