@@ -63,6 +63,7 @@ pub enum Command {
     SaveQuery,
     SaveFileAs,
     OpenScriptFile,
+    ToggleComment,
 
     // === Results ===
     ExportResults,
@@ -128,6 +129,7 @@ impl Command {
             "run_query" => Some(Command::RunQuery),
             "run_query_in_new_tab" => Some(Command::RunQueryInNewTab),
             "save_query" => Some(Command::SaveQuery),
+            "toggle_comment" => Some(Command::ToggleComment),
             "open_history" => Some(Command::ToggleHistoryDropdown),
             "cancel_query" => Some(Command::CancelQuery),
             "close_tab" => Some(Command::CloseCurrentTab),
@@ -216,6 +218,7 @@ impl Command {
             Command::SaveQuery => "Save",
             Command::SaveFileAs => "Save File As",
             Command::OpenScriptFile => "Open Script File",
+            Command::ToggleComment => "Toggle Comment",
 
             Command::ExportResults => "Export Results",
             Command::ResultsNextPage => "Results Next Page",
@@ -321,6 +324,7 @@ impl Command {
             Command::SaveQuery => "save_query",
             Command::SaveFileAs => "save_file_as",
             Command::OpenScriptFile => "open_script_file",
+            Command::ToggleComment => "toggle_comment",
 
             Command::ExportResults => "export_results",
             Command::ResultsNextPage => "results_next_page",
@@ -421,6 +425,7 @@ impl Command {
             Command::SaveQuery,
             Command::SaveFileAs,
             Command::OpenScriptFile,
+            Command::ToggleComment,
             Command::ExportResults,
             Command::ResultsNextPage,
             Command::ResultsPrevPage,
@@ -520,7 +525,8 @@ impl Command {
             | Command::OpenSavedQueries
             | Command::SaveQuery
             | Command::SaveFileAs
-            | Command::OpenScriptFile => "Editor",
+            | Command::OpenScriptFile
+            | Command::ToggleComment => "Editor",
 
             Command::ExportResults
             | Command::ResultsNextPage
@@ -857,6 +863,7 @@ mod tests {
             "run_query",
             "run_query_in_new_tab",
             "save_query",
+            "toggle_comment",
             "open_history",
             "cancel_query",
             "close_tab",

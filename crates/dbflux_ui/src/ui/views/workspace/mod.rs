@@ -1602,6 +1602,7 @@ impl Workspace {
             save_query: &'static str,
             save_file_as: &'static str,
             open_script_file: &'static str,
+            toggle_comment: &'static str,
             open_history: &'static str,
             close_tab: &'static str,
             export_results: &'static str,
@@ -1617,6 +1618,7 @@ impl Workspace {
             save_query: "cmd-s",
             save_file_as: "cmd-shift-s",
             open_script_file: "cmd-o",
+            toggle_comment: "cmd-/",
             open_history: "cmd-p",
             close_tab: "cmd-w",
             export_results: "cmd-e",
@@ -1631,6 +1633,7 @@ impl Workspace {
             save_query: "ctrl-s",
             save_file_as: "ctrl-shift-s",
             open_script_file: "ctrl-o",
+            toggle_comment: "ctrl-/",
             open_history: "ctrl-p",
             close_tab: "ctrl-w",
             export_results: "ctrl-e",
@@ -1676,6 +1679,12 @@ impl Workspace {
                 dbflux_i18n::t!("palette.category.editor"),
             )
             .with_shortcut(SC.open_script_file),
+            PaletteCommand::new(
+                "toggle_comment",
+                dbflux_i18n::t!("palette.command.toggle_comment.name"),
+                dbflux_i18n::t!("palette.category.editor"),
+            )
+            .with_shortcut(SC.toggle_comment),
             PaletteCommand::new(
                 "open_history",
                 dbflux_i18n::t!("palette.command.open_history.name"),

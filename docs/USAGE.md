@@ -512,6 +512,7 @@ stay `Ctrl` on all platforms (to avoid clashing with macOS system shortcuts).
 | `Ctrl+p` / `Cmd+p` | Open saved queries |
 | `Ctrl+s` / `Cmd+s` | Save query |
 | `Ctrl+Shift+s` / `Cmd+Shift+s` | Save file as |
+| `Ctrl+/` / `Cmd+/` | Toggle line comment |
 | `Enter` | Focus / execute |
 
 (Unmodified letters are intentionally left to the text input so typing works.)

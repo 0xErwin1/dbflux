@@ -2490,6 +2490,8 @@ palette:
       name: Save File As
     open_script_file:
       name: Open Script File
+    toggle_comment:
+      name: Toggle Comment
     open_history:
       name: Open Query History
     cancel_query:
@@ -2730,6 +2732,7 @@ settings:
       save_query: Save
       save_file_as: Save File As
       open_script_file: Open Script File
+      toggle_comment: Toggle Comment
       export_results: Export Results
       results_next_page: Results Next Page
       results_prev_page: Results Previous Page
