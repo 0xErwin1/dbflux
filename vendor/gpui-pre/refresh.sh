@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+#
+# Rebuild the vendored gpui-pre copy from a published version.
+#
+# Usage:
+#   vendor/gpui-pre/refresh.sh 0.3.6
+#
+# Downloads the crate, keeps the parts the patch needs, re-applies
+# element-transform.patch and leaves .rej files for hunks that no longer apply.
+# See VENDOR.md for what to check afterwards.
+
+set -euo pipefail
+
+version="${1:-}"
+if [[ -z "$version" ]]; then
+    echo "usage: $0 <gpui-pre version>  (for example: $0 0.3.6)" >&2
+    exit 1
+fi
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "$here/../.." && pwd)"
+crate="gpui-pre-$version"
+
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+
+echo "Fetching gpui-pre $version"
+curl -fsSL "https://static.crates.io/crates/gpui-pre/$crate.crate" -o "$work/$crate.crate"
+tar -xzf "$work/$crate.crate" -C "$work"
+source_dir="$work/$crate"
+
+if [[ ! -d "$source_dir/src" ]]; then
+    echo "error: $crate.crate did not contain src/" >&2
+    exit 1
+fi
+
+echo "Rebuilding $here"
+rm -rf "$here/src" "$here/resources" "$here/Cargo.toml"
+cp -r "$source_dir/src" "$here/src"
+mkdir -p "$here/resources"
+cp -r "$source_dir/resources/." "$here/resources/"
+cp "$source_dir/build.rs" "$source_dir/LICENSE-APACHE" "$source_dir/README.md" "$here/"
+
+# Drop the target tables whose sources are not vendored, then give the crate its own
+# workspace root so Cargo does not expect it in DBFlux's member list.
+awk '
+    /^\[\[example\]\]/ { skip = 1 }
+    /^\[\[test\]\]/    { skip = 1 }
+    /^\[\[bench\]\]/   { skip = 1 }
+    /^\[/ && !/^\[\[example\]\]|^\[\[test\]\]|^\[\[bench\]\]/ { skip = 0 }
+    !skip { print }
+' "$source_dir/Cargo.toml" > "$here/Cargo.toml"
+printf '\n[workspace]\n' >> "$here/Cargo.toml"
+
+echo "Applying element-transform.patch"
+cd "$repo_root"
+git apply -p3 --directory=vendor/gpui-pre --reject vendor/gpui-pre/element-transform.patch || true
+
+rejects="$(find "$here" -name '*.rej' || true)"
+if [[ -n "$rejects" ]]; then
+    echo
+    echo "Rejected hunks need a manual port (see VENDOR.md):"
+    echo "$rejects"
+    exit 2
+fi
+
+echo "Done. Bump the version constraints in the root Cargo.toml next."

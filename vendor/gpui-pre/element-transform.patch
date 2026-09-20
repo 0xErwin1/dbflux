@@ -1,0 +1,2533 @@
+diff --git a/crates/gpui/src/elements/div.rs b/crates/gpui/src/elements/div.rs
+index f9208d04ad0f44..fdaceab977ce8b 100644
+--- a/crates/gpui/src/elements/div.rs
++++ b/crates/gpui/src/elements/div.rs
+@@ -2329,21 +2329,23 @@ impl Interactivity {
+                 }
+ 
+                 window.with_text_style(style.text_style().cloned(), |window| {
+-                    window.with_content_mask(
+-                        style.overflow_mask(bounds, window.rem_size()),
+-                        |window| {
+-                            let hitbox = if self.should_insert_hitbox(&style, window, cx) {
+-                                Some(window.insert_hitbox(bounds, self.hitbox_behavior))
+-                            } else {
+-                                None
+-                            };
++                    window.with_style_transform(style.transform, bounds, |window| {
++                        window.with_content_mask(
++                            style.overflow_mask(bounds, window.rem_size()),
++                            |window| {
++                                let hitbox = if self.should_insert_hitbox(&style, window, cx) {
++                                    Some(window.insert_hitbox(bounds, self.hitbox_behavior))
++                                } else {
++                                    None
++                                };
+ 
+-                            let scroll_offset =
+-                                self.clamp_scroll_position(bounds, &style, window, cx);
+-                            let result = f(&style, scroll_offset, hitbox, window, cx);
+-                            (result, element_state)
+-                        },
+-                    )
++                                let scroll_offset =
++                                    self.clamp_scroll_position(bounds, &style, window, cx);
++                                let result = f(&style, scroll_offset, hitbox, window, cx);
++                                (result, element_state)
++                            },
++                        )
++                    })
+                 })
+             },
+         )
+@@ -2487,95 +2489,104 @@ impl Interactivity {
+                 }
+ 
+                 window.with_element_opacity(style.opacity, |window| {
+-                    style.paint(bounds, window, cx, |window: &mut Window, cx: &mut App| {
+-                        window.with_text_style(style.text_style().cloned(), |window| {
+-                            window.with_content_mask(
+-                                style.overflow_mask(bounds, window.rem_size()),
+-                                |window| {
+-                                    window.with_tab_group(tab_group, |window| {
+-                                        // Register the container's own focus handle *inside* its
+-                                        // tab group, so that focusing the container and then
+-                                        // calling `focus_next` descends into this group's first
+-                                        // item. Inserting it before `with_tab_group` would give the
+-                                        // container a shallower tab path than its children; with
+-                                        // sibling groups every container would then sort ahead of
+-                                        // every item, and `focus_next` from a container would jump
+-                                        // to the first item in the whole window instead of its own.
+-                                        if let Some(focus_handle) = &self.tracked_focus_handle {
+-                                            window.next_frame.tab_stops.insert(focus_handle);
+-                                        }
+-                                        if let Some(hitbox) = hitbox {
+-                                            #[cfg(debug_assertions)]
+-                                            self.paint_debug_info(
+-                                                global_id, hitbox, &style, window, cx,
+-                                            );
+-
+-                                            if let Some(drag) = cx.active_drag.as_ref() {
+-                                                if let Some(mouse_cursor) = drag.cursor_style {
+-                                                    window.set_window_cursor_style(mouse_cursor);
++                    window.with_style_transform(style.transform, bounds, |window| {
++                        style.paint(bounds, window, cx, |window: &mut Window, cx: &mut App| {
++                            window.with_text_style(style.text_style().cloned(), |window| {
++                                window.with_content_mask(
++                                    style.overflow_mask(bounds, window.rem_size()),
++                                    |window| {
++                                        window.with_tab_group(tab_group, |window| {
++                                            // Register the container's own focus handle *inside* its
++                                            // tab group, so that focusing the container and then
++                                            // calling `focus_next` descends into this group's first
++                                            // item. Inserting it before `with_tab_group` would give the
++                                            // container a shallower tab path than its children; with
++                                            // sibling groups every container would then sort ahead of
++                                            // every item, and `focus_next` from a container would jump
++                                            // to the first item in the whole window instead of its own.
++                                            if let Some(focus_handle) = &self.tracked_focus_handle {
++                                                window.next_frame.tab_stops.insert(focus_handle);
++                                            }
++                                            if let Some(hitbox) = hitbox {
++                                                #[cfg(debug_assertions)]
++                                                self.paint_debug_info(
++                                                    global_id, hitbox, &style, window, cx,
++                                                );
++
++                                                if let Some(drag) = cx.active_drag.as_ref() {
++                                                    if let Some(mouse_cursor) = drag.cursor_style {
++                                                        window
++                                                            .set_window_cursor_style(mouse_cursor);
++                                                    }
++                                                } else {
++                                                    if let Some(mouse_cursor) = style.mouse_cursor {
++                                                        window
++                                                            .set_cursor_style(mouse_cursor, hitbox);
++                                                    }
+                                                 }
+-                                            } else {
+-                                                if let Some(mouse_cursor) = style.mouse_cursor {
+-                                                    window.set_cursor_style(mouse_cursor, hitbox);
++
++                                                if let Some(group) = self.group.clone() {
++                                                    GroupHitboxes::push(group, hitbox.id, cx);
+                                                 }
+-                                            }
+ 
+-                                            if let Some(group) = self.group.clone() {
+-                                                GroupHitboxes::push(group, hitbox.id, cx);
+-                                            }
++                                                if let Some(area) = self.window_control {
++                                                    window.insert_window_control_hitbox(
++                                                        area,
++                                                        hitbox.clone(),
++                                                    );
++                                                }
+ 
+-                                            if let Some(area) = self.window_control {
+-                                                window.insert_window_control_hitbox(
+-                                                    area,
+-                                                    hitbox.clone(),
++                                                self.paint_mouse_listeners(
++                                                    hitbox,
++                                                    element_state.as_mut(),
++                                                    window,
++                                                    cx,
++                                                );
++                                                self.paint_scroll_listener(
++                                                    hitbox, &style, window, cx,
+                                                 );
+                                             }
+ 
+-                                            self.paint_mouse_listeners(
+-                                                hitbox,
+-                                                element_state.as_mut(),
+-                                                window,
+-                                                cx,
+-                                            );
+-                                            self.paint_scroll_listener(hitbox, &style, window, cx);
+-                                        }
+-
+-                                        self.paint_keyboard_listeners(window, cx);
+-
+-                                        if window.a11y.is_active() {
+-                                            if let Some(global_id) = global_id {
+-                                                if !self.a11y_action_listeners.is_empty() {
+-                                                    let node_id = global_id.accesskit_node_id();
+-                                                    for (action, listener) in
+-                                                        self.a11y_action_listeners.drain(..)
+-                                                    {
+-                                                        window.on_a11y_action(
+-                                                            node_id, action, listener,
+-                                                        );
++                                            self.paint_keyboard_listeners(window, cx);
++
++                                            if window.a11y.is_active() {
++                                                if let Some(global_id) = global_id {
++                                                    if !self.a11y_action_listeners.is_empty() {
++                                                        let node_id = global_id.accesskit_node_id();
++                                                        for (action, listener) in
++                                                            self.a11y_action_listeners.drain(..)
++                                                        {
++                                                            window.on_a11y_action(
++                                                                node_id, action, listener,
++                                                            );
++                                                        }
+                                                     }
+                                                 }
+                                             }
+-                                        }
+ 
+-                                        f(&style, window, cx);
++                                            f(&style, window, cx);
+ 
+-                                        if let Some(_hitbox) = hitbox {
+-                                            #[cfg(any(feature = "inspector", debug_assertions))]
+-                                            window.insert_inspector_hitbox(
+-                                                _hitbox.id,
+-                                                _inspector_id,
+-                                                cx,
+-                                            );
++                                            if let Some(_hitbox) = hitbox {
++                                                #[cfg(any(
++                                                    feature = "inspector",
++                                                    debug_assertions
++                                                ))]
++                                                window.insert_inspector_hitbox(
++                                                    _hitbox.id,
++                                                    _inspector_id,
++                                                    cx,
++                                                );
+ 
+-                                            if let Some(group) = self.group.as_ref() {
+-                                                GroupHitboxes::pop(group, cx);
++                                                if let Some(group) = self.group.as_ref() {
++                                                    GroupHitboxes::pop(group, cx);
++                                                }
+                                             }
+-                                        }
+-                                    })
+-                                },
+-                            );
++                                        })
++                                    },
++                                );
++                            });
+                         });
+-                    });
++                    })
+                 });
+ 
+                 ((), element_state)
+diff --git a/crates/gpui/src/scene.rs b/crates/gpui/src/scene.rs
+index ea0f5d7e31af43..d33bd7f42ef511 100644
+--- a/crates/gpui/src/scene.rs
++++ b/crates/gpui/src/scene.rs
+@@ -42,6 +42,7 @@ pub struct Scene {
+     pub(crate) paint_operations: Vec<PaintOperation>,
+     primitive_bounds: BoundsTree<ScaledPixels>,
+     layer_stack: Vec<DrawOrder>,
++    transform_stack: Vec<TransformationMatrix>,
+     pub shadows: Vec<Shadow>,
+     pub quads: Vec<Quad>,
+     pub paths: Vec<Path<ScaledPixels>>,
+@@ -58,6 +59,7 @@ impl Scene {
+         self.paint_operations.clear();
+         self.primitive_bounds.clear();
+         self.layer_stack.clear();
++        self.transform_stack.clear();
+         self.paths.clear();
+         self.shadows.clear();
+         self.quads.clear();
+@@ -73,21 +75,38 @@ impl Scene {
+     }
+ 
+     pub fn push_layer(&mut self, bounds: Bounds<ScaledPixels>) {
++        let bounds = transform_bounds(bounds, self.current_transform());
++        self.push_replayed_layer(bounds);
++    }
++
++    fn push_replayed_layer(&mut self, bounds: Bounds<ScaledPixels>) {
+         let order = self.primitive_bounds.insert(bounds);
+         self.layer_stack.push(order);
+         self.paint_operations
+             .push(PaintOperation::StartLayer(bounds));
+     }
+ 
++    pub(crate) fn push_transformed_layer(&mut self, bounds: Bounds<ScaledPixels>) {
++        self.push_replayed_layer(bounds);
++    }
++
+     pub fn pop_layer(&mut self) {
+         self.layer_stack.pop();
+         self.paint_operations.push(PaintOperation::EndLayer);
+     }
+ 
+     pub fn insert_primitive(&mut self, primitive: impl Into<Primitive>) {
+-        let mut primitive = primitive.into();
++        self.insert_transformed_primitive(primitive, self.current_transform());
++    }
++
++    pub(crate) fn insert_transformed_primitive(
++        &mut self,
++        primitive: impl Into<Primitive>,
++        transform: TransformationMatrix,
++    ) {
++        let mut primitive = primitive.into().transform(transform);
+         let clipped_bounds = primitive
+-            .bounds()
++            .visual_bounds()
+             .intersect(&primitive.content_mask().bounds);
+ 
+         if clipped_bounds.is_empty() {
+@@ -138,11 +157,29 @@ impl Scene {
+             .push(PaintOperation::Primitive(primitive));
+     }
+ 
++    #[allow(dead_code)]
++    pub(crate) fn with_transform<R>(
++        &mut self,
++        transform: TransformationMatrix,
++        f: impl FnOnce(&mut Self) -> R,
++    ) -> R {
++        let transform = self.current_transform().compose(transform);
++        self.transform_stack.push(transform);
++        let result = f(self);
++        self.transform_stack.pop();
++        result
++    }
++
++    pub(crate) fn current_transform(&self) -> TransformationMatrix {
++        self.transform_stack.last().copied().unwrap_or_default()
++    }
++
+     pub fn replay(&mut self, range: Range<usize>, prev_scene: &Scene) {
+         for operation in &prev_scene.paint_operations[range] {
+             match operation {
+-                PaintOperation::Primitive(primitive) => self.insert_primitive(primitive.clone()),
+-                PaintOperation::StartLayer(bounds) => self.push_layer(*bounds),
++                PaintOperation::Primitive(primitive) => self
++                    .insert_transformed_primitive(primitive.clone(), TransformationMatrix::unit()),
++                PaintOperation::StartLayer(bounds) => self.push_replayed_layer(*bounds),
+                 PaintOperation::EndLayer => self.pop_layer(),
+             }
+         }
+@@ -257,6 +294,99 @@ impl Primitive {
+             Primitive::Surface(surface) => &surface.content_mask,
+         }
+     }
++
++    fn visual_bounds(&self) -> Bounds<ScaledPixels> {
++        match self {
++            Primitive::MonochromeSprite(sprite) => {
++                transform_bounds(sprite.bounds, sprite.transformation)
++            }
++            Primitive::SubpixelSprite(sprite) => {
++                transform_bounds(sprite.bounds, sprite.transformation)
++            }
++            _ => *self.bounds(),
++        }
++    }
++
++    fn transform(self, transform: TransformationMatrix) -> Self {
++        if transform == TransformationMatrix::unit() {
++            return self;
++        }
++
++        match self {
++            Primitive::Shadow(mut shadow) => {
++                shadow.bounds = transform_bounds(shadow.bounds, transform);
++                Primitive::Shadow(shadow)
++            }
++            Primitive::Quad(mut quad) => {
++                quad.bounds = transform_bounds(quad.bounds, transform);
++                Primitive::Quad(quad)
++            }
++            Primitive::Path(mut path) => {
++                path.transform(transform);
++                Primitive::Path(path)
++            }
++            Primitive::Underline(mut underline) => {
++                underline.bounds = transform_bounds(underline.bounds, transform);
++                Primitive::Underline(underline)
++            }
++            Primitive::MonochromeSprite(mut sprite) => {
++                sprite.transformation = transform.compose(sprite.transformation);
++                Primitive::MonochromeSprite(sprite)
++            }
++            Primitive::SubpixelSprite(mut sprite) => {
++                sprite.transformation = transform.compose(sprite.transformation);
++                Primitive::SubpixelSprite(sprite)
++            }
++            Primitive::PolychromeSprite(mut sprite) => {
++                sprite.bounds = transform_bounds(sprite.bounds, transform);
++                Primitive::PolychromeSprite(sprite)
++            }
++            Primitive::Surface(mut surface) => {
++                surface.bounds = transform_bounds(surface.bounds, transform);
++                Primitive::Surface(surface)
++            }
++        }
++    }
++}
++
++pub(crate) fn transform_bounds(
++    bounds: Bounds<ScaledPixels>,
++    transform: TransformationMatrix,
++) -> Bounds<ScaledPixels> {
++    let top_left = transform.apply_scaled(bounds.origin);
++    let top_right = transform.apply_scaled(point(bounds.right(), bounds.top()));
++    let bottom_left = transform.apply_scaled(point(bounds.left(), bounds.bottom()));
++    let bottom_right = transform.apply_scaled(point(bounds.right(), bounds.bottom()));
++
++    let left = top_left
++        .x
++        .0
++        .min(top_right.x.0)
++        .min(bottom_left.x.0)
++        .min(bottom_right.x.0);
++    let top = top_left
++        .y
++        .0
++        .min(top_right.y.0)
++        .min(bottom_left.y.0)
++        .min(bottom_right.y.0);
++    let right = top_left
++        .x
++        .0
++        .max(top_right.x.0)
++        .max(bottom_left.x.0)
++        .max(bottom_right.x.0);
++    let bottom = top_left
++        .y
++        .0
++        .max(top_right.y.0)
++        .max(bottom_left.y.0)
++        .max(bottom_right.y.0);
++
++    Bounds::from_corners(
++        point(ScaledPixels(left), ScaledPixels(top)),
++        point(ScaledPixels(right), ScaledPixels(bottom)),
++    )
+ }
+ 
+ #[cfg_attr(
+@@ -603,7 +733,7 @@ pub enum BorderStyle {
+ }
+ 
+ /// A data type representing a 2 dimensional transformation that can be applied to an element.
+-#[derive(Debug, Clone, Copy, PartialEq)]
++#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+ #[repr(C)]
+ pub struct TransformationMatrix {
+     /// 2x2 matrix containing rotation and scale,
+@@ -686,6 +816,31 @@ impl TransformationMatrix {
+         }
+     }
+ 
++    pub(crate) fn inverse(self) -> Option<TransformationMatrix> {
++        let [[a, b], [c, d]] = self.rotation_scale;
++        let determinant = a * d - b * c;
++        if determinant.abs() <= f32::EPSILON {
++            return None;
++        }
++
++        let inverse_determinant = determinant.recip();
++        let rotation_scale = [
++            [d * inverse_determinant, -b * inverse_determinant],
++            [-c * inverse_determinant, a * inverse_determinant],
++        ];
++        let translation = [
++            -(rotation_scale[0][0] * self.translation[0]
++                + rotation_scale[0][1] * self.translation[1]),
++            -(rotation_scale[1][0] * self.translation[0]
++                + rotation_scale[1][1] * self.translation[1]),
++        ];
++
++        Some(TransformationMatrix {
++            rotation_scale,
++            translation,
++        })
++    }
++
+     /// Apply transformation to a point, mainly useful for debugging
+     pub fn apply(&self, point: Point<Pixels>) -> Point<Pixels> {
+         let input = [point.x.0, point.y.0];
+@@ -697,6 +852,17 @@ impl TransformationMatrix {
+         }
+         Point::new(output[0].into(), output[1].into())
+     }
++
++    pub(crate) fn apply_scaled(&self, point: Point<ScaledPixels>) -> Point<ScaledPixels> {
++        let input = [point.x.0, point.y.0];
++        let mut output = self.translation;
++        for (i, output_cell) in output.iter_mut().enumerate() {
++            for (k, input_cell) in input.iter().enumerate() {
++                *output_cell += self.rotation_scale[i][k] * *input_cell;
++            }
++        }
++        Point::new(ScaledPixels(output[0]), ScaledPixels(output[1]))
++    }
+ }
+ 
+ impl Default for TransformationMatrix {
+@@ -922,12 +1088,226 @@ where
+     }
+ }
+ 
++impl Path<ScaledPixels> {
++    fn transform(&mut self, transform: TransformationMatrix) {
++        self.bounds = transform_bounds(self.bounds, transform);
++        self.start = transform.apply_scaled(self.start);
++        self.current = transform.apply_scaled(self.current);
++
++        for vertex in &mut self.vertices {
++            vertex.xy_position = transform.apply_scaled(vertex.xy_position);
++        }
++    }
++}
++
+ impl From<Path<ScaledPixels>> for Primitive {
+     fn from(path: Path<ScaledPixels>) -> Self {
+         Primitive::Path(path)
+     }
+ }
+ 
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::{AtlasTextureKind, DevicePixels, TileId, size};
++
++    #[test]
++    fn transform_stack_composes_parent_then_child() {
++        let mut scene = Scene::default();
++        let parent =
++            TransformationMatrix::unit().translate(point(ScaledPixels(10.), ScaledPixels(0.)));
++        let child = TransformationMatrix::unit().scale(size(2., 2.));
++
++        scene.with_transform(parent, |scene| {
++            scene.with_transform(child, |scene| {
++                let transformed = scene
++                    .current_transform()
++                    .apply(point(Pixels(3.), Pixels(4.)));
++
++                assert_eq!(transformed, point(Pixels(16.), Pixels(8.)));
++            });
++        });
++    }
++
++    #[test]
++    fn nested_transform_matches_direct_composed_sprite() {
++        let parent =
++            TransformationMatrix::unit().translate(point(ScaledPixels(10.), ScaledPixels(0.)));
++        let child = TransformationMatrix::unit().scale(size(2., 2.));
++        let direct_transform = parent.compose(child);
++
++        let mut direct_scene = Scene::default();
++        direct_scene.with_transform(direct_transform, |scene| {
++            scene.insert_primitive(test_sprite());
++        });
++
++        let mut nested_scene = Scene::default();
++        nested_scene.with_transform(parent, |scene| {
++            scene.with_transform(child, |scene| {
++                scene.insert_primitive(test_sprite());
++            });
++        });
++
++        assert_eq!(direct_scene.monochrome_sprites.len(), 1);
++        assert_eq!(nested_scene.monochrome_sprites.len(), 1);
++
++        let Some(direct_sprite) = direct_scene.monochrome_sprites.first() else {
++            panic!("direct scene should emit one monochrome sprite");
++        };
++        let Some(nested_sprite) = nested_scene.monochrome_sprites.first() else {
++            panic!("nested scene should emit one monochrome sprite");
++        };
++
++        assert_eq!(nested_sprite.transformation, direct_sprite.transformation,);
++    }
++
++    #[test]
++    fn replay_preserves_previously_transformed_primitives() {
++        let transform =
++            TransformationMatrix::unit().translate(point(ScaledPixels(10.), ScaledPixels(20.)));
++
++        let mut previous_scene = Scene::default();
++        previous_scene.with_transform(transform, |scene| {
++            scene.insert_primitive(test_quad());
++        });
++
++        let mut replayed_scene = Scene::default();
++        replayed_scene.with_transform(transform, |scene| {
++            scene.replay(0..previous_scene.len(), &previous_scene);
++        });
++
++        assert_eq!(previous_scene.quads.len(), 1);
++        assert_eq!(replayed_scene.quads.len(), 1);
++
++        let Some(previous_quad) = previous_scene.quads.first() else {
++            panic!("previous scene should emit one quad");
++        };
++        let Some(replayed_quad) = replayed_scene.quads.first() else {
++            panic!("replayed scene should emit one quad");
++        };
++
++        assert_eq!(replayed_quad.bounds, previous_quad.bounds);
++    }
++
++    #[test]
++    fn transformed_monochrome_sprite_is_culled_by_visual_bounds() {
++        let transform =
++            TransformationMatrix::unit().translate(point(ScaledPixels(100.), ScaledPixels(0.)));
++
++        let mut sprite = test_sprite();
++        sprite.content_mask = ContentMask {
++            bounds: Bounds::new(
++                point(ScaledPixels(100.), ScaledPixels(0.)),
++                size(ScaledPixels(10.), ScaledPixels(10.)),
++            ),
++        };
++
++        let mut scene = Scene::default();
++        scene.insert_transformed_primitive(sprite, transform);
++
++        assert_eq!(scene.monochrome_sprites.len(), 1);
++
++        let Some(sprite) = scene.monochrome_sprites.first() else {
++            panic!("scene should emit one transformed monochrome sprite");
++        };
++
++        assert_eq!(sprite.bounds, test_sprite().bounds);
++        assert_eq!(sprite.transformation, transform);
++    }
++
++    #[test]
++    fn transformed_subpixel_sprite_is_culled_by_visual_bounds() {
++        let transform =
++            TransformationMatrix::unit().translate(point(ScaledPixels(0.), ScaledPixels(100.)));
++
++        let mut sprite = test_subpixel_sprite();
++        sprite.content_mask = ContentMask {
++            bounds: Bounds::new(
++                point(ScaledPixels(0.), ScaledPixels(100.)),
++                size(ScaledPixels(10.), ScaledPixels(10.)),
++            ),
++        };
++
++        let mut scene = Scene::default();
++        scene.insert_transformed_primitive(sprite, transform);
++
++        assert_eq!(scene.subpixel_sprites.len(), 1);
++
++        let Some(sprite) = scene.subpixel_sprites.first() else {
++            panic!("scene should emit one transformed subpixel sprite");
++        };
++
++        assert_eq!(sprite.bounds, test_subpixel_sprite().bounds);
++        assert_eq!(sprite.transformation, transform);
++    }
++
++    fn test_quad() -> Quad {
++        Quad {
++            order: 0,
++            border_style: BorderStyle::default(),
++            bounds: Bounds::new(
++                point(ScaledPixels(1.), ScaledPixels(2.)),
++                size(ScaledPixels(3.), ScaledPixels(4.)),
++            ),
++            content_mask: ContentMask {
++                bounds: Bounds::new(
++                    point(ScaledPixels(0.), ScaledPixels(0.)),
++                    size(ScaledPixels(100.), ScaledPixels(100.)),
++                ),
++            },
++            background: Background::default(),
++            border_color: Hsla::default(),
++            corner_radii: Corners::default(),
++            border_widths: Edges::default(),
++        }
++    }
++
++    fn test_sprite() -> MonochromeSprite {
++        MonochromeSprite {
++            order: 0,
++            pad: 0,
++            bounds: Bounds::new(
++                point(ScaledPixels(0.), ScaledPixels(0.)),
++                size(ScaledPixels(10.), ScaledPixels(10.)),
++            ),
++            content_mask: ContentMask {
++                bounds: Bounds::new(
++                    point(ScaledPixels(0.), ScaledPixels(0.)),
++                    size(ScaledPixels(100.), ScaledPixels(100.)),
++                ),
++            },
++            color: Hsla::default(),
++            tile: AtlasTile {
++                texture_id: AtlasTextureId {
++                    index: 0,
++                    kind: AtlasTextureKind::Monochrome,
++                },
++                tile_id: TileId(0),
++                padding: 0,
++                bounds: Bounds::new(
++                    point(DevicePixels(0), DevicePixels(0)),
++                    size(DevicePixels(10), DevicePixels(10)),
++                ),
++            },
++            transformation: TransformationMatrix::unit(),
++        }
++    }
++
++    fn test_subpixel_sprite() -> SubpixelSprite {
++        let sprite = test_sprite();
++
++        SubpixelSprite {
++            order: sprite.order,
++            pad: sprite.pad,
++            bounds: sprite.bounds,
++            content_mask: sprite.content_mask,
++            color: sprite.color,
++            tile: sprite.tile,
++            transformation: sprite.transformation,
++        }
++    }
++}
++
+ #[derive(Clone, Debug)]
+ #[repr(C)]
+ #[expect(missing_docs)]
+diff --git a/crates/gpui/src/style.rs b/crates/gpui/src/style.rs
+index 9150fdded91b81..35411c366fabf0 100644
+--- a/crates/gpui/src/style.rs
++++ b/crates/gpui/src/style.rs
+@@ -8,8 +8,8 @@ use crate::{
+     AbsoluteLength, App, Background, BackgroundTag, BorderStyle, Bounds, ContentMask, Corners,
+     CornersRefinement, CursorStyle, DefiniteLength, DevicePixels, Edges, EdgesRefinement, Font,
+     FontFallbacks, FontFeatures, FontStyle, FontWeight, GridLocation, Hsla, Length, Pixels, Point,
+-    PointRefinement, Rgba, SharedString, Size, SizeRefinement, Styled, TextRun, Window, black, phi,
+-    point, px, quad, rems, size,
++    PointRefinement, Rgba, ScaledPixels, SharedString, Size, SizeRefinement, Styled, TextRun,
++    TransformationMatrix, Window, black, phi, point, px, quad, rems, size,
+ };
+ use collections::HashSet;
+ use refineable::Refineable;
+@@ -301,6 +301,9 @@ pub struct Style {
+     /// The opacity of this element
+     pub opacity: Option<f32>,
+ 
++    /// The transform applied to this element and its descendants after layout.
++    pub transform: Option<ElementTransform>,
++
+     /// The grid columns of this element
+     /// Roughly equivalent to the Tailwind `grid-cols-<number>`
+     pub grid_cols: Option<GridTemplate>,
+@@ -321,6 +324,62 @@ pub struct Style {
+     pub debug_below: bool,
+ }
+ 
++/// A 2D transform applied to a styled element subtree after layout.
++#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
++pub struct ElementTransform {
++    matrix: TransformationMatrix,
++    origin: Point<f32>,
++}
++
++impl ElementTransform {
++    /// Moves the transformed subtree by the given pixel offset.
++    pub fn translate(mut self, offset: Point<Pixels>) -> Self {
++        self.matrix = self.matrix.compose(TransformationMatrix {
++            rotation_scale: [[1.0, 0.0], [0.0, 1.0]],
++            translation: [offset.x.0, offset.y.0],
++        });
++        self
++    }
++
++    /// Scales the transformed subtree.
++    pub fn scale(mut self, scale: Size<f32>) -> Self {
++        self.matrix = self.matrix.scale(scale);
++        self
++    }
++
++    /// Sets the transform origin as fractions of the element bounds.
++    pub fn origin(mut self, origin: Point<f32>) -> Self {
++        self.origin = origin;
++        self
++    }
++
++    pub(crate) fn resolve(
++        &self,
++        bounds: Bounds<Pixels>,
++        scale_factor: f32,
++    ) -> TransformationMatrix {
++        let origin = point(
++            ScaledPixels((bounds.origin.x.0 + bounds.size.width.0 * self.origin.x) * scale_factor),
++            ScaledPixels((bounds.origin.y.0 + bounds.size.height.0 * self.origin.y) * scale_factor),
++        );
++        let matrix = TransformationMatrix {
++            rotation_scale: self.matrix.rotation_scale,
++            translation: [
++                self.matrix.translation[0] * scale_factor,
++                self.matrix.translation[1] * scale_factor,
++            ],
++        };
++
++        TransformationMatrix::unit()
++            .translate(origin)
++            .compose(matrix)
++            .compose(
++                TransformationMatrix::unit()
++                    .translate(point(ScaledPixels(-origin.x.0), ScaledPixels(-origin.y.0))),
++            )
++    }
++}
++
+ impl Styled for StyleRefinement {
+     fn style(&mut self) -> &mut StyleRefinement {
+         self
+@@ -809,6 +868,7 @@ impl Default for Style {
+             text: TextStyleRefinement::default(),
+             mouse_cursor: None,
+             opacity: None,
++            transform: None,
+             grid_rows: None,
+             grid_cols: None,
+             grid_location: None,
+diff --git a/crates/gpui/src/styled.rs b/crates/gpui/src/styled.rs
+index a24982a6acb607..3e0fcff5f0917e 100644
+--- a/crates/gpui/src/styled.rs
++++ b/crates/gpui/src/styled.rs
+@@ -1,8 +1,8 @@
+ use crate::{
+     self as gpui, AbsoluteLength, AlignContent, AlignItems, AlignSelf, BorderStyle, CursorStyle,
+-    DefiniteLength, Display, Fill, FlexDirection, FlexWrap, Font, FontFeatures, FontStyle,
+-    FontWeight, GridPlacement, GridTemplate, GridTemplateMinSize, Hsla, JustifyContent, Length,
+-    SharedString, StrikethroughStyle, StyleRefinement, TextAlign, TextOverflow,
++    DefiniteLength, Display, ElementTransform, Fill, FlexDirection, FlexWrap, Font, FontFeatures,
++    FontStyle, FontWeight, GridPlacement, GridTemplate, GridTemplateMinSize, Hsla, JustifyContent,
++    Length, SharedString, StrikethroughStyle, StyleRefinement, TextAlign, TextOverflow,
+     TextStyleRefinement, UnderlineStyle, WhiteSpace, px, relative, rems,
+ };
+ pub use gpui_macros::{
+@@ -496,6 +496,12 @@ pub trait Styled: Sized {
+         self
+     }
+ 
++    /// Sets the transform applied to this element and its descendants after layout.
++    fn transform(mut self, transform: ElementTransform) -> Self {
++        self.style().transform = Some(transform);
++        self
++    }
++
+     /// Sets the border style of the element.
+     fn border_dashed(mut self) -> Self {
+         self.style().border_style = Some(BorderStyle::Dashed);
+diff --git a/crates/gpui/src/text_system/line.rs b/crates/gpui/src/text_system/line.rs
+index 15101e6a2f39b5..25f7c8b3cf1809 100644
+--- a/crates/gpui/src/text_system/line.rs
++++ b/crates/gpui/src/text_system/line.rs
+@@ -1,7 +1,8 @@
+ use crate::{
+     App, Bounds, DevicePixels, Half, Hsla, LineLayout, Pixels, Point, RenderGlyphParams, Result,
+-    SharedString, StrikethroughStyle, TextAlign, UnderlineStyle, Window, WrapBoundary,
+-    WrappedLineLayout, black, fill, point, px, size,
++    ScaledPixels, SharedString, StrikethroughStyle, TextAlign,
++    TransformationMatrix, UnderlineStyle, Window, WrapBoundary, WrappedLineLayout, black, fill,
++    point, px, size,
+ };
+ use derive_more::{Deref, DerefMut};
+ use smallvec::SmallVec;
+@@ -532,7 +533,12 @@ fn paint_line(
+                 };
+ 
+                 let content_mask = window.content_mask();
+-                if max_glyph_bounds.intersects(&content_mask.bounds) {
++                if glyph_bounds_intersects_content_mask(
++                    max_glyph_bounds,
++                    content_mask.bounds,
++                    window.current_transform(),
++                    window.scale_factor(),
++                ) {
+                     let vertical_offset = point(px(0.0), glyph.position.y);
+                     if glyph.is_emoji {
+                         window.paint_emoji(
+@@ -759,6 +765,22 @@ fn aligned_origin_x(
+     }
+ }
+ 
++fn glyph_bounds_intersects_content_mask(
++    glyph_bounds: Bounds<Pixels>,
++    content_mask_bounds: Bounds<Pixels>,
++    transform: TransformationMatrix,
++    scale_factor: f32,
++) -> bool {
++    let visual_bounds = if transform == TransformationMatrix::unit() {
++        glyph_bounds
++    } else {
++        crate::scene::transform_bounds(glyph_bounds.scale(scale_factor), transform)
++            .map(|coordinate: ScaledPixels| px(coordinate.0 / scale_factor))
++    };
++
++    visual_bounds.intersects(&content_mask_bounds)
++}
++
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+@@ -1022,4 +1044,33 @@ mod tests {
+         assert_eq!(right.decoration_runs[1].len, 1);
+         assert_eq!(right.decoration_runs[1].color, blue);
+     }
++
++    #[test]
++    fn translated_glyph_culling_uses_visual_bounds() {
++        let glyph_bounds = Bounds::new(point(px(0.0), px(0.0)), size(px(10.0), px(10.0)));
++        let content_mask = Bounds::new(point(px(100.0), px(0.0)), size(px(10.0), px(10.0)));
++        let transform =
++            TransformationMatrix::unit().translate(point(ScaledPixels(100.0), ScaledPixels(0.0)));
++
++        assert!(glyph_bounds_intersects_content_mask(
++            glyph_bounds,
++            content_mask,
++            transform,
++            1.0
++        ));
++    }
++
++    #[test]
++    fn scaled_glyph_culling_uses_visual_bounds() {
++        let glyph_bounds = Bounds::new(point(px(10.0), px(10.0)), size(px(10.0), px(10.0)));
++        let content_mask = Bounds::new(point(px(20.0), px(20.0)), size(px(20.0), px(20.0)));
++        let transform = TransformationMatrix::unit().scale(size(2.0, 2.0));
++
++        assert!(glyph_bounds_intersects_content_mask(
++            glyph_bounds,
++            content_mask,
++            transform,
++            1.0
++        ));
++    }
+ }
+diff --git a/crates/gpui/src/view.rs b/crates/gpui/src/view.rs
+index f8343be29a09d4..a2fc148dc3c429 100644
+--- a/crates/gpui/src/view.rs
++++ b/crates/gpui/src/view.rs
+@@ -1,7 +1,8 @@
+ use crate::{
+     AnyElement, AnyEntity, AnyWeakEntity, App, Bounds, ContentMask, Context, Element, ElementId,
+     Entity, EntityId, GlobalElementId, InspectorElementId, IntoElement, LayoutId, PaintIndex,
+-    Pixels, PrepaintStateIndex, Render, RenderOnce, Style, StyleRefinement, TextStyle, WeakEntity,
++    Pixels, PrepaintStateIndex, Render, RenderOnce, Style, StyleRefinement, TextStyle,
++    TransformationMatrix, WeakEntity,
+ };
+ use crate::{Empty, Window};
+ use anyhow::Result;
+@@ -100,6 +101,58 @@ impl<V: 'static + Render> IntoElement for Entity<V> {
+     }
+ }
+ 
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::{ScaledPixels, TransformationMatrix, point, px, size};
++
++    #[test]
++    fn cached_view_key_includes_current_transform() {
++        let bounds = Bounds::new(point(px(0.), px(0.)), size(px(10.), px(10.)));
++        let content_mask = ContentMask { bounds };
++        let text_style = TextStyle::default();
++
++        let untransformed = ViewElementCacheKey {
++            bounds,
++            content_mask,
++            text_style: text_style.clone(),
++            transform: TransformationMatrix::unit(),
++        };
++        let translated = ViewElementCacheKey {
++            bounds,
++            content_mask,
++            text_style,
++            transform: TransformationMatrix::unit()
++                .translate(point(ScaledPixels(10.), ScaledPixels(0.))),
++        };
++
++        assert!(untransformed != translated);
++    }
++
++    #[test]
++    fn cached_view_key_matches_when_transform_is_unchanged() {
++        let bounds = Bounds::new(point(px(0.), px(0.)), size(px(10.), px(10.)));
++        let content_mask = ContentMask { bounds };
++        let transform =
++            TransformationMatrix::unit().translate(point(ScaledPixels(10.), ScaledPixels(0.)));
++
++        let first = ViewElementCacheKey {
++            bounds,
++            content_mask,
++            text_style: TextStyle::default(),
++            transform,
++        };
++        let second = ViewElementCacheKey {
++            bounds,
++            content_mask,
++            text_style: TextStyle::default(),
++            transform,
++        };
++
++        assert!(first == second);
++    }
++}
++
+ impl IntoElement for AnyView {
+     type Element = ViewElement<AnyView>;
+ 
+@@ -289,10 +342,12 @@ struct ViewElementState {
+     accessed_entities: FxHashSet<EntityId>,
+ }
+ 
++#[derive(PartialEq)]
+ struct ViewElementCacheKey {
+     bounds: Bounds<Pixels>,
+     content_mask: ContentMask<Pixels>,
+     text_style: TextStyle,
++    transform: TransformationMatrix,
+ }
+ 
+ impl<V: View> Element for ViewElement<V> {
+@@ -382,11 +437,13 @@ impl<V: View> Element for ViewElement<V> {
+                     |element_state, window| {
+                         let content_mask = window.content_mask();
+                         let text_style = window.text_style();
++                        let transform = window.current_transform();
+ 
+                         if let Some(mut element_state) = element_state
+                             && element_state.cache_key.bounds == bounds
+                             && element_state.cache_key.content_mask == content_mask
+                             && element_state.cache_key.text_style == text_style
++                            && element_state.cache_key.transform == transform
+                             && !window.dirty_views.contains(&entity_id)
+                             && !window.refreshing
+                         {
+@@ -427,6 +484,7 @@ impl<V: View> Element for ViewElement<V> {
+                                     bounds,
+                                     content_mask,
+                                     text_style,
++                                    transform,
+                                 },
+                             },
+                         )
+diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
+index cf8eded704ca0e..339b68c72c5785 100644
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -8,21 +8,22 @@ use crate::{
+     Action, AnyDrag, AnyElement, AnyImageCache, AnyTooltip, AnyView, App, AppContext, Arena, Asset,
+     AsyncWindowContext, AtlasTile, AvailableSpace, Background, BorderStyle, Bounds, BoxShadow,
+     Capslock, Context, Corners, CursorHideMode, CursorStyle, Decorations, DevicePixels,
+-    DispatchActionListener, DispatchNodeId, DispatchTree, DisplayId, Edges, Effect, Entity,
+-    EntityId, EventEmitter, FileDropEvent, FontId, Global, GlobalElementId, GlyphId, GpuSpecs,
+-    Hsla, InputHandler, IsZero, KeyBinding, KeyContext, KeyDownEvent, KeyEvent, Keystroke,
+-    KeystrokeEvent, LayoutId, LineLayoutIndex, Modifiers, ModifiersChangedEvent, MonochromeSprite,
+-    MouseButton, MouseEvent, MouseMoveEvent, MouseUpEvent, Path, Pixels, PlatformAtlas,
+-    PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow, Point, PolychromeSprite,
+-    Priority, PromptButton, PromptLevel, Quad, Render, RenderGlyphParams, RenderImage,
+-    RenderImageParams, RenderSvgParams, Replay, ResizeEdge, SMOOTH_SVG_SCALE_FACTOR,
+-    SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ScaledPixels, Scene, Shadow, SharedString, Size,
+-    StrikethroughStyle, Style, SubpixelSprite, SubscriberSet, Subscription, SystemWindowTab,
+-    SystemWindowTabController, TabStopMap, TaffyLayoutEngine, Task, TextInputConfiguration,
+-    TextInputStateChange, TextRenderingMode, TextStyle, TextStyleRefinement, ThermalState,
+-    TransformationMatrix, Underline, UnderlineStyle, WindowAppearance, WindowBackgroundAppearance,
+-    WindowBounds, WindowControls, WindowDecorations, WindowOptions, WindowParams, WindowTextSystem,
+-    point, prelude::*, px, rems, size, transparent_black,
++    DispatchActionListener, DispatchNodeId, DispatchTree, DisplayId, Edges, Effect,
++    ElementTransform, Entity, EntityId, EventEmitter, FileDropEvent, FontId, Global,
++    GlobalElementId, GlyphId, GpuSpecs, Hsla, InputHandler, IsZero, KeyBinding, KeyContext,
++    KeyDownEvent, KeyEvent, Keystroke, KeystrokeEvent, LayoutId, LineLayoutIndex, Modifiers,
++    ModifiersChangedEvent, MonochromeSprite, MouseButton, MouseEvent, MouseMoveEvent, MouseUpEvent,
++    Path, Pixels, PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler,
++    PlatformWindow, Point, PolychromeSprite, Priority, PromptButton, PromptLevel, Quad, Render,
++    RenderGlyphParams, RenderImage, RenderImageParams, RenderSvgParams, Replay, ResizeEdge,
++    SMOOTH_SVG_SCALE_FACTOR, SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ScaledPixels, Scene, Shadow,
++    SharedString, Size, StrikethroughStyle, Style, SubpixelSprite, SubscriberSet, Subscription,
++    SystemWindowTab, SystemWindowTabController, TabStopMap, TaffyLayoutEngine, Task,
++    TextInputConfiguration, TextInputStateChange, TextRenderingMode, TextStyle,
++    TextStyleRefinement, ThermalState, TransformationMatrix, Underline, UnderlineStyle,
++    WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowControls, WindowDecorations,
++    WindowOptions, WindowParams, WindowTextSystem, point, prelude::*, profiler, px, rems, size,
++    transparent_black,
+ };
+ 
+ use crate::gestures::{GestureTuning, RecognizedTouchGesture, TouchGestureRecognizer};
+@@ -77,6 +78,87 @@ use crate::util::{
+ };
+ pub use prompts::*;
+ 
++const MIN_TEXT_RASTER_TRANSFORM_MULTIPLIER: f32 = 1.0;
++const MAX_TEXT_RASTER_TRANSFORM_MULTIPLIER: f32 = 4.0;
++const TEXT_RASTER_TRANSFORM_MULTIPLIER_STEP: f32 = 0.125;
++const SUBPIXEL_SAFE_TRANSFORM_EPSILON: f32 = 0.001;
++
++fn transform_raster_multiplier(transform: TransformationMatrix) -> f32 {
++    let [[xx, xy], [yx, yy]] = transform.rotation_scale;
++    let x_scale = xx.hypot(yx);
++    let y_scale = xy.hypot(yy);
++    let multiplier = x_scale.max(y_scale);
++
++    if !multiplier.is_finite() {
++        return MIN_TEXT_RASTER_TRANSFORM_MULTIPLIER;
++    }
++
++    let multiplier = multiplier.clamp(
++        MIN_TEXT_RASTER_TRANSFORM_MULTIPLIER,
++        MAX_TEXT_RASTER_TRANSFORM_MULTIPLIER,
++    );
++
++    (multiplier / TEXT_RASTER_TRANSFORM_MULTIPLIER_STEP).round()
++        * TEXT_RASTER_TRANSFORM_MULTIPLIER_STEP
++}
++
++fn glyph_raster_scale_factor(scale_factor: f32, transform: TransformationMatrix) -> f32 {
++    scale_factor * transform_raster_multiplier(transform)
++}
++
++fn transform_allows_subpixel_rendering(transform: TransformationMatrix) -> bool {
++    let [[xx, xy], [yx, yy]] = transform.rotation_scale;
++    let x_scale = xx.hypot(yx);
++    let y_scale = xy.hypot(yy);
++
++    if !x_scale.is_finite() || !y_scale.is_finite() {
++        return false;
++    }
++
++    if !approximately_zero(xy) || !approximately_zero(yx) {
++        return false;
++    }
++
++    if xx <= 0.0 || yy <= 0.0 || !approximately_equal(x_scale, y_scale) {
++        return false;
++    }
++
++    let rounded_scale = x_scale.round();
++    rounded_scale >= MIN_TEXT_RASTER_TRANSFORM_MULTIPLIER
++        && approximately_equal(x_scale, rounded_scale)
++}
++
++fn approximately_zero(value: f32) -> bool {
++    value.abs() <= SUBPIXEL_SAFE_TRANSFORM_EPSILON
++}
++
++fn approximately_equal(left: f32, right: f32) -> bool {
++    (left - right).abs() <= SUBPIXEL_SAFE_TRANSFORM_EPSILON
++}
++
++fn compensate_glyph_sprite_bounds(
++    bounds: Bounds<ScaledPixels>,
++    raster_multiplier: f32,
++) -> Bounds<ScaledPixels> {
++    if raster_multiplier == MIN_TEXT_RASTER_TRANSFORM_MULTIPLIER {
++        return bounds;
++    }
++
++    bounds.map(|value| ScaledPixels(value.0 / raster_multiplier))
++}
++
++#[cfg(test)]
++fn transformed_glyph_visual_bounds(
++    raster_bounds: Bounds<ScaledPixels>,
++    transform: TransformationMatrix,
++) -> Bounds<ScaledPixels> {
++    let raster_multiplier = transform_raster_multiplier(transform);
++    crate::scene::transform_bounds(
++        compensate_glyph_sprite_bounds(raster_bounds, raster_multiplier),
++        transform,
++    )
++}
++
+ /// Default window size used when no explicit size is provided.
+ pub const DEFAULT_WINDOW_SIZE: Size<Pixels> = size(px(1536.), px(1095.));
+ 
+@@ -832,6 +914,14 @@ pub struct Hitbox {
+     pub behavior: HitboxBehavior,
+ }
+ 
++#[derive(Clone, Debug)]
++struct HitboxTransformMetadata {
++    id: HitboxId,
++    local_bounds: Bounds<Pixels>,
++    inverse_transform: Option<TransformationMatrix>,
++    scale_factor: f32,
++}
++
+ impl Hitbox {
+     /// Checks if the hitbox is currently hovered. Returns `false` during keyboard input modality
+     /// so that keyboard navigation suppresses hover highlights. Except when handling
+@@ -970,6 +1060,7 @@ pub(crate) struct DeferredDraw {
+     text_style_stack: Vec<TextStyleRefinement>,
+     content_mask: Option<ContentMask<Pixels>>,
+     rem_size: Pixels,
++    transform: TransformationMatrix,
+     element: Option<AnyElement>,
+     absolute_offset: Point<Pixels>,
+     prepaint_range: Range<PrepaintStateIndex>,
+@@ -985,6 +1076,7 @@ pub(crate) struct Frame {
+     pub(crate) dispatch_tree: DispatchTree,
+     pub(crate) scene: Scene,
+     pub(crate) hitboxes: Vec<Hitbox>,
++    hitbox_transform_metadata: Vec<HitboxTransformMetadata>,
+     pub(crate) window_control_hitboxes: Vec<(WindowControlArea, Hitbox)>,
+     pub(crate) deferred_draws: Vec<DeferredDraw>,
+     pub(crate) input_handlers: Vec<Option<PlatformInputHandler>>,
+@@ -1002,6 +1094,7 @@ pub(crate) struct Frame {
+ #[derive(Clone, Default)]
+ pub(crate) struct PrepaintStateIndex {
+     hitboxes_index: usize,
++    hitbox_transform_metadata_index: usize,
+     tooltips_index: usize,
+     deferred_draws_index: usize,
+     dispatch_tree_index: usize,
+@@ -1031,6 +1124,7 @@ impl Frame {
+             dispatch_tree,
+             scene: Scene::default(),
+             hitboxes: Vec::new(),
++            hitbox_transform_metadata: Vec::new(),
+             window_control_hitboxes: Vec::new(),
+             deferred_draws: Vec::new(),
+             input_handlers: Vec::new(),
+@@ -1059,6 +1153,7 @@ impl Frame {
+         self.tooltip_requests.clear();
+         self.cursor_styles.clear();
+         self.hitboxes.clear();
++        self.hitbox_transform_metadata.clear();
+         self.window_control_hitboxes.clear();
+         self.deferred_draws.clear();
+         self.tab_stops.clear();
+@@ -1095,8 +1190,7 @@ impl Frame {
+         let mut set_hover_hitbox_count = false;
+         let mut hit_test = HitTest::default();
+         for hitbox in self.hitboxes.iter().rev() {
+-            let bounds = hitbox.bounds.intersect(&hitbox.content_mask.bounds);
+-            if bounds.contains(&position) {
++            if self.hitbox_contains_position(hitbox, position) {
+                 hit_test.ids.push(hitbox.id);
+                 if !set_hover_hitbox_count
+                     && hitbox.behavior == HitboxBehavior::BlockMouseExceptScroll
+@@ -1115,6 +1209,31 @@ impl Frame {
+         hit_test
+     }
+ 
++    fn hitbox_contains_position(&self, hitbox: &Hitbox, position: Point<Pixels>) -> bool {
++        let bounds = hitbox.bounds.intersect(&hitbox.content_mask.bounds);
++        if !bounds.contains(&position) {
++            return false;
++        }
++
++        let Some(metadata) = self
++            .hitbox_transform_metadata
++            .iter()
++            .find(|metadata| metadata.id == hitbox.id)
++        else {
++            return true;
++        };
++
++        let Some(inverse_transform) = metadata.inverse_transform else {
++            return false;
++        };
++
++        let local_position = inverse_transform
++            .apply_scaled(position.scale(metadata.scale_factor))
++            .map(|value| px(value.0 / metadata.scale_factor));
++
++        metadata.local_bounds.contains(&local_position)
++    }
++
+     pub(crate) fn focus_path(&self) -> SmallVec<[FocusId; 8]> {
+         self.focus
+             .map(|focus_id| self.dispatch_tree.focus_path(focus_id))
+@@ -1167,6 +1286,7 @@ pub struct Window {
+     pub(crate) rendered_entity_stack: Vec<EntityId>,
+     pub(crate) element_offset_stack: Vec<Point<Pixels>>,
+     pub(crate) element_opacity: f32,
++    pub(crate) transform_stack: Vec<TransformationMatrix>,
+     pub(crate) content_mask_stack: Vec<ContentMask<Pixels>>,
+     pub(crate) requested_autoscroll: Option<Bounds<Pixels>>,
+     /// The [`TextInputConfiguration`] most recently forwarded to the platform
+@@ -1994,6 +2114,7 @@ impl Window {
+             text_style_stack: Vec::new(),
+             rendered_entity_stack: Vec::new(),
+             element_offset_stack: Vec::new(),
++            transform_stack: Vec::new(),
+             content_mask_stack: Vec::new(),
+             element_opacity: 1.0,
+             requested_autoscroll: None,
+@@ -3479,7 +3600,16 @@ impl Window {
+             traversal_order.sort_by_key(|ix| self.next_frame.deferred_draws[*ix].priority);
+ 
+             for deferred_draw_ix in traversal_order {
+-                let (element, parent_node, current_view, rem_size, absolute_offset, prepaint_range) = {
++                let (
++                    element,
++                    parent_node,
++                    current_view,
++                    rem_size,
++                    absolute_offset,
++                    prepaint_range,
++                    transform,
++                    content_mask,
++                ) = {
+                     let deferred_draw = &mut self.next_frame.deferred_draws[deferred_draw_ix];
+                     self.element_id_stack
+                         .clone_from(&deferred_draw.element_id_stack);
+@@ -3492,6 +3622,8 @@ impl Window {
+                         deferred_draw.rem_size,
+                         deferred_draw.absolute_offset,
+                         deferred_draw.prepaint_range.clone(),
++                        deferred_draw.transform,
++                        deferred_draw.content_mask,
+                     )
+                 };
+                 self.next_frame.dispatch_tree.set_active_node(parent_node);
+@@ -3499,9 +3631,16 @@ impl Window {
+                 let prepaint_start = self.prepaint_index();
+                 if let Some(mut element) = element {
+                     self.with_rendered_view(current_view, |window| {
+-                        window.with_rem_size(Some(rem_size), |window| {
+-                            window.with_absolute_element_offset(absolute_offset, |window| {
+-                                element.prepaint(window, cx);
++                        window.with_transform(transform, |window| {
++                            window.with_content_mask(content_mask, |window| {
++                                window.with_rem_size(Some(rem_size), |window| {
++                                    window.with_absolute_element_offset(
++                                        absolute_offset,
++                                        |window| {
++                                            element.prepaint(window, cx);
++                                        },
++                                    );
++                                });
+                             });
+                         });
+                     });
+@@ -3541,11 +3680,14 @@ impl Window {
+ 
+             let paint_start = self.paint_index();
+             let content_mask = deferred_draw.content_mask;
++            let transform = deferred_draw.transform;
+             if let Some(element) = deferred_draw.element.as_mut() {
+                 self.with_rendered_view(deferred_draw.current_view, |window| {
+-                    window.with_content_mask(content_mask, |window| {
+-                        window.with_rem_size(Some(deferred_draw.rem_size), |window| {
+-                            element.paint(window, cx);
++                    window.with_transform(transform, |window| {
++                        window.with_content_mask(content_mask, |window| {
++                            window.with_rem_size(Some(deferred_draw.rem_size), |window| {
++                                element.paint(window, cx);
++                            });
+                         });
+                     })
+                 })
+@@ -3569,6 +3711,7 @@ impl Window {
+     pub(crate) fn prepaint_index(&self) -> PrepaintStateIndex {
+         PrepaintStateIndex {
+             hitboxes_index: self.next_frame.hitboxes.len(),
++            hitbox_transform_metadata_index: self.next_frame.hitbox_transform_metadata.len(),
+             tooltips_index: self.next_frame.tooltip_requests.len(),
+             deferred_draws_index: self.next_frame.deferred_draws.len(),
+             dispatch_tree_index: self.next_frame.dispatch_tree.len(),
+@@ -3583,6 +3726,14 @@ impl Window {
+                 .iter()
+                 .cloned(),
+         );
++        self.next_frame.hitbox_transform_metadata.extend(
++            self.rendered_frame.hitbox_transform_metadata[range
++                .start
++                .hitbox_transform_metadata_index
++                ..range.end.hitbox_transform_metadata_index]
++                .iter()
++                .cloned(),
++        );
+         self.next_frame.tooltip_requests.extend(
+             self.rendered_frame.tooltip_requests
+                 [range.start.tooltips_index..range.end.tooltips_index]
+@@ -3619,6 +3770,7 @@ impl Window {
+                     text_style_stack: deferred_draw.text_style_stack.clone(),
+                     content_mask: deferred_draw.content_mask,
+                     rem_size: deferred_draw.rem_size,
++                    transform: deferred_draw.transform,
+                     priority: deferred_draw.priority,
+                     element: None,
+                     absolute_offset: deferred_draw.absolute_offset,
+@@ -3741,7 +3893,9 @@ impl Window {
+     ) -> R {
+         self.invalidator.debug_assert_paint_or_prepaint();
+         if let Some(mask) = mask {
+-            let mask = mask.intersect(&self.content_mask());
++            let mask = self
++                .transform_content_mask(mask)
++                .intersect(&self.content_mask());
+             self.content_mask_stack.push(mask);
+             let result = f(self);
+             self.content_mask_stack.pop();
+@@ -3751,6 +3905,72 @@ impl Window {
+         }
+     }
+ 
++    #[allow(dead_code)]
++    pub(crate) fn with_transform<R>(
++        &mut self,
++        transform: TransformationMatrix,
++        f: impl FnOnce(&mut Self) -> R,
++    ) -> R {
++        self.invalidator.debug_assert_paint_or_prepaint();
++
++        let transform = self.current_transform().compose(transform);
++        self.transform_stack.push(transform);
++        let result = f(self);
++        self.transform_stack.pop();
++        result
++    }
++
++    pub(crate) fn with_style_transform<R>(
++        &mut self,
++        transform: Option<ElementTransform>,
++        bounds: Bounds<Pixels>,
++        f: impl FnOnce(&mut Self) -> R,
++    ) -> R {
++        if let Some(transform) = transform {
++            self.with_transform(transform.resolve(bounds, self.scale_factor()), f)
++        } else {
++            f(self)
++        }
++    }
++
++    pub(crate) fn current_transform(&self) -> TransformationMatrix {
++        self.invalidator.debug_assert_paint_or_prepaint();
++        self.transform_stack.last().copied().unwrap_or_default()
++    }
++
++    fn transform_content_mask(&self, mask: ContentMask<Pixels>) -> ContentMask<Pixels> {
++        let transform = self.current_transform();
++        if transform == TransformationMatrix::unit() {
++            return mask;
++        }
++
++        let scale_factor = self.scale_factor();
++        let bounds = crate::scene::transform_bounds(mask.bounds.scale(scale_factor), transform)
++            .map(|value| px(value.0 / scale_factor));
++
++        ContentMask { bounds }
++    }
++
++    fn transform_hitbox_bounds(
++        &self,
++        bounds: Bounds<Pixels>,
++        transform: TransformationMatrix,
++    ) -> Bounds<Pixels> {
++        if transform == TransformationMatrix::unit() {
++            return bounds;
++        }
++
++        let scale_factor = self.scale_factor();
++        crate::scene::transform_bounds(bounds.scale(scale_factor), transform)
++            .map(|value| px(value.0 / scale_factor))
++    }
++
++    fn insert_primitive(&mut self, primitive: impl Into<crate::Primitive>) {
++        self.next_frame
++            .scene
++            .insert_transformed_primitive(primitive, self.current_transform());
++    }
++
+     /// Updates the global element offset relative to the current offset. This is used to implement
+     /// scrolling. This method should only be called during the prepaint phase of element drawing.
+     pub fn with_element_offset<R>(
+@@ -4118,6 +4338,7 @@ impl Window {
+             text_style_stack: self.text_style_stack.clone(),
+             content_mask,
+             rem_size: self.rem_size(),
++            transform: self.current_transform(),
+             priority,
+             element: Some(element),
+             absolute_offset,
+@@ -4135,11 +4356,11 @@ impl Window {
+         self.invalidator.debug_assert_paint();
+ 
+         let content_mask = self.content_mask();
+-        let clipped_bounds = bounds.intersect(&content_mask.bounds);
++        let transformed_bounds =
++            crate::scene::transform_bounds(self.cover_bounds(bounds), self.current_transform());
++        let clipped_bounds = transformed_bounds.intersect(&self.cover_bounds(content_mask.bounds));
+         if !clipped_bounds.is_empty() {
+-            self.next_frame
+-                .scene
+-                .push_layer(self.cover_bounds(clipped_bounds));
++            self.next_frame.scene.push_transformed_layer(clipped_bounds);
+         }
+ 
+         let result = f(self);
+@@ -4174,7 +4395,7 @@ impl Window {
+                 continue;
+             }
+             let shadow_bounds = (bounds + shadow.offset).dilate(shadow.spread_radius);
+-            self.next_frame.scene.insert_primitive(Shadow {
++            self.insert_primitive(Shadow {
+                 order: 0,
+                 blur_radius: shadow.blur_radius.scale(scale_factor),
+                 bounds: self.cover_bounds(shadow_bounds),
+@@ -4300,7 +4521,7 @@ impl Window {
+         };
+ 
+         if !quad.background.is_transparent() {
+-            self.next_frame.scene.insert_primitive(quad);
++            self.insert_primitive(quad);
+             return;
+         }
+ 
+@@ -4310,7 +4531,7 @@ impl Window {
+         let inner_bounds = Self::largest_border_interior(&quad);
+ 
+         if inner_bounds.is_empty() {
+-            self.next_frame.scene.insert_primitive(quad);
++            self.insert_primitive(quad);
+             return;
+         }
+ 
+@@ -4340,7 +4561,7 @@ impl Window {
+         for strip in strips {
+             let content_mask_bounds = quad.content_mask.bounds.intersect(&strip);
+             if !content_mask_bounds.is_empty() {
+-                self.next_frame.scene.insert_primitive(Quad {
++                self.insert_primitive(Quad {
+                     content_mask: ContentMask {
+                         bounds: content_mask_bounds,
+                     },
+@@ -4362,9 +4583,7 @@ impl Window {
+         path.content_mask = content_mask;
+         let color: Background = color.into();
+         path.color = color.opacity(opacity);
+-        self.next_frame
+-            .scene
+-            .insert_primitive(path.scale(scale_factor));
++        self.insert_primitive(path.scale(scale_factor));
+     }
+ 
+     /// Paint an underline into the scene for the next frame at the current z-index.
+@@ -4391,7 +4610,7 @@ impl Window {
+         };
+         let element_opacity = self.element_opacity();
+ 
+-        self.next_frame.scene.insert_primitive(Underline {
++        self.insert_primitive(Underline {
+             order: 0,
+             pad: 0,
+             bounds,
+@@ -4421,7 +4640,7 @@ impl Window {
+         };
+         let opacity = self.element_opacity();
+ 
+-        self.next_frame.scene.insert_primitive(Underline {
++        self.insert_primitive(Underline {
+             order: 0,
+             pad: 0,
+             bounds,
+@@ -4452,6 +4671,9 @@ impl Window {
+ 
+         let element_opacity = self.element_opacity();
+         let scale_factor = self.scale_factor();
++        let current_transform = self.current_transform();
++        let raster_multiplier = transform_raster_multiplier(current_transform);
++        let effective_scale_factor = glyph_raster_scale_factor(scale_factor, current_transform);
+         let glyph_origin = origin.scale(scale_factor);
+ 
+         let quantized_origin = Point::new(
+@@ -4472,7 +4694,7 @@ impl Window {
+             glyph_id,
+             font_size,
+             subpixel_variant,
+-            scale_factor,
++            scale_factor: effective_scale_factor,
+             is_emoji: false,
+             subpixel_rendering,
+             dilation,
+@@ -4487,14 +4709,21 @@ impl Window {
+                     Ok(Some((size, Cow::Owned(bytes))))
+                 })?
+                 .expect("Callback above only errors or returns Some");
++            let local_bounds = compensate_glyph_sprite_bounds(
++                Bounds {
++                    origin: raster_bounds.origin.map(Into::into),
++                    size: tile.bounds.size.map(Into::into),
++                },
++                raster_multiplier,
++            );
+             let bounds = Bounds {
+-                origin: integer_origin + raster_bounds.origin.map(Into::into),
+-                size: tile.bounds.size.map(Into::into),
++                origin: integer_origin + local_bounds.origin,
++                size: local_bounds.size,
+             };
+             let content_mask = self.snapped_content_mask();
+ 
+             if subpixel_rendering {
+-                self.next_frame.scene.insert_primitive(SubpixelSprite {
++                self.insert_primitive(SubpixelSprite {
+                     order: 0,
+                     pad: 0,
+                     bounds,
+@@ -4504,7 +4733,7 @@ impl Window {
+                     transformation: TransformationMatrix::unit(),
+                 });
+             } else {
+-                self.next_frame.scene.insert_primitive(MonochromeSprite {
++                self.insert_primitive(MonochromeSprite {
+                     order: 0,
+                     pad: 0,
+                     bounds,
+@@ -4527,6 +4756,10 @@ impl Window {
+             return false;
+         }
+ 
++        if !transform_allows_subpixel_rendering(self.current_transform()) {
++            return false;
++        }
++
+         let mode = match self.text_rendering_mode.get() {
+             TextRenderingMode::PlatformDefault => self
+                 .text_system()
+@@ -4555,6 +4788,9 @@ impl Window {
+         self.invalidator.debug_assert_paint();
+ 
+         let scale_factor = self.scale_factor();
++        let current_transform = self.current_transform();
++        let raster_multiplier = transform_raster_multiplier(current_transform);
++        let effective_scale_factor = glyph_raster_scale_factor(scale_factor, current_transform);
+         let glyph_origin = origin.scale(scale_factor);
+         let integer_origin = glyph_origin.map(|c| ScaledPixels(round_half_toward_zero(c.0)));
+         let params = RenderGlyphParams {
+@@ -4562,7 +4798,7 @@ impl Window {
+             glyph_id,
+             font_size,
+             subpixel_variant: Default::default(),
+-            scale_factor,
++            scale_factor: effective_scale_factor,
+             is_emoji: true,
+             subpixel_rendering: false,
+             dilation: 0,
+@@ -4578,14 +4814,21 @@ impl Window {
+                 })?
+                 .expect("Callback above only errors or returns Some");
+ 
++            let local_bounds = compensate_glyph_sprite_bounds(
++                Bounds {
++                    origin: raster_bounds.origin.map(Into::into),
++                    size: tile.bounds.size.map(Into::into),
++                },
++                raster_multiplier,
++            );
+             let bounds = Bounds {
+-                origin: integer_origin + raster_bounds.origin.map(Into::into),
+-                size: tile.bounds.size.map(Into::into),
++                origin: integer_origin + local_bounds.origin,
++                size: local_bounds.size,
+             };
+             let content_mask = self.snapped_content_mask();
+             let opacity = self.element_opacity();
+ 
+-            self.next_frame.scene.insert_primitive(PolychromeSprite {
++            self.insert_primitive(PolychromeSprite {
+                 order: 0,
+                 pad: 0,
+                 grayscale: false.into(),
+@@ -4651,7 +4894,7 @@ impl Window {
+             .map_origin(|value| ScaledPixels(round_half_toward_zero(value.0)))
+             .map_size(|size| size.ceil());
+ 
+-        self.next_frame.scene.insert_primitive(MonochromeSprite {
++        self.insert_primitive(MonochromeSprite {
+             order: 0,
+             pad: 0,
+             bounds: final_bounds,
+@@ -4757,7 +5000,7 @@ impl Window {
+             .scale(self.scale_factor());
+         let opacity = self.element_opacity();
+ 
+-        self.next_frame.scene.insert_primitive(PolychromeSprite {
++        self.insert_primitive(PolychromeSprite {
+             order: 0,
+             pad: 0,
+             grayscale: grayscale.into(),
+@@ -4781,7 +5024,7 @@ impl Window {
+ 
+         let bounds = self.snap_bounds(bounds);
+         let content_mask = self.snapped_content_mask();
+-        self.next_frame.scene.insert_primitive(PaintSurface {
++        self.insert_primitive(PaintSurface {
+             order: 0,
+             bounds,
+             content_mask,
+@@ -4914,14 +5157,28 @@ impl Window {
+         self.invalidator.debug_assert_prepaint();
+ 
+         let content_mask = self.content_mask();
++        let transform = self.current_transform();
+         let mut id = self.next_hitbox_id;
+         self.next_hitbox_id = self.next_hitbox_id.next();
++        let transformed_bounds = self.transform_hitbox_bounds(bounds, transform);
+         let hitbox = Hitbox {
+             id,
+-            bounds,
++            bounds: transformed_bounds,
+             content_mask,
+             behavior,
+         };
++
++        if transform != TransformationMatrix::unit() {
++            self.next_frame
++                .hitbox_transform_metadata
++                .push(HitboxTransformMetadata {
++                    id,
++                    local_bounds: bounds,
++                    inverse_transform: transform.inverse(),
++                    scale_factor: self.scale_factor(),
++                });
++        }
++
+         self.next_frame.hitboxes.push(hitbox.clone());
+         hitbox
+     }
+@@ -7378,6 +7635,7 @@ pub fn outline(
+ 
+ #[cfg(test)]
+ mod tests {
++    use super::*;
+     use std::{
+         cell::{Cell, RefCell},
+         path::PathBuf,
+@@ -8094,6 +8352,828 @@ mod tests {
+         assert_eq!(b_focus_count.get(), 1);
+     }
+ 
++    struct TestQuadElement {
++        bounds: Bounds<Pixels>,
++        color: Hsla,
++    }
++
++    impl TestQuadElement {
++        fn new(bounds: Bounds<Pixels>, color: Hsla) -> Self {
++            Self { bounds, color }
++        }
++    }
++
++    impl Element for TestQuadElement {
++        type RequestLayoutState = ();
++        type PrepaintState = ();
++
++        fn id(&self) -> Option<ElementId> {
++            None
++        }
++
++        fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
++            None
++        }
++
++        fn request_layout(
++            &mut self,
++            _id: Option<&GlobalElementId>,
++            _inspector_id: Option<&InspectorElementId>,
++            window: &mut Window,
++            cx: &mut App,
++        ) -> (LayoutId, Self::RequestLayoutState) {
++            let layout_id = window.request_layout(
++                Style {
++                    display: crate::Display::None,
++                    ..Default::default()
++                },
++                None,
++                cx,
++            );
++
++            (layout_id, ())
++        }
++
++        fn prepaint(
++            &mut self,
++            _id: Option<&GlobalElementId>,
++            _inspector_id: Option<&InspectorElementId>,
++            _bounds: Bounds<Pixels>,
++            _request_layout: &mut Self::RequestLayoutState,
++            _window: &mut Window,
++            _cx: &mut App,
++        ) {
++        }
++
++        fn paint(
++            &mut self,
++            _id: Option<&GlobalElementId>,
++            _inspector_id: Option<&InspectorElementId>,
++            _bounds: Bounds<Pixels>,
++            _request_layout: &mut Self::RequestLayoutState,
++            _prepaint: &mut Self::PrepaintState,
++            window: &mut Window,
++            _cx: &mut App,
++        ) {
++            window.paint_quad(fill(self.bounds, self.color));
++        }
++    }
++
++    impl IntoElement for TestQuadElement {
++        type Element = Self;
++
++        fn into_element(self) -> Self::Element {
++            self
++        }
++    }
++
++    struct TestHitboxElement {
++        bounds: Bounds<Pixels>,
++    }
++
++    impl TestHitboxElement {
++        fn new(bounds: Bounds<Pixels>) -> Self {
++            Self { bounds }
++        }
++    }
++
++    impl Element for TestHitboxElement {
++        type RequestLayoutState = ();
++        type PrepaintState = ();
++
++        fn id(&self) -> Option<ElementId> {
++            None
++        }
++
++        fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
++            None
++        }
++
++        fn request_layout(
++            &mut self,
++            _id: Option<&GlobalElementId>,
++            _inspector_id: Option<&InspectorElementId>,
++            window: &mut Window,
++            cx: &mut App,
++        ) -> (LayoutId, Self::RequestLayoutState) {
++            let layout_id = window.request_layout(
++                Style {
++                    display: crate::Display::None,
++                    ..Default::default()
++                },
++                None,
++                cx,
++            );
++
++            (layout_id, ())
++        }
++
++        fn prepaint(
++            &mut self,
++            _id: Option<&GlobalElementId>,
++            _inspector_id: Option<&InspectorElementId>,
++            _bounds: Bounds<Pixels>,
++            _request_layout: &mut Self::RequestLayoutState,
++            window: &mut Window,
++            _cx: &mut App,
++        ) {
++            window.insert_hitbox(self.bounds, HitboxBehavior::Normal);
++        }
++
++        fn paint(
++            &mut self,
++            _id: Option<&GlobalElementId>,
++            _inspector_id: Option<&InspectorElementId>,
++            _bounds: Bounds<Pixels>,
++            _request_layout: &mut Self::RequestLayoutState,
++            _prepaint: &mut Self::PrepaintState,
++            _window: &mut Window,
++            _cx: &mut App,
++        ) {
++        }
++    }
++
++    impl IntoElement for TestHitboxElement {
++        type Element = Self;
++
++        fn into_element(self) -> Self::Element {
++            self
++        }
++    }
++
++    fn paint_test_root(root: impl IntoElement, cx: &mut TestAppContext) -> Vec<Quad> {
++        let window = cx.add_window(|_, _| Empty);
++        let current_view = window.root(cx).expect("root view should exist").entity_id();
++        let window = window.into();
++
++        cx.update_window(window, |_, window, cx| {
++            window.next_frame.scene.clear();
++            window.next_frame.dispatch_tree.clear();
++
++            let mut root = root.into_any_element();
++            window.with_rendered_view(current_view, |window| {
++                window.invalidator.set_phase(DrawPhase::Prepaint);
++                root.prepaint_as_root(
++                    Point::default(),
++                    size(px(100.), px(100.)).into(),
++                    window,
++                    cx,
++                );
++
++                window.invalidator.set_phase(DrawPhase::Paint);
++                root.paint(window, cx);
++            });
++
++            window.invalidator.set_phase(DrawPhase::None);
++            window.next_frame.scene.quads.clone()
++        })
++        .expect("test window should still exist")
++    }
++
++    #[gpui::test]
++    fn public_style_transform_translates_subtree(cx: &mut TestAppContext) {
++        let quads = paint_test_root(
++            div()
++                .w(px(20.))
++                .h(px(20.))
++                .transform(ElementTransform::default().translate(point(px(5.), px(10.))))
++                .child(TestQuadElement::new(
++                    Bounds::new(point(px(1.), px(2.)), size(px(3.), px(4.))),
++                    crate::black(),
++                )),
++            cx,
++        );
++
++        assert_eq!(quads.len(), 1);
++
++        let Some(quad) = quads.first() else {
++            panic!("styled transform should emit one quad");
++        };
++        assert_eq!(
++            quad.bounds.origin,
++            point(ScaledPixels(12.), ScaledPixels(24.))
++        );
++        assert_eq!(quad.bounds.size, size(ScaledPixels(6.), ScaledPixels(8.)));
++    }
++
++    #[gpui::test]
++    fn public_style_transform_scales_around_origin(cx: &mut TestAppContext) {
++        let quads = paint_test_root(
++            div()
++                .w(px(20.))
++                .h(px(20.))
++                .transform(
++                    ElementTransform::default()
++                        .scale(size(2., 2.))
++                        .origin(point(0.5, 0.5)),
++                )
++                .child(TestQuadElement::new(
++                    Bounds::new(point(px(11.), px(12.)), size(px(3.), px(4.))),
++                    crate::black(),
++                )),
++            cx,
++        );
++
++        assert_eq!(quads.len(), 1);
++
++        let Some(quad) = quads.first() else {
++            panic!("origin-scaled transform should emit one quad");
++        };
++        assert_eq!(
++            quad.bounds.origin,
++            point(ScaledPixels(24.), ScaledPixels(28.))
++        );
++        assert_eq!(quad.bounds.size, size(ScaledPixels(12.), ScaledPixels(16.)));
++    }
++
++    #[gpui::test]
++    fn public_style_transform_composes_nested_origins(cx: &mut TestAppContext) {
++        let quads = paint_test_root(
++            div()
++                .w(px(20.))
++                .h(px(20.))
++                .transform(
++                    ElementTransform::default()
++                        .scale(size(2., 2.))
++                        .origin(point(0.5, 0.5)),
++                )
++                .child(
++                    div()
++                        .w(px(10.))
++                        .h(px(10.))
++                        .transform(
++                            ElementTransform::default()
++                                .scale(size(2., 2.))
++                                .origin(point(0.5, 0.5)),
++                        )
++                        .child(TestQuadElement::new(
++                            Bounds::new(point(px(6.), px(7.)), size(px(2.), px(3.))),
++                            crate::black(),
++                        )),
++                ),
++            cx,
++        );
++
++        assert_eq!(quads.len(), 1);
++
++        let Some(quad) = quads.first() else {
++            panic!("nested origin transforms should emit one quad");
++        };
++        assert_eq!(
++            quad.bounds.origin,
++            point(ScaledPixels(8.), ScaledPixels(16.))
++        );
++        assert_eq!(quad.bounds.size, size(ScaledPixels(16.), ScaledPixels(24.)));
++    }
++
++    #[gpui::test]
++    fn window_with_transform_applies_to_painted_quad(cx: &mut TestAppContext) {
++        let window = cx.add_window(|_, _| Empty);
++        let window = window.into();
++
++        let quads = cx
++            .update_window(window, |_, window, _| {
++                window.next_frame.scene.clear();
++                window.invalidator.set_phase(DrawPhase::Paint);
++
++                let transform = TransformationMatrix::unit()
++                    .translate(point(ScaledPixels(10.), ScaledPixels(20.)));
++                window.with_transform(transform, |window| {
++                    window.paint_quad(fill(
++                        Bounds::new(point(px(1.), px(2.)), size(px(3.), px(4.))),
++                        crate::black(),
++                    ));
++                });
++
++                assert_eq!(window.current_transform(), TransformationMatrix::default());
++
++                window.invalidator.set_phase(DrawPhase::None);
++                window.next_frame.scene.quads.clone()
++            })
++            .expect("test window should still exist");
++
++        assert_eq!(quads.len(), 1);
++
++        let Some(quad) = quads.first() else {
++            panic!("window transform should emit one quad");
++        };
++        assert_eq!(
++            quad.bounds.origin,
++            point(ScaledPixels(12.), ScaledPixels(24.))
++        );
++        assert_eq!(quad.bounds.size, size(ScaledPixels(6.), ScaledPixels(8.)));
++    }
++
++    #[test]
++    fn transform_raster_multiplier_is_quantized_and_clamped() {
++        assert_eq!(
++            transform_raster_multiplier(TransformationMatrix::unit()),
++            1.0
++        );
++        assert_eq!(
++            transform_raster_multiplier(TransformationMatrix::unit().scale(size(1.24, 1.24))),
++            1.25
++        );
++        assert_eq!(
++            transform_raster_multiplier(TransformationMatrix::unit().scale(size(1.26, 1.26))),
++            1.25
++        );
++        assert_eq!(
++            transform_raster_multiplier(TransformationMatrix::unit().scale(size(8.0, 8.0))),
++            4.0
++        );
++    }
++
++    #[test]
++    fn transform_raster_multiplier_ignores_translation() {
++        let base = TransformationMatrix::unit().scale(size(2.0, 2.0));
++        let translated = base.translate(point(ScaledPixels(100.0), ScaledPixels(50.0)));
++
++        assert_eq!(
++            transform_raster_multiplier(base),
++            transform_raster_multiplier(translated)
++        );
++
++        let base_params = RenderGlyphParams {
++            font_id: FontId(1),
++            glyph_id: GlyphId(2),
++            font_size: px(16.0),
++            subpixel_variant: point(0, 0),
++            scale_factor: glyph_raster_scale_factor(1.0, base),
++            is_emoji: false,
++            subpixel_rendering: false,
++            dilation: 0,
++        };
++        let translated_params = RenderGlyphParams {
++            scale_factor: glyph_raster_scale_factor(1.0, translated),
++            ..base_params
++        };
++
++        assert_eq!(base_params, translated_params);
++
++        let mut base_hasher = collections::FxHasher::default();
++        base_params.hash(&mut base_hasher);
++
++        let mut translated_hasher = collections::FxHasher::default();
++        translated_params.hash(&mut translated_hasher);
++
++        assert_eq!(base_hasher.finish(), translated_hasher.finish());
++    }
++
++    #[test]
++    fn zoom_transform_increases_raster_scale_and_compensates_sprite_bounds() {
++        let zoom_transform = TransformationMatrix::unit().scale(size(2.0, 2.0));
++        let raster_multiplier = transform_raster_multiplier(zoom_transform);
++
++        assert_eq!(
++            glyph_raster_scale_factor(1.0, TransformationMatrix::unit()),
++            1.0
++        );
++        assert_eq!(glyph_raster_scale_factor(1.0, zoom_transform), 2.0);
++
++        let raster_bounds = Bounds::new(
++            point(ScaledPixels(4.0), ScaledPixels(6.0)),
++            size(ScaledPixels(20.0), ScaledPixels(30.0)),
++        );
++        let compensated_bounds = compensate_glyph_sprite_bounds(raster_bounds, raster_multiplier);
++
++        assert_eq!(
++            compensated_bounds.origin,
++            point(ScaledPixels(2.0), ScaledPixels(3.0))
++        );
++        assert_eq!(
++            compensated_bounds.size,
++            size(ScaledPixels(10.0), ScaledPixels(15.0))
++        );
++    }
++
++    #[test]
++    fn transform_subpixel_policy_rejects_fractional_and_anisotropic_scale() {
++        assert!(!transform_allows_subpixel_rendering(
++            TransformationMatrix::unit().scale(size(1.25, 1.25))
++        ));
++        assert!(!transform_allows_subpixel_rendering(
++            TransformationMatrix::unit().scale(size(2.0, 1.0))
++        ));
++        assert!(!transform_allows_subpixel_rendering(
++            TransformationMatrix::unit().scale(size(1.0, 2.0))
++        ));
++    }
++
++    #[test]
++    fn transform_subpixel_policy_preserves_unit_and_integer_safe_scale() {
++        assert!(transform_allows_subpixel_rendering(
++            TransformationMatrix::unit()
++        ));
++        assert!(transform_allows_subpixel_rendering(
++            TransformationMatrix::unit().scale(size(2.0, 2.0))
++        ));
++        assert!(transform_allows_subpixel_rendering(
++            TransformationMatrix::unit()
++                .scale(size(2.0, 2.0))
++                .translate(point(ScaledPixels(100.0), ScaledPixels(50.0)))
++        ));
++    }
++
++    #[test]
++    fn transformed_glyph_visual_bounds_match_scaled_layout_bounds() {
++        let raster_bounds = Bounds::new(
++            point(ScaledPixels(4.0), ScaledPixels(6.0)),
++            size(ScaledPixels(20.0), ScaledPixels(30.0)),
++        );
++        let transform = TransformationMatrix::unit().scale(size(2.0, 2.0));
++
++        assert_eq!(
++            transformed_glyph_visual_bounds(raster_bounds, transform),
++            Bounds::new(
++                point(ScaledPixels(4.0), ScaledPixels(6.0)),
++                size(ScaledPixels(20.0), ScaledPixels(30.0))
++            )
++        );
++    }
++
++    #[gpui::test]
++    fn hit_test_uses_transformed_visual_region(cx: &mut TestAppContext) {
++        let window = cx.add_window(|_, _| Empty);
++        let window = window.into();
++
++        let (hitbox_id, hitbox_bounds, visual_hit, local_hit) = cx
++            .update_window(window, |_, window, _| {
++                window.next_frame.hitboxes.clear();
++                window.invalidator.set_phase(DrawPhase::Prepaint);
++
++                let transform = TransformationMatrix::unit()
++                    .translate(point(ScaledPixels(10.), ScaledPixels(20.)));
++                let hitbox = window.with_transform(transform, |window| {
++                    window.insert_hitbox(
++                        Bounds::new(point(px(1.), px(2.)), size(px(3.), px(4.))),
++                        HitboxBehavior::Normal,
++                    )
++                });
++
++                assert_eq!(window.current_transform(), TransformationMatrix::default());
++
++                let visual_hit = window.next_frame.hit_test(point(px(6.), px(12.)));
++                let local_hit = window.next_frame.hit_test(point(px(1.), px(2.)));
++
++                window.invalidator.set_phase(DrawPhase::None);
++                (hitbox.id, hitbox.bounds, visual_hit, local_hit)
++            })
++            .expect("test window should still exist");
++
++        assert_eq!(hitbox_bounds.origin, point(px(6.), px(12.)));
++        assert_eq!(hitbox_bounds.size, size(px(3.), px(4.)));
++        assert_eq!(visual_hit.ids.as_slice(), &[hitbox_id]);
++        assert_eq!(visual_hit.hover_hitbox_count, 1);
++        assert!(local_hit.ids.is_empty());
++        assert_eq!(local_hit.hover_hitbox_count, 0);
++    }
++
++    #[gpui::test]
++    fn hit_test_inverse_maps_scaled_visual_region(cx: &mut TestAppContext) {
++        let window = cx.add_window(|_, _| Empty);
++        let window = window.into();
++
++        let (hitbox_id, hitbox_bounds, inside_hit, outside_hit) = cx
++            .update_window(window, |_, window, _| {
++                window.next_frame.hitboxes.clear();
++                window.invalidator.set_phase(DrawPhase::Prepaint);
++
++                let transform = TransformationMatrix::unit().scale(size(2., 2.));
++                let hitbox = window.with_transform(transform, |window| {
++                    window.insert_hitbox(
++                        Bounds::new(point(px(2.), px(3.)), size(px(4.), px(5.))),
++                        HitboxBehavior::Normal,
++                    )
++                });
++
++                let inside_hit = window.next_frame.hit_test(point(px(10.), px(12.)));
++                let outside_hit = window.next_frame.hit_test(point(px(13.), px(17.)));
++
++                window.invalidator.set_phase(DrawPhase::None);
++                (hitbox.id, hitbox.bounds, inside_hit, outside_hit)
++            })
++            .expect("test window should still exist");
++
++        assert_eq!(hitbox_bounds.origin, point(px(4.), px(6.)));
++        assert_eq!(hitbox_bounds.size, size(px(8.), px(10.)));
++        assert_eq!(inside_hit.ids.as_slice(), &[hitbox_id]);
++        assert_eq!(inside_hit.hover_hitbox_count, 1);
++        assert!(outside_hit.ids.is_empty());
++        assert_eq!(outside_hit.hover_hitbox_count, 0);
++    }
++
++    #[gpui::test]
++    fn reuse_prepaint_preserves_transformed_hitbox_inverse_metadata(cx: &mut TestAppContext) {
++        let window = cx.add_window(|_, _| Empty);
++        let window = window.into();
++
++        let (hitbox_id, reused_hitbox_ids, inside_hit, outside_local_hit) = cx
++            .update_window(window, |_, window, _| {
++                window.next_frame.hitboxes.clear();
++                window.next_frame.hitbox_transform_metadata.clear();
++                window.rendered_frame.hitboxes.clear();
++                window.rendered_frame.hitbox_transform_metadata.clear();
++                window.invalidator.set_phase(DrawPhase::Prepaint);
++
++                window.with_transform(
++                    TransformationMatrix::unit()
++                        .translate(point(ScaledPixels(100.), ScaledPixels(100.))),
++                    |window| {
++                        window.insert_hitbox(
++                            Bounds::new(point(px(0.), px(0.)), size(px(10.), px(10.))),
++                            HitboxBehavior::Normal,
++                        )
++                    },
++                );
++
++                let prepaint_start = window.prepaint_index();
++                let transform =
++                    TransformationMatrix::unit().rotate(radians(std::f32::consts::FRAC_PI_4));
++                let hitbox = window.with_transform(transform, |window| {
++                    window.insert_hitbox(
++                        Bounds::new(point(px(0.), px(0.)), size(px(10.), px(10.))),
++                        HitboxBehavior::Normal,
++                    )
++                });
++                let prepaint_end = window.prepaint_index();
++
++                window.rendered_frame.hitboxes = window.next_frame.hitboxes.clone();
++                window.rendered_frame.hitbox_transform_metadata =
++                    window.next_frame.hitbox_transform_metadata.clone();
++                window.next_frame.hitboxes.clear();
++                window.next_frame.hitbox_transform_metadata.clear();
++
++                window.reuse_prepaint(prepaint_start..prepaint_end);
++
++                let reused_hitbox_ids = window
++                    .next_frame
++                    .hitboxes
++                    .iter()
++                    .map(|hitbox| hitbox.id)
++                    .collect::<Vec<_>>();
++                let inside_hit = window.next_frame.hit_test(point(px(0.), px(7.)));
++                let outside_local_hit = window.next_frame.hit_test(point(px(6.), px(1.)));
++
++                window.invalidator.set_phase(DrawPhase::None);
++                (hitbox.id, reused_hitbox_ids, inside_hit, outside_local_hit)
++            })
++            .expect("test window should still exist");
++
++        assert_eq!(reused_hitbox_ids.as_slice(), &[hitbox_id]);
++        assert_eq!(inside_hit.ids.as_slice(), &[hitbox_id]);
++        assert_eq!(inside_hit.hover_hitbox_count, 1);
++        assert!(outside_local_hit.ids.is_empty());
++        assert_eq!(outside_local_hit.hover_hitbox_count, 0);
++    }
++
++    #[gpui::test]
++    fn non_transformed_hit_test_still_uses_inserted_bounds(cx: &mut TestAppContext) {
++        let window = cx.add_window(|_, _| Empty);
++        let window = window.into();
++
++        let (hitbox_id, inside_hit, outside_hit) = cx
++            .update_window(window, |_, window, _| {
++                window.next_frame.hitboxes.clear();
++                window.invalidator.set_phase(DrawPhase::Prepaint);
++
++                let hitbox = window.insert_hitbox(
++                    Bounds::new(point(px(1.), px(2.)), size(px(3.), px(4.))),
++                    HitboxBehavior::Normal,
++                );
++
++                let inside_hit = window.next_frame.hit_test(point(px(1.), px(2.)));
++                let outside_hit = window.next_frame.hit_test(point(px(6.), px(12.)));
++
++                window.invalidator.set_phase(DrawPhase::None);
++                (hitbox.id, inside_hit, outside_hit)
++            })
++            .expect("test window should still exist");
++
++        assert_eq!(inside_hit.ids.as_slice(), &[hitbox_id]);
++        assert_eq!(inside_hit.hover_hitbox_count, 1);
++        assert!(outside_hit.ids.is_empty());
++        assert_eq!(outside_hit.hover_hitbox_count, 0);
++    }
++
++    #[gpui::test]
++    fn content_mask_entered_under_transform_clips_transformed_quad(cx: &mut TestAppContext) {
++        let window = cx.add_window(|_, _| Empty);
++        let window = window.into();
++
++        let quads = cx
++            .update_window(window, |_, window, _| {
++                window.next_frame.scene.clear();
++                window.invalidator.set_phase(DrawPhase::Paint);
++
++                let transform = TransformationMatrix::unit()
++                    .translate(point(ScaledPixels(10.), ScaledPixels(20.)));
++                let mask = ContentMask {
++                    bounds: Bounds::new(point(px(1.), px(2.)), size(px(3.), px(4.))),
++                };
++
++                window.with_transform(transform, |window| {
++                    window.with_content_mask(Some(mask), |window| {
++                        window.paint_quad(fill(
++                            Bounds::new(point(px(1.), px(2.)), size(px(3.), px(4.))),
++                            crate::black(),
++                        ));
++                    });
++                });
++
++                assert_eq!(window.current_transform(), TransformationMatrix::default());
++                assert_eq!(window.content_mask_stack.len(), 0);
++
++                window.invalidator.set_phase(DrawPhase::None);
++                window.next_frame.scene.quads.clone()
++            })
++            .expect("test window should still exist");
++
++        assert_eq!(quads.len(), 1);
++
++        let Some(quad) = quads.first() else {
++            panic!("transformed mask should retain the transformed quad");
++        };
++        assert_eq!(
++            quad.bounds.origin,
++            point(ScaledPixels(12.), ScaledPixels(24.))
++        );
++        assert_eq!(quad.bounds.size, size(ScaledPixels(6.), ScaledPixels(8.)));
++        assert_eq!(quad.content_mask.bounds.origin, quad.bounds.origin);
++        assert_eq!(quad.content_mask.bounds.size, quad.bounds.size);
++    }
++
++    #[gpui::test]
++    fn paint_layer_under_transform_uses_transformed_content_mask(cx: &mut TestAppContext) {
++        let window = cx.add_window(|_, _| Empty);
++        let window = window.into();
++
++        let layer_bounds = cx
++            .update_window(window, |_, window, _| {
++                window.next_frame.scene.clear();
++                window.invalidator.set_phase(DrawPhase::Paint);
++
++                let transform = TransformationMatrix::unit()
++                    .translate(point(ScaledPixels(10.), ScaledPixels(20.)));
++                let mask = ContentMask {
++                    bounds: Bounds::new(point(px(1.), px(2.)), size(px(3.), px(4.))),
++                };
++
++                window.with_transform(transform, |window| {
++                    window.with_content_mask(Some(mask), |window| {
++                        window.paint_layer(
++                            Bounds::new(point(px(1.), px(2.)), size(px(3.), px(4.))),
++                            |window| {
++                                window.paint_quad(fill(
++                                    Bounds::new(point(px(1.), px(2.)), size(px(3.), px(4.))),
++                                    crate::black(),
++                                ));
++                            },
++                        );
++                    });
++                });
++
++                assert_eq!(window.current_transform(), TransformationMatrix::default());
++                assert_eq!(window.content_mask_stack.len(), 0);
++
++                window.invalidator.set_phase(DrawPhase::None);
++                window.next_frame.scene.paint_operations.iter().find_map(
++                    |operation| match operation {
++                        crate::scene::PaintOperation::StartLayer(bounds) => Some(*bounds),
++                        _ => None,
++                    },
++                )
++            })
++            .expect("test window should still exist");
++
++        let Some(layer_bounds) = layer_bounds else {
++            panic!("transformed paint_layer should push a layer");
++        };
++        assert_eq!(
++            layer_bounds.origin,
++            point(ScaledPixels(12.), ScaledPixels(24.))
++        );
++        assert_eq!(layer_bounds.size, size(ScaledPixels(6.), ScaledPixels(8.)));
++    }
++
++    #[gpui::test]
++    fn defer_draw_under_transform_preserves_z_order_and_transform_scope(cx: &mut TestAppContext) {
++        let window = cx.add_window(|_, _| Empty);
++        let current_view = window.root(cx).expect("root view should exist").entity_id();
++        let window = window.into();
++
++        let quads = cx
++            .update_window(window, |_, window, cx| {
++                window.next_frame.scene.clear();
++                window.next_frame.dispatch_tree.clear();
++                window.invalidator.set_phase(DrawPhase::Prepaint);
++
++                let transform = TransformationMatrix::unit()
++                    .translate(point(ScaledPixels(10.), ScaledPixels(20.)));
++                let deferred_bounds = Bounds::new(point(px(1.), px(2.)), size(px(3.), px(4.)));
++                let immediate_bounds = Bounds::new(point(px(6.), px(12.)), size(px(3.), px(4.)));
++                let parent_node = window.next_frame.dispatch_tree.push_node();
++
++                window.with_rendered_view(current_view, |window| {
++                    window.with_transform(transform, |window| {
++                        let mut element = TestQuadElement::new(deferred_bounds, crate::black())
++                            .into_any_element();
++                        element.request_layout(window, cx);
++                        window.defer_draw(element, point(px(0.), px(0.)), 0, None);
++                    });
++                });
++
++                window.next_frame.dispatch_tree.pop_node();
++                assert_eq!(window.current_transform(), TransformationMatrix::default());
++                assert_eq!(window.next_frame.deferred_draws.len(), 1);
++                assert_eq!(window.next_frame.deferred_draws[0].parent_node, parent_node);
++
++                window.prepaint_deferred_draws(cx);
++
++                window.invalidator.set_phase(DrawPhase::Paint);
++                window.paint_quad(fill(immediate_bounds, crate::black()));
++                window.paint_deferred_draws(cx);
++
++                assert_eq!(window.current_transform(), TransformationMatrix::default());
++                window.invalidator.set_phase(DrawPhase::None);
++                window.next_frame.scene.quads.clone()
++            })
++            .expect("test window should still exist");
++
++        assert_eq!(quads.len(), 2);
++
++        let Some(immediate_quad) = quads.first() else {
++            panic!("immediate quad should be painted before deferred quad");
++        };
++        assert_eq!(
++            immediate_quad.bounds.origin,
++            point(ScaledPixels(12.), ScaledPixels(24.))
++        );
++
++        let Some(deferred_quad) = quads.get(1) else {
++            panic!("deferred quad should be painted after immediate quad");
++        };
++        assert_eq!(
++            deferred_quad.bounds.origin,
++            point(ScaledPixels(12.), ScaledPixels(24.))
++        );
++        assert_eq!(
++            deferred_quad.bounds.size,
++            size(ScaledPixels(6.), ScaledPixels(8.))
++        );
++        assert!(immediate_quad.order < deferred_quad.order);
++    }
++
++    #[gpui::test]
++    fn defer_draw_prepaint_applies_content_mask_to_hitboxes(cx: &mut TestAppContext) {
++        let window = cx.add_window(|_, _| Empty);
++        let current_view = window.root(cx).expect("root view should exist").entity_id();
++        let window = window.into();
++
++        cx.update_window(window, |_, window, cx| {
++            window.next_frame.dispatch_tree.clear();
++            window.invalidator.set_phase(DrawPhase::Prepaint);
++
++            let content_mask = ContentMask {
++                bounds: Bounds::new(point(px(0.), px(0.)), size(px(10.), px(10.))),
++            };
++            let inside_bounds = Bounds::new(point(px(2.), px(2.)), size(px(4.), px(4.)));
++            let outside_bounds = Bounds::new(point(px(20.), px(2.)), size(px(4.), px(4.)));
++
++            window.next_frame.dispatch_tree.push_node();
++            window.with_rendered_view(current_view, |window| {
++                let mut inside_element = TestHitboxElement::new(inside_bounds).into_any_element();
++                inside_element.request_layout(window, cx);
++                window.defer_draw(inside_element, point(px(0.), px(0.)), 0, Some(content_mask));
++
++                let mut outside_element = TestHitboxElement::new(outside_bounds).into_any_element();
++                outside_element.request_layout(window, cx);
++                window.defer_draw(
++                    outside_element,
++                    point(px(0.), px(0.)),
++                    1,
++                    Some(content_mask),
++                );
++            });
++            window.next_frame.dispatch_tree.pop_node();
++
++            window.prepaint_deferred_draws(cx);
++
++            let inside_hitbox = window.next_frame.hitboxes[0].clone();
++            let outside_hitbox = window.next_frame.hitboxes[1].clone();
++            let inside_hit_test = window.next_frame.hit_test(point(px(3.), px(3.)));
++            let outside_hit_test = window.next_frame.hit_test(point(px(21.), px(3.)));
++
++            assert!(inside_hit_test.ids.contains(&inside_hitbox.id));
++            assert!(!outside_hit_test.ids.contains(&outside_hitbox.id));
++            assert_eq!(inside_hitbox.content_mask, content_mask);
++            assert_eq!(outside_hitbox.content_mask, content_mask);
++
++            window.invalidator.set_phase(DrawPhase::None);
++        })
++        .expect("test window should still exist");
++    }
++
+     #[gpui::test]
+     fn claimed_touch_drag_receives_movement_and_release(cx: &mut TestAppContext) {
+         let events = Rc::new(RefCell::new(Vec::new()));

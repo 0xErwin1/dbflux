@@ -105,6 +105,7 @@ dbflux_transfer = { path = "crates/dbflux_transfer" }
 dbflux_i18n = { path = "crates/dbflux_i18n" }
 mysql = "28"
 
+
 gpui = { package = "gpui-pre", version = "=0.3.5" }
 gpui-component = { version = "=0.6.1", features = ["tree-sitter"] }
 gpui-pre-platform = { version = "=0.3.5", default-features = false, features = ["wayland", "x11"] }
@@ -200,6 +201,15 @@ dbg_macro = "warn"
 todo = "warn"
 unimplemented = "warn"
 indexing_slicing = "warn"
+
+# The schema visualizer pans and zooms by handing one transform to a subtree
+# (`crates/dbflux_ui_document/src/schema_viz/mod.rs`), which needs the
+# `ElementTransform` API that upstream gpui does not carry yet. The vendored
+# crate is the published gpui-pre 0.3.5 source with
+# `vendor/gpui-pre/element-transform.patch` applied; see `vendor/gpui-pre/VENDOR.md`
+# for the provenance and `vendor/gpui-pre/refresh.sh` for the update procedure.
+[patch.crates-io]
+gpui-pre = { path = "vendor/gpui-pre" }
 
 # Development build profile tuned for memory and link speed.
 # Full debug info (debug = 2) is the main driver of peak RAM and disk usage
