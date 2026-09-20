@@ -2491,16 +2491,8 @@ impl SchemaVizDocument {
         cx: &mut Context<Self>,
     ) -> Vec<Div> {
         let Some(graph) = &self.graph else {
-            log::info!("DEBUG render_nodes: self.graph is None, returning empty");
             return Vec::new();
         };
-
-        let node_count = graph.nodes().count();
-        log::info!(
-            "DEBUG render_nodes: graph.nodes() count={} layout.nodes.len={}",
-            node_count,
-            layout.nodes.len()
-        );
 
         let dragging_node = self.dragging_node;
 
