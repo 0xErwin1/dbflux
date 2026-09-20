@@ -721,6 +721,29 @@ impl SchemaVizDocument {
                     }
                 }
 
+                // The focal table's own foreign keys only name the tables it
+                // references. Tables that reference *it* declare that in their own
+                // DDL, so ask the driver for every foreign key in the schema and
+                // keep the ones pointing here. A driver without the batch query
+                // returns an empty list, and the scan over the loaded tables below
+                // still finds whatever it can see.
+                match connection.schema_foreign_keys(&db_name, schema.as_deref()) {
+                    Ok(schema_foreign_keys) => {
+                        for name in Self::inbound_neighbor_names(
+                            &schema_foreign_keys,
+                            &table,
+                            schema.as_deref(),
+                        ) {
+                            all_table_names.insert((schema.clone(), name));
+                        }
+                    }
+                    Err(error) => log::warn!(
+                        "Failed to list foreign keys for schema {:?}: {}",
+                        schema,
+                        error
+                    ),
+                }
+
                 let mut all_tables = Vec::with_capacity(all_table_names.len());
                 all_tables.push(focal_table.clone());
                 let mut tables_loaded = 1; // focal table already loaded
@@ -864,6 +887,39 @@ impl SchemaVizDocument {
         }
 
         neighbors
+    }
+
+    /// Names of the tables that declare a foreign key pointing at `focal_table`.
+    ///
+    /// `schema_foreign_keys` is scoped to one schema and reports the keys that
+    /// schema's tables declare, so the declaring table lives in that same schema.
+    fn inbound_neighbor_names(
+        schema_foreign_keys: &[dbflux_core::SchemaForeignKeyInfo],
+        focal_table: &str,
+        focal_schema: Option<&str>,
+    ) -> Vec<String> {
+        let mut names: Vec<String> = schema_foreign_keys
+            .iter()
+            .filter(|fk| {
+                fk.table_name != focal_table
+                    && fk.referenced_table == focal_table
+                    && Self::same_namespace(fk.referenced_schema.as_deref(), focal_schema)
+            })
+            .map(|fk| fk.table_name.clone())
+            .collect();
+        names.sort();
+        names.dedup();
+        names
+    }
+
+    /// Whether a foreign key's referenced schema and the focal node's schema mean
+    /// the same namespace. A driver that reports no referenced schema and a node
+    /// the sidebar opened without one are the same place, not different ones.
+    fn same_namespace(referenced: Option<&str>, focal: Option<&str>) -> bool {
+        match (referenced, focal) {
+            (Some(referenced), Some(focal)) => referenced == focal,
+            _ => true,
+        }
     }
 
     pub fn id(&self) -> DocumentId {

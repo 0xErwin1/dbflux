@@ -4,7 +4,7 @@ use super::routing::{NodeBounds, RoutePoint, route_foreign_key};
 /// Imports are kept minimal (no `super::*`) to avoid triggering GPUI proc-macro
 /// expansion across the full parent module during test compilation.
 use super::{SchemaVizDocument, pixel_aligned_diagram_pan};
-use dbflux_core::{ColumnInfo, ForeignKeyInfo, TableInfo};
+use dbflux_core::{ColumnInfo, ForeignKeyInfo, SchemaForeignKeyInfo, TableInfo};
 use dbflux_schema_viz::{
     graph::SchemaGraph,
     layout::{LayoutFormat, compute_layout},
@@ -90,6 +90,86 @@ fn make_fk_table(name: &str, ref_table: &str) -> TableInfo {
         child_items: None,
         storage_hints: None,
     }
+}
+
+fn make_schema_fk(
+    table: &str,
+    referenced_table: &str,
+    referenced_schema: Option<&str>,
+) -> SchemaForeignKeyInfo {
+    SchemaForeignKeyInfo {
+        name: format!("fk_{}_{}", table, referenced_table),
+        table_name: table.to_owned(),
+        columns: vec![format!("{}_id", referenced_table)],
+        referenced_schema: referenced_schema.map(str::to_owned),
+        referenced_table: referenced_table.to_owned(),
+        referenced_columns: vec!["id".to_owned()],
+        on_delete: None,
+        on_update: None,
+    }
+}
+
+#[test]
+fn inbound_neighbours_include_tables_that_only_reference_the_focal_one() {
+    // The focal table's own foreign keys never name the tables that point at it:
+    // those are declared by the children, which is what the schema's key list has.
+    let foreign_keys = vec![
+        make_schema_fk("comments", "documents", None),
+        make_schema_fk("attachments", "documents", None),
+        make_schema_fk("document_revisions", "documents", None),
+        make_schema_fk("documents", "folders", None),
+        make_schema_fk("documents", "documents", None),
+        make_schema_fk("comments", "comment_links", None),
+    ];
+
+    assert_eq!(
+        SchemaVizDocument::inbound_neighbor_names(&foreign_keys, "documents", None),
+        vec![
+            "attachments".to_owned(),
+            "comments".to_owned(),
+            "document_revisions".to_owned(),
+        ]
+    );
+}
+
+#[test]
+fn inbound_neighbours_are_deduplicated_across_a_composite_key() {
+    let foreign_keys = vec![
+        make_schema_fk("document_links", "documents", None),
+        make_schema_fk("document_links", "documents", None),
+    ];
+
+    assert_eq!(
+        SchemaVizDocument::inbound_neighbor_names(&foreign_keys, "documents", None),
+        vec!["document_links".to_owned()]
+    );
+}
+
+#[test]
+fn inbound_neighbours_respect_the_schema_when_both_sides_have_one() {
+    let foreign_keys = vec![
+        make_schema_fk("comments", "documents", Some("public")),
+        make_schema_fk("archive_comments", "documents", Some("archive")),
+    ];
+
+    assert_eq!(
+        SchemaVizDocument::inbound_neighbor_names(&foreign_keys, "documents", Some("public")),
+        vec!["comments".to_owned()]
+    );
+}
+
+#[test]
+fn inbound_neighbours_treat_a_missing_schema_as_the_same_namespace() {
+    // SQLite reports no schema anywhere; the sidebar always passes one where the
+    // driver has one. A node without a schema and a key without one are the same
+    // namespace, not different ones.
+    assert!(SchemaVizDocument::same_namespace(None, None));
+    assert!(SchemaVizDocument::same_namespace(Some("public"), None));
+    assert!(SchemaVizDocument::same_namespace(None, Some("public")));
+    assert!(!SchemaVizDocument::same_namespace(
+        Some("public"),
+        Some("archive")
+    ));
 }
 
 // ── T23: set_show_types toggles the field and recomputes layout ──────────
