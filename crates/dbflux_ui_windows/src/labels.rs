@@ -1691,11 +1691,11 @@ mod keybinding_translation_tests {
     }
 
     #[test]
-    fn keybinding_context_names_resolve_in_both_locales_and_match_display_name_in_english() {
+    fn keybinding_context_names_resolve_in_all_locales_and_match_display_name_in_english() {
         for context in ContextId::all_variants() {
             let key = format!("settings.keybindings.context.{}", context.id());
 
-            for locale in ["en", "es"] {
+            for locale in ["en", "es", "zh_Hans"] {
                 let value = dbflux_i18n::t!(&key, locale = locale);
 
                 assert!(
