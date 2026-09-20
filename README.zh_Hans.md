@@ -1,6 +1,6 @@
 # DBFlux
 
-[English](README.md) · [Español](README.es.md) · **简体中文**
+[English](README.md) · [Español](README.es.md) · [한국어](README.ko.md) · **简体中文**
 
 一个可扩展、以键盘操作为先的数据平台，以 Rust + GPUI 桌面客户端的形式交付。
 

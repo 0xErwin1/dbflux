@@ -28,7 +28,7 @@ DBFlux 的翻译分布在三处，各自的贡献方式不同：应用程序界�
 
 ## 文档——拉取请求
 
-站点直接渲染仓库自身的 Markdown，因此翻译一个页面就是在该放的位置新增一个文件。每种语言在 `docs/` 下都有一个目录（`docs/es/`、`docs/zh_Hans/`），其结构与英文目录保持一致：
+站点直接渲染仓库自身的 Markdown，因此翻译一个页面就是在该放的位置新增一个文件。每种语言在 `docs/` 下都有一个目录（`docs/es/`、`docs/ko/`、`docs/zh_Hans/`），其结构与英文目录保持一致：
 
 | 英文页面 | 翻译后的文件 |
 |---|---|
@@ -50,7 +50,7 @@ DBFlux 的翻译分布在三处，各自的贡献方式不同：应用程序界�
 
 导航、落地页、页脚以及搜索界面的字符串存放在 `web/src/i18n/` 下的带类型 TypeScript 词典中。为已有语言翻译这些字符串，就是编辑该语言的词典；而为网站**新增**一门语言则需要两处改动：
 
-1. 在 `web/src/i18n/locale-registry.mjs` 中注册该区域设置。`id` 是公开标识——它会成为 URL 前缀（`/es/`、`/zh-Hans/`）以及 HTML 的 `lang`/`hreflang` 取值，因此必须是合法的 [BCP-47](https://en.wikipedia.org/wiki/IETF_language_tag) 标签（用连字符，绝不用下划线）。`docsDirectory` 指定 `docs/` 下的文件夹名称，可以与 `id` 不同。
+1. 在 `web/src/i18n/locale-registry.ts` 中注册该区域设置。`id` 是公开标识——它会成为 URL 前缀（`/es/`、`/zh-Hans/`）以及 HTML 的 `lang`/`hreflang` 取值，因此必须是合法的 [BCP-47](https://en.wikipedia.org/wiki/IETF_language_tag) 标签（用连字符，绝不用下划线）。`docsDirectory` 指定 `docs/` 下的文件夹名称，可以与 `id` 不同。
 2. 新增 `web/src/i18n/<locale>.ts`，导出一个 `Dictionary` 对象。该类型是穷尽的：缺少任何键都会导致编译错误，由 `pnpm check` 捕获。
 
 如果你不熟悉 TypeScript，可以提交一个 issue 说明你的语言，由我们来接手代码部分——真正需要母语者投入时间的是翻译文件与文档翻译。

@@ -1,9 +1,10 @@
 import { en } from './en';
 import { es } from './es';
+import { ko } from './ko';
 import { zh_Hans } from './zh_Hans';
 import { DEFAULT_LOCALE as REGISTRY_DEFAULT_LOCALE, LOCALE_REGISTRY } from './locale-registry.ts';
 
-const DICTIONARY_MODULES = { en, es, 'zh-Hans': zh_Hans };
+const DICTIONARY_MODULES = { en, es, ko, 'zh-Hans': zh_Hans };
 
 export type Locale = keyof typeof DICTIONARY_MODULES;
 
