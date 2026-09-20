@@ -274,10 +274,14 @@ impl CodeDocument {
         // the cursor and reopens the completion menu, which costs the selection
         // the toggle has just restored. The flag stays set until that handler
         // consumes it — GPUI delivers `emit` after the outermost update, so
-        // clearing it here would be too early.
+        // clearing it here would be too early. Closing an open menu must not be
+        // skipped with it, so that half of the cursor move happens here, before
+        // the edit; only the reopening stays suppressed.
         self.editor.toggling_comment = true;
         self.editor.input_state.update(cx, |state, cx| {
             let scroll_offset = state.scroll_offset();
+            let cursor = state.cursor_position();
+            state.set_cursor_position(cursor, window, cx);
             state.replace_text_in_range(Some(region), &toggle.region, window, cx);
             state.set_selected_range(next_selection, cx);
             state.set_scroll_offset(scroll_offset, cx);

@@ -25,7 +25,6 @@ impl Workspace {
                 Some(true)
             }
             Command::ToggleComment => {
-                // Route to active document; non-code documents decline it.
                 self.tab_manager.update(cx, |mgr, cx| {
                     mgr.dispatch_active(Command::ToggleComment, window, cx);
                 });
