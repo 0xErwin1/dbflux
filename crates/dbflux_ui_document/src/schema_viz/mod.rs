@@ -378,8 +378,6 @@ impl SchemaVizDocument {
             .connections
             .connection_for_task_target(&task_target);
 
-        let entity = cx.entity().clone();
-
         let mut doc = Self {
             id,
             profile_id,
@@ -420,7 +418,7 @@ impl SchemaVizDocument {
         };
 
         // Spawn async loading task with the correct per-database connection
-        doc.spawn_loading(profile_id, database, mode, connection, entity, cx);
+        doc.spawn_loading(profile_id, database, mode, connection, cx);
 
         doc
     }
@@ -502,7 +500,6 @@ impl SchemaVizDocument {
         database: Option<String>,
         mode: SchemaVizMode,
         connection: Option<Arc<dyn Connection>>,
-        entity: Entity<Self>,
         cx: &mut Context<Self>,
     ) {
         // Register the task with the TasksPanel before spawning
@@ -526,9 +523,12 @@ impl SchemaVizDocument {
             Self::load_focused_schema_blocking(database, mode, connection, cancel_token)
         });
 
-        let entity = entity.clone();
-        let app_state = self.app_state.clone();
-        cx.spawn(async move |_entity, cx| {
+        // The load runs on a background task and can outlive its tab, or its
+        // window. The future only ever upgrades a weak handle, after the await:
+        // holding a strong one across it would keep the document — and the app
+        // state — alive until the load finishes.
+        let app_state = self.app_state.downgrade();
+        cx.spawn(async move |entity, cx| {
             let load_result = task.await;
 
             // Determine if cancelled by checking if error message is "Cancelled"
@@ -539,6 +539,14 @@ impl SchemaVizDocument {
                 .unwrap_or(false);
 
             cx.update(|cx| {
+                let (Some(entity), Some(app_state)) = (entity.upgrade(), app_state.upgrade())
+                else {
+                    // The tab or the app state went away while the schema was
+                    // loading: nothing is left to update.
+                    log::debug!("Schema diagram load finished after its document was released");
+                    return;
+                };
+
                 entity.update(cx, |doc, cx| {
                     match load_result {
                         Ok((tables, graph, layout, capped, tables_loaded)) => {
