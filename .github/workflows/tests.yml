@@ -280,3 +280,12 @@ jobs:
 
       - name: Cargo check
         run: cargo check --workspace --locked --features "sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,clickhouse,turso,aws${{ matrix.extra_features }}"
+
+      # Compiling the Windows process-containment path (Job Objects) does not prove
+      # it reclaims a cancelled hook's process tree, and this is the only job that
+      # runs on Windows. Deliberately scoped to the hook module: no other test in
+      # the workspace has ever run on Windows, so a broader filter would put
+      # unrelated breakage in front of every PR.
+      - name: Run hook process containment tests (Windows)
+        if: matrix.os == 'windows-latest'
+        run: cargo test -p dbflux_core --locked --lib connection::hook

@@ -6,6 +6,15 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Added
 
+* **Hook process trees are reclaimed on Windows when a hook is cancelled or
+  times out** — cancelling a hook on Windows killed only the direct child, so a
+  hook that spawned helpers left them orphaned. A managed hook now runs inside a
+  Job Object: cancelling, timing out or aborting it reclaims the whole tree, as
+  the Unix build already did through process groups. A detached hook still
+  outlives the app unless it is cancelled, and a hook that finishes normally
+  leaves its background processes running until DBFlux exits (the Unix build
+  leaves them running after that too).
+
 * **Applying a table's pending edits before its tab closes** — closing a table
   tab that holds staged, unapplied grid edits used to be a dead end: the
   unsaved-changes dialog listed the tab, but its action could not do anything

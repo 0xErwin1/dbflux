@@ -585,6 +585,7 @@ pub struct DetachedProcessHandle {
     pub description: String,
     pub timeout: Option<Duration>,
     pub ready_signal: Option<String>,
+    containment: Option<ProcessContainment>,
     _temp_file: Option<NamedTempFile>,
 }
 
@@ -594,6 +595,7 @@ impl DetachedProcessHandle {
         description: String,
         timeout: Option<Duration>,
         ready_signal: Option<String>,
+        containment: Option<ProcessContainment>,
         temp_file: Option<NamedTempFile>,
     ) -> Self {
         Self {
@@ -601,8 +603,234 @@ impl DetachedProcessHandle {
             description,
             timeout,
             ready_signal,
+            containment,
             _temp_file: temp_file,
         }
+    }
+
+    /// Takes ownership of the containment primitive bound at spawn time, when the
+    /// platform provides one. Callers that move the `Child` out of the handle need
+    /// this to pass both to `execute_streaming_process` without holding a borrow of
+    /// the handle across the move.
+    pub fn take_containment(&mut self) -> Option<ProcessContainment> {
+        self.containment.take()
+    }
+}
+
+/// Owns the OS primitive that binds a spawned child, and the processes it spawns
+/// afterwards, to a single lifetime, so a cancel or timeout can reclaim the whole
+/// tree instead of only the direct child.
+#[cfg(windows)]
+pub struct ProcessContainment {
+    job: windows_job::JobObjectHandle,
+}
+
+/// Platform-inert on Unix: `spawn_process` puts every hook in its own process
+/// group (`process_group(0)`) and `terminate_process_group` signals that group
+/// through a negative PID, so no state has to travel with the child.
+#[cfg(not(windows))]
+#[derive(Debug)]
+pub struct ProcessContainment;
+
+#[cfg(unix)]
+impl ProcessContainment {
+    /// Returns `true` when the direct child was already reaped here, in which
+    /// case the caller must not `wait` on it again.
+    fn terminate(&self, child: &mut Child) -> bool {
+        terminate_process_group(child)
+    }
+}
+
+#[cfg(windows)]
+impl ProcessContainment {
+    /// `TerminateJobObject` reclaims the direct child too, but it does not reap
+    /// the `Child`, so the caller still has to `wait` on it.
+    fn terminate(&self, _child: &mut Child) -> bool {
+        self.job.terminate();
+        false
+    }
+
+    /// Binds the child's tree to a job the OS reclaims when the job handle is
+    /// closed, including at process teardown.
+    fn bind_kill_on_close(child: &Child) -> Option<Self> {
+        let job = windows_job::JobObjectHandle::create(true)?;
+        if !job.assign(child) {
+            return None;
+        }
+        Some(Self { job })
+    }
+
+    /// Binds the child's tree to a job without `KILL_ON_JOB_CLOSE`, so explicit
+    /// termination reclaims it but app exit leaves it running.
+    fn bind_outliving(child: &Child) -> Option<Self> {
+        let job = windows_job::JobObjectHandle::create(false)?;
+        if !job.assign(child) {
+            return None;
+        }
+        Some(Self { job })
+    }
+
+    fn retain_until_exit(self) {
+        windows_job::retain_until_exit(self.job);
+    }
+}
+
+#[cfg(not(windows))]
+impl ProcessContainment {
+    /// Unix reclaims the tree by process group, so there is nothing to retain.
+    fn retain_until_exit(self) {}
+}
+
+/// Whether a spawn must bind its process tree to a containment primitive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SpawnIntent {
+    /// Cancelling or timing out the hook must reclaim the whole tree.
+    Managed,
+    /// The hook outlives the app by design.
+    Detached,
+}
+
+#[cfg(windows)]
+fn spawn_containment(child: &Child, intent: SpawnIntent) -> Option<ProcessContainment> {
+    match intent {
+        // A managed hook that backgrounds a daemon must survive the hook itself,
+        // so the tree is only reclaimed when the job is explicitly terminated —
+        // except at process teardown, where the OS closes every handle.
+        SpawnIntent::Managed => ProcessContainment::bind_kill_on_close(child),
+        // A detached hook outlives the app: explicit cancel reclaims its tree,
+        // app exit does not.
+        SpawnIntent::Detached => ProcessContainment::bind_outliving(child),
+    }
+}
+
+#[cfg(not(windows))]
+fn spawn_containment(_child: &Child, _intent: SpawnIntent) -> Option<ProcessContainment> {
+    // Every hook, managed or detached, already got its own process group at spawn.
+    Some(ProcessContainment)
+}
+
+#[cfg(windows)]
+mod windows_job {
+    use std::os::windows::io::AsRawHandle;
+    use std::process::Child;
+    use std::sync::{Mutex, OnceLock};
+
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        JOBOBJECT_BASIC_LIMIT_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JobObjectExtendedLimitInformation, SetInformationJobObject, TerminateJobObject,
+    };
+
+    /// Owns one Job Object handle.
+    ///
+    /// SAFETY: a job handle is a kernel object handle with no thread affinity. Every
+    /// operation issued through it (`AssignProcessToJobObject`, `TerminateJobObject`,
+    /// `CloseHandle`) is safe to call from any thread of this process, which is what
+    /// makes moving it across threads sound.
+    #[derive(Debug)]
+    pub(super) struct JobObjectHandle(HANDLE);
+
+    unsafe impl Send for JobObjectHandle {}
+
+    impl JobObjectHandle {
+        pub(super) fn create(kill_on_close: bool) -> Option<Self> {
+            // SAFETY: both arguments are allowed to be null: an unnamed job object
+            // with default security attributes.
+            let handle = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+            if handle.is_null() {
+                log::warn!(
+                    "Failed to create job object for hook containment: {}",
+                    std::io::Error::last_os_error()
+                );
+                return None;
+            }
+
+            let job = Self(handle);
+            let info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION {
+                BasicLimitInformation: JOBOBJECT_BASIC_LIMIT_INFORMATION {
+                    LimitFlags: if kill_on_close {
+                        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+                    } else {
+                        0
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            // SAFETY: `handle` is a live job object handle, the info class matches
+            // the struct type, and the buffer/size pair describes `info` exactly.
+            let ok = unsafe {
+                SetInformationJobObject(
+                    handle,
+                    JobObjectExtendedLimitInformation,
+                    &info as *const _ as *const core::ffi::c_void,
+                    std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                )
+            };
+            if ok == 0 {
+                log::warn!(
+                    "Failed to configure job object for hook containment: {}",
+                    std::io::Error::last_os_error()
+                );
+                return None;
+            }
+
+            Some(job)
+        }
+
+        pub(super) fn assign(&self, child: &Child) -> bool {
+            // The annotation states the type instead of casting it: `RawHandle` and a
+            // windows-sys `HANDLE` are the same `*mut c_void` today, and a future
+            // divergence should fail to compile here rather than silently truncate.
+            let process_handle: HANDLE = child.as_raw_handle();
+
+            // SAFETY: the child's raw handle is a live process handle for the
+            // duration of the call, and `self.0` is a live job object handle.
+            let ok = unsafe { AssignProcessToJobObject(self.0, process_handle) };
+            if ok == 0 {
+                log::warn!(
+                    "Failed to assign hook process to job object: {}",
+                    std::io::Error::last_os_error()
+                );
+                return false;
+            }
+            true
+        }
+
+        pub(super) fn terminate(&self) {
+            // SAFETY: `self.0` is a live job object handle.
+            let ok = unsafe { TerminateJobObject(self.0, 0) };
+            if ok == 0 {
+                log::warn!(
+                    "Failed to terminate hook job object: {}",
+                    std::io::Error::last_os_error()
+                );
+            }
+        }
+    }
+
+    impl Drop for JobObjectHandle {
+        fn drop(&mut self) {
+            // A failed close leaks one handle; there is nothing to recover from.
+            unsafe { CloseHandle(self.0) };
+        }
+    }
+
+    /// Retains a managed hook's job for the process lifetime.
+    ///
+    /// Closing the handle fires `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, which would
+    /// kill a descendant that a successful hook deliberately left running. The
+    /// handle is therefore held until process teardown, where the OS closes it and
+    /// reclaims whatever is still alive.
+    pub(super) fn retain_until_exit(job: JobObjectHandle) {
+        static RETAINED: OnceLock<Mutex<Vec<JobObjectHandle>>> = OnceLock::new();
+        let mutex = RETAINED.get_or_init(|| Mutex::new(Vec::new()));
+        let mut retained = match mutex.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        retained.push(job);
     }
 }
 
@@ -948,10 +1176,12 @@ impl ConnectionHook {
             return self.execute_detached_process(context, detached);
         }
 
-        let mut spawned = self.spawn_process(context)?;
+        let mut spawned = self.spawn_process(context, SpawnIntent::Managed)?;
+        let containment = spawned.containment.take();
 
-        match execute_streaming_process(
+        let result = match execute_streaming_process(
             &mut spawned.child,
+            containment.as_ref(),
             cancel_token,
             parent_cancel_token,
             self.timeout_ms.map(Duration::from_millis),
@@ -981,7 +1211,17 @@ impl ConnectionHook {
                 stdout,
                 stderr
             )),
+        };
+
+        // Retain the job for every managed outcome, not only success: the timed-out
+        // path also reports `Ok(HookResult { timed_out: true, .. })`, and descendants
+        // that a partially-completed hook left behind must outlive this handle either
+        // way.
+        if let Some(containment) = containment {
+            containment.retain_until_exit();
         }
+
+        result
     }
 
     fn execute_detached_process(
@@ -993,7 +1233,7 @@ impl ConnectionHook {
             return Err("Detached hooks are not available in this context".to_string());
         };
 
-        let spawned = self.spawn_process(context)?;
+        let spawned = self.spawn_process(context, SpawnIntent::Detached)?;
 
         detached
             .send(spawned)
@@ -1009,7 +1249,11 @@ impl ConnectionHook {
         })
     }
 
-    fn spawn_process(&self, context: &HookContext) -> Result<DetachedProcessHandle, String> {
+    fn spawn_process(
+        &self,
+        context: &HookContext,
+        intent: SpawnIntent,
+    ) -> Result<DetachedProcessHandle, String> {
         let resolved = self.resolve_execution()?;
 
         let mut command = Command::new(&resolved.program);
@@ -1041,11 +1285,14 @@ impl ConnectionHook {
             format!("Failed to execute '{}': {}", self.display_command(), error)
         })?;
 
+        let containment = spawn_containment(&child, intent);
+
         Ok(DetachedProcessHandle::new(
             child,
             self.display_command(),
             self.timeout_ms.map(Duration::from_millis),
             self.ready_signal.clone(),
+            containment,
             resolved._temp_file,
         ))
     }
@@ -1124,6 +1371,7 @@ impl ConnectionHook {
 
 pub fn execute_streaming_process(
     child: &mut Child,
+    containment: Option<&ProcessContainment>,
     cancel_token: &CancelToken,
     parent_cancel_token: Option<&CancelToken>,
     timeout: Option<Duration>,
@@ -1163,21 +1411,21 @@ pub fn execute_streaming_process(
             // is reaped concurrently and `wait` returns ECHILD) must not be propagated
             // in its place, or a genuine cancellation would surface as a spurious wait
             // error. The same holds for the timeout branches below.
-            if let Err(error) = terminate_child(child) {
+            if let Err(error) = terminate_child(child, containment) {
                 log::debug!("terminate_child during cancellation failed: {error:?}");
             }
             break ProcessMonitorOutcome::Cancelled;
         }
 
         if abort_timeout.is_some_and(|limit| start.elapsed() > limit) {
-            if let Err(error) = terminate_child(child) {
+            if let Err(error) = terminate_child(child, containment) {
                 log::debug!("terminate_child during abort timeout failed: {error:?}");
             }
             break ProcessMonitorOutcome::AbortTimedOut;
         }
 
         if timeout.is_some_and(|limit| start.elapsed() > limit) {
-            if let Err(error) = terminate_child(child) {
+            if let Err(error) = terminate_child(child, containment) {
                 log::debug!("terminate_child during timeout failed: {error:?}");
             }
             break ProcessMonitorOutcome::TimedOut;
@@ -1187,7 +1435,7 @@ pub fn execute_streaming_process(
             Ok(Some(status)) => break ProcessMonitorOutcome::Exited(status.code()),
             Ok(None) => {}
             Err(error) => {
-                terminate_child(child)?;
+                terminate_child(child, containment)?;
                 break ProcessMonitorOutcome::WaitFailed(error.to_string());
             }
         }
@@ -1262,22 +1510,25 @@ fn drain_output_events(
     }
 }
 
-fn terminate_child(child: &mut Child) -> Result<(), ProcessExecutionError> {
-    #[cfg(unix)]
-    let already_reaped = terminate_process_group(child);
-    #[cfg(not(unix))]
-    let already_reaped = false;
-
-    // An already-exited child that `terminate_process_group` reaped via `try_wait`
-    // has been terminated successfully. A second `kill`/`wait` on it would fail with
-    // ECHILD and that error would mask the real outcome — e.g. turning a cancellation
-    // into a spurious "Wait" failure when the killed process happens to die promptly.
-    if already_reaped {
+fn terminate_child(
+    child: &mut Child,
+    containment: Option<&ProcessContainment>,
+) -> Result<(), ProcessExecutionError> {
+    // The containment (Unix process group / Windows job object) reclaims the whole
+    // process tree. When it reports the direct child was already reaped here, a
+    // second `kill`/`wait` on it would fail with ECHILD and that error would mask
+    // the real outcome — e.g. turning a cancellation into a spurious "Wait" failure
+    // when the killed process happens to die promptly.
+    if let Some(containment) = containment
+        && containment.terminate(child)
+    {
         return Ok(());
     }
 
     if let Err(error) = child.kill() {
-        log::debug!("kill after group termination failed (child likely already exited): {error}");
+        log::debug!(
+            "kill after containment termination failed (child likely already exited): {error}"
+        );
     }
 
     child
@@ -1288,14 +1539,15 @@ fn terminate_child(child: &mut Child) -> Result<(), ProcessExecutionError> {
 
 /// Terminates the process group of the given child process.
 ///
-/// On Unix, sends SIGTERM to the entire process group identified by the child's PID
-/// (using negative-PID kill semantics), then waits up to ~50 ms for the group to exit
-/// cleanly. If the group has not exited after the grace window, SIGKILL is sent. The
-/// process group is set via `process_group(0)` at spawn time, so child-spawned
-/// grandchildren share the group and are also targeted.
+/// Unix-side implementation of [`ProcessContainment::terminate`]: sends SIGTERM to
+/// the entire process group identified by the child's PID (using negative-PID kill
+/// semantics), then waits up to ~50 ms for the group to exit cleanly. If the group
+/// has not exited after the grace window, SIGKILL is sent. The process group is set
+/// via `process_group(0)` at spawn time, so child-spawned grandchildren share the
+/// group and are also targeted.
 ///
-/// On Windows, only the direct child process is killed; grandchildren are orphaned
-/// because no Job Object is used to bind them to the parent's lifetime.
+/// Windows reclaims the same tree through a Job Object instead; see
+/// [`ProcessContainment`].
 ///
 /// Returns `true` if the child exited within the grace window and was reaped here
 /// (via `try_wait`), in which case the caller must NOT `wait` on it again.
@@ -2177,16 +2429,23 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn test_unix_process_group_kill() {
+    fn test_unix_process_group_kill_reclaims_grandchildren() {
         use std::time::{Duration, Instant};
+
+        let temp = tempfile::TempDir::new().unwrap();
+        let tick_file = temp.path().join("ticks");
+        let tick_path = tick_file.display().to_string();
 
         let hook = ConnectionHook {
             kind: HookKind::Command {
                 command: "sh".to_string(),
                 args: vec![
                     "-c".to_string(),
-                    // Spawn a grandchild into the same process group, then sleep
-                    "sh -c 'sleep 100' & sleep 100".to_string(),
+                    // Spawn a grandchild into the same process group that keeps
+                    // writing, then sleep
+                    format!(
+                        "sh -c 'while true; do echo tick >> {tick_path}; sleep 0.2; done' & sleep 100"
+                    ),
                 ],
             },
             ..echo_hook("")
@@ -2197,18 +2456,126 @@ mod tests {
 
         let handle = std::thread::spawn(move || hook.execute(&test_context(), &token_clone, None));
 
-        // Give the grandchild a moment to start
-        std::thread::sleep(Duration::from_millis(50));
+        fn tick_line_count(path: &std::path::Path) -> usize {
+            std::fs::read_to_string(path)
+                .map(|content| content.lines().count())
+                .unwrap_or(0)
+        }
 
-        let start = Instant::now();
+        // Wait until the grandchild has actually written: only then does the file
+        // prove the grandchild ran, rather than the test passing vacuously.
+        let mut waited = Duration::ZERO;
+        while tick_line_count(&tick_file) == 0 && waited < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(50));
+            waited += Duration::from_millis(50);
+        }
+        assert!(
+            tick_line_count(&tick_file) > 0,
+            "grandchild never started writing"
+        );
+
         token.cancel();
-        let _ = handle.join();
+        let start = Instant::now();
+        let outcome = handle.join().expect("hook thread panicked");
+
+        // The assertion under test is that the whole process group was reclaimed;
+        // the hook's own outcome still has to be the cancellation error rather than
+        // a silently successful result.
+        assert!(
+            matches!(&outcome, Err(message) if message.contains("cancelled")),
+            "a cancelled hook must report cancellation, got {outcome:?}"
+        );
 
         assert!(
             start.elapsed().as_millis() < 500,
             "process group kill took too long: {}ms",
             start.elapsed().as_millis()
         );
+
+        let count_after_kill = tick_line_count(&tick_file);
+        // The grandchild ticks every 0.2 s, so a survivor adds lines within this pause.
+        std::thread::sleep(Duration::from_millis(500));
+        let count_after_pause = tick_line_count(&tick_file);
+
+        assert_eq!(
+            count_after_pause, count_after_kill,
+            "grandchild kept writing after cancellation ({} -> {} lines)",
+            count_after_kill, count_after_pause
+        );
+    }
+
+    // =========================================================================
+    // Windows job-object kill behavior (CI-verified only; runs on Windows hosts)
+    // =========================================================================
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_job_object_reclaims_the_hook_process_tree() {
+        use std::time::{Duration, Instant};
+
+        let hook = ConnectionHook {
+            kind: HookKind::Command {
+                command: "cmd".to_string(),
+                args: vec![
+                    "/C".to_string(),
+                    // The backgrounded ping is the grandchild a plain `Child::kill`
+                    // would orphan; the foreground one is the direct child.
+                    "start /B ping -n 30 127.0.0.1 > NUL & ping -n 30 127.0.0.1 > NUL".to_string(),
+                ],
+            },
+            ..echo_hook("")
+        };
+
+        let token = CancelToken::new();
+        let token_clone = token.clone();
+
+        let handle = std::thread::spawn(move || hook.execute(&test_context(), &token_clone, None));
+
+        // Give both the child and the backgrounded grandchild time to start.
+        std::thread::sleep(Duration::from_millis(1500));
+
+        token.cancel();
+        let outcome = handle.join().expect("hook thread panicked");
+        assert!(
+            matches!(&outcome, Err(message) if message.contains("cancelled")),
+            "a cancelled hook must report cancellation, got {outcome:?}"
+        );
+
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut surviving = running_ping_count().expect("tasklist must not fail");
+        while surviving > 0 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(250));
+            surviving = running_ping_count().expect("tasklist must not fail");
+        }
+
+        assert_eq!(
+            surviving, 0,
+            "hook process tree survived cancellation: {surviving} ping processes still running"
+        );
+    }
+
+    #[cfg(windows)]
+    fn running_ping_count() -> Result<usize, String> {
+        let output = Command::new("tasklist")
+            .args(["/FI", "IMAGENAME eq PING.EXE", "/NH"])
+            .output()
+            .map_err(|error| format!("failed to run tasklist: {error}"))?;
+
+        if !output.status.success() {
+            return Err(format!(
+                "tasklist failed with exit code {:?}: {}",
+                output.status.code(),
+                String::from_utf8_lossy(&output.stderr)
+            ));
+        }
+
+        let text = String::from_utf8_lossy(&output.stdout);
+        // With no match tasklist prints an "INFO: no tasks" line, so only count
+        // lines that actually name the image.
+        Ok(text
+            .lines()
+            .filter(|line| line.to_uppercase().contains("PING.EXE"))
+            .count())
     }
 
     // =========================================================================
@@ -2370,10 +2737,31 @@ mod tests {
 
     #[test]
     fn execute_inherit_env_false_clears_environment() {
+        // A child with a cleared environment must not be able to report a variable
+        // this test process owns. Each shell says "unset" in its own way: `sh`
+        // expands the default, `cmd` echoes back the token it could not expand.
+        // Unix probes `HOME` rather than `PATH` because bash synthesizes a default
+        // `PATH` when the variable is absent, so a cleared child can still report
+        // one. Git Bash is unusable as the Windows probe: it rebuilds `PATH` and
+        // `HOME` for the child no matter what the parent set.
+        let (command, args, unset) = if cfg!(windows) {
+            (
+                "cmd",
+                vec!["/C".to_string(), "echo %PATH%".to_string()],
+                "%PATH%",
+            )
+        } else {
+            (
+                "sh",
+                vec!["-c".to_string(), "echo ${HOME:-unset}".to_string()],
+                "unset",
+            )
+        };
+
         let hook = ConnectionHook {
             kind: HookKind::Command {
-                command: "sh".to_string(),
-                args: vec!["-c".to_string(), "echo ${HOME:-empty}".to_string()],
+                command: command.to_string(),
+                args,
             },
             inherit_env: false,
             ..echo_hook("")
@@ -2383,17 +2771,28 @@ mod tests {
             .execute(&test_context(), &CancelToken::new(), None)
             .unwrap();
 
-        assert_eq!(result.stdout.trim(), "empty");
+        assert_eq!(result.stdout.trim(), unset);
     }
 
     #[test]
     fn execute_respects_cwd() {
+        // `std::env::temp_dir()` exists on every platform, and each system reports
+        // its working directory with a different binary (`pwd` versus `cmd /C cd`).
+        // Canonicalizing both sides keeps the comparison honest across macOS's
+        // symlinked temp directory and Windows' short (8.3) path spelling.
+        let dir = std::env::temp_dir();
+        let (command, args) = if cfg!(windows) {
+            ("cmd", vec!["/C".to_string(), "cd".to_string()])
+        } else {
+            ("pwd", Vec::new())
+        };
+
         let hook = ConnectionHook {
             kind: HookKind::Command {
-                command: "pwd".to_string(),
-                args: vec![],
+                command: command.to_string(),
+                args,
             },
-            cwd: Some(PathBuf::from("/tmp")),
+            cwd: Some(dir.clone()),
             ..echo_hook("")
         };
 
@@ -2402,9 +2801,14 @@ mod tests {
             .unwrap();
 
         let output = result.stdout.trim();
-        assert!(
-            output == "/tmp" || output.ends_with("/tmp"),
-            "expected /tmp, got: {}",
+        let reported = std::fs::canonicalize(output).unwrap_or_else(|_| PathBuf::from(output));
+        let expected = std::fs::canonicalize(&dir).unwrap_or(dir);
+
+        assert_eq!(
+            reported,
+            expected,
+            "expected the hook to run in {}, got {}",
+            expected.display(),
             output
         );
     }
@@ -2873,6 +3277,7 @@ mod tests {
         let mut child = command.spawn().unwrap();
         let result = execute_streaming_process(
             &mut child,
+            None,
             &CancelToken::new(),
             None,
             None,
@@ -2898,7 +3303,7 @@ mod tests {
         let mut command = Command::new(python);
         command.args([
             "-c",
-            "import sys, time; sys.stdout.write('partial'); sys.stdout.flush(); time.sleep(0.3); sys.stdout.write(' line\\n'); sys.stdout.flush()",
+            "import sys, time; sys.stdout.write('partial'); sys.stdout.flush(); time.sleep(1.0); sys.stdout.write(' line\\n'); sys.stdout.flush()",
         ]);
         command.stdout(Stdio::piped());
         command.stderr(Stdio::piped());
@@ -2909,16 +3314,22 @@ mod tests {
         let handle = thread::spawn(move || {
             execute_streaming_process(
                 &mut child,
+                None,
                 &CancelToken::new(),
                 None,
-                Some(Duration::from_secs(2)),
+                // Neither bound is the property under test: the assertions below are
+                // that the flushed chunk arrives as its own event and that the two
+                // writes do not coalesce into one. A cold interpreter start on
+                // Windows costs more than the 2 s this used to allow, and 200 ms for
+                // the first event was a race on any loaded machine.
+                Some(Duration::from_secs(30)),
                 None,
                 Some(&sender),
             )
             .unwrap()
         });
 
-        let first_event = receiver.recv_timeout(Duration::from_millis(200)).unwrap();
+        let first_event = receiver.recv_timeout(Duration::from_secs(10)).unwrap();
         let result = handle.join().unwrap();
 
         assert_eq!(first_event.stream, OutputStreamKind::Stdout);
@@ -2943,6 +3354,7 @@ mod tests {
         let mut child = command.spawn().unwrap();
         let result = execute_streaming_process(
             &mut child,
+            None,
             &CancelToken::new(),
             None,
             Some(Duration::from_secs(2)),

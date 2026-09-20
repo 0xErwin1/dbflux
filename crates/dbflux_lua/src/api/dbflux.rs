@@ -200,6 +200,7 @@ fn run_process(lua: &Lua, state: &LuaRuntimeState, options: Table) -> LuaResult<
                 timeout,
                 None,
                 None,
+                None,
             ))
             .map_err(|_| {
                 mlua::Error::RuntimeError("Failed to register detached process".to_string())
@@ -216,6 +217,9 @@ fn run_process(lua: &Lua, state: &LuaRuntimeState, options: Table) -> LuaResult<
 
     match execute_streaming_process(
         &mut child,
+        // `dbflux.process.run` spawns outside the hook process group and stays out
+        // of scope for job-object containment (#206).
+        None,
         &state.cancel_token,
         state.parent_cancel_token.as_ref(),
         timeout,

@@ -41,8 +41,8 @@ pub use hook::{
     DetachedProcessReceiver, DetachedProcessSender, HookContext, HookExecution, HookExecutionMode,
     HookExecutor, HookFailureMode, HookKind, HookPhase, HookPhaseOutcome, HookResult, HookRunner,
     LuaCapabilities, OutputEvent, OutputReceiver, OutputSender, OutputStreamKind,
-    ProcessExecutionError, ProcessExecutor, ScriptLanguage, ScriptSource, detached_process_channel,
-    execute_streaming_process, output_channel,
+    ProcessContainment, ProcessExecutionError, ProcessExecutor, ScriptLanguage, ScriptSource,
+    detached_process_channel, execute_streaming_process, output_channel,
 };
 pub use instance_catalog::{
     DefaultDashboardPanel, DefaultInstanceDashboard, InspectorRowAction, InstanceCatalog,
