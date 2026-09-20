@@ -2476,7 +2476,15 @@ mod tests {
 
         token.cancel();
         let start = Instant::now();
-        handle.join().expect("hook thread panicked");
+        let outcome = handle.join().expect("hook thread panicked");
+
+        // The assertion under test is that the whole process group was reclaimed;
+        // the hook's own outcome still has to be the cancellation error rather than
+        // a silently successful result.
+        assert!(
+            matches!(&outcome, Err(message) if message.contains("cancelled")),
+            "a cancelled hook must report cancellation, got {outcome:?}"
+        );
 
         assert!(
             start.elapsed().as_millis() < 500,
@@ -2527,7 +2535,11 @@ mod tests {
         std::thread::sleep(Duration::from_millis(1500));
 
         token.cancel();
-        handle.join().expect("hook thread panicked");
+        let outcome = handle.join().expect("hook thread panicked");
+        assert!(
+            matches!(&outcome, Err(message) if message.contains("cancelled")),
+            "a cancelled hook must report cancellation, got {outcome:?}"
+        );
 
         let deadline = Instant::now() + Duration::from_secs(10);
         let mut surviving = running_ping_count().expect("tasklist must not fail");
