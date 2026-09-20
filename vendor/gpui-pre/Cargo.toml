@@ -490,3 +490,11 @@ level = "allow"
 priority = 0
 
 [workspace]
+
+# cargo-machete, unlike cargo-shear above, has no exemption for this crate, and
+# upstream's published source only reaches `tracing` through a cfg'd path that
+# the heuristic does not follow. Keep the CI free of that false positive; the
+# same crate is listed in the cargo-shear `ignored` list above for the same
+# reason.
+[package.metadata.cargo-machete]
+ignored = ["tracing"]

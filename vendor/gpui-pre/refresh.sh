@@ -42,7 +42,8 @@ cp -r "$source_dir/resources/." "$here/resources/"
 cp "$source_dir/build.rs" "$source_dir/LICENSE-APACHE" "$source_dir/README.md" "$here/"
 
 # Drop the target tables whose sources are not vendored, then give the crate its own
-# workspace root so Cargo does not expect it in DBFlux's member list.
+# workspace root so Cargo does not expect it in DBFlux's member list, and record the
+# cargo-machete exemption the published manifest does not carry.
 awk '
     /^\[\[example\]\]/ { skip = 1 }
     /^\[\[test\]\]/    { skip = 1 }
@@ -51,6 +52,16 @@ awk '
     !skip { print }
 ' "$source_dir/Cargo.toml" > "$here/Cargo.toml"
 printf '\n[workspace]\n' >> "$here/Cargo.toml"
+cat >> "$here/Cargo.toml" <<'MANIFEST'
+
+# cargo-machete, unlike cargo-shear above, has no exemption for this crate, and
+# upstream's published source only reaches `tracing` through a cfg'd path that
+# the heuristic does not follow. Keep the CI free of that false positive; the
+# same crate is listed in the cargo-shear `ignored` list above for the same
+# reason.
+[package.metadata.cargo-machete]
+ignored = ["tracing"]
+MANIFEST
 
 echo "Applying element-transform.patch"
 cd "$repo_root"

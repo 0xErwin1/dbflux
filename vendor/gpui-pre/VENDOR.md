@@ -50,6 +50,13 @@ dropping the `ShapedGlyph` and `ShapedRun` that upstream's current code no longe
 Without that trim the crate builds with an `unused_imports` warning, and a path dependency
 is linted as first-party code, so `cargo clippy --workspace -- -D warnings` would fail.
 
+The manifest also carries a `[package.metadata.cargo-machete]` exemption for `tracing`,
+which the published crate does not declare: CI runs `cargo machete` over the whole
+directory tree, so it analyses this crate too, and upstream only reaches `tracing` through
+a cfg'd path the heuristic does not follow. Upstream records the same crate in its
+`[package.metadata.cargo-shear]` list for the same reason. `refresh.sh` appends the block,
+so a refresh reproduces it.
+
 ## Refreshing
 
 ```sh
