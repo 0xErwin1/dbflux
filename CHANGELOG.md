@@ -6,6 +6,20 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Added
 
+* **Interactive schema visualization** — a table or a whole database can now be
+  opened as a diagram of the schema instead of a list of objects. Tables render
+  as nodes carrying their columns, primary keys and flags, and foreign keys as
+  edges between them; the diagram pans by dragging, zooms on the cursor with the
+  wheel or from the toolbar between 25% and 400%, and a node can be dragged to
+  rearrange the layout. Arrow keys and `hjkl` walk the nodes, and the context
+  menu switches between the left-right, snowflake and compact layouts, centers
+  the view on a table, opens that table's schema inspector, and copies the
+  diagram as DBML or as `CREATE TABLE` / `ALTER TABLE` DDL. The same two formats
+  are behind the toolbar's Export button, next to the toggles for column types
+  and indexes. Loading a large schema runs in the background and can be
+  cancelled. The diagram is read-only: it displays the schema and exports it, and
+  never issues DDL of its own.
+
 * **Hook process trees are reclaimed on Windows when a hook is cancelled or
   times out** — cancelling a hook on Windows killed only the direct child, so a
   hook that spawned helpers left them orphaned. A managed hook now runs inside a

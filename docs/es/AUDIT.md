@@ -251,6 +251,12 @@ Usa las constantes en lugar de strings sueltos:
 | `MCP_REJECT_EXECUTION`    | `mcp_reject_execution`    | Mcp        |
 | `MCP_TOOL_EXECUTE`        | `mcp_tool_execute`        | Mcp        |
 | `MCP_TOOL_EXECUTE_FAILED` | `mcp_tool_execute_failed` | Mcp        |
+| `SCHEMA_VIZ_OPEN`         | `schema_viz_open`         | Config     |
+| `SCHEMA_VIZ_CANCEL`       | `schema_viz_cancel`       | Config     |
+| `SCHEMA_VIZ_ERROR`        | `schema_viz_error`        | Config     |
+| `SCHEMA_VIZ_LAYOUT_CHANGE` | `schema_viz_layout_change` | Config     |
+| `SCHEMA_VIZ_EXPORT_DBML`  | `schema_viz_export_dbml`  | Config     |
+| `SCHEMA_VIZ_EXPORT_SQL`   | `schema_viz_export_sql`   | Config     |
 | `SYSTEM_PANIC`            | `system_panic`            | System     |
 
 ### Checklist de campos obligatorios
