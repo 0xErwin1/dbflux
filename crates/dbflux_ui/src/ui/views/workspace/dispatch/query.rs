@@ -24,6 +24,12 @@ impl Workspace {
                 });
                 Some(true)
             }
+            Command::ToggleComment => {
+                self.tab_manager.update(cx, |mgr, cx| {
+                    mgr.dispatch_active(Command::ToggleComment, window, cx);
+                });
+                Some(true)
+            }
             Command::ExportResults => {
                 self.tab_manager.update(cx, |mgr, cx| {
                     mgr.dispatch_active(Command::ExportResults, window, cx);

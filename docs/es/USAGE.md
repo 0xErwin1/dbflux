@@ -554,6 +554,7 @@ conflictos con los atajos del sistema en macOS).
 | `Ctrl+p` / `Cmd+p`             | Abrir queries guardadas                  |
 | `Ctrl+s` / `Cmd+s`             | Guardar query                            |
 | `Ctrl+Shift+s` / `Cmd+Shift+s` | Guardar archivo como                     |
+| `Ctrl+/` / `Cmd+/`             | Alternar comentario de línea             |
 | `Enter`                        | Enfocar / ejecutar                       |
 
 (Las letras sin modificador se dejan intencionadamente para el input de texto,

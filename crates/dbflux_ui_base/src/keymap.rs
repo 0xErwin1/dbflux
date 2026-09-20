@@ -316,6 +316,10 @@ fn editor_layer() -> KeymapLayer {
         KeyChord::new("s", Modifiers::primary_shift()),
         Command::SaveFileAs,
     );
+    layer.bind(
+        KeyChord::new("/", Modifiers::primary()),
+        Command::ToggleComment,
+    );
 
     layer
 }
@@ -904,6 +908,25 @@ mod tests {
         assert_eq!(
             keymap.resolve(ContextId::Editor, &primary_s),
             Some(Command::SaveQuery)
+        );
+    }
+
+    #[test]
+    fn test_editor_toggle_comment_binding() {
+        let keymap = default_keymap();
+
+        let primary_slash = KeyChord::new("/", Modifiers::primary());
+        assert_eq!(
+            keymap.resolve(ContextId::Editor, &primary_slash),
+            Some(Command::ToggleComment)
+        );
+
+        // An unmodified `/` stays with the text input: it must not be claimed
+        // by the editor layer, or typing a slash in a query would toggle a
+        // comment instead.
+        assert_eq!(
+            keymap.resolve(ContextId::Editor, &KeyChord::new("/", Modifiers::none())),
+            None
         );
     }
 

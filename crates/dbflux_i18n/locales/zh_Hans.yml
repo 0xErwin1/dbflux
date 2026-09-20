@@ -2490,6 +2490,8 @@ palette:
       name: 文件另存为
     open_script_file:
       name: 打开脚本文件
+    toggle_comment:
+      name: 切换注释
     open_history:
       name: 打开查询历史
     cancel_query:
@@ -2730,6 +2732,7 @@ settings:
       save_query: 保存
       save_file_as: 文件另存为
       open_script_file: 打开脚本文件
+      toggle_comment: 切换注释
       export_results: 导出结果
       results_next_page: 结果下一页
       results_prev_page: 结果上一页

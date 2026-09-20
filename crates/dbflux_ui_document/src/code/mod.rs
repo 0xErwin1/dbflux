@@ -57,6 +57,7 @@ use std::time::Instant;
 use uuid::Uuid;
 
 mod code_actions;
+mod comment;
 mod completion;
 mod context_bar;
 mod diagnostics;
@@ -279,6 +280,9 @@ pub(super) struct EditorState {
     pub(super) is_dirty: bool,
     /// Buffer length at the previous `Change` event, to detect deletions.
     pub(super) last_change_length: usize,
+    /// Set while `toggle_comment` rewrites the buffer, so the Change handler
+    /// skips the completion-menu plumbing meant for a user's deletion.
+    pub(super) toggling_comment: bool,
     /// Shared with the completion provider, which bumps it on every query.
     /// A deletion that did NOT bump it was ignored by the menu plumbing
     /// (cursor deleted back past the menu's trigger start) and would leave a
@@ -619,6 +623,10 @@ impl CodeDocument {
                     let current_length = input.read(cx).text().len();
                     let previous_length =
                         std::mem::replace(&mut this.editor.last_change_length, current_length);
+                    // Consumed here, not cleared by the toggle itself: GPUI
+                    // delivers `emit` after the outermost update finishes, so a
+                    // toggle's Change arrives long after it returned.
+                    let toggled = std::mem::take(&mut this.editor.toggling_comment);
 
                     let generation = this.editor.completion_query_generation.get();
                     let provider_queried = generation != this.editor.last_completion_generation;
@@ -634,6 +642,7 @@ impl CodeDocument {
                         if current_length < previous_length
                             && !provider_queried
                             && this.editor.current_editor_mode == "sql"
+                            && !toggled
                         {
                             // The menu plumbing ignores deletions once the menu
                             // lost its trigger anchor, leaving a stale menu (or
@@ -957,6 +966,7 @@ impl CodeDocument {
                 path: None,
                 is_dirty: false,
                 last_change_length: 0,
+                toggling_comment: false,
                 completion_query_generation,
                 last_completion_generation: 0,
                 cached_effective_language: query_language.clone(),
@@ -1683,6 +1693,7 @@ impl CodeDocument {
                 self.run_query_in_new_tab(window, cx);
                 true
             }
+            Command::ToggleComment => self.toggle_comment(window, cx),
             Command::Cancel | Command::CancelQuery if self.runner.is_primary_active() => {
                 self.cancel_query(cx);
                 true
@@ -2034,6 +2045,7 @@ mod tests {
         CodeDocument, LanguageBinding, diff_stats_from_pair, source_input_values_from_context,
     };
     use crate::handle::DocumentEvent;
+    use dbflux_app::keymap::Command;
     use dbflux_components::theme;
     use dbflux_core::{ExecutionSourceContext, QueryLanguage};
     use dbflux_storage::bootstrap::StorageRuntime;
@@ -2135,6 +2147,417 @@ mod tests {
             "run_query on a read-only doc must not spawn a task"
         );
         assert!(!is_dirty, "read-only document must not be marked dirty");
+    }
+
+    /// `ToggleComment` rewrites the selected lines with the language's comment
+    /// prefix, marks the buffer dirty, and leaves a selection that a second
+    /// press can toggle back.
+    #[gpui::test]
+    fn toggle_comment_uses_the_language_prefix(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let doc_holder: Rc<RefCell<Option<gpui::Entity<CodeDocument>>>> =
+            Rc::new(RefCell::new(None));
+        let doc_ref = doc_holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let doc = cx.new(|cx| {
+                let mut d = CodeDocument::new_with_language(
+                    app_state.clone(),
+                    None,
+                    QueryLanguage::Lua,
+                    window,
+                    cx,
+                );
+                d.set_content("print(1)\nprint(2)", window, cx);
+                d
+            });
+            doc_ref.replace(Some(doc.clone()));
+            Root::new(doc, window, cx)
+        });
+
+        let doc = doc_holder.borrow().clone().expect("doc should be created");
+
+        window.update(|window, cx| {
+            doc.update(cx, |d, cx| {
+                d.editor
+                    .input_state
+                    .update(cx, |state, cx| state.set_selected_range(0..8, cx));
+                assert!(
+                    d.dispatch_command(Command::ToggleComment, window, cx),
+                    "an editable script document must handle ToggleComment"
+                );
+            });
+        });
+
+        window.update(|_, cx| {
+            let d = doc.read(cx);
+            assert_eq!(
+                d.editor.input_state.read(cx).value().to_string(),
+                "-- print(1)\nprint(2)",
+                "a Lua buffer must be commented with `--`"
+            );
+            assert!(d.editor.is_dirty, "a toggled buffer must be marked dirty");
+        });
+
+        window.update(|window, cx| {
+            doc.update(cx, |d, cx| {
+                d.dispatch_command(Command::ToggleComment, window, cx);
+            });
+        });
+
+        window.update(|_, cx| {
+            let value = doc.read(cx).editor.input_state.read(cx).value().to_string();
+            assert_eq!(value, "print(1)\nprint(2)", "the second press must restore");
+        });
+    }
+
+    /// Caret and selection offsets are UTF-8 byte ranges, so a toggle that
+    /// splices a prefix next to multi-byte text must keep them on character
+    /// boundaries — a byte-indexed rewrite that ignored that would panic on
+    /// `String` slicing or silently shift the caret by the wrong amount.
+    ///
+    /// SQL is the mode worth exercising: removing a comment there also takes
+    /// the deletion path in the `InputEvent::Change` handler.
+    #[gpui::test]
+    fn toggle_comment_keeps_multibyte_offsets(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let doc_holder: Rc<RefCell<Option<gpui::Entity<CodeDocument>>>> =
+            Rc::new(RefCell::new(None));
+        let doc_ref = doc_holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let doc = cx.new(|cx| {
+                let mut d = CodeDocument::new_with_language(
+                    app_state.clone(),
+                    None,
+                    QueryLanguage::Sql,
+                    window,
+                    cx,
+                );
+                d.set_content("SELECT 'привет';", window, cx);
+                d
+            });
+            doc_ref.replace(Some(doc.clone()));
+            Root::new(doc, window, cx)
+        });
+
+        let doc = doc_holder.borrow().clone().expect("doc should be created");
+
+        window.update(|window, cx| {
+            doc.update(cx, |d, cx| {
+                d.editor
+                    .input_state
+                    .update(cx, |state, cx| state.set_selected_range(7..7, cx));
+                assert!(
+                    d.dispatch_command(Command::ToggleComment, window, cx),
+                    "an editable SQL document must handle ToggleComment"
+                );
+            });
+        });
+
+        window.update(|_, cx| {
+            let state = doc.read(cx).editor.input_state.read(cx);
+            assert_eq!(
+                state.value().to_string(),
+                "-- SELECT 'привет';",
+                "a SQL buffer must be commented with `--`"
+            );
+            assert_eq!(
+                state.selected_range(),
+                10..10,
+                "the caret must move by the byte length of the inserted prefix"
+            );
+        });
+
+        window.update(|window, cx| {
+            doc.update(cx, |d, cx| {
+                d.dispatch_command(Command::ToggleComment, window, cx);
+            });
+        });
+
+        window.update(|_, cx| {
+            let state = doc.read(cx).editor.input_state.read(cx);
+            assert_eq!(
+                state.value().to_string(),
+                "SELECT 'привет';",
+                "the second press must restore the text byte for byte"
+            );
+            assert_eq!(
+                state.selected_range(),
+                7..7,
+                "the caret must come back to its pre-toggle offset"
+            );
+        });
+    }
+
+    /// Commenting and uncommenting must both leave the toggled lines selected.
+    /// The completion plumbing in the Change handler moves the cursor on a
+    /// deletion, which used to drop the selection on the way out. The first
+    /// toggle seeds `last_change_length` — a `set_content` does not emit a
+    /// `Change` — so the uncomment below really is seen as a deletion.
+    #[gpui::test]
+    fn toggle_comment_keeps_the_selection_when_uncommenting(cx: &mut TestAppContext) {
+        use gpui::{IntoElement, point, px, size};
+
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let doc_holder: Rc<RefCell<Option<gpui::Entity<CodeDocument>>>> =
+            Rc::new(RefCell::new(None));
+        let doc_ref = doc_holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let doc = cx.new(|cx| {
+                let mut d = CodeDocument::new_with_language(
+                    app_state.clone(),
+                    None,
+                    QueryLanguage::Sql,
+                    window,
+                    cx,
+                );
+                d.set_content("SELECT 1;\nSELECT 2;\n-- SELECT 3;", window, cx);
+                d
+            });
+            doc_ref.replace(Some(doc.clone()));
+            Root::new(doc, window, cx)
+        });
+
+        let doc = doc_holder.borrow().clone().expect("doc should be created");
+
+        // Comment the first line to seed the Change handler with the buffer
+        // length, the way any real edit before the toggle would.
+        window.update(|window, cx| {
+            doc.update(cx, |d, cx| {
+                d.editor
+                    .input_state
+                    .update(cx, |state, cx| state.set_selected_range(0..0, cx));
+                assert!(
+                    d.dispatch_command(Command::ToggleComment, window, cx),
+                    "an editable SQL document must handle ToggleComment"
+                );
+            });
+        });
+
+        let text = "-- SELECT 1;\nSELECT 2;\n-- SELECT 3;";
+        let line_start = "-- SELECT 1;\nSELECT 2;\n".len();
+        let line_end = line_start + "-- SELECT 3;".len();
+
+        window.update(|window, cx| {
+            doc.update(cx, |d, cx| {
+                d.editor.input_state.update(cx, |state, cx| {
+                    state.set_selected_range(line_start..line_end, cx)
+                });
+                assert!(
+                    d.dispatch_command(Command::ToggleComment, window, cx),
+                    "an editable SQL document must handle ToggleComment"
+                );
+            });
+        });
+
+        window.draw(point(px(0.), px(0.)), size(px(800.), px(600.)), {
+            let doc = doc.clone();
+            move |_, _| doc.clone().into_any_element()
+        });
+
+        window.update(|_, cx| {
+            let state = doc.read(cx).editor.input_state.read(cx);
+            assert_eq!(
+                state.value().to_string(),
+                "-- SELECT 1;\nSELECT 2;\nSELECT 3;",
+                "the second toggle must remove the prefix"
+            );
+            assert_eq!(
+                state.selected_range(),
+                line_start..line_end - 3,
+                "the uncommented lines must stay selected"
+            );
+            assert_eq!(
+                text.len() - 3,
+                state.value().len(),
+                "the uncomment must shorten the buffer"
+            );
+        });
+    }
+
+    /// A toggle only rewrites the block of touched lines, so the editor keeps
+    /// the syntax highlighter it already had. This guards that: a whole-buffer
+    /// replacement drops the cached highlighter, and the pass that recreates it
+    /// is exactly where the colors go missing.
+    #[gpui::test]
+    fn toggle_comment_keeps_the_syntax_highlighter(cx: &mut TestAppContext) {
+        use gpui::{
+            Context, HighlightStyle, IntoElement, SharedString, VisualTestContext, Window, point,
+            px, size,
+        };
+        use gpui_component::input::{
+            FoldRange, HighlightStyleResolver, InputEdit, InputHighlighter,
+            InputHighlighterFactory, Rope,
+        };
+        use std::cell::Cell;
+        use std::ops::Range;
+
+        struct CountingHighlighter;
+
+        impl InputHighlighter for CountingHighlighter {
+            fn language(&self) -> SharedString {
+                "test".into()
+            }
+
+            fn update(
+                &mut self,
+                _edit: Option<InputEdit>,
+                _text: &Rope,
+                _folding: bool,
+                _window: &mut Window,
+                _cx: &mut Context<super::GpuiEditorState>,
+            ) {
+            }
+
+            fn styles(
+                &self,
+                range: &Range<usize>,
+                _resolver: &dyn HighlightStyleResolver,
+            ) -> Vec<(Range<usize>, HighlightStyle)> {
+                vec![(range.clone(), HighlightStyle::default())]
+            }
+
+            fn fold_ranges(&self, _text: &Rope) -> Vec<FoldRange> {
+                Vec::new()
+            }
+        }
+
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let doc_holder: Rc<RefCell<Option<gpui::Entity<CodeDocument>>>> =
+            Rc::new(RefCell::new(None));
+        let doc_ref = doc_holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let doc = cx.new(|cx| {
+                let mut d = CodeDocument::new_with_language(
+                    app_state.clone(),
+                    None,
+                    QueryLanguage::Lua,
+                    window,
+                    cx,
+                );
+                d.set_content("print(1)", window, cx);
+                d
+            });
+            doc_ref.replace(Some(doc.clone()));
+            Root::new(doc, window, cx)
+        });
+
+        let doc = doc_holder.borrow().clone().expect("doc should be created");
+
+        // The editor installs gpui-component's tree-sitter factory only when no
+        // factory is set, so counting rebuilds through our own is enough to see
+        // whether the highlighter survives a toggle.
+        let rebuilds = Rc::new(Cell::new(0usize));
+        window.update(|_, cx| {
+            doc.update(cx, |d, cx| {
+                let counter = rebuilds.clone();
+                d.editor.input_state.update(cx, |state, cx| {
+                    let factory: InputHighlighterFactory = Rc::new(move |_language: &str| {
+                        counter.set(counter.get() + 1);
+                        Some(Box::new(CountingHighlighter))
+                    });
+                    state.set_highlighter_factory(factory, cx);
+                });
+            });
+        });
+
+        let draw = |window: &mut VisualTestContext| {
+            let doc = doc.clone();
+            window.draw(
+                point(px(0.), px(0.)),
+                size(px(800.), px(600.)),
+                move |_, _| doc.clone().into_any_element(),
+            );
+        };
+
+        draw(window);
+        let rebuilds_before_toggle = rebuilds.get();
+
+        window.update(|window, cx| {
+            doc.update(cx, |d, cx| {
+                assert!(
+                    d.dispatch_command(Command::ToggleComment, window, cx),
+                    "an editable script document must handle ToggleComment"
+                );
+            });
+        });
+
+        draw(window);
+
+        window.update(|_, cx| {
+            assert_eq!(
+                doc.read(cx).editor.input_state.read(cx).value().to_string(),
+                "-- print(1)"
+            );
+        });
+        assert_eq!(
+            rebuilds.get(),
+            rebuilds_before_toggle,
+            "toggling a comment must not rebuild the syntax highlighter"
+        );
+    }
+
+    /// A read-only document (a routine body) declines `ToggleComment` and keeps
+    /// its text untouched.
+    #[gpui::test]
+    fn toggle_comment_is_a_no_op_on_read_only_documents(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let doc_holder: Rc<RefCell<Option<gpui::Entity<CodeDocument>>>> =
+            Rc::new(RefCell::new(None));
+        let doc_ref = doc_holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let doc = cx.new(|cx| {
+                let mut d = CodeDocument::new_with_language(
+                    app_state.clone(),
+                    None,
+                    QueryLanguage::Sql,
+                    window,
+                    cx,
+                )
+                .with_read_only(cx);
+                d.set_content("SELECT 1;", window, cx);
+                d
+            });
+            doc_ref.replace(Some(doc.clone()));
+            Root::new(doc, window, cx)
+        });
+
+        let doc = doc_holder.borrow().clone().expect("doc should be created");
+
+        window.update(|window, cx| {
+            doc.update(cx, |d, cx| {
+                d.editor
+                    .input_state
+                    .update(cx, |state, cx| state.set_selected_range(0..0, cx));
+                assert!(
+                    !d.dispatch_command(Command::ToggleComment, window, cx),
+                    "a read-only document must decline ToggleComment"
+                );
+            });
+        });
+
+        window.update(|_, cx| {
+            let d = doc.read(cx);
+            assert_eq!(
+                d.editor.input_state.read(cx).value().to_string(),
+                "SELECT 1;"
+            );
+            assert!(!d.editor.is_dirty);
+        });
     }
 
     /// A programmatic write into the underlying InputState of a read-only

@@ -18,6 +18,14 @@ All notable changes to DBFlux will be documented in this file.
   confirmation leaves the tab open with its edits. Until quitting asks too, a
   quit still drops staged grid edits.
 
+* **Toggle Comment in the code editors** — `Ctrl+/` (`Cmd+/` on macOS) comments
+  every line the selection touches, or uncomments them when each touched line
+  already carries the language's prefix, so the same chord works in the SQL
+  editor and in Lua, Python, and Bash scripts. Blank lines are left alone, the
+  viewport stays where it was, and a toggle on a bare caret walks the cursor to
+  the next line. Read-only documents ignore the command. The command is also
+  available in the command palette.
+
 * **TursoDB driver** — connect to Turso Cloud and self-hosted libSQL
   (`sqld`) servers over HTTP with a URL and an auth token. The driver speaks
   the SQLite dialect and supports schema discovery (tables, views, columns,
