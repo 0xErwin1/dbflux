@@ -488,6 +488,81 @@ mod tests {
         }
     }
 
+    fn extract_placeholders(value: &str) -> Vec<String> {
+        let mut tokens = Vec::new();
+        let bytes = value.as_bytes();
+        let mut index = 0;
+        while index + 2 <= bytes.len() {
+            if &bytes[index..index + 2] != b"%{" {
+                index += 1;
+                continue;
+            }
+            let mut cursor = index + 2;
+            while cursor < bytes.len()
+                && (bytes[cursor].is_ascii_alphanumeric() || bytes[cursor] == b'_')
+            {
+                cursor += 1;
+            }
+            if cursor < bytes.len() && bytes[cursor] == b'}' && cursor > index + 2 {
+                tokens.push(value[index..=cursor].to_string());
+                index = cursor + 1;
+            } else {
+                index += 2;
+            }
+        }
+        tokens
+    }
+
+    #[test]
+    fn translated_catalogs_preserve_english_placeholders() {
+        let en = catalog("en");
+        let mut en_entries = Vec::new();
+        flatten_catalog_values(&en, &mut en_entries);
+        let en_values: std::collections::BTreeMap<String, String> = en_entries
+            .into_iter()
+            .filter_map(|(key, value)| value.as_str().map(|text| (key, text.to_string())))
+            .collect();
+
+        for language in Language::available()
+            .iter()
+            .filter(|language| **language != Language::ENGLISH)
+        {
+            let locale = language.locale_code();
+            let translated = catalog(locale);
+            let mut translated_entries = Vec::new();
+            flatten_catalog_values(&translated, &mut translated_entries);
+
+            let mut placeholder_bearing_keys = 0usize;
+            for (key, value) in translated_entries {
+                let Some(text) = value.as_str() else { continue };
+                let Some(en_text) = en_values.get(&key) else {
+                    continue;
+                };
+
+                let mut expected = extract_placeholders(en_text);
+                let mut found = extract_placeholders(text);
+                if !expected.is_empty() || !found.is_empty() {
+                    placeholder_bearing_keys += 1;
+                }
+                expected.sort();
+                found.sort();
+
+                assert_eq!(
+                    expected, found,
+                    "catalog {locale} key {key}: placeholder drift; \
+                     english value {en_text:?} expects {expected:?}, \
+                     translated value {text:?} has {found:?}"
+                );
+            }
+
+            assert!(
+                placeholder_bearing_keys > 0,
+                "catalog {locale} shares no placeholder-bearing keys with English; \
+                 the placeholder comparison compared nothing"
+            );
+        }
+    }
+
     #[test]
     fn catalog_has_no_empty_values() {
         let en: serde_yaml::Value =
