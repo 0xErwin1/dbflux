@@ -2725,10 +2725,31 @@ mod tests {
 
     #[test]
     fn execute_inherit_env_false_clears_environment() {
+        // A child with a cleared environment must not be able to report a variable
+        // this test process owns. Each shell says "unset" in its own way: `sh`
+        // expands the default, `cmd` echoes back the token it could not expand.
+        // Unix probes `HOME` rather than `PATH` because bash synthesizes a default
+        // `PATH` when the variable is absent, so a cleared child can still report
+        // one. Git Bash is unusable as the Windows probe: it rebuilds `PATH` and
+        // `HOME` for the child no matter what the parent set.
+        let (command, args, unset) = if cfg!(windows) {
+            (
+                "cmd",
+                vec!["/C".to_string(), "echo %PATH%".to_string()],
+                "%PATH%",
+            )
+        } else {
+            (
+                "sh",
+                vec!["-c".to_string(), "echo ${HOME:-unset}".to_string()],
+                "unset",
+            )
+        };
+
         let hook = ConnectionHook {
             kind: HookKind::Command {
-                command: "sh".to_string(),
-                args: vec!["-c".to_string(), "echo ${HOME:-empty}".to_string()],
+                command: command.to_string(),
+                args,
             },
             inherit_env: false,
             ..echo_hook("")
@@ -2738,17 +2759,28 @@ mod tests {
             .execute(&test_context(), &CancelToken::new(), None)
             .unwrap();
 
-        assert_eq!(result.stdout.trim(), "empty");
+        assert_eq!(result.stdout.trim(), unset);
     }
 
     #[test]
     fn execute_respects_cwd() {
+        // `std::env::temp_dir()` exists on every platform, and each system reports
+        // its working directory with a different binary (`pwd` versus `cmd /C cd`).
+        // Canonicalizing both sides keeps the comparison honest across macOS's
+        // symlinked temp directory and Windows' short (8.3) path spelling.
+        let dir = std::env::temp_dir();
+        let (command, args) = if cfg!(windows) {
+            ("cmd", vec!["/C".to_string(), "cd".to_string()])
+        } else {
+            ("pwd", Vec::new())
+        };
+
         let hook = ConnectionHook {
             kind: HookKind::Command {
-                command: "pwd".to_string(),
-                args: vec![],
+                command: command.to_string(),
+                args,
             },
-            cwd: Some(PathBuf::from("/tmp")),
+            cwd: Some(dir.clone()),
             ..echo_hook("")
         };
 
@@ -2757,9 +2789,14 @@ mod tests {
             .unwrap();
 
         let output = result.stdout.trim();
-        assert!(
-            output == "/tmp" || output.ends_with("/tmp"),
-            "expected /tmp, got: {}",
+        let reported = std::fs::canonicalize(output).unwrap_or_else(|_| PathBuf::from(output));
+        let expected = std::fs::canonicalize(&dir).unwrap_or(dir);
+
+        assert_eq!(
+            reported,
+            expected,
+            "expected the hook to run in {}, got {}",
+            expected.display(),
             output
         );
     }
@@ -3254,7 +3291,7 @@ mod tests {
         let mut command = Command::new(python);
         command.args([
             "-c",
-            "import sys, time; sys.stdout.write('partial'); sys.stdout.flush(); time.sleep(0.3); sys.stdout.write(' line\\n'); sys.stdout.flush()",
+            "import sys, time; sys.stdout.write('partial'); sys.stdout.flush(); time.sleep(1.0); sys.stdout.write(' line\\n'); sys.stdout.flush()",
         ]);
         command.stdout(Stdio::piped());
         command.stderr(Stdio::piped());
@@ -3268,14 +3305,19 @@ mod tests {
                 None,
                 &CancelToken::new(),
                 None,
-                Some(Duration::from_secs(2)),
+                // Neither bound is the property under test: the assertions below are
+                // that the flushed chunk arrives as its own event and that the two
+                // writes do not coalesce into one. A cold interpreter start on
+                // Windows costs more than the 2 s this used to allow, and 200 ms for
+                // the first event was a race on any loaded machine.
+                Some(Duration::from_secs(30)),
                 None,
                 Some(&sender),
             )
             .unwrap()
         });
 
-        let first_event = receiver.recv_timeout(Duration::from_millis(200)).unwrap();
+        let first_event = receiver.recv_timeout(Duration::from_secs(10)).unwrap();
         let result = handle.join().unwrap();
 
         assert_eq!(first_event.stream, OutputStreamKind::Stdout);
