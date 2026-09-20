@@ -60,6 +60,15 @@ All notable changes to DBFlux will be documented in this file.
   hidden behind a shared rule (`ILIKE`, `INTEGER`, `INT4`, …), and statements
   the grammar never defines (`GRANT`, `REVOKE`, `FETCH`, …).
 
+* **Korean user interface (#529)** — the app's in-app interface strings (menus,
+  dialogs, settings, error messages) are now available in Korean, and the
+  language appears in Settings → General on its own with no configuration. This
+  supersedes the Weblate translation PR #529. The translation was produced
+  without a Korean-speaking reviewer, so terminology may read awkwardly in
+  places, and any string not yet translated falls back to English. A new test
+  now fails the build if any translated catalog drops or renames an English
+  `%{placeholder}` — a failure that is otherwise silent in the UI.
+
 ### Fixed
 
 * **Single-line completion fields keep their text on the row** — the DataView
