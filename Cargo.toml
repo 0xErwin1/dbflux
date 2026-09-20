@@ -39,6 +39,7 @@ members = [
     "crates/dbflux_approval",
     "crates/dbflux_audit",
     "crates/dbflux_storage",
+    "crates/dbflux_schema_viz",
     "crates/dbflux_driver_influxdb",
     "crates/dbflux_portability",
     "crates/dbflux_driver_s3",
@@ -91,6 +92,7 @@ dbflux_policy = { path = "crates/dbflux_policy" }
 dbflux_approval = { path = "crates/dbflux_approval" }
 dbflux_audit = { path = "crates/dbflux_audit" }
 dbflux_storage = { path = "crates/dbflux_storage" }
+dbflux_schema_viz = { path = "crates/dbflux_schema_viz" }
 dbflux_driver_influxdb = { path = "crates/dbflux_driver_influxdb" }
 dbflux_portability = { path = "crates/dbflux_portability" }
 dbflux_driver_s3 = { path = "crates/dbflux_driver_s3" }
@@ -105,6 +107,7 @@ dbflux_transfer = { path = "crates/dbflux_transfer" }
 dbflux_i18n = { path = "crates/dbflux_i18n" }
 mysql = "28"
 
+petgraph = "0.7"
 
 gpui = { package = "gpui-pre", version = "=0.3.5" }
 gpui-component = { version = "=0.6.1", features = ["tree-sitter"] }
