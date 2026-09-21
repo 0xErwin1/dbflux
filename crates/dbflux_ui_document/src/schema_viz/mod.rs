@@ -28,7 +28,7 @@ use crate::handle::DocumentEvent;
 use crate::types::{DocumentId, DocumentState};
 use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::LoadingBlock;
+use dbflux_components::primitives::Spinner;
 use dbflux_components::tokens::{FontSizes, Spacing};
 use dbflux_ui_base::AppStateEntity;
 use dbflux_ui_base::toast::{PendingToast, flush_pending_toast};
@@ -304,6 +304,8 @@ pub struct SchemaVizDocument {
     pub table_cap_warning: bool,
     // Cancellation
     cancel_token: Option<Arc<CancelToken>>,
+    /// Frame of the loading spinner, advanced by a timer while the schema loads.
+    loading_frame: usize,
     // Pending toast notification (set from sync context, flushed in render)
     pending_toast: Option<PendingToast>,
     // Toolbar dropdowns
@@ -414,6 +416,7 @@ impl SchemaVizDocument {
             show_indexes: false,
             table_cap_warning: false,
             cancel_token: None,
+            loading_frame: 0,
             pending_toast: None,
             layout_menu_open: false,
             export_menu_open: false,
@@ -531,6 +534,33 @@ impl SchemaVizDocument {
         let task = cx.background_executor().spawn(async move {
             Self::load_focused_schema_blocking(database, mode, connection, cancel_token)
         });
+
+        // Advance the loading spinner while the load runs. The future upgrades the
+        // document weakly on every tick, so a load that outlives its tab neither
+        // holds the document alive nor keeps ticking.
+        cx.spawn(async move |entity, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(Spinner::INTERVAL_MS))
+                    .await;
+
+                let still_loading = entity
+                    .update(cx, |doc, cx| {
+                        if !matches!(doc.load_status, LoadStatus::Loading) {
+                            return false;
+                        }
+                        doc.loading_frame = doc.loading_frame.wrapping_add(1);
+                        cx.notify();
+                        true
+                    })
+                    .unwrap_or(false);
+
+                if !still_loading {
+                    break;
+                }
+            }
+        })
+        .detach();
 
         // The load runs on a background task and can outlive its tab, or its
         // window. The future only ever upgrades a weak handle, after the await:
@@ -1461,16 +1491,83 @@ impl SchemaVizDocument {
 
     fn render_loading(&self, cx: &mut Context<Self>) -> Div {
         let theme = cx.theme();
+        let card_bg = theme.secondary;
+        let border = theme.border;
+
+        // A diagram skeleton instead of a spinner floating in a void: an empty
+        // schema panel is large, and six placeholder cards read as "tables are
+        // coming" while the metadata load runs.
+        let placeholder = |rows: usize| {
+            div()
+                .w(px(200.0))
+                .rounded_md()
+                .border_1()
+                .border_color(border.opacity(0.45))
+                .bg(card_bg.opacity(0.35))
+                .p(Spacing::SM)
+                .flex()
+                .flex_col()
+                .gap(Spacing::XXS)
+                .child(
+                    div()
+                        .h(px(10.0))
+                        .w(px(110.0))
+                        .rounded_sm()
+                        .bg(border.opacity(0.55)),
+                )
+                .children((0..rows).map(|_| {
+                    div()
+                        .h(Spacing::SM)
+                        .w_full()
+                        .rounded_sm()
+                        .bg(border.opacity(0.25))
+                }))
+        };
+
         div()
             .flex()
+            .flex_col()
             .size_full()
             .items_center()
             .justify_center()
+            .gap(Spacing::XL)
             .bg(theme.background)
-            .child(LoadingBlock::loading(
-                Some(SharedString::from("Loading schema…")),
-                0,
-            ))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(Spacing::XS)
+                    .child(Spinner::new(self.loading_frame))
+                    .child(
+                        div()
+                            .text_size(FontSizes::SM)
+                            .text_color(theme.muted_foreground)
+                            .child("Loading schema…"),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(Spacing::XL)
+                    .opacity(0.75)
+                    .child(
+                        div()
+                            .flex()
+                            .gap(Spacing::XL)
+                            .child(placeholder(4))
+                            .child(placeholder(6))
+                            .child(placeholder(3)),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .gap(Spacing::XL)
+                            .child(placeholder(5))
+                            .child(placeholder(3))
+                            .child(placeholder(6)),
+                    ),
+            )
     }
 
     fn render_error(&self, msg: &str) -> Div {
