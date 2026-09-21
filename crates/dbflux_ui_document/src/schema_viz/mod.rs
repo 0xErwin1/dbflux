@@ -3106,6 +3106,29 @@ impl SchemaVizDocument {
         }
         let mut next_lane_rank: HashMap<(NodeIndex, NodeIndex), usize> = HashMap::new();
 
+        // Node rectangles in world space, built once: the router needs them for the
+        // edge's own ends and to keep its lanes clear of every other table.
+        let mut bounds_by_node: HashMap<NodeIndex, routing::NodeBounds> = HashMap::new();
+        for (idx, _) in graph.nodes() {
+            let Some(node_layout) = layout.nodes.get(&idx) else {
+                continue;
+            };
+            let (x, y) = self
+                .node_position_overrides
+                .get(&idx)
+                .map_or((node_layout.x, node_layout.y), |pos| (pos.x, pos.y));
+            bounds_by_node.insert(
+                idx,
+                routing::NodeBounds {
+                    x,
+                    y,
+                    width: node_layout.width,
+                    height: node_layout.height,
+                },
+            );
+        }
+        let obstacles: Vec<routing::NodeBounds> = bounds_by_node.values().copied().collect();
+
         for edge_idx in graph.edge_indices() {
             let (source, target) = match graph.edge_endpoints(edge_idx) {
                 Some(endpoints) => endpoints,
@@ -3119,14 +3142,6 @@ impl SchemaVizDocument {
                 Some(w) => w,
                 None => continue,
             };
-            let from_layout = match layout.nodes.get(&source) {
-                Some(l) => l,
-                None => continue,
-            };
-            let to_layout = match layout.nodes.get(&target) {
-                Some(l) => l,
-                None => continue,
-            };
             let from_node_weight = match graph.node_weight(source) {
                 Some(n) => n,
                 None => continue,
@@ -3136,14 +3151,11 @@ impl SchemaVizDocument {
                 None => continue,
             };
 
-            let (from_x_base, from_y_base) = self
-                .node_position_overrides
-                .get(&source)
-                .map_or((from_layout.x, from_layout.y), |pos| (pos.x, pos.y));
-            let (to_x_base, to_y_base) = self
-                .node_position_overrides
-                .get(&target)
-                .map_or((to_layout.x, to_layout.y), |pos| (pos.x, pos.y));
+            let (Some(&source_bounds), Some(&target_bounds)) =
+                (bounds_by_node.get(&source), bounds_by_node.get(&target))
+            else {
+                continue;
+            };
 
             let from_col_y = edge_weight
                 .from_columns
@@ -3177,22 +3189,13 @@ impl SchemaVizDocument {
             // visually overlap the FK / PK badges inside the row.
 
             let route = routing::route_foreign_key(
-                routing::NodeBounds {
-                    x: from_x_base,
-                    y: from_y_base,
-                    width: from_layout.width,
-                    height: from_layout.height,
-                },
-                routing::NodeBounds {
-                    x: to_x_base,
-                    y: to_y_base,
-                    width: to_layout.width,
-                    height: to_layout.height,
-                },
+                source_bounds,
+                target_bounds,
                 from_col_y,
                 to_col_y,
                 lane_rank,
                 lane_count,
+                &obstacles,
             );
 
             // All edges render solid; the off-screen dashed variant was dropped.

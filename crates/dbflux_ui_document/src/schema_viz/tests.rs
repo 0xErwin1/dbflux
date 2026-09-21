@@ -315,7 +315,7 @@ fn test_route_left_to_right_uses_facing_ports() {
         height: 80.0,
     };
 
-    let route = route_foreign_key(source, target, 30.0, 30.0, 0, 1);
+    let route = route_foreign_key(source, target, 30.0, 30.0, 0, 1, &[]);
 
     assert!(route.start().x > source.x + source.width);
     assert!(route.end().x < target.x);
@@ -337,7 +337,7 @@ fn test_route_right_to_left_uses_facing_ports_and_corridor_controls() {
         height: 80.0,
     };
 
-    let route = route_foreign_key(source, target, 30.0, 30.0, 0, 1);
+    let route = route_foreign_key(source, target, 30.0, 30.0, 0, 1, &[]);
 
     assert!(
         route.start().x < source.x,
@@ -364,7 +364,7 @@ fn test_route_self_reference_equal_rows_stays_outside_node() {
         height: 80.0,
     };
 
-    let route = route_foreign_key(node, node, 40.0, 40.0, 0, 1);
+    let route = route_foreign_key(node, node, 40.0, 40.0, 0, 1, &[]);
     let midpoint = route_midpoint(&route);
 
     assert_ne!(
@@ -397,8 +397,8 @@ fn test_route_parallel_foreign_keys_have_deterministic_distinct_lanes() {
         height: 80.0,
     };
 
-    let first = route_foreign_key(source, target, 40.0, 40.0, 0, 2);
-    let second = route_foreign_key(source, target, 40.0, 40.0, 1, 2);
+    let first = route_foreign_key(source, target, 40.0, 40.0, 0, 2, &[]);
+    let second = route_foreign_key(source, target, 40.0, 40.0, 1, 2, &[]);
 
     assert_ne!(first, second, "parallel FKs need separate lanes");
     assert_ne!(
@@ -407,7 +407,10 @@ fn test_route_parallel_foreign_keys_have_deterministic_distinct_lanes() {
         "parallel FKs need distinct corridors"
     );
     assert_axis_aligned(&first);
-    assert_eq!(first, route_foreign_key(source, target, 40.0, 40.0, 0, 2));
+    assert_eq!(
+        first,
+        route_foreign_key(source, target, 40.0, 40.0, 0, 2, &[])
+    );
 }
 
 #[test]
@@ -425,7 +428,7 @@ fn test_route_overlapping_tables_uses_same_side_exterior_ports() {
         height: 80.0,
     };
 
-    let route = route_foreign_key(source, target, 40.0, 40.0, 0, 1);
+    let route = route_foreign_key(source, target, 40.0, 40.0, 0, 1, &[]);
 
     assert!(
         route.start().x < source.x,
@@ -467,8 +470,8 @@ fn test_route_translation_preserves_shape() {
         ..target
     };
 
-    let route = route_foreign_key(source, target, 30.0, 50.0, 0, 1);
-    let translated = route_foreign_key(translated_source, translated_target, 30.0, 50.0, 0, 1);
+    let route = route_foreign_key(source, target, 30.0, 50.0, 0, 1, &[]);
+    let translated = route_foreign_key(translated_source, translated_target, 30.0, 50.0, 0, 1, &[]);
 
     let expected: Vec<RoutePoint> = route
         .points
@@ -508,8 +511,8 @@ fn test_route_reverse_translation_preserves_shape() {
         ..target
     };
 
-    let route = route_foreign_key(source, target, 30.0, 50.0, 0, 1);
-    let translated = route_foreign_key(translated_source, translated_target, 30.0, 50.0, 0, 1);
+    let route = route_foreign_key(source, target, 30.0, 50.0, 0, 1, &[]);
+    let translated = route_foreign_key(translated_source, translated_target, 30.0, 50.0, 0, 1, &[]);
 
     let expected: Vec<RoutePoint> = route
         .points
@@ -535,7 +538,7 @@ fn test_route_self_reference_distinct_rows_stays_outside_node() {
         height: 100.0,
     };
 
-    let route = route_foreign_key(node, node, 30.0, 70.0, 0, 1);
+    let route = route_foreign_key(node, node, 30.0, 70.0, 0, 1, &[]);
 
     assert!(
         route.points.iter().all(|point| point.x < node.x),
@@ -561,8 +564,8 @@ fn test_route_zero_lane_count_is_safe_and_uses_single_lane() {
     };
 
     assert_eq!(
-        route_foreign_key(source, target, 40.0, 40.0, 0, 0),
-        route_foreign_key(source, target, 40.0, 40.0, 0, 1)
+        route_foreign_key(source, target, 40.0, 40.0, 0, 0, &[]),
+        route_foreign_key(source, target, 40.0, 40.0, 0, 1, &[])
     );
 }
 
@@ -715,7 +718,7 @@ fn test_route_segments_are_axis_aligned_in_every_configuration() {
         (target_overlaps, "target overlapping the source column"),
     ] {
         for (lane_rank, lane_count) in [(0, 1), (0, 3), (1, 3), (2, 3)] {
-            let route = route_foreign_key(source, target, 30.0, 50.0, lane_rank, lane_count);
+            let route = route_foreign_key(source, target, 30.0, 50.0, lane_rank, lane_count, &[]);
             assert!(
                 route.points.len() >= 2,
                 "{label} with {lane_rank}/{lane_count}: a route needs at least one segment"
@@ -768,7 +771,7 @@ fn test_route_between_nearly_touching_tables_does_not_panic() {
             height: 80.0,
         };
 
-        let route = route_foreign_key(source, target, 30.0, 30.0, 0, 3);
+        let route = route_foreign_key(source, target, 30.0, 30.0, 0, 3, &[]);
 
         assert_axis_aligned(&route);
         let lane = lane_x(&route);
@@ -777,4 +780,37 @@ fn test_route_between_nearly_touching_tables_does_not_panic() {
             "gap {gap}: the vertical leg must land on a real coordinate, got {lane}"
         );
     }
+}
+
+#[test]
+fn test_route_lane_steps_around_a_table_in_the_corridor() {
+    let source = NodeBounds {
+        x: 0.0,
+        y: 0.0,
+        width: 100.0,
+        height: 80.0,
+    };
+    let target = NodeBounds {
+        x: 300.0,
+        y: 0.0,
+        width: 100.0,
+        height: 80.0,
+    };
+    // A third table parked in the middle of the corridor, right where the preferred
+    // lane (the midpoint, x = 200) would run.
+    let blocking = NodeBounds {
+        x: 180.0,
+        y: 0.0,
+        width: 60.0,
+        height: 200.0,
+    };
+
+    let route = route_foreign_key(source, target, 40.0, 40.0, 0, 1, &[blocking]);
+    let lane = lane_x(&route);
+
+    assert!(
+        lane <= 180.0 || lane >= 240.0,
+        "the vertical leg must not run through the table standing in the corridor, lane={lane}"
+    );
+    assert_axis_aligned(&route);
 }
