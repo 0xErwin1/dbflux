@@ -748,3 +748,33 @@ fn test_drag_snapping_lands_on_the_grid_lattice() {
         );
     }
 }
+
+#[test]
+fn test_route_between_nearly_touching_tables_does_not_panic() {
+    // Tables dragged by hand, or placed radially, can sit closer together than the
+    // anchor gap. That leaves a corridor narrower than the anchors need, and the
+    // lane clamp used to panic on the inverted range.
+    for gap in [0.0_f32, 2.0, 8.0, 11.0, 12.0, 64.0] {
+        let source = NodeBounds {
+            x: -600.0,
+            y: 0.0,
+            width: 100.0,
+            height: 80.0,
+        };
+        let target = NodeBounds {
+            x: -500.0 + gap,
+            y: 40.0,
+            width: 100.0,
+            height: 80.0,
+        };
+
+        let route = route_foreign_key(source, target, 30.0, 30.0, 0, 3);
+
+        assert_axis_aligned(&route);
+        let lane = lane_x(&route);
+        assert!(
+            lane.is_finite(),
+            "gap {gap}: the vertical leg must land on a real coordinate, got {lane}"
+        );
+    }
+}

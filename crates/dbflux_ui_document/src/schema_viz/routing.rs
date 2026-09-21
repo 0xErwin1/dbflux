@@ -177,9 +177,15 @@ fn between_columns_route(
         )
     };
 
-    // Keep the lane inside the corridor: a bundle wider than the gutter would
-    // otherwise push its outermost edges into a node.
-    let lane_x = ((exit_x + entry_x) / 2.0 + lane_offset).clamp(corridor_low, corridor_high);
+    // Keep the lane inside the corridor, but only when there is one: tables dragged
+    // close together can leave less room than the anchor gap, and an inverted range
+    // makes `clamp` panic. In that case the leg runs down the midpoint instead.
+    let midpoint = (exit_x + entry_x) / 2.0;
+    let lane_x = if corridor_low <= corridor_high {
+        (midpoint + lane_offset).clamp(corridor_low, corridor_high)
+    } else {
+        midpoint
+    };
 
     OrthogonalRoute::two_ended(vec![
         RoutePoint {
