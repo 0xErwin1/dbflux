@@ -235,6 +235,13 @@ pub fn dispatch(conn: &dyn Connection, body: DriverRequestBody) -> DriverRespons
             }
         }
 
+        DriverRequestBody::SchemaColumns { database, schema } => {
+            match conn.schema_columns(&database, schema.as_deref()) {
+                Ok(columns) => DriverResponseBody::SchemaColumns { columns },
+                Err(e) => db_error_to_response(e),
+            }
+        }
+
         // === Key-Value operations ===
         DriverRequestBody::KvScanKeys { request } => dispatch_kv(conn, |kv| {
             kv.scan_keys(&request)

@@ -9,12 +9,13 @@ use dbflux_core::{
     KeyPersistRequest, KeyRenameRequest, KeyScanPage, KeyScanRequest, KeySetRequest, KeyTtlRequest,
     KeyType, KeyTypeRequest, KeyValueApi, LanguageService, ListPushRequest, ListRemoveRequest,
     ListSetRequest, QueryHandle, QueryRequest, QueryResult, RowDelete, RowInsert, RowPatch,
-    SchemaFeatures, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot,
-    SemanticPlan, SemanticRequest, SetAddRequest, SetRemoveRequest, SqlDialect, StreamAddRequest,
-    StreamDeleteRequest, TableBrowseRequest, TableCountRequest, TableInfo, ViewInfo,
-    ZSetAddRequest, ZSetRemoveRequest,
+    SchemaColumnInfo, SchemaFeatures, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy,
+    SchemaSnapshot, SemanticPlan, SemanticRequest, SetAddRequest, SetRemoveRequest, SqlDialect,
+    StreamAddRequest, StreamDeleteRequest, TableBrowseRequest, TableCountRequest, TableInfo,
+    ViewInfo, ZSetAddRequest, ZSetRemoveRequest,
 };
 use dbflux_ipc::driver_protocol::{DriverRequestBody, DriverResponseBody};
+use dbflux_ipc::{DRIVER_RPC_VERSION, ProtocolVersion};
 
 use crate::transport::RpcClient;
 use uuid::Uuid;
@@ -225,6 +226,18 @@ impl Connection for IpcConnection {
     ) -> Result<Vec<SchemaForeignKeyInfo>, DbError> {
         self.client
             .schema_foreign_keys(self.session_id, database, schema)
+            .map_err(DbError::from)
+    }
+
+    fn schema_columns(
+        &self,
+        database: &str,
+        schema: Option<&str>,
+    ) -> Result<Vec<SchemaColumnInfo>, DbError> {
+        ensure_bulk_schema_columns_supported(self.client.selected_version())?;
+
+        self.client
+            .schema_columns(self.session_id, database, schema)
             .map_err(DbError::from)
     }
 
@@ -506,5 +519,54 @@ impl KeyValueApi for IpcConnection {
             DriverResponseBody::Error(e) => Err(DbError::QueryFailed(e.message.into())),
             _ => Err(DbError::QueryFailed("Unexpected KV response".into())),
         }
+    }
+}
+
+/// Whether bulk schema column loads (`SchemaColumns`) are available on the
+/// negotiated driver RPC version. Introduced in v1.4; mirrors
+/// `protocol_supports_semantic_planning` in the transport, which assumes
+/// future major versions stay forward-compatible.
+fn protocol_supports_bulk_schema_columns(version: ProtocolVersion) -> bool {
+    version.major > DRIVER_RPC_VERSION.major
+        || (version.major == DRIVER_RPC_VERSION.major && version.minor >= 4)
+}
+
+/// Refuse bulk schema column loads locally, before anything is sent, when the
+/// negotiated driver RPC version predates the `SchemaColumns` request. The
+/// `NotSupported` error is the established "no bulk path" signal, so consumers
+/// fall back to per-table `table_details` loads.
+#[allow(clippy::result_large_err)]
+fn ensure_bulk_schema_columns_supported(version: ProtocolVersion) -> Result<(), DbError> {
+    if !protocol_supports_bulk_schema_columns(version) {
+        return Err(DbError::NotSupported(
+            "the negotiated driver RPC protocol does not support bulk schema column loads"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ensure_bulk_schema_columns_supported;
+    use dbflux_core::DbError;
+    use dbflux_ipc::ProtocolVersion;
+
+    #[test]
+    fn bulk_schema_columns_refused_below_v1_4() {
+        let result = ensure_bulk_schema_columns_supported(ProtocolVersion::new(1, 3));
+
+        match result {
+            Err(DbError::NotSupported(message)) => {
+                assert!(message.contains("bulk schema column loads"));
+            }
+            other => panic!("expected NotSupported refusal, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn bulk_schema_columns_allowed_from_v1_4() {
+        assert!(ensure_bulk_schema_columns_supported(ProtocolVersion::new(1, 4)).is_ok());
+        assert!(ensure_bulk_schema_columns_supported(ProtocolVersion::new(1, 5)).is_ok());
     }
 }

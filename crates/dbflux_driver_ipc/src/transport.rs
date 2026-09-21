@@ -716,6 +716,29 @@ impl RpcClient {
         }
     }
 
+    pub fn schema_columns(
+        &self,
+        session_id: Uuid,
+        database: &str,
+        schema: Option<&str>,
+    ) -> Result<Vec<dbflux_core::SchemaColumnInfo>, RpcError> {
+        let body = self.call(
+            Some(session_id),
+            DriverRequestBody::SchemaColumns {
+                database: database.to_string(),
+                schema: schema.map(|s| s.to_string()),
+            },
+        )?;
+
+        match body {
+            DriverResponseBody::SchemaColumns { columns } => Ok(columns),
+            DriverResponseBody::Error(e) => Err(RpcError::Driver(e.message)),
+            _ => Err(RpcError::Protocol(
+                "Unexpected response to SchemaColumns".into(),
+            )),
+        }
+    }
+
     // === Key-Value operations ===
 
     pub fn kv_call(

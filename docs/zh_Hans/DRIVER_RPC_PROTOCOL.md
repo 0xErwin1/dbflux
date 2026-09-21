@@ -89,6 +89,7 @@ DriverRequestBody::Hello(DriverHelloRequest {
         ProtocolVersion::new(1, 1),
         ProtocolVersion::new(1, 2),
         ProtocolVersion::new(1, 3),
+        ProtocolVersion::new(1, 4),
     ],
     requested_capabilities: vec![
         DriverCapability::Cancellation,
@@ -165,6 +166,12 @@ DriverResponseBody::Hello(DriverHelloResponse {
 - `TooLarge { size_bytes, limit_bytes }` — 因超过 `max_value_bytes` 而未获取该值；`value` 为空。
 
 这两个字段都是既有请求/响应类型上的普通结构体字段（带 `#[serde(default)]`），并非新增的能力标志：`Hello` 协商不对其设限，忽略 `max_value_bytes` 的驱动只会始终返回 `Loaded`。
+
+### 批量读取模式列（v1.4+）
+
+`SchemaColumns { database, schema }` 通过一次调用获取某个模式下所有关系的列，并返回 `SchemaColumns { columns: Vec<SchemaColumnInfo> }`，其中每条记录都在常规的 `ColumnInfo` 旁带有其 `table_name`。宿主进程将该请求分发到连接的 `schema_columns` 接缝，处理方式与 `SchemaIndexes` 和 `SchemaForeignKeys` 完全一致。
+
+与上面的 v1.3 字段不同，该操作在线路上并非追加式变更：帧使用 postcard 编码，它以 varint 判别式索引而非名称来标记枚举变体。因此 `SchemaColumns` 被追加在请求与响应枚举中最后一个 v1.3 变体之后；若将其插入枚举中部，会使之后所有变体的索引整体后移，协商 v1.3 的对端会把移位后的变体解码成错误的变体，并使帧的剩余部分无法解码，导致流失去同步。客户端还在本地进行版本拦截：当协商的次版本低于 1.4 时，`IpcConnection::schema_columns` 检查 `Hello` 期间选定的版本，直接返回 `DbError::NotSupported` 而不发送任何内容，因此旧宿主进程根本不会收到新变体。消费者对该错误的处理与 trait 默认的 `NotSupported` 相同：回退到按表的 `table_details` 加载。
 
 ## 认证提供程序 RPC 契约
 

@@ -4,13 +4,23 @@ use std::thread;
 use dbflux_core::{DatabaseCategory, DbKind, DriverFormDef, DriverMetadataBuilder, QueryLanguage};
 use dbflux_ipc::audit::AuditEventEmitDto;
 use dbflux_ipc::{
-    DRIVER_RPC_VERSION,
+    ProtocolVersion,
     driver_protocol::{
         DriverCapability, DriverHelloResponse, DriverRequestEnvelope, DriverResponseBody,
         DriverResponseEnvelope,
     },
-    driver_rpc_supported_versions, driver_socket_name, framing,
+    driver_socket_name, framing,
 };
+
+/// Protocol version the fake advertises in `Hello` and stamps on every frame.
+///
+/// Deliberately pinned to v1.3. `run_server` has no per-request dispatch: it
+/// reads one request per configured [`FakeDriverAction`] and replays the
+/// script whatever the request body contains, so it serves no v1.4 operations
+/// (e.g. `SchemaColumns`). Advertizing the current `DRIVER_RPC_VERSION` would
+/// claim a feature set the fake does not implement.
+const FAKE_DRIVER_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(1, 3);
+
 use interprocess::local_socket::{ListenerNonblockingMode::Neither, ListenerOptions};
 
 /// Script of actions for the fake driver server to perform on each connection.
@@ -117,7 +127,7 @@ fn run_server(
             match action {
                 FakeDriverAction::Pong => {
                     let pong = DriverResponseEnvelope::ok(
-                        DRIVER_RPC_VERSION,
+                        FAKE_DRIVER_PROTOCOL_VERSION,
                         request.request_id,
                         request.session_id,
                         DriverResponseBody::Pong,
@@ -127,7 +137,7 @@ fn run_server(
 
                 FakeDriverAction::EmitAuditThenPong(dto) => {
                     let audit_frame = DriverResponseEnvelope {
-                        protocol_version: DRIVER_RPC_VERSION,
+                        protocol_version: FAKE_DRIVER_PROTOCOL_VERSION,
                         request_id: request.request_id,
                         session_id: request.session_id,
                         done: false,
@@ -136,7 +146,7 @@ fn run_server(
                     framing::send_msg(&mut stream, &audit_frame)?;
 
                     let pong = DriverResponseEnvelope::ok(
-                        DRIVER_RPC_VERSION,
+                        FAKE_DRIVER_PROTOCOL_VERSION,
                         request.request_id,
                         request.session_id,
                         DriverResponseBody::Pong,
@@ -147,7 +157,7 @@ fn run_server(
                 FakeDriverAction::EmitNAuditThenPong(n, dto) => {
                     for _ in 0..*n {
                         let audit_frame = DriverResponseEnvelope {
-                            protocol_version: DRIVER_RPC_VERSION,
+                            protocol_version: FAKE_DRIVER_PROTOCOL_VERSION,
                             request_id: request.request_id,
                             session_id: request.session_id,
                             done: false,
@@ -157,7 +167,7 @@ fn run_server(
                     }
 
                     let pong = DriverResponseEnvelope::ok(
-                        DRIVER_RPC_VERSION,
+                        FAKE_DRIVER_PROTOCOL_VERSION,
                         request.request_id,
                         request.session_id,
                         DriverResponseBody::Pong,
@@ -188,7 +198,7 @@ fn build_hello_response(config: &FakeDriverRpcConfig, request_id: u64) -> Driver
     let hello = DriverHelloResponse {
         server_name: "fake-rpc-host".to_string(),
         server_version: "0.0.1".to_string(),
-        selected_version: negotiate_version(),
+        selected_version: FAKE_DRIVER_PROTOCOL_VERSION,
         capabilities,
         driver_kind: DbKind::SQLite,
         driver_metadata: metadata,
@@ -197,17 +207,22 @@ fn build_hello_response(config: &FakeDriverRpcConfig, request_id: u64) -> Driver
     };
 
     DriverResponseEnvelope::ok(
-        DRIVER_RPC_VERSION,
+        FAKE_DRIVER_PROTOCOL_VERSION,
         request_id,
         None,
         DriverResponseBody::Hello(hello),
     )
 }
 
-fn negotiate_version() -> dbflux_ipc::ProtocolVersion {
-    driver_rpc_supported_versions()
-        .iter()
-        .copied()
-        .max_by_key(|v| (v.major, v.minor))
-        .unwrap_or(DRIVER_RPC_VERSION)
+#[cfg(test)]
+mod tests {
+    use super::FAKE_DRIVER_PROTOCOL_VERSION;
+    use dbflux_ipc::{DRIVER_RPC_VERSION, ProtocolVersion};
+
+    #[test]
+    fn fake_pins_v1_3_below_the_current_protocol_version() {
+        assert_eq!(FAKE_DRIVER_PROTOCOL_VERSION, ProtocolVersion::new(1, 3));
+        assert_eq!(FAKE_DRIVER_PROTOCOL_VERSION.major, DRIVER_RPC_VERSION.major);
+        assert!(FAKE_DRIVER_PROTOCOL_VERSION.minor < DRIVER_RPC_VERSION.minor);
+    }
 }
