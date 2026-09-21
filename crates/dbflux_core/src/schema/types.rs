@@ -780,6 +780,13 @@ pub struct SchemaForeignKeyInfo {
     pub on_update: Option<String>,
 }
 
+/// Schema-level column info (includes table name for bulk per-schema loads).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SchemaColumnInfo {
+    pub table_name: String,
+    pub column: ColumnInfo,
+}
+
 /// Routine kind, mapped from engine metadata (e.g. PostgreSQL pg_proc.prokind).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RoutineKind {
