@@ -3054,34 +3054,42 @@ fn get_foreign_keys(
     schema: &str,
     table: &str,
 ) -> Result<Vec<ForeignKeyInfo>, DbError> {
-    // Use a simpler query that avoids complex array_agg issues
-    // Query each FK constraint individually with its columns
-    // Cast sql_identifier to text to avoid deserialization issues
+    // Introspect pg_constraint directly: the four-way information_schema join
+    // was expensive, and key_column_usage joined against constraint_column_usage
+    // pairs composite-FK columns only by luck. conkey/confkey are unnested
+    // together so local and referenced columns pair positionally.
     let rows = client
         .query(
             r#"
             SELECT
-                kcu.constraint_name::text,
-                kcu.column_name::text,
-                ccu.table_schema::text as referenced_schema,
-                ccu.table_name::text as referenced_table,
-                ccu.column_name::text as referenced_column,
-                rc.delete_rule::text,
-                rc.update_rule::text
-            FROM information_schema.key_column_usage kcu
-            JOIN information_schema.table_constraints tc
-                ON kcu.constraint_name = tc.constraint_name
-                AND kcu.table_schema = tc.table_schema
-            JOIN information_schema.constraint_column_usage ccu
-                ON kcu.constraint_name = ccu.constraint_name
-                AND kcu.constraint_schema = ccu.constraint_schema
-            JOIN information_schema.referential_constraints rc
-                ON kcu.constraint_name = rc.constraint_name
-                AND kcu.constraint_schema = rc.constraint_schema
-            WHERE tc.constraint_type = 'FOREIGN KEY'
-                AND kcu.table_schema = $1
-                AND kcu.table_name = $2
-            ORDER BY kcu.constraint_name, kcu.ordinal_position
+                con.conname::text,
+                la.attname::text,
+                rn.nspname::text AS referenced_schema,
+                rt.relname::text AS referenced_table,
+                ra.attname::text AS referenced_column,
+                CASE con.confdeltype
+                    WHEN 'a' THEN NULL WHEN 'r' THEN 'RESTRICT' WHEN 'c' THEN 'CASCADE'
+                    WHEN 'n' THEN 'SET NULL' WHEN 'd' THEN 'SET DEFAULT'
+                END::text AS delete_rule,
+                CASE con.confupdtype
+                    WHEN 'a' THEN NULL WHEN 'r' THEN 'RESTRICT' WHEN 'c' THEN 'CASCADE'
+                    WHEN 'n' THEN 'SET NULL' WHEN 'd' THEN 'SET DEFAULT'
+                END::text AS update_rule
+            FROM pg_catalog.pg_constraint con
+            JOIN pg_catalog.pg_class r ON r.oid = con.conrelid
+            JOIN pg_catalog.pg_namespace n ON n.oid = r.relnamespace
+            JOIN LATERAL unnest(con.conkey, con.confkey)
+                WITH ORDINALITY AS k(local_attnum, ref_attnum, ord) ON true
+            JOIN pg_catalog.pg_attribute la
+                ON la.attrelid = con.conrelid AND la.attnum = k.local_attnum
+            JOIN pg_catalog.pg_attribute ra
+                ON ra.attrelid = con.confrelid AND ra.attnum = k.ref_attnum
+            JOIN pg_catalog.pg_class rt ON rt.oid = con.confrelid
+            JOIN pg_catalog.pg_namespace rn ON rn.oid = rt.relnamespace
+            WHERE con.contype = 'f'
+                AND n.nspname = $1
+                AND r.relname = $2
+            ORDER BY con.conname, k.ord
             "#,
             &[&schema, &table],
         )
@@ -3128,30 +3136,34 @@ fn get_constraints(
     schema: &str,
     table: &str,
 ) -> Result<Vec<ConstraintInfo>, DbError> {
+    // pg_constraint keeps the CHECK/UNIQUE scope; conbin is deparsed directly
+    // because pg_get_constraintdef would wrap the expression as CHECK (...).
+    // contype 'c' < 'u' preserves the old CHECK-before-UNIQUE ordering.
     let rows = client
         .query(
             r#"
             SELECT
-                tc.constraint_name,
-                tc.constraint_type,
+                con.conname::text,
+                con.contype::text,
                 COALESCE(
-                    array_agg(kcu.column_name ORDER BY kcu.ordinal_position)
-                    FILTER (WHERE kcu.column_name IS NOT NULL),
+                    ARRAY_AGG(la.attname::text ORDER BY k.ord),
                     ARRAY[]::text[]
-                ) as columns,
-                cc.check_clause
-            FROM information_schema.table_constraints tc
-            LEFT JOIN information_schema.key_column_usage kcu
-                ON tc.constraint_name = kcu.constraint_name
-                AND tc.table_schema = kcu.table_schema
-            LEFT JOIN information_schema.check_constraints cc
-                ON tc.constraint_name = cc.constraint_name
-                AND tc.constraint_schema = cc.constraint_schema
-            WHERE tc.table_schema = $1
-                AND tc.table_name = $2
-                AND tc.constraint_type IN ('CHECK', 'UNIQUE')
-            GROUP BY tc.constraint_name, tc.constraint_type, cc.check_clause
-            ORDER BY tc.constraint_type, tc.constraint_name
+                ) AS columns,
+                CASE WHEN con.contype = 'c'
+                    THEN pg_get_expr(con.conbin, con.conrelid)
+                END AS check_clause
+            FROM pg_catalog.pg_constraint con
+            JOIN pg_catalog.pg_class r ON r.oid = con.conrelid
+            JOIN pg_catalog.pg_namespace n ON n.oid = r.relnamespace
+            LEFT JOIN LATERAL unnest(con.conkey)
+                WITH ORDINALITY AS k(local_attnum, ord) ON true
+            LEFT JOIN pg_catalog.pg_attribute la
+                ON la.attrelid = con.conrelid AND la.attnum = k.local_attnum
+            WHERE con.contype IN ('c', 'u')
+                AND n.nspname = $1
+                AND r.relname = $2
+            GROUP BY con.conname, con.contype, con.conbin, con.conrelid
+            ORDER BY con.contype, con.conname
             "#,
             &[&schema, &table],
         )
@@ -3161,13 +3173,13 @@ fn get_constraints(
         .iter()
         .filter_map(|row| {
             let name: String = row.try_get(0).ok()?;
-            let constraint_type: String = row.try_get(1).ok()?;
+            let contype: String = row.try_get(1).ok()?;
             let columns: Vec<String> = row.try_get(2).ok().unwrap_or_default();
             let check_clause: Option<String> = row.try_get(3).ok().flatten();
 
-            let kind = match constraint_type.as_str() {
-                "CHECK" => ConstraintKind::Check,
-                "UNIQUE" => ConstraintKind::Unique,
+            let kind = match contype.as_str() {
+                "c" => ConstraintKind::Check,
+                "u" => ConstraintKind::Unique,
                 _ => return None,
             };
 
@@ -5029,31 +5041,39 @@ fn get_schema_foreign_keys(
     client: &mut Client,
     schema: &str,
 ) -> Result<Vec<SchemaForeignKeyInfo>, DbError> {
+    // Same pg_constraint query as get_foreign_keys, without the table filter.
     let rows = client
         .query(
             r#"
             SELECT
-                kcu.constraint_name::text,
-                kcu.table_name::text,
-                kcu.column_name::text,
-                ccu.table_schema::text as referenced_schema,
-                ccu.table_name::text as referenced_table,
-                ccu.column_name::text as referenced_column,
-                rc.delete_rule::text,
-                rc.update_rule::text
-            FROM information_schema.key_column_usage kcu
-            JOIN information_schema.table_constraints tc
-                ON kcu.constraint_name = tc.constraint_name
-                AND kcu.table_schema = tc.table_schema
-            JOIN information_schema.constraint_column_usage ccu
-                ON kcu.constraint_name = ccu.constraint_name
-                AND kcu.constraint_schema = ccu.constraint_schema
-            JOIN information_schema.referential_constraints rc
-                ON kcu.constraint_name = rc.constraint_name
-                AND kcu.constraint_schema = rc.constraint_schema
-            WHERE tc.constraint_type = 'FOREIGN KEY'
-                AND kcu.table_schema = $1
-            ORDER BY kcu.table_name, kcu.constraint_name, kcu.ordinal_position
+                con.conname::text,
+                r.relname::text AS table_name,
+                la.attname::text,
+                rn.nspname::text AS referenced_schema,
+                rt.relname::text AS referenced_table,
+                ra.attname::text AS referenced_column,
+                CASE con.confdeltype
+                    WHEN 'a' THEN NULL WHEN 'r' THEN 'RESTRICT' WHEN 'c' THEN 'CASCADE'
+                    WHEN 'n' THEN 'SET NULL' WHEN 'd' THEN 'SET DEFAULT'
+                END::text AS delete_rule,
+                CASE con.confupdtype
+                    WHEN 'a' THEN NULL WHEN 'r' THEN 'RESTRICT' WHEN 'c' THEN 'CASCADE'
+                    WHEN 'n' THEN 'SET NULL' WHEN 'd' THEN 'SET DEFAULT'
+                END::text AS update_rule
+            FROM pg_catalog.pg_constraint con
+            JOIN pg_catalog.pg_class r ON r.oid = con.conrelid
+            JOIN pg_catalog.pg_namespace n ON n.oid = r.relnamespace
+            JOIN LATERAL unnest(con.conkey, con.confkey)
+                WITH ORDINALITY AS k(local_attnum, ref_attnum, ord) ON true
+            JOIN pg_catalog.pg_attribute la
+                ON la.attrelid = con.conrelid AND la.attnum = k.local_attnum
+            JOIN pg_catalog.pg_attribute ra
+                ON ra.attrelid = con.confrelid AND ra.attnum = k.ref_attnum
+            JOIN pg_catalog.pg_class rt ON rt.oid = con.confrelid
+            JOIN pg_catalog.pg_namespace rn ON rn.oid = rt.relnamespace
+            WHERE con.contype = 'f'
+                AND n.nspname = $1
+            ORDER BY r.relname, con.conname, k.ord
             "#,
             &[&schema],
         )
@@ -5164,7 +5184,7 @@ fn collect_filter_values(filter: &Value, params: &mut Vec<Value>) {
 /// Covers:
 ///  - Views (`pg_class.relkind = 'v'`) depending on the table via `pg_depend`.
 ///  - Materialized views (`pg_class.relkind = 'm'`).
-///  - Tables with a foreign-key referencing this table (`information_schema`).
+///  - Tables with a foreign-key referencing this table (`pg_constraint`).
 ///  - Triggers defined on the table.
 ///
 /// Returns an error if the query fails; returns an empty `Vec` when the table
@@ -5215,24 +5235,28 @@ pub fn fetch_dependents(
         });
     }
 
-    // FK child tables via information_schema
+    // FK child tables via pg_constraint: children are the FK constraints
+    // whose referenced side (confrelid) is the requested table.
     let fk_rows = client
         .query(
             "
         SELECT
-            kcu.table_schema AS child_schema,
-            kcu.table_name   AS child_table,
-            kcu.column_name  AS child_col
-        FROM information_schema.referential_constraints rc
-        JOIN information_schema.key_column_usage kcu
-          ON kcu.constraint_name = rc.constraint_name
-         AND kcu.constraint_schema = rc.constraint_schema
-        JOIN information_schema.key_column_usage pku
-          ON pku.constraint_name = rc.unique_constraint_name
-         AND pku.constraint_schema = rc.unique_constraint_schema
-        WHERE pku.table_schema = $1
-          AND pku.table_name   = $2
-        GROUP BY kcu.table_schema, kcu.table_name, kcu.column_name
+            cn.nspname::text AS child_schema,
+            cr.relname::text AS child_table,
+            la.attname::text AS child_col
+        FROM pg_catalog.pg_constraint con
+        JOIN pg_catalog.pg_class cr ON cr.oid = con.conrelid
+        JOIN pg_catalog.pg_namespace cn ON cn.oid = cr.relnamespace
+        JOIN pg_catalog.pg_class pr ON pr.oid = con.confrelid
+        JOIN pg_catalog.pg_namespace pn ON pn.oid = pr.relnamespace
+        JOIN LATERAL unnest(con.conkey)
+            WITH ORDINALITY AS k(local_attnum, ord) ON true
+        JOIN pg_catalog.pg_attribute la
+            ON la.attrelid = con.conrelid AND la.attnum = k.local_attnum
+        WHERE con.contype = 'f'
+          AND pn.nspname = $1
+          AND pr.relname = $2
+        GROUP BY cn.nspname, cr.relname, la.attname
         ",
             &[&schema, &table],
         )
