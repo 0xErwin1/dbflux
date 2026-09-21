@@ -30,11 +30,17 @@ pub const NODE_ROW_PX: f32 = 22.0;
 pub const NODE_INDEX_HEADER_PX: f32 = 20.0;
 pub const NODE_INDEX_ROW_PX: f32 = 18.0;
 
-const LAYER_SPACING_X: f32 = 320.0;
-const NODE_SPACING_Y: f32 = 40.0;
+/// Horizontal gutter between two layers of the layered layout. Each layer starts
+/// after the widest node of the previous one, so a wide table can never overlap
+/// its neighbour.
+const LAYER_GUTTER_X: f32 = 96.0;
+/// Vertical gutter between two stacked nodes.
+const NODE_SPACING_Y: f32 = 64.0;
 const CELL_WIDTH: f32 = 360.0;
-const COMPACT_CELL_SPACING_X: f32 = 20.0;
-const COMPACT_CELL_SPACING_Y: f32 = 20.0;
+/// Gutter between the columns of the grid layout.
+const CELL_GUTTER_X: f32 = 64.0;
+const COMPACT_CELL_SPACING_X: f32 = 48.0;
+const COMPACT_CELL_SPACING_Y: f32 = 48.0;
 
 /// Compute the pixel height of a node given its column count and toggle state.
 ///
@@ -243,11 +249,24 @@ fn layered_layout(graph: &SchemaGraph, show_types: bool, show_indexes: bool) -> 
         });
     }
 
-    let computed_max_layer = layers.keys().max().copied().unwrap_or(0);
     let mut nodes: HashMap<NodeIndex, NodeLayout> = HashMap::new();
 
-    for (layer_num, node_ids) in &layers {
-        let x = *layer_num as f32 * LAYER_SPACING_X;
+    // Layers are stacked left to right, each one starting after the widest node of
+    // the previous layer. A fixed stride let a node as wide as 640px overlap the
+    // next layer, which is part of why the diagram read as one solid block.
+    let mut layer_keys: Vec<usize> = layers.keys().copied().collect();
+    layer_keys.sort_unstable();
+
+    let mut layer_x = 0.0_f32;
+    for layer_num in layer_keys {
+        let Some(node_ids) = layers.get(&layer_num) else {
+            continue;
+        };
+        let layer_width = node_ids
+            .iter()
+            .filter_map(|&idx| graph.graph.node_weight(idx))
+            .map(|node_weight| compute_node_width(node_weight, show_types, show_indexes))
+            .fold(0.0_f32, f32::max);
 
         let mut y_cursor = 0.0_f32;
         for &idx in node_ids {
@@ -260,7 +279,7 @@ fn layered_layout(graph: &SchemaGraph, show_types: bool, show_indexes: bool) -> 
             nodes.insert(
                 idx,
                 NodeLayout {
-                    x,
+                    x: layer_x,
                     y: y_cursor,
                     width,
                     height,
@@ -268,12 +287,17 @@ fn layered_layout(graph: &SchemaGraph, show_types: bool, show_indexes: bool) -> 
             );
             y_cursor += height + NODE_SPACING_Y;
         }
+
+        layer_x += layer_width + LAYER_GUTTER_X;
     }
 
     let edges = build_edges(graph, &nodes);
 
-    let total_width = computed_max_layer as f32 * LAYER_SPACING_X
-        + nodes.values().map(|n| n.width).fold(0.0_f32, f32::max);
+    let total_width = if layers.is_empty() {
+        0.0_f32
+    } else {
+        (layer_x - LAYER_GUTTER_X).max(0.0_f32)
+    };
     let total_height = layers
         .values()
         .map(|ids| {
@@ -340,9 +364,10 @@ fn grid_layout(graph: &SchemaGraph, show_types: bool, show_indexes: bool) -> Lay
         }
     }
 
-    // Cell width based on maximum node width across all nodes.
+    // Cell width based on maximum node width across all nodes, plus a gutter so
+    // neighbouring columns never touch.
     let max_node_width = all_widths.iter().fold(0.0_f32, |acc, &w| acc.max(w));
-    let cell_width = max_node_width.max(CELL_WIDTH);
+    let cell_width = max_node_width.max(CELL_WIDTH) + CELL_GUTTER_X;
 
     // Second pass: place nodes using row y offsets.
     let mut nodes: HashMap<NodeIndex, NodeLayout> = HashMap::new();
@@ -1027,15 +1052,26 @@ mod tests {
             "Cyclic graph should use grid layout with multiple columns; got x values: {xs:?}"
         );
 
-        // Grid x positions must be multiples of CELL_WIDTH.
+        // Grid x positions must all sit on the same column stride. The stride is the
+        // widest node plus the gutter, so it is derived here instead of assumed.
+        let mut xs: Vec<f32> = layout.nodes.values().map(|l| l.x).collect();
+        xs.sort_by(|a, b| a.total_cmp(b));
+        xs.dedup();
+        let stride = match (xs.first(), xs.get(1)) {
+            (Some(first), Some(second)) => second - first,
+            _ => 0.0,
+        };
+        assert!(
+            stride > 0.0,
+            "expected more than one column, got x values: {xs:?}"
+        );
         for node_layout in layout.nodes.values() {
-            let col = (node_layout.x / CELL_WIDTH).round();
-            let expected_x = col * CELL_WIDTH;
+            let col = (node_layout.x / stride).round();
             assert!(
-                (node_layout.x - expected_x).abs() < 0.01,
-                "x={} is not a multiple of CELL_WIDTH={}",
+                (node_layout.x - col * stride).abs() < 0.01,
+                "x={} is not a multiple of the column stride {}",
                 node_layout.x,
-                CELL_WIDTH
+                stride
             );
         }
     }
