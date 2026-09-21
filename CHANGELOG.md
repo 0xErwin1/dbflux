@@ -85,6 +85,12 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **Composite foreign keys keep the constraint's own column order** — the referenced
+  columns came from a join between two catalog views that matched the constraint as a
+  set rather than by position, so a key spanning more than one column kept its pairing
+  only by accident of the order the catalog happened to return. The single-table view
+  and the whole-schema view now read the constraint's own column arrays in order.
+
 * **Enum columns whose type is outside `search_path` offer their values again** —
   the type name a column reports is schema-qualified when its type is not on the
   search path, while the lookup for the enum's labels used the bare type name, so
@@ -227,7 +233,9 @@ All notable changes to DBFlux will be documented in this file.
   hundred tables, could reach roughly five hundred. Metadata is now read once per
   schema and assembled in memory, which brings the same schema to about eleven
   queries and stops the cost from growing with the number of tables. A driver with
-  no bulk path still loads one table at a time.
+  no bulk path still loads one table at a time. The constraint and foreign-key
+  introspection also reads the catalog directly now instead of the standard
+  information views, which are four-way joins with privilege checks.
 
 * **Coupled schemas keep their depth** — when tables reference each other in a ring,
   the diagram no longer draws them as one tall column: the cycle is cut open and every

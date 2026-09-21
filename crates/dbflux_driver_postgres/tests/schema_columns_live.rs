@@ -7,7 +7,8 @@
 )]
 
 use dbflux_core::{
-    ColumnInfo, Connection, ConnectionProfile, DbConfig, DbDriver, DbError, IndexData, QueryRequest,
+    ColumnInfo, Connection, ConnectionProfile, ConstraintKind, DbConfig, DbDriver, DbError,
+    IndexData, QueryRequest,
 };
 use dbflux_driver_postgres::PostgresDriver;
 use dbflux_test_support::containers;
@@ -467,6 +468,207 @@ fn schema_indexes_and_foreign_keys_bulk_match_table_details_including_partitione
                 ["a".to_string(), "b".to_string()].as_slice()
             ),
             "composite foreign key columns must be present and paired correctly"
+        );
+
+        Ok(())
+    })
+}
+
+/// Pins the things the bulk-vs-per-table differential test cannot:
+///
+/// - referential action codes render exactly as the driver's contract has
+///   always rendered them (`Some("CASCADE")`, `Some("SET NULL")`, and
+///   `None` — never `Some("NO ACTION")`);
+/// - a three-column composite foreign key whose local and referenced columns
+///   have different names is paired positionally (the old cross-product of
+///   key_column_usage against constraint_column_usage cannot satisfy this);
+/// - a CHECK constraint's definition text is pinned to an exact string;
+/// - a UNIQUE constraint is still reported and a primary key is not.
+#[test]
+#[ignore = "requires Docker daemon"]
+fn schema_foreign_keys_pair_positionally_and_constraint_text_is_pinned() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let connection = connect_postgres(uri)?;
+
+        connection.execute(&QueryRequest::new("CREATE SCHEMA pgcat_check"))?;
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE pgcat_check.parents (
+                id integer PRIMARY KEY,
+                kind integer NOT NULL,
+                region_code text NOT NULL,
+                UNIQUE (id, kind, region_code)
+            )",
+        ))?;
+        // The composite key's local and referenced column names differ, so the
+        // column pairing can only be correct if it comes from the constraint's
+        // own conkey/confkey arrays; a cross-product cannot produce it.
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE pgcat_check.child (
+                id integer PRIMARY KEY,
+                owner_id integer NOT NULL,
+                owner_kind integer NOT NULL,
+                region text NOT NULL,
+                code text NOT NULL,
+                qty integer NOT NULL,
+                drop_col integer,
+                CONSTRAINT child_qty_check CHECK (qty > 0),
+                CONSTRAINT child_code_unique UNIQUE (code),
+                FOREIGN KEY (owner_id, owner_kind, region)
+                    REFERENCES pgcat_check.parents (id, kind, region_code)
+                        ON DELETE CASCADE
+                        ON UPDATE SET NULL,
+                FOREIGN KEY (drop_col) REFERENCES pgcat_check.parents (id)
+            )",
+        ))?;
+
+        // --- Per-table foreign keys --------------------------------------
+
+        let details = connection.table_details("postgres", Some("pgcat_check"), "child")?;
+        let foreign_keys = details
+            .foreign_keys
+            .unwrap_or_else(|| panic!("table_details(child) must report foreign keys"));
+
+        let composite = foreign_keys
+            .iter()
+            .find(|fk| fk.name == "child_owner_id_owner_kind_region_fkey")
+            .unwrap_or_else(|| {
+                panic!(
+                    "composite foreign key missing from {:?}",
+                    foreign_keys.iter().map(|fk| &fk.name).collect::<Vec<_>>()
+                )
+            });
+        assert_eq!(
+            composite.columns,
+            [
+                "owner_id".to_string(),
+                "owner_kind".to_string(),
+                "region".to_string()
+            ],
+            "local columns must follow the constraint's own conkey order"
+        );
+        assert_eq!(
+            composite.referenced_columns,
+            [
+                "id".to_string(),
+                "kind".to_string(),
+                "region_code".to_string()
+            ],
+            "referenced columns must pair positionally with the local columns"
+        );
+        assert_eq!(composite.referenced_schema.as_deref(), Some("pgcat_check"));
+        assert_eq!(composite.referenced_table, "parents");
+        assert_eq!(
+            (
+                composite.on_delete.as_deref(),
+                composite.on_update.as_deref()
+            ),
+            (Some("CASCADE"), Some("SET NULL")),
+            "referential actions must render exactly CASCADE and SET NULL"
+        );
+
+        let no_action = foreign_keys
+            .iter()
+            .find(|fk| fk.name == "child_drop_col_fkey")
+            .unwrap_or_else(|| {
+                panic!(
+                    "no-action foreign key missing from {:?}",
+                    foreign_keys.iter().map(|fk| &fk.name).collect::<Vec<_>>()
+                )
+            });
+        assert_eq!(
+            (
+                no_action.on_delete.as_deref(),
+                no_action.on_update.as_deref()
+            ),
+            (None, None),
+            "a key with no explicit action must render None, not Some(\"NO ACTION\")"
+        );
+
+        // --- Whole-schema foreign keys must agree ------------------------
+
+        let bulk_foreign_keys = connection.schema_foreign_keys("postgres", Some("pgcat_check"))?;
+        let bulk_composite = bulk_foreign_keys
+            .iter()
+            .find(|fk| {
+                fk.table_name == "child" && fk.name == "child_owner_id_owner_kind_region_fkey"
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "bulk foreign keys missing composite key; got {:?}",
+                    bulk_foreign_keys
+                        .iter()
+                        .map(|fk| (&fk.table_name, &fk.name))
+                        .collect::<Vec<_>>()
+                )
+            });
+        assert_eq!(
+            (
+                bulk_composite.columns.as_slice(),
+                bulk_composite.referenced_columns.as_slice()
+            ),
+            (
+                [
+                    "owner_id".to_string(),
+                    "owner_kind".to_string(),
+                    "region".to_string()
+                ]
+                .as_slice(),
+                [
+                    "id".to_string(),
+                    "kind".to_string(),
+                    "region_code".to_string()
+                ]
+                .as_slice()
+            ),
+            "the bulk path must pair composite columns positionally too"
+        );
+        assert_eq!(
+            (
+                bulk_composite.on_delete.as_deref(),
+                bulk_composite.on_update.as_deref()
+            ),
+            (Some("CASCADE"), Some("SET NULL"))
+        );
+        let bulk_no_action = bulk_foreign_keys
+            .iter()
+            .find(|fk| fk.table_name == "child" && fk.name == "child_drop_col_fkey")
+            .expect("bulk foreign keys must report the no-action key");
+        assert_eq!(
+            (
+                bulk_no_action.on_delete.as_deref(),
+                bulk_no_action.on_update.as_deref()
+            ),
+            (None, None)
+        );
+
+        // --- Constraints --------------------------------------------------
+
+        let constraints = details
+            .constraints
+            .unwrap_or_else(|| panic!("table_details(child) must report constraints"));
+
+        let check = constraints
+            .iter()
+            .find(|c| c.name == "child_qty_check")
+            .expect("CHECK constraint must be reported");
+        assert!(matches!(check.kind, ConstraintKind::Check));
+        assert_eq!(
+            check.check_clause.as_deref(),
+            Some("(qty > 0)"),
+            "CHECK definition text must be the bare deparsed expression"
+        );
+
+        let unique = constraints
+            .iter()
+            .find(|c| c.name == "child_code_unique")
+            .expect("UNIQUE constraint must be reported");
+        assert!(matches!(unique.kind, ConstraintKind::Unique));
+        assert_eq!(unique.columns, ["code".to_string()]);
+        assert_eq!(unique.check_clause, None);
+
+        assert!(
+            !constraints.iter().any(|c| c.name == "child_pkey"),
+            "the primary key must not be reported by this function"
         );
 
         Ok(())
