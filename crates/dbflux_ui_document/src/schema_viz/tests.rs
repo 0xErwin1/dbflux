@@ -11,19 +11,47 @@ use dbflux_schema_viz::{
 };
 use gpui::{Pixels, Point, px};
 
-fn route_midpoint(route: super::routing::CubicRoute) -> RoutePoint {
-    let t = 0.5_f32;
-    let one_minus_t = 1.0 - t;
-    RoutePoint {
-        x: one_minus_t.powi(3) * route.start.x
-            + 3.0 * one_minus_t.powi(2) * t * route.control1.x
-            + 3.0 * one_minus_t * t.powi(2) * route.control2.x
-            + t.powi(3) * route.end.x,
-        y: one_minus_t.powi(3) * route.start.y
-            + 3.0 * one_minus_t.powi(2) * t * route.control1.y
-            + 3.0 * one_minus_t * t.powi(2) * route.control2.y
-            + t.powi(3) * route.end.y,
+fn route_midpoint(route: &super::routing::OrthogonalRoute) -> RoutePoint {
+    let mut total = 0.0_f32;
+    for pair in route.points.windows(2) {
+        if let [a, b] = pair {
+            total += ((b.x - a.x).powi(2) + (b.y - a.y).powi(2)).sqrt();
+        }
     }
+
+    let mut remaining = total / 2.0;
+    for pair in route.points.windows(2) {
+        if let [a, b] = pair {
+            let length = ((b.x - a.x).powi(2) + (b.y - a.y).powi(2)).sqrt();
+            if length >= remaining && length > 0.0 {
+                let ratio = remaining / length;
+                return RoutePoint {
+                    x: a.x + (b.x - a.x) * ratio,
+                    y: a.y + (b.y - a.y) * ratio,
+                };
+            }
+            remaining -= length;
+        }
+    }
+
+    route.end()
+}
+
+/// Every segment of an orthogonal route shares an axis with the next point.
+fn assert_axis_aligned(route: &super::routing::OrthogonalRoute) {
+    for pair in route.points.windows(2) {
+        if let [a, b] = pair {
+            assert!(
+                (a.x - b.x).abs() < 0.01 || (a.y - b.y).abs() < 0.01,
+                "segment {a:?} -> {b:?} is diagonal; routes must be axis-aligned"
+            );
+        }
+    }
+}
+
+/// x of the vertical leg, i.e. the middle vertices of a four-point route.
+fn lane_x(route: &super::routing::OrthogonalRoute) -> f32 {
+    route.points.get(1).map(|p| p.x).unwrap_or_default()
 }
 
 fn make_table(name: &str, n_cols: usize) -> TableInfo {
@@ -289,8 +317,9 @@ fn test_route_left_to_right_uses_facing_ports() {
 
     let route = route_foreign_key(source, target, 30.0, 30.0, 0, 1);
 
-    assert!(route.start.x > source.x + source.width);
-    assert!(route.end.x < target.x);
+    assert!(route.start().x > source.x + source.width);
+    assert!(route.end().x < target.x);
+    assert_axis_aligned(&route);
 }
 
 #[test]
@@ -311,15 +340,19 @@ fn test_route_right_to_left_uses_facing_ports_and_corridor_controls() {
     let route = route_foreign_key(source, target, 30.0, 30.0, 0, 1);
 
     assert!(
-        route.start.x < source.x,
+        route.start().x < source.x,
         "source must exit from its left port"
     );
     assert!(
-        route.end.x > target.x + target.width,
+        route.end().x > target.x + target.width,
         "target must enter through its right port"
     );
-    assert!(route.control1.x < source.x && route.control1.x > target.x + target.width);
-    assert!(route.control2.x < source.x && route.control2.x > target.x + target.width);
+    let lane = lane_x(&route);
+    assert!(
+        lane > target.x + target.width && lane < source.x,
+        "the vertical leg must run in the corridor between the two columns, got {lane}"
+    );
+    assert_axis_aligned(&route);
 }
 
 #[test]
@@ -332,12 +365,14 @@ fn test_route_self_reference_equal_rows_stays_outside_node() {
     };
 
     let route = route_foreign_key(node, node, 40.0, 40.0, 0, 1);
-    let midpoint = route_midpoint(route);
+    let midpoint = route_midpoint(&route);
 
     assert_ne!(
-        route.start, route.end,
+        route.start(),
+        route.end(),
         "self-reference needs a visible loop"
     );
+    assert_axis_aligned(&route);
     assert!(
         midpoint.x < node.x
             || midpoint.x > node.x + node.width
@@ -366,6 +401,12 @@ fn test_route_parallel_foreign_keys_have_deterministic_distinct_lanes() {
     let second = route_foreign_key(source, target, 40.0, 40.0, 1, 2);
 
     assert_ne!(first, second, "parallel FKs need separate lanes");
+    assert_ne!(
+        lane_x(&first),
+        lane_x(&second),
+        "parallel FKs need distinct corridors"
+    );
+    assert_axis_aligned(&first);
     assert_eq!(first, route_foreign_key(source, target, 40.0, 40.0, 0, 2));
 }
 
@@ -387,13 +428,14 @@ fn test_route_overlapping_tables_uses_same_side_exterior_ports() {
     let route = route_foreign_key(source, target, 40.0, 40.0, 0, 1);
 
     assert!(
-        route.start.x < source.x,
+        route.start().x < source.x,
         "source must exit on the exterior side"
     );
     assert!(
-        route.end.x < target.x,
+        route.end().x < target.x,
         "target must enter on the exterior side"
     );
+    assert_axis_aligned(&route);
 }
 
 #[test]
@@ -428,34 +470,16 @@ fn test_route_translation_preserves_shape() {
     let route = route_foreign_key(source, target, 30.0, 50.0, 0, 1);
     let translated = route_foreign_key(translated_source, translated_target, 30.0, 50.0, 0, 1);
 
-    assert_eq!(
-        translated.start,
-        RoutePoint {
-            x: route.start.x + translation.x,
-            y: route.start.y + translation.y,
-        }
-    );
-    assert_eq!(
-        translated.control1,
-        RoutePoint {
-            x: route.control1.x + translation.x,
-            y: route.control1.y + translation.y,
-        }
-    );
-    assert_eq!(
-        translated.control2,
-        RoutePoint {
-            x: route.control2.x + translation.x,
-            y: route.control2.y + translation.y,
-        }
-    );
-    assert_eq!(
-        translated.end,
-        RoutePoint {
-            x: route.end.x + translation.x,
-            y: route.end.y + translation.y,
-        }
-    );
+    let expected: Vec<RoutePoint> = route
+        .points
+        .iter()
+        .map(|point| RoutePoint {
+            x: point.x + translation.x,
+            y: point.y + translation.y,
+        })
+        .collect();
+
+    assert_eq!(translated.points, expected);
 }
 
 #[test]
@@ -487,26 +511,18 @@ fn test_route_reverse_translation_preserves_shape() {
     let route = route_foreign_key(source, target, 30.0, 50.0, 0, 1);
     let translated = route_foreign_key(translated_source, translated_target, 30.0, 50.0, 0, 1);
 
+    let expected: Vec<RoutePoint> = route
+        .points
+        .iter()
+        .map(|point| RoutePoint {
+            x: point.x + translation.x,
+            y: point.y + translation.y,
+        })
+        .collect();
+
     assert_eq!(
         translated,
-        super::routing::CubicRoute {
-            start: RoutePoint {
-                x: route.start.x + translation.x,
-                y: route.start.y + translation.y,
-            },
-            control1: RoutePoint {
-                x: route.control1.x + translation.x,
-                y: route.control1.y + translation.y,
-            },
-            control2: RoutePoint {
-                x: route.control2.x + translation.x,
-                y: route.control2.y + translation.y,
-            },
-            end: RoutePoint {
-                x: route.end.x + translation.x,
-                y: route.end.y + translation.y,
-            },
-        }
+        super::routing::OrthogonalRoute { points: expected }
     );
 }
 
@@ -521,9 +537,12 @@ fn test_route_self_reference_distinct_rows_stays_outside_node() {
 
     let route = route_foreign_key(node, node, 30.0, 70.0, 0, 1);
 
-    assert!(route.start.x < node.x && route.end.x < node.x);
-    assert!(route.control1.x < node.x && route.control2.x < node.x);
-    assert!(route_midpoint(route).x < node.x);
+    assert!(
+        route.points.iter().all(|point| point.x < node.x),
+        "a self reference must loop outside its own node"
+    );
+    assert!(route_midpoint(&route).x < node.x);
+    assert_axis_aligned(&route);
 }
 
 #[test]
@@ -659,6 +678,103 @@ fn pixel_aligned_pan_keeps_raw_pan_for_invalid_display_scale() {
         assert_eq!(
             pixel_aligned_diagram_pan(raw_pan, point(0.2, -0.1), 1.5, invalid_scale),
             raw_pan
+        );
+    }
+}
+
+#[test]
+fn test_route_segments_are_axis_aligned_in_every_configuration() {
+    let source = NodeBounds {
+        x: 300.0,
+        y: 20.0,
+        width: 120.0,
+        height: 90.0,
+    };
+    let target_is_right = NodeBounds {
+        x: 600.0,
+        y: 40.0,
+        width: 120.0,
+        height: 90.0,
+    };
+    let target_is_left = NodeBounds {
+        x: 0.0,
+        y: 40.0,
+        width: 120.0,
+        height: 90.0,
+    };
+    let target_overlaps = NodeBounds {
+        x: 320.0,
+        y: 300.0,
+        width: 120.0,
+        height: 90.0,
+    };
+
+    for (target, label) in [
+        (target_is_right, "target to the right"),
+        (target_is_left, "target to the left"),
+        (target_overlaps, "target overlapping the source column"),
+    ] {
+        for (lane_rank, lane_count) in [(0, 1), (0, 3), (1, 3), (2, 3)] {
+            let route = route_foreign_key(source, target, 30.0, 50.0, lane_rank, lane_count);
+            assert!(
+                route.points.len() >= 2,
+                "{label} with {lane_rank}/{lane_count}: a route needs at least one segment"
+            );
+            assert_axis_aligned(&route);
+        }
+    }
+}
+
+#[test]
+fn test_drag_snapping_lands_on_the_grid_lattice() {
+    // The dot grid and the drag snap share one lattice, so a dropped table lines
+    // up with the background and with its neighbours.
+    for (input, expected) in [
+        (0.0_f32, 0.0_f32),
+        (11.9, 0.0),
+        (12.1, 24.0),
+        (-13.0, -24.0),
+        (100.0, 96.0),
+    ] {
+        let snapped = super::snap_to_lattice(input);
+        assert!(
+            (snapped - expected).abs() < 0.01,
+            "snap_to_lattice({input}) = {snapped}, expected {expected}"
+        );
+        assert!(
+            (snapped % super::GRID_LATTICE).abs() < 0.01
+                || (snapped % super::GRID_LATTICE - super::GRID_LATTICE).abs() < 0.01,
+            "{snapped} is not a multiple of the lattice"
+        );
+    }
+}
+
+#[test]
+fn test_route_between_nearly_touching_tables_does_not_panic() {
+    // Tables dragged by hand, or placed radially, can sit closer together than the
+    // anchor gap. That leaves a corridor narrower than the anchors need, and the
+    // lane clamp used to panic on the inverted range.
+    for gap in [0.0_f32, 2.0, 8.0, 11.0, 12.0, 64.0] {
+        let source = NodeBounds {
+            x: -600.0,
+            y: 0.0,
+            width: 100.0,
+            height: 80.0,
+        };
+        let target = NodeBounds {
+            x: -500.0 + gap,
+            y: 40.0,
+            width: 100.0,
+            height: 80.0,
+        };
+
+        let route = route_foreign_key(source, target, 30.0, 30.0, 0, 3);
+
+        assert_axis_aligned(&route);
+        let lane = lane_x(&route);
+        assert!(
+            lane.is_finite(),
+            "gap {gap}: the vertical leg must land on a real coordinate, got {lane}"
         );
     }
 }

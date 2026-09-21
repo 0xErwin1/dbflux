@@ -28,10 +28,19 @@ use crate::handle::DocumentEvent;
 use crate::types::{DocumentId, DocumentState};
 use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::icons::AppIcon;
-use dbflux_components::primitives::LoadingBlock;
+use dbflux_components::primitives::Spinner;
 use dbflux_components::tokens::{FontSizes, Spacing};
 use dbflux_ui_base::AppStateEntity;
 use dbflux_ui_base::toast::{PendingToast, flush_pending_toast};
+
+/// Spacing of the diagram's dot grid, in graph coordinates. Node drags and
+/// keyboard nudges land on this lattice, so tables line up instead of drifting.
+const GRID_LATTICE: f32 = 24.0;
+
+/// Rounds a graph-space coordinate onto the diagram lattice.
+fn snap_to_lattice(value: f32) -> f32 {
+    (value / GRID_LATTICE).round() * GRID_LATTICE
+}
 
 /// Direction for spatial selection navigation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -295,6 +304,8 @@ pub struct SchemaVizDocument {
     pub table_cap_warning: bool,
     // Cancellation
     cancel_token: Option<Arc<CancelToken>>,
+    /// Frame of the loading spinner, advanced by a timer while the schema loads.
+    loading_frame: usize,
     // Pending toast notification (set from sync context, flushed in render)
     pending_toast: Option<PendingToast>,
     // Toolbar dropdowns
@@ -405,6 +416,7 @@ impl SchemaVizDocument {
             show_indexes: false,
             table_cap_warning: false,
             cancel_token: None,
+            loading_frame: 0,
             pending_toast: None,
             layout_menu_open: false,
             export_menu_open: false,
@@ -522,6 +534,33 @@ impl SchemaVizDocument {
         let task = cx.background_executor().spawn(async move {
             Self::load_focused_schema_blocking(database, mode, connection, cancel_token)
         });
+
+        // Advance the loading spinner while the load runs. The future upgrades the
+        // document weakly on every tick, so a load that outlives its tab neither
+        // holds the document alive nor keeps ticking.
+        cx.spawn(async move |entity, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(Spinner::INTERVAL_MS))
+                    .await;
+
+                let still_loading = entity
+                    .update(cx, |doc, cx| {
+                        if !matches!(doc.load_status, LoadStatus::Loading) {
+                            return false;
+                        }
+                        doc.loading_frame = doc.loading_frame.wrapping_add(1);
+                        cx.notify();
+                        true
+                    })
+                    .unwrap_or(false);
+
+                if !still_loading {
+                    break;
+                }
+            }
+        })
+        .detach();
 
         // The load runs on a background task and can outlive its tab, or its
         // window. The future only ever upgrades a weak handle, after the await:
@@ -948,6 +987,55 @@ impl SchemaVizDocument {
     }
 
     /// Recomputes layout using the current format, focal, show_types, and show_indexes.
+    /// Fit the whole diagram into the viewport: pick the zoom that makes every node
+    /// visible and pan so the content starts at the top-left margin.
+    fn fit_to_view(&mut self) {
+        let (Some(graph), Some(layout)) = (&self.graph, &self.layout) else {
+            return;
+        };
+
+        let mut min_x = f32::MAX;
+        let mut min_y = f32::MAX;
+        let mut max_x = f32::MIN;
+        let mut max_y = f32::MIN;
+        for (idx, _) in graph.nodes() {
+            let Some(node_layout) = layout.nodes.get(&idx) else {
+                continue;
+            };
+            let (x, y) = self
+                .node_position_overrides
+                .get(&idx)
+                .map_or((node_layout.x, node_layout.y), |pos| (pos.x, pos.y));
+            min_x = min_x.min(x);
+            min_y = min_y.min(y);
+            max_x = max_x.max(x + node_layout.width);
+            max_y = max_y.max(y + node_layout.height);
+        }
+
+        if min_x > max_x || min_y > max_y {
+            return;
+        }
+
+        let content_width = (max_x - min_x).max(1.0);
+        let content_height = (max_y - min_y).max(1.0);
+        let viewport_width: f32 = self.viewport_size.width.into();
+        let viewport_height: f32 = self.viewport_size.height.into();
+        if viewport_width <= 0.0 || viewport_height <= 0.0 {
+            return;
+        }
+
+        let margin = 48.0_f32;
+        let zoom = ((viewport_width - margin) / content_width)
+            .min((viewport_height - margin) / content_height)
+            .clamp(0.25, 1.5);
+
+        self.zoom = zoom;
+        self.pan_offset = Point::new(
+            px(margin / 2.0 - min_x * zoom),
+            px(margin / 2.0 - min_y * zoom),
+        );
+    }
+
     fn recompute_layout(&mut self) {
         let Some(ref graph) = self.graph else {
             return;
@@ -1403,16 +1491,83 @@ impl SchemaVizDocument {
 
     fn render_loading(&self, cx: &mut Context<Self>) -> Div {
         let theme = cx.theme();
+        let card_bg = theme.secondary;
+        let border = theme.border;
+
+        // A diagram skeleton instead of a spinner floating in a void: an empty
+        // schema panel is large, and six placeholder cards read as "tables are
+        // coming" while the metadata load runs.
+        let placeholder = |rows: usize| {
+            div()
+                .w(px(200.0))
+                .rounded_md()
+                .border_1()
+                .border_color(border.opacity(0.45))
+                .bg(card_bg.opacity(0.35))
+                .p(Spacing::SM)
+                .flex()
+                .flex_col()
+                .gap(Spacing::XXS)
+                .child(
+                    div()
+                        .h(px(10.0))
+                        .w(px(110.0))
+                        .rounded_sm()
+                        .bg(border.opacity(0.55)),
+                )
+                .children((0..rows).map(|_| {
+                    div()
+                        .h(Spacing::SM)
+                        .w_full()
+                        .rounded_sm()
+                        .bg(border.opacity(0.25))
+                }))
+        };
+
         div()
             .flex()
+            .flex_col()
             .size_full()
             .items_center()
             .justify_center()
+            .gap(Spacing::XL)
             .bg(theme.background)
-            .child(LoadingBlock::loading(
-                Some(SharedString::from("Loading schema…")),
-                0,
-            ))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(Spacing::XS)
+                    .child(Spinner::new(self.loading_frame))
+                    .child(
+                        div()
+                            .text_size(FontSizes::SM)
+                            .text_color(theme.muted_foreground)
+                            .child("Loading schema…"),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(Spacing::XL)
+                    .opacity(0.75)
+                    .child(
+                        div()
+                            .flex()
+                            .gap(Spacing::XL)
+                            .child(placeholder(4))
+                            .child(placeholder(6))
+                            .child(placeholder(3)),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .gap(Spacing::XL)
+                            .child(placeholder(5))
+                            .child(placeholder(3))
+                            .child(placeholder(6)),
+                    ),
+            )
     }
 
     fn render_error(&self, msg: &str) -> Div {
@@ -1861,7 +2016,7 @@ impl SchemaVizDocument {
                 // T20: dot-grid background rendered via a single canvas element.
                 // Each dot is a 1.5px square painted at 24px lattice intersections.
                 let dot_color = border.opacity(0.35);
-                let dot_lattice = 24.0_f32;
+                let dot_lattice = GRID_LATTICE;
                 let dot_extent = 3000.0_f32;
                 let dot_size = px(1.5_f32);
                 let dot_grid = canvas(
@@ -2038,6 +2193,37 @@ impl SchemaVizDocument {
                             )
                             .child("Reset"),
                     )
+                    .child(
+                        div()
+                            .cursor_pointer()
+                            .px(Spacing::SM)
+                            .py(px(2.0))
+                            .rounded_sm()
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _, cx| {
+                                    this.node_position_overrides.clear();
+                                    this.recompute_layout();
+                                    cx.notify();
+                                }),
+                            )
+                            .child("Arrange"),
+                    )
+                    .child(
+                        div()
+                            .cursor_pointer()
+                            .px(Spacing::SM)
+                            .py(px(2.0))
+                            .rounded_sm()
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _, cx| {
+                                    this.fit_to_view();
+                                    cx.notify();
+                                }),
+                            )
+                            .child("Fit"),
+                    )
                     .child(div().w(px(1.0)).h(Spacing::LG).bg(border.opacity(0.5)))
                     // Layout dropdown
                     .child(
@@ -2165,8 +2351,10 @@ impl SchemaVizDocument {
                     // graph_x = (screen_x - drag_offset_x - pan_x) / zoom
                     let new_graph_x = (screen_x - off_x - pan_x) / zoom;
                     let new_graph_y = (screen_y - off_y - pan_y) / zoom;
-                    this.node_position_overrides
-                        .insert(node_idx, Point::new(new_graph_x, new_graph_y));
+                    this.node_position_overrides.insert(
+                        node_idx,
+                        Point::new(snap_to_lattice(new_graph_x), snap_to_lattice(new_graph_y)),
+                    );
                     cx.notify();
                     return;
                 }
@@ -2479,7 +2667,10 @@ impl SchemaVizDocument {
                         _ => return,
                     }
 
-                    this.node_position_overrides.insert(selected, new_pos);
+                    this.node_position_overrides.insert(
+                        selected,
+                        Point::new(snap_to_lattice(new_pos.x), snap_to_lattice(new_pos.y)),
+                    );
                     cx.notify();
                 }
             }))
@@ -2900,7 +3091,7 @@ impl SchemaVizDocument {
 
         // Collect all edge data before moving into the canvas closure.
         struct EdgeData {
-            route: routing::CubicRoute,
+            route: routing::OrthogonalRoute,
 
             dashed: bool,
         }
@@ -3028,47 +3219,39 @@ impl SchemaVizDocument {
                 let oy: f32 = bounds.origin.y.into();
 
                 for e in &edges {
-                    let fx = e.route.start.x + ox;
-                    let fy = e.route.start.y + oy;
-                    let tx = e.route.end.x + ox;
-                    let ty = e.route.end.y + oy;
-
-                    let ctrl1 =
-                        gpui::point(px(e.route.control1.x + ox), px(e.route.control1.y + oy));
-                    let ctrl2 =
-                        gpui::point(px(e.route.control2.x + ox), px(e.route.control2.y + oy));
-                    let from = gpui::point(px(fx), px(fy));
-                    let to = gpui::point(px(tx), px(ty));
+                    let start = e.route.start();
+                    let end = e.route.end();
+                    let ox_start = start.x + ox;
+                    let oy_start = start.y + oy;
+                    let ox_end = end.x + ox;
+                    let oy_end = end.y + oy;
+                    let color = if e.dashed { edge_color_dim } else { edge_color };
 
                     let mut builder = PathBuilder::stroke(px(1.5));
                     if e.dashed {
                         // FK edge dash on/off lengths are diagram stroke geometry, not UI spacing.
                         builder = builder.dash_array(&[px(6.0), px(4.0)]); // guardrail-allow: diagram stroke geometry
                     }
-                    builder.move_to(from);
-                    builder.cubic_bezier_to(to, ctrl1, ctrl2);
-
+                    for (position, point) in e.route.points.iter().enumerate() {
+                        let target = gpui::point(px(point.x + ox), px(point.y + oy));
+                        if position == 0 {
+                            builder.move_to(target);
+                        } else {
+                            builder.line_to(target);
+                        }
+                    }
                     if let Ok(path) = builder.build() {
-                        let color = if e.dashed { edge_color_dim } else { edge_color };
                         window.paint_path(path, color);
                     }
 
-                    // Arrowhead: small filled triangle at `to`, pointing from ctrl2 direction.
+                    // Arrowhead: small filled triangle at the referenced end, along the
+                    // direction the last segment enters with.
+                    let (ux, uy) = e.route.end_direction();
                     let arrow_len = 8.0_f32;
                     let arrow_half_base = 3.0_f32;
-                    let ctrl2_x: f32 = f32::from(ctrl2.x);
-                    let ctrl2_y: f32 = f32::from(ctrl2.y);
-                    let dx_arrow = tx - ctrl2_x;
-                    let dy_arrow = ty - ctrl2_y;
-                    let mag = (dx_arrow * dx_arrow + dy_arrow * dy_arrow)
-                        .sqrt()
-                        .max(0.001);
-                    let ux = dx_arrow / mag;
-                    let uy = dy_arrow / mag;
-
-                    let tip = gpui::point(px(tx), px(ty));
-                    let base_center_x = tx - ux * arrow_len;
-                    let base_center_y = ty - uy * arrow_len;
+                    let tip = gpui::point(px(ox_end), px(oy_end));
+                    let base_center_x = ox_end - ux * arrow_len;
+                    let base_center_y = oy_end - uy * arrow_len;
                     let left = gpui::point(
                         px(base_center_x - uy * arrow_half_base),
                         px(base_center_y + ux * arrow_half_base),
@@ -3085,8 +3268,46 @@ impl SchemaVizDocument {
                     arrow_builder.close();
 
                     if let Ok(arrow_path) = arrow_builder.build() {
-                        let color = if e.dashed { edge_color_dim } else { edge_color };
                         window.paint_path(arrow_path, color);
+                    }
+
+                    // Cardinality notation, as in an IDEF1X diagram: a crow's foot on the
+                    // table that declares the key (many) and a tick on the table it points
+                    // at (one), so the direction is readable without following the line.
+                    let (sx_dir, sy_dir) = e.route.start_direction();
+                    let (perp_x, perp_y) = (-sy_dir, sx_dir);
+                    let foot_len = 9.0_f32;
+                    let foot_spread = 4.5_f32;
+                    let base_x = ox_start + sx_dir * foot_len;
+                    let base_y = oy_start + sy_dir * foot_len;
+
+                    let mut foot_builder = PathBuilder::stroke(px(1.5));
+                    for offset in [-foot_spread, 0.0, foot_spread] {
+                        foot_builder.move_to(gpui::point(px(base_x), px(base_y)));
+                        foot_builder.line_to(gpui::point(
+                            px(ox_start + perp_x * offset),
+                            px(oy_start + perp_y * offset),
+                        ));
+                    }
+                    if let Ok(foot_path) = foot_builder.build() {
+                        window.paint_path(foot_path, color);
+                    }
+
+                    let tick_offset = 6.0_f32;
+                    let tick_half = 5.0_f32;
+                    let tick_x = ox_end - ux * tick_offset;
+                    let tick_y = oy_end - uy * tick_offset;
+                    let mut tick_builder = PathBuilder::stroke(px(1.5));
+                    tick_builder.move_to(gpui::point(
+                        px(tick_x + uy * tick_half),
+                        px(tick_y - ux * tick_half),
+                    ));
+                    tick_builder.line_to(gpui::point(
+                        px(tick_x - uy * tick_half),
+                        px(tick_y + ux * tick_half),
+                    ));
+                    if let Ok(tick_path) = tick_builder.build() {
+                        window.paint_path(tick_path, color);
                     }
                 }
             },
