@@ -37,6 +37,22 @@ use dbflux_ui_base::toast::{PendingToast, flush_pending_toast};
 /// keyboard nudges land on this lattice, so tables line up instead of drifting.
 const GRID_LATTICE: f32 = 24.0;
 
+/// Longest type name shown in a column row before it is cut short.
+///
+/// The row reserves a fixed slot for it, and the types that overflow it are the
+/// loud ones — `timestamp with time zone`, `character varying(255)` — whose first
+/// characters already identify them.
+const TYPE_NAME_CHARS: usize = 8;
+
+/// Shortens a column type to fit its row slot, keeping the tail visible.
+fn truncate_type_name(type_name: &str) -> String {
+    if type_name.chars().count() <= TYPE_NAME_CHARS {
+        return type_name.to_owned();
+    }
+    let head: String = type_name.chars().take(TYPE_NAME_CHARS - 1).collect();
+    format!("{head}…")
+}
+
 /// Rounds a graph-space coordinate onto the diagram lattice.
 fn snap_to_lattice(value: f32) -> f32 {
     (value / GRID_LATTICE).round() * GRID_LATTICE
@@ -2765,7 +2781,7 @@ impl SchemaVizDocument {
     /// `filled=true`: solid background badge. `filled=false`: outlined badge.
     fn render_column_badge(&self, label: &str, filled: bool, color: Hsla) -> impl IntoElement {
         let base = div()
-            .px(px(5.0))
+            .px(px(3.0))
             .py(px(1.0))
             .rounded_full()
             .text_size(FontSizes::XS)
@@ -2877,7 +2893,7 @@ impl SchemaVizDocument {
                     .items_center()
                     .justify_end()
                     .flex_shrink_0()
-                    .w(px(64.0))
+                    .w(px(56.0))
                     .gap(Spacing::XS)
                     .when(col.is_pk, |d| {
                         d.child(self.render_column_badge("PK", true, pk_color))
@@ -2910,11 +2926,11 @@ impl SchemaVizDocument {
                         d.child(
                             div()
                                 .flex_shrink_0()
-                                .w(px(72.0))
+                                .w(px(56.0))
                                 .overflow_hidden()
                                 .text_ellipsis()
                                 .text_color(muted_fg)
-                                .child(col.type_name.clone()),
+                                .child(truncate_type_name(&col.type_name)),
                         )
                     })
             })
@@ -3106,6 +3122,29 @@ impl SchemaVizDocument {
         }
         let mut next_lane_rank: HashMap<(NodeIndex, NodeIndex), usize> = HashMap::new();
 
+        // Node rectangles in world space, built once: the router needs them for the
+        // edge's own ends and to keep its lanes clear of every other table.
+        let mut bounds_by_node: HashMap<NodeIndex, routing::NodeBounds> = HashMap::new();
+        for (idx, _) in graph.nodes() {
+            let Some(node_layout) = layout.nodes.get(&idx) else {
+                continue;
+            };
+            let (x, y) = self
+                .node_position_overrides
+                .get(&idx)
+                .map_or((node_layout.x, node_layout.y), |pos| (pos.x, pos.y));
+            bounds_by_node.insert(
+                idx,
+                routing::NodeBounds {
+                    x,
+                    y,
+                    width: node_layout.width,
+                    height: node_layout.height,
+                },
+            );
+        }
+        let obstacles: Vec<routing::NodeBounds> = bounds_by_node.values().copied().collect();
+
         for edge_idx in graph.edge_indices() {
             let (source, target) = match graph.edge_endpoints(edge_idx) {
                 Some(endpoints) => endpoints,
@@ -3119,14 +3158,6 @@ impl SchemaVizDocument {
                 Some(w) => w,
                 None => continue,
             };
-            let from_layout = match layout.nodes.get(&source) {
-                Some(l) => l,
-                None => continue,
-            };
-            let to_layout = match layout.nodes.get(&target) {
-                Some(l) => l,
-                None => continue,
-            };
             let from_node_weight = match graph.node_weight(source) {
                 Some(n) => n,
                 None => continue,
@@ -3136,14 +3167,11 @@ impl SchemaVizDocument {
                 None => continue,
             };
 
-            let (from_x_base, from_y_base) = self
-                .node_position_overrides
-                .get(&source)
-                .map_or((from_layout.x, from_layout.y), |pos| (pos.x, pos.y));
-            let (to_x_base, to_y_base) = self
-                .node_position_overrides
-                .get(&target)
-                .map_or((to_layout.x, to_layout.y), |pos| (pos.x, pos.y));
+            let (Some(&source_bounds), Some(&target_bounds)) =
+                (bounds_by_node.get(&source), bounds_by_node.get(&target))
+            else {
+                continue;
+            };
 
             let from_col_y = edge_weight
                 .from_columns
@@ -3177,22 +3205,13 @@ impl SchemaVizDocument {
             // visually overlap the FK / PK badges inside the row.
 
             let route = routing::route_foreign_key(
-                routing::NodeBounds {
-                    x: from_x_base,
-                    y: from_y_base,
-                    width: from_layout.width,
-                    height: from_layout.height,
-                },
-                routing::NodeBounds {
-                    x: to_x_base,
-                    y: to_y_base,
-                    width: to_layout.width,
-                    height: to_layout.height,
-                },
+                source_bounds,
+                target_bounds,
                 from_col_y,
                 to_col_y,
                 lane_rank,
                 lane_count,
+                &obstacles,
             );
 
             // All edges render solid; the off-screen dashed variant was dropped.

@@ -116,6 +116,7 @@ pub(super) fn route_foreign_key(
     target_row_y: f32,
     lane_rank: usize,
     lane_count: usize,
+    obstacles: &[NodeBounds],
 ) -> OrthogonalRoute {
     let source_y = source.y + source_row_y;
     let target_y = target.y + target_row_y;
@@ -126,10 +127,26 @@ pub(super) fn route_foreign_key(
     }
 
     if source.right() <= target.left() {
-        return between_columns_route(source, target, source_y, target_y, lane_offset, true);
+        return between_columns_route(
+            source,
+            target,
+            source_y,
+            target_y,
+            lane_offset,
+            true,
+            obstacles,
+        );
     }
     if target.right() <= source.left() {
-        return between_columns_route(source, target, source_y, target_y, lane_offset, false);
+        return between_columns_route(
+            source,
+            target,
+            source_y,
+            target_y,
+            lane_offset,
+            false,
+            obstacles,
+        );
     }
 
     let use_left_side = source.center_x() <= target.center_x();
@@ -153,6 +170,7 @@ fn lane_offset(lane_rank: usize, lane_count: usize) -> f32 {
 
 /// Route between two nodes that face each other, running the vertical leg in the
 /// gutter that separates their columns.
+#[allow(clippy::too_many_arguments)]
 fn between_columns_route(
     source: NodeBounds,
     target: NodeBounds,
@@ -160,6 +178,7 @@ fn between_columns_route(
     target_y: f32,
     lane_offset: f32,
     target_is_right: bool,
+    obstacles: &[NodeBounds],
 ) -> OrthogonalRoute {
     let (exit_x, entry_x, corridor_low, corridor_high) = if target_is_right {
         (
@@ -182,7 +201,17 @@ fn between_columns_route(
     // makes `clamp` panic. In that case the leg runs down the midpoint instead.
     let midpoint = (exit_x + entry_x) / 2.0;
     let lane_x = if corridor_low <= corridor_high {
-        (midpoint + lane_offset).clamp(corridor_low, corridor_high)
+        let preferred = (midpoint + lane_offset).clamp(corridor_low, corridor_high);
+        free_lane(
+            preferred,
+            corridor_low,
+            corridor_high,
+            source_y,
+            target_y,
+            source,
+            target,
+            obstacles,
+        )
     } else {
         midpoint
     };
@@ -206,6 +235,70 @@ fn between_columns_route(
         },
     ])
 }
+
+/// Returns the first lane position that does not run through another table.
+///
+/// The preferred lane is the middle of the corridor, which is where a layout keeps
+/// its gaps, so this only earns its keep when a dragged table or a radial layout
+/// left something standing there. Candidates step outwards from the preferred
+/// position and stay inside the corridor; if every one is blocked, the preferred
+/// position is used anyway, which is no worse than before this check existed.
+#[allow(clippy::too_many_arguments)]
+fn free_lane(
+    preferred: f32,
+    corridor_low: f32,
+    corridor_high: f32,
+    source_y: f32,
+    target_y: f32,
+    source: NodeBounds,
+    target: NodeBounds,
+    obstacles: &[NodeBounds],
+) -> f32 {
+    let span_low = source_y.min(target_y);
+    let span_high = source_y.max(target_y);
+
+    if !lane_crosses_table(preferred, span_low, span_high, source, target, obstacles) {
+        return preferred;
+    }
+
+    let mut step = LANE_RETRY_STEP;
+    while step <= corridor_high - corridor_low {
+        for candidate in [preferred - step, preferred + step] {
+            if candidate < corridor_low || candidate > corridor_high {
+                continue;
+            }
+            if !lane_crosses_table(candidate, span_low, span_high, source, target, obstacles) {
+                return candidate;
+            }
+        }
+        step += LANE_RETRY_STEP;
+    }
+
+    preferred
+}
+
+/// Whether a vertical segment at `x` would pass through a table that is neither
+/// end of the edge.
+fn lane_crosses_table(
+    x: f32,
+    span_low: f32,
+    span_high: f32,
+    source: NodeBounds,
+    target: NodeBounds,
+    obstacles: &[NodeBounds],
+) -> bool {
+    obstacles.iter().any(|node| {
+        *node != source
+            && *node != target
+            && x > node.left()
+            && x < node.right()
+            && span_high > node.y
+            && span_low < node.y + node.height
+    })
+}
+
+/// How far the lane search steps away from the preferred position.
+const LANE_RETRY_STEP: f32 = 18.0;
 
 /// Route between two nodes that overlap horizontally: leave and enter on the same
 /// side, travelling around the outside of the pair.

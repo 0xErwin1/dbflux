@@ -208,6 +208,13 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Changed
 
+* **Coupled schemas keep their depth** — when tables reference each other in a ring,
+  the diagram no longer draws them as one tall column: the cycle is cut open and every
+  table keeps the depth its dependencies suggest. The router also steps an edge lane
+  around a table that ends up standing in a corridor, and column rows reserve less
+  space, so a table takes less width (`timestamp with time zone` is shown as
+  `timesta…`, which still identifies it).
+
 * **The schema diagram is laid out to be read** — tables now keep real space
   between them, and the layered view no longer packs a wide table into the next
   column. Foreign keys are drawn as straight orthogonal paths that travel in the
