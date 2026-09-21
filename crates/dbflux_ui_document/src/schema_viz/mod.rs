@@ -2900,7 +2900,7 @@ impl SchemaVizDocument {
 
         // Collect all edge data before moving into the canvas closure.
         struct EdgeData {
-            route: routing::CubicRoute,
+            route: routing::OrthogonalRoute,
 
             dashed: bool,
         }
@@ -3028,47 +3028,39 @@ impl SchemaVizDocument {
                 let oy: f32 = bounds.origin.y.into();
 
                 for e in &edges {
-                    let fx = e.route.start.x + ox;
-                    let fy = e.route.start.y + oy;
-                    let tx = e.route.end.x + ox;
-                    let ty = e.route.end.y + oy;
-
-                    let ctrl1 =
-                        gpui::point(px(e.route.control1.x + ox), px(e.route.control1.y + oy));
-                    let ctrl2 =
-                        gpui::point(px(e.route.control2.x + ox), px(e.route.control2.y + oy));
-                    let from = gpui::point(px(fx), px(fy));
-                    let to = gpui::point(px(tx), px(ty));
+                    let start = e.route.start();
+                    let end = e.route.end();
+                    let ox_start = start.x + ox;
+                    let oy_start = start.y + oy;
+                    let ox_end = end.x + ox;
+                    let oy_end = end.y + oy;
+                    let color = if e.dashed { edge_color_dim } else { edge_color };
 
                     let mut builder = PathBuilder::stroke(px(1.5));
                     if e.dashed {
                         // FK edge dash on/off lengths are diagram stroke geometry, not UI spacing.
                         builder = builder.dash_array(&[px(6.0), px(4.0)]); // guardrail-allow: diagram stroke geometry
                     }
-                    builder.move_to(from);
-                    builder.cubic_bezier_to(to, ctrl1, ctrl2);
-
+                    for (position, point) in e.route.points.iter().enumerate() {
+                        let target = gpui::point(px(point.x + ox), px(point.y + oy));
+                        if position == 0 {
+                            builder.move_to(target);
+                        } else {
+                            builder.line_to(target);
+                        }
+                    }
                     if let Ok(path) = builder.build() {
-                        let color = if e.dashed { edge_color_dim } else { edge_color };
                         window.paint_path(path, color);
                     }
 
-                    // Arrowhead: small filled triangle at `to`, pointing from ctrl2 direction.
+                    // Arrowhead: small filled triangle at the referenced end, along the
+                    // direction the last segment enters with.
+                    let (ux, uy) = e.route.end_direction();
                     let arrow_len = 8.0_f32;
                     let arrow_half_base = 3.0_f32;
-                    let ctrl2_x: f32 = f32::from(ctrl2.x);
-                    let ctrl2_y: f32 = f32::from(ctrl2.y);
-                    let dx_arrow = tx - ctrl2_x;
-                    let dy_arrow = ty - ctrl2_y;
-                    let mag = (dx_arrow * dx_arrow + dy_arrow * dy_arrow)
-                        .sqrt()
-                        .max(0.001);
-                    let ux = dx_arrow / mag;
-                    let uy = dy_arrow / mag;
-
-                    let tip = gpui::point(px(tx), px(ty));
-                    let base_center_x = tx - ux * arrow_len;
-                    let base_center_y = ty - uy * arrow_len;
+                    let tip = gpui::point(px(ox_end), px(oy_end));
+                    let base_center_x = ox_end - ux * arrow_len;
+                    let base_center_y = oy_end - uy * arrow_len;
                     let left = gpui::point(
                         px(base_center_x - uy * arrow_half_base),
                         px(base_center_y + ux * arrow_half_base),
@@ -3085,8 +3077,46 @@ impl SchemaVizDocument {
                     arrow_builder.close();
 
                     if let Ok(arrow_path) = arrow_builder.build() {
-                        let color = if e.dashed { edge_color_dim } else { edge_color };
                         window.paint_path(arrow_path, color);
+                    }
+
+                    // Cardinality notation, as in an IDEF1X diagram: a crow's foot on the
+                    // table that declares the key (many) and a tick on the table it points
+                    // at (one), so the direction is readable without following the line.
+                    let (sx_dir, sy_dir) = e.route.start_direction();
+                    let (perp_x, perp_y) = (-sy_dir, sx_dir);
+                    let foot_len = 9.0_f32;
+                    let foot_spread = 4.5_f32;
+                    let base_x = ox_start + sx_dir * foot_len;
+                    let base_y = oy_start + sy_dir * foot_len;
+
+                    let mut foot_builder = PathBuilder::stroke(px(1.5));
+                    for offset in [-foot_spread, 0.0, foot_spread] {
+                        foot_builder.move_to(gpui::point(px(base_x), px(base_y)));
+                        foot_builder.line_to(gpui::point(
+                            px(ox_start + perp_x * offset),
+                            px(oy_start + perp_y * offset),
+                        ));
+                    }
+                    if let Ok(foot_path) = foot_builder.build() {
+                        window.paint_path(foot_path, color);
+                    }
+
+                    let tick_offset = 6.0_f32;
+                    let tick_half = 5.0_f32;
+                    let tick_x = ox_end - ux * tick_offset;
+                    let tick_y = oy_end - uy * tick_offset;
+                    let mut tick_builder = PathBuilder::stroke(px(1.5));
+                    tick_builder.move_to(gpui::point(
+                        px(tick_x + uy * tick_half),
+                        px(tick_y - ux * tick_half),
+                    ));
+                    tick_builder.line_to(gpui::point(
+                        px(tick_x - uy * tick_half),
+                        px(tick_y + ux * tick_half),
+                    ));
+                    if let Ok(tick_path) = tick_builder.build() {
+                        window.paint_path(tick_path, color);
                     }
                 }
             },
