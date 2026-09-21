@@ -5,7 +5,7 @@ use dbflux_core::{
     ColumnMeta, CrudResult, CustomTypeInfo, DatabaseInfo, DbSchemaInfo, DescribeRequest,
     DocumentDelete, DocumentInsert, DocumentUpdate, DriverFormDef, DriverMetadata,
     ExecutionContext, ExplainRequest, QueryRequest, QueryResult, QueryResultShape, RowDelete,
-    RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyInfo, SchemaIndexInfo,
+    RowInsert, RowPatch, SchemaColumnInfo, SchemaFeatures, SchemaForeignKeyInfo, SchemaIndexInfo,
     SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan, SemanticRequest, TableBrowseRequest,
     TableCountRequest, TableInfo, Value, ViewInfo,
 };
@@ -385,6 +385,14 @@ pub enum DriverRequestBody {
         generator_id: String,
         table: TableInfo,
     },
+    // Appended last on purpose: the wire encodes enum variants as a varint
+    // discriminant index (see framing.rs, postcard), so a new variant is
+    // appended. Inserting it mid-enum would shift every later variant's index
+    // for any peer that negotiated an older minor and desynchronise the stream.
+    SchemaColumns {
+        database: String,
+        schema: Option<String>,
+    },
 }
 
 /// Request envelope for driver RPC operations.
@@ -525,6 +533,13 @@ pub enum DriverResponseBody {
     EmitAuditEvent(AuditEventEmitDto),
     // === Error ===
     Error(DriverRpcError),
+    // Appended last on purpose: the wire encodes enum variants as a varint
+    // discriminant index (see framing.rs, postcard), so a new variant is
+    // appended. Inserting it mid-enum would shift every later variant's index
+    // for any peer that negotiated an older minor and desynchronise the stream.
+    SchemaColumns {
+        columns: Vec<SchemaColumnInfo>,
+    },
 }
 
 /// Response envelope for driver RPC operations.
@@ -594,7 +609,7 @@ impl DriverResponseEnvelope {
 mod tests {
     use super::{
         DriverRequestBody, DriverRequestEnvelope, DriverResponseBody, DriverResponseEnvelope,
-        QueryRequestDto,
+        DriverRpcError, DriverRpcErrorCode, QueryRequestDto,
     };
     use crate::ProtocolVersion;
     use dbflux_core::{
@@ -750,6 +765,139 @@ mod tests {
             }
             other => panic!("unexpected response body: {other:?}"),
         }
+    }
+
+    #[test]
+    fn schema_columns_request_round_trips_through_json() {
+        let request = DriverRequestBody::SchemaColumns {
+            database: "analytics".into(),
+            schema: Some("public".into()),
+        };
+
+        let json = serde_json::to_string(&request).expect("serialize");
+        let restored: DriverRequestBody = serde_json::from_str(&json).expect("deserialize");
+
+        match restored {
+            DriverRequestBody::SchemaColumns { database, schema } => {
+                assert_eq!(database, "analytics");
+                assert_eq!(schema.as_deref(), Some("public"));
+            }
+            other => panic!("unexpected request body: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn schema_columns_response_round_trips_through_json() {
+        let response = DriverResponseBody::SchemaColumns {
+            columns: vec![dbflux_core::SchemaColumnInfo {
+                table_name: "users".into(),
+                column: dbflux_core::ColumnInfo {
+                    name: "email".into(),
+                    type_name: "varchar(255)".into(),
+                    nullable: false,
+                    is_primary_key: false,
+                    default_value: None,
+                    enum_values: None,
+                },
+            }],
+        };
+
+        let json = serde_json::to_string(&response).expect("serialize");
+        let restored: DriverResponseBody = serde_json::from_str(&json).expect("deserialize");
+
+        match restored {
+            DriverResponseBody::SchemaColumns { columns } => {
+                assert_eq!(columns.len(), 1);
+                assert_eq!(columns[0].table_name, "users");
+                assert_eq!(columns[0].column.name, "email");
+            }
+            other => panic!("unexpected response body: {other:?}"),
+        }
+    }
+
+    /// Decodes the leading LEB128 varint postcard uses to tag enum variants.
+    ///
+    /// JSON round-trip tests cannot catch discriminant shifts: serde_json tags
+    /// variants by name, while the wire format (postcard, see framing.rs) tags
+    /// them by declaration-order index. That is why the JSON round-trip tests
+    /// passed while the v1.4 enum order broke the wire for v1.3 peers.
+    fn wire_variant_index(value: &impl serde::Serialize) -> u64 {
+        let bytes = postcard::to_allocvec(value).expect("serialize");
+        let mut index = 0u64;
+        let mut shift = 0;
+        for &byte in &bytes {
+            index |= ((byte & 0x7f) as u64) << shift;
+            if byte & 0x80 == 0 {
+                return index;
+            }
+            shift += 7;
+        }
+        panic!("varint without terminator");
+    }
+
+    fn dummy_table_info() -> dbflux_core::TableInfo {
+        dbflux_core::TableInfo {
+            name: "t".into(),
+            schema: None,
+            columns: None,
+            indexes: None,
+            foreign_keys: None,
+            constraints: None,
+            sample_fields: None,
+            presentation: Default::default(),
+            child_items: None,
+            storage_hints: None,
+        }
+    }
+
+    #[test]
+    fn request_variants_after_the_schema_block_keep_their_v1_3_wire_indices() {
+        // These literals are the v1.3 wire indices. Inserting a variant
+        // mid-enum shifts every later index; a peer that negotiated the older
+        // minor would then decode those variants as the wrong ones and leave
+        // the rest of the frame undecoded, desynchronising the stream.
+        // SchemaColumns must therefore stay appended after the last v1.3
+        // variant (index 56).
+        assert_eq!(wire_variant_index(&DriverRequestBody::ActiveDatabase), 31);
+        assert_eq!(
+            wire_variant_index(&DriverRequestBody::GenerateCode {
+                generator_id: "t".to_string(),
+                table: dummy_table_info(),
+            }),
+            55
+        );
+        assert_eq!(
+            wire_variant_index(&DriverRequestBody::SchemaColumns {
+                database: "d".to_string(),
+                schema: None,
+            }),
+            56
+        );
+    }
+
+    #[test]
+    fn response_variants_after_the_schema_block_keep_their_v1_3_wire_indices() {
+        // Same contract as the request enum: these literals are the v1.3 wire
+        // indices, and SchemaColumns must stay appended after the last v1.3
+        // variant (index 33).
+        assert_eq!(
+            wire_variant_index(&DriverResponseBody::ActiveDatabaseResult { database: None }),
+            22
+        );
+        assert_eq!(
+            wire_variant_index(&DriverResponseBody::Error(DriverRpcError {
+                code: DriverRpcErrorCode::Driver,
+                message: "m".into(),
+                retriable: false,
+            })),
+            32
+        );
+        assert_eq!(
+            wire_variant_index(&DriverResponseBody::SchemaColumns {
+                columns: Vec::new()
+            }),
+            33
+        );
     }
 
     #[test]

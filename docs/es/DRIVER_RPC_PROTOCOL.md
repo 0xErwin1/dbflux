@@ -110,6 +110,8 @@ DriverRequestBody::Hello(DriverHelloRequest {
         ProtocolVersion::new(1, 0),
         ProtocolVersion::new(1, 1),
         ProtocolVersion::new(1, 2),
+        ProtocolVersion::new(1, 3),
+        ProtocolVersion::new(1, 4),
     ],
     requested_capabilities: vec![
         DriverCapability::Cancellation,
@@ -192,6 +194,55 @@ por `socket_id`; los eventos que exceden ese límite se descartan sin generar
 error en la sesión. Los peers que negocian por debajo de v1.2 u omiten la
 capability permanecen silenciosos. Ver [Audit § emisión de audit
 externa](AUDIT.md) para el contrato completo de sanitización.
+
+### Puerta de tamaño de lectura de clave-valor (v1.3+)
+
+`KeyGetRequest` lleva `max_value_bytes: Option<u64>`, un límite superior
+opcional sobre los bytes de valor que una llamada `KvGetKey` puede transferir.
+`None` significa sin límite, que es también lo que obtiene un peer que negocie
+por debajo de v1.3: el campo es aditivo y toma el valor `None` por defecto
+cuando falta en la carga del wire, de modo que los drivers y hosts antiguos
+siguen obteniendo el valor completo.
+
+`KeyGetResult` lleva `load_state: KeyLoadState`, que informa si `value` es la
+carga completa:
+
+- `Loaded` — se obtuvo el valor completo. Es el valor por defecto cuando el
+  campo falta en la carga del wire.
+- `Truncated { returned_bytes, total_bytes }` — solo se obtuvo parte del valor
+  (por ejemplo, un límite por ítem impuesto por el driver sobre un tipo de
+  colección); `total_bytes` es el tamaño completo cuando el driver lo conoce.
+- `TooLarge { size_bytes, limit_bytes }` — el valor no se obtuvo porque excede
+  `max_value_bytes`; `value` queda vacío.
+
+Ambos campos son campos de struct comunes con `#[serde(default)]` sobre tipos
+de request/response existentes, no un nuevo flag de capability: ninguna
+negociación de `Hello` los limita, y un driver que ignora `max_value_bytes`
+simplemente siempre devuelve `Loaded`.
+
+### Columnas de esquema en bloque (v1.4+)
+
+`SchemaColumns { database, schema }` obtiene las columnas de todas las
+relaciones de un esquema en una sola llamada y responde
+`SchemaColumns { columns: Vec<SchemaColumnInfo> }`, donde cada entrada lleva su
+`table_name` junto con el `ColumnInfo` habitual. El host despacha la solicitud
+al seam `schema_columns` de la conexión, igual que `SchemaIndexes` y
+`SchemaForeignKeys`.
+
+A diferencia de los campos de v1.3, esta operación no es aditiva en el wire:
+los frames se codifican con postcard, que etiqueta las variantes de enum con
+un índice discriminante en varint, nunca con un nombre. Por eso
+`SchemaColumns` se agrega después de la última variante de v1.3 tanto del enum
+de requests como del de responses; insertarla a mitad del enum desplazaría el
+índice de todas las variantes posteriores, y un peer que negoció v1.3
+decodificaría esas variantes desplazadas como otras distintas y dejaría el
+resto del frame sin decodificar, desincronizando el stream. Además, el cliente
+la controla localmente: `IpcConnection::schema_columns` inspecciona la versión
+seleccionada durante el `Hello` y devuelve `DbError::NotSupported` sin enviar
+nada cuando la versión negociada es anterior a la 1.4, de modo que un host
+antiguo jamás recibe la nueva variante. Los consumidores tratan ese error igual
+que el default `NotSupported` del propio trait y vuelven a la carga por tabla
+con `table_details`.
 
 ## Contrato RPC de auth-provider
 

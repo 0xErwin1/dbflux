@@ -89,6 +89,7 @@ DriverRequestBody::Hello(DriverHelloRequest {
         ProtocolVersion::new(1, 1),
         ProtocolVersion::new(1, 2),
         ProtocolVersion::new(1, 3),
+        ProtocolVersion::new(1, 4),
     ],
     requested_capabilities: vec![
         DriverCapability::Cancellation,
@@ -165,6 +166,12 @@ The host overrides identity fields (`actor_type` → `ExternalDriver`, `actor_id
 - `TooLarge { size_bytes, limit_bytes }` — the value was not fetched because it exceeds `max_value_bytes`; `value` is empty.
 
 Both fields are plain, `#[serde(default)]` struct fields on existing request/response types, not a new capability flag: no `Hello` negotiation gates them, and a driver ignoring `max_value_bytes` simply always returns `Loaded`.
+
+### Bulk schema columns (v1.4+)
+
+`SchemaColumns { database, schema }` fetches the columns of every relation in a schema in a single call and answers `SchemaColumns { columns: Vec<SchemaColumnInfo> }`, where each entry carries its `table_name` next to the usual `ColumnInfo`. The host dispatches the request to the connection's `schema_columns` seam, exactly like `SchemaIndexes` and `SchemaForeignKeys`.
+
+Unlike the v1.3 fields above, this operation is not additive on the wire: frames are encoded with postcard, which tags enum variants with a varint discriminant index, never a name. `SchemaColumns` is therefore appended after the last v1.3 variant of both the request and the response enum; inserting it mid-enum would shift every later variant's index, so a peer that negotiated v1.3 would decode the shifted variants as the wrong ones and leave the rest of the frame undecoded, desynchronising the stream. The client also gates locally: `IpcConnection::schema_columns` inspects the version selected during `Hello` and returns `DbError::NotSupported` without sending anything when the negotiated minor is below 1.4, so an older host never receives the new variant at all. Consumers treat that error the same as the trait's own `NotSupported` default and fall back to per-table `table_details` loads.
 
 ## Auth-provider RPC contract
 
