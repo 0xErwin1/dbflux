@@ -3,7 +3,7 @@ use super::routing::{NodeBounds, RoutePoint, route_foreign_key};
 ///
 /// Imports are kept minimal (no `super::*`) to avoid triggering GPUI proc-macro
 /// expansion across the full parent module during test compilation.
-use super::{SchemaVizDocument, pixel_aligned_diagram_pan};
+use super::{LoadedSchemaData, SchemaVizDocument, pixel_aligned_diagram_pan};
 use dbflux_core::{ColumnInfo, ForeignKeyInfo, SchemaForeignKeyInfo, TableInfo};
 use dbflux_schema_viz::{
     graph::SchemaGraph,
@@ -1067,18 +1067,17 @@ fn users_from_bulk() -> Vec<SchemaColumnInfo> {
 }
 
 fn users_focused_load(source: &FakeSource) -> (Vec<TableInfo>, bool, usize) {
-    let (tables, _graph, _layout, capped, tables_loaded) =
-        SchemaVizDocument::load_focused_schema_blocking(
-            Some("app".to_owned()),
-            SchemaVizMode::Focused {
-                table: "users".to_owned(),
-                schema: Some("public".to_owned()),
-            },
-            source,
-            Arc::new(CancelToken::new()),
-        )
-        .expect("focused load should succeed");
-    (tables, capped, tables_loaded)
+    let result = SchemaVizDocument::load_focused_schema_blocking(
+        Some("app".to_owned()),
+        SchemaVizMode::Focused {
+            table: "users".to_owned(),
+            schema: Some("public".to_owned()),
+        },
+        source,
+        Arc::new(CancelToken::new()),
+    )
+    .expect("focused load should succeed");
+    (result.tables, result.capped, result.tables_loaded)
 }
 
 fn sorted_table_summaries(
@@ -1297,6 +1296,141 @@ fn loader_bulk_result_extra_relation_becomes_no_node() {
 }
 
 #[test]
+fn loader_returns_unfiltered_bulk_maps_for_cache_seeding() {
+    let mut source = FakeSource::new();
+    let mut columns = users_from_bulk();
+    // A serial primary key leaves a sequence behind: the diagram excludes it
+    // from its nodes, but the cache seed must still carry it — a populated
+    // schema key means the whole schema is loaded.
+    columns.push(bulk_column("feed_id_seq", "last_value", false));
+    source.columns.insert(Some("public".to_owned()), columns);
+    source.indexes.insert(
+        Some("public".to_owned()),
+        vec![
+            bulk_index("users", "users_pkey", &["id"]),
+            bulk_index("feed_id_seq", "feed_id_seq_pkey", &["last_value"]),
+        ],
+    );
+    source.foreign_keys.insert(
+        Some("public".to_owned()),
+        vec![make_schema_fk("posts", "users", None)],
+    );
+
+    let result = SchemaVizDocument::load_focused_schema_blocking(
+        Some("app".to_owned()),
+        SchemaVizMode::Focused {
+            table: "users".to_owned(),
+            schema: Some("public".to_owned()),
+        },
+        &source,
+        Arc::new(CancelToken::new()),
+    )
+    .expect("focused load should succeed");
+
+    // The diagram itself filtered the sequence out of its nodes...
+    let mut names: Vec<&str> = result.tables.iter().map(|t| t.name.as_str()).collect();
+    names.sort();
+    assert_eq!(names, vec!["posts", "users"]);
+
+    // ...but the returned bulk maps must carry every relation the fake's bulk
+    // response contained, including the one the diagram excluded.
+    assert_eq!(result.bulk.len(), 1, "one entry per fetched schema");
+    let seed = &result.bulk[0];
+    assert_eq!(seed.database, "app");
+    assert_eq!(seed.schema.as_deref(), Some("public"));
+
+    let mut column_tables: Vec<&str> = seed
+        .columns
+        .as_ref()
+        .expect("bulk columns fetched")
+        .iter()
+        .map(|c| c.table_name.as_str())
+        .collect();
+    column_tables.sort();
+    column_tables.dedup();
+    assert_eq!(
+        column_tables,
+        vec!["feed_id_seq", "posts", "users"],
+        "the column seed is unfiltered: the sequence the diagram dropped is still there"
+    );
+
+    let mut index_tables: Vec<&str> = seed
+        .indexes
+        .as_ref()
+        .expect("bulk indexes fetched")
+        .iter()
+        .map(|i| i.table_name.as_str())
+        .collect();
+    index_tables.sort();
+    assert_eq!(
+        index_tables,
+        vec!["feed_id_seq", "users"],
+        "the index seed is unfiltered"
+    );
+
+    let fk_tables: Vec<&str> = seed
+        .foreign_keys
+        .as_ref()
+        .expect("bulk foreign keys fetched")
+        .iter()
+        .map(|fk| fk.table_name.as_str())
+        .collect();
+    assert_eq!(fk_tables, vec!["posts"]);
+
+    // Degraded seams must arrive as `None` so the cache is never seeded with
+    // an empty stand-in for a real result.
+    let mut failed_seams = FakeSource::new();
+    failed_seams.fail_indexes_and_fks = true;
+    failed_seams.schemas.insert(
+        "app".to_owned(),
+        DbSchemaInfo {
+            name: "app".to_owned(),
+            tables: vec![TableInfo {
+                name: "users".to_owned(),
+                schema: Some("public".to_owned()),
+                columns: None,
+                indexes: None,
+                foreign_keys: None,
+                constraints: None,
+                sample_fields: None,
+                presentation: CollectionPresentation::DataGrid,
+                child_items: None,
+                storage_hints: None,
+            }],
+            views: Vec::new(),
+            custom_types: None,
+        },
+    );
+    failed_seams.columns.insert(
+        Some("public".to_owned()),
+        vec![bulk_column("users", "id", true)],
+    );
+
+    let failed = SchemaVizDocument::load_focused_schema_blocking(
+        Some("app".to_owned()),
+        SchemaVizMode::Global,
+        &failed_seams,
+        Arc::new(CancelToken::new()),
+    )
+    .expect("global load should succeed despite the failed seams");
+
+    assert_eq!(failed.bulk.len(), 1);
+    let failed_seed = &failed.bulk[0];
+    assert!(
+        failed_seed.columns.is_some(),
+        "the successful column seam is seeded"
+    );
+    assert!(
+        failed_seed.indexes.is_none(),
+        "a failed index seam must not seed an empty stand-in"
+    );
+    assert!(
+        failed_seed.foreign_keys.is_none(),
+        "a failed foreign-key seam must not seed an empty stand-in"
+    );
+}
+
+#[test]
 fn loader_cross_schema_focused_load_bulks_each_schema_once() {
     let mut source = FakeSource::new();
     // Two relations per schema: with only one relation per schema, calling
@@ -1501,14 +1635,18 @@ fn loader_global_bulks_each_schema_once_without_table_details() {
         ],
     );
 
-    let (tables, _graph, _layout, capped, tables_loaded) =
-        SchemaVizDocument::load_focused_schema_blocking(
-            Some("app".to_owned()),
-            SchemaVizMode::Global,
-            &source,
-            Arc::new(CancelToken::new()),
-        )
-        .expect("global load should succeed");
+    let LoadedSchemaData {
+        tables,
+        capped,
+        tables_loaded,
+        ..
+    } = SchemaVizDocument::load_focused_schema_blocking(
+        Some("app".to_owned()),
+        SchemaVizMode::Global,
+        &source,
+        Arc::new(CancelToken::new()),
+    )
+    .expect("global load should succeed");
 
     assert_eq!(tables_loaded, 4);
     assert!(!capped);
@@ -1566,17 +1704,21 @@ fn loader_same_name_in_two_schemas_keeps_schema_scoped_maps() {
         vec![make_schema_fk("orders", "orders", Some("billing"))],
     );
 
-    let (tables, _graph, _layout, capped, tables_loaded) =
-        SchemaVizDocument::load_focused_schema_blocking(
-            Some("app".to_owned()),
-            SchemaVizMode::Focused {
-                table: "orders".to_owned(),
-                schema: Some("public".to_owned()),
-            },
-            &source,
-            Arc::new(CancelToken::new()),
-        )
-        .expect("focused load should succeed");
+    let LoadedSchemaData {
+        tables,
+        capped,
+        tables_loaded,
+        ..
+    } = SchemaVizDocument::load_focused_schema_blocking(
+        Some("app".to_owned()),
+        SchemaVizMode::Focused {
+            table: "orders".to_owned(),
+            schema: Some("public".to_owned()),
+        },
+        &source,
+        Arc::new(CancelToken::new()),
+    )
+    .expect("focused load should succeed");
 
     assert_eq!(tables_loaded, 2);
     assert!(!capped);
@@ -1696,14 +1838,18 @@ fn loader_global_not_supported_columns_fall_back_per_relation() {
         ),
     );
 
-    let (tables, _graph, _layout, capped, tables_loaded) =
-        SchemaVizDocument::load_focused_schema_blocking(
-            Some("app".to_owned()),
-            SchemaVizMode::Global,
-            &source,
-            Arc::new(CancelToken::new()),
-        )
-        .expect("global load should succeed");
+    let LoadedSchemaData {
+        tables,
+        capped,
+        tables_loaded,
+        ..
+    } = SchemaVizDocument::load_focused_schema_blocking(
+        Some("app".to_owned()),
+        SchemaVizMode::Global,
+        &source,
+        Arc::new(CancelToken::new()),
+    )
+    .expect("global load should succeed");
 
     assert_eq!(tables_loaded, 2);
     assert!(!capped);
@@ -1801,14 +1947,18 @@ fn loader_global_succeeds_with_empty_indexes_and_fks_when_bulk_seams_fail() {
         vec![make_schema_fk("posts", "users", None)],
     );
 
-    let (tables, _graph, _layout, capped, tables_loaded) =
-        SchemaVizDocument::load_focused_schema_blocking(
-            Some("app".to_owned()),
-            SchemaVizMode::Global,
-            &source,
-            Arc::new(CancelToken::new()),
-        )
-        .expect("global load should succeed despite index and FK failures");
+    let LoadedSchemaData {
+        tables,
+        capped,
+        tables_loaded,
+        ..
+    } = SchemaVizDocument::load_focused_schema_blocking(
+        Some("app".to_owned()),
+        SchemaVizMode::Global,
+        &source,
+        Arc::new(CancelToken::new()),
+    )
+    .expect("global load should succeed despite index and FK failures");
 
     assert_eq!(tables_loaded, 2);
     assert!(!capped);

@@ -12,10 +12,11 @@ use dbflux_core::observability::{
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::{
     AuthProfile, CancelToken, Connection, ConnectionHooks, ConnectionProfile, DbDriver,
-    DbSchemaInfo, DriverKey, EffectiveSettings, FetchCollectionChildrenParams, FormValues,
-    GeneralSettings, GlobalOverrides, HistoryEntry, HookContext, HookPhase, SavedQuery,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot, ScriptsDirectory, SecretStore,
-    SessionFacade, ShutdownPhase, SshTunnelProfile, TaskId, TaskKind, TaskSnapshot,
+    DbSchemaInfo, DriverKey, EffectiveSettings, FetchCollectionChildrenParams,
+    FetchSchemaColumnsParams, FormValues, GeneralSettings, GlobalOverrides, HistoryEntry,
+    HookContext, HookPhase, SavedQuery, SchemaColumnInfo, SchemaForeignKeyInfo, SchemaIndexInfo,
+    SchemaSnapshot, ScriptsDirectory, SecretStore, SessionFacade, ShutdownPhase, SshTunnelProfile,
+    TaskId, TaskKind, TaskSnapshot,
 };
 use dbflux_storage::SavedQueryRepo;
 use dbflux_storage::bootstrap::StorageRuntime;
@@ -322,6 +323,30 @@ impl AppState {
         self.facade
             .connections
             .needs_schema_types(profile_id, database, schema)
+    }
+
+    pub fn set_schema_columns(
+        &mut self,
+        profile_id: Uuid,
+        database: String,
+        schema: Option<String>,
+        columns: Vec<SchemaColumnInfo>,
+    ) {
+        self.facade
+            .connections
+            .set_schema_columns(profile_id, database, schema, columns);
+    }
+
+    #[allow(dead_code)]
+    pub fn needs_schema_columns(
+        &self,
+        profile_id: Uuid,
+        database: &str,
+        schema: Option<&str>,
+    ) -> bool {
+        self.facade
+            .connections
+            .needs_schema_columns(profile_id, database, schema)
     }
 
     pub fn set_schema_indexes(
@@ -707,6 +732,17 @@ impl AppState {
         self.facade
             .connections
             .prepare_fetch_schema_types(profile_id, database, schema)
+    }
+
+    pub fn prepare_fetch_schema_columns(
+        &self,
+        profile_id: Uuid,
+        database: &str,
+        schema: Option<&str>,
+    ) -> Result<FetchSchemaColumnsParams, String> {
+        self.facade
+            .connections
+            .prepare_fetch_schema_columns(profile_id, database, schema)
     }
 
     pub fn prepare_fetch_schema_indexes(

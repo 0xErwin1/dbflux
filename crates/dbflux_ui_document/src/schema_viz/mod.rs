@@ -613,7 +613,15 @@ impl SchemaVizDocument {
 
                 entity.update(cx, |doc, cx| {
                     match load_result {
-                        Ok((tables, graph, layout, capped, tables_loaded)) => {
+                        Ok(result) => {
+                            let LoadedSchemaData {
+                                tables,
+                                graph,
+                                layout,
+                                capped,
+                                tables_loaded,
+                                bulk,
+                            } = result;
                             let (focal_table, focal_schema) = match &doc.mode {
                                 SchemaVizMode::Focused { table, schema } => {
                                     (table.clone(), schema.clone())
@@ -647,8 +655,47 @@ impl SchemaVizDocument {
                                 cx,
                             );
 
-                            // Complete the task in the TasksPanel
+                            // Seed the connection manager's per-schema caches
+                            // with the unfiltered bulk result, so the sidebar's
+                            // Indexes and Foreign Keys folders are warm and a
+                            // later consumer does not refetch. A failed bulk
+                            // seam arrives as `None` and leaves its cache key
+                            // empty rather than caching a stand-in.
                             app_state.update(cx, |state, cx| {
+                                for FetchedSchemaBulk {
+                                    database,
+                                    schema,
+                                    columns,
+                                    indexes,
+                                    foreign_keys,
+                                } in bulk
+                                {
+                                    if let Some(columns) = columns {
+                                        state.set_schema_columns(
+                                            doc.profile_id,
+                                            database.clone(),
+                                            schema.clone(),
+                                            columns,
+                                        );
+                                    }
+                                    if let Some(indexes) = indexes {
+                                        state.set_schema_indexes(
+                                            doc.profile_id,
+                                            database.clone(),
+                                            schema.clone(),
+                                            indexes,
+                                        );
+                                    }
+                                    if let Some(foreign_keys) = foreign_keys {
+                                        state.set_schema_foreign_keys(
+                                            doc.profile_id,
+                                            database,
+                                            schema,
+                                            foreign_keys,
+                                        );
+                                    }
+                                }
+
                                 state.complete_task(task_id);
                                 cx.emit(dbflux_ui_base::AppStateChanged);
                             });
@@ -797,13 +844,15 @@ impl SchemaVizDocument {
         schema: Option<&str>,
         foreign_keys_when_unsupported: bool,
     ) -> SchemaBulk {
-        let (columns, columns_ok) = match source.schema_columns(database, schema) {
+        let (columns, columns_ok, fetched_columns) = match source.schema_columns(database, schema) {
             Ok(rows) => {
                 let mut map: HashMap<String, Vec<ColumnInfo>> = HashMap::new();
-                for row in rows {
-                    map.entry(row.table_name).or_default().push(row.column);
+                for row in &rows {
+                    map.entry(row.table_name.clone())
+                        .or_default()
+                        .push(row.column.clone());
                 }
-                (map, true)
+                (map, true, Some(rows))
             }
             Err(error) => {
                 log::debug!(
@@ -811,47 +860,49 @@ impl SchemaVizDocument {
                     schema,
                     error
                 );
-                (HashMap::new(), false)
+                (HashMap::new(), false, None)
             }
         };
 
-        let indexes = if columns_ok {
+        let (indexes, fetched_indexes) = if columns_ok {
             match source.schema_indexes(database, schema) {
                 Ok(rows) => {
                     let mut map: HashMap<String, Vec<IndexInfo>> = HashMap::new();
-                    for row in rows {
-                        map.entry(row.table_name).or_default().push(IndexInfo {
-                            name: row.name,
-                            columns: row.columns,
-                            is_unique: row.is_unique,
-                            is_primary: row.is_primary,
-                        });
+                    for row in &rows {
+                        map.entry(row.table_name.clone())
+                            .or_default()
+                            .push(IndexInfo {
+                                name: row.name.clone(),
+                                columns: row.columns.clone(),
+                                is_unique: row.is_unique,
+                                is_primary: row.is_primary,
+                            });
                     }
-                    map
+                    (map, Some(rows))
                 }
                 Err(error) => {
                     log::warn!("Failed to list indexes for schema {:?}: {}", schema, error);
-                    HashMap::new()
+                    (HashMap::new(), None)
                 }
             }
         } else {
-            HashMap::new()
+            (HashMap::new(), None)
         };
 
-        let foreign_keys = if columns_ok || foreign_keys_when_unsupported {
+        let (foreign_keys, fetched_foreign_keys) = if columns_ok || foreign_keys_when_unsupported {
             match source.schema_foreign_keys(database, schema) {
-                Ok(foreign_keys) => foreign_keys,
+                Ok(foreign_keys) => (foreign_keys.clone(), Some(foreign_keys)),
                 Err(error) => {
                     log::warn!(
                         "Failed to list foreign keys for schema {:?}: {}",
                         schema,
                         error
                     );
-                    Vec::new()
+                    (Vec::new(), None)
                 }
             }
         } else {
-            Vec::new()
+            (Vec::new(), None)
         };
 
         SchemaBulk {
@@ -859,6 +910,9 @@ impl SchemaVizDocument {
             indexes,
             foreign_keys,
             columns_ok,
+            fetched_columns,
+            fetched_indexes,
+            fetched_foreign_keys,
         }
     }
 
@@ -907,16 +961,16 @@ impl SchemaVizDocument {
     /// `connection_for_task_target` in `SchemaVizDocument::new`), not the primary connection.
     ///
     /// The `cancel_token` is checked at key points to allow cancellation.
-    /// Returns `(tables, graph, layout, capped, tables_loaded)` where
-    /// `tables_loaded` counts relations assembled from either path — bulk or
-    /// per-table `table_details` (useful for audit events on cancel).
+    /// Returns the diagram data plus, in `LoadedSchemaData::bulk`, every
+    /// schema's unfiltered bulk result so the caller can seed the connection
+    /// manager's per-schema caches.
     #[allow(clippy::collapsible_if)]
     fn load_focused_schema_blocking(
         database: Option<String>,
         mode: SchemaVizMode,
         source: &dyn MetadataSource,
         cancel_token: Arc<CancelToken>,
-    ) -> Result<(Vec<TableInfo>, SchemaGraph, LayoutResult, bool, usize), String> {
+    ) -> Result<LoadedSchemaData, String> {
         let db_name = database.ok_or_else(|| "No database specified".to_string())?;
 
         match mode {
@@ -1072,7 +1126,19 @@ impl SchemaVizDocument {
                     false,
                 );
 
-                Ok((all_tables, focused_graph, layout, false, tables_loaded))
+                Ok(LoadedSchemaData {
+                    tables: all_tables,
+                    graph: focused_graph,
+                    layout,
+                    capped: false,
+                    tables_loaded,
+                    bulk: bulk
+                        .into_iter()
+                        .map(|(schema, schema_bulk)| {
+                            schema_bulk.cache_seed(&db_name, schema.as_deref())
+                        })
+                        .collect(),
+                })
             }
             SchemaVizMode::Global => {
                 let metadata = source.metadata();
@@ -1132,7 +1198,19 @@ impl SchemaVizDocument {
                 let graph = SchemaGraph::build(&all_table_details);
                 let layout = Self::initial_global_layout(&graph);
 
-                Ok((all_table_details, graph, layout, capped, tables_loaded))
+                Ok(LoadedSchemaData {
+                    tables: all_table_details,
+                    graph,
+                    layout,
+                    capped,
+                    tables_loaded,
+                    bulk: bulk
+                        .into_iter()
+                        .map(|(schema, schema_bulk)| {
+                            schema_bulk.cache_seed(&db_name, schema.as_deref())
+                        })
+                        .collect(),
+                })
             }
         }
     }
@@ -3566,6 +3644,52 @@ struct SchemaBulk {
     indexes: HashMap<String, Vec<IndexInfo>>,
     foreign_keys: Vec<SchemaForeignKeyInfo>,
     columns_ok: bool,
+    /// Exactly what each bulk seam returned, kept so the loader can hand the
+    /// unfiltered result back for cache seeding. `None` means the seam was
+    /// never called or it failed — the cache must never be seeded from a
+    /// degraded empty stand-in.
+    fetched_columns: Option<Vec<SchemaColumnInfo>>,
+    fetched_indexes: Option<Vec<SchemaIndexInfo>>,
+    fetched_foreign_keys: Option<Vec<SchemaForeignKeyInfo>>,
+}
+
+impl SchemaBulk {
+    /// The cache-seed view of this schema's bulk result: the rows exactly as
+    /// fetched, including every relation the diagram itself did not use.
+    fn cache_seed(&self, database: &str, schema: Option<&str>) -> FetchedSchemaBulk {
+        FetchedSchemaBulk {
+            database: database.to_string(),
+            schema: schema.map(str::to_string),
+            columns: self.fetched_columns.clone(),
+            indexes: self.fetched_indexes.clone(),
+            foreign_keys: self.fetched_foreign_keys.clone(),
+        }
+    }
+}
+
+/// One schema's unfiltered bulk metadata, handed back by the loader so the
+/// caller can seed the connection manager's per-schema caches. A populated
+/// schema key in those caches means "fully loaded", so these carry the whole
+/// per-schema result — including relations the diagram filtered out.
+struct FetchedSchemaBulk {
+    database: String,
+    schema: Option<String>,
+    columns: Option<Vec<SchemaColumnInfo>>,
+    indexes: Option<Vec<SchemaIndexInfo>>,
+    foreign_keys: Option<Vec<SchemaForeignKeyInfo>>,
+}
+
+/// What `load_focused_schema_blocking` produced for one diagram load.
+struct LoadedSchemaData {
+    tables: Vec<TableInfo>,
+    graph: SchemaGraph,
+    layout: LayoutResult,
+    capped: bool,
+    /// Relations assembled from either path — bulk or per-table
+    /// `table_details` (useful for audit events on cancel).
+    tables_loaded: usize,
+    /// One entry per distinct schema whose bulk data was fetched.
+    bulk: Vec<FetchedSchemaBulk>,
 }
 
 /// Outcome of loading one relation for the diagram.
