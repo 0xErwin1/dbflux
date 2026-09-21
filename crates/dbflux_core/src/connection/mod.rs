@@ -53,13 +53,14 @@ pub use manager::{
     CacheEntry, CacheKey, ConnectProfileParams, ConnectProfileResult, ConnectedProfile,
     ConnectionManager, ConnectionResolutionError, DatabaseConnection,
     DefaultMutationPolicyResolver, FetchCollectionChildrenParams, FetchCollectionChildrenResult,
-    FetchDatabaseSchemaParams, FetchDatabaseSchemaResult, FetchSchemaForeignKeysParams,
-    FetchSchemaForeignKeysResult, FetchSchemaIndexesParams, FetchSchemaIndexesResult,
-    FetchSchemaRoutinesParams, FetchSchemaRoutinesResult, FetchSchemaTypesParams,
-    FetchSchemaTypesResult, FetchTableDetailsParams, FetchTableDetailsResult, HookExecutionContext,
-    MutationPolicy, OwnedCacheEntry, PendingOperation, PrepareConnectError, ProfilePolicyResolver,
-    ReadOnlyReason, RedisKeyCache, RedisKeyCacheEntry, ResolvedProxy, SchemaCacheKey,
-    SwitchDatabaseParams, SwitchDatabaseResult, WritePrivilege, compose_mutation_policy,
+    FetchDatabaseSchemaParams, FetchDatabaseSchemaResult, FetchSchemaColumnsParams,
+    FetchSchemaColumnsResult, FetchSchemaForeignKeysParams, FetchSchemaForeignKeysResult,
+    FetchSchemaIndexesParams, FetchSchemaIndexesResult, FetchSchemaRoutinesParams,
+    FetchSchemaRoutinesResult, FetchSchemaTypesParams, FetchSchemaTypesResult,
+    FetchTableDetailsParams, FetchTableDetailsResult, HookExecutionContext, MutationPolicy,
+    OwnedCacheEntry, PendingOperation, PrepareConnectError, ProfilePolicyResolver, ReadOnlyReason,
+    RedisKeyCache, RedisKeyCacheEntry, ResolvedProxy, SchemaCacheKey, SwitchDatabaseParams,
+    SwitchDatabaseResult, WritePrivilege, compose_mutation_policy,
 };
 #[allow(deprecated)]
 pub use profile::{

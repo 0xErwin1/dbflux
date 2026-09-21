@@ -4109,6 +4109,7 @@ mod tests {
             table_details: HashMap::new(),
             collection_children: HashMap::new(),
             schema_types: HashMap::new(),
+            schema_columns: HashMap::new(),
             schema_indexes: HashMap::new(),
             schema_foreign_keys: HashMap::new(),
             schema_routines: HashMap::new(),

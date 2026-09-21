@@ -518,6 +518,7 @@ mod tests {
                         table_details: Default::default(),
                         collection_children: Default::default(),
                         schema_types: Default::default(),
+                        schema_columns: Default::default(),
                         schema_indexes: Default::default(),
                         schema_foreign_keys: Default::default(),
                         schema_routines: Default::default(),

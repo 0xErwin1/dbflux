@@ -237,6 +237,11 @@ All notable changes to DBFlux will be documented in this file.
   introspection also reads the catalog directly now instead of the standard
   information views, which are four-way joins with privilege checks.
 
+* **A diagram warms the sidebar's index and foreign-key folders** — the metadata a
+  diagram reads in bulk is handed to the connection's caches, so expanding those
+  folders afterwards shows them instead of fetching what the diagram already had. A
+  seam that failed leaves its cache empty rather than filling it with a stand-in.
+
 * **Coupled schemas keep their depth** — when tables reference each other in a ring,
   the diagram no longer draws them as one tall column: the cycle is cut open and every
   table keeps the depth its dependencies suggest. The router also steps an edge lane

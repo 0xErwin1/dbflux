@@ -2,9 +2,9 @@ use crate::LogErr;
 use crate::{
     CollectionChildrenCache, CollectionChildrenPage, CollectionChildrenRequest, CollectionRef,
     Connection, ConnectionHooks, ConnectionProfile, CustomTypeInfo, DbDriver, DbError, DbKind,
-    DbSchemaInfo, HookContext, ProxyProfile, RelationRef, RoutineInfo, SchemaForeignKeyInfo,
-    SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SecretStore, ShutdownCoordinator,
-    ShutdownPhase, SshTunnelProfile, TableInfo, TaskTarget,
+    DbSchemaInfo, HookContext, ProxyProfile, RelationRef, RoutineInfo, SchemaColumnInfo,
+    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SecretStore,
+    ShutdownCoordinator, ShutdownPhase, SshTunnelProfile, TableInfo, TaskTarget,
 };
 use log::{error, info};
 use secrecy::SecretString;
@@ -64,6 +64,10 @@ pub enum CacheKey {
         database: String,
         schema: Option<String>,
     },
+    SchemaColumns {
+        database: String,
+        schema: Option<String>,
+    },
     SchemaIndexes {
         database: String,
         schema: Option<String>,
@@ -111,6 +115,13 @@ impl CacheKey {
         }
     }
 
+    pub fn schema_columns(database: impl Into<String>, schema: Option<impl Into<String>>) -> Self {
+        Self::SchemaColumns {
+            database: database.into(),
+            schema: schema.map(|s| s.into()),
+        }
+    }
+
     pub fn schema_indexes(database: impl Into<String>, schema: Option<impl Into<String>>) -> Self {
         Self::SchemaIndexes {
             database: database.into(),
@@ -143,6 +154,7 @@ pub enum CacheEntry<'a> {
     TableDetails(&'a TableInfo),
     CollectionChildren(&'a CollectionChildrenCache),
     SchemaTypes(&'a Vec<CustomTypeInfo>),
+    SchemaColumns(&'a Vec<SchemaColumnInfo>),
     SchemaIndexes(&'a Vec<SchemaIndexInfo>),
     SchemaForeignKeys(&'a Vec<SchemaForeignKeyInfo>),
     SchemaRoutines(&'a Vec<RoutineInfo>),
@@ -169,6 +181,11 @@ pub enum OwnedCacheEntry {
         database: String,
         schema: Option<String>,
         types: Vec<CustomTypeInfo>,
+    },
+    SchemaColumns {
+        database: String,
+        schema: Option<String>,
+        columns: Vec<SchemaColumnInfo>,
     },
     SchemaIndexes {
         database: String,
@@ -424,6 +441,7 @@ pub struct ConnectedProfile {
     pub table_details: HashMap<(String, Option<String>, String), TableInfo>,
     pub collection_children: HashMap<(String, String), CollectionChildrenCache>,
     pub schema_types: HashMap<SchemaCacheKey, Vec<CustomTypeInfo>>,
+    pub schema_columns: HashMap<SchemaCacheKey, Vec<SchemaColumnInfo>>,
     pub schema_indexes: HashMap<SchemaCacheKey, Vec<SchemaIndexInfo>>,
     pub schema_foreign_keys: HashMap<SchemaCacheKey, Vec<SchemaForeignKeyInfo>>,
     pub schema_routines: HashMap<SchemaCacheKey, Vec<RoutineInfo>>,
@@ -472,6 +490,11 @@ impl ConnectedProfile {
             CacheKey::SchemaTypes { database, schema } => {
                 let sk = SchemaCacheKey::new(database.as_str(), schema.as_deref());
                 self.schema_types.get(&sk).map(CacheEntry::SchemaTypes)
+            }
+
+            CacheKey::SchemaColumns { database, schema } => {
+                let sk = SchemaCacheKey::new(database.as_str(), schema.as_deref());
+                self.schema_columns.get(&sk).map(CacheEntry::SchemaColumns)
             }
 
             CacheKey::SchemaIndexes { database, schema } => {
@@ -538,6 +561,15 @@ impl ConnectedProfile {
             } => {
                 let sk = SchemaCacheKey::new(database, schema);
                 self.schema_types.insert(sk, types);
+            }
+
+            OwnedCacheEntry::SchemaColumns {
+                database,
+                schema,
+                columns,
+            } => {
+                let sk = SchemaCacheKey::new(database, schema);
+                self.schema_columns.insert(sk, columns);
             }
 
             OwnedCacheEntry::SchemaIndexes {
@@ -792,6 +824,7 @@ impl ConnectionManager {
                 table_details: HashMap::new(),
                 collection_children: HashMap::new(),
                 schema_types: HashMap::new(),
+                schema_columns: HashMap::new(),
                 schema_indexes: HashMap::new(),
                 schema_foreign_keys: HashMap::new(),
                 schema_routines: HashMap::new(),
@@ -1016,6 +1049,34 @@ impl ConnectionManager {
         schema: Option<&str>,
     ) -> bool {
         let key = CacheKey::schema_types(database, schema);
+        self.connections
+            .get(&profile_id)
+            .is_some_and(|c| !c.cache_contains(&key))
+    }
+
+    pub fn set_schema_columns(
+        &mut self,
+        profile_id: Uuid,
+        database: String,
+        schema: Option<String>,
+        columns: Vec<SchemaColumnInfo>,
+    ) {
+        if let Some(connected) = self.connections.get_mut(&profile_id) {
+            connected.cache_set(OwnedCacheEntry::SchemaColumns {
+                database,
+                schema,
+                columns,
+            });
+        }
+    }
+
+    pub fn needs_schema_columns(
+        &self,
+        profile_id: Uuid,
+        database: &str,
+        schema: Option<&str>,
+    ) -> bool {
+        let key = CacheKey::schema_columns(database, schema);
         self.connections
             .get(&profile_id)
             .is_some_and(|c| !c.cache_contains(&key))
@@ -1441,6 +1502,7 @@ impl ConnectionManager {
                 table_details: HashMap::new(),
                 collection_children: HashMap::new(),
                 schema_types: HashMap::new(),
+                schema_columns: HashMap::new(),
                 schema_indexes: HashMap::new(),
                 schema_foreign_keys: HashMap::new(),
                 schema_routines: HashMap::new(),
@@ -1572,6 +1634,30 @@ impl ConnectionManager {
         }
 
         Ok(FetchSchemaTypesParams {
+            profile_id,
+            database: database.to_string(),
+            schema: schema.map(String::from),
+            connection: connected.connection_for_database(database),
+        })
+    }
+
+    pub fn prepare_fetch_schema_columns(
+        &self,
+        profile_id: Uuid,
+        database: &str,
+        schema: Option<&str>,
+    ) -> Result<FetchSchemaColumnsParams, String> {
+        let connected = self
+            .connections
+            .get(&profile_id)
+            .ok_or_else(|| "Profile not connected".to_string())?;
+
+        let key = CacheKey::schema_columns(database, schema);
+        if connected.cache_contains(&key) {
+            return Err("Schema columns already cached".to_string());
+        }
+
+        Ok(FetchSchemaColumnsParams {
             profile_id,
             database: database.to_string(),
             schema: schema.map(String::from),
@@ -2001,6 +2087,36 @@ pub struct FetchSchemaTypesResult {
     pub types: Vec<CustomTypeInfo>,
 }
 
+pub struct FetchSchemaColumnsParams {
+    pub profile_id: Uuid,
+    pub database: String,
+    pub schema: Option<String>,
+    pub connection: Arc<dyn Connection>,
+}
+
+impl FetchSchemaColumnsParams {
+    pub fn execute(self) -> Result<FetchSchemaColumnsResult, String> {
+        let columns = self
+            .connection
+            .schema_columns(&self.database, self.schema.as_deref())
+            .map_err(|e| e.to_string())?;
+
+        Ok(FetchSchemaColumnsResult {
+            profile_id: self.profile_id,
+            database: self.database,
+            schema: self.schema,
+            columns,
+        })
+    }
+}
+
+pub struct FetchSchemaColumnsResult {
+    pub profile_id: Uuid,
+    pub database: String,
+    pub schema: Option<String>,
+    pub columns: Vec<SchemaColumnInfo>,
+}
+
 pub struct FetchSchemaIndexesParams {
     pub profile_id: Uuid,
     pub database: String,
@@ -2205,6 +2321,7 @@ mod tests {
             table_details: HashMap::new(),
             collection_children: HashMap::new(),
             schema_types: HashMap::new(),
+            schema_columns: HashMap::new(),
             schema_indexes: HashMap::new(),
             schema_foreign_keys: HashMap::new(),
             schema_routines: HashMap::new(),
@@ -3042,6 +3159,82 @@ mod tests {
         } else {
             panic!("Expected CacheEntry::SchemaRoutines but got something else");
         }
+    }
+
+    #[test]
+    fn schema_columns_cache_roundtrip() {
+        use crate::{ColumnInfo, SchemaColumnInfo};
+
+        let profile = ConnectionProfile::new("pg", DbConfig::default_postgres());
+        let connection = make_connection(
+            DbKind::Postgres,
+            SchemaLoadingStrategy::ConnectionPerDatabase,
+        );
+        let mut manager = ConnectionManager::new(HashMap::new());
+        manager.add_connection(
+            profile.clone(),
+            connection,
+            None,
+            None,
+            false,
+            WritePrivilege::Unknown,
+        );
+
+        let profile_id = profile.id;
+
+        // Before setting: needs_schema_columns should return true (cache miss)
+        assert!(
+            manager.needs_schema_columns(profile_id, "mydb", Some("public")),
+            "needs_schema_columns must be true before caching"
+        );
+
+        let columns = vec![SchemaColumnInfo {
+            table_name: "users".to_string(),
+            column: ColumnInfo {
+                name: "id".to_string(),
+                type_name: "integer".to_string(),
+                nullable: false,
+                is_primary_key: true,
+                default_value: None,
+                enum_values: None,
+            },
+        }];
+
+        manager.set_schema_columns(
+            profile_id,
+            "mydb".to_string(),
+            Some("public".to_string()),
+            columns,
+        );
+
+        // After setting: needs_schema_columns must return false
+        assert!(
+            !manager.needs_schema_columns(profile_id, "mydb", Some("public")),
+            "needs_schema_columns must be false after caching"
+        );
+
+        // Retrieve and verify the cached value
+        let key = CacheKey::schema_columns("mydb", Some("public"));
+        let conn = manager.connections.get(&profile_id).unwrap();
+        if let Some(CacheEntry::SchemaColumns(cached)) = conn.cache_get(&key) {
+            assert_eq!(cached.len(), 1);
+            assert_eq!(cached[0].table_name, "users");
+            assert_eq!(cached[0].column.name, "id");
+            assert!(cached[0].column.is_primary_key);
+        } else {
+            panic!("Expected CacheEntry::SchemaColumns but got something else");
+        }
+
+        // A distinct (database, schema) key stays independent: setting one
+        // schema's columns must never satisfy another schema's miss.
+        assert!(
+            manager.needs_schema_columns(profile_id, "mydb", Some("billing")),
+            "a distinct schema key must stay independent"
+        );
+        assert!(
+            manager.needs_schema_columns(profile_id, "otherdb", Some("public")),
+            "a distinct database key must stay independent"
+        );
     }
 
     // =========================================================================
