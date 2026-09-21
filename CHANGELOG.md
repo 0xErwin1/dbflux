@@ -85,6 +85,16 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **Left-Right now flows left to right on cyclic schemas** — the layered layout only
+  handled acyclic graphs, so a schema where two tables reference each other (the
+  common case) silently fell back to a grid and the Left-Right choice made no
+  difference. Layers are assigned on the graph's strongly connected components now,
+  and the tables inside each layer are ordered to reduce crossings.
+
+* **Switching diagram layouts no longer panics** — two tables closer together than
+  the gap the edge anchors need — dragged by hand, or placed by the radial layout —
+  produced an inverted corridor that made the routing clamp panic.
+
 * **Single-line completion fields keep their text on the row** — the DataView
   `WHERE` filter and the query builder's row inputs (filter, sort, group by,
   join, projected columns) moved to a code-editor widget in the gpui-pre
@@ -197,6 +207,20 @@ All notable changes to DBFlux will be documented in this file.
   when a pending insert sits above the selection instead of one row below it.
 
 ### Changed
+
+* **The schema diagram is laid out to be read** — tables now keep real space
+  between them, and the layered view no longer packs a wide table into the next
+  column. Foreign keys are drawn as straight orthogonal paths that travel in the
+  gaps between tables instead of curves crossing the canvas, and each end carries
+  a crow's foot on the table that declares the key and a tick on the table it
+  references, so direction no longer has to be traced through a line. Dragged
+  tables snap to the background grid, and the toolbar gained **Arrange** — clear
+  the manual positions and recompute the layout — and **Fit**, which zooms the
+  whole diagram into view.
+
+* **Loading a schema shows the shape of what is coming** — the diagram panel used
+  to show a spinner and a label in an otherwise empty canvas; it now shows a grid
+  of placeholder tables while the metadata loads, and the spinner animates.
 
 * **Language list derived from the translation catalogs (#360)** — the
   Settings language dropdown now lists every language that ships a catalog in
