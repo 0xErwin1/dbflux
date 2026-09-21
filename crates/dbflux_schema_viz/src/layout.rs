@@ -1,7 +1,6 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap};
 use std::f32::consts::PI as PI_F32;
 
-use petgraph::algo::is_cyclic_directed;
 use petgraph::prelude::NodeIndex;
 use petgraph::visit::EdgeRef;
 
@@ -37,8 +36,6 @@ const LAYER_GUTTER_X: f32 = 96.0;
 /// Vertical gutter between two stacked nodes.
 const NODE_SPACING_Y: f32 = 64.0;
 const CELL_WIDTH: f32 = 360.0;
-/// Gutter between the columns of the grid layout.
-const CELL_GUTTER_X: f32 = 64.0;
 const COMPACT_CELL_SPACING_X: f32 = 48.0;
 const COMPACT_CELL_SPACING_Y: f32 = 48.0;
 
@@ -168,100 +165,190 @@ pub fn compute_layout(
     }
 
     match format {
-        LayoutFormat::LeftRight => {
-            if is_cyclic_directed(&graph.graph) {
-                grid_layout(graph, show_types, show_indexes)
-            } else {
-                layered_layout(graph, show_types, show_indexes)
-            }
-        }
+        LayoutFormat::LeftRight => layered_layout(graph, show_types, show_indexes),
         LayoutFormat::Compact => compact_layout(graph, show_types, show_indexes),
         LayoutFormat::Snowflake => {
             if let Some((focal_name, focal_schema)) = focal {
                 snowflake_layout(graph, focal_name, focal_schema, show_types, show_indexes)
             } else {
-                // No focal table — fall back to layered layout
-                if is_cyclic_directed(&graph.graph) {
-                    grid_layout(graph, show_types, show_indexes)
-                } else {
-                    layered_layout(graph, show_types, show_indexes)
-                }
+                // No focal table: the layered layout places the most connected
+                // table first, which is the closest thing to a focal node.
+                layered_layout(graph, show_types, show_indexes)
             }
         }
     }
 }
 
-/// Layered layout for acyclic graphs.
-fn layered_layout(graph: &SchemaGraph, show_types: bool, show_indexes: bool) -> LayoutResult {
-    // Find a root node: one with no incoming edges, or the first node.
-    let Some(root_idx) = graph
+/// Assigns every node to a layer, tolerating cycles.
+///
+/// The graph is condensed into its strongly connected components first, so a
+/// cycle becomes one node of the DAG; components are then layered by longest path
+/// from the roots, and every member inherits its component's layer. Tables in a
+/// cycle therefore share a layer instead of forcing the whole diagram into a
+/// grid, which is what the previous implementation did.
+fn assign_layers(graph: &SchemaGraph) -> BTreeMap<usize, Vec<NodeIndex>> {
+    let components = petgraph::algo::kosaraju_scc(&graph.graph);
+    if components.is_empty() {
+        return BTreeMap::new();
+    }
+
+    let mut component_of: HashMap<NodeIndex, usize> = HashMap::new();
+    for (component_index, members) in components.iter().enumerate() {
+        for &member in members {
+            component_of.insert(member, component_index);
+        }
+    }
+
+    // Longest path over the component DAG. Edges inside one component are the
+    // cycle itself and say nothing about depth.
+    let mut component_layer = vec![0_usize; components.len()];
+    for _ in 0..components.len() {
+        let mut moved = false;
+        for edge in graph.graph.edge_references() {
+            let (Some(&from), Some(&to)) = (
+                component_of.get(&edge.source()),
+                component_of.get(&edge.target()),
+            ) else {
+                continue;
+            };
+            if from == to {
+                continue;
+            }
+            let from_layer = component_layer.get(from).copied().unwrap_or_default();
+            if let Some(slot) = component_layer.get_mut(to)
+                && *slot < from_layer + 1
+            {
+                *slot = from_layer + 1;
+                moved = true;
+            }
+        }
+        if !moved {
+            break;
+        }
+    }
+
+    let mut layers: BTreeMap<usize, Vec<NodeIndex>> = BTreeMap::new();
+    for (component_index, members) in components.iter().enumerate() {
+        let layer = component_layer
+            .get(component_index)
+            .copied()
+            .unwrap_or_default();
+        layers
+            .entry(layer)
+            .or_default()
+            .extend(members.iter().copied());
+    }
+
+    for nodes in layers.values_mut() {
+        sort_by_table_name(graph, nodes);
+    }
+
+    layers
+}
+
+/// Reorders the nodes inside each layer to reduce edge crossings.
+///
+/// This is the barycenter pass of a Sugiyama layout: repeatedly place every node
+/// next to the average position of the neighbours it connects to in the layer
+/// before it (then after it, sweeping back up). Ties break on the table name, so
+/// the same schema always produces the same diagram.
+fn reduce_crossings(graph: &SchemaGraph, layers: &mut BTreeMap<usize, Vec<NodeIndex>>) {
+    const SWEEPS: usize = 4;
+    if layers.len() < 2 {
+        return;
+    }
+
+    let keys: Vec<usize> = layers.keys().copied().collect();
+
+    for _ in 0..SWEEPS {
+        // Swipe top-down, then bottom-up, so both orders inform each other.
+        let passes: [Box<dyn Iterator<Item = &usize>>; 2] =
+            [Box::new(keys.iter()), Box::new(keys.iter().rev())];
+
+        for pass in passes {
+            for key in pass {
+                let Some(current) = layers.get(key).cloned() else {
+                    continue;
+                };
+                let Some(&previous_key) = keys.iter().filter(|k| *k < key).max() else {
+                    continue;
+                };
+                let positions = positions_of(layers.get(&previous_key).map(Vec::as_slice));
+
+                let mut scored: Vec<(f32, String, NodeIndex)> = current
+                    .iter()
+                    .map(|&idx| {
+                        let neighbours: Vec<f32> = graph
+                            .graph
+                            .neighbors_directed(idx, petgraph::Direction::Incoming)
+                            .filter_map(|neighbor| positions.get(&neighbor).copied())
+                            .collect();
+                        let barycenter = if neighbours.is_empty() {
+                            f32::MAX
+                        } else {
+                            neighbours.iter().sum::<f32>() / neighbours.len() as f32
+                        };
+                        (barycenter, table_name(graph, idx), idx)
+                    })
+                    .collect();
+
+                scored.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+                layers.insert(*key, scored.into_iter().map(|(_, _, idx)| idx).collect());
+            }
+        }
+    }
+}
+
+/// Position of every node inside one layer, used as the barycenter input.
+fn positions_of(layer: Option<&[NodeIndex]>) -> HashMap<NodeIndex, f32> {
+    layer
+        .unwrap_or_default()
+        .iter()
+        .enumerate()
+        .map(|(position, &idx)| (idx, position as f32))
+        .collect()
+}
+
+fn table_name(graph: &SchemaGraph, idx: NodeIndex) -> String {
+    graph
         .graph
-        .externals(petgraph::Direction::Incoming)
-        .next()
-        .or_else(|| graph.graph.externals(petgraph::Direction::Outgoing).next())
-        .or_else(|| graph.graph.node_indices().next())
-    else {
+        .node_weight(idx)
+        .map(|node| node.id.name.clone())
+        .unwrap_or_default()
+}
+
+fn sort_by_table_name(graph: &SchemaGraph, nodes: &mut [NodeIndex]) {
+    nodes.sort_by_key(|&idx| table_name(graph, idx));
+}
+
+/// Layered layout, left to right.
+///
+/// Cyclic schemas are the norm — a pair of tables referencing each other is
+/// enough — and the previous implementation gave up on them and silently drew a
+/// grid instead, which is why choosing "Left-Right" produced a compact-looking
+/// diagram. Layers are now assigned on the condensation of the graph, so the
+/// cycle is collapsed into one layer and everything else still flows left to
+/// right.
+fn layered_layout(graph: &SchemaGraph, show_types: bool, show_indexes: bool) -> LayoutResult {
+    if graph.node_count() == 0 {
         return LayoutResult {
             nodes: HashMap::new(),
             edges: Vec::new(),
             total_width: 0.0,
             total_height: 0.0,
         };
-    };
-
-    // BFS from root to assign layers.
-    let mut layer: HashMap<NodeIndex, usize> = HashMap::new();
-    let mut queue: VecDeque<(NodeIndex, usize)> = VecDeque::from([(root_idx, 0)]);
-    layer.insert(root_idx, 0);
-
-    while let Some((current, depth)) = queue.pop_front() {
-        for edge in graph
-            .graph
-            .edges_directed(current, petgraph::Direction::Outgoing)
-        {
-            let neighbor = edge.target();
-            if layer.insert(neighbor, depth + 1).is_none() {
-                queue.push_back((neighbor, depth + 1));
-            }
-        }
     }
 
-    // Handle disconnected nodes: assign them to an isolated layer beyond max_layer.
-    let max_layer = layer.values().max().copied().unwrap_or(0);
-    for idx in graph.graph.node_indices() {
-        layer.entry(idx).or_insert(max_layer + 1);
-    }
-
-    // Group nodes by layer.
-    let mut layers: HashMap<usize, Vec<NodeIndex>> = HashMap::new();
-    for (idx, &l) in &layer {
-        layers.entry(l).or_default().push(*idx);
-    }
-
-    // Sort nodes within each layer by table name for determinism.
-    for nodes in layers.values_mut() {
-        nodes.sort_by_key(|&idx| {
-            graph
-                .graph
-                .node_weight(idx)
-                .map(|n| n.id.name.as_str())
-                .unwrap_or("")
-        });
-    }
+    let mut layers = assign_layers(graph);
+    reduce_crossings(graph, &mut layers);
 
     let mut nodes: HashMap<NodeIndex, NodeLayout> = HashMap::new();
 
     // Layers are stacked left to right, each one starting after the widest node of
     // the previous layer. A fixed stride let a node as wide as 640px overlap the
     // next layer, which is part of why the diagram read as one solid block.
-    let mut layer_keys: Vec<usize> = layers.keys().copied().collect();
-    layer_keys.sort_unstable();
-
     let mut layer_x = 0.0_f32;
-    for layer_num in layer_keys {
-        let Some(node_ids) = layers.get(&layer_num) else {
-            continue;
-        };
+    for node_ids in layers.values() {
         let layer_width = node_ids
             .iter()
             .filter_map(|&idx| graph.graph.node_weight(idx))
@@ -312,96 +399,6 @@ fn layered_layout(graph: &SchemaGraph, show_types: bool, show_indexes: bool) -> 
                 + (ids.len().saturating_sub(1) as f32) * NODE_SPACING_Y
         })
         .max_by(|a, b| a.total_cmp(b))
-        .unwrap_or(0.0_f32);
-
-    LayoutResult {
-        nodes,
-        edges,
-        total_width,
-        total_height,
-    }
-}
-
-/// Grid layout for cyclic graphs.
-fn grid_layout(graph: &SchemaGraph, show_types: bool, show_indexes: bool) -> LayoutResult {
-    let n = graph.node_count();
-    let cols = ((n as f32).sqrt().ceil() as usize).max(1);
-    let rows = n.div_ceil(cols);
-
-    // Sort nodes deterministically by table name before laying out.
-    let mut sorted_indices: Vec<NodeIndex> = graph.graph.node_indices().collect();
-    sorted_indices.sort_by_key(|&idx| {
-        graph
-            .graph
-            .node_weight(idx)
-            .map(|n| n.id.name.as_str())
-            .unwrap_or("")
-    });
-
-    // First pass: compute per-row max heights and collect all widths.
-    let mut row_max_heights = vec![0.0_f32; rows];
-    let mut all_widths: Vec<f32> = Vec::with_capacity(sorted_indices.len());
-    for (i, &idx) in sorted_indices.iter().enumerate() {
-        let Some(node_weight) = graph.graph.node_weight(idx) else {
-            continue;
-        };
-        let height = compute_node_height(node_weight, show_indexes);
-        let width = compute_node_width(node_weight, show_types, show_indexes);
-        if let Some(slot) = row_max_heights.get_mut(i / cols) {
-            *slot = slot.max(height);
-        }
-        all_widths.push(width);
-    }
-
-    // Compute cumulative row y offsets.
-    let mut row_y_offsets = vec![0.0_f32; rows];
-    for r in 1..rows {
-        if let (Some(&prev_offset), Some(&prev_height)) =
-            (row_y_offsets.get(r - 1), row_max_heights.get(r - 1))
-            && let Some(slot) = row_y_offsets.get_mut(r)
-        {
-            *slot = prev_offset + prev_height + NODE_SPACING_Y;
-        }
-    }
-
-    // Cell width based on maximum node width across all nodes, plus a gutter so
-    // neighbouring columns never touch.
-    let max_node_width = all_widths.iter().fold(0.0_f32, |acc, &w| acc.max(w));
-    let cell_width = max_node_width.max(CELL_WIDTH) + CELL_GUTTER_X;
-
-    // Second pass: place nodes using row y offsets.
-    let mut nodes: HashMap<NodeIndex, NodeLayout> = HashMap::new();
-    for (i, &idx) in sorted_indices.iter().enumerate() {
-        let Some(node_weight) = graph.graph.node_weight(idx) else {
-            continue;
-        };
-        let height = compute_node_height(node_weight, show_indexes);
-        let width = compute_node_width(node_weight, show_types, show_indexes);
-
-        let col = i % cols;
-        let row = i / cols;
-        let x = col as f32 * cell_width;
-        let Some(&y) = row_y_offsets.get(row) else {
-            continue;
-        };
-
-        nodes.insert(
-            idx,
-            NodeLayout {
-                x,
-                y,
-                width,
-                height,
-            },
-        );
-    }
-
-    let edges = build_edges(graph, &nodes);
-
-    let total_width = cols as f32 * cell_width;
-    let total_height = row_y_offsets
-        .last()
-        .map(|&y| y + row_max_heights.last().copied().unwrap_or(0.0))
         .unwrap_or(0.0_f32);
 
     LayoutResult {
@@ -515,12 +512,9 @@ fn snowflake_layout(
     };
 
     let Some(&focal_idx) = graph.node_index_by_id.get(&focal_id) else {
-        // Focal node not found — fall back to layered layout
-        if is_cyclic_directed(&graph.graph) {
-            return grid_layout(graph, show_types, show_indexes);
-        } else {
-            return layered_layout(graph, show_types, show_indexes);
-        }
+        // Focal table not in the graph: the layered layout is still the best
+        // answer, and it no longer refuses cyclic schemas.
+        return layered_layout(graph, show_types, show_indexes);
     };
 
     // Collect all neighbor indices (direct FK connections in either direction).
@@ -1019,8 +1013,9 @@ mod tests {
     // ── 9.10: cyclic graph uses grid layout (multiple x values) ──────────────
 
     #[test]
-    fn test_grid_fallback_chosen_for_cyclic() {
-        // A → B → C → A
+    fn test_cyclic_schema_still_flows_left_to_right() {
+        // a → b → c → b: b and c reference each other, which used to push the whole
+        // diagram into a grid and silently ignore the Left-Right choice.
         let tables = vec![
             table(
                 "a",
@@ -1035,44 +1030,80 @@ mod tests {
             table(
                 "c",
                 vec![col("id", "integer", true)],
-                vec![fk("fk_c_a", vec!["id"], "a", vec!["id"])],
+                vec![fk("fk_c_b", vec!["id"], "b", vec!["id"])],
             ),
         ];
 
         let graph = SchemaGraph::build(&tables);
         let layout = compute_layout(&graph, LayoutFormat::LeftRight, None, true, false);
 
-        // Collect x values from all nodes and check uniqueness.
-        let mut xs: Vec<_> = layout.nodes.values().map(|l| l.x).collect();
-        xs.sort_by(|a, b| a.total_cmp(b));
-        xs.dedup();
-        // Grid layout should produce at least 2 different x values.
-        assert!(
-            xs.len() >= 2,
-            "Cyclic graph should use grid layout with multiple columns; got x values: {xs:?}"
-        );
-
-        // Grid x positions must all sit on the same column stride. The stride is the
-        // widest node plus the gutter, so it is derived here instead of assumed.
-        let mut xs: Vec<f32> = layout.nodes.values().map(|l| l.x).collect();
-        xs.sort_by(|a, b| a.total_cmp(b));
-        xs.dedup();
-        let stride = match (xs.first(), xs.get(1)) {
-            (Some(first), Some(second)) => second - first,
-            _ => 0.0,
+        let x_of = |name: &str| {
+            graph
+                .node_index_by_id
+                .get(&crate::graph::TableNodeId {
+                    schema: None,
+                    name: name.to_owned(),
+                })
+                .and_then(|idx| layout.nodes.get(idx))
+                .map(|node| node.x)
+                .unwrap_or_default()
         };
+
+        // a is outside the cycle and drives it, so it takes the first layer.
         assert!(
-            stride > 0.0,
-            "expected more than one column, got x values: {xs:?}"
+            x_of("a") < x_of("b"),
+            "a must sit left of the table it references, got a={} b={}",
+            x_of("a"),
+            x_of("b")
         );
-        for node_layout in layout.nodes.values() {
-            let col = (node_layout.x / stride).round();
-            assert!(
-                (node_layout.x - col * stride).abs() < 0.01,
-                "x={} is not a multiple of the column stride {}",
-                node_layout.x,
-                stride
-            );
-        }
+        // b and c are mutually dependent: one layer, so the same column.
+        assert!(
+            (x_of("b") - x_of("c")).abs() < 0.01,
+            "a cycle shares a layer, got b={} c={}",
+            x_of("b"),
+            x_of("c")
+        );
+    }
+
+    #[test]
+    fn test_layered_layout_orders_layers_to_avoid_crossings() {
+        // Two tables pointing at two tables, crossed: alphabetical order draws the
+        // edges across each other, the barycenter pass flips the second layer.
+        let tables = vec![
+            table(
+                "left_a",
+                vec![col("id", "integer", true), col("b_id", "integer", false)],
+                vec![fk("fk_left_a_right_b", vec!["b_id"], "right_b", vec!["id"])],
+            ),
+            table(
+                "left_c",
+                vec![col("id", "integer", true), col("b_id", "integer", false)],
+                vec![fk("fk_left_c_right_a", vec!["b_id"], "right_a", vec!["id"])],
+            ),
+            table("right_a", vec![col("id", "integer", true)], vec![]),
+            table("right_b", vec![col("id", "integer", true)], vec![]),
+        ];
+
+        let graph = SchemaGraph::build(&tables);
+        let layout = compute_layout(&graph, LayoutFormat::LeftRight, None, true, false);
+
+        let y_of = |name: &str| {
+            graph
+                .node_index_by_id
+                .get(&crate::graph::TableNodeId {
+                    schema: None,
+                    name: name.to_owned(),
+                })
+                .and_then(|idx| layout.nodes.get(idx))
+                .map(|node| node.y)
+                .unwrap_or_default()
+        };
+
+        assert!(
+            y_of("right_b") < y_of("right_a"),
+            "the referenced table must line up with the table that points at it, got right_b={} right_a={}",
+            y_of("right_b"),
+            y_of("right_a")
+        );
     }
 }
