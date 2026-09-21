@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::f32::consts::PI as PI_F32;
 
 use petgraph::prelude::NodeIndex;
@@ -179,64 +179,78 @@ pub fn compute_layout(
     }
 }
 
-/// Assigns every node to a layer, tolerating cycles.
+/// Assigns every node to a layer by dependency depth, cutting cycles open as it
+/// goes.
 ///
-/// The graph is condensed into its strongly connected components first, so a
-/// cycle becomes one node of the DAG; components are then layered by longest path
-/// from the roots, and every member inherits its component's layer. Tables in a
-/// cycle therefore share a layer instead of forcing the whole diagram into a
-/// grid, which is what the previous implementation did.
+/// Condensing a cycle into one layer kept the diagram from collapsing into a grid,
+/// but it also merged every table of the cycle into a single column: a schema whose
+/// tables reference each other in a ring drew one tall stripe. This walks the graph
+/// from its roots instead, and when it reaches a node whose remaining predecessors
+/// are all inside a cycle, it cuts there and keeps going, so a cycle costs one
+/// reversed edge rather than a lost layout.
 fn assign_layers(graph: &SchemaGraph) -> BTreeMap<usize, Vec<NodeIndex>> {
-    let components = petgraph::algo::kosaraju_scc(&graph.graph);
-    if components.is_empty() {
-        return BTreeMap::new();
+    let mut pending_incoming: HashMap<NodeIndex, usize> = HashMap::new();
+    for idx in graph.graph.node_indices() {
+        pending_incoming.insert(
+            idx,
+            graph
+                .graph
+                .edges_directed(idx, petgraph::Direction::Incoming)
+                .count(),
+        );
     }
 
-    let mut component_of: HashMap<NodeIndex, usize> = HashMap::new();
-    for (component_index, members) in components.iter().enumerate() {
-        for &member in members {
-            component_of.insert(member, component_index);
-        }
-    }
+    // Name order decides every tie, so the same schema always draws the same way.
+    let mut remaining: Vec<NodeIndex> = graph.graph.node_indices().collect();
+    remaining.sort_by_key(|&idx| table_name(graph, idx));
 
-    // Longest path over the component DAG. Edges inside one component are the
-    // cycle itself and say nothing about depth.
-    let mut component_layer = vec![0_usize; components.len()];
-    for _ in 0..components.len() {
-        let mut moved = false;
-        for edge in graph.graph.edge_references() {
-            let (Some(&from), Some(&to)) = (
-                component_of.get(&edge.source()),
-                component_of.get(&edge.target()),
-            ) else {
-                continue;
-            };
-            if from == to {
+    let mut layer: HashMap<NodeIndex, usize> =
+        remaining.iter().map(|&idx| (idx, 0_usize)).collect();
+    let mut placed: HashSet<NodeIndex> = HashSet::new();
+    let mut queue: VecDeque<NodeIndex> = remaining
+        .iter()
+        .copied()
+        .filter(|idx| pending_incoming.get(idx).copied().unwrap_or_default() == 0)
+        .collect();
+
+    while placed.len() < graph.node_count() {
+        while let Some(node) = queue.pop_front() {
+            if !placed.insert(node) {
                 continue;
             }
-            let from_layer = component_layer.get(from).copied().unwrap_or_default();
-            if let Some(slot) = component_layer.get_mut(to)
-                && *slot < from_layer + 1
+            let node_layer = layer.get(&node).copied().unwrap_or_default();
+            for successor in graph
+                .graph
+                .neighbors_directed(node, petgraph::Direction::Outgoing)
             {
-                *slot = from_layer + 1;
-                moved = true;
+                if placed.contains(&successor) {
+                    continue;
+                }
+                let successor_layer = layer.entry(successor).or_default();
+                *successor_layer = (*successor_layer).max(node_layer + 1);
+
+                if let Some(count) = pending_incoming.get_mut(&successor) {
+                    *count = count.saturating_sub(1);
+                    if *count == 0 {
+                        queue.push_back(successor);
+                    }
+                }
             }
         }
-        if !moved {
+
+        // No source left: everything unplaced sits inside a cycle. Cut it at the
+        // first name still standing and treat the edges that closed the cycle as
+        // back edges.
+        let Some(&cut) = remaining.iter().find(|idx| !placed.contains(*idx)) else {
             break;
-        }
+        };
+        pending_incoming.insert(cut, 0);
+        queue.push_back(cut);
     }
 
     let mut layers: BTreeMap<usize, Vec<NodeIndex>> = BTreeMap::new();
-    for (component_index, members) in components.iter().enumerate() {
-        let layer = component_layer
-            .get(component_index)
-            .copied()
-            .unwrap_or_default();
-        layers
-            .entry(layer)
-            .or_default()
-            .extend(members.iter().copied());
+    for (&idx, &depth) in &layer {
+        layers.entry(depth).or_default().push(idx);
     }
 
     for nodes in layers.values_mut() {
@@ -1013,7 +1027,7 @@ mod tests {
     // ── 9.10: cyclic graph uses grid layout (multiple x values) ──────────────
 
     #[test]
-    fn test_cyclic_schema_still_flows_left_to_right() {
+    fn test_cyclic_schema_keeps_dependency_depths() {
         // a → b → c → b: b and c reference each other, which used to push the whole
         // diagram into a grid and silently ignore the Left-Right choice.
         let tables = vec![
@@ -1056,10 +1070,11 @@ mod tests {
             x_of("a"),
             x_of("b")
         );
-        // b and c are mutually dependent: one layer, so the same column.
+        // b and c reference each other: the cycle is cut open, so each keeps its own
+        // depth instead of collapsing into one column.
         assert!(
-            (x_of("b") - x_of("c")).abs() < 0.01,
-            "a cycle shares a layer, got b={} c={}",
+            x_of("b") < x_of("c"),
+            "a cycle is cut, not flattened, got b={} c={}",
             x_of("b"),
             x_of("c")
         );
