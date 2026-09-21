@@ -724,3 +724,27 @@ fn test_route_segments_are_axis_aligned_in_every_configuration() {
         }
     }
 }
+
+#[test]
+fn test_drag_snapping_lands_on_the_grid_lattice() {
+    // The dot grid and the drag snap share one lattice, so a dropped table lines
+    // up with the background and with its neighbours.
+    for (input, expected) in [
+        (0.0_f32, 0.0_f32),
+        (11.9, 0.0),
+        (12.1, 24.0),
+        (-13.0, -24.0),
+        (100.0, 96.0),
+    ] {
+        let snapped = super::snap_to_lattice(input);
+        assert!(
+            (snapped - expected).abs() < 0.01,
+            "snap_to_lattice({input}) = {snapped}, expected {expected}"
+        );
+        assert!(
+            (snapped % super::GRID_LATTICE).abs() < 0.01
+                || (snapped % super::GRID_LATTICE - super::GRID_LATTICE).abs() < 0.01,
+            "{snapped} is not a multiple of the lattice"
+        );
+    }
+}

@@ -33,6 +33,15 @@ use dbflux_components::tokens::{FontSizes, Spacing};
 use dbflux_ui_base::AppStateEntity;
 use dbflux_ui_base::toast::{PendingToast, flush_pending_toast};
 
+/// Spacing of the diagram's dot grid, in graph coordinates. Node drags and
+/// keyboard nudges land on this lattice, so tables line up instead of drifting.
+const GRID_LATTICE: f32 = 24.0;
+
+/// Rounds a graph-space coordinate onto the diagram lattice.
+fn snap_to_lattice(value: f32) -> f32 {
+    (value / GRID_LATTICE).round() * GRID_LATTICE
+}
+
 /// Direction for spatial selection navigation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Direction {
@@ -948,6 +957,55 @@ impl SchemaVizDocument {
     }
 
     /// Recomputes layout using the current format, focal, show_types, and show_indexes.
+    /// Fit the whole diagram into the viewport: pick the zoom that makes every node
+    /// visible and pan so the content starts at the top-left margin.
+    fn fit_to_view(&mut self) {
+        let (Some(graph), Some(layout)) = (&self.graph, &self.layout) else {
+            return;
+        };
+
+        let mut min_x = f32::MAX;
+        let mut min_y = f32::MAX;
+        let mut max_x = f32::MIN;
+        let mut max_y = f32::MIN;
+        for (idx, _) in graph.nodes() {
+            let Some(node_layout) = layout.nodes.get(&idx) else {
+                continue;
+            };
+            let (x, y) = self
+                .node_position_overrides
+                .get(&idx)
+                .map_or((node_layout.x, node_layout.y), |pos| (pos.x, pos.y));
+            min_x = min_x.min(x);
+            min_y = min_y.min(y);
+            max_x = max_x.max(x + node_layout.width);
+            max_y = max_y.max(y + node_layout.height);
+        }
+
+        if min_x > max_x || min_y > max_y {
+            return;
+        }
+
+        let content_width = (max_x - min_x).max(1.0);
+        let content_height = (max_y - min_y).max(1.0);
+        let viewport_width: f32 = self.viewport_size.width.into();
+        let viewport_height: f32 = self.viewport_size.height.into();
+        if viewport_width <= 0.0 || viewport_height <= 0.0 {
+            return;
+        }
+
+        let margin = 48.0_f32;
+        let zoom = ((viewport_width - margin) / content_width)
+            .min((viewport_height - margin) / content_height)
+            .clamp(0.25, 1.5);
+
+        self.zoom = zoom;
+        self.pan_offset = Point::new(
+            px(margin / 2.0 - min_x * zoom),
+            px(margin / 2.0 - min_y * zoom),
+        );
+    }
+
     fn recompute_layout(&mut self) {
         let Some(ref graph) = self.graph else {
             return;
@@ -1861,7 +1919,7 @@ impl SchemaVizDocument {
                 // T20: dot-grid background rendered via a single canvas element.
                 // Each dot is a 1.5px square painted at 24px lattice intersections.
                 let dot_color = border.opacity(0.35);
-                let dot_lattice = 24.0_f32;
+                let dot_lattice = GRID_LATTICE;
                 let dot_extent = 3000.0_f32;
                 let dot_size = px(1.5_f32);
                 let dot_grid = canvas(
@@ -2038,6 +2096,37 @@ impl SchemaVizDocument {
                             )
                             .child("Reset"),
                     )
+                    .child(
+                        div()
+                            .cursor_pointer()
+                            .px(Spacing::SM)
+                            .py(px(2.0))
+                            .rounded_sm()
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _, cx| {
+                                    this.node_position_overrides.clear();
+                                    this.recompute_layout();
+                                    cx.notify();
+                                }),
+                            )
+                            .child("Arrange"),
+                    )
+                    .child(
+                        div()
+                            .cursor_pointer()
+                            .px(Spacing::SM)
+                            .py(px(2.0))
+                            .rounded_sm()
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _, cx| {
+                                    this.fit_to_view();
+                                    cx.notify();
+                                }),
+                            )
+                            .child("Fit"),
+                    )
                     .child(div().w(px(1.0)).h(Spacing::LG).bg(border.opacity(0.5)))
                     // Layout dropdown
                     .child(
@@ -2165,8 +2254,10 @@ impl SchemaVizDocument {
                     // graph_x = (screen_x - drag_offset_x - pan_x) / zoom
                     let new_graph_x = (screen_x - off_x - pan_x) / zoom;
                     let new_graph_y = (screen_y - off_y - pan_y) / zoom;
-                    this.node_position_overrides
-                        .insert(node_idx, Point::new(new_graph_x, new_graph_y));
+                    this.node_position_overrides.insert(
+                        node_idx,
+                        Point::new(snap_to_lattice(new_graph_x), snap_to_lattice(new_graph_y)),
+                    );
                     cx.notify();
                     return;
                 }
@@ -2479,7 +2570,10 @@ impl SchemaVizDocument {
                         _ => return,
                     }
 
-                    this.node_position_overrides.insert(selected, new_pos);
+                    this.node_position_overrides.insert(
+                        selected,
+                        Point::new(snap_to_lattice(new_pos.x), snap_to_lattice(new_pos.y)),
+                    );
                     cx.notify();
                 }
             }))
