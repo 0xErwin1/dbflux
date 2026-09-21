@@ -11,9 +11,9 @@ use crate::{
     DriverFormDef, DriverMetadata, EventPage, EventQuery, ExplainRequest, ExportFieldHint,
     FormFieldKind, FormValues, LanguageService, NoOpCodeGenerator, QueryHandle, QueryLanguage,
     QueryRequest, QueryResult, RelationRef, RoutineInfo, RowDelete, RowInsert, RowPatch,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot, SemanticPlan, SemanticPlanner,
-    SemanticRequest, SqlDialect, SqlGenerationRequest, SqlLanguageService, TableAlterPlanner,
-    TableBrowseRequest, TableCountRequest, TableInfo, Value, ViewInfo,
+    SchemaColumnInfo, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot, SemanticPlan,
+    SemanticPlanner, SemanticRequest, SqlDialect, SqlGenerationRequest, SqlLanguageService,
+    TableAlterPlanner, TableBrowseRequest, TableCountRequest, TableInfo, Value, ViewInfo,
     config::DriverKey,
     data::key_value::{
         HashDeleteRequest, HashSetRequest, KeyBulkGetRequest, KeyDeleteRequest, KeyExistsRequest,
@@ -1144,6 +1144,23 @@ pub trait Connection: Send + Sync {
         _schema: Option<&str>,
     ) -> Result<Vec<SchemaForeignKeyInfo>, DbError> {
         Ok(Vec::new())
+    }
+
+    /// Fetch the columns of every relation in a schema in one bulk call.
+    ///
+    /// The default returns `Err(DbError::NotSupported(..))` rather than an
+    /// empty vector on purpose: an empty result is a legitimate answer for a
+    /// schema without relations, so consumers could not distinguish it from
+    /// "this driver has no bulk path". Consumers must fall back to per-table
+    /// [`Connection::table_details`] when this returns an error.
+    fn schema_columns(
+        &self,
+        _database: &str,
+        _schema: Option<&str>,
+    ) -> Result<Vec<SchemaColumnInfo>, DbError> {
+        Err(DbError::NotSupported(
+            "this driver does not support bulk schema column loads".to_string(),
+        ))
     }
 
     /// Temporarily enable or disable referential-integrity (FK) checking for

@@ -22,15 +22,15 @@ use dbflux_core::{
     MutationCapabilities, OrderByColumn, PaginationStyle, PlaceholderStyle, QueryCancelHandle,
     QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage,
     QueryRequest, QueryResult, ReindexRequest, RelationalConnection, RelationalSchema, RoutineInfo,
-    RoutineKind, Row, RowDelete, RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyBuilder,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan,
-    SemanticPlanKind, SemanticRequest, SortDirection, SqlDialect, SqlMutationGenerator,
-    SqlQueryBuilder, SshTunnelConfig, SyntaxInfo, TableInfo, TransactionCapabilities,
-    TransferFamily, TypeDefinition, Value, ViewInfo, WhereOperator, field_password, field_required,
-    field_use_uri, generate_create_table, generate_delete_template, generate_drop_table,
-    generate_insert_template, generate_select_star, generate_truncate, generate_update_template,
-    render_semantic_filter_sql, sanitize_uri, ssh_tab, validate_ddl_fragment, when_checked,
-    when_unchecked, with_default, with_help,
+    RoutineKind, Row, RowDelete, RowInsert, RowPatch, SchemaColumnInfo, SchemaFeatures,
+    SchemaForeignKeyBuilder, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy,
+    SchemaSnapshot, SemanticPlan, SemanticPlanKind, SemanticRequest, SortDirection, SqlDialect,
+    SqlMutationGenerator, SqlQueryBuilder, SshTunnelConfig, SyntaxInfo, TableInfo,
+    TransactionCapabilities, TransferFamily, TypeDefinition, Value, ViewInfo, WhereOperator,
+    field_password, field_required, field_use_uri, generate_create_table, generate_delete_template,
+    generate_drop_table, generate_insert_template, generate_select_star, generate_truncate,
+    generate_update_template, render_semantic_filter_sql, sanitize_uri, ssh_tab,
+    validate_ddl_fragment, when_checked, when_unchecked, with_default, with_help,
 };
 use dbflux_ssh::SshTunnel;
 use half::f16;
@@ -2033,6 +2033,21 @@ impl Connection for PostgresConnection {
         get_schema_foreign_keys(&mut client, schema_name)
     }
 
+    fn schema_columns(
+        &self,
+        _database: &str,
+        schema: Option<&str>,
+    ) -> Result<Vec<SchemaColumnInfo>, DbError> {
+        let schema_name = schema.unwrap_or("public");
+
+        let mut client = self
+            .client
+            .lock()
+            .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e).into()))?;
+
+        get_all_columns_for_schema(&mut client, schema_name)
+    }
+
     fn schema_routines(
         &self,
         _database: &str,
@@ -2819,7 +2834,8 @@ fn get_columns(client: &mut Client, schema: &str, table: &str) -> Result<Vec<Col
                        AND ix.indisprimary
                        AND a.attnum = ANY(ix.indkey)),
                     false
-                ) AS is_pk
+                ) AS is_pk,
+                a.atttypid AS type_oid
             FROM pg_attribute a
             JOIN pg_class c ON c.oid = a.attrelid
             JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -2834,51 +2850,52 @@ fn get_columns(client: &mut Client, schema: &str, table: &str) -> Result<Vec<Col
         )
         .map_err(|e| format_pg_query_error(&e))?;
 
-    let mut columns: Vec<ColumnInfo> = rows
-        .iter()
-        .map(|row| ColumnInfo {
+    let enum_values = fetch_enum_values_for_columns(client, schema, table)?;
+
+    let mut columns: Vec<ColumnInfo> = Vec::with_capacity(rows.len());
+    for row in rows.iter() {
+        let type_oid: u32 = row.get(5);
+        let mut column = ColumnInfo {
             name: row.get(0),
             type_name: row.get(1),
             nullable: row.get(2),
             default_value: row.get(3),
             is_primary_key: row.get(4),
             enum_values: None,
-        })
-        .collect();
-
-    let enum_values = fetch_enum_values_for_columns(client, schema, table)?;
-    for col in &mut columns {
-        if let Some(values) = enum_values.get(&col.type_name) {
-            col.enum_values = Some(values.clone());
+        };
+        if let Some(values) = enum_values.get(&type_oid) {
+            column.enum_values = Some(values.clone());
         }
+        columns.push(column);
     }
 
     Ok(columns)
 }
 
-/// Fetch enum values for all enum-typed columns in a table, keyed by type name.
+/// Fetch enum values for all enum-typed columns in a table, keyed by the
+/// column's type OID. Keys must be OIDs, not `type_name`: `format_type`
+/// schema-qualifies types outside `search_path` (e.g. `other.mood`), so a
+/// bare-name lookup would silently miss them.
 fn fetch_enum_values_for_columns(
     client: &mut Client,
     schema: &str,
     table: &str,
-) -> Result<HashMap<String, Vec<String>>, DbError> {
+) -> Result<HashMap<u32, Vec<String>>, DbError> {
     let rows = client
         .query(
             r#"
-            SELECT DISTINCT
-                t.typname,
+            SELECT
+                a.atttypid,
                 array_agg(e.enumlabel ORDER BY e.enumsortorder) AS enum_values
             FROM pg_attribute a
             JOIN pg_class c ON c.oid = a.attrelid
             JOIN pg_namespace n ON n.oid = c.relnamespace
-            JOIN pg_type t ON t.oid = a.atttypid
-            JOIN pg_enum e ON e.enumtypid = t.oid
+            JOIN pg_enum e ON e.enumtypid = a.atttypid
             WHERE n.nspname = $1
               AND c.relname = $2
               AND a.attnum > 0
               AND NOT a.attisdropped
-              AND t.typtype = 'e'
-            GROUP BY t.typname
+            GROUP BY a.atttypid
             "#,
             &[&schema, &table],
         )
@@ -2886,18 +2903,17 @@ fn fetch_enum_values_for_columns(
 
     let mut result = HashMap::new();
     for row in rows {
-        let type_name: String = row.get(0);
+        let type_oid: u32 = row.get(0);
         let values: Vec<String> = row.get(1);
-        result.insert(type_name, values);
+        result.insert(type_oid, values);
     }
     Ok(result)
 }
 
-#[allow(dead_code)]
 fn get_all_columns_for_schema(
     client: &mut Client,
     schema: &str,
-) -> Result<HashMap<String, Vec<ColumnInfo>>, DbError> {
+) -> Result<Vec<SchemaColumnInfo>, DbError> {
     let rows = client
         .query(
             r#"
@@ -2913,13 +2929,19 @@ fn get_all_columns_for_schema(
                        AND ix.indisprimary
                        AND a.attnum = ANY(ix.indkey)),
                     false
-                ) AS is_pk
+                ) AS is_pk,
+                (SELECT array_agg(e.enumlabel ORDER BY e.enumsortorder)
+                 FROM pg_enum e WHERE e.enumtypid = a.atttypid) AS enum_values
             FROM pg_attribute a
             JOIN pg_class c ON c.oid = a.attrelid
             JOIN pg_namespace n ON n.oid = c.relnamespace
             LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
             WHERE n.nspname = $1
-              AND c.relkind IN ('r', 'p')
+              -- Indexes ('i'/'I') and composite types ('c') carry attributes
+              -- that are not columns. Sequences ('S') are excluded because a
+              -- serial/identity primary key creates one and this seam returns
+              -- untyped rows, so the caller cannot tell it from a table.
+              AND c.relkind NOT IN ('i', 'I', 'c', 'S')
               AND a.attnum > 0
               AND NOT a.attisdropped
             ORDER BY c.relname, a.attnum
@@ -2928,22 +2950,20 @@ fn get_all_columns_for_schema(
         )
         .map_err(|e| format_pg_query_error(&e))?;
 
-    let mut result: HashMap<String, Vec<ColumnInfo>> = HashMap::new();
-
-    for row in rows {
-        let table_name: String = row.get(0);
-        let column = ColumnInfo {
-            name: row.get(1),
-            type_name: row.get(2),
-            nullable: row.get(3),
-            default_value: row.get(4),
-            is_primary_key: row.get(5),
-            enum_values: None,
-        };
-        result.entry(table_name).or_default().push(column);
-    }
-
-    Ok(result)
+    Ok(rows
+        .iter()
+        .map(|row| SchemaColumnInfo {
+            table_name: row.get(0),
+            column: ColumnInfo {
+                name: row.get(1),
+                type_name: row.get(2),
+                nullable: row.get(3),
+                default_value: row.get(4),
+                is_primary_key: row.get(5),
+                enum_values: row.get(6),
+            },
+        })
+        .collect())
 }
 
 #[allow(dead_code)]
