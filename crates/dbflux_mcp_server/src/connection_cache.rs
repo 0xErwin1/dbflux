@@ -7,7 +7,7 @@ use dbflux_core::{
     CollectionCountRequest, Connection, CrudResult, CustomTypeInfo, DatabaseInfo, DbError, DbKind,
     DbSchemaInfo, DescribeRequest, DocumentDelete, DocumentInsert, DocumentUpdate, ExplainRequest,
     KeyValueApi, LanguageService, OrderByColumn, QueryCancelHandle, QueryGenerator, QueryHandle,
-    QueryRequest, QueryResult, RowDelete, RowInsert, RowPatch, SchemaFeatures,
+    QueryRequest, QueryResult, RowDelete, RowInsert, RowPatch, SchemaColumnInfo, SchemaFeatures,
     SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan,
     SemanticPlanner, SemanticRequest, SqlDialect, SqlGenerationRequest, TableBrowseRequest,
     TableCountRequest, TableInfo, Value, ViewInfo,
@@ -138,6 +138,14 @@ impl Connection for CachedConnection {
         schema: Option<&str>,
     ) -> Result<Vec<CustomTypeInfo>, DbError> {
         self.connection.schema_types(database, schema)
+    }
+
+    fn schema_columns(
+        &self,
+        database: &str,
+        schema: Option<&str>,
+    ) -> Result<Vec<SchemaColumnInfo>, DbError> {
+        self.connection.schema_columns(database, schema)
     }
 
     fn schema_indexes(
