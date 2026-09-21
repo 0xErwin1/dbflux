@@ -7,7 +7,7 @@
 )]
 
 use dbflux_core::{
-    ColumnInfo, Connection, ConnectionProfile, DbConfig, DbDriver, DbError, QueryRequest,
+    ColumnInfo, Connection, ConnectionProfile, DbConfig, DbDriver, DbError, IndexData, QueryRequest,
 };
 use dbflux_driver_postgres::PostgresDriver;
 use dbflux_test_support::containers;
@@ -42,6 +42,23 @@ fn connect_postgres(uri: String) -> Result<Box<dyn Connection>, dbflux_core::DbE
 
     Ok(connection)
 }
+
+/// One `(name, columns, is_unique, is_primary)` row, as both the bulk and
+/// per-table index paths report it.
+type IndexEntry<'a> = (&'a str, Vec<String>, bool, bool);
+
+/// One `(name, columns, referenced_schema, referenced_table,
+/// referenced_columns, on_delete, on_update)` row, as both foreign-key paths
+/// report it.
+type ForeignKeyEntry<'a> = (
+    &'a str,
+    Vec<String>,
+    Option<&'a str>,
+    &'a str,
+    Vec<String>,
+    Option<&'a str>,
+    Option<&'a str>,
+);
 
 fn assert_columns_equal(bulk: &ColumnInfo, per_table: &ColumnInfo, context: &str) {
     assert_eq!(bulk.name, per_table.name, "column name mismatch: {context}");
@@ -242,6 +259,214 @@ fn schema_columns_bulk_matches_table_details_and_resolves_out_of_search_path_enu
         assert_eq!(
             mood.type_name, "other.mood",
             "format_type must schema-qualify enum types outside search_path"
+        );
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn schema_indexes_and_foreign_keys_bulk_match_table_details_including_partitioned_parent()
+-> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let connection = connect_postgres(uri)?;
+
+        connection.execute(&QueryRequest::new("CREATE SCHEMA other"))?;
+        // Partitioned parent: relkind = 'p', PK index lives on the parent.
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE other.events (
+                id integer,
+                day date,
+                PRIMARY KEY (id, day)
+            ) PARTITION BY RANGE (day)",
+        ))?;
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE other.events_2024
+                PARTITION OF other.events
+                FOR VALUES FROM ('2024-01-01') TO ('2025-01-01')",
+        ))?;
+        // One unique and one plain index on the same table: exercises flags
+        // and index ordering within one relation.
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE other.tagged (
+                id integer PRIMARY KEY,
+                tag text
+            )",
+        ))?;
+        connection.execute(&QueryRequest::new(
+            "CREATE UNIQUE INDEX tagged_tag_key ON other.tagged (tag)",
+        ))?;
+        connection.execute(&QueryRequest::new(
+            "CREATE INDEX tagged_id_tag ON other.tagged (id, tag)",
+        ))?;
+        // Two-column FK: the composite case is where joining
+        // key_column_usage against constraint_column_usage can mis-pair
+        // columns, so it must be asserted explicitly.
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE other.parent_a (
+                a integer,
+                b integer,
+                PRIMARY KEY (a, b)
+            )",
+        ))?;
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE other.parent_b (x integer PRIMARY KEY)",
+        ))?;
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE other.child (
+                id integer PRIMARY KEY,
+                a integer,
+                b integer,
+                x integer,
+                FOREIGN KEY (a, b) REFERENCES other.parent_a (a, b),
+                FOREIGN KEY (x) REFERENCES other.parent_b (x)
+            )",
+        ))?;
+
+        // --- Indexes: bulk vs per-table ---------------------------------
+
+        let bulk_indexes = connection.schema_indexes("postgres", Some("other"))?;
+        let mut indexes_by_table: std::collections::BTreeMap<&str, Vec<IndexEntry>> =
+            std::collections::BTreeMap::new();
+        for row in &bulk_indexes {
+            indexes_by_table
+                .entry(row.table_name.as_str())
+                .or_default()
+                .push((
+                    row.name.as_str(),
+                    row.columns.clone(),
+                    row.is_unique,
+                    row.is_primary,
+                ));
+        }
+        for entries in indexes_by_table.values_mut() {
+            entries.sort_by(|a, b| a.0.cmp(b.0));
+        }
+
+        // The fix: the partitioned parent is relkind = 'p' but carries its
+        // own entry in pg_index; the bulk result must report it.
+        let events_indexes = indexes_by_table.get("events").unwrap_or_else(|| {
+            panic!(
+                "partitioned parent other.events must appear in the bulk index result; got {:?}",
+                indexes_by_table.keys().collect::<Vec<_>>()
+            )
+        });
+        assert_eq!(
+            events_indexes,
+            &vec![(
+                "events_pkey",
+                vec!["id".to_string(), "day".to_string()],
+                true,
+                true
+            )],
+            "partitioned parent must carry its own primary-key index in the bulk result"
+        );
+
+        for (table, bulk_indexes_for_table) in &indexes_by_table {
+            let details = connection.table_details("postgres", Some("other"), table)?;
+            let per_table_indexes = match details.indexes {
+                Some(IndexData::Relational(indexes)) => indexes,
+                other => {
+                    panic!("table_details({table}) returned non-relational index data: {other:?}")
+                }
+            };
+            let mut per_table: Vec<(&str, Vec<String>, bool, bool)> = per_table_indexes
+                .iter()
+                .map(|index| {
+                    (
+                        index.name.as_str(),
+                        index.columns.clone(),
+                        index.is_unique,
+                        index.is_primary,
+                    )
+                })
+                .collect();
+            per_table.sort_by(|a, b| a.0.cmp(b.0));
+            assert_eq!(
+                bulk_indexes_for_table, &per_table,
+                "index mismatch for {table}: bulk vs table_details"
+            );
+        }
+
+        // The partition must also still be reported by both paths.
+        assert!(
+            indexes_by_table.contains_key("events_2024"),
+            "partition other.events_2024 must appear in the bulk index result"
+        );
+
+        // --- Foreign keys: bulk vs per-table -----------------------------
+
+        let bulk_foreign_keys = connection.schema_foreign_keys("postgres", Some("other"))?;
+        let mut foreign_keys_by_table: std::collections::BTreeMap<&str, Vec<ForeignKeyEntry>> =
+            std::collections::BTreeMap::new();
+        for row in &bulk_foreign_keys {
+            foreign_keys_by_table
+                .entry(row.table_name.as_str())
+                .or_default()
+                .push((
+                    row.name.as_str(),
+                    row.columns.clone(),
+                    row.referenced_schema.as_deref(),
+                    row.referenced_table.as_str(),
+                    row.referenced_columns.clone(),
+                    row.on_delete.as_deref(),
+                    row.on_update.as_deref(),
+                ));
+        }
+        for entries in foreign_keys_by_table.values_mut() {
+            entries.sort_by(|a, b| a.0.cmp(b.0));
+        }
+
+        for (table, bulk_foreign_keys_for_table) in &foreign_keys_by_table {
+            let details = connection.table_details("postgres", Some("other"), table)?;
+            let per_table_foreign_keys = details.foreign_keys.unwrap_or_default();
+            let mut per_table: Vec<ForeignKeyEntry> = per_table_foreign_keys
+                .iter()
+                .map(|fk| {
+                    (
+                        fk.name.as_str(),
+                        fk.columns.clone(),
+                        fk.referenced_schema.as_deref(),
+                        fk.referenced_table.as_str(),
+                        fk.referenced_columns.clone(),
+                        fk.on_delete.as_deref(),
+                        fk.on_update.as_deref(),
+                    )
+                })
+                .collect();
+            per_table.sort_by(|a, b| a.0.cmp(b.0));
+            assert_eq!(
+                bulk_foreign_keys_for_table, &per_table,
+                "foreign key mismatch for {table}: bulk vs table_details"
+            );
+        }
+
+        // The composite FK must keep both column pairs correctly paired;
+        // this is where key_column_usage joined against
+        // constraint_column_usage can go wrong.
+        let child_foreign_keys = foreign_keys_by_table.get("child").unwrap_or_else(|| {
+            panic!(
+                "bulk foreign key result is missing child; got {:?}",
+                foreign_keys_by_table.keys().collect::<Vec<_>>()
+            )
+        });
+        let composite = child_foreign_keys
+            .iter()
+            .find(|(_name, _, _, referenced_table, _, _, _)| *referenced_table == "parent_a")
+            .unwrap_or_else(|| {
+                panic!(
+                    "bulk foreign key result is missing child -> parent_a; got {:?}",
+                    child_foreign_keys
+                )
+            });
+        assert_eq!(
+            (composite.1.as_slice(), composite.4.as_slice()),
+            (
+                ["a".to_string(), "b".to_string()].as_slice(),
+                ["a".to_string(), "b".to_string()].as_slice()
+            ),
+            "composite foreign key columns must be present and paired correctly"
         );
 
         Ok(())

@@ -833,3 +833,1031 @@ fn test_type_names_are_truncated_to_their_row_slot() {
         super::TYPE_NAME_CHARS
     );
 }
+
+// ---------------------------------------------------------------------------
+// Metadata loader tests: bulk path, per-table fallback, relation-set discipline.
+//
+// The fake below implements the `MetadataSource` seam the loader consumes and
+// records every call so the tests can assert which path ran, not only what
+// came out the other end.
+// ---------------------------------------------------------------------------
+
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
+use super::{MetadataSource, SchemaVizMode};
+use dbflux_core::{
+    CancelToken, CollectionPresentation, DatabaseCategory, DbError, DbSchemaInfo,
+    DriverCapabilities, DriverMetadata, DriverMetadataBuilder, IndexData, IndexInfo, QueryLanguage,
+    SchemaColumnInfo, SchemaIndexInfo,
+};
+
+#[derive(Clone, Debug, Default)]
+struct FakeCalls {
+    table_details: Vec<(Option<String>, String)>,
+    schema_columns: Vec<Option<String>>,
+    schema_indexes: Vec<Option<String>>,
+    schema_foreign_keys: Vec<Option<String>>,
+    schema_for_database: Vec<String>,
+}
+
+struct FakeSource {
+    metadata: DriverMetadata,
+    columns: HashMap<Option<String>, Vec<SchemaColumnInfo>>,
+    indexes: HashMap<Option<String>, Vec<SchemaIndexInfo>>,
+    foreign_keys: HashMap<Option<String>, Vec<SchemaForeignKeyInfo>>,
+    tables: HashMap<(Option<String>, String), TableInfo>,
+    schemas: HashMap<String, DbSchemaInfo>,
+    /// When set, `schema_indexes` and `schema_foreign_keys` fail after
+    /// recording the call, so the loader's log-only degradation arms run.
+    fail_indexes_and_fks: bool,
+    calls: Mutex<FakeCalls>,
+}
+
+impl FakeSource {
+    fn new() -> Self {
+        Self {
+            metadata: DriverMetadataBuilder::new(
+                "fake",
+                "Fake",
+                DatabaseCategory::Relational,
+                QueryLanguage::Sql,
+            )
+            .capabilities(DriverCapabilities::FOREIGN_KEYS)
+            .build(),
+            columns: HashMap::new(),
+            indexes: HashMap::new(),
+            foreign_keys: HashMap::new(),
+            tables: HashMap::new(),
+            schemas: HashMap::new(),
+            fail_indexes_and_fks: false,
+            calls: Mutex::new(FakeCalls::default()),
+        }
+    }
+
+    fn calls(&self) -> FakeCalls {
+        self.calls.lock().expect("fake calls mutex").clone()
+    }
+}
+
+impl MetadataSource for FakeSource {
+    fn metadata(&self) -> &DriverMetadata {
+        &self.metadata
+    }
+
+    fn table_details(
+        &self,
+        _database: &str,
+        schema: Option<&str>,
+        table: &str,
+    ) -> Result<TableInfo, DbError> {
+        self.calls
+            .lock()
+            .expect("fake calls mutex")
+            .table_details
+            .push((schema.map(str::to_owned), table.to_owned()));
+        self.tables
+            .get(&(schema.map(str::to_owned), table.to_owned()))
+            .cloned()
+            .ok_or_else(|| DbError::NotSupported(format!("no table {}", table)))
+    }
+
+    fn schema_columns(
+        &self,
+        _database: &str,
+        schema: Option<&str>,
+    ) -> Result<Vec<SchemaColumnInfo>, DbError> {
+        self.calls
+            .lock()
+            .expect("fake calls mutex")
+            .schema_columns
+            .push(schema.map(str::to_owned));
+        self.columns
+            .get(&schema.map(str::to_owned))
+            .cloned()
+            .ok_or_else(|| DbError::NotSupported("no bulk column path".to_owned()))
+    }
+
+    fn schema_indexes(
+        &self,
+        _database: &str,
+        schema: Option<&str>,
+    ) -> Result<Vec<SchemaIndexInfo>, DbError> {
+        self.calls
+            .lock()
+            .expect("fake calls mutex")
+            .schema_indexes
+            .push(schema.map(str::to_owned));
+        if self.fail_indexes_and_fks {
+            return Err(DbError::NotSupported("no bulk index path".to_owned()));
+        }
+        Ok(self
+            .indexes
+            .get(&schema.map(str::to_owned))
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    fn schema_foreign_keys(
+        &self,
+        _database: &str,
+        schema: Option<&str>,
+    ) -> Result<Vec<SchemaForeignKeyInfo>, DbError> {
+        self.calls
+            .lock()
+            .expect("fake calls mutex")
+            .schema_foreign_keys
+            .push(schema.map(str::to_owned));
+        if self.fail_indexes_and_fks {
+            return Err(DbError::NotSupported("no bulk foreign key path".to_owned()));
+        }
+        Ok(self
+            .foreign_keys
+            .get(&schema.map(str::to_owned))
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    fn schema_for_database(&self, database: &str) -> Result<DbSchemaInfo, DbError> {
+        self.calls
+            .lock()
+            .expect("fake calls mutex")
+            .schema_for_database
+            .push(database.to_owned());
+        self.schemas
+            .get(database)
+            .cloned()
+            .ok_or_else(|| DbError::NotSupported(format!("no schema for {}", database)))
+    }
+}
+
+fn bulk_column(table: &str, name: &str, is_primary_key: bool) -> SchemaColumnInfo {
+    SchemaColumnInfo {
+        table_name: table.to_owned(),
+        column: ColumnInfo {
+            name: name.to_owned(),
+            type_name: "integer".to_owned(),
+            nullable: !is_primary_key,
+            is_primary_key,
+            default_value: None,
+            enum_values: None,
+        },
+    }
+}
+
+fn bulk_index(table: &str, name: &str, columns: &[&str]) -> SchemaIndexInfo {
+    SchemaIndexInfo {
+        name: name.to_owned(),
+        table_name: table.to_owned(),
+        columns: columns.iter().map(|c| (*c).to_owned()).collect(),
+        is_unique: false,
+        is_primary: false,
+    }
+}
+
+fn plain_column(name: &str, is_primary_key: bool) -> ColumnInfo {
+    ColumnInfo {
+        name: name.to_owned(),
+        type_name: "integer".to_owned(),
+        nullable: !is_primary_key,
+        is_primary_key,
+        default_value: None,
+        enum_values: None,
+    }
+}
+
+fn per_table_index(name: &str, columns: &[&str]) -> IndexInfo {
+    IndexInfo {
+        name: name.to_owned(),
+        columns: columns.iter().map(|c| (*c).to_owned()).collect(),
+        is_unique: false,
+        is_primary: false,
+    }
+}
+
+/// A per-table `table_details` response shaped exactly like what the bulk
+/// path fabricates, so the two paths can be compared for the same input.
+fn per_table_response(
+    name: &str,
+    schema: Option<&str>,
+    columns: Vec<ColumnInfo>,
+    indexes: Vec<IndexInfo>,
+    foreign_keys: Vec<ForeignKeyInfo>,
+) -> TableInfo {
+    TableInfo {
+        name: name.to_owned(),
+        schema: schema.map(str::to_owned),
+        columns: Some(columns),
+        indexes: Some(IndexData::Relational(indexes)),
+        foreign_keys: Some(foreign_keys),
+        constraints: None,
+        sample_fields: None,
+        presentation: CollectionPresentation::DataGrid,
+        child_items: None,
+        storage_hints: None,
+    }
+}
+
+fn users_from_bulk() -> Vec<SchemaColumnInfo> {
+    vec![
+        bulk_column("users", "id", true),
+        bulk_column("posts", "id", true),
+        bulk_column("posts", "user_id", false),
+    ]
+}
+
+fn users_focused_load(source: &FakeSource) -> (Vec<TableInfo>, bool, usize) {
+    let (tables, _graph, _layout, capped, tables_loaded) =
+        SchemaVizDocument::load_focused_schema_blocking(
+            Some("app".to_owned()),
+            SchemaVizMode::Focused {
+                table: "users".to_owned(),
+                schema: Some("public".to_owned()),
+            },
+            source,
+            Arc::new(CancelToken::new()),
+        )
+        .expect("focused load should succeed");
+    (tables, capped, tables_loaded)
+}
+
+fn sorted_table_summaries(
+    tables: &[TableInfo],
+) -> Vec<(String, Vec<String>, Vec<String>, Vec<String>)> {
+    let mut summaries: Vec<(String, Vec<String>, Vec<String>, Vec<String>)> = tables
+        .iter()
+        .map(|table| {
+            let columns = table
+                .columns
+                .as_ref()
+                .map(|cols| cols.iter().map(|c| c.name.clone()).collect())
+                .unwrap_or_default();
+            let index_names = table
+                .indexes
+                .as_ref()
+                .map(|data| match data {
+                    IndexData::Relational(indexes) => {
+                        indexes.iter().map(|i| i.name.clone()).collect()
+                    }
+                    IndexData::Document(indexes) => {
+                        indexes.iter().map(|i| i.name.clone()).collect()
+                    }
+                })
+                .unwrap_or_default();
+            let foreign_keys = table
+                .foreign_keys
+                .as_ref()
+                .map(|fks| fks.iter().map(|fk| fk.referenced_table.clone()).collect())
+                .unwrap_or_default();
+            (table.name.clone(), columns, index_names, foreign_keys)
+        })
+        .collect();
+    summaries.sort_by(|a, b| a.0.cmp(&b.0));
+    summaries
+}
+
+fn sorted_table_details_calls(calls: &[(Option<String>, String)]) -> Vec<(String, String)> {
+    let mut sorted: Vec<(String, String)> = calls
+        .iter()
+        .map(|(schema, table)| (schema.clone().unwrap_or_default(), table.clone()))
+        .collect();
+    sorted.sort();
+    sorted
+}
+
+#[test]
+fn loader_bulk_path_fabricates_tables_without_table_details() {
+    let mut source = FakeSource::new();
+    source
+        .columns
+        .insert(Some("public".to_owned()), users_from_bulk());
+    source.indexes.insert(
+        Some("public".to_owned()),
+        vec![bulk_index("users", "users_pkey", &["id"])],
+    );
+    source.foreign_keys.insert(
+        Some("public".to_owned()),
+        vec![make_schema_fk("posts", "users", None)],
+    );
+
+    let (tables, capped, tables_loaded) = users_focused_load(&source);
+
+    assert_eq!(tables_loaded, 2);
+    assert!(!capped);
+
+    let users = tables
+        .iter()
+        .find(|t| t.name == "users")
+        .expect("users node");
+    assert_eq!(users.schema.as_deref(), Some("public"));
+    let user_columns = users.columns.as_ref().expect("users columns");
+    assert_eq!(user_columns.len(), 1);
+    assert!(user_columns[0].is_primary_key);
+    match &users.indexes {
+        Some(IndexData::Relational(indexes)) => {
+            assert_eq!(indexes.len(), 1);
+            assert_eq!(indexes[0].name, "users_pkey");
+        }
+        other => panic!("users should carry relational indexes, got {other:?}"),
+    }
+    let user_fks = users.foreign_keys.as_ref().expect("users fks");
+    assert!(user_fks.is_empty());
+
+    let posts = tables
+        .iter()
+        .find(|t| t.name == "posts")
+        .expect("posts node");
+    let post_fks = posts.foreign_keys.as_ref().expect("posts fks");
+    assert_eq!(post_fks.len(), 1);
+    assert_eq!(post_fks[0].name, "fk_posts_users");
+    assert_eq!(post_fks[0].columns, vec!["users_id".to_owned()]);
+    assert_eq!(post_fks[0].referenced_table, "users");
+    assert_eq!(post_fks[0].referenced_schema, None);
+    assert_eq!(post_fks[0].referenced_columns, vec!["id".to_owned()]);
+    assert_eq!(post_fks[0].on_delete, None);
+    assert_eq!(post_fks[0].on_update, None);
+
+    let calls = source.calls();
+    assert!(
+        calls.table_details.is_empty(),
+        "table_details must not run on the bulk path, got {calls:?}"
+    );
+    assert_eq!(calls.schema_columns, vec![Some("public".to_owned())]);
+    assert_eq!(calls.schema_indexes, vec![Some("public".to_owned())]);
+    assert_eq!(calls.schema_foreign_keys, vec![Some("public".to_owned())]);
+    assert!(calls.schema_for_database.is_empty());
+}
+
+#[test]
+fn loader_fallback_path_matches_bulk_path_result() {
+    // Same scenario twice: bulk supported, then `schema_columns` unsupported
+    // (no `columns` entry) so every relation goes through `table_details`.
+    let mut bulk_source = FakeSource::new();
+    bulk_source
+        .columns
+        .insert(Some("public".to_owned()), users_from_bulk());
+    bulk_source.indexes.insert(
+        Some("public".to_owned()),
+        vec![bulk_index("users", "users_pkey", &["id"])],
+    );
+    bulk_source.foreign_keys.insert(
+        Some("public".to_owned()),
+        vec![make_schema_fk("posts", "users", None)],
+    );
+
+    let (bulk_tables, _, _) = users_focused_load(&bulk_source);
+
+    let mut fallback_source = FakeSource::new();
+    fallback_source.foreign_keys.insert(
+        Some("public".to_owned()),
+        vec![make_schema_fk("posts", "users", None)],
+    );
+    fallback_source.tables.insert(
+        (Some("public".to_owned()), "users".to_owned()),
+        per_table_response(
+            "users",
+            Some("public"),
+            vec![plain_column("id", true)],
+            vec![per_table_index("users_pkey", &["id"])],
+            vec![],
+        ),
+    );
+    fallback_source.tables.insert(
+        (Some("public".to_owned()), "posts".to_owned()),
+        per_table_response(
+            "posts",
+            Some("public"),
+            vec![plain_column("id", true), plain_column("user_id", false)],
+            vec![],
+            vec![ForeignKeyInfo {
+                name: "fk_posts_users".to_owned(),
+                columns: vec!["users_id".to_owned()],
+                referenced_table: "users".to_owned(),
+                referenced_schema: None,
+                referenced_columns: vec!["id".to_owned()],
+                on_delete: None,
+                on_update: None,
+            }],
+        ),
+    );
+
+    let (fallback_tables, capped, tables_loaded) = users_focused_load(&fallback_source);
+
+    // One relation comes from bulk and one from `table_details`; both count.
+    assert_eq!(
+        tables_loaded, 2,
+        "relations assembled from either path must be counted"
+    );
+    assert!(!capped);
+    assert_eq!(
+        sorted_table_summaries(&bulk_tables),
+        sorted_table_summaries(&fallback_tables)
+    );
+
+    let calls = fallback_source.calls();
+    assert_eq!(
+        sorted_table_details_calls(&calls.table_details),
+        vec![
+            ("public".to_owned(), "posts".to_owned()),
+            ("public".to_owned(), "users".to_owned()),
+        ]
+    );
+    assert_eq!(calls.schema_columns, vec![Some("public".to_owned())]);
+    assert!(
+        calls.schema_indexes.is_empty(),
+        "the fallback path must not bulk-fetch indexes"
+    );
+    assert_eq!(calls.schema_foreign_keys, vec![Some("public".to_owned())]);
+}
+
+#[test]
+fn loader_bulk_result_extra_relation_becomes_no_node() {
+    let mut source = FakeSource::new();
+    let mut columns = users_from_bulk();
+    // A serial primary key leaves a sequence behind; the bulk result names it
+    // but nothing in the name distinguishes it from a table.
+    columns.push(bulk_column("feed_id_seq", "last_value", false));
+    source.columns.insert(Some("public".to_owned()), columns);
+    source.foreign_keys.insert(
+        Some("public".to_owned()),
+        vec![make_schema_fk("posts", "users", None)],
+    );
+
+    let (tables, _, _) = users_focused_load(&source);
+
+    let mut names: Vec<&str> = tables.iter().map(|t| t.name.as_str()).collect();
+    names.sort();
+    assert_eq!(names, vec!["posts", "users"]);
+
+    let calls = source.calls();
+    assert!(
+        calls.table_details.is_empty(),
+        "the extra relation must not even be fetched, got {calls:?}"
+    );
+}
+
+#[test]
+fn loader_cross_schema_focused_load_bulks_each_schema_once() {
+    let mut source = FakeSource::new();
+    // Two relations per schema: with only one relation per schema, calling
+    // the bulk seams once per relation would produce the same call vector as
+    // calling them once per schema.
+    source.columns.insert(
+        Some("public".to_owned()),
+        vec![
+            bulk_column("users", "id", true),
+            bulk_column("profiles", "id", true),
+        ],
+    );
+    source.columns.insert(
+        Some("billing".to_owned()),
+        vec![
+            bulk_column("invoices", "id", true),
+            bulk_column("invoices", "user_id", false),
+            bulk_column("audit_entries", "id", true),
+        ],
+    );
+    // The focal table declares outbound foreign keys into another schema, and
+    // a second public relation declares an inbound one back at the focal table.
+    source.foreign_keys.insert(
+        Some("public".to_owned()),
+        vec![
+            make_schema_fk("users", "invoices", Some("billing")),
+            make_schema_fk("users", "audit_entries", Some("billing")),
+            make_schema_fk("profiles", "users", None),
+        ],
+    );
+
+    let (tables, _, tables_loaded) = users_focused_load(&source);
+
+    assert_eq!(tables_loaded, 4);
+    let mut names: Vec<&str> = tables.iter().map(|t| t.name.as_str()).collect();
+    names.sort();
+    assert_eq!(
+        names,
+        vec!["audit_entries", "invoices", "profiles", "users"]
+    );
+    let invoices = tables
+        .iter()
+        .find(|t| t.name == "invoices")
+        .expect("cross-schema node");
+    assert_eq!(invoices.schema.as_deref(), Some("billing"));
+    let invoice_columns = invoices.columns.as_ref().expect("invoices columns");
+    assert_eq!(invoice_columns.len(), 2);
+
+    let users = tables
+        .iter()
+        .find(|t| t.name == "users")
+        .expect("users node");
+    let user_fks = users.foreign_keys.as_ref().expect("users fks");
+    assert_eq!(user_fks[0].referenced_schema.as_deref(), Some("billing"));
+
+    let calls = source.calls();
+    assert!(calls.table_details.is_empty());
+    let mut column_calls = calls.schema_columns.clone();
+    column_calls.sort();
+    assert_eq!(
+        column_calls,
+        vec![Some("billing".to_owned()), Some("public".to_owned())],
+        "one bulk attempt per distinct schema"
+    );
+}
+
+#[test]
+fn loader_missing_relation_falls_back_per_relation() {
+    let mut source = FakeSource::new();
+    // Bulk result covers users but not posts.
+    source.columns.insert(
+        Some("public".to_owned()),
+        vec![bulk_column("users", "id", true)],
+    );
+    source.foreign_keys.insert(
+        Some("public".to_owned()),
+        vec![make_schema_fk("posts", "users", None)],
+    );
+    source.tables.insert(
+        (Some("public".to_owned()), "posts".to_owned()),
+        per_table_response(
+            "posts",
+            Some("public"),
+            vec![plain_column("id", true), plain_column("user_id", false)],
+            vec![],
+            vec![ForeignKeyInfo {
+                name: "fk_posts_users".to_owned(),
+                columns: vec!["users_id".to_owned()],
+                referenced_table: "users".to_owned(),
+                referenced_schema: None,
+                referenced_columns: vec!["id".to_owned()],
+                on_delete: None,
+                on_update: None,
+            }],
+        ),
+    );
+
+    let (tables, _, tables_loaded) = users_focused_load(&source);
+
+    // users arrives via the bulk path and posts via `table_details`; both
+    // count toward `tables_loaded`.
+    assert_eq!(
+        tables_loaded, 2,
+        "relations assembled from either path must be counted"
+    );
+    let posts = tables
+        .iter()
+        .find(|t| t.name == "posts")
+        .expect("posts node");
+    let post_columns = posts.columns.as_ref().expect("posts columns");
+    assert_eq!(post_columns.len(), 2);
+    let users = tables
+        .iter()
+        .find(|t| t.name == "users")
+        .expect("users node");
+    assert_eq!(users.columns.as_ref().expect("users columns").len(), 1);
+
+    let calls = source.calls();
+    assert_eq!(
+        sorted_table_details_calls(&calls.table_details),
+        vec![("public".to_owned(), "posts".to_owned())],
+        "only the relation missing from the bulk result is fetched per table"
+    );
+    assert_eq!(calls.schema_columns, vec![Some("public".to_owned())]);
+}
+
+#[test]
+fn loader_global_bulks_each_schema_once_without_table_details() {
+    let mut source = FakeSource::new();
+    source.schemas.insert(
+        "app".to_owned(),
+        DbSchemaInfo {
+            name: "app".to_owned(),
+            tables: vec![
+                TableInfo {
+                    name: "users".to_owned(),
+                    schema: Some("public".to_owned()),
+                    columns: None,
+                    indexes: None,
+                    foreign_keys: None,
+                    constraints: None,
+                    sample_fields: None,
+                    presentation: CollectionPresentation::DataGrid,
+                    child_items: None,
+                    storage_hints: None,
+                },
+                TableInfo {
+                    name: "sessions".to_owned(),
+                    schema: Some("public".to_owned()),
+                    columns: None,
+                    indexes: None,
+                    foreign_keys: None,
+                    constraints: None,
+                    sample_fields: None,
+                    presentation: CollectionPresentation::DataGrid,
+                    child_items: None,
+                    storage_hints: None,
+                },
+                TableInfo {
+                    name: "audit_log".to_owned(),
+                    schema: Some("audit".to_owned()),
+                    columns: None,
+                    indexes: None,
+                    foreign_keys: None,
+                    constraints: None,
+                    sample_fields: None,
+                    presentation: CollectionPresentation::DataGrid,
+                    child_items: None,
+                    storage_hints: None,
+                },
+                TableInfo {
+                    name: "audit_archive".to_owned(),
+                    schema: Some("audit".to_owned()),
+                    columns: None,
+                    indexes: None,
+                    foreign_keys: None,
+                    constraints: None,
+                    sample_fields: None,
+                    presentation: CollectionPresentation::DataGrid,
+                    child_items: None,
+                    storage_hints: None,
+                },
+            ],
+            views: Vec::new(),
+            custom_types: None,
+        },
+    );
+    source.columns.insert(
+        Some("public".to_owned()),
+        vec![
+            bulk_column("users", "id", true),
+            bulk_column("sessions", "id", true),
+            // Present in the bulk result but not in the relation set.
+            bulk_column("users_session_seq", "last_value", false),
+        ],
+    );
+    source.columns.insert(
+        Some("audit".to_owned()),
+        vec![
+            bulk_column("audit_log", "id", true),
+            bulk_column("audit_archive", "id", true),
+        ],
+    );
+
+    let (tables, _graph, _layout, capped, tables_loaded) =
+        SchemaVizDocument::load_focused_schema_blocking(
+            Some("app".to_owned()),
+            SchemaVizMode::Global,
+            &source,
+            Arc::new(CancelToken::new()),
+        )
+        .expect("global load should succeed");
+
+    assert_eq!(tables_loaded, 4);
+    assert!(!capped);
+    let mut names: Vec<&str> = tables.iter().map(|t| t.name.as_str()).collect();
+    names.sort();
+    assert_eq!(
+        names,
+        vec!["audit_archive", "audit_log", "sessions", "users"]
+    );
+
+    let calls = source.calls();
+    assert!(calls.table_details.is_empty());
+    let mut column_calls = calls.schema_columns.clone();
+    column_calls.sort();
+    assert_eq!(
+        column_calls,
+        vec![Some("audit".to_owned()), Some("public".to_owned())]
+    );
+}
+
+#[test]
+fn loader_same_name_in_two_schemas_keeps_schema_scoped_maps() {
+    let mut source = FakeSource::new();
+    // The same relation name exists in two schemas with deliberately
+    // different columns and indexes: merging the per-schema bulk maps into
+    // one table-keyed map would cross-contaminate both nodes.
+    source.columns.insert(
+        Some("public".to_owned()),
+        vec![
+            bulk_column("orders", "id", true),
+            bulk_column("orders", "customer_id", false),
+        ],
+    );
+    source.columns.insert(
+        Some("billing".to_owned()),
+        vec![
+            bulk_column("orders", "id", true),
+            bulk_column("orders", "invoice_id", false),
+        ],
+    );
+    source.indexes.insert(
+        Some("public".to_owned()),
+        vec![bulk_index("orders", "orders_pkey", &["id"])],
+    );
+    source.indexes.insert(
+        Some("billing".to_owned()),
+        vec![bulk_index(
+            "orders",
+            "billing_orders_invoice_idx",
+            &["invoice_id"],
+        )],
+    );
+    source.foreign_keys.insert(
+        Some("public".to_owned()),
+        vec![make_schema_fk("orders", "orders", Some("billing"))],
+    );
+
+    let (tables, _graph, _layout, capped, tables_loaded) =
+        SchemaVizDocument::load_focused_schema_blocking(
+            Some("app".to_owned()),
+            SchemaVizMode::Focused {
+                table: "orders".to_owned(),
+                schema: Some("public".to_owned()),
+            },
+            &source,
+            Arc::new(CancelToken::new()),
+        )
+        .expect("focused load should succeed");
+
+    assert_eq!(tables_loaded, 2);
+    assert!(!capped);
+    assert_eq!(tables.len(), 2);
+
+    let public_orders = tables
+        .iter()
+        .find(|t| t.name == "orders" && t.schema.as_deref() == Some("public"))
+        .expect("public orders node");
+    let public_columns: Vec<&str> = public_orders
+        .columns
+        .as_ref()
+        .expect("public orders columns")
+        .iter()
+        .map(|c| c.name.as_str())
+        .collect();
+    assert_eq!(public_columns, vec!["id", "customer_id"]);
+    match &public_orders.indexes {
+        Some(IndexData::Relational(indexes)) => {
+            let names: Vec<&str> = indexes.iter().map(|i| i.name.as_str()).collect();
+            assert_eq!(names, vec!["orders_pkey"]);
+        }
+        other => panic!("public orders should carry relational indexes, got {other:?}"),
+    }
+
+    let billing_orders = tables
+        .iter()
+        .find(|t| t.name == "orders" && t.schema.as_deref() == Some("billing"))
+        .expect("billing orders node");
+    let billing_columns: Vec<&str> = billing_orders
+        .columns
+        .as_ref()
+        .expect("billing orders columns")
+        .iter()
+        .map(|c| c.name.as_str())
+        .collect();
+    assert_eq!(billing_columns, vec!["id", "invoice_id"]);
+    match &billing_orders.indexes {
+        Some(IndexData::Relational(indexes)) => {
+            let names: Vec<&str> = indexes.iter().map(|i| i.name.as_str()).collect();
+            assert_eq!(names, vec!["billing_orders_invoice_idx"]);
+        }
+        other => panic!("billing orders should carry relational indexes, got {other:?}"),
+    }
+
+    let calls = source.calls();
+    assert!(
+        calls.table_details.is_empty(),
+        "same-named relations must resolve from their own schema's bulk data, got {calls:?}"
+    );
+    let mut column_calls = calls.schema_columns.clone();
+    column_calls.sort();
+    assert_eq!(
+        column_calls,
+        vec![Some("billing".to_owned()), Some("public".to_owned())]
+    );
+}
+
+#[test]
+fn loader_global_not_supported_columns_fall_back_per_relation() {
+    let mut source = FakeSource::new();
+    // No `columns` entries: every `schema_columns` attempt returns
+    // NotSupported, so the Global loop must fall back to per-relation
+    // `table_details` and drop nothing.
+    source.schemas.insert(
+        "app".to_owned(),
+        DbSchemaInfo {
+            name: "app".to_owned(),
+            tables: vec![
+                TableInfo {
+                    name: "users".to_owned(),
+                    schema: Some("public".to_owned()),
+                    columns: None,
+                    indexes: None,
+                    foreign_keys: None,
+                    constraints: None,
+                    sample_fields: None,
+                    presentation: CollectionPresentation::DataGrid,
+                    child_items: None,
+                    storage_hints: None,
+                },
+                TableInfo {
+                    name: "audit_log".to_owned(),
+                    schema: Some("audit".to_owned()),
+                    columns: None,
+                    indexes: None,
+                    foreign_keys: None,
+                    constraints: None,
+                    sample_fields: None,
+                    presentation: CollectionPresentation::DataGrid,
+                    child_items: None,
+                    storage_hints: None,
+                },
+            ],
+            views: Vec::new(),
+            custom_types: None,
+        },
+    );
+    source.tables.insert(
+        (Some("public".to_owned()), "users".to_owned()),
+        per_table_response(
+            "users",
+            Some("public"),
+            vec![plain_column("id", true)],
+            vec![],
+            vec![],
+        ),
+    );
+    source.tables.insert(
+        (Some("audit".to_owned()), "audit_log".to_owned()),
+        per_table_response(
+            "audit_log",
+            Some("audit"),
+            vec![plain_column("id", true), plain_column("event", false)],
+            vec![],
+            vec![],
+        ),
+    );
+
+    let (tables, _graph, _layout, capped, tables_loaded) =
+        SchemaVizDocument::load_focused_schema_blocking(
+            Some("app".to_owned()),
+            SchemaVizMode::Global,
+            &source,
+            Arc::new(CancelToken::new()),
+        )
+        .expect("global load should succeed");
+
+    assert_eq!(tables_loaded, 2);
+    assert!(!capped);
+    let mut names: Vec<&str> = tables.iter().map(|t| t.name.as_str()).collect();
+    names.sort();
+    assert_eq!(names, vec!["audit_log", "users"], "no relation is dropped");
+    let users = tables
+        .iter()
+        .find(|t| t.name == "users")
+        .expect("users node");
+    assert_eq!(users.columns.as_ref().expect("users columns").len(), 1);
+    let audit_log = tables
+        .iter()
+        .find(|t| t.name == "audit_log")
+        .expect("audit_log node");
+    assert_eq!(
+        audit_log.columns.as_ref().expect("audit_log columns").len(),
+        2
+    );
+
+    let calls = source.calls();
+    assert_eq!(
+        sorted_table_details_calls(&calls.table_details),
+        vec![
+            ("audit".to_owned(), "audit_log".to_owned()),
+            ("public".to_owned(), "users".to_owned()),
+        ],
+        "every relation must arrive via table_details"
+    );
+    let mut column_calls = calls.schema_columns.clone();
+    column_calls.sort();
+    assert_eq!(
+        column_calls,
+        vec![Some("audit".to_owned()), Some("public".to_owned())],
+        "the bulk attempt still runs once per distinct schema"
+    );
+}
+
+#[test]
+fn loader_global_succeeds_with_empty_indexes_and_fks_when_bulk_seams_fail() {
+    let mut source = FakeSource::new();
+    source.fail_indexes_and_fks = true;
+    // `schema_columns` succeeds while `schema_indexes` and
+    // `schema_foreign_keys` both fail: the load degrades to empty indexes and
+    // foreign keys but must not fail or drop relations.
+    source.schemas.insert(
+        "app".to_owned(),
+        DbSchemaInfo {
+            name: "app".to_owned(),
+            tables: vec![
+                TableInfo {
+                    name: "users".to_owned(),
+                    schema: Some("public".to_owned()),
+                    columns: None,
+                    indexes: None,
+                    foreign_keys: None,
+                    constraints: None,
+                    sample_fields: None,
+                    presentation: CollectionPresentation::DataGrid,
+                    child_items: None,
+                    storage_hints: None,
+                },
+                TableInfo {
+                    name: "posts".to_owned(),
+                    schema: Some("public".to_owned()),
+                    columns: None,
+                    indexes: None,
+                    foreign_keys: None,
+                    constraints: None,
+                    sample_fields: None,
+                    presentation: CollectionPresentation::DataGrid,
+                    child_items: None,
+                    storage_hints: None,
+                },
+            ],
+            views: Vec::new(),
+            custom_types: None,
+        },
+    );
+    source.columns.insert(
+        Some("public".to_owned()),
+        vec![
+            bulk_column("users", "id", true),
+            bulk_column("posts", "id", true),
+            bulk_column("posts", "user_id", false),
+        ],
+    );
+    // Would have been used had the seams not failed.
+    source.indexes.insert(
+        Some("public".to_owned()),
+        vec![bulk_index("users", "users_pkey", &["id"])],
+    );
+    source.foreign_keys.insert(
+        Some("public".to_owned()),
+        vec![make_schema_fk("posts", "users", None)],
+    );
+
+    let (tables, _graph, _layout, capped, tables_loaded) =
+        SchemaVizDocument::load_focused_schema_blocking(
+            Some("app".to_owned()),
+            SchemaVizMode::Global,
+            &source,
+            Arc::new(CancelToken::new()),
+        )
+        .expect("global load should succeed despite index and FK failures");
+
+    assert_eq!(tables_loaded, 2);
+    assert!(!capped);
+    let users = tables
+        .iter()
+        .find(|t| t.name == "users")
+        .expect("users node");
+    let user_columns: Vec<&str> = users
+        .columns
+        .as_ref()
+        .expect("users columns")
+        .iter()
+        .map(|c| c.name.as_str())
+        .collect();
+    assert_eq!(user_columns, vec!["id"]);
+    match &users.indexes {
+        Some(IndexData::Relational(indexes)) => {
+            assert!(indexes.is_empty(), "failed index seam degrades to empty");
+        }
+        other => panic!("users should carry relational indexes, got {other:?}"),
+    }
+    assert!(
+        users.foreign_keys.as_ref().expect("users fks").is_empty(),
+        "failed foreign-key seam degrades to empty"
+    );
+
+    let posts = tables
+        .iter()
+        .find(|t| t.name == "posts")
+        .expect("posts node");
+    let post_columns: Vec<&str> = posts
+        .columns
+        .as_ref()
+        .expect("posts columns")
+        .iter()
+        .map(|c| c.name.as_str())
+        .collect();
+    assert_eq!(post_columns, vec!["id", "user_id"]);
+
+    let calls = source.calls();
+    assert_eq!(calls.schema_columns, vec![Some("public".to_owned())]);
+    assert_eq!(
+        calls.schema_indexes,
+        vec![Some("public".to_owned())],
+        "the failing index seam was attempted"
+    );
+    assert_eq!(
+        calls.schema_foreign_keys,
+        vec![Some("public".to_owned())],
+        "the failing foreign-key seam was attempted"
+    );
+}

@@ -11,7 +11,11 @@ use dbflux_core::observability::actions as audit_actions;
 use dbflux_core::observability::{
     AuditAction, EventCategory, EventOrigin, EventOutcome, EventRecord, EventSeverity,
 };
-use dbflux_core::{CancelToken, Connection, DbSchemaInfo, TableInfo, TaskKind, TaskTarget};
+use dbflux_core::{
+    CancelToken, CollectionPresentation, ColumnInfo, Connection, DbError, DbSchemaInfo,
+    DriverCapabilities, DriverMetadata, ForeignKeyInfo, IndexData, IndexInfo, SchemaColumnInfo,
+    SchemaForeignKeyInfo, SchemaIndexInfo, TableInfo, TaskKind, TaskTarget,
+};
 use dbflux_schema_viz::{
     graph::SchemaGraph,
     layout::{
@@ -20,7 +24,7 @@ use dbflux_schema_viz::{
     },
 };
 use petgraph::graph::NodeIndex;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, hash_map::Entry};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -548,7 +552,12 @@ impl SchemaVizDocument {
         self.cancel_token = Some(cancel_token.clone());
 
         let task = cx.background_executor().spawn(async move {
-            Self::load_focused_schema_blocking(database, mode, connection, cancel_token)
+            match connection {
+                Some(connection) => {
+                    Self::load_focused_schema_blocking(database, mode, &connection, cancel_token)
+                }
+                None => Err("Connection not found or not active".to_string()),
+            }
         });
 
         // Advance the loading spinner while the load runs. The future upgrades the
@@ -733,28 +742,186 @@ impl SchemaVizDocument {
         .detach();
     }
 
+    /// Fabricates a `TableInfo` for one relation from that relation's
+    /// schema-scoped bulk data. Pure, so tests can drive it directly.
+    ///
+    /// Returns `None` when the relation is absent from the column map so the
+    /// caller can fall back to `table_details` for that relation alone. The
+    /// column and index maps are keyed per schema and are never merged across
+    /// schemas: `SchemaColumnInfo` carries no schema field, so a same-named
+    /// table in two schemas must not cross-contaminate.
+    fn fabricated_table_from_bulk(
+        name: &str,
+        schema: Option<&str>,
+        columns: &HashMap<String, Vec<ColumnInfo>>,
+        indexes: &HashMap<String, Vec<IndexInfo>>,
+        foreign_keys: &[SchemaForeignKeyInfo],
+    ) -> Option<TableInfo> {
+        let table_columns = columns.get(name)?;
+        let table_indexes = indexes.get(name).cloned().unwrap_or_default();
+        let foreign_keys = foreign_keys
+            .iter()
+            .filter(|fk| fk.table_name == name)
+            .map(|fk| ForeignKeyInfo {
+                name: fk.name.clone(),
+                columns: fk.columns.clone(),
+                referenced_table: fk.referenced_table.clone(),
+                referenced_schema: fk.referenced_schema.clone(),
+                referenced_columns: fk.referenced_columns.clone(),
+                on_delete: fk.on_delete.clone(),
+                on_update: fk.on_update.clone(),
+            })
+            .collect();
+
+        Some(TableInfo {
+            name: name.to_owned(),
+            schema: schema.map(str::to_owned),
+            columns: Some(table_columns.clone()),
+            indexes: Some(IndexData::Relational(table_indexes)),
+            foreign_keys: Some(foreign_keys),
+            constraints: None,
+            sample_fields: None,
+            presentation: CollectionPresentation::DataGrid,
+            child_items: None,
+            storage_hints: None,
+        })
+    }
+
+    /// Bulk metadata for one schema, from one attempt per method. When
+    /// `schema_columns` is not supported the whole schema keeps the per-table
+    /// path (`columns_ok: false`); index and foreign-key failures only log and
+    /// degrade to empty, they never fail the load.
+    fn bulk_metadata(
+        source: &dyn MetadataSource,
+        database: &str,
+        schema: Option<&str>,
+        foreign_keys_when_unsupported: bool,
+    ) -> SchemaBulk {
+        let (columns, columns_ok) = match source.schema_columns(database, schema) {
+            Ok(rows) => {
+                let mut map: HashMap<String, Vec<ColumnInfo>> = HashMap::new();
+                for row in rows {
+                    map.entry(row.table_name).or_default().push(row.column);
+                }
+                (map, true)
+            }
+            Err(error) => {
+                log::debug!(
+                    "Bulk column load not supported for schema {:?}: {}",
+                    schema,
+                    error
+                );
+                (HashMap::new(), false)
+            }
+        };
+
+        let indexes = if columns_ok {
+            match source.schema_indexes(database, schema) {
+                Ok(rows) => {
+                    let mut map: HashMap<String, Vec<IndexInfo>> = HashMap::new();
+                    for row in rows {
+                        map.entry(row.table_name).or_default().push(IndexInfo {
+                            name: row.name,
+                            columns: row.columns,
+                            is_unique: row.is_unique,
+                            is_primary: row.is_primary,
+                        });
+                    }
+                    map
+                }
+                Err(error) => {
+                    log::warn!("Failed to list indexes for schema {:?}: {}", schema, error);
+                    HashMap::new()
+                }
+            }
+        } else {
+            HashMap::new()
+        };
+
+        let foreign_keys = if columns_ok || foreign_keys_when_unsupported {
+            match source.schema_foreign_keys(database, schema) {
+                Ok(foreign_keys) => foreign_keys,
+                Err(error) => {
+                    log::warn!(
+                        "Failed to list foreign keys for schema {:?}: {}",
+                        schema,
+                        error
+                    );
+                    Vec::new()
+                }
+            }
+        } else {
+            Vec::new()
+        };
+
+        SchemaBulk {
+            columns,
+            indexes,
+            foreign_keys,
+            columns_ok,
+        }
+    }
+
+    /// Loads one relation, preferring the bulk data of its schema and falling
+    /// back to `table_details` for the relation alone. The schema's bulk
+    /// attempt happens here if it has not run yet — once per distinct schema.
+    fn load_relation(
+        source: &dyn MetadataSource,
+        database: &str,
+        schema: Option<&str>,
+        name: &str,
+        bulk: &mut HashMap<Option<String>, SchemaBulk>,
+        cancel_token: &CancelToken,
+    ) -> LoadedRelation {
+        let schema_bulk = match bulk.entry(schema.map(str::to_owned)) {
+            Entry::Vacant(slot) => {
+                slot.insert(Self::bulk_metadata(source, database, schema, false))
+            }
+            Entry::Occupied(slot) => slot.into_mut(),
+        };
+
+        if schema_bulk.columns_ok
+            && let Some(assembled) = Self::fabricated_table_from_bulk(
+                name,
+                schema,
+                &schema_bulk.columns,
+                &schema_bulk.indexes,
+                &schema_bulk.foreign_keys,
+            )
+        {
+            return LoadedRelation::Loaded(assembled);
+        }
+
+        if cancel_token.is_cancelled() {
+            return LoadedRelation::Cancelled;
+        }
+
+        match source.table_details(database, schema, name) {
+            Ok(details) => LoadedRelation::Loaded(details),
+            Err(error) => LoadedRelation::Failed(error),
+        }
+    }
+
     /// Loads schema data (blocking, runs on background executor).
     /// The connection must be the correct per-database connection (obtained via
     /// `connection_for_task_target` in `SchemaVizDocument::new`), not the primary connection.
     ///
     /// The `cancel_token` is checked at key points to allow cancellation.
-    /// Returns `(tables, graph, layout, capped, tables_loaded)` where `tables_loaded`
-    /// is the count of successfully loaded tables (useful for audit events on cancel).
+    /// Returns `(tables, graph, layout, capped, tables_loaded)` where
+    /// `tables_loaded` counts relations assembled from either path — bulk or
+    /// per-table `table_details` (useful for audit events on cancel).
     #[allow(clippy::collapsible_if)]
     fn load_focused_schema_blocking(
         database: Option<String>,
         mode: SchemaVizMode,
-        connection: Option<Arc<dyn Connection>>,
+        source: &dyn MetadataSource,
         cancel_token: Arc<CancelToken>,
     ) -> Result<(Vec<TableInfo>, SchemaGraph, LayoutResult, bool, usize), String> {
-        let connection =
-            connection.ok_or_else(|| "Connection not found or not active".to_string())?;
-
         let db_name = database.ok_or_else(|| "No database specified".to_string())?;
 
         match mode {
             SchemaVizMode::Focused { table, schema } => {
-                let metadata = connection.metadata();
+                let metadata = source.metadata();
                 if !metadata
                     .capabilities
                     .contains(dbflux_core::DriverCapabilities::FOREIGN_KEYS)
@@ -766,9 +933,30 @@ impl SchemaVizDocument {
                     return Err("Cancelled".into());
                 }
 
-                let focal_table = connection
-                    .table_details(&db_name, schema.as_deref(), &table)
-                    .map_err(|e| format!("Failed to fetch table details: {}", e))?;
+                // Bulk metadata is attempted once per distinct schema and the
+                // bulk-vs-per-table decision is made once per schema. The
+                // focal schema is attempted first, so discovering outbound
+                // references never triggers a second call for it.
+                let mut bulk: HashMap<Option<String>, SchemaBulk> = HashMap::new();
+                bulk.insert(
+                    schema.clone(),
+                    Self::bulk_metadata(source, &db_name, schema.as_deref(), true),
+                );
+
+                let focal_table = match Self::load_relation(
+                    source,
+                    &db_name,
+                    schema.as_deref(),
+                    &table,
+                    &mut bulk,
+                    &cancel_token,
+                ) {
+                    LoadedRelation::Loaded(details) => details,
+                    LoadedRelation::Failed(e) => {
+                        return Err(format!("Failed to fetch table details: {}", e));
+                    }
+                    LoadedRelation::Cancelled => return Err("Cancelled".into()),
+                };
 
                 if cancel_token.is_cancelled() {
                     return Err("Cancelled".into());
@@ -790,21 +978,18 @@ impl SchemaVizDocument {
                 // keep the ones pointing here. A driver without the batch query
                 // returns an empty list, and the scan over the loaded tables below
                 // still finds whatever it can see.
-                match connection.schema_foreign_keys(&db_name, schema.as_deref()) {
-                    Ok(schema_foreign_keys) => {
-                        for name in Self::inbound_neighbor_names(
-                            &schema_foreign_keys,
-                            &table,
-                            schema.as_deref(),
-                        ) {
-                            all_table_names.insert((schema.clone(), name));
-                        }
-                    }
-                    Err(error) => log::warn!(
-                        "Failed to list foreign keys for schema {:?}: {}",
-                        schema,
-                        error
-                    ),
+                // The focal schema's foreign keys arrived with the bulk
+                // attempt above (also on the fallback path — `bulk_metadata`
+                // fetches them when asked); failures already degraded to an
+                // empty list with a warning.
+                let focal_foreign_keys = bulk
+                    .get(&schema)
+                    .map(|schema_bulk| schema_bulk.foreign_keys.clone())
+                    .unwrap_or_default();
+                for name in
+                    Self::inbound_neighbor_names(&focal_foreign_keys, &table, schema.as_deref())
+                {
+                    all_table_names.insert((schema.clone(), name));
                 }
 
                 let mut all_tables = Vec::with_capacity(all_table_names.len());
@@ -820,12 +1005,19 @@ impl SchemaVizDocument {
                         return Err("Cancelled".into());
                     }
 
-                    match connection.table_details(&db_name, tbl_schema.as_deref(), tbl_name) {
-                        Ok(details) => {
+                    match Self::load_relation(
+                        source,
+                        &db_name,
+                        tbl_schema.as_deref(),
+                        tbl_name,
+                        &mut bulk,
+                        &cancel_token,
+                    ) {
+                        LoadedRelation::Loaded(details) => {
                             tables_loaded += 1;
                             all_tables.push(details);
                         }
-                        Err(e) => {
+                        LoadedRelation::Failed(e) => {
                             log::warn!(
                                 "Failed to fetch details for table {}.{:?}: {}",
                                 tbl_schema.as_deref().unwrap_or("<default>"),
@@ -833,6 +1025,7 @@ impl SchemaVizDocument {
                                 e
                             );
                         }
+                        LoadedRelation::Cancelled => return Err("Cancelled".into()),
                     }
                 }
 
@@ -851,11 +1044,20 @@ impl SchemaVizDocument {
                             return Err("Cancelled".into());
                         }
 
-                        if let Ok(details) =
-                            connection.table_details(&db_name, tbl_schema.as_deref(), tbl_name)
-                        {
-                            tables_loaded += 1;
-                            all_tables.push(details);
+                        match Self::load_relation(
+                            source,
+                            &db_name,
+                            tbl_schema.as_deref(),
+                            tbl_name,
+                            &mut bulk,
+                            &cancel_token,
+                        ) {
+                            LoadedRelation::Loaded(details) => {
+                                tables_loaded += 1;
+                                all_tables.push(details);
+                            }
+                            LoadedRelation::Failed(_) => {}
+                            LoadedRelation::Cancelled => return Err("Cancelled".into()),
                         }
                     }
                 }
@@ -873,7 +1075,7 @@ impl SchemaVizDocument {
                 Ok((all_tables, focused_graph, layout, false, tables_loaded))
             }
             SchemaVizMode::Global => {
-                let metadata = connection.metadata();
+                let metadata = source.metadata();
                 if !metadata
                     .capabilities
                     .contains(dbflux_core::DriverCapabilities::FOREIGN_KEYS)
@@ -882,7 +1084,7 @@ impl SchemaVizDocument {
                 }
 
                 // Load ALL tables in the database
-                let schema_info = connection
+                let schema_info = source
                     .schema_for_database(&db_name)
                     .map_err(|e| format!("Failed to list tables: {}", e))?;
 
@@ -898,17 +1100,32 @@ impl SchemaVizDocument {
                 let mut all_table_details = Vec::with_capacity(tables_to_load.len());
                 let mut tables_loaded = 0;
 
+                let mut bulk: HashMap<Option<String>, SchemaBulk> = HashMap::new();
+
                 for tbl in &tables_to_load {
                     if cancel_token.is_cancelled() {
                         return Err("Cancelled".into());
                     }
 
-                    match connection.table_details(&db_name, tbl.schema.as_deref(), &tbl.name) {
-                        Ok(details) => {
+                    // One bulk attempt per distinct schema, on the first
+                    // relation seen from it; the fallback decision is made
+                    // once per schema.
+                    match Self::load_relation(
+                        source,
+                        &db_name,
+                        tbl.schema.as_deref(),
+                        &tbl.name,
+                        &mut bulk,
+                        &cancel_token,
+                    ) {
+                        LoadedRelation::Loaded(details) => {
                             tables_loaded += 1;
                             all_table_details.push(details);
                         }
-                        Err(e) => log::warn!("Failed to fetch details for {}: {}", tbl.name, e),
+                        LoadedRelation::Failed(e) => {
+                            log::warn!("Failed to fetch details for {}: {}", tbl.name, e)
+                        }
+                        LoadedRelation::Cancelled => return Err("Cancelled".into()),
                     }
                 }
 
@@ -3342,6 +3559,107 @@ impl SchemaVizDocument {
 }
 
 /// Tests for SchemaVizDocument logic (pure unit tests — no GPUI harness required).
+/// Bulk metadata fetched for one schema. `columns_ok` is false when the
+/// driver has no bulk column path and the schema keeps the per-table path.
+struct SchemaBulk {
+    columns: HashMap<String, Vec<ColumnInfo>>,
+    indexes: HashMap<String, Vec<IndexInfo>>,
+    foreign_keys: Vec<SchemaForeignKeyInfo>,
+    columns_ok: bool,
+}
+
+/// Outcome of loading one relation for the diagram.
+enum LoadedRelation {
+    Loaded(TableInfo),
+    Failed(DbError),
+    Cancelled,
+}
+
+/// Metadata seam for the schema-diagram loader so it can be unit-tested with
+/// a fake instead of a live connection. Every schema-scoped method carries
+/// the database name: `ConnectionPerDatabase` drivers and the MySQL and MSSQL
+/// `schema_for_database` implementations treat it as load-bearing.
+trait MetadataSource {
+    #[allow(clippy::result_large_err)]
+    fn metadata(&self) -> &DriverMetadata;
+
+    #[allow(clippy::result_large_err)]
+    fn table_details(
+        &self,
+        database: &str,
+        schema: Option<&str>,
+        table: &str,
+    ) -> Result<TableInfo, DbError>;
+
+    #[allow(clippy::result_large_err)]
+    fn schema_columns(
+        &self,
+        database: &str,
+        schema: Option<&str>,
+    ) -> Result<Vec<SchemaColumnInfo>, DbError>;
+
+    #[allow(clippy::result_large_err)]
+    fn schema_indexes(
+        &self,
+        database: &str,
+        schema: Option<&str>,
+    ) -> Result<Vec<SchemaIndexInfo>, DbError>;
+
+    #[allow(clippy::result_large_err)]
+    fn schema_foreign_keys(
+        &self,
+        database: &str,
+        schema: Option<&str>,
+    ) -> Result<Vec<SchemaForeignKeyInfo>, DbError>;
+
+    #[allow(clippy::result_large_err)]
+    fn schema_for_database(&self, database: &str) -> Result<DbSchemaInfo, DbError>;
+}
+
+#[allow(clippy::result_large_err)]
+impl MetadataSource for Arc<dyn Connection> {
+    fn metadata(&self) -> &DriverMetadata {
+        self.as_ref().metadata()
+    }
+
+    fn table_details(
+        &self,
+        database: &str,
+        schema: Option<&str>,
+        table: &str,
+    ) -> Result<TableInfo, DbError> {
+        self.as_ref().table_details(database, schema, table)
+    }
+
+    fn schema_columns(
+        &self,
+        database: &str,
+        schema: Option<&str>,
+    ) -> Result<Vec<SchemaColumnInfo>, DbError> {
+        self.as_ref().schema_columns(database, schema)
+    }
+
+    fn schema_indexes(
+        &self,
+        database: &str,
+        schema: Option<&str>,
+    ) -> Result<Vec<SchemaIndexInfo>, DbError> {
+        self.as_ref().schema_indexes(database, schema)
+    }
+
+    fn schema_foreign_keys(
+        &self,
+        database: &str,
+        schema: Option<&str>,
+    ) -> Result<Vec<SchemaForeignKeyInfo>, DbError> {
+        self.as_ref().schema_foreign_keys(database, schema)
+    }
+
+    fn schema_for_database(&self, database: &str) -> Result<DbSchemaInfo, DbError> {
+        self.as_ref().schema_for_database(database)
+    }
+}
+
 /// Kept in a separate file to avoid rustc stack overflow during compilation of
 /// this large module (see crates/dbflux_ui/src/ui/document/schema_viz/tests.rs).
 #[cfg(test)]

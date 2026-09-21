@@ -4994,7 +4994,10 @@ fn get_schema_indexes(client: &mut Client, schema: &str) -> Result<Vec<SchemaInd
             JOIN pg_namespace n ON n.oid = t.relnamespace
             JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(ix.indkey)
             WHERE n.nspname = $1
-                AND t.relkind = 'r'
+                -- A partitioned table is relkind = 'p' but carries its own
+                -- entries in pg_index, so restricting to 'r' silently drops
+                -- the parent's indexes while keeping each partition's.
+                AND t.relkind IN ('r', 'p')
             GROUP BY i.relname, t.relname, ix.indisunique, ix.indisprimary
             ORDER BY t.relname, i.relname
             "#,

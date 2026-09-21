@@ -1152,7 +1152,11 @@ pub trait Connection: Send + Sync {
     /// empty vector on purpose: an empty result is a legitimate answer for a
     /// schema without relations, so consumers could not distinguish it from
     /// "this driver has no bulk path". Consumers must fall back to per-table
-    /// [`Connection::table_details`] when this returns an error.
+    /// [`Connection::table_details`] when this returns an error. A driver that
+    /// overrides this method must also override [`Connection::schema_indexes`]
+    /// and [`Connection::schema_foreign_keys`]: consumers of a successful bulk
+    /// column load read indexes and foreign keys from those seams, whose
+    /// defaults return empty results instead of triggering a fallback.
     fn schema_columns(
         &self,
         _database: &str,

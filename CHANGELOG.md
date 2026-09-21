@@ -85,6 +85,18 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **Enum columns whose type is outside `search_path` offer their values again** —
+  the type name a column reports is schema-qualified when its type is not on the
+  search path, while the lookup for the enum's labels used the bare type name, so
+  the two never matched and the grid fell back to free text instead of the value
+  dropdown.
+
+* **A partitioned table keeps its indexes in the sidebar and in comparisons** —
+  the bulk index query selected only ordinary tables, but a partitioned table is
+  its own relation kind while still carrying entries in the index catalog, so the
+  parent lost its indexes while every partition kept theirs. The one-table path
+  never filtered, which is why the two disagreed; both agree now.
+
 * **Left-Right now flows left to right on cyclic schemas** — the layered layout only
   handled acyclic graphs, so a schema where two tables reference each other (the
   common case) silently fell back to a grid and the Left-Right choice made no
@@ -207,6 +219,15 @@ All notable changes to DBFlux will be documented in this file.
   when a pending insert sits above the selection instead of one row below it.
 
 ### Changed
+
+* **Schema metadata is loaded in bulk** — the schema diagram asked the database for
+  one table at a time, five queries per table (columns, enum values, indexes,
+  foreign keys and constraints), so a sixteen-table schema cost about eighty-five
+  sequential round trips and the whole-database diagram, which loads up to a
+  hundred tables, could reach roughly five hundred. Metadata is now read once per
+  schema and assembled in memory, which brings the same schema to about eleven
+  queries and stops the cost from growing with the number of tables. A driver with
+  no bulk path still loads one table at a time.
 
 * **Coupled schemas keep their depth** — when tables reference each other in a ring,
   the diagram no longer draws them as one tall column: the cycle is cut open and every
