@@ -60,8 +60,8 @@ fn compute_node_height(node: &crate::graph::TableNode, show_indexes: bool) -> f3
 ///
 /// `show_types` controls whether type labels contribute to width.
 /// `show_indexes` controls whether index label widths are considered.
-/// Badge cluster always contributes `badge_count * 26.0` px.
-/// Result is clamped to [200, 640].
+/// Badge cluster contributes a fixed slot, and the type column another one.
+/// Result is clamped to [200, 520].
 pub fn compute_node_width(
     node: &crate::graph::TableNode,
     show_types: bool,
@@ -81,11 +81,11 @@ pub fn compute_node_width(
     let header_width = header_text.len() as f32 * bold_chars_per_px + header_chrome;
 
     // Body width must mirror the actual rendered row layout:
-    // [container px(10)] [name flex_1] [gap 8] [badge slot 64] {[gap 8] [type slot 72]} [container px(10)]
+    // [container px(10)] [name flex_1] [gap 8] [badge slot 56] {[gap 8] [type slot 56]} [container px(10)]
     let body_padding = 10.0 + 10.0;
-    let badge_slot_w = 64.0;
+    let badge_slot_w = 56.0;
     let row_chrome = if show_types {
-        body_padding + 8.0 + badge_slot_w + 8.0 + 72.0
+        body_padding + 8.0 + badge_slot_w + 8.0 + 56.0
     } else {
         body_padding + 8.0 + badge_slot_w
     };
@@ -114,7 +114,7 @@ pub fn compute_node_width(
     header_width
         .max(body_width)
         .max(index_width)
-        .clamp(200.0, 640.0)
+        .clamp(200.0, 520.0)
 }
 
 /// Layout information for a single node.
@@ -359,7 +359,7 @@ fn layered_layout(graph: &SchemaGraph, show_types: bool, show_indexes: bool) -> 
     let mut nodes: HashMap<NodeIndex, NodeLayout> = HashMap::new();
 
     // Layers are stacked left to right, each one starting after the widest node of
-    // the previous layer. A fixed stride let a node as wide as 640px overlap the
+    // the previous layer. A fixed stride let a wide node overlap the
     // next layer, which is part of why the diagram read as one solid block.
     let mut layer_x = 0.0_f32;
     for node_ids in layers.values() {
@@ -789,11 +789,11 @@ mod tests {
         let ft = compute_node_width(node, false, true);
         let ff = compute_node_width(node, false, false);
 
-        // All results must be within the clamp range [200, 640]
+        // All results must be within the clamp range [200, 520]
         for (label, w) in [("TT", tt), ("TF", tf), ("FT", ft), ("FF", ff)] {
             assert!(
-                (200.0..=640.0).contains(&w),
-                "compute_node_width({label}) = {w} outside [200, 640]"
+                (200.0..=520.0).contains(&w),
+                "compute_node_width({label}) = {w} outside [200, 520]"
             );
         }
     }
@@ -818,11 +818,11 @@ mod tests {
         let w_without = layout_without.nodes.get(&idx).map(|n| n.width).unwrap();
 
         assert!(
-            (200.0..=640.0).contains(&w_with),
+            (200.0..=520.0).contains(&w_with),
             "width with types out of range: {w_with}"
         );
         assert!(
-            (200.0..=640.0).contains(&w_without),
+            (200.0..=520.0).contains(&w_without),
             "width without types out of range: {w_without}"
         );
 

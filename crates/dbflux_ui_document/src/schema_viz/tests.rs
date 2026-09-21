@@ -814,3 +814,22 @@ fn test_route_lane_steps_around_a_table_in_the_corridor() {
     );
     assert_axis_aligned(&route);
 }
+
+#[test]
+fn test_type_names_are_truncated_to_their_row_slot() {
+    // The row reserves a fixed slot for the type, so long names are cut short
+    // rather than widening every table.
+    assert_eq!(super::truncate_type_name("text"), "text");
+    assert_eq!(super::truncate_type_name("uuid"), "uuid");
+    assert_eq!(super::truncate_type_name("timestamptz"), "timesta…");
+    assert_eq!(
+        super::truncate_type_name("timestamp with time zone"),
+        "timesta…"
+    );
+    assert_eq!(
+        super::truncate_type_name("timestamp with time zone")
+            .chars()
+            .count(),
+        super::TYPE_NAME_CHARS
+    );
+}
