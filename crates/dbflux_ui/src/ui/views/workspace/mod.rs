@@ -931,6 +931,27 @@ impl Workspace {
                 } => {
                     this.open_key_value_document(*profile_id, database.clone(), window, cx);
                 }
+                SidebarEvent::OpenSchemaViz {
+                    profile_id,
+                    database,
+                    schema,
+                    table,
+                } => {
+                    this.open_schema_viz_document(
+                        *profile_id,
+                        database.clone(),
+                        schema.clone(),
+                        table.clone(),
+                        window,
+                        cx,
+                    );
+                }
+                SidebarEvent::OpenGlobalSchemaViz {
+                    profile_id,
+                    database,
+                } => {
+                    this.open_global_schema_viz_document(*profile_id, database.clone(), window, cx);
+                }
                 SidebarEvent::OpenObjectStoreBuckets { profile_id } => {
                     this.open_object_store_buckets_document(*profile_id, window, cx);
                 }

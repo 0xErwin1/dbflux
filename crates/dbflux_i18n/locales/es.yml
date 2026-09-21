@@ -2789,6 +2789,7 @@ settings:
       context_bar: Barra de contexto
       audit: Visor de auditoría
       event_streams_picker: Selector de flujos de eventos
+      schema_viz: Visualización de esquema
     category:
       global: Global
       focus: Foco

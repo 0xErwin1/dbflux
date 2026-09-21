@@ -230,6 +230,12 @@ event_sink.record(event)?;
 | `MCP_REJECT_EXECUTION` | `mcp_reject_execution` | MCP |
 | `MCP_TOOL_EXECUTE` | `mcp_tool_execute` | MCP |
 | `MCP_TOOL_EXECUTE_FAILED` | `mcp_tool_execute_failed` | MCP |
+| `SCHEMA_VIZ_OPEN` | `schema_viz_open` | 配置 |
+| `SCHEMA_VIZ_CANCEL` | `schema_viz_cancel` | 配置 |
+| `SCHEMA_VIZ_ERROR` | `schema_viz_error` | 配置 |
+| `SCHEMA_VIZ_LAYOUT_CHANGE` | `schema_viz_layout_change` | 配置 |
+| `SCHEMA_VIZ_EXPORT_DBML` | `schema_viz_export_dbml` | 配置 |
+| `SCHEMA_VIZ_EXPORT_SQL` | `schema_viz_export_sql` | 配置 |
 | `SYSTEM_PANIC` | `system_panic` | 系统 |
 
 ### 必填字段清单

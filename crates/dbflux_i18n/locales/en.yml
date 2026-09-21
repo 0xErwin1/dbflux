@@ -2789,6 +2789,7 @@ settings:
       context_bar: Context Bar
       audit: Audit Viewer
       event_streams_picker: Event Streams Picker
+      schema_viz: Schema Viz
     category:
       global: Global
       focus: Focus

@@ -562,6 +562,12 @@ crates/
       audit.rs              # AuditRepository with AuditEventDto
       *.rs                  # Other domain repositories
     src/legacy.rs           # JSON-to-SQLite import
+  dbflux_schema_viz/        # Schema visualization
+    src/lib.rs              # Re-exports: graph, layout, dbml, sql modules, DbmlScope, SqlScope
+    src/graph.rs            # SchemaGraph, TableNode, ForeignKeyEdge, ColumnRefNode
+    src/layout.rs           # Layout algorithms: ForceBased, Tree, Radial, Grid
+    src/dbml.rs             # DBML export (3 scopes: FocalTable, Subgraph, Full)
+    src/sql.rs              # SQL DDL export (3 scopes: CREATE TABLE + ALTER TABLE)
   dbflux_test_support/       # Docker containers and fixtures for integration tests
     src/containers.rs       # Docker container lifecycle (Postgres, MySQL, MongoDB, Redis, DynamoDB Local)
     src/fixtures.rs         # Test fixture helpers
@@ -872,6 +878,14 @@ conexión sin acceder al código del driver.
   específico de Redis con renderizado por tipo (String, Hash, List, Set,
   SortedSet, Stream), paginación, mutations y menú contextual. Se integra con el
   workspace vía un `PaneHandle` construido en `key_value/pane.rs`.
+- **Schema visualization**: `crates/dbflux_schema_viz/` provee `SchemaGraph`
+  (nodos de tabla, aristas de clave foránea, nodos de referencia de columna),
+  algoritmos de layout (ForceBased, Tree, Radial, Grid), exportación a DBML y
+  exportación de DDL SQL. Se accede desde `SchemaVizDocument` en
+  `crates/dbflux_ui_document/src/schema_viz/mod.rs`, con menús desplegables en
+  la barra (Layout, Export), avisos toast, eventos de auditoría y carga
+  cancelable en tareas de fondo. Se integra con el workspace mediante un
+  `PaneHandle` construido en `schema_viz/pane.rs`.
 - Cell editor modal: `crates/dbflux_components/src/modals/cell_editor.rs` provee
   un editor modal para columnas JSON y texto largo/multilínea, con validación y
   formateo de JSON. (Shim en la ruta antigua de overlay en `dbflux_ui`.)

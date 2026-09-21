@@ -2789,6 +2789,7 @@ settings:
       context_bar: 上下文栏
       audit: 审计查看器
       event_streams_picker: 事件流选择器
+      schema_viz: 架构可视化
     category:
       global: 全局
       focus: 聚焦
