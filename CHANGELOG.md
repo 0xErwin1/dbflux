@@ -106,6 +106,12 @@ All notable changes to DBFlux will be documented in this file.
   component library's default white fill. Component colors, including hover and
   pressed states, stay aligned when switching between Dark, Mirage, and Light.
 
+* **The command palette accepts every letter while typing a search** — the palette
+  layer bound bare `s`, `j` and `k` to commands, so the workspace keydown handler
+  consumed those keystrokes before the search input saw them. All unmodified
+  letters now reach the input; list navigation stays on the arrow keys, with
+  Enter to run and Escape to close unchanged.
+
 * **Composite foreign keys keep the constraint's own column order** — the referenced
   columns came from a join between two catalog views that matched the constraint as a
   set rather than by position, so a key spanning more than one column kept its pairing

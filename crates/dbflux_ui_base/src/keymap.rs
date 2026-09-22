@@ -587,18 +587,16 @@ fn background_tasks_layer() -> KeymapLayer {
 fn command_palette_layer() -> KeymapLayer {
     let mut layer = KeymapLayer::new(ContextId::CommandPalette);
 
-    layer.bind(KeyChord::new("j", Modifiers::none()), Command::SelectNext);
+    // The palette's search input must receive every unmodified letter, so this
+    // layer binds no bare a-z chords; list navigation stays on the arrow keys.
     layer.bind(
         KeyChord::new("down", Modifiers::none()),
         Command::SelectNext,
     );
-
-    layer.bind(KeyChord::new("k", Modifiers::none()), Command::SelectPrev);
     layer.bind(KeyChord::new("up", Modifiers::none()), Command::SelectPrev);
 
     layer.bind(KeyChord::new("enter", Modifiers::none()), Command::Execute);
     layer.bind(KeyChord::new("escape", Modifiers::none()), Command::Cancel);
-    layer.bind(KeyChord::new("s", Modifiers::none()), Command::SaveQuery);
 
     layer
 }
@@ -1121,6 +1119,60 @@ mod tests {
                 &KeyChord::new("s", Modifiers::primary_shift())
             ),
             Some(Command::SaveFileAs),
+        );
+    }
+
+    /// Every unmodified a-z keystroke must reach the palette's search input
+    /// instead of being swallowed by the workspace keydown handler, so the
+    /// CommandPalette layer must bind none of them. Navigation stays on the
+    /// arrow keys; Enter confirms and Escape closes.
+    #[test]
+    fn command_palette_does_not_steal_unmodified_letters() {
+        let keymap = default_keymap();
+        for letter in 'a'..='z' {
+            let chord = KeyChord::new(letter.to_string(), Modifiers::none());
+            assert_eq!(
+                keymap.resolve(ContextId::CommandPalette, &chord),
+                None,
+                "CommandPalette must not bind unmodified `{letter}` — it would be \
+                 swallowed before the search input ever sees the keystroke",
+            );
+        }
+    }
+
+    /// Arrow navigation, Enter and Escape must keep resolving in the palette
+    /// once the bare-letter bindings are gone.
+    #[test]
+    fn command_palette_keeps_navigation_and_dismiss_chords() {
+        let keymap = default_keymap();
+
+        assert_eq!(
+            keymap.resolve(
+                ContextId::CommandPalette,
+                &KeyChord::new("down", Modifiers::none())
+            ),
+            Some(Command::SelectNext)
+        );
+        assert_eq!(
+            keymap.resolve(
+                ContextId::CommandPalette,
+                &KeyChord::new("up", Modifiers::none())
+            ),
+            Some(Command::SelectPrev)
+        );
+        assert_eq!(
+            keymap.resolve(
+                ContextId::CommandPalette,
+                &KeyChord::new("enter", Modifiers::none())
+            ),
+            Some(Command::Execute)
+        );
+        assert_eq!(
+            keymap.resolve(
+                ContextId::CommandPalette,
+                &KeyChord::new("escape", Modifiers::none())
+            ),
+            Some(Command::Cancel)
         );
     }
 
