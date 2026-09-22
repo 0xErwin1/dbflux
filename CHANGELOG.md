@@ -101,6 +101,11 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **Ayu colors on buttons and checkboxes** — primary buttons such as Save and
+  checked checkboxes now use the selected theme's amber accent instead of the
+  component library's default white fill. Component colors, including hover and
+  pressed states, stay aligned when switching between Dark, Mirage, and Light.
+
 * **Composite foreign keys keep the constraint's own column order** — the referenced
   columns came from a join between two catalog views that matched the constraint as a
   set rather than by position, so a key spanning more than one column kept its pairing
