@@ -101,6 +101,11 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **Ayu colors on buttons and checkboxes** — primary buttons such as Save and
+  checked checkboxes now use the selected theme's amber accent instead of the
+  component library's default white fill. Component colors, including hover and
+  pressed states, stay aligned when switching between Dark, Mirage, and Light.
+
 * **The command palette accepts every letter while typing a search** — the palette
   layer bound bare `s`, `j` and `k` to commands, so the workspace keydown handler
   consumed those keystrokes before the search input saw them. All unmodified
