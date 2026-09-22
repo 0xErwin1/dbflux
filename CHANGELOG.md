@@ -1,6 +1,15 @@
 # Changelog
 
 All notable changes to DBFlux will be documented in this file.
+## [0.7.9] - 2026-09-22
+
+
+### Fixed
+
+* Let command palette search accept every letter (#683)
+* Retain database in lazy relational tree IDs (#670)
+* Defer palette window commands outside render (#684)
+
 ## [0.7.8] - 2026-09-12
 
 
