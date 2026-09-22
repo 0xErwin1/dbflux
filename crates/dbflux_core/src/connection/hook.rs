@@ -3352,17 +3352,31 @@ mod tests {
         command.stderr(Stdio::piped());
 
         let mut child = command.spawn().unwrap();
+        // Generous bound so a cold interpreter start on Windows does not eat the
+        // output before decoding is exercised; see the sibling test above.
         let result = execute_streaming_process(
             &mut child,
             None,
             &CancelToken::new(),
             None,
-            Some(Duration::from_secs(2)),
+            Some(Duration::from_secs(30)),
             None,
             None,
         )
         .unwrap();
 
+        assert!(
+            !result.timed_out,
+            "process timed out: exit_code={:?}, stdout={:?}, stderr={:?}",
+            result.exit_code, result.stdout, result.stderr
+        );
+        assert_eq!(
+            result.exit_code,
+            Some(0),
+            "unexpected exit: stdout={:?}, stderr={:?}",
+            result.stdout,
+            result.stderr
+        );
         assert!(result.stdout.contains("prefix"));
         assert!(result.stdout.contains(char::REPLACEMENT_CHARACTER));
         assert!(result.stdout.contains("suffix"));
