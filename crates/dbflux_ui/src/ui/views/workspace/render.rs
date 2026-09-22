@@ -9,6 +9,28 @@ use dbflux_ui_base::modal_frame::ModalFrame;
 use dbflux_ui_base::platform;
 use gpui_component::IconName;
 
+/// Schedules `run` at the end of the current effect cycle instead of running
+/// it inline (`Context::defer_in`). Commands that open native windows
+/// (Settings, Connection Manager) must never be dispatched from inside
+/// `Render::render`: opening a window while the workspace render pass is on
+/// the stack nests a full window draw into it. The deferred callback runs at
+/// most once; if the window closes before the cycle drains, the callback is
+/// dropped rather than run.
+fn defer_to_end_of_effect_cycle<T: 'static>(
+    window: &Window,
+    cx: &mut Context<T>,
+    run: impl FnOnce(&mut T, &mut Window, &mut Context<T>) + 'static,
+) {
+    cx.defer_in(window, run);
+}
+
+/// Palette commands that open a separate native window. After these run, the
+/// parent workspace must not steal focus back from the newly opened window;
+/// the window activation inside the command owns the final focus.
+fn palette_command_opens_native_window(command_id: &str) -> bool {
+    matches!(command_id, "open_settings" | "open_connection_manager")
+}
+
 impl Workspace {
     /// Renders the active document from TabManager (v0.3).
     ///
@@ -44,8 +66,16 @@ fn empty_state_shortcut<const N: usize>(
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if let Some(command_id) = self.pending_command.take() {
-            self.handle_command(command_id, window, cx);
-            self.focus_handle.focus(window, cx);
+            // `take` before scheduling keeps dispatch at most once across
+            // re-renders; the deferred callback runs after the render pass
+            // returns, or not at all if the window closes first.
+            let refocus_parent = !palette_command_opens_native_window(command_id);
+            defer_to_end_of_effect_cycle(window, cx, move |this, window, cx| {
+                this.handle_command(command_id, window, cx);
+                if refocus_parent {
+                    this.focus_handle.focus(window, cx);
+                }
+            });
         }
 
         // Handle SQL generated from sidebar (e.g., SELECT * FROM table)
@@ -1067,7 +1097,13 @@ impl Render for Workspace {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
     use std::fs;
+    use std::rc::Rc;
+
+    use gpui::{
+        Context, FontWeight, IntoElement, Render, TestAppContext, VisualTestContext, Window, div,
+    };
 
     use dbflux_components::composites::{
         PanelHeaderBackground, PanelHeaderTitleColor, PanelHeaderVariant, inspect_panel_header,
@@ -1075,7 +1111,8 @@ mod tests {
     use dbflux_components::primitives::SurfaceRole;
     use dbflux_components::tokens::FontSizes;
     use dbflux_components::typography::AppFonts;
-    use gpui::FontWeight;
+
+    use super::{defer_to_end_of_effect_cycle, palette_command_opens_native_window};
 
     #[test]
     fn panel_headers_keep_mono_family_and_focus_weight_difference() {
@@ -1168,6 +1205,154 @@ mod tests {
             assert!(!invocation.contains("theme.tab_bar"));
             assert!(!invocation.contains("theme.primary"));
         }
+    }
+
+    #[test]
+    fn native_window_palette_commands_skip_the_parent_refocus() {
+        assert!(palette_command_opens_native_window("open_settings"));
+        assert!(palette_command_opens_native_window(
+            "open_connection_manager"
+        ));
+    }
+
+    #[test]
+    fn in_window_palette_commands_keep_the_parent_refocus() {
+        for command_id in [
+            "new_query_tab",
+            "open_audit_viewer",
+            "open_login_modal",
+            "focus_sidebar",
+        ] {
+            assert!(
+                !palette_command_opens_native_window(command_id),
+                "`{command_id}` runs inside the workspace window and must keep \
+                 the parent refocus"
+            );
+        }
+    }
+
+    #[test]
+    fn workspace_render_schedules_pending_palette_commands_outside_the_render_pass() {
+        let source = workspace_render_source();
+
+        let start = source
+            .find("self.pending_command.take()")
+            .expect("workspace render must consume pending_command");
+        let branch_end = source[start..]
+            .find("self.pending_sql.take()")
+            .expect("workspace render should continue after pending_command");
+        let branch = &source[start..start + branch_end];
+
+        assert!(
+            branch.contains("defer_to_end_of_effect_cycle("),
+            "pending commands must be scheduled for the end of the effect \
+             cycle, never dispatched while the render pass is on the stack"
+        );
+        assert!(
+            !branch.contains("self.handle_command("),
+            "workspace render must not dispatch commands inline"
+        );
+        assert!(
+            branch.contains("palette_command_opens_native_window"),
+            "native-window commands must not steal focus back from the newly \
+             opened window"
+        );
+    }
+
+    struct DeferredDispatchProbe {
+        runs: Rc<Cell<usize>>,
+    }
+
+    impl Render for DeferredDispatchProbe {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+        }
+    }
+
+    /// Exercises the production deferral helper: work scheduled through
+    /// `defer_to_end_of_effect_cycle` must not run while the current effect
+    /// cycle is on the stack, and must run exactly once when the cycle
+    /// flushes. This is the scheduling behavior the palette-command fix
+    /// relies on to keep `open_window` (which draws synchronously) out of
+    /// the workspace render pass.
+    #[gpui::test]
+    fn deferred_palette_dispatch_runs_once_after_the_effect_cycle_flushes(cx: &mut TestAppContext) {
+        let runs = Rc::new(Cell::new(0usize));
+        let handle = cx.add_window(|_, _| DeferredDispatchProbe { runs: runs.clone() });
+        let cx = &mut VisualTestContext::from_window(handle.into(), cx);
+
+        handle
+            .update(cx, |probe, window, cx| {
+                defer_to_end_of_effect_cycle(
+                    window,
+                    cx,
+                    |probe: &mut DeferredDispatchProbe, _, _| {
+                        probe.runs.set(probe.runs.get() + 1);
+                    },
+                );
+                assert_eq!(
+                    probe.runs.get(),
+                    0,
+                    "deferred work must not run while the effect cycle is on the stack"
+                );
+            })
+            .expect("probe window update");
+
+        cx.run_until_parked();
+
+        handle
+            .update(cx, |probe, _window, _cx| {
+                assert_eq!(
+                    probe.runs.get(),
+                    1,
+                    "deferred work must run exactly once after flush"
+                );
+            })
+            .expect("probe window update");
+
+        cx.run_until_parked();
+
+        handle
+            .update(cx, |probe, _window, _cx| {
+                assert_eq!(
+                    probe.runs.get(),
+                    1,
+                    "a second flush must not re-run deferred work"
+                );
+            })
+            .expect("probe window update");
+    }
+
+    /// Closing the parent window before the effect cycle drains drops the
+    /// deferred callback instead of running it: the dispatch is at most
+    /// once, not unconditionally exactly once.
+    #[gpui::test]
+    fn closing_the_window_before_the_deferred_dispatch_drains_drops_it(cx: &mut TestAppContext) {
+        let runs = Rc::new(Cell::new(0usize));
+        let handle = cx.add_window(|_, _| DeferredDispatchProbe { runs: runs.clone() });
+        let cx = &mut VisualTestContext::from_window(handle.into(), cx);
+
+        handle
+            .update(cx, |_, window, cx| {
+                defer_to_end_of_effect_cycle(
+                    window,
+                    cx,
+                    |probe: &mut DeferredDispatchProbe, _, _| {
+                        probe.runs.set(probe.runs.get() + 1);
+                    },
+                );
+                window.remove_window();
+            })
+            .expect("probe window update");
+
+        cx.run_until_parked();
+
+        assert_eq!(
+            runs.get(),
+            0,
+            "a deferred dispatch must be dropped when the window closes \
+             before the effect cycle drains"
+        );
     }
 
     fn workspace_render_source() -> String {
