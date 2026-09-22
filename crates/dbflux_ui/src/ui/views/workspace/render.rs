@@ -9,6 +9,27 @@ use dbflux_ui_base::modal_frame::ModalFrame;
 use dbflux_ui_base::platform;
 use gpui_component::IconName;
 
+/// Schedules `run` at the end of the current effect cycle instead of running
+/// it inline (GPUI 0.2.2 `Context::defer_in`). GPUI 0.2.2 `open_window`
+/// draws the new window synchronously, so commands that open native windows
+/// (Settings, Connection Manager) must never be dispatched from inside
+/// `Render::render` — doing so nests a full window draw into the parent's
+/// render pass.
+fn defer_to_end_of_effect_cycle<T: 'static>(
+    window: &Window,
+    cx: &mut Context<T>,
+    run: impl FnOnce(&mut T, &mut Window, &mut Context<T>) + 'static,
+) {
+    cx.defer_in(window, run);
+}
+
+/// Palette commands that open a separate native window. After these run, the
+/// parent workspace must not steal focus back from the newly opened window;
+/// the window activation inside the command owns the final focus.
+fn palette_command_opens_native_window(command_id: &str) -> bool {
+    matches!(command_id, "open_settings" | "open_connection_manager")
+}
+
 impl Workspace {
     /// Renders the active document from TabManager (v0.3).
     ///
@@ -44,8 +65,15 @@ fn empty_state_shortcut<const N: usize>(
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if let Some(command_id) = self.pending_command.take() {
-            self.handle_command(command_id, window, cx);
-            self.focus_handle.focus(window);
+            // `take` before scheduling keeps command execution exactly-once
+            // even if a nested effect cycle re-renders the workspace.
+            let refocus_parent = !palette_command_opens_native_window(command_id);
+            defer_to_end_of_effect_cycle(window, cx, move |this, window, cx| {
+                this.handle_command(command_id, window, cx);
+                if refocus_parent {
+                    this.focus_handle.focus(window);
+                }
+            });
         }
 
         // Handle SQL generated from sidebar (e.g., SELECT * FROM table)
@@ -1049,6 +1077,11 @@ impl Render for Workspace {
 mod tests {
     use std::fs;
 
+    use gpui::{
+        Context, IntoElement, Render, TestAppContext, VisualContext, VisualTestContext, Window, div,
+    };
+    use std::ops::Deref;
+
     use dbflux_components::composites::{
         PanelHeaderBackground, PanelHeaderTitleColor, PanelHeaderVariant, inspect_panel_header,
     };
@@ -1148,6 +1181,119 @@ mod tests {
             assert!(!invocation.contains("theme.tab_bar"));
             assert!(!invocation.contains("theme.primary"));
         }
+    }
+
+    #[test]
+    fn workspace_render_schedules_pending_palette_commands_outside_the_render_pass() {
+        let source = workspace_render_source();
+
+        let start = source
+            .find("self.pending_command.take()")
+            .expect("workspace render must consume pending_command");
+        let branch_end = source[start..]
+            .find("self.pending_sql.take()")
+            .expect("workspace render should continue after pending_command");
+        let branch = &source[start..start + branch_end];
+
+        assert!(
+            branch.contains("defer_to_end_of_effect_cycle("),
+            "pending commands must be scheduled for the end of the effect \
+             cycle, never dispatched while the render pass is on the stack"
+        );
+        assert!(
+            !branch.contains("self.handle_command("),
+            "workspace render must not dispatch commands inline"
+        );
+        assert!(
+            branch.contains("palette_command_opens_native_window"),
+            "native-window commands must not steal focus back from the newly \
+             opened window"
+        );
+    }
+
+    #[test]
+    fn native_window_palette_commands_skip_the_parent_refocus() {
+        use super::palette_command_opens_native_window;
+
+        assert!(palette_command_opens_native_window("open_settings"));
+        assert!(palette_command_opens_native_window(
+            "open_connection_manager"
+        ));
+    }
+
+    #[test]
+    fn in_window_palette_commands_keep_the_parent_refocus() {
+        use super::palette_command_opens_native_window;
+
+        for command_id in [
+            "new_query_tab",
+            "open_audit_viewer",
+            "open_login_modal",
+            "focus_sidebar",
+        ] {
+            assert!(
+                !palette_command_opens_native_window(command_id),
+                "`{command_id}` runs inside the workspace window and must keep \
+                 the parent refocus"
+            );
+        }
+    }
+
+    struct DeferredDispatchProbe {
+        runs: usize,
+    }
+
+    impl Render for DeferredDispatchProbe {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+        }
+    }
+
+    /// Exercises the production deferral helper: work scheduled through
+    /// `defer_to_end_of_effect_cycle` must not run while the current effect
+    /// cycle is on the stack, and must run exactly once when the cycle
+    /// flushes. This is the scheduling behavior the palette-command fix
+    /// relies on to keep `open_window` (which draws synchronously) out of
+    /// the workspace render pass.
+    #[gpui::test]
+    fn palette_deferred_dispatch_runs_once_after_the_effect_cycle_flushes(cx: &mut TestAppContext) {
+        use super::defer_to_end_of_effect_cycle;
+
+        let handle = cx.add_window(|_, _| DeferredDispatchProbe { runs: 0 });
+        let view = handle.root(cx).expect("probe window root");
+        let cx = &mut VisualTestContext::from_window(*handle.deref(), cx);
+
+        cx.update_window_entity(&view, |probe, window, cx| {
+            defer_to_end_of_effect_cycle(
+                window,
+                cx,
+                |probe: &mut DeferredDispatchProbe, _window, _cx| {
+                    probe.runs += 1;
+                },
+            );
+            assert_eq!(
+                probe.runs, 0,
+                "deferred work must not run while the effect cycle is on the stack"
+            );
+        });
+
+        cx.run_until_parked();
+
+        cx.update_window_entity(&view, |probe, _window, _cx| {
+            assert_eq!(
+                probe.runs, 1,
+                "deferred work must run exactly once after flush"
+            );
+        });
+
+        cx.run_until_parked();
+
+        cx.update_window_entity(&view, |probe, _window, _cx| {
+            assert_eq!(
+                probe.runs, 1,
+                "a second flush must not re-run deferred work"
+            );
+        });
     }
 
     fn workspace_render_source() -> String {
