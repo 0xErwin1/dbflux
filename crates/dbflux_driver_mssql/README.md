@@ -121,6 +121,36 @@ Requires the `VIEW SERVER STATE` permission.
   and CLR aggregates (`AF`) are listed per schema via `sys.objects`. Source
   definitions are fetched with `OBJECT_DEFINITION(object_id)`.
 
+### Faithful CREATE TABLE (schema diff)
+
+- Column introspection reports **exact type dimensions**: `nvarchar`/`nchar`
+  lengths in characters (UTF-16 bytes halved, `-1` rendered as `MAX`),
+  `varchar`/`char`/`binary`/`varbinary` byte lengths, `decimal`/`numeric`
+  precision and scale, `datetime2`/`datetimeoffset`/`time` scale, and
+  `float(n)` precision. Identity is deliberately **not** part of `type_name` —
+  it travels in structured creation metadata.
+- `table_creation_metadata()` reports the identity seed and increment as
+  **exact server-converted text** (a `numeric(38,0)` identity value can exceed
+  any 64-bit integer), the primary-key columns in declared key order, a
+  completeness report naming anything unobservable, and blockers for creation
+  semantics the generator cannot express.
+- `generate_code_with_creation_metadata("create_table", …)` renders a faithful
+  `CREATE TABLE` from **reference-side** metadata: bracket-escaped identifiers,
+  exact identity text, column nullability and defaults, and a primary key in
+  declared order. It refuses (named `NotSupported`) when no metadata is
+  supplied — old snapshots must be recaptured as deep snapshots — or when the
+  metadata is incomplete or carries blockers. The legacy
+  `generate_code("create_table")` seam refuses by design: it cannot carry
+  reference metadata. For **schema-diff whole-table regeneration**, support
+  depends entirely on the metadata-aware `generate_code_with_creation_metadata`
+  code path, and that is the path `DdlCapabilities::supports_create_table`
+  describes for this operation; structured DDL support otherwise exists as
+  usual, while the legacy `generate_code("create_table")` seam refuses
+  whenever reference metadata is missing.
+- Used by the schema-diff document when a table exists on the reference side
+  and is created on the target; the target connection generates, the reference
+  connection only supplies metadata.
+
 ### CRUD with OUTPUT
 
 - INSERT/UPDATE/DELETE on a row use SQL Server's `OUTPUT INSERTED.*` /
@@ -203,6 +233,42 @@ Requires the `VIEW SERVER STATE` permission.
 
 ## Limitations
 
+- Faithful `CREATE TABLE` generation (schema diff) refuses, rather than
+  flattening, tables whose creation semantics it cannot reproduce: computed
+  columns, user-defined/CLR (and alias) column types, sparse columns,
+  `FILESTREAM`, `ROWGUIDCOL`, memory-optimized tables, system-versioned
+  temporal tables, nonclustered primary keys, row/page compression, and tables
+  on a non-default filegroup. Indexes (other than the primary key), foreign
+  keys, and CHECK/UNIQUE constraints are not carried by `CREATE TABLE` at all;
+  apply those separately.
+- The generated primary-key constraint is server-named: the original
+  constraint name is not captured, so `PK_…` differs from the source.
+- Schema diff detects whole-table creation from the shallow table list.
+  Reference creation metadata is **collected for every live reference table**
+  (and read from every snapshot row that carries it), but it is only
+  **consumed** for whole-table adds (`TableAdded`), where a new table is
+  generated on the target. An identity or primary-key change on an
+  already-existing table is neither collected into a diff nor applied, and
+  must be handled manually.
+- Deep snapshots captured before creation-metadata support (DBF-161 PR1) carry
+  no metadata; using one as the diff reference refuses creation and the
+  snapshot must be recaptured. The UI's automatic on-connect capture is
+  currently **shallow**, so a **saved** snapshot carries creation metadata
+  only when it was captured programmatically through the deep snapshot API;
+  when the diff reference is a **live connection**, the metadata is fetched
+  through the generic `table_creation_metadata` seam and generation works
+  without any stored snapshot.
+- Tables containing any character-typed column (`char`, `varchar`, `nchar`,
+  `nvarchar`, `text`, `ntext`) always refuse: `sys.columns.collation_name` is
+  non-null for every character column — even when the collation was only
+  inherited from the source database default — and the target database's
+  default collation is unknown at generation time, so a recreated column
+  could silently sort and compare differently. Only tables whose columns all
+  have non-collated types (integers, decimals, dates, binaries, untyped `xml`,
+  …) can be generated faithfully.
+- Typed `xml` columns — `xml` bound to an XML schema collection — refuse:
+  generating a plain `xml` column would silently drop the schema-collection
+  binding. Untyped `xml` columns generate faithfully.
 - Instance metrics and inspector features require the `VIEW SERVER STATE` server permission. Without it, both `list_metrics()` and `list_inspectors()` return empty lists rather than an error.
 
 - Instance metrics return a single data point per call (current value from `sys.dm_os_performance_counters`), not a historical time series. Rate counters (e.g. `mssql.batch_requests_per_sec`) represent the server-side running average as reported by the DMV, not a delta computed by the driver.

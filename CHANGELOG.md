@@ -6,6 +6,38 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Added
 
+* **Faithful MSSQL `CREATE TABLE` generation via schema diff** — the SQL
+  Server driver now introspects full column type dimensions (Unicode lengths
+  in characters with `MAX` support, byte lengths for character/binary types,
+  decimal precision/scale, temporal scale, `float` precision; identity kept
+  out of the type name) and reports identity seed/increment as exact
+  server-converted text — `numeric(38,0)` identity values beyond any 64-bit
+  integer survive verbatim — plus primary-key columns in declared key order,
+  a completeness report, and named blockers for creation semantics it cannot
+  reproduce (computed columns, user-defined/CLR types, sparse, `FILESTREAM`,
+  `ROWGUIDCOL`, memory-optimized, system-versioned temporal, nonclustered
+  primary keys, descending primary-key columns, identity `NOT FOR REPLICATION`,
+  row/page compression, non-default filegroups, typed `xml` bound to an XML
+  schema collection, and legacy-bound or permission-hidden default expressions
+  that surface as named incompleteness). Notably, **every character-typed
+  column currently refuses**: `sys.columns.collation_name` is non-null for
+  all of them — even when the collation was only inherited from the source
+  database default — and the target database's default collation is unknown
+  at generation time, so only tables whose columns all have non-collated
+  types can currently be generated. The schema-diff document forwards the
+  reference side's metadata — live through the generic
+  `table_creation_metadata` seam, or from a deep snapshot captured
+  programmatically — to the target connection, which generates a faithful
+  `CREATE TABLE` for both preview and apply and refuses when the metadata is
+  missing, incomplete, or blocked, so old snapshots can never regenerate an
+  identity-less table. The UI's automatic on-connect snapshot capture stays
+  shallow in this change: a saved reference carries creation metadata only
+  when it was captured programmatically, while a live reference needs
+  nothing stored. No UI crate branches on driver identifiers. MSSQL
+  connections also resolve the actual session database (`DB_NAME()`) at
+  connect time for URI and direct/SSH default logins, so the driver reports
+  the login's real default database instead of an unknown selection.
+
 * **Structured table-creation metadata for faithful schema captures** — deep
   schema snapshots can now carry, per table, the creation details the legacy
   table shape cannot express: identity seed and increment as exact decimal

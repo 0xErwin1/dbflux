@@ -1235,7 +1235,7 @@ pub(crate) fn table_action_description(
     use crate::schema_diff::apply::TableLevelAction;
 
     match action {
-        TableLevelAction::Create(info) => dbflux_i18n::t!(
+        TableLevelAction::Create(info, _) => dbflux_i18n::t!(
             "document.schema_diff.table_action.create",
             table = qualified_table_name(info.schema.as_deref(), &info.name)
         ),
@@ -3880,7 +3880,7 @@ mod tests {
             child_items: None,
             storage_hints: None,
         };
-        let create = TableLevelAction::Create(table_info);
+        let create = TableLevelAction::Create(Box::new(table_info), None);
         let drop = TableLevelAction::Drop(TableRef {
             schema: Some("public".to_string()),
             name: "orders".to_string(),
