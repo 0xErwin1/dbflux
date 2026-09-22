@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use rusqlite::Connection;
 use uuid::Uuid;
 
-use dbflux_core::{SchemaSnapshotRecord, SnapshotDepth, TableInfo};
+use dbflux_core::{SchemaSnapshotRecord, SnapshotDepth, TableCreationMetadata, TableInfo};
 
 use crate::error::StorageError;
 
@@ -69,14 +69,45 @@ impl SchemaSnapshotRepo {
         )
         .map_err(sqlite_err)?;
 
+        let metadata_by_table: std::collections::HashMap<
+            (Option<&str>, &str),
+            &TableCreationMetadata,
+        > = record
+            .creation_metadata
+            .iter()
+            .map(|metadata| {
+                (
+                    (metadata.schema.as_deref(), metadata.table.as_str()),
+                    metadata,
+                )
+            })
+            .collect();
+
         for table in &record.tables {
             let detail_json = serde_json::to_string(table)
                 .map_err(|e| StorageError::Data(format!("serialize table detail: {e}")))?;
 
+            let creation_metadata_json =
+                match metadata_by_table.get(&(table.schema.as_deref(), table.name.as_str())) {
+                    Some(metadata) => {
+                        let json = serde_json::to_string(metadata).map_err(|e| {
+                            StorageError::Data(format!("serialize creation metadata: {e}"))
+                        })?;
+                        Some(json)
+                    }
+                    None => None,
+                };
+
             tx.execute(
-                "INSERT INTO sch_snapshot_tables (snapshot_id, schema_name, name, detail_json)
-                 VALUES (?1, ?2, ?3, ?4)",
-                rusqlite::params![id, table.schema, table.name, detail_json],
+                "INSERT INTO sch_snapshot_tables (snapshot_id, schema_name, name, detail_json, creation_metadata_json)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![
+                    id,
+                    table.schema,
+                    table.name,
+                    detail_json,
+                    creation_metadata_json,
+                ],
             )
             .map_err(sqlite_err)?;
         }
@@ -185,16 +216,40 @@ fn load_record(conn: &Connection, id: &str) -> Result<Option<SchemaSnapshotRecor
     };
 
     let mut stmt = conn
-        .prepare("SELECT detail_json FROM sch_snapshot_tables WHERE snapshot_id = ?1")
+        .prepare(
+            "SELECT schema_name, name, detail_json, creation_metadata_json
+             FROM sch_snapshot_tables WHERE snapshot_id = ?1",
+        )
         .map_err(sqlite_err)?;
 
-    let tables = stmt
-        .query_map([id], |row| row.get::<_, String>(0))
+    struct TableRow {
+        detail_json: String,
+        creation_metadata_json: Option<String>,
+    }
+
+    let rows = stmt
+        .query_map([id], |row| {
+            Ok(TableRow {
+                detail_json: row.get(2)?,
+                creation_metadata_json: row.get(3)?,
+            })
+        })
         .map_err(sqlite_err)?
         .filter_map(|r| r.ok())
-        .map(|json| serde_json::from_str::<TableInfo>(&json))
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| StorageError::Data(format!("deserialize table detail: {e}")))?;
+        .collect::<Vec<_>>();
+
+    let mut tables = Vec::with_capacity(rows.len());
+    let mut creation_metadata = Vec::new();
+    for row in rows {
+        let table: TableInfo = serde_json::from_str(&row.detail_json)
+            .map_err(|e| StorageError::Data(format!("deserialize table detail: {e}")))?;
+        if let Some(json) = row.creation_metadata_json {
+            let metadata: TableCreationMetadata = serde_json::from_str(&json)
+                .map_err(|e| StorageError::Data(format!("deserialize creation metadata: {e}")))?;
+            creation_metadata.push(metadata);
+        }
+        tables.push(table);
+    }
 
     let profile_id = Uuid::parse_str(&root.profile_id)
         .map_err(|e| StorageError::Data(format!("invalid profile_id uuid: {e}")))?;
@@ -207,6 +262,7 @@ fn load_record(conn: &Connection, id: &str) -> Result<Option<SchemaSnapshotRecor
         fingerprint: root.fingerprint,
         depth: depth_from_storage(&root.depth),
         tables,
+        creation_metadata,
     }))
 }
 
@@ -322,6 +378,7 @@ mod tests {
             fingerprint: "fp-1".to_string(),
             depth: SnapshotDepth::Shallow,
             tables: vec![sample_table("users"), sample_table("orders")],
+            creation_metadata: Vec::new(),
         }
     }
 
@@ -550,5 +607,171 @@ mod tests {
             .list(&other_profile_id.to_string(), Some("db1"))
             .expect("list b");
         assert_eq!(remaining_b.len(), 1, "other profile must be untouched");
+    }
+
+    // --- creation metadata (migration 029) ---
+
+    fn sample_creation_metadata(table_name: &str) -> dbflux_core::TableCreationMetadata {
+        dbflux_core::TableCreationMetadata {
+            schema: Some("public".to_string()),
+            table: table_name.to_string(),
+            completeness: dbflux_core::MetadataCompleteness::Complete,
+            identity: Some(dbflux_core::IdentitySpec {
+                column: "id".to_string(),
+                seed: "99999999999999999999999999999999999999".to_string(),
+                increment: "-1".to_string(),
+            }),
+            primary_key: Some(dbflux_core::PrimaryKeySpec {
+                columns: vec!["id".to_string()],
+            }),
+            blockers: Vec::new(),
+        }
+    }
+
+    /// Raw-SQL regression: migration 029 must add a nullable
+    /// `creation_metadata_json` column to `sch_snapshot_tables`. Written
+    /// against raw schema inspection so it can fail before any new Rust
+    /// persistence API exists.
+    #[test]
+    fn migration_029_adds_nullable_creation_metadata_json_column() {
+        let path = temp_db("m029_column");
+        let conn = open_database(&path).expect("open");
+        MigrationRegistry::new().run_all(&conn).expect("migrate");
+
+        let column: Option<(String, String, i64)> = conn
+            .query_row(
+                "SELECT name, type, \"notnull\" FROM pragma_table_info('sch_snapshot_tables')
+                 WHERE name = 'creation_metadata_json'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .ok();
+
+        let (name, column_type, notnull) = column.expect(
+            "creation_metadata_json column must exist on sch_snapshot_tables after migrations",
+        );
+        assert_eq!(name, "creation_metadata_json");
+        assert_eq!(column_type.to_uppercase(), "TEXT");
+        assert_eq!(notnull, 0, "the column must be nullable for legacy rows");
+    }
+
+    /// Simulates upgrading a database created before migration 029: legacy
+    /// rows are present, the column and its bookkeeping entry are removed,
+    /// and the migration registry runs again.
+    #[test]
+    fn migration_029_upgrades_existing_snapshot_database_and_preserves_rows() {
+        let (conn, repo, profile_id) = setup("m029_upgrade");
+
+        // Legacy snapshot written before creation metadata existed.
+        let legacy = sample_record(profile_id, Some("db1"), 1000);
+        repo.insert(&legacy).expect("insert legacy record");
+
+        {
+            let locked = conn.lock().unwrap();
+            locked
+                .execute(
+                    "ALTER TABLE sch_snapshot_tables DROP COLUMN creation_metadata_json",
+                    [],
+                )
+                .expect("simulate pre-029 schema");
+            locked
+                .execute(
+                    "DELETE FROM sys_migrations WHERE name = '029_sch_snapshot_creation_metadata'",
+                    [],
+                )
+                .expect("clear 029 bookkeeping");
+        }
+
+        MigrationRegistry::new()
+            .run_all(&conn.lock().unwrap())
+            .expect("re-run migrations on the simulated old database");
+
+        let column_exists: i64 = conn
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('sch_snapshot_tables')
+                 WHERE name = 'creation_metadata_json'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(column_exists, 1, "re-run must re-create the column");
+
+        // The legacy row survives the upgrade and stays readable.
+        let loaded = repo
+            .get(&legacy.id.to_string())
+            .expect("get after upgrade")
+            .expect("legacy row must survive");
+        assert!(loaded.creation_metadata.is_empty());
+        assert_eq!(loaded.tables.len(), 2);
+    }
+
+    #[test]
+    fn insert_and_get_roundtrip_preserves_creation_metadata() {
+        let (_, repo, profile_id) = setup("m029_roundtrip");
+
+        let mut record = sample_record(profile_id, Some("app_db"), 1000);
+        record.depth = SnapshotDepth::Deep;
+        // Give the orders table its own schema so the association test proves
+        // metadata lands on the right (schema, name) component pair.
+        record.tables[1].schema = Some("sales".to_string());
+        record.creation_metadata = vec![
+            sample_creation_metadata("users"),
+            sample_creation_metadata("orders"),
+        ];
+        record.creation_metadata[1].schema = Some("sales".to_string());
+
+        repo.insert(&record).expect("insert");
+
+        let loaded = repo
+            .get(&record.id.to_string())
+            .expect("get")
+            .expect("exists");
+
+        assert_eq!(loaded.creation_metadata.len(), 2);
+        let users = loaded
+            .creation_metadata
+            .iter()
+            .find(|m| m.table == "users")
+            .expect("users metadata");
+        assert_eq!(users.schema.as_deref(), Some("public"));
+        assert_eq!(
+            users.identity.as_ref().expect("identity").seed,
+            "99999999999999999999999999999999999999",
+            "38-digit seed must survive persistence as the exact decimal string"
+        );
+        let orders = loaded
+            .creation_metadata
+            .iter()
+            .find(|m| m.table == "orders")
+            .expect("orders metadata");
+        assert_eq!(orders.schema.as_deref(), Some("sales"));
+    }
+
+    #[test]
+    fn legacy_rows_without_metadata_remain_readable() {
+        let (conn, repo, profile_id) = setup("m029_legacy_readable");
+
+        let record = sample_record(profile_id, Some("db1"), 1000);
+        repo.insert(&record).expect("insert");
+
+        // Force the exact state a pre-029 database presents after upgrading:
+        // NULL metadata on every table row.
+        conn.lock()
+            .unwrap()
+            .execute(
+                "UPDATE sch_snapshot_tables SET creation_metadata_json = NULL
+                 WHERE snapshot_id = ?1",
+                [record.id.to_string()],
+            )
+            .expect("null out metadata");
+
+        let loaded = repo
+            .get(&record.id.to_string())
+            .expect("get")
+            .expect("exists");
+        assert!(loaded.creation_metadata.is_empty());
+        assert_eq!(loaded.tables.len(), 2);
     }
 }

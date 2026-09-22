@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::TableInfo;
+use crate::{TableCreationMetadata, TableInfo};
 
 /// How much detail a captured [`SchemaSnapshotRecord`] carries per table.
 ///
@@ -34,11 +34,19 @@ pub struct SchemaSnapshotRecord {
     pub fingerprint: String,
     pub depth: SnapshotDepth,
     pub tables: Vec<TableInfo>,
+    /// Structured creation metadata captured with `Deep` snapshots, kept
+    /// separate from `tables` because `TableInfo` is a legacy wire shape.
+    /// Each entry carries its own `(schema, table)` identity components; it
+    /// must be associated to table rows by those components, never by a
+    /// concatenated key. Shallow captures carry an empty vec.
+    #[serde(default)]
+    pub creation_metadata: Vec<TableCreationMetadata>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{IdentitySpec, MetadataCompleteness};
 
     #[test]
     fn snapshot_depth_round_trips_through_serde() {
@@ -82,6 +90,7 @@ mod tests {
                 child_items: None,
                 storage_hints: None,
             }],
+            creation_metadata: Vec::new(),
         };
 
         let json = serde_json::to_string(&record).expect("serialize");
@@ -94,5 +103,57 @@ mod tests {
         assert_eq!(back.depth, record.depth);
         assert_eq!(back.tables.len(), 1);
         assert_eq!(back.tables[0].name, "users");
+        assert!(back.creation_metadata.is_empty());
+    }
+
+    #[test]
+    fn snapshot_record_json_without_metadata_field_still_loads() {
+        // Shape persisted by builds before creation metadata existed; the
+        // field is serde-default so old JSON stays readable.
+        let legacy_json = serde_json::json!({
+            "id": Uuid::now_v7(),
+            "profile_id": Uuid::now_v7(),
+            "database": "app_db",
+            "captured_at": 1_700_000_000_000i64,
+            "fingerprint": "abc123",
+            "depth": "shallow",
+            "tables": [],
+        });
+
+        let record: SchemaSnapshotRecord =
+            serde_json::from_value(legacy_json).expect("deserialize legacy record");
+
+        assert!(record.creation_metadata.is_empty());
+        assert_eq!(record.depth, SnapshotDepth::Shallow);
+    }
+
+    #[test]
+    fn snapshot_record_roundtrips_creation_metadata() {
+        let record = SchemaSnapshotRecord {
+            id: Uuid::now_v7(),
+            profile_id: Uuid::now_v7(),
+            database: Some("app_db".to_string()),
+            captured_at: 1_700_000_000_000,
+            fingerprint: "abc123".to_string(),
+            depth: SnapshotDepth::Deep,
+            tables: vec![],
+            creation_metadata: vec![TableCreationMetadata {
+                schema: Some("sales".to_string()),
+                table: "orders".to_string(),
+                completeness: MetadataCompleteness::Complete,
+                identity: Some(IdentitySpec {
+                    column: "id".to_string(),
+                    seed: "99999999999999999999999999999999999999".to_string(),
+                    increment: "1".to_string(),
+                }),
+                primary_key: None,
+                blockers: Vec::new(),
+            }],
+        };
+
+        let json = serde_json::to_string(&record).expect("serialize");
+        let back: SchemaSnapshotRecord = serde_json::from_str(&json).expect("deserialize");
+
+        assert_eq!(back.creation_metadata, record.creation_metadata);
     }
 }

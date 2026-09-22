@@ -850,6 +850,70 @@ mod tests {
         }
     }
 
+    /// Fixture shape for the golden byte tests below. Populated fields:
+    /// `schema`, two `columns` (one with default and enum values, one with an
+    /// empty `enum_values` list), `foreign_keys`, `constraints`, and
+    /// `storage_hints`. Deliberately left empty: `indexes` (postcard cannot
+    /// encode the internally tagged `IndexData` enum), `sample_fields`
+    /// (document-database only), and `child_items` (driver child sources).
+    fn nontrivial_table_info() -> dbflux_core::TableInfo {
+        dbflux_core::TableInfo {
+            name: "orders".into(),
+            schema: Some("sales".into()),
+            columns: Some(vec![
+                dbflux_core::ColumnInfo {
+                    name: "id".into(),
+                    type_name: "int".into(),
+                    nullable: false,
+                    is_primary_key: true,
+                    default_value: None,
+                    // NOTE: `enum_values` carries `skip_serializing_if`,
+                    // which postcard cannot round-trip (a skipped field
+                    // misaligns every later byte on decode). The fixture
+                    // keeps it `Some` so the bytes are decodable; real
+                    // multi-column payloads with a `None` here have the same
+                    // pre-existing decode hazard.
+                    enum_values: Some(Vec::new()),
+                },
+                dbflux_core::ColumnInfo {
+                    name: "status".into(),
+                    type_name: "varchar(16)".into(),
+                    nullable: true,
+                    is_primary_key: false,
+                    default_value: Some("'new'".into()),
+                    enum_values: Some(vec!["new".into(), "paid".into()]),
+                },
+            ]),
+            // `IndexData` is internally tagged (`#[serde(tag = "kind")]`),
+            // which postcard cannot encode (`SerdeSerCustom`), so wire-carried
+            // `TableInfo` always leaves `indexes` as `None`.
+            indexes: None,
+            foreign_keys: Some(vec![dbflux_core::ForeignKeyInfo {
+                name: "fk_orders_customer".into(),
+                columns: vec!["customer_id".into()],
+                referenced_table: "customers".into(),
+                referenced_schema: Some("sales".into()),
+                referenced_columns: vec!["id".into()],
+                on_delete: Some("CASCADE".into()),
+                on_update: None,
+            }]),
+            constraints: Some(vec![dbflux_core::ConstraintInfo {
+                name: "ck_orders_total".into(),
+                kind: dbflux_core::ConstraintKind::Check,
+                columns: vec!["total".into()],
+                check_clause: Some("total >= 0".into()),
+            }]),
+            sample_fields: None,
+            presentation: Default::default(),
+            child_items: None,
+            storage_hints: Some(vec![dbflux_core::TableStorageHint {
+                label: "Distribution Key".into(),
+                columns: vec!["id".into()],
+                detail: Some("KEY".into()),
+            }]),
+        }
+    }
+
     #[test]
     fn request_variants_after_the_schema_block_keep_their_v1_3_wire_indices() {
         // These literals are the v1.3 wire indices. Inserting a variant
@@ -928,5 +992,111 @@ mod tests {
             }
             other => panic!("unexpected response body: {other:?}"),
         }
+    }
+
+    /// Decodes a hex string into bytes for the golden fixtures below.
+
+    fn hex_bytes(hex: &str) -> Vec<u8> {
+        (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).expect("valid hex"))
+            .collect()
+    }
+
+    /// Golden postcard bytes for `DriverRequestBody::GenerateCode`, captured
+    /// from the unchanged v1.4 wire shapes before the creation-metadata work.
+    ///
+    /// Scope note: these fixtures freeze exactly the two payloads they encode.
+    /// They prove the `TableInfo` legacy shape and the `GenerateCode` /
+    /// `TableDetails` discriminants are byte-stable; they do not cover every
+    /// historical protocol version or every payload variant.
+    const GOLDEN_GENERATE_CODE_BYTES: &str = "370c6372656174655f7461626c65066f7264657273010573616c6573010202696403696e740001000100067374617475730b766172636861722831362901000105276e6577270102036e6577047061696400010112666b5f6f72646572735f637573746f6d6572010b637573746f6d65725f696409637573746f6d657273010573616c6573010269640107434153434144450001010f636b5f6f72646572735f746f74616c000105746f74616c010a746f74616c203e3d2030000000010110446973747269627574696f6e204b65790102696401034b4559";
+
+    /// Golden postcard bytes for `DriverResponseBody::TableDetails`, same
+    /// capture origin and scope as [`GOLDEN_GENERATE_CODE_BYTES`].
+    const GOLDEN_TABLE_DETAILS_BYTES: &str = "0c066f7264657273010573616c6573010202696403696e740001000100067374617475730b766172636861722831362901000105276e6577270102036e6577047061696400010112666b5f6f72646572735f637573746f6d6572010b637573746f6d65725f696409637573746f6d657273010573616c6573010269640107434153434144450001010f636b5f6f72646572735f746f74616c000105746f74616c010a746f74616c203e3d2030000000010110446973747269627574696f6e204b65790102696401034b4559";
+
+    #[test]
+    fn generate_code_request_encodes_to_frozen_legacy_bytes() {
+        let request = DriverRequestBody::GenerateCode {
+            generator_id: "create_table".to_string(),
+            table: nontrivial_table_info(),
+        };
+
+        let encoded = postcard::to_allocvec(&request).expect("serialize");
+        assert_eq!(
+            encoded,
+            hex_bytes(GOLDEN_GENERATE_CODE_BYTES),
+            "GenerateCode wire encoding drifted from the captured legacy bytes"
+        );
+    }
+
+    #[test]
+    fn generate_code_request_frozen_bytes_decode_to_expected_value() {
+        let bytes = hex_bytes(GOLDEN_GENERATE_CODE_BYTES);
+        let decoded: DriverRequestBody = postcard::from_bytes(&bytes).expect("decode frozen bytes");
+
+        match decoded {
+            DriverRequestBody::GenerateCode {
+                generator_id,
+                table,
+            } => {
+                assert_eq!(generator_id, "create_table");
+                assert_decode_matches_fixture_shape(&table);
+            }
+            other => panic!("frozen bytes decode to unexpected variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn table_details_response_encodes_to_frozen_legacy_bytes() {
+        let response = DriverResponseBody::TableDetails {
+            table: nontrivial_table_info(),
+        };
+
+        let encoded = postcard::to_allocvec(&response).expect("serialize");
+        assert_eq!(
+            encoded,
+            hex_bytes(GOLDEN_TABLE_DETAILS_BYTES),
+            "TableDetails wire encoding drifted from the captured legacy bytes"
+        );
+    }
+
+    #[test]
+    fn table_details_response_frozen_bytes_decode_to_expected_value() {
+        let bytes = hex_bytes(GOLDEN_TABLE_DETAILS_BYTES);
+        let decoded: DriverResponseBody =
+            postcard::from_bytes(&bytes).expect("decode frozen bytes");
+
+        match decoded {
+            DriverResponseBody::TableDetails { table } => {
+                assert_decode_matches_fixture_shape(&table);
+            }
+            other => panic!("frozen bytes decode to unexpected variant: {other:?}"),
+        }
+    }
+
+    /// Field-by-field comparison against the fixture shape; `TableInfo` does
+    /// not implement `PartialEq` and must stay unchanged.
+    fn assert_decode_matches_fixture_shape(table: &dbflux_core::TableInfo) {
+        assert_eq!(table.name, "orders");
+        assert_eq!(table.schema.as_deref(), Some("sales"));
+        let columns = table.columns.as_ref().expect("columns decoded");
+        assert_eq!(columns.len(), 2);
+        assert_eq!(columns[0].name, "id");
+        assert!(columns[0].is_primary_key);
+        assert_eq!(columns[1].default_value.as_deref(), Some("'new'"));
+        assert_eq!(
+            columns[1].enum_values.as_ref().map(|v| v.as_slice()),
+            Some(["new".to_string(), "paid".to_string()].as_slice())
+        );
+        let fks = table.foreign_keys.as_ref().expect("fks decoded");
+        assert_eq!(fks.len(), 1);
+        assert_eq!(fks[0].referenced_table, "customers");
+        assert_eq!(fks[0].on_delete.as_deref(), Some("CASCADE"));
+        let constraints = table.constraints.as_ref().expect("constraints decoded");
+        assert_eq!(constraints[0].check_clause.as_deref(), Some("total >= 0"));
+        let hints = table.storage_hints.as_ref().expect("hints decoded");
+        assert_eq!(hints[0].label, "Distribution Key");
     }
 }
