@@ -334,6 +334,8 @@ cargo clippy --workspace -- -D warnings
 cargo test --workspace
 ```
 
+이 빠른 스위트들은 드라이버 라이브 통합 테스트를 포괄하지 않습니다. 드라이버별 스위트는 컨테이너, 로컬 파일 또는 자격 증명이 필요한 Redshift 클러스터를 기반으로 하며, [tests/driver-live/README.md](../../tests/driver-live/README.md)에 문서화되어 있습니다. rc나 stable에 태깅하기 전에 실행하세요. CI는 동일한 스위트를 게시 게이트로 사용합니다 — `release.yml`이 `tests.yml`을 호출하고 `Create Release` 잡이 그 완료를 기다립니다 — 하지만 이 스위트들은 빌드된 아티팩트가 아니라 소스 코드를 검증하며, 나이틀리 빌드는 테스트 게이트가 없습니다(`nightly.yml`은 `build.yml`을 직접 호출합니다).
+
 ## 관련 자료
 
 - `.github/workflows/release.yml` — 분류 로직과 아티팩트 게시
