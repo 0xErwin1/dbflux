@@ -6,6 +6,22 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Added
 
+* **Structured table-creation metadata for faithful schema captures** — deep
+  schema snapshots can now carry, per table, the creation details the legacy
+  table shape cannot express: identity seed and increment as exact decimal
+  strings (SQL Server allows `numeric(38,0)` magnitudes), explicit primary-key
+  column order, a completeness report naming what the driver could not
+  observe, and actionable blockers that rule out faithful `CREATE TABLE`
+  generation. The metadata is a standalone type: the legacy RPC payloads and
+  the on-the-wire table shape are untouched. Drivers expose it through new
+  defaulted `Connection` seams (`table_creation_metadata` and
+  `generate_code_with_creation_metadata`) that preserve existing behavior for
+  every driver that has not opted in. Deep snapshot capture collects the
+  metadata through those seams, persists it in a new nullable column on
+  snapshot table rows (old databases upgrade in place and stay readable), and
+  snapshot deduplication no longer discards a fresh capture just because the
+  structural fingerprint is unchanged.
+
 * **Interactive schema visualization** — a table or a whole database can now be
   opened as a diagram of the schema instead of a list of objects. Tables render
   as nodes carrying their columns, primary keys and flags, and foreign keys as

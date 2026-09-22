@@ -577,6 +577,118 @@ impl SchemaSnapshot {
     }
 }
 
+// =============================================================================
+// Table Creation Metadata (faithful CREATE TABLE support)
+// =============================================================================
+
+/// Driver-reported details needed to regenerate a table's `CREATE TABLE`
+/// statement faithfully — beyond what the legacy [`TableInfo`] shape carries.
+///
+/// This type is intentionally standalone: `TableInfo` is embedded in
+/// postcard-encoded RPC payloads and persisted snapshot rows, so it cannot
+/// gain fields without protocol and compatibility consequences. Creation
+/// metadata travels beside it instead: in-process through the defaulted
+/// `Connection::table_creation_metadata` seam, and persisted as a nullable
+/// JSON column on deep snapshot table rows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TableCreationMetadata {
+    /// Schema that owns the table; `None` on engines without schemas.
+    /// Together with `table` this forms the collision-safe identity used to
+    /// associate metadata with its table — schema and name are kept as
+    /// separate components, never concatenated into one key (a `"a.b"` name
+    /// in schema `"c"` would be indistinguishable from `"b"` in `"c.a"`).
+    #[serde(default)]
+    pub schema: Option<String>,
+
+    /// Table name this metadata describes.
+    pub table: String,
+
+    /// Whether the driver could observe every creation-relevant property.
+    pub completeness: MetadataCompleteness,
+
+    /// Identity (auto-increment) definition, when the table has one.
+    #[serde(default)]
+    pub identity: Option<IdentitySpec>,
+
+    /// Explicit primary-key declaration, when present. Column order here is
+    /// the declared key order, which the per-column `is_primary_key` flags on
+    /// `TableInfo` cannot express.
+    #[serde(default)]
+    pub primary_key: Option<PrimaryKeySpec>,
+
+    /// Conditions that currently make faithful `CREATE TABLE` generation
+    /// impossible, even when the rest of the metadata is complete.
+    #[serde(default)]
+    pub blockers: Vec<CreationBlocker>,
+}
+
+/// How complete a [`TableCreationMetadata`] capture is.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum MetadataCompleteness {
+    /// The driver observed every property faithful generation needs.
+    Complete,
+
+    /// The driver could not observe some properties; `missing` names them.
+    Partial {
+        /// Properties the driver could not observe.
+        missing: Vec<MissingCreationMetadata>,
+    },
+}
+
+/// A creation-relevant property a driver could not observe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MissingCreationMetadata {
+    /// Identity seed and/or increment were not observable.
+    IdentitySeedOrIncrement,
+    /// Primary-key column order was not observable.
+    PrimaryKeyOrder,
+    /// Column default expressions were not observable.
+    ColumnDefaultExpressions,
+    /// Engine storage options (filegroup, tablespace, and similar) were not
+    /// observable.
+    StorageOptions,
+}
+
+/// Identity (auto-increment) definition for a column.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IdentitySpec {
+    /// Column carrying the identity.
+    pub column: String,
+
+    /// Exact seed as a decimal string. SQL Server permits `numeric(38,0)`
+    /// magnitudes that exceed 64-bit integers, so the value is kept as a
+    /// string and must never be narrowed to a numeric type.
+    pub seed: String,
+
+    /// Exact increment as a decimal string, for the same reason as `seed`.
+    pub increment: String,
+}
+
+/// Primary-key declaration with explicit column order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrimaryKeySpec {
+    /// Columns in declared key order; the order defines index/cluster
+    /// position and must be preserved verbatim.
+    pub columns: Vec<String>,
+}
+
+/// One condition that blocks faithful `CREATE TABLE` generation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CreationBlocker {
+    /// Stable machine-readable reason (e.g. `"memory_optimized"`), so callers
+    /// can branch on it without parsing `message`.
+    pub code: String,
+
+    /// Human-readable explanation of what blocks faithful generation.
+    pub message: String,
+
+    /// Column the blocker applies to, when it is column-specific.
+    #[serde(default)]
+    pub column: Option<String>,
+}
+
 /// Table metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TableInfo {
@@ -1209,5 +1321,96 @@ mod tests {
         let json = serde_json::to_string(&decoded).expect("serialize");
         let redecoded: TableInfo = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(redecoded.storage_hints.expect("hints").len(), 2);
+    }
+
+    fn full_creation_metadata() -> TableCreationMetadata {
+        TableCreationMetadata {
+            schema: Some("sales".to_string()),
+            table: "orders".to_string(),
+            completeness: MetadataCompleteness::Complete,
+            identity: Some(IdentitySpec {
+                column: "id".to_string(),
+                seed: "-99999999999999999999999999999999999999".to_string(),
+                increment: "99999999999999999999999999999999999999".to_string(),
+            }),
+            primary_key: Some(PrimaryKeySpec {
+                columns: vec!["tenant_id".to_string(), "id".to_string()],
+            }),
+            blockers: vec![CreationBlocker {
+                code: "memory_optimized".to_string(),
+                message: "MEMORY_OPTIMIZED tables have no faithful CREATE TABLE mapping"
+                    .to_string(),
+                column: None,
+            }],
+        }
+    }
+
+    #[test]
+    fn table_creation_metadata_roundtrips_38_digit_identity_strings() {
+        let original = full_creation_metadata();
+
+        let json = serde_json::to_string(&original).expect("serialize");
+        let decoded: TableCreationMetadata = serde_json::from_str(&json).expect("deserialize");
+
+        assert_eq!(decoded, original);
+
+        let identity = decoded.identity.expect("identity present");
+        assert_eq!(
+            identity.seed, "-99999999999999999999999999999999999999",
+            "38-digit seed must survive as the exact decimal string"
+        );
+        assert_eq!(
+            identity.increment, "99999999999999999999999999999999999999",
+            "38-digit increment must survive as the exact decimal string"
+        );
+    }
+
+    #[test]
+    fn identity_seed_and_increment_serialize_as_json_strings() {
+        let metadata = full_creation_metadata();
+
+        let value = serde_json::to_value(&metadata).expect("to value");
+        let seed = &value["identity"]["seed"];
+        let increment = &value["identity"]["increment"];
+
+        assert!(seed.is_string(), "seed must be a JSON string, got: {seed}");
+        assert!(
+            increment.is_string(),
+            "increment must be a JSON string, got: {increment}"
+        );
+    }
+
+    #[test]
+    fn metadata_completeness_roundtrips_all_variants() {
+        let complete = MetadataCompleteness::Complete;
+        let partial = MetadataCompleteness::Partial {
+            missing: vec![
+                MissingCreationMetadata::IdentitySeedOrIncrement,
+                MissingCreationMetadata::PrimaryKeyOrder,
+                MissingCreationMetadata::ColumnDefaultExpressions,
+                MissingCreationMetadata::StorageOptions,
+            ],
+        };
+
+        for completeness in [complete, partial] {
+            let json = serde_json::to_string(&completeness).expect("serialize");
+            let decoded: MetadataCompleteness = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(decoded, completeness);
+        }
+    }
+
+    #[test]
+    fn table_creation_metadata_optional_fields_default_when_absent() {
+        let json = serde_json::json!({
+            "table": "plain",
+            "completeness": { "state": "complete" },
+        });
+
+        let decoded: TableCreationMetadata = serde_json::from_value(json).expect("deserialize");
+        assert_eq!(decoded.table, "plain");
+        assert_eq!(decoded.schema, None);
+        assert_eq!(decoded.identity, None);
+        assert_eq!(decoded.primary_key, None);
+        assert!(decoded.blockers.is_empty());
     }
 }

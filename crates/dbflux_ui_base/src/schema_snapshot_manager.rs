@@ -14,7 +14,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use dbflux_core::{Connection, SchemaFingerprint, SchemaSnapshotRecord, SnapshotDepth, TableInfo};
+use dbflux_core::{
+    Connection, SchemaFingerprint, SchemaSnapshotRecord, SnapshotDepth, TableCreationMetadata,
+    TableInfo,
+};
 use dbflux_storage::error::StorageError;
 use dbflux_storage::repositories::sch_schema_snapshots::{
     SchemaSnapshotRepo, SchemaSnapshotSummary,
@@ -93,6 +96,26 @@ impl SchemaSnapshotManager {
         depth: SnapshotDepth,
         retention: usize,
     ) -> Result<CaptureOutcome, StorageError> {
+        self.capture_with_creation_metadata(profile_id, database, tables, &[], depth, retention)
+    }
+
+    /// Captures a snapshot together with structured creation metadata.
+    ///
+    /// Deduplication is metadata-aware: when the legacy schema fingerprint is
+    /// unchanged but the new capture carries metadata the latest stored
+    /// snapshot lacks (or differs from), a new row is inserted so the freshly
+    /// captured metadata is never discarded. A capture without metadata
+    /// always dedups against an identical fingerprint, preserving existing
+    /// shallow-capture behavior.
+    pub fn capture_with_creation_metadata(
+        &mut self,
+        profile_id: &str,
+        database: Option<&str>,
+        tables: &[TableInfo],
+        creation_metadata: &[TableCreationMetadata],
+        depth: SnapshotDepth,
+        retention: usize,
+    ) -> Result<CaptureOutcome, StorageError> {
         // A retention of 0 would prune the row just inserted, silently
         // disabling persistence; always keep at least the latest snapshot.
         let retention = retention.max(1);
@@ -103,6 +126,7 @@ impl SchemaSnapshotManager {
 
         if let Some(latest) = &latest
             && latest.fingerprint == fingerprint
+            && !self.metadata_changed_since(&latest.id, creation_metadata)?
         {
             return Ok(CaptureOutcome::Deduped {
                 existing_id: latest.id.clone(),
@@ -120,6 +144,7 @@ impl SchemaSnapshotManager {
             fingerprint,
             depth,
             tables: tables.to_vec(),
+            creation_metadata: creation_metadata.to_vec(),
         };
 
         self.repo.insert(&record)?;
@@ -130,12 +155,55 @@ impl SchemaSnapshotManager {
         Ok(CaptureOutcome::Inserted { id: record.id })
     }
 
+    /// Returns `true` when `new_metadata` differs from the creation metadata
+    /// stored with the given snapshot — including the case where the stored
+    /// snapshot has none but the new capture does. Only captures that carry
+    /// metadata can report a change.
+    fn metadata_changed_since(
+        &self,
+        latest_id: &str,
+        new_metadata: &[TableCreationMetadata],
+    ) -> Result<bool, StorageError> {
+        if new_metadata.is_empty() {
+            return Ok(false);
+        }
+
+        let Some(latest_record) = self.repo.get(latest_id)? else {
+            return Ok(true);
+        };
+
+        let stored_by_table: std::collections::HashMap<
+            (Option<&str>, &str),
+            &TableCreationMetadata,
+        > = latest_record
+            .creation_metadata
+            .iter()
+            .map(|metadata| {
+                (
+                    (metadata.schema.as_deref(), metadata.table.as_str()),
+                    metadata,
+                )
+            })
+            .collect();
+
+        for metadata in new_metadata {
+            let key = (metadata.schema.as_deref(), metadata.table.as_str());
+            match stored_by_table.get(&key) {
+                Some(stored) if stored == &metadata => {}
+                _ => return Ok(true),
+            }
+        }
+
+        Ok(false)
+    }
+
     /// Captures a `Deep` snapshot by back-filling full `table_details` for
     /// every entry in `shallow_tables` before persisting.
     ///
-    /// A per-table `table_details` failure does not abort the capture: the
-    /// shallow entry is kept for that table so the rest of the snapshot still
-    /// captures real detail.
+    /// Per-table failures abort the capture with an error naming the table
+    /// and the source failure; nothing is persisted and the cache is left
+    /// untouched. Structured creation metadata is collected through the same
+    /// generic connection per table and propagates on failure the same way.
     pub fn capture_deep(
         &mut self,
         connection: &dyn Connection,
@@ -146,19 +214,38 @@ impl SchemaSnapshotManager {
     ) -> Result<CaptureOutcome, StorageError> {
         let db = database.unwrap_or_default();
 
-        let deep_tables: Vec<TableInfo> = shallow_tables
-            .iter()
-            .map(|table| {
-                connection
-                    .table_details(db, table.schema.as_deref(), &table.name)
-                    .unwrap_or_else(|_| table.clone())
-            })
-            .collect();
+        let mut deep_tables = Vec::with_capacity(shallow_tables.len());
+        let mut creation_metadata = Vec::new();
+        for table in shallow_tables {
+            let detail = connection
+                .table_details(db, table.schema.as_deref(), &table.name)
+                .map_err(|error| {
+                    StorageError::Data(format!(
+                        "deep capture failed for table '{}' in schema {:?}: {error}",
+                        table.name, table.schema
+                    ))
+                })?;
 
-        self.capture(
+            if let Some(metadata) = connection
+                .table_creation_metadata(db, table.schema.as_deref(), &table.name)
+                .map_err(|error| {
+                    StorageError::Data(format!(
+                        "creation metadata introspection failed for table '{}' in schema {:?}: {error}",
+                        table.name, table.schema
+                    ))
+                })?
+            {
+                creation_metadata.push(metadata);
+            }
+
+            deep_tables.push(detail);
+        }
+
+        self.capture_with_creation_metadata(
             profile_id,
             database,
             &deep_tables,
+            &creation_metadata,
             SnapshotDepth::Deep,
             retention,
         )
@@ -481,6 +568,14 @@ mod tests {
         metadata: DriverMetadata,
         detail: TableInfo,
         fail_lookup: bool,
+        /// Table name whose `table_details` lookup fails, to exercise
+        /// failure after earlier tables succeeded.
+        fail_lookup_table: Option<String>,
+        /// Structured creation metadata the mock returns from
+        /// `table_creation_metadata`; `None` mimics a driver without
+        /// introspection.
+        creation_metadata: Option<TableCreationMetadata>,
+        fail_metadata_lookup: bool,
     }
 
     impl Connection for MockConnection {
@@ -517,10 +612,22 @@ mod tests {
             _schema: Option<&str>,
             _table: &str,
         ) -> Result<TableInfo, DbError> {
-            if self.fail_lookup {
+            if self.fail_lookup || self.fail_lookup_table.as_deref() == Some(_table) {
                 Err(DbError::NotSupported("boom".into()))
             } else {
                 Ok(self.detail.clone())
+            }
+        }
+        fn table_creation_metadata(
+            &self,
+            _database: &str,
+            _schema: Option<&str>,
+            _table: &str,
+        ) -> Result<Option<TableCreationMetadata>, DbError> {
+            if self.fail_metadata_lookup {
+                Err(DbError::NotSupported("metadata boom".into()))
+            } else {
+                Ok(self.creation_metadata.clone())
             }
         }
         fn list_databases(&self) -> Result<Vec<DatabaseInfo>, DbError> {
@@ -584,6 +691,9 @@ mod tests {
             metadata: minimal_metadata(),
             detail: deep_users,
             fail_lookup: false,
+            fail_lookup_table: None,
+            creation_metadata: None,
+            fail_metadata_lookup: false,
         };
 
         let outcome = mgr
@@ -601,18 +711,108 @@ mod tests {
     }
 
     #[test]
-    fn capture_deep_keeps_shallow_entry_on_lookup_failure() {
+    fn capture_deep_propagates_table_details_errors() {
         let (mut mgr, profile_id) = make_manager();
 
         let connection = MockConnection {
             metadata: minimal_metadata(),
             detail: table("unused"),
             fail_lookup: true,
+            fail_lookup_table: None,
+            creation_metadata: None,
+            fail_metadata_lookup: false,
+        };
+
+        let outcome =
+            mgr.capture_deep(&connection, &profile_id, Some("db1"), &[table("users")], 10);
+
+        assert!(
+            outcome.is_err(),
+            "a table_details failure must propagate, got: {:?}",
+            outcome
+        );
+        let error = outcome.err().unwrap().to_string();
+        assert!(
+            error.contains("users"),
+            "the error must name the failing table, got: {error}"
+        );
+        assert!(
+            error.contains("boom"),
+            "the error must retain the source error, got: {error}"
+        );
+        assert_eq!(
+            mgr.list(&profile_id, Some("db1")).len(),
+            0,
+            "a failed capture must persist no snapshot row"
+        );
+    }
+
+    #[test]
+    fn capture_deep_error_after_prior_table_success_persists_nothing() {
+        let (mut mgr, profile_id) = make_manager();
+
+        let connection = MockConnection {
+            metadata: minimal_metadata(),
+            detail: table("unused"),
+            fail_lookup: false,
+            fail_lookup_table: Some("orders".to_string()),
+            creation_metadata: None,
+            fail_metadata_lookup: false,
+        };
+
+        let outcome = mgr.capture_deep(
+            &connection,
+            &profile_id,
+            Some("db1"),
+            &[table("users"), table("orders")],
+            10,
+        );
+
+        assert!(
+            outcome.is_err(),
+            "a failure on any table must propagate even after earlier tables succeeded, got: {:?}",
+            outcome
+        );
+        assert_eq!(
+            mgr.list(&profile_id, Some("db1")).len(),
+            0,
+            "no partial snapshot may be persisted when a later table fails"
+        );
+    }
+
+    fn sample_creation_metadata(table_name: &str) -> TableCreationMetadata {
+        TableCreationMetadata {
+            schema: Some("public".to_string()),
+            table: table_name.to_string(),
+            completeness: dbflux_core::MetadataCompleteness::Complete,
+            identity: Some(dbflux_core::IdentitySpec {
+                column: "id".to_string(),
+                seed: "99999999999999999999999999999999999999".to_string(),
+                increment: "1".to_string(),
+            }),
+            primary_key: Some(dbflux_core::PrimaryKeySpec {
+                columns: vec!["id".to_string()],
+            }),
+            blockers: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn capture_deep_persists_creation_metadata() {
+        let (mut mgr, profile_id) = make_manager();
+
+        let connection = MockConnection {
+            metadata: minimal_metadata(),
+            detail: table("users"),
+            fail_lookup: false,
+            fail_lookup_table: None,
+            creation_metadata: Some(sample_creation_metadata("users")),
+            fail_metadata_lookup: false,
         };
 
         let outcome = mgr
             .capture_deep(&connection, &profile_id, Some("db1"), &[table("users")], 10)
-            .expect("capture_deep must not fail on per-table lookup errors");
+            .expect("capture_deep");
 
         let id = match outcome {
             CaptureOutcome::Inserted { id } => id,
@@ -620,6 +820,159 @@ mod tests {
         };
 
         let loaded = mgr.get(&id.to_string()).unwrap().unwrap();
-        assert_eq!(loaded.tables[0].name, "users");
+        assert_eq!(loaded.creation_metadata.len(), 1);
+        assert_eq!(loaded.creation_metadata[0].table, "users");
+        assert_eq!(
+            loaded.creation_metadata[0].schema.as_deref(),
+            Some("public")
+        );
+        let identity = loaded.creation_metadata[0]
+            .identity
+            .as_ref()
+            .expect("identity captured");
+        assert_eq!(
+            identity.seed, "99999999999999999999999999999999999999",
+            "38-digit seed must be persisted as the exact decimal string"
+        );
+    }
+
+    #[test]
+    fn capture_deep_propagates_metadata_introspection_errors() {
+        let (mut mgr, profile_id) = make_manager();
+
+        let connection = MockConnection {
+            metadata: minimal_metadata(),
+            detail: table("users"),
+            fail_lookup: false,
+            fail_lookup_table: None,
+            creation_metadata: None,
+            fail_metadata_lookup: true,
+        };
+
+        let outcome =
+            mgr.capture_deep(&connection, &profile_id, Some("db1"), &[table("users")], 10);
+
+        assert!(
+            outcome.is_err(),
+            "a creation-metadata introspection failure must propagate, got: {:?}",
+            outcome
+        );
+    }
+
+    #[test]
+    fn capture_with_metadata_inserts_new_row_despite_identical_fingerprint() {
+        let (mut mgr, profile_id) = make_manager();
+
+        // First capture: same tables, no metadata (e.g. a legacy snapshot).
+        mgr.capture(
+            &profile_id,
+            Some("db1"),
+            &[table("users")],
+            SnapshotDepth::Deep,
+            10,
+        )
+        .expect("first capture");
+
+        // Second capture: identical structure fingerprint, but the driver now
+        // reports creation metadata. It must not be silently discarded.
+        let metadata = vec![sample_creation_metadata("users")];
+        let outcome = mgr
+            .capture_with_creation_metadata(
+                &profile_id,
+                Some("db1"),
+                &[table("users")],
+                &metadata,
+                SnapshotDepth::Deep,
+                10,
+            )
+            .expect("second capture");
+
+        assert!(
+            matches!(outcome, CaptureOutcome::Inserted { .. }),
+            "newly captured metadata must not be deduped away, got: {:?}",
+            outcome
+        );
+
+        assert_eq!(mgr.list(&profile_id, Some("db1")).len(), 2);
+        let inserted_id = match outcome {
+            CaptureOutcome::Inserted { id } => id,
+            _ => unreachable!("asserted above"),
+        };
+        let inserted = mgr.get(&inserted_id.to_string()).unwrap().unwrap();
+        assert_eq!(inserted.creation_metadata.len(), 1);
+    }
+
+    #[test]
+    fn capture_with_identical_metadata_dedups() {
+        let (mut mgr, profile_id) = make_manager();
+
+        let metadata = vec![sample_creation_metadata("users")];
+        let first = mgr
+            .capture_with_creation_metadata(
+                &profile_id,
+                Some("db1"),
+                &[table("users")],
+                &metadata,
+                SnapshotDepth::Deep,
+                10,
+            )
+            .expect("first capture");
+        let first_id = match first {
+            CaptureOutcome::Inserted { id } => id,
+            _ => panic!("expected Inserted"),
+        };
+
+        let second = mgr
+            .capture_with_creation_metadata(
+                &profile_id,
+                Some("db1"),
+                &[table("users")],
+                &metadata,
+                SnapshotDepth::Deep,
+                10,
+            )
+            .expect("second capture");
+
+        assert_eq!(
+            second,
+            CaptureOutcome::Deduped {
+                existing_id: first_id.to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn capture_without_metadata_dedups_against_metadata_bearing_snapshot() {
+        // A shallow on-connect capture of an unchanged structure must still
+        // dedup even when the stored snapshot carries creation metadata; only
+        // changed or newly present metadata forces an insert.
+        let (mut mgr, profile_id) = make_manager();
+
+        let metadata = vec![sample_creation_metadata("users")];
+        mgr.capture_with_creation_metadata(
+            &profile_id,
+            Some("db1"),
+            &[table("users")],
+            &metadata,
+            SnapshotDepth::Deep,
+            10,
+        )
+        .expect("metadata-bearing capture");
+
+        let shallow = mgr
+            .capture(
+                &profile_id,
+                Some("db1"),
+                &[table("users")],
+                SnapshotDepth::Shallow,
+                10,
+            )
+            .expect("shallow capture");
+
+        assert!(
+            matches!(shallow, CaptureOutcome::Deduped { .. }),
+            "shallow capture without metadata must dedup, got: {:?}",
+            shallow
+        );
     }
 }
