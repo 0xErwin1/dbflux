@@ -56,6 +56,9 @@ fn cleanup_test_tables(conn: &dyn dbflux_core::Connection) {
         "fk_parent",
         "fk_child",
         "truncate_test",
+        "zero_column_test",
+        "partitioned_test",
+        "partitioned_test_regions",
     ];
 
     for table in tables {
@@ -559,7 +562,10 @@ fn postgres_ddl_drop_table() -> Result<(), DbError> {
         connection.execute(&QueryRequest::new(format!("DROP TABLE {}", table.name)))?;
 
         let after = connection.table_details("postgres", Some("public"), &table.name);
-        assert!(after.is_err(), "table should not exist");
+        assert!(
+            matches!(after, Err(DbError::ObjectNotFound(_))),
+            "dropped table should report ObjectNotFound, got {after:?}"
+        );
 
         cleanup_test_tables(&*connection);
         Ok(())
@@ -638,6 +644,137 @@ fn postgres_ddl_drop_view() -> Result<(), DbError> {
             .flat_map(|s| s.views.iter())
             .any(|v| v.name == view.name);
         assert!(!has_view_after, "view should not exist");
+
+        cleanup_test_tables(&*connection);
+        Ok(())
+    })
+}
+
+// ---------------------------------------------------------------------------
+// table_details existence tests
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_ddl_table_details_missing_relation_object_not_found() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+        cleanup_test_tables(&*connection);
+
+        let missing =
+            connection.table_details("postgres", Some("public"), "never_created_table_xyz");
+        assert!(
+            matches!(missing, Err(DbError::ObjectNotFound(_))),
+            "never-existent relation should report ObjectNotFound, got {missing:?}"
+        );
+
+        cleanup_test_tables(&*connection);
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_ddl_table_details_zero_column_table() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+        cleanup_test_tables(&*connection);
+
+        connection.execute(&QueryRequest::new("CREATE TABLE zero_column_test ()"))?;
+
+        let details = connection.table_details("postgres", Some("public"), "zero_column_test")?;
+        assert_eq!(details.name, "zero_column_test");
+        let columns = details.columns.as_ref().expect("columns should be loaded");
+        assert!(
+            columns.is_empty(),
+            "a real zero-column table is not a missing relation"
+        );
+
+        cleanup_test_tables(&*connection);
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_ddl_table_details_quoted_non_default_schema() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+        cleanup_test_tables(&*connection);
+
+        connection.execute(&QueryRequest::new(
+            "CREATE SCHEMA IF NOT EXISTS \"dbflux test\"",
+        ))?;
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE \"dbflux test\".\"MixedCase Table\" (id INTEGER PRIMARY KEY, note TEXT)",
+        ))?;
+
+        let details =
+            connection.table_details("postgres", Some("dbflux test"), "MixedCase Table")?;
+        assert_eq!(details.schema.as_deref(), Some("dbflux test"));
+        assert_eq!(details.name, "MixedCase Table");
+        let columns = details.columns.as_ref().expect("columns should be loaded");
+        assert_eq!(columns.len(), 2);
+
+        let missing = connection.table_details("postgres", Some("dbflux test"), "Missing Table");
+        assert!(
+            matches!(missing, Err(DbError::ObjectNotFound(_))),
+            "missing relation in a non-default schema should report ObjectNotFound, got {missing:?}"
+        );
+
+        connection.execute(&QueryRequest::new(
+            "DROP TABLE IF EXISTS \"dbflux test\".\"MixedCase Table\"",
+        ))?;
+        connection.execute(&QueryRequest::new(
+            "DROP SCHEMA IF EXISTS \"dbflux test\" CASCADE",
+        ))?;
+
+        cleanup_test_tables(&*connection);
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_ddl_table_details_supported_relation_kinds() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+        cleanup_test_tables(&*connection);
+
+        let table = PostgresFixtures::table_serial_pk();
+        connection.execute(&QueryRequest::new(&table.create_sql))?;
+        let view = PostgresFixtures::view_simple();
+        connection.execute(&QueryRequest::new(&view.create_sql))?;
+
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE partitioned_test (id INTEGER, region TEXT) PARTITION BY LIST (region)",
+        ))?;
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE partitioned_test_regions PARTITION OF partitioned_test FOR VALUES IN ('americas')",
+        ))?;
+
+        let view_details = connection.table_details("postgres", Some("public"), &view.name)?;
+        let view_columns = view_details.columns.as_ref().expect("view columns loaded");
+        assert!(
+            !view_columns.is_empty(),
+            "supported views keep their columns"
+        );
+
+        let partitioned_details =
+            connection.table_details("postgres", Some("public"), "partitioned_test")?;
+        let partitioned_columns = partitioned_details
+            .columns
+            .as_ref()
+            .expect("partitioned table columns loaded");
+        assert_eq!(partitioned_columns.len(), 2);
+
+        let partition_details =
+            connection.table_details("postgres", Some("public"), "partitioned_test_regions")?;
+        let partition_columns = partition_details
+            .columns
+            .as_ref()
+            .expect("partition columns loaded");
+        assert_eq!(partition_columns.len(), 2);
 
         cleanup_test_tables(&*connection);
         Ok(())

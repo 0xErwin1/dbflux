@@ -570,7 +570,23 @@ impl Connection for DynamoConnection {
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
         let started = std::time::Instant::now();
 
-        if partiql_verb(&req.sql).is_some() {
+        if req.statement_timeout.is_some() {
+            return Err(DbError::NotSupported(
+                "DynamoDB query execution does not support statement timeouts".to_string(),
+            ));
+        }
+
+        if let Some(verb) = partiql_verb(&req.sql) {
+            if req.limit.is_some() && verb != PartiqlVerb::Select {
+                return Err(DbError::NotSupported(
+                    "DynamoDB PartiQL writes do not support query row limits".to_string(),
+                ));
+            }
+            if req.limit == Some(0) {
+                return Err(DbError::NotSupported(
+                    "DynamoDB PartiQL SELECT does not support a zero row limit".to_string(),
+                ));
+            }
             let mut result = self.execute_partiql(req)?;
             result.execution_time = started.elapsed();
             return Ok(result);
@@ -600,7 +616,13 @@ impl Connection for DynamoConnection {
                     .unwrap_or_else(|| DYNAMODB_DEFAULT_DATABASE.to_string());
 
                 let pagination = Pagination::Offset {
-                    limit: limit.or(req.limit).unwrap_or(100),
+                    limit: match (limit, req.limit) {
+                        (Some(envelope_limit), Some(request_limit)) => {
+                            envelope_limit.min(request_limit)
+                        }
+                        (Some(limit), None) | (None, Some(limit)) => limit,
+                        (None, None) => 100,
+                    },
                     offset: offset.or(req.offset.map(u64::from)).unwrap_or(0),
                 };
 
@@ -618,6 +640,11 @@ impl Connection for DynamoConnection {
                 table,
                 items,
             } => {
+                if req.limit.is_some() {
+                    return Err(DbError::NotSupported(
+                        "DynamoDB writes do not support query row limits".to_string(),
+                    ));
+                }
                 let insert = DocumentInsert {
                     collection: table,
                     database: Some(
@@ -638,6 +665,11 @@ impl Connection for DynamoConnection {
                 many,
                 upsert,
             } => {
+                if req.limit.is_some() {
+                    return Err(DbError::NotSupported(
+                        "DynamoDB writes do not support query row limits".to_string(),
+                    ));
+                }
                 let update_request = DocumentUpdate {
                     collection: table,
                     database: Some(
@@ -659,6 +691,11 @@ impl Connection for DynamoConnection {
                 key,
                 many,
             } => {
+                if req.limit.is_some() {
+                    return Err(DbError::NotSupported(
+                        "DynamoDB writes do not support query row limits".to_string(),
+                    ));
+                }
                 let delete_request = DocumentDelete {
                     collection: table,
                     database: Some(

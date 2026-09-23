@@ -15,7 +15,7 @@ AWS DynamoDB driver for DBFlux, built on the [`aws-sdk-dynamodb`](https://crates
 - Managed NoSQL driver classified as `DatabaseCategory::Document` with a `QueryLanguage::Custom("DynamoDB")` command envelope; the editor uses a DynamoDB-specific syntax, not SQL.
 - AWS connection configuration via region, named profile, and optional endpoint override (for DynamoDB Local or VPC endpoints). `deployment_class` is `CloudManaged`.
 - Table discovery with `ListTables` and `DescribeTable`, mapping partition key (PK), sort key (SK), and Global/Local Secondary Index (GSI/LSI) key metadata into DBFlux schema abstractions.
-- Native command envelope execution for `scan`, `query`, `put`, `update`, and `delete`. The query generator emits scan-shaped preview envelopes and notes that execution may optimize to `Query` when the filter matches the table key schema.
+- Native command envelope execution for `scan`, `query`, `put`, `update`, and `delete`. The query generator emits scan-shaped preview envelopes and notes that execution may optimize to `Query` when the filter matches the table key schema. Read limits retain zero-row behavior and use the smaller of an envelope limit and an explicit request limit.
 - Read options for index targeting, consistent-read control, and a filter-translation fallback policy (server-side filter vs. client-side fallback; client filtering is rejected when the fallback policy is set to reject).
 - WHERE operators in semantic filters: `Eq`, `Ne`, `Gt`, `Gte`, `Lt`, `Lte`, `In`, `NotIn`, and logical `And`/`Or` (see Limitations for `Not`).
 - Mutations: insert (`put`), update, and delete (`INSERT`/`UPDATE`/`DELETE`). Batch writes support up to 25 items (`max_insert_values: 25`, `supports_batch: true`) with bounded retry for unprocessed batch-write items.
@@ -29,7 +29,9 @@ AWS DynamoDB driver for DBFlux, built on the [`aws-sdk-dynamodb`](https://crates
 ## Limitations
 
 - The `profile` field (AWS named profile) is an `AuthProfileRef` form field. The generic portability seam (`DbDriver::export_field_hint`) maps all `AuthProfileRef` fields to `RequiredOnImport`, so the field value is omitted from any exported bundle and recipients must supply or create a matching auth profile at import time. No driver-specific override is required.
-- Query cancellation is not supported; the driver returns `NotSupported` for cancel requests.
+- Explicit statement timeouts are rejected before execution, including zero-duration timeouts. Query cancellation is not supported; the driver returns `NotSupported` for cancel requests.
+- Explicit request row limits on envelope and PartiQL writes are rejected before mutation. PartiQL `SELECT` accepts positive limits through the SDK; a zero limit is rejected before the request. PartiQL returns only the first page and exposes a next-page token without an inbound token on `QueryRequest`.
+- Row limits bound returned rows, not bytes or DynamoDB server work. No truncation claim is made without evidence of omitted rows.
 - The command envelope API does not expose PartiQL or DynamoDB transaction operations; transactions are disabled (`supports_transactions: false`).
 - Single-item upsert is supported (`supports_upsert: true`); `update` with `many=true` and `upsert=true` together is rejected (`update_many_with_upsert`).
 - Bulk update and bulk delete are not supported (`supports_bulk_update: false`, `supports_bulk_delete: false`), and `RETURNING` is not supported.

@@ -15,7 +15,7 @@ AWS 관리형 NoSQL 키-값 및 문서 데이터베이스입니다.
 - `DatabaseCategory::Document`로 분류되고 `QueryLanguage::Custom("DynamoDB")` 명령 엔벨로프를 갖는 관리형 NoSQL 드라이버입니다. 에디터는 SQL이 아닌 DynamoDB 전용 문법을 사용합니다.
 - 리전, 명명된 프로필, 선택적 엔드포인트 재정의(DynamoDB Local 또는 VPC 엔드포인트용)를 통한 AWS 연결 구성입니다. `deployment_class`는 `CloudManaged`입니다.
 - 테이블 탐색은 `ListTables`와 `DescribeTable`을 사용하며, 파티션 키(PK), 정렬 키(SK), Global/Local Secondary Index(GSI/LSI) 키 메타데이터를 DBFlux 스키마 추상화에 매핑합니다.
-- `scan`, `query`, `put`, `update`, `delete`를 위한 네이티브 명령 엔벨로프 실행입니다. 쿼리 생성기는 scan 형태의 미리 보기 엔벨로프를 만들어 내며, 필터가 테이블 키 스키마와 일치하면 실행이 `Query`로 최적화될 수 있음을 알려 줍니다.
+- `scan`, `query`, `put`, `update`, `delete`를 위한 네이티브 명령 엔벨로프 실행입니다. 쿼리 생성기는 scan 형태의 미리 보기 엔벨로프를 만들어 내며, 필터가 테이블 키 스키마와 일치하면 실행이 `Query`로 최적화될 수 있음을 알려 줍니다. 읽기 제한은 0행 결과를 유지하며 엔벨로프 제한과 명시적 요청 제한 중 더 작은 값을 적용합니다.
 - 인덱스 대상 지정, consistent-read 제어, 필터 변환 폴백 정책(서버 측 필터 대 클라이언트 측 폴백; 폴백 정책이 reject로 설정되면 클라이언트 필터링은 거부됨)을 위한 읽기 옵션입니다.
 - 시맨틱 필터의 WHERE 연산자: `Eq`, `Ne`, `Gt`, `Gte`, `Lt`, `Lte`, `In`, `NotIn`, 논리 `And`/`Or`(`Not`은 제한 사항 참조).
 - 변경: 삽입(`put`), 업데이트, 삭제(`INSERT`/`UPDATE`/`DELETE`). 배치 쓰기는 최대 25개 항목(`max_insert_values: 25`, `supports_batch: true`)까지 지원하며, 처리되지 않은 배치 쓰기 항목에 대해 범위가 제한된 재시도를 수행합니다.
@@ -29,7 +29,9 @@ AWS 관리형 NoSQL 키-값 및 문서 데이터베이스입니다.
 ## 제한 사항
 
 - `profile` 필드(AWS 명명된 프로필)는 `AuthProfileRef` 폼 필드입니다. 일반 이식성 시임(`DbDriver::export_field_hint`)은 모든 `AuthProfileRef` 필드를 `RequiredOnImport`로 매핑하므로, 이 필드 값은 내보낸 번들에서 생략되며 받는 쪽에서 가져오기 시점에 일치하는 인증 프로필을 제공하거나 만들어야 합니다. 드라이버별 재정의는 필요하지 않습니다.
-- 쿼리 취소는 지원되지 않습니다. 취소 요청에 대해 드라이버는 `NotSupported`를 반환합니다.
+- 명시적 실행 시간 제한은 0초인 경우를 포함하여 실행 전에 거부됩니다. 쿼리 취소는 지원되지 않습니다. 취소 요청에 대해 드라이버는 `NotSupported`를 반환합니다.
+- 엔벨로프와 PartiQL 쓰기에 명시적 요청 행 제한이 있으면 변경 전에 거부됩니다. PartiQL `SELECT`는 SDK를 통해 양수 제한을 적용하며, 0 제한은 요청 전에 거부됩니다. PartiQL은 첫 페이지만 반환하고 다음 페이지 토큰을 노출하지만 `QueryRequest`에 입력 토큰을 전달할 수 없습니다.
+- 행 제한은 반환 행 수만 제한하며 바이트 수나 DynamoDB 서버 작업량을 제한하지 않습니다. 생략된 행이 확인되지 않으면 결과가 잘렸다고 주장하지 않습니다.
 - 명령 엔벨로프 API는 PartiQL이나 DynamoDB 트랜잭션 작업을 노출하지 않습니다. 트랜잭션은 비활성화되어 있습니다(`supports_transactions: false`).
 - 단일 항목 upsert는 지원됩니다(`supports_upsert: true`). `many=true`와 `upsert=true`를 함께 사용하는 `update`는 거부됩니다(`update_many_with_upsert`).
 - 벌크 업데이트와 벌크 삭제는 지원되지 않고(`supports_bulk_update: false`, `supports_bulk_delete: false`), `RETURNING`도 지원되지 않습니다.

@@ -314,6 +314,7 @@ fn render_filter_input(state: &Entity<InputState>) -> impl IntoElement {
     // magnifier renders in the same muted tone as in the screenshot without
     // requiring a theme lookup at this call site.
     GpuiInput::new(state)
+        .id("cm-driver-filter")
         .small()
         .cleanable(true)
         .prefix(Icon::new(AppIcon::Search).size(Heights::ICON_SM))

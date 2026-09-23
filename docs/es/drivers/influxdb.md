@@ -153,6 +153,8 @@ Driver de InfluxDB para DBFlux.
 
 ## Limitaciones
 
+- `execute()` rechaza cualquier límite de filas solicitado (incluso cero) o tiempo máximo de ejecución con `NotSupported` antes de enviar HTTP o despachar el contexto de instancia. Las consultas sin estas protecciones siguen disponibles; el editor predeterminado no puede garantizarlas.
+
 - **Sin cancelación de query** — `cancel()` devuelve `NotSupported`; las queries
   en curso no se pueden abortar desde la UI (`QUERY_CANCELLATION` no está
   declarada).

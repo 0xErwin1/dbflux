@@ -321,6 +321,151 @@ fn dynamodb_update_many_and_delete_many_apply_to_all_matches() -> Result<(), DbE
 
 #[test]
 #[ignore = "requires Docker daemon"]
+fn dynamodb_query_safety() -> Result<(), DbError> {
+    containers::with_dynamodb_endpoint(|endpoint| {
+        let table_name = "dbflux_query_safety_fixture";
+        create_table(&endpoint, table_name)?;
+        seed_items(&endpoint, table_name, 1)?;
+        let connection = connect_dynamodb(&endpoint)?;
+        let collection = CollectionRef::new("dynamodb", table_name);
+        let count =
+            || connection.count_collection(&CollectionCountRequest::new(collection.clone()));
+
+        for (label, limit, timeout) in [
+            ("write limit zero", Some(0), None),
+            ("write limit positive", Some(2), None),
+            ("write timeout", None, Some(Duration::from_secs(10))),
+        ] {
+            let mut request = QueryRequest::new(
+                json!({"op": "put", "table": table_name, "items": [{"pk": label}]}).to_string(),
+            );
+            request.limit = limit;
+            request.statement_timeout = timeout;
+            let outcome = connection.execute(&request);
+            let observed_count = count()?;
+            println!("{label}: outcome={outcome:?}, table_count={observed_count}");
+            assert_eq!(observed_count, 1, "{label}: write must not take effect");
+            assert!(
+                matches!(outcome, Err(DbError::NotSupported(_))),
+                "{label}: expected refusal"
+            );
+        }
+
+        let scan = json!({"op": "scan", "table": table_name}).to_string();
+        let mut timed_read = QueryRequest::new(&scan);
+        timed_read.statement_timeout = Some(Duration::from_secs(10));
+        let outcome = connection.execute(&timed_read);
+        let observed_count = count()?;
+        println!("read timeout: outcome={outcome:?}, table_count={observed_count}");
+        assert!(matches!(outcome, Err(DbError::NotSupported(_))));
+        assert_eq!(observed_count, 1);
+
+        for operation in ["scan", "query"] {
+            let sql = json!({"op": operation, "table": table_name}).to_string();
+            for limit in [Some(0), None] {
+                let mut request = QueryRequest::new(&sql);
+                request.limit = limit;
+                let outcome = connection.execute(&request);
+                println!(
+                    "{operation} limit={limit:?}: outcome={outcome:?}, table_count={}",
+                    count()?
+                );
+                let result = outcome?;
+                assert_eq!(result.row_count(), if limit == Some(0) { 0 } else { 1 });
+            }
+        }
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn dynamodb_query_safety_envelope_limit_cannot_override_caller() -> Result<(), DbError> {
+    containers::with_dynamodb_endpoint(|endpoint| {
+        let table_name = "dbflux_query_safety_envelope_limit";
+        create_table(&endpoint, table_name)?;
+        seed_items(&endpoint, table_name, 3)?;
+        let connection = connect_dynamodb(&endpoint)?;
+        let mut violations = Vec::new();
+        for operation in ["scan", "query"] {
+            let mut request = QueryRequest::new(
+                json!({"op": operation, "table": table_name, "limit": 2}).to_string(),
+            );
+            request.limit = Some(0);
+            let outcome = connection.execute(&request);
+            let count = connection.count_collection(&CollectionCountRequest::new(
+                CollectionRef::new("dynamodb", table_name),
+            ))?;
+            println!("{operation} envelope=2 caller=0: outcome={outcome:?}, table_count={count}");
+            if count != 3 {
+                violations.push(format!(
+                    "{operation}: read changed fixture count to {count}"
+                ));
+            }
+            match outcome {
+                Ok(result) if result.row_count() == 0 => {}
+                Ok(result) => {
+                    violations.push(format!("{operation}: returned {} rows", result.row_count()))
+                }
+                Err(DbError::NotSupported(_)) => {}
+                Err(error) => violations.push(format!("{operation}: unexpected refusal: {error}")),
+            }
+        }
+        assert!(violations.is_empty(), "{}", violations.join("; "));
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn dynamodb_query_safety_partiql_insert_limit() -> Result<(), DbError> {
+    containers::with_dynamodb_endpoint(|endpoint| {
+        let table_name = "dbflux_query_safety_partiql_limit";
+        create_table(&endpoint, table_name)?;
+        let connection = connect_dynamodb(&endpoint)?;
+        let request = QueryRequest::new(format!(
+            "INSERT INTO \"{table_name}\" VALUE {{'pk': 'partiql#1'}}"
+        ))
+        .with_limit(1);
+        let outcome = connection.execute(&request);
+        let count = connection.count_collection(&CollectionCountRequest::new(
+            CollectionRef::new("dynamodb", table_name),
+        ))?;
+        println!("PartiQL INSERT limit=1: outcome={outcome:?}, table_count={count}");
+        assert_eq!(count, 0, "INSERT must not take effect");
+        assert!(
+            matches!(outcome, Err(DbError::NotSupported(_))),
+            "expected pre-effect refusal"
+        );
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn dynamodb_query_safety_partiql_select_zero_limit() -> Result<(), DbError> {
+    containers::with_dynamodb_endpoint(|endpoint| {
+        let table_name = "dbflux_query_safety_partiql_select";
+        create_table(&endpoint, table_name)?;
+        seed_items(&endpoint, table_name, 1)?;
+        let connection = connect_dynamodb(&endpoint)?;
+        let request = QueryRequest::new(format!("SELECT * FROM \"{table_name}\"")).with_limit(0);
+        let outcome = connection.execute(&request);
+        let count = connection.count_collection(&CollectionCountRequest::new(
+            CollectionRef::new("dynamodb", table_name),
+        ))?;
+        println!("PartiQL SELECT limit=0: outcome={outcome:?}, table_count={count}");
+        assert_eq!(count, 1);
+        assert!(
+            matches!(outcome, Err(DbError::NotSupported(_))),
+            "zero limit must be refused before SDK request"
+        );
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
 fn dynamodb_upsert_updates_existing_and_inserts_missing_items() -> Result<(), DbError> {
     containers::with_dynamodb_endpoint(|endpoint| {
         let table_name = "dbflux_phase4_upsert_fixture";

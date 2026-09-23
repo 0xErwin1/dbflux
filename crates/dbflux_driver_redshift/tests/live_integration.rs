@@ -35,6 +35,65 @@
 use dbflux_core::secrecy::SecretString;
 use dbflux_core::{ConnectionProfile, DbConfig, DbDriver, DbError, QueryRequest};
 use dbflux_driver_redshift::RedshiftDriver;
+use dbflux_test_support::containers::{retry_db_operation, with_trust_postgres_port};
+use std::time::Duration;
+
+#[test]
+#[ignore = "requires a disposable PostgreSQL 16 container (wire-compatible early refusal only)"]
+fn redshift_query_safety_refuses_protected_requests_before_prepare() -> Result<(), DbError> {
+    with_trust_postgres_port(|port| {
+        let profile = ConnectionProfile::new(
+            "redshift-protocol-compatibility",
+            DbConfig::Redshift {
+                use_uri: false,
+                uri: None,
+                host: "127.0.0.1".to_string(),
+                port,
+                user: "testuser".to_string(),
+                database: "testdb".to_string(),
+                ssl_mode: Some("disable".to_string()),
+                ssl_root_cert_path: None,
+                ssl_client_cert_path: None,
+                ssl_client_key_path: None,
+                ssh_tunnel: None,
+                ssh_tunnel_profile_id: None,
+            },
+        );
+        let connection = retry_db_operation(Duration::from_secs(30), || -> Result<_, DbError> {
+            let connection = RedshiftDriver::new().connect_with_secrets(&profile, None, None)?;
+            connection.ping()?;
+            Ok(connection)
+        })?;
+
+        for limit in [Some(0), Some(1)] {
+            let mut request = QueryRequest::new("SELECT 42");
+            request.limit = limit;
+            let result = connection.execute(&request);
+            assert!(
+                matches!(result, Err(DbError::NotSupported(_))),
+                "limit {limit:?}: expected early NotSupported, got {result:?}"
+            );
+        }
+
+        let mut timed = QueryRequest::new("SELECT 42");
+        timed.statement_timeout = Some(Duration::from_secs(1));
+        assert!(matches!(
+            connection.execute(&timed),
+            Err(DbError::NotSupported(_))
+        ));
+
+        let mut invalid = QueryRequest::new("SELECT FROM");
+        invalid.limit = Some(1);
+        assert!(matches!(
+            connection.execute(&invalid),
+            Err(DbError::NotSupported(_))
+        ));
+
+        let control = connection.execute(&QueryRequest::new("SELECT 42"))?;
+        assert_eq!(control.rows.len(), 1);
+        Ok(())
+    })
+}
 
 struct LiveRedshiftEnv {
     host: String,

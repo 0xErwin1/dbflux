@@ -4,9 +4,30 @@ All notable changes to DBFlux will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+* ClickHouse and Redshift now refuse explicit query row limits (including zero) and statement timeouts before dispatch or preparation; unprotected queries retain existing behavior, including possible full-result buffering. ClickHouse HTTP timeout does not guarantee server cancellation, and the Redshift early-refusal regression uses PostgreSQL 16 protocol compatibility rather than a hosted Redshift cluster.
+
+### Fixed
+
+* Redis, Turso, and InfluxDB now refuse requested row limits (including zero)
+  or statement timeouts before execution with `NotSupported`, rather than
+  dispatching commands, SQL, HTTP, or instance-context queries without those
+  protections. Unprotected execution remains available; the default editor
+  cannot promise these protections on these backends.
+  
+* Reject MongoDB execution requests with row limits or statement timeouts before any operation dispatches.
+
+
 ### Added
 
 * **PostgreSQL bounded query execution** — single-statement row limits retain only the requested rows while draining execution to completion; unsupported bounded batches, instance catalog requests, and statement deadlines are rejected before execution.
+
+* **DynamoDB execution safety** — requested timeouts and row-limited writes
+  now fail before execution; scan/query use the smaller request/envelope cap
+  including zero. PartiQL SELECT rejects zero limits and retains existing
+  positive-limit first-page behavior. Limits do not bound bytes or server work;
+  hosted AWS behavior was not validated.
 
 * **Shared lazy object hierarchy and collapsed sidebar preview** — the sidebar
   and migration wizard share coordinated loading while keeping independent
@@ -161,6 +182,22 @@ All notable changes to DBFlux will be documented in this file.
   `%{placeholder}` — a failure that is otherwise silent in the UI.
 
 ### Fixed
+
+* **Missing PostgreSQL relations no longer open as empty tables** — asking a
+  PostgreSQL connection for the details of a table or view that does not exist
+  returned an empty structure instead of an error, so the grid showed a blank
+  table. `table_details` now reports `ObjectNotFound` for absent relations;
+  real zero-column tables and supported views, partitioned tables and
+  partitions keep loading normally (#675).
+
+* **Connection Manager inputs and tabs are named for assistive technology** —
+  text inputs in the Connection Manager were announced by their placeholder
+  (the Host input read as "localhost") and carried ids generated from runtime
+  entity ids, so UI automation could not address them across runs. Each input
+  now reports the label shown next to it and a stable id derived from its form
+  field (`cm-field-host`, `cm-field-ssh_user`, `cm-setting-refresh_interval`).
+  Document tabs and Connection Manager tabs are exposed as tabs inside a tab
+  list, with the active tab reported as selected, instead of as buttons.
 
 * **The MCP approvals overlay can be closed** — once opened, the approvals
   overlay stayed on screen until the audit viewer was opened. It now closes

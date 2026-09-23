@@ -1,5 +1,7 @@
 use gpui::prelude::*;
-use gpui::{App, Entity, FontWeight, IntoElement, KeyBinding, Window, actions};
+use gpui::{
+    App, ElementId, Entity, FontWeight, IntoElement, KeyBinding, SharedString, Window, actions,
+};
 use gpui_component::Sizable;
 
 use crate::tokens::FontSizes;
@@ -46,6 +48,8 @@ pub fn register_input_overrides(cx: &mut App) {
 #[derive(IntoElement)]
 pub struct Input {
     state: Entity<InputState>,
+    id: Option<ElementId>,
+    aria_label: Option<SharedString>,
     small: bool,
     placeholder: Option<gpui::SharedString>,
     disabled: bool,
@@ -59,6 +63,8 @@ impl Input {
     pub fn new(state: &Entity<InputState>) -> Self {
         Self {
             state: state.clone(),
+            id: None,
+            aria_label: None,
             small: false,
             placeholder: None,
             disabled: false,
@@ -67,6 +73,23 @@ impl Input {
             cleanable: false,
             secret: false,
         }
+    }
+
+    /// Sets the element id of the input frame.
+    ///
+    /// Without it the id is derived from the state entity, so it changes
+    /// between runs. Give an input that UI automation must find a stable id,
+    /// unique within its window.
+    pub fn id(mut self, id: impl Into<ElementId>) -> Self {
+        self.id = Some(id.into());
+        self
+    }
+
+    /// Sets the accessible name of the input, normally the visible label of
+    /// the field it edits. Without it the name falls back to the placeholder.
+    pub fn aria_label(mut self, label: impl Into<SharedString>) -> Self {
+        self.aria_label = Some(label.into());
+        self
     }
 
     pub fn small(mut self) -> Self {
@@ -140,6 +163,121 @@ impl RenderOnce for Input {
             input = input.content_type(InputContentType::Password);
         }
 
+        if let Some(id) = self.id {
+            input = input.id(id);
+        }
+
+        if let Some(label) = self.aria_label {
+            input = input.aria_label(label);
+        }
+
         input
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use gpui::{
+        AccessibilityFrame, AppContext as _, Context, FrameObserver, IntoElement,
+        ParentElement as _, Render, Role, Styled as _, TestAppContext, Window, div,
+    };
+
+    use super::{Input, InputState};
+
+    /// Keeps the latest rendered accessibility frame of the window it observes.
+    #[derive(Default)]
+    struct FrameCapture(Mutex<Option<AccessibilityFrame>>);
+
+    impl FrameObserver for FrameCapture {
+        fn accessibility_updated(&self, frame: &AccessibilityFrame) {
+            *self.0.lock().expect("frame capture lock") = Some(frame.clone());
+        }
+    }
+
+    /// Node id, role and accessible name of every node in a frame.
+    type ObservedNode = (String, Role, Option<String>);
+
+    struct Field {
+        state: gpui::Entity<InputState>,
+        named: bool,
+    }
+
+    impl Render for Field {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            let input = Input::new(&self.state);
+            let input = if self.named {
+                input.id("cm-field-host").aria_label("Host")
+            } else {
+                input
+            };
+
+            div().size_full().child(input)
+        }
+    }
+
+    fn render_field(named: bool, cx: &mut TestAppContext) -> Vec<ObservedNode> {
+        cx.update(gpui_component::init);
+
+        let capture = Arc::new(FrameCapture::default());
+        let capture_for_window = capture.clone();
+        let (_view, visual) = cx.add_window_view(move |window, cx| {
+            window.observe_frames(&capture_for_window);
+            window.refresh();
+            let state = cx.new(|cx| InputState::new(window, cx).placeholder("localhost"));
+            Field { state, named }
+        });
+        visual.run_until_parked();
+
+        let frame = capture
+            .0
+            .lock()
+            .expect("frame capture lock")
+            .clone()
+            .expect("the window rendered a frame");
+
+        frame
+            .nodes()
+            .map(|(_, node)| {
+                let accessible = frame.accessibility_node(node);
+                let role = accessible.map_or_else(|| node.fallback_role(), |node| node.role());
+                let label = accessible
+                    .and_then(|node| node.label())
+                    .map(ToOwned::to_owned);
+                (node.id().to_owned(), role, label)
+            })
+            .collect()
+    }
+
+    #[gpui::test]
+    fn id_and_label_reach_the_rendered_input(cx: &mut TestAppContext) {
+        let nodes = render_field(true, cx);
+
+        let (_, role, label) = nodes
+            .iter()
+            .find(|(id, _, _)| id == "cm-field-host")
+            .expect("the input is found by the id it was given");
+
+        assert_eq!(*role, Role::TextInput);
+        assert_eq!(label.as_deref(), Some("Host"));
+    }
+
+    #[gpui::test]
+    fn input_without_id_keeps_the_entity_id_and_placeholder_name(cx: &mut TestAppContext) {
+        let nodes = render_field(false, cx);
+
+        let (id, _, _) = nodes
+            .iter()
+            .find(|(_, role, _)| *role == Role::TextInput)
+            .expect("the input is rendered");
+
+        assert!(id.starts_with("input-"), "unexpected default id {id}");
+        assert!(
+            nodes
+                .iter()
+                .any(|(_, _, label)| label.as_deref() == Some("localhost")),
+            "the placeholder is no longer the fallback name: {nodes:?}"
+        );
     }
 }

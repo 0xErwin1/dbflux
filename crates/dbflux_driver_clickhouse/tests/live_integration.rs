@@ -65,6 +65,77 @@ impl Drop for TableCleanup<'_> {
 
 #[test]
 #[ignore = "requires Docker daemon"]
+fn clickhouse_query_safety_rejects_explicit_controls_before_effects() -> Result<(), DbError> {
+    containers::with_clickhouse(|config| {
+        let connection = connect(&config)?;
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE dbflux_live_query_safety (id UInt64) ENGINE = MergeTree ORDER BY id",
+        ))?;
+        let _cleanup = TableCleanup {
+            connection: connection.as_ref(),
+            table: "dbflux_live_query_safety",
+        };
+
+        let first =
+            QueryRequest::new("INSERT INTO dbflux_live_query_safety VALUES (1)").with_limit(0);
+        let first_result = connection.execute(&first);
+        let count = connection.execute(&QueryRequest::new(
+            "SELECT count() FROM dbflux_live_query_safety",
+        ))?;
+        assert_eq!(
+            count.rows,
+            vec![vec![Value::Int(0)]],
+            "first protected INSERT returned {first_result:?}, persisted count: {:?}",
+            count.rows
+        );
+        assert!(
+            matches!(first_result, Err(DbError::NotSupported(_))),
+            "first protected INSERT returned {first_result:?}"
+        );
+
+        for request in [
+            QueryRequest::new("INSERT INTO dbflux_live_query_safety VALUES (2)").with_limit(2),
+            {
+                let mut request =
+                    QueryRequest::new("INSERT INTO dbflux_live_query_safety VALUES (3)");
+                request.statement_timeout = Some(Duration::from_secs(1));
+                request
+            },
+            {
+                let mut request = metric_request("clickhouse.inserted_rows").with_limit(0);
+                request.sql = "INSERT INTO dbflux_live_query_safety VALUES (4)".to_string();
+                request
+            },
+            {
+                let mut request = inspector_request("clickhouse.processes").with_limit(0);
+                request.sql = "INSERT INTO dbflux_live_query_safety VALUES (5)".to_string();
+                request
+            },
+        ] {
+            assert!(
+                matches!(connection.execute(&request), Err(DbError::NotSupported(_))),
+                "protected query must be rejected before execution: {:?}",
+                request.sql
+            );
+        }
+
+        let count = connection.execute(&QueryRequest::new(
+            "SELECT count() FROM dbflux_live_query_safety",
+        ))?;
+        assert_eq!(count.rows, vec![vec![Value::Int(0)]]);
+        connection.execute(&QueryRequest::new(
+            "INSERT INTO dbflux_live_query_safety VALUES (6)",
+        ))?;
+        let count = connection.execute(&QueryRequest::new(
+            "SELECT count() FROM dbflux_live_query_safety",
+        ))?;
+        assert_eq!(count.rows, vec![vec![Value::Int(1)]]);
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
 fn clickhouse_connects_and_decodes_types() -> Result<(), DbError> {
     containers::with_clickhouse(|config| {
         let connection = connect(&config)?;
@@ -92,14 +163,13 @@ fn clickhouse_connects_and_decodes_types() -> Result<(), DbError> {
         );
         assert_eq!(result.rows[0][3], Value::Null);
 
-        let page = connection.execute(
-            &QueryRequest::new("SELECT number FROM numbers(6) ORDER BY number")
-                .with_limit(2)
-                .with_offset(2),
-        )?;
-        assert_eq!(page.rows, vec![vec![Value::Int(2)], vec![Value::Int(3)]]);
-        assert_eq!(page.columns[0].name, "number");
-        assert_eq!(page.columns[0].kind, ColumnKind::Integer);
+        let bounded = QueryRequest::new("SELECT number FROM numbers(6) ORDER BY number")
+            .with_limit(2)
+            .with_offset(2);
+        assert!(matches!(
+            connection.execute(&bounded),
+            Err(DbError::NotSupported(_))
+        ));
 
         Ok(())
     })
@@ -114,22 +184,15 @@ fn clickhouse_paginates_ordered_views() -> Result<(), DbError> {
             "CREATE VIEW dbflux_live_pagination_view AS SELECT intDiv(number, 10) AS tens, max(number) AS maximum FROM numbers(500) GROUP BY tens",
         ))?;
 
-        let page = connection.execute(
-            &QueryRequest::new(
-                "SELECT * FROM dbflux_live_pagination_view ORDER BY tens ASC LIMIT 100",
-            )
-            .with_limit(6)
-            .with_offset(5),
-        )?;
-
-        assert_eq!(page.rows.len(), 6);
-        assert_eq!(
-            page.rows
-                .iter()
-                .map(|row| row[0].clone())
-                .collect::<Vec<_>>(),
-            (5..=10).map(Value::Int).collect::<Vec<_>>()
-        );
+        let bounded = QueryRequest::new(
+            "SELECT * FROM dbflux_live_pagination_view ORDER BY tens ASC LIMIT 100",
+        )
+        .with_limit(6)
+        .with_offset(5);
+        assert!(matches!(
+            connection.execute(&bounded),
+            Err(DbError::NotSupported(_))
+        ));
         connection.execute(&QueryRequest::new("DROP VIEW dbflux_live_pagination_view"))?;
         Ok(())
     })

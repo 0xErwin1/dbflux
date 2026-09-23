@@ -36,9 +36,9 @@ así que el endpoint es una URL y no un par host/port.
   partition keys, tamaño en disco y compresión.
 - La carga de schema es perezosa por database, así que un servidor con muchas
   databases no paga el costo de todas ellas al conectar.
-- Paginación, ordenamiento y filtrado se aplican por el driver como
-  `LIMIT`/`OFFSET` alrededor del statement, que es lo que hace funcionar el
-  browsing de resultados sin un cursor.
+- El SQL se envía sin modificaciones por HTTP. El valor `offset` existente se
+  envía como parámetro de la URL HTTP; aquí no se certifica su comportamiento
+  en el servidor.
 - Generación de SELECT visual de solo lectura, usando las reglas de quoting de
   identificadores y literales de ClickHouse.
 - Creación de gráficos a partir de resultados de queries, y exportación a CSV y
@@ -77,8 +77,12 @@ texto crudo:
 ## Limitaciones
 
 - Sin túneles SSH.
-- Sin transacciones, prepared statements ni cancelación de query. Un statement
-  en ejecución está acotado únicamente por el timeout de request, y el driver no
+- Sin transacciones, prepared statements ni cancelación de query. Los límites
+  de filas explícitos de `QueryRequest` (incluido cero) y los timeouts de
+  statement explícitos se rechazan antes del despacho. El timeout HTTP de
+  transporte configurado sigue vigente, pero no garantiza detener el trabajo
+  ni las mutaciones en el servidor. Una query sin límite puede alojar todo el
+  resultado en memoria (dentro del límite del cuerpo HTTP). El driver no
   reporta soporte de lock-timeout.
 - Sin soporte estructurado de `INSERT`, `UPDATE`, `DELETE`, DDL ni transferencia
   de datos. El SQL de escritura solo se ejecuta cuando se escribe explícitamente
