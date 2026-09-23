@@ -145,7 +145,7 @@ impl Workspace {
     #[cfg(feature = "mcp")]
     pub(in crate::ui::views::workspace) fn open_mcp_approvals(
         &mut self,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.mcp_approvals_view.update(cx, |view, cx| {
@@ -153,9 +153,33 @@ impl Workspace {
         });
 
         self.active_governance_panel = Some(super::GovernancePanel::Approvals);
+
+        // The overlay has no focusable element of its own, so the workspace
+        // takes focus: that keeps Escape out of whichever editor or input was
+        // focused underneath and routes it to the workspace keymap instead.
+        self.focus_handle.focus(window, cx);
+        cx.notify();
+
         Toast::info(audit_opened_mcp_approvals_message())
             .meta_right(now_hms())
             .push(cx);
+    }
+
+    /// Hides the governance overlay and hands focus back to the panel that
+    /// owned it before the overlay opened. Shared by the header close button,
+    /// the backdrop click, and `Command::Cancel`. Does nothing when no
+    /// governance panel is open.
+    #[cfg(feature = "mcp")]
+    pub(in crate::ui::views::workspace) fn close_governance_panel(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.active_governance_panel.take().is_none() {
+            return;
+        }
+
+        self.set_focus(self.focus_target, window, cx);
     }
 
     #[cfg(feature = "mcp")]

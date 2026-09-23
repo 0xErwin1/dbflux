@@ -154,6 +154,11 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **The MCP approvals overlay can be closed** — once opened, the approvals
+  overlay stayed on screen until the audit viewer was opened. It now closes
+  from the close button in its header, with Escape, or with a click on the
+  dimmed area around it, and keyboard focus returns to where it was before.
+
 * **PostgreSQL `NUMERIC` columns show their values** — `NUMERIC` and `DECIMAL`
   values read back as `NULL` in query results, table browsing, MCP
   `select_data`, exports, and the rows returned after an insert, update, or
