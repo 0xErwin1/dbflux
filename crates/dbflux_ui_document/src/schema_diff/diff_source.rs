@@ -269,8 +269,9 @@ pub fn partition_table_changes(
 }
 
 /// The result of classifying a whole-table add/remove: its governance risk,
-/// and whether the driver's `generate_code` seam (`"create_table"`/
-/// `"drop_table"`) can express it. Table-level counterpart to
+/// and whether the driver's table-level generation seams (`"create_table"`
+/// via `generate_code_with_creation_metadata`, `"drop_table"` via the legacy
+/// `generate_code`) can express it. Table-level counterpart to
 /// `PartitionedChanges` — a single item rather than a list, since
 /// `TableChange::TableAdded`/`TableRemoved` each carry exactly one action.
 #[derive(Clone, Debug)]
@@ -288,7 +289,9 @@ pub enum TableActionOutcome {
 }
 
 /// Risk-classifies a whole-table add/remove and folds in the outcome of
-/// probing `Connection::generate_code` (via `build_statements_for_table_action`).
+/// probing the driver's table-level generation seams (via
+/// `build_statements_for_table_action`: `generate_code_with_creation_metadata`
+/// for creates, legacy `generate_code("drop_table")` for drops).
 /// The probe result is passed in rather than a live `Connection` so this stays
 /// a pure, easily unit-tested classification step, mirroring
 /// `partition_table_changes` for column/index changes.
@@ -296,7 +299,7 @@ pub fn classify_table_action(
     action: TableLevelAction,
     probe: Result<Vec<String>, DdlRejection>,
 ) -> TableActionOutcome {
-    let is_create = matches!(action, TableLevelAction::Create(_));
+    let is_create = matches!(action, TableLevelAction::Create(..));
     let risk = if is_create {
         classify_table_added()
     } else {
@@ -646,7 +649,7 @@ mod tests {
 
     #[test]
     fn table_added_probe_ok_is_applicable_with_admin_safe_risk() {
-        let action = TableLevelAction::Create(table_info());
+        let action = TableLevelAction::Create(Box::new(table_info()), None);
 
         let outcome = classify_table_action(action, Ok(vec!["CREATE TABLE orders ()".to_string()]));
 
@@ -674,7 +677,7 @@ mod tests {
 
     #[test]
     fn table_added_probe_err_is_unsupported_with_reason_and_followup() {
-        let action = TableLevelAction::Create(table_info());
+        let action = TableLevelAction::Create(Box::new(table_info()), None);
         let probe = Err(DdlRejection {
             reason: "Code generator 'create_table' not supported".to_string(),
             followup: Some("DBF-999"),

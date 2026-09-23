@@ -3,8 +3,8 @@ use std::sync::Arc;
 use dbflux_core::{
     AddColumnRequest, AlterColumnRequest, CodeGenerator, Connection, DdlRejection, DefaultSpec,
     DropColumnRequest, EventCategory, EventOutcome, EventRecord, EventSeverity, EventSink,
-    MutationPolicy, QueryRequest, ReadOnlyReason, RiskedChange, SchemaChange, TableInfo, TableRef,
-    TransactionVocab,
+    MutationPolicy, QueryRequest, ReadOnlyReason, RiskedChange, SchemaChange,
+    TableCreationMetadata, TableInfo, TableRef, TransactionVocab,
 };
 
 use super::diff_source::{SelectedTableAlterRoute, select_table_alter_route};
@@ -191,19 +191,26 @@ pub(crate) fn build_statements_for_change(
     }
 }
 
-/// A whole-table `CREATE` or `DROP`, generated through `Connection::generate_code`
-/// rather than the column/index `CodeGenerator` seam: driver-specific type
-/// mapping for `CREATE TABLE` (auto-increment PKs, dialect-specific column
-/// types, ...) already lives in each driver's `"create_table"`/`"drop_table"`
-/// `generate_code` implementation, which this reuses instead of duplicating.
+/// A whole-table `CREATE` or `DROP`. A `Create` is generated through
+/// `Connection::generate_code_with_creation_metadata("create_table", …)`,
+/// where driver-specific type mapping for `CREATE TABLE` (auto-increment
+/// PKs, dialect-specific column types, ...) plus the reference-side creation
+/// metadata live; a `Drop` uses the legacy generic
+/// `Connection::generate_code("drop_table")` seam, which remains the right
+/// fit because a dropped table needs no reference metadata. A `Create`
+/// carries the reference side's creation metadata (identity seed/
+/// increment, primary-key order, blockers) so the target driver can generate
+/// faithfully; `None` means the reference supplied no metadata (driver
+/// without introspection, or a pre-metadata snapshot) and metadata-aware
+/// drivers must refuse rather than silently flatten the table.
 #[derive(Debug, Clone)]
 pub enum TableLevelAction {
-    Create(TableInfo),
+    Create(Box<TableInfo>, Option<TableCreationMetadata>),
     Drop(TableRef),
 }
 
-/// Builds a minimal `TableInfo` (name + schema only) for `generate_code`,
-/// which the `"drop_table"` generator only reads those two fields from.
+/// Builds a minimal `TableInfo` (name + schema only) for the legacy
+/// `generate_code("drop_table")` seam, which only reads those two fields from it.
 fn table_info_from_ref(table: &TableRef) -> TableInfo {
     TableInfo {
         name: table.name.clone(),
@@ -219,27 +226,37 @@ fn table_info_from_ref(table: &TableRef) -> TableInfo {
     }
 }
 
-/// Maps a whole-table add/remove onto the driver-owned `Connection::generate_code`
-/// seam. A driver that does not implement `"create_table"`/`"drop_table"` for
-/// this generator id returns `DbError::NotSupported`, surfaced here as a named
-/// `DdlRejection` exactly like the column/index seam does, rather than a
-/// silent skip.
+/// Maps a whole-table add/remove onto the driver-owned generation seams: a
+/// `Create` goes through `Connection::generate_code_with_creation_metadata`
+/// with the reference metadata, a `Drop` through the legacy generic
+/// `generate_code("drop_table")`. A driver that does not implement the
+/// requested generator id returns `DbError::NotSupported`, surfaced here as a
+/// named `DdlRejection` exactly like the column/index seam does, rather than
+/// a silent skip.
 pub(crate) fn build_statements_for_table_action(
     connection: &dyn Connection,
     action: &TableLevelAction,
 ) -> Result<Vec<String>, DdlRejection> {
-    let (generator_id, table) = match action {
-        TableLevelAction::Create(table) => ("create_table", table.clone()),
-        TableLevelAction::Drop(table_ref) => ("drop_table", table_info_from_ref(table_ref)),
+    // The two actions deliberately use different seams: only the metadata-
+    // aware seam can carry reference creation metadata for a faithful
+    // CREATE TABLE, while a drop needs no metadata and must go through the
+    // legacy generic `generate_code` — a driver override may implement the
+    // metadata-aware seam only for `create_table` and handle other ids
+    // differently, so routing a drop through it would be a compatibility
+    // hazard. Both map `DbError::NotSupported` to a named `DdlRejection`
+    // exactly like the column/index seam does, rather than a silent skip.
+    let result = match action {
+        TableLevelAction::Create(table, metadata) => connection
+            .generate_code_with_creation_metadata("create_table", table, metadata.as_ref()),
+        TableLevelAction::Drop(table_ref) => {
+            connection.generate_code("drop_table", &table_info_from_ref(table_ref))
+        }
     };
 
-    connection
-        .generate_code(generator_id, &table)
-        .map(|sql| vec![sql])
-        .map_err(|e| DdlRejection {
-            reason: e.to_string(),
-            followup: None,
-        })
+    result.map(|sql| vec![sql]).map_err(|e| DdlRejection {
+        reason: e.to_string(),
+        followup: None,
+    })
 }
 
 /// Builds the full ordered statement list for `changes` (and, if present, a
@@ -1118,7 +1135,7 @@ mod tests {
         #[test]
         fn table_added_maps_to_generate_code_create_table() {
             let conn = FakeConnection::new(DbKind::Postgres, true);
-            let action = TableLevelAction::Create(table_info());
+            let action = TableLevelAction::Create(Box::new(table_info()), None);
 
             let stmts = build_statements_for_table_action(conn.as_ref(), &action).unwrap();
 
@@ -1139,12 +1156,81 @@ mod tests {
         }
 
         #[test]
+        fn table_removed_routes_through_legacy_seam_not_metadata_aware() {
+            // A driver override may implement the metadata-aware seam only for
+            // the generators that carry reference metadata (create_table) and
+            // behave differently there; a drop must therefore reach the legacy
+            // generic `generate_code` seam and never the metadata-aware one.
+            let conn = FakeConnection::new(DbKind::Postgres, true);
+            let action = TableLevelAction::Drop(TableRef {
+                schema: Some("public".to_string()),
+                name: "orders".to_string(),
+            });
+
+            let stmts = build_statements_for_table_action(conn.as_ref(), &action).unwrap();
+
+            assert_eq!(stmts, vec!["DROP TABLE orders"]);
+            assert!(
+                conn.creation_metadata_arg.lock().unwrap().is_empty(),
+                "a drop must not route through the metadata-aware seam"
+            );
+            assert_eq!(
+                *conn.generate_code_calls.lock().unwrap(),
+                vec!["drop_table".to_string()],
+                "a drop must go through the legacy generic generate_code seam"
+            );
+        }
+
+        #[test]
+        fn table_create_action_forwards_reference_metadata_to_the_driver_seam() {
+            let conn = FakeConnection::new(DbKind::SqlServer, true);
+            let metadata = dbflux_core::TableCreationMetadata {
+                schema: Some("public".to_string()),
+                table: "orders".to_string(),
+                completeness: dbflux_core::MetadataCompleteness::Complete,
+                identity: Some(dbflux_core::IdentitySpec {
+                    column: "id".to_string(),
+                    seed: "1".to_string(),
+                    increment: "1".to_string(),
+                }),
+                primary_key: None,
+                blockers: Vec::new(),
+            };
+            let action = TableLevelAction::Create(Box::new(table_info()), Some(metadata.clone()));
+
+            let stmts = build_statements_for_table_action(conn.as_ref(), &action).unwrap();
+
+            assert!(!stmts.is_empty());
+            let recorded = conn.creation_metadata_arg.lock().unwrap().clone();
+            assert_eq!(
+                recorded,
+                vec![Some(metadata)],
+                "reference creation metadata must reach the target driver's metadata-aware seam"
+            );
+        }
+
+        #[test]
+        fn table_create_action_without_reference_metadata_forwards_none() {
+            let conn = FakeConnection::new(DbKind::SqlServer, true);
+            let action = TableLevelAction::Create(Box::new(table_info()), None);
+
+            build_statements_for_table_action(conn.as_ref(), &action).unwrap();
+
+            let recorded = conn.creation_metadata_arg.lock().unwrap().clone();
+            assert_eq!(
+                recorded,
+                vec![None],
+                "an absent reference metadata must arrive as None so metadata-aware drivers refuse"
+            );
+        }
+
+        #[test]
         fn driver_without_table_ddl_support_surfaces_as_rejection() {
             let conn = FakeConnection::without_table_ddl_support(DbKind::SqlServer, true);
 
             let create_result = build_statements_for_table_action(
                 conn.as_ref(),
-                &TableLevelAction::Create(table_info()),
+                &TableLevelAction::Create(Box::new(table_info()), None),
             );
             let drop_result = build_statements_for_table_action(
                 conn.as_ref(),
@@ -1203,6 +1289,8 @@ mod tests {
         fail_on_sql_containing: Option<&'static str>,
         fail_rollback: bool,
         supports_table_ddl: bool,
+        creation_metadata_arg: Arc<Mutex<Vec<Option<dbflux_core::TableCreationMetadata>>>>,
+        generate_code_calls: Arc<Mutex<Vec<String>>>,
     }
 
     struct FakeTableAlterPlanner {
@@ -1311,6 +1399,8 @@ mod tests {
                 fail_on_sql_containing,
                 fail_rollback,
                 supports_table_ddl,
+                creation_metadata_arg: Arc::new(Mutex::new(Vec::new())),
+                generate_code_calls: Arc::new(Mutex::new(Vec::new())),
             })
         }
 
@@ -1390,11 +1480,28 @@ mod tests {
             self.transactional_ddl
         }
 
+        fn generate_code_with_creation_metadata(
+            &self,
+            generator_id: &str,
+            table: &dbflux_core::TableInfo,
+            creation_metadata: Option<&dbflux_core::TableCreationMetadata>,
+        ) -> Result<String, DbError> {
+            self.creation_metadata_arg
+                .lock()
+                .unwrap()
+                .push(creation_metadata.cloned());
+            self.generate_code(generator_id, table)
+        }
+
         fn generate_code(
             &self,
             generator_id: &str,
             table: &dbflux_core::TableInfo,
         ) -> Result<String, DbError> {
+            self.generate_code_calls
+                .lock()
+                .unwrap()
+                .push(generator_id.to_string());
             if !self.supports_table_ddl {
                 return Err(DbError::NotSupported(format!(
                     "Code generator '{}' not supported",
@@ -2167,7 +2274,7 @@ mod tests {
             name: "orders".to_string(),
         };
         let executor = DdlApplyExecutor::new(table, vec![], deps(conn, None))
-            .with_table_action(TableLevelAction::Create(table_info));
+            .with_table_action(TableLevelAction::Create(Box::new(table_info), None));
 
         let outcome = executor.apply().unwrap();
         assert_eq!(
@@ -2229,7 +2336,7 @@ mod tests {
             name: "orders".to_string(),
         };
         let executor = DdlApplyExecutor::new(table, vec![], deps(conn, None))
-            .with_table_action(TableLevelAction::Create(table_info));
+            .with_table_action(TableLevelAction::Create(Box::new(table_info), None));
 
         let result = executor.apply();
         assert!(matches!(result, Err(ExecutorError::Generation(_))));

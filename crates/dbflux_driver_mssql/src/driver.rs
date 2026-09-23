@@ -10,22 +10,24 @@ use dbflux_core::secrecy::{ExposeSecret, SecretString};
 use dbflux_core::{
     AddColumnRequest, AlterColumnRequest, CodeGenCapabilities, CodeGenerator, ColumnAssignment,
     ColumnInfo, ColumnMeta, Connection, ConnectionErrorFormatter, ConnectionExt, ConnectionProfile,
-    ConstraintInfo, ConstraintKind, CrudResult, CustomTypeInfo, CustomTypeKind, DatabaseCategory,
-    DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DdlCapabilities, DdlRejection,
-    DeploymentClass, DescribeRequest, DocumentConnection, DriverCapabilities, DriverFormDef,
-    DriverLimits, DriverMetadata, DropColumnRequest, ExecutionSourceContext, ExplainRequest,
-    ForeignKeyBuilder, ForeignKeyInfo, FormFieldKind, FormSection, FormTab, FormValues,
-    FormattedError, Icon, IndexData, IndexInfo, InstanceCatalog, IsolationLevel,
-    KeyValueConnection, MutationCapabilities, OrderByColumn, PaginationStyle, PlaceholderStyle,
-    QueryCancelHandle, QueryCapabilities, QueryErrorFormatter, QueryHandle, QueryLanguage,
-    QueryRequest, QueryResult, RecordIdentity, RelationalConnection, RelationalSchema, RoutineInfo,
-    RoutineKind, Row, RowDelete, RowInsert, RowPatch, SchemaFeatures, SchemaForeignKeyBuilder,
-    SchemaForeignKeyInfo, SchemaIndexBuilder, SchemaIndexInfo, SchemaLoadingStrategy,
-    SchemaSnapshot, SortDirection, SqlDialect, SqlMutationGenerator, SshTunnelConfig, SyntaxInfo,
-    TableBrowseRequest, TableCountRequest, TableInfo, TransactionCapabilities, TransferFamily,
-    Value, ViewInfo, WhereOperator, field, field_password, field_required, field_use_uri,
-    generate_delete_template, generate_drop_table, generate_insert_template, generate_select_star,
-    generate_truncate, generate_update_template, render_semantic_filter_sql, sanitize_uri, ssh_tab,
+    ConstraintInfo, ConstraintKind, CreationBlocker, CrudResult, CustomTypeInfo, CustomTypeKind,
+    DatabaseCategory, DatabaseInfo, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo,
+    DdlCapabilities, DdlRejection, DeploymentClass, DescribeRequest, DocumentConnection,
+    DriverCapabilities, DriverFormDef, DriverLimits, DriverMetadata, DropColumnRequest,
+    ExecutionSourceContext, ExplainRequest, ForeignKeyBuilder, ForeignKeyInfo, FormFieldKind,
+    FormSection, FormTab, FormValues, FormattedError, Icon, IdentitySpec, IndexData, IndexInfo,
+    InstanceCatalog, IsolationLevel, KeyValueConnection, MetadataCompleteness,
+    MissingCreationMetadata, MutationCapabilities, OrderByColumn, PaginationStyle,
+    PlaceholderStyle, PrimaryKeySpec, QueryCancelHandle, QueryCapabilities, QueryErrorFormatter,
+    QueryHandle, QueryLanguage, QueryRequest, QueryResult, RecordIdentity, RelationalConnection,
+    RelationalSchema, RoutineInfo, RoutineKind, Row, RowDelete, RowInsert, RowPatch,
+    SchemaFeatures, SchemaForeignKeyBuilder, SchemaForeignKeyInfo, SchemaIndexBuilder,
+    SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SortDirection, SqlDialect,
+    SqlMutationGenerator, SshTunnelConfig, SyntaxInfo, TableBrowseRequest, TableCountRequest,
+    TableCreationMetadata, TableInfo, TransactionCapabilities, TransferFamily, Value, ViewInfo,
+    WhereOperator, field, field_password, field_required, field_use_uri, generate_delete_template,
+    generate_drop_table, generate_insert_template, generate_select_star, generate_truncate,
+    generate_update_template, render_semantic_filter_sql, sanitize_uri, ssh_tab,
     validate_ddl_fragment, when_checked, when_unchecked, with_default,
 };
 use dbflux_ssh::SshTunnel;
@@ -1008,18 +1010,31 @@ async fn establish_tiberius(config: Config) -> Result<TiberiusClient, tiberius::
     Client::connect(config, tcp.compat_write()).await
 }
 
-/// Fetch the server-side session id (`@@SPID`) for the open client.
+/// Fetch the server-side session id (`@@SPID`) and the actual session
+/// database (`DB_NAME()`) for the open client.
 ///
 /// `@@SPID` returns a SQL `smallint`, so we widen to `i32` for the rest of
 /// the driver. Returns `0` on any decoding failure rather than propagating
-/// — a missing SPID just means cancel becomes a no-op, which is fine.
-async fn capture_spid(client: &mut TiberiusClient) -> Result<i32, tiberius::error::Error> {
-    let stream = client.simple_query("SELECT @@SPID").await?;
+/// — a missing SPID just means cancel becomes a no-op, which is fine. The
+/// database is resolved in the same round trip: a default-login URI or a
+/// host/port profile without a database still starts in the login's
+/// default database, and callers must see that actual database instead of
+/// an unknown (None) selection.
+async fn capture_session_info(
+    client: &mut TiberiusClient,
+) -> Result<(i32, Option<String>), tiberius::error::Error> {
+    let stream = client.simple_query("SELECT @@SPID, DB_NAME()").await?;
     let row = stream.into_row().await?;
-    Ok(row
+    let spid = row
+        .as_ref()
         .and_then(|r| r.get::<i16, _>(0))
         .map(|s| s as i32)
-        .unwrap_or(0))
+        .unwrap_or(0);
+    let database = row
+        .as_ref()
+        .and_then(|r| r.get::<&str, _>(1))
+        .map(str::to_string);
+    Ok((spid, database))
 }
 
 impl MssqlDriver {
@@ -1068,17 +1083,18 @@ impl MssqlDriver {
         let reconnect_config = config.clone();
         let runtime = build_runtime()?;
 
-        let (client, spid) = runtime
+        let (client, spid, database) = runtime
             .block_on(async move {
                 let mut client = establish_tiberius(config).await?;
-                let spid = capture_spid(&mut client).await?;
-                Ok::<_, tiberius::error::Error>((client, spid))
+                let (spid, database) = capture_session_info(&mut client).await?;
+                Ok::<_, tiberius::error::Error>((client, spid, database))
             })
             .map_err(|e| format_mssql_uri_error(&e, base_uri))?;
 
         log::info!(
-            "[CONNECT] SQL Server connection established via URI (spid: {})",
-            spid
+            "[CONNECT] SQL Server connection established via URI (spid: {}, database: {:?})",
+            spid,
+            database
         );
 
         Ok(Box::new(MssqlConnection {
@@ -1086,7 +1102,7 @@ impl MssqlDriver {
                 client: Some(client),
                 runtime,
             })),
-            current_database: Mutex::new(None),
+            current_database: Mutex::new(database),
             ssh_tunnel: None,
             cancelled: Arc::new(AtomicBool::new(false)),
             spid: Arc::new(AtomicI32::new(spid)),
@@ -1133,15 +1149,19 @@ impl MssqlDriver {
         let established = establish_mssql_session(tiberius_config, &config.host, config.port)?;
 
         log::info!(
-            "Successfully connected to {}:{} (spid: {})",
+            "Successfully connected to {}:{} (spid: {}, database: {:?})",
             config.host,
             config.port,
-            established.spid
+            established.spid,
+            established.database
         );
+
+        let effective_database =
+            resolve_session_database(established.database.clone(), config.database.clone());
 
         Ok(Box::new(build_mssql_connection(
             established,
-            config.database.clone(),
+            effective_database,
             None,
         )))
     }
@@ -1202,9 +1222,12 @@ impl MssqlDriver {
             established.spid
         );
 
+        let effective_database =
+            resolve_session_database(established.database.clone(), config.database.clone());
+
         Ok(Box::new(build_mssql_connection(
             established,
-            config.database.clone(),
+            effective_database,
             Some(tunnel),
         )))
     }
@@ -1215,14 +1238,25 @@ struct EstablishedMssqlSession {
     client: TiberiusClient,
     runtime: Runtime,
     spid: i32,
+    database: Option<String>,
     reconnect_config: tiberius::Config,
 }
 
-/// Build a tokio runtime, open the tiberius client, and capture `@@SPID`.
+/// Resolve the connection's effective database: the session's actual
+/// database (`DB_NAME()`) wins, and the configured database is kept only
+/// as a fallback when the server does not report one. A default-login
+/// connect without a configured database must surface the login's actual
+/// default database instead of an unknown (None) selection.
+fn resolve_session_database(session: Option<String>, configured: Option<String>) -> Option<String> {
+    session.or(configured)
+}
+
+/// Build a tokio runtime, open the tiberius client, and capture `@@SPID`
+/// plus `DB_NAME()`.
 ///
 /// Shared by `connect_direct` and `connect_via_ssh_tunnel` so the
-/// runtime/client/spid plumbing lives in one place. `host`/`port` are only
-/// used to format a meaningful error if the dial fails.
+/// runtime/client/session plumbing lives in one place. `host`/`port` are
+/// only used to format a meaningful error if the dial fails.
 fn establish_mssql_session(
     tiberius_config: Config,
     host: &str,
@@ -1230,17 +1264,18 @@ fn establish_mssql_session(
 ) -> Result<EstablishedMssqlSession, DbError> {
     let reconnect_config = tiberius_config.clone();
     let runtime = build_runtime()?;
-    let (client, spid) = runtime
+    let (client, spid, database) = runtime
         .block_on(async move {
             let mut client = establish_tiberius(tiberius_config).await?;
-            let spid = capture_spid(&mut client).await?;
-            Ok::<_, tiberius::error::Error>((client, spid))
+            let (spid, database) = capture_session_info(&mut client).await?;
+            Ok::<_, tiberius::error::Error>((client, spid, database))
         })
         .map_err(|e| format_mssql_connect_error(&e, host, port))?;
     Ok(EstablishedMssqlSession {
         client,
         runtime,
         spid,
+        database,
         reconnect_config,
     })
 }
@@ -1809,7 +1844,7 @@ impl Connection for MssqlConnection {
             .ok()
             .and_then(|guard| guard.clone());
 
-        let new_client_and_spid: Result<(TiberiusClient, i32), tiberius::error::Error> = {
+        let new_session: Result<(TiberiusClient, i32, Option<String>), tiberius::error::Error> = {
             let mut guard = match self.inner.lock() {
                 Ok(g) => g,
                 Err(poison_err) => poison_err.into_inner(),
@@ -1821,12 +1856,12 @@ impl Connection for MssqlConnection {
 
             guard.runtime.block_on(async move {
                 let mut client = establish_tiberius(config).await?;
-                let spid = capture_spid(&mut client).await?;
-                Ok((client, spid))
+                let (spid, database) = capture_session_info(&mut client).await?;
+                Ok((client, spid, database))
             })
         };
 
-        let (new_client, new_spid) = new_client_and_spid.map_err(|e| {
+        let (new_client, new_spid, new_database) = new_session.map_err(|e| {
             log::error!("[CLEANUP] Reconnect failed: {}", e);
             // Address fields aren't worth reconstructing here — the message
             // from tiberius is already host-aware via Config::get_addr().
@@ -1854,6 +1889,13 @@ impl Connection for MssqlConnection {
         if let Some(db) = active_database {
             let escaped = db.replace(']', "]]");
             self.execute_simple(&format!("USE [{}]", escaped))?;
+        } else if let Some(db) = new_database {
+            // No previous selection to restore: the reconnect landed in the
+            // login's default database, so track that actual database rather
+            // than leaving the selection unknown.
+            if let Ok(mut current) = self.current_database.lock() {
+                *current = Some(db);
+            }
         }
 
         self.poisoned.store(false, Ordering::SeqCst);
@@ -2031,6 +2073,354 @@ impl Connection for MssqlConnection {
             child_items: None,
             storage_hints: None,
         })
+    }
+
+    fn table_creation_metadata(
+        &self,
+        database: &str,
+        schema: Option<&str>,
+        table: &str,
+    ) -> Result<Option<TableCreationMetadata>, DbError> {
+        let schema_name = schema.unwrap_or("dbo");
+        let escaped_db = database.replace(']', "]]");
+        let qualified_db = format!("[{escaped_db}]");
+        let escaped_schema = schema_name.replace('\'', "''");
+        let escaped_table = table.replace('\'', "''");
+        let where_clause = format!("s.name = '{escaped_schema}' AND tbl.name = '{escaped_table}'");
+
+        // Table-level properties: memory-optimized and system-versioned
+        // temporal tables have creation semantics this generator cannot
+        // express; a table on a non-default filegroup would silently lose
+        // its storage placement when the ON clause is omitted.
+        let table_sql = format!(
+            "SELECT tbl.is_memory_optimized, tbl.temporal_type, \
+             CASE WHEN EXISTS(SELECT 1 FROM {qualified_db}.sys.key_constraints kc \
+                    WHERE kc.type = 'PK' AND kc.parent_object_id = tbl.object_id) \
+                  THEN 1 ELSE 0 END AS has_pk, \
+             ds.is_default, \
+             ISNULL((SELECT MAX(i.type) FROM {qualified_db}.sys.indexes i \
+                     WHERE i.object_id = tbl.object_id AND i.is_primary_key = 1), 0) AS pk_index_type, \
+             ISNULL((SELECT MAX(p.data_compression) FROM {qualified_db}.sys.partitions p \
+                     WHERE p.object_id = tbl.object_id AND p.index_id IN (0, 1)), 0) AS data_compression \
+             FROM {qualified_db}.sys.tables tbl \
+             JOIN {qualified_db}.sys.schemas s ON s.schema_id = tbl.schema_id \
+             JOIN {qualified_db}.sys.indexes ti ON ti.object_id = tbl.object_id \
+                   AND ti.index_id IN (0, 1) \
+             JOIN {qualified_db}.sys.data_spaces ds ON ds.data_space_id = ti.data_space_id \
+             WHERE {where_clause}"
+        );
+        let table_result = self.execute_simple(&table_sql)?;
+        let Some(table_row) = table_result.rows.into_iter().next() else {
+            // Table not found in the reference: metadata is unavailable, and
+            // callers must treat that as absent rather than as "no identity".
+            return Ok(None);
+        };
+
+        let mut table_iter = table_row.into_iter();
+        let is_memory_optimized = value_is_truthy(table_iter.next());
+        let temporal_type = match table_iter.next() {
+            Some(Value::Int(n)) => n,
+            _ => 0,
+        };
+        let has_primary_key = value_is_truthy(table_iter.next());
+        let on_default_filegroup = value_is_truthy(table_iter.next());
+        // sys.indexes.type: 1 = clustered, 2 = nonclustered. A plain
+        // `PRIMARY KEY (…)` in generated DDL creates a clustered key, so a
+        // nonclustered source key must refuse rather than silently cluster.
+        let pk_index_type = match table_iter.next() {
+            Some(Value::Int(n)) => n,
+            _ => 0,
+        };
+        // sys.partitions.data_compression: 0 = none, 1 = row, 2 = page.
+        let data_compression = match table_iter.next() {
+            Some(Value::Int(n)) => n,
+            _ => 0,
+        };
+
+        let mut blockers = Vec::new();
+        if is_memory_optimized {
+            blockers.push(CreationBlocker {
+                code: "memory_optimized".to_string(),
+                message: "memory-optimized tables require an In-Memory OLTP filegroup".to_string(),
+                column: None,
+            });
+        }
+        // sys.tables.temporal_type: 0 = non-temporal, 1 = history table,
+        // 2 = system-versioned.
+        if temporal_type != 0 {
+            blockers.push(CreationBlocker {
+                code: "system_versioned_temporal".to_string(),
+                message: "system-versioned temporal tables require history-table wiring"
+                    .to_string(),
+                column: None,
+            });
+        }
+        if has_primary_key && pk_index_type == 2 {
+            blockers.push(CreationBlocker {
+                code: "nonclustered_primary_key".to_string(),
+                message: "a nonclustered primary key would be recreated as clustered".to_string(),
+                column: None,
+            });
+        }
+        if data_compression != 0 {
+            blockers.push(CreationBlocker {
+                code: "data_compression".to_string(),
+                message: "row/page compression would be silently lost".to_string(),
+                column: None,
+            });
+        }
+
+        let mut missing: Vec<MissingCreationMetadata> = Vec::new();
+        if !on_default_filegroup {
+            missing.push(MissingCreationMetadata::StorageOptions);
+        }
+
+        // Column-level properties that block faithful generation.
+        let column_sql = format!(
+            "SELECT c.name, c.is_computed, c.is_sparse, c.is_filestream, c.is_rowguidcol, \
+                    t.is_user_defined, t.is_assembly_type, c.collation_name, \
+                    t.name AS type_name, c.xml_collection_id \
+             FROM {qualified_db}.sys.columns c \
+             JOIN {qualified_db}.sys.tables tbl ON tbl.object_id = c.object_id \
+             JOIN {qualified_db}.sys.schemas s ON s.schema_id = tbl.schema_id \
+             JOIN {qualified_db}.sys.types t ON t.user_type_id = c.user_type_id \
+             WHERE {where_clause} ORDER BY c.column_id"
+        );
+        let column_result = self.execute_simple(&column_sql)?;
+        for row in column_result.rows {
+            let mut iter = row.into_iter();
+            let column_name = match iter.next() {
+                Some(Value::Text(name)) => name,
+                _ => continue,
+            };
+            let is_computed = value_is_truthy(iter.next());
+            let is_sparse = value_is_truthy(iter.next());
+            let is_filestream = value_is_truthy(iter.next());
+            let is_rowguidcol = value_is_truthy(iter.next());
+            let is_user_defined = value_is_truthy(iter.next());
+            let is_assembly_type = value_is_truthy(iter.next());
+            let collation_name = match iter.next() {
+                Some(Value::Text(collation)) => Some(collation),
+                _ => None,
+            };
+
+            let mut push_blocker = |code: &str, message: String| {
+                blockers.push(CreationBlocker {
+                    code: code.to_string(),
+                    message,
+                    column: Some(column_name.clone()),
+                });
+            };
+            if is_computed {
+                push_blocker(
+                    "computed_column",
+                    "computed columns are not reproducible from introspection".to_string(),
+                );
+            }
+            if is_user_defined || is_assembly_type {
+                push_blocker(
+                    "user_defined_type",
+                    "the column type is a user-defined/CLR type that must pre-exist in the target"
+                        .to_string(),
+                );
+            }
+            if is_sparse {
+                push_blocker(
+                    "sparse_column",
+                    "sparse column storage would be silently lost".to_string(),
+                );
+            }
+            if is_filestream {
+                push_blocker(
+                    "filestream_column",
+                    "FILESTREAM storage would be silently lost".to_string(),
+                );
+            }
+            if is_rowguidcol {
+                push_blocker(
+                    "rowguidcol_property",
+                    "the ROWGUIDCOL property would be silently lost".to_string(),
+                );
+            }
+            if let Some(collation) = collation_name {
+                // sys.columns.collation_name is non-null for every text-typed
+                // column, whether the collation was explicitly declared or
+                // inherited from the database default. Even a column matching
+                // the SOURCE database default is unsafe: a column created in
+                // the target without COLLATE inherits the TARGET database
+                // default, which is unknown at reference-introspection time
+                // and may differ.
+                push_blocker(
+                    "column_collation",
+                    format!("collation '{collation}' cannot be reproduced in the target database"),
+                );
+            }
+            let type_name = match iter.next() {
+                Some(Value::Text(name)) => name,
+                _ => String::new(),
+            };
+            let xml_collection_id = match iter.next() {
+                Some(Value::Int(n)) => n,
+                _ => 0,
+            };
+            if let Some(message) = typed_xml_blocker(&type_name, xml_collection_id) {
+                push_blocker("typed_xml", message.to_string());
+            }
+        }
+
+        // Identity: exact seed/increment read as server-converted text so
+        // numeric(38,0) magnitudes beyond i64 survive verbatim.
+        let identity_sql = format!(
+            "SELECT c.name, CONVERT(NVARCHAR(4000), ic.seed_value), \
+                    CONVERT(NVARCHAR(4000), ic.increment_value), ic.is_not_for_replication \
+             FROM {qualified_db}.sys.identity_columns ic \
+             JOIN {qualified_db}.sys.columns c ON c.object_id = ic.object_id \
+                   AND c.column_id = ic.column_id \
+             JOIN {qualified_db}.sys.tables tbl ON tbl.object_id = ic.object_id \
+             JOIN {qualified_db}.sys.schemas s ON s.schema_id = tbl.schema_id \
+             WHERE {where_clause} ORDER BY c.column_id"
+        );
+        let identity_result = self.execute_simple(&identity_sql)?;
+        let mut identity: Option<IdentitySpec> = None;
+        for row in identity_result.rows {
+            let mut iter = row.into_iter();
+            let column_name = match iter.next() {
+                Some(Value::Text(name)) => name,
+                _ => continue,
+            };
+            let seed = match iter.next() {
+                Some(Value::Text(seed)) => seed,
+                _ => {
+                    missing.push(MissingCreationMetadata::IdentitySeedOrIncrement);
+                    continue;
+                }
+            };
+            let increment = match iter.next() {
+                Some(Value::Text(increment)) => increment,
+                _ => {
+                    missing.push(MissingCreationMetadata::IdentitySeedOrIncrement);
+                    continue;
+                }
+            };
+            if value_is_truthy(iter.next()) {
+                blockers.push(CreationBlocker {
+                    code: "identity_not_for_replication".to_string(),
+                    message: "the identity's NOT FOR REPLICATION property would be silently lost"
+                        .to_string(),
+                    column: Some(column_name.clone()),
+                });
+            }
+            identity = Some(IdentitySpec {
+                column: column_name,
+                seed,
+                increment,
+            });
+        }
+
+        // Primary-key column order in declared key order, with key-column
+        // direction (a descending key column cannot be expressed by the
+        // ordered-column contract).
+        let pk_sql = format!(
+            "SELECT c.name, ic.is_descending_key \
+             FROM {qualified_db}.sys.key_constraints kc \
+             JOIN {qualified_db}.sys.indexes i ON i.object_id = kc.parent_object_id \
+                   AND i.index_id = kc.unique_index_id \
+             JOIN {qualified_db}.sys.index_columns ic ON ic.object_id = i.object_id \
+                   AND ic.index_id = i.index_id AND ic.key_ordinal >= 1 \
+             JOIN {qualified_db}.sys.columns c ON c.object_id = ic.object_id \
+                   AND c.column_id = ic.column_id \
+             JOIN {qualified_db}.sys.tables tbl ON tbl.object_id = kc.parent_object_id \
+             JOIN {qualified_db}.sys.schemas s ON s.schema_id = tbl.schema_id \
+             WHERE kc.type = 'PK' AND {where_clause} ORDER BY ic.key_ordinal"
+        );
+        let pk_result = self.execute_simple(&pk_sql)?;
+        let mut pk_columns = Vec::new();
+        let mut descending_pk_key = false;
+        for row in pk_result.rows {
+            let mut iter = row.into_iter();
+            let name = match iter.next() {
+                Some(Value::Text(name)) => name,
+                _ => continue,
+            };
+            if value_is_truthy(iter.next()) {
+                descending_pk_key = true;
+            }
+            pk_columns.push(name);
+        }
+        let primary_key = if has_primary_key && !pk_columns.is_empty() {
+            if descending_pk_key {
+                blockers.push(CreationBlocker {
+                    code: "descending_primary_key".to_string(),
+                    message: "a descending primary-key column would be recreated ascending"
+                        .to_string(),
+                    column: None,
+                });
+            }
+            Some(PrimaryKeySpec {
+                columns: pk_columns,
+            })
+        } else {
+            if has_primary_key {
+                missing.push(MissingCreationMetadata::PrimaryKeyOrder);
+            }
+            None
+        };
+
+        // Column defaults: distinguish a genuinely absent default
+        // (default_object_id = 0) from a KNOWN default whose definition is
+        // not available (legacy sp_bindefault-bound defaults, permission-
+        // hidden definitions). The latter must surface as named
+        // incompleteness, never silently drop on generation.
+        let defaults_sql = format!(
+            "SELECT \
+                ISNULL(SUM(CASE WHEN c.default_object_id <> 0 THEN 1 ELSE 0 END), 0) AS defaults_total, \
+                ISNULL(SUM(CASE WHEN c.default_object_id <> 0 AND dc.definition IS NULL \
+                                THEN 1 ELSE 0 END), 0) AS defaults_unreadable \
+             FROM {qualified_db}.sys.columns c \
+             LEFT JOIN {qualified_db}.sys.default_constraints dc \
+                   ON dc.parent_object_id = c.object_id AND dc.parent_column_id = c.column_id \
+             JOIN {qualified_db}.sys.tables tbl ON tbl.object_id = c.object_id \
+             JOIN {qualified_db}.sys.schemas s ON s.schema_id = tbl.schema_id \
+             WHERE {where_clause}"
+        );
+        let defaults_result = self.execute_simple(&defaults_sql)?;
+        let (defaults_total, defaults_unreadable) = defaults_result
+            .rows
+            .into_iter()
+            .next()
+            .map(|row| {
+                let mut iter = row.into_iter();
+                let total = match iter.next() {
+                    Some(Value::Int(n)) => n.max(0) as usize,
+                    _ => 0,
+                };
+                let unreadable = match iter.next() {
+                    Some(Value::Int(n)) => n.max(0) as usize,
+                    _ => 0,
+                };
+                (total, unreadable)
+            })
+            .unwrap_or((0, 0));
+        if let Some(missing_defaults) =
+            default_expression_availability(defaults_total, defaults_unreadable)
+        {
+            missing.push(missing_defaults);
+        }
+
+        let completeness = if missing.is_empty() {
+            MetadataCompleteness::Complete
+        } else {
+            MetadataCompleteness::Partial { missing }
+        };
+
+        Ok(Some(TableCreationMetadata {
+            schema: Some(schema_name.to_string()),
+            table: table.to_string(),
+            completeness,
+            identity,
+            primary_key,
+            blockers,
+        }))
     }
 
     fn view_details(
@@ -2314,10 +2704,37 @@ impl Connection for MssqlConnection {
             "delete" => Ok(generate_delete_template(&MSSQL_DIALECT, table)),
             "truncate" => Ok(generate_truncate(&MSSQL_DIALECT, table)),
             "drop_table" => Ok(generate_drop_table(&MSSQL_DIALECT, table)),
+            // CREATE TABLE for SQL Server is only faithful when generated
+            // from reference-side creation metadata (identity seed/increment,
+            // primary-key order, blockers), which a plain TableInfo cannot
+            // carry and the target cannot introspect for a table it does not
+            // have. Refuse with an actionable pointer instead of generating
+            // lossy DDL. This id is deliberately absent from the sidebar
+            // code-generators list: that UI has no reference metadata, so
+            // offering it would present an unusable command.
+            "create_table" => Err(DbError::NotSupported(
+                "CREATE TABLE generation for SQL Server requires reference creation metadata \
+                 (identity seed/increment, primary-key order, blockers) that a plain TableInfo \
+                 cannot carry; use generate_code_with_creation_metadata with metadata captured \
+                 from the reference connection"
+                    .to_string(),
+            )),
             _ => Err(DbError::NotSupported(format!(
                 "Code generator '{}' not supported",
                 generator_id
             ))),
+        }
+    }
+
+    fn generate_code_with_creation_metadata(
+        &self,
+        generator_id: &str,
+        table: &TableInfo,
+        creation_metadata: Option<&TableCreationMetadata>,
+    ) -> Result<String, DbError> {
+        match generator_id {
+            "create_table" => mssql_create_table_ddl(table, creation_metadata),
+            _ => self.generate_code(generator_id, table),
         }
     }
 
@@ -2575,7 +2992,8 @@ impl MssqlConnection {
                 t.name AS type_name, \
                 c.is_nullable AS nullable, \
                 CAST(dc.definition AS NVARCHAR(MAX)) AS column_default, \
-                CASE WHEN ic.column_id IS NOT NULL THEN 1 ELSE 0 END AS is_pk \
+                CASE WHEN ic.column_id IS NOT NULL THEN 1 ELSE 0 END AS is_pk, \
+                c.max_length, c.precision, c.scale \
              FROM {qualified_db}.sys.columns c \
              JOIN {qualified_db}.sys.tables tbl ON tbl.object_id = c.object_id \
              JOIN {qualified_db}.sys.schemas s ON s.schema_id = tbl.schema_id \
@@ -2614,10 +3032,26 @@ impl MssqlConnection {
                 _ => None,
             };
             let is_primary_key = value_is_truthy(iter.next());
+            let max_length = match iter.next() {
+                Some(Value::Int(n)) => n as i32,
+                _ => 0,
+            };
+            let precision = match iter.next() {
+                Some(Value::Int(n)) => n.clamp(0, u8::MAX as i64) as u8,
+                _ => 0,
+            };
+            let scale = match iter.next() {
+                Some(Value::Int(n)) => n.clamp(0, u8::MAX as i64) as u8,
+                _ => 0,
+            };
 
             columns.push(ColumnInfo {
                 name,
-                type_name,
+                // Full dimensions (lengths incl. MAX, precision/scale,
+                // temporal scale) are baked in here; identity deliberately
+                // stays out of the type name — it travels in
+                // `table_creation_metadata`.
+                type_name: mssql_column_type_name(&type_name, max_length, precision, scale),
                 nullable,
                 default_value,
                 is_primary_key,
@@ -3867,6 +4301,327 @@ fn format_mssql_uri_error(e: &tiberius::error::Error, uri: &str) -> DbError {
     formatted.into_connection_error()
 }
 
+// ---------------------------------------------------------------------------
+// Faithful CREATE TABLE generation (DBF-161)
+// ---------------------------------------------------------------------------
+
+/// Renders a column type name with exact dimensions from `sys.columns`:
+/// character/binary lengths (UTF-16 byte counts halved for `n*` types,
+/// `-1` meaning `MAX`), decimal precision/scale, and temporal scale.
+pub(crate) fn mssql_column_type_name(
+    base: &str,
+    max_length: i32,
+    precision: u8,
+    scale: u8,
+) -> String {
+    match base {
+        "char" | "varchar" | "binary" | "varbinary" => {
+            if max_length < 0 {
+                format!("{base}(max)")
+            } else {
+                format!("{base}({max_length})")
+            }
+        }
+        // Unicode types store 2 bytes per character (UTF-16 code units), so
+        // sys.columns.max_length is double the declared character length.
+        "nchar" | "nvarchar" => {
+            if max_length < 0 {
+                format!("{base}(max)")
+            } else {
+                format!("{base}({})", max_length / 2)
+            }
+        }
+        "decimal" | "numeric" => format!("{base}({precision},{scale})"),
+        "datetime2" | "datetimeoffset" | "time" => format!("{base}({scale})"),
+        // float defaults to float(53), which is written without precision.
+        "float" if precision < 53 => format!("{base}({precision})"),
+        _ => base.to_string(),
+    }
+}
+
+/// The bare type name without any `(…)` dimensions, lowercased.
+fn mssql_base_type(type_name: &str) -> &str {
+    let base = match type_name.find('(') {
+        Some(index) => &type_name[..index],
+        None => type_name,
+    };
+    base.trim()
+}
+
+/// SQL Server identity columns accept `int`/`bigint`/`smallint`/`tinyint`
+/// and `decimal`/`numeric` with scale 0.
+fn mssql_type_supports_identity(type_name: &str) -> bool {
+    match mssql_base_type(type_name).to_ascii_lowercase().as_str() {
+        "int" | "bigint" | "smallint" | "tinyint" => true,
+        "decimal" | "numeric" => type_name.ends_with(",0)"),
+        _ => false,
+    }
+}
+
+/// Bounded decimal-integer grammar for identity seed/increment: an optional
+/// minus sign followed by at most 38 ASCII digits (the numeric(38,0) bound).
+fn is_valid_identity_decimal(value: &str) -> bool {
+    let digits = value.strip_prefix('-').unwrap_or(value);
+    !digits.is_empty() && digits.len() <= 38 && digits.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// Given the number of columns carrying a default (`default_object_id <> 0`)
+/// and how many of those have an UNAVAILABLE definition (bound defaults,
+/// permission-hidden definitions), returns the missing-creation property that
+/// blocks faithful generation, if any. A genuinely absent default is fine.
+pub(crate) fn default_expression_availability(
+    _defaults_total: usize,
+    defaults_unreadable: usize,
+) -> Option<MissingCreationMetadata> {
+    if defaults_unreadable > 0 {
+        Some(MissingCreationMetadata::ColumnDefaultExpressions)
+    } else {
+        None
+    }
+}
+
+/// Detect a typed `xml` column: sys.columns reports a nonzero
+/// `xml_collection_id` exactly when an xml-typed column is bound to an XML
+/// schema collection. Generating plain `xml` would silently drop that
+/// binding, so the column must be named as a blocker instead.
+pub(crate) fn typed_xml_blocker(type_name: &str, xml_collection_id: i64) -> Option<&'static str> {
+    if type_name.eq_ignore_ascii_case("xml") && xml_collection_id != 0 {
+        Some(
+            "a typed xml column is bound to an XML schema collection that cannot be recreated; \
+             generating a plain xml type would silently drop the binding",
+        )
+    } else {
+        None
+    }
+}
+
+fn missing_property_label(missing: &MissingCreationMetadata) -> &'static str {
+    match missing {
+        MissingCreationMetadata::IdentitySeedOrIncrement => "identity seed/increment",
+        MissingCreationMetadata::PrimaryKeyOrder => "primary-key column order",
+        MissingCreationMetadata::ColumnDefaultExpressions => "column default expressions",
+        MissingCreationMetadata::StorageOptions => "storage options",
+    }
+}
+
+/// Validates reference-side creation metadata against the table it is
+/// supposed to describe. Every refusal names the problem: generation must
+/// fail closed rather than silently flattening identity, key order, or
+/// unsupported creation semantics into a lossy statement.
+fn validate_creation_metadata(
+    table: &TableInfo,
+    metadata: &TableCreationMetadata,
+) -> Result<(), DbError> {
+    if metadata.table != table.name || metadata.schema != table.schema {
+        let bound = match &metadata.schema {
+            Some(schema) => format!("[{schema}].[{}]", metadata.table),
+            None => format!("[{}]", metadata.table),
+        };
+        let requested = match &table.schema {
+            Some(schema) => format!("[{schema}].[{}]", table.name),
+            None => format!("[{}]", table.name),
+        };
+        return Err(DbError::NotSupported(format!(
+            "creation metadata is bound to {bound} but CREATE TABLE was requested for {requested}",
+        )));
+    }
+
+    let columns = table.columns.as_deref().ok_or_else(|| {
+        DbError::NotSupported("CREATE TABLE generation requires loaded column metadata".to_string())
+    })?;
+    if columns.is_empty() {
+        return Err(DbError::NotSupported(
+            "CREATE TABLE generation requires at least one column".to_string(),
+        ));
+    }
+
+    let mut seen = std::collections::HashSet::new();
+    for column in columns {
+        if !seen.insert(column.name.as_str()) {
+            return Err(DbError::NotSupported(format!(
+                "duplicate column name '{}' in table metadata",
+                column.name
+            )));
+        }
+    }
+
+    if !metadata.blockers.is_empty() {
+        let described = metadata
+            .blockers
+            .iter()
+            .map(|blocker| match &blocker.column {
+                Some(column) => format!("{} (column '{}')", blocker.code, column),
+                None => blocker.code.clone(),
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Err(DbError::NotSupported(format!(
+            "table has creation semantics faithful generation cannot express: {described}"
+        )));
+    }
+
+    if let MetadataCompleteness::Partial { missing } = &metadata.completeness {
+        let described = missing
+            .iter()
+            .map(missing_property_label)
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(DbError::NotSupported(format!(
+            "reference metadata is incomplete ({described}); recapture a deep snapshot of the reference before generating"
+        )));
+    }
+
+    if let Some(identity) = &metadata.identity {
+        let column = columns
+            .iter()
+            .find(|column| column.name == identity.column)
+            .ok_or_else(|| {
+                DbError::NotSupported(format!(
+                    "identity spec names column '{}' which is not part of the table",
+                    identity.column
+                ))
+            })?;
+        if !mssql_type_supports_identity(&column.type_name) {
+            return Err(DbError::NotSupported(format!(
+                "identity column '{}' has type '{}' which cannot carry an identity",
+                identity.column, column.type_name
+            )));
+        }
+        for (label, value) in [("seed", &identity.seed), ("increment", &identity.increment)] {
+            if !is_valid_identity_decimal(value) {
+                return Err(DbError::NotSupported(format!(
+                    "identity {label} '{value}' is not a bounded decimal integer (numeric(38,0))"
+                )));
+            }
+        }
+    }
+
+    if let Some(primary_key) = &metadata.primary_key {
+        if primary_key.columns.is_empty() {
+            return Err(DbError::NotSupported(
+                "primary-key spec is empty".to_string(),
+            ));
+        }
+        let mut key_columns = std::collections::HashSet::new();
+        for name in &primary_key.columns {
+            if !columns.iter().any(|column| &column.name == name) {
+                return Err(DbError::NotSupported(format!(
+                    "primary-key spec names column '{name}' which is not part of the table"
+                )));
+            }
+            if !key_columns.insert(name.as_str()) {
+                return Err(DbError::NotSupported(format!(
+                    "primary-key spec lists column '{name}' twice"
+                )));
+            }
+        }
+        // The metadata key set and the per-column flags must agree, otherwise
+        // one of the two views is stale.
+        let flagged: Vec<&str> = columns
+            .iter()
+            .filter(|column| column.is_primary_key)
+            .map(|column| column.name.as_str())
+            .collect();
+        let flagged_set: std::collections::HashSet<&str> = flagged.iter().copied().collect();
+        let spec_set: std::collections::HashSet<&str> =
+            primary_key.columns.iter().map(String::as_str).collect();
+        if flagged_set != spec_set {
+            return Err(DbError::NotSupported(
+                "primary-key spec disagrees with the table's primary-key column flags".to_string(),
+            ));
+        }
+    } else if columns.iter().any(|column| column.is_primary_key) {
+        return Err(DbError::NotSupported(
+            "table has primary-key columns but the metadata declares none; \
+             recapture a deep snapshot of the reference"
+                .to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+/// Renders a faithful `CREATE TABLE` from reference-side metadata, refusing
+/// (named `NotSupported`) when the metadata is missing, incomplete, or
+/// describes creation semantics the generator cannot express.
+pub(crate) fn mssql_create_table_ddl(
+    table: &TableInfo,
+    creation_metadata: Option<&TableCreationMetadata>,
+) -> Result<String, DbError> {
+    let Some(metadata) = creation_metadata else {
+        return Err(DbError::NotSupported(
+            "faithful CREATE TABLE requires reference creation metadata, but none was supplied; \
+             snapshots captured before creation-metadata support must be recaptured as a deep snapshot"
+                .to_string(),
+        ));
+    };
+
+    validate_creation_metadata(table, metadata)?;
+
+    let Some(columns) = table.columns.as_deref() else {
+        // Unreachable after validate_creation_metadata, but never panic.
+        return Err(DbError::NotSupported(
+            "CREATE TABLE generation requires loaded column metadata".to_string(),
+        ));
+    };
+
+    let mut lines: Vec<String> = Vec::with_capacity(columns.len() + 1);
+    for column in columns {
+        let mut line = format!(
+            "    {} {}",
+            mssql_bracket_identifier(&column.name),
+            column.type_name
+        );
+        if let Some(identity) = metadata
+            .identity
+            .as_ref()
+            .filter(|identity| identity.column == column.name)
+        {
+            line.push_str(&format!(
+                " IDENTITY({}, {})",
+                identity.seed, identity.increment
+            ));
+        }
+        line.push_str(if column.nullable {
+            " NULL"
+        } else {
+            " NOT NULL"
+        });
+        if let Some(default) = column.default_value.as_deref() {
+            line.push_str(&format!(" DEFAULT {default}"));
+        }
+        lines.push(line);
+    }
+
+    if let Some(primary_key) = &metadata.primary_key {
+        let key_columns = primary_key
+            .columns
+            .iter()
+            .map(|column| mssql_bracket_identifier(column))
+            .collect::<Vec<_>>()
+            .join(", ");
+        lines.push(format!("    PRIMARY KEY ({key_columns})"));
+    }
+
+    let qualified = match &table.schema {
+        Some(schema) => format!(
+            "{}.{}",
+            mssql_bracket_identifier(schema),
+            mssql_bracket_identifier(&table.name)
+        ),
+        None => mssql_bracket_identifier(&table.name),
+    };
+
+    Ok(format!(
+        "CREATE TABLE {qualified} (\n{}\n)",
+        lines.join(",\n")
+    ))
+}
+
+fn mssql_bracket_identifier(identifier: &str) -> String {
+    format!("[{}]", identifier.replace(']', "]]"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4842,6 +5597,483 @@ mod tests {
                     .to_string(),
                 followup: None,
             })
+        );
+    }
+
+    // ── DBF-161: faithful CREATE TABLE generation ───────────────────────
+
+    use dbflux_core::{
+        CreationBlocker, IdentitySpec, MetadataCompleteness, MissingCreationMetadata,
+        PrimaryKeySpec,
+    };
+
+    fn plain_column(
+        name: &str,
+        type_name: &str,
+        nullable: bool,
+        is_primary_key: bool,
+    ) -> ColumnInfo {
+        ColumnInfo {
+            name: name.to_string(),
+            type_name: type_name.to_string(),
+            nullable,
+            is_primary_key,
+            default_value: None,
+            enum_values: None,
+        }
+    }
+
+    fn creation_table() -> TableInfo {
+        TableInfo {
+            name: "gen_users".to_string(),
+            schema: Some("dbo".to_string()),
+            columns: Some(vec![
+                plain_column("ID", "DECIMAL(38,0)", false, true),
+                plain_column("Name", "NVARCHAR(50)", false, true),
+                plain_column("Bio", "NVARCHAR(MAX)", true, false),
+                plain_column("Balance", "DECIMAL(12,4)", false, false),
+                plain_column("Stamp", "DATETIME2(3)", true, false),
+            ]),
+            indexes: None,
+            foreign_keys: None,
+            constraints: None,
+            sample_fields: None,
+            presentation: Default::default(),
+            child_items: None,
+            storage_hints: None,
+        }
+    }
+
+    fn complete_metadata() -> TableCreationMetadata {
+        TableCreationMetadata {
+            schema: Some("dbo".to_string()),
+            table: "gen_users".to_string(),
+            completeness: MetadataCompleteness::Complete,
+            identity: Some(IdentitySpec {
+                column: "ID".to_string(),
+                seed: "99999999999999999999999999999999999990".to_string(),
+                increment: "3".to_string(),
+            }),
+            primary_key: Some(PrimaryKeySpec {
+                columns: vec!["Name".to_string(), "ID".to_string()],
+            }),
+            blockers: Vec::new(),
+        }
+    }
+
+    // ── Verifier blocker 3: bound/hidden default expressions ─────────────
+
+    #[test]
+    fn default_expression_availability_allows_absent_and_readable_defaults() {
+        // No defaults at all: nothing missing.
+        assert_eq!(default_expression_availability(0, 0), None);
+        // Every default's definition is readable (CREATE TABLE defaults):
+        // nothing missing.
+        assert_eq!(default_expression_availability(2, 0), None);
+    }
+
+    #[test]
+    fn default_expression_availability_blocks_known_defaults_without_definitions() {
+        // A known default (default_object_id <> 0) whose definition is not
+        // available (legacy bound default, permission-hidden definition)
+        // must not silently drop on generation.
+        assert_eq!(
+            default_expression_availability(1, 1),
+            Some(MissingCreationMetadata::ColumnDefaultExpressions)
+        );
+        assert_eq!(
+            default_expression_availability(3, 2),
+            Some(MissingCreationMetadata::ColumnDefaultExpressions)
+        );
+        assert_eq!(default_expression_availability(0, 0), None);
+    }
+
+    // ── Typed XML detection ──────────────────────────────────────────────
+
+    #[test]
+    fn typed_xml_blocker_fires_only_for_xml_bound_to_a_collection() {
+        // Typed xml: collection bound — must block.
+        assert!(typed_xml_blocker("xml", 5).is_some());
+        // Case-insensitive type match.
+        assert!(typed_xml_blocker("XML", 5).is_some());
+        // Untyped xml: no collection — plain xml is faithful, must not block.
+        assert_eq!(typed_xml_blocker("xml", 0), None);
+        // Non-xml types never block, even with a nonzero id.
+        assert_eq!(typed_xml_blocker("nvarchar", 5), None);
+        assert_eq!(typed_xml_blocker("", 0), None);
+    }
+
+    #[test]
+    fn resolve_session_database_prefers_actual_session_over_configured() {
+        // The session's actual database (DB_NAME()) is the source of truth.
+        assert_eq!(
+            resolve_session_database(Some("master".to_string()), Some("other".to_string())),
+            Some("master".to_string())
+        );
+        // No configured database (default login): the actual session
+        // database must surface instead of None.
+        assert_eq!(
+            resolve_session_database(Some("master".to_string()), None),
+            Some("master".to_string())
+        );
+        // Server reporting no database: fall back to the configured one
+        // rather than treating unknown as empty.
+        assert_eq!(
+            resolve_session_database(None, Some("appdb".to_string())),
+            Some("appdb".to_string())
+        );
+        assert_eq!(resolve_session_database(None, None), None);
+    }
+
+    // ── Type-dimension rendering ──────────────────────────────────────────────
+
+    #[test]
+    fn mssql_type_name_renders_unicode_length_in_characters_not_utf16_bytes() {
+        // sys.columns.max_length counts UTF-16 bytes (2 per character).
+        assert_eq!(mssql_column_type_name("nvarchar", 40, 0, 0), "nvarchar(20)");
+        assert_eq!(mssql_column_type_name("nchar", 20, 0, 0), "nchar(10)");
+        assert_eq!(
+            mssql_column_type_name("nvarchar", -1, 0, 0),
+            "nvarchar(max)"
+        );
+        assert_eq!(mssql_column_type_name("nchar", -1, 0, 0), "nchar(max)");
+    }
+
+    #[test]
+    fn mssql_type_name_renders_byte_lengths_and_max() {
+        assert_eq!(mssql_column_type_name("varchar", 50, 0, 0), "varchar(50)");
+        assert_eq!(mssql_column_type_name("char", 10, 0, 0), "char(10)");
+        assert_eq!(
+            mssql_column_type_name("varbinary", 16, 0, 0),
+            "varbinary(16)"
+        );
+        assert_eq!(mssql_column_type_name("binary", 32, 0, 0), "binary(32)");
+        assert_eq!(
+            mssql_column_type_name("varbinary", -1, 0, 0),
+            "varbinary(max)"
+        );
+        assert_eq!(mssql_column_type_name("varchar", -1, 0, 0), "varchar(max)");
+    }
+
+    #[test]
+    fn mssql_type_name_renders_decimal_and_temporal_scale() {
+        assert_eq!(mssql_column_type_name("decimal", 9, 12, 4), "decimal(12,4)");
+        assert_eq!(
+            mssql_column_type_name("numeric", 17, 38, 0),
+            "numeric(38,0)"
+        );
+        assert_eq!(
+            mssql_column_type_name("datetime2", 8, 27, 7),
+            "datetime2(7)"
+        );
+        assert_eq!(
+            mssql_column_type_name("datetimeoffset", 10, 34, 5),
+            "datetimeoffset(5)"
+        );
+        assert_eq!(mssql_column_type_name("time", 5, 16, 3), "time(3)");
+    }
+
+    #[test]
+    fn mssql_type_name_leaves_dimensionless_types_untouched() {
+        for base in [
+            "int",
+            "bigint",
+            "smallint",
+            "tinyint",
+            "bit",
+            "datetime",
+            "smalldatetime",
+            "money",
+            "smallmoney",
+            "uniqueidentifier",
+            "rowversion",
+            "text",
+            "ntext",
+            "image",
+            "xml",
+            "real",
+        ] {
+            assert_eq!(
+                mssql_column_type_name(base, 4, 10, 0),
+                base,
+                "type {base} must not gain dimensions"
+            );
+        }
+    }
+
+    #[test]
+    fn mssql_type_name_renders_float_precision_but_not_default_float53() {
+        // float defaults to float(53), which is written plainly; a narrower
+        // float(n) must keep its precision. `real` is its own base type.
+        assert_eq!(mssql_column_type_name("float", 8, 53, 0), "float");
+        assert_eq!(mssql_column_type_name("float", 8, 30, 0), "float(30)");
+        assert_eq!(mssql_column_type_name("real", 4, 24, 0), "real");
+    }
+
+    // ── Faithful DDL rendering ───────────────────────────────────────────
+
+    #[test]
+    fn mssql_create_table_renders_faithful_ddl_from_metadata() {
+        let table = creation_table();
+        let metadata = complete_metadata();
+
+        let ddl = mssql_create_table_ddl(&table, Some(&metadata)).expect("render");
+
+        assert!(ddl.contains("CREATE TABLE [dbo].[gen_users]"), "got: {ddl}");
+        // Exact identity text, seeded inside numeric(38,0) beyond i64, with
+        // the type rendered separately — identity never leaks into type_name.
+        assert!(
+            ddl.contains(
+                "[ID] DECIMAL(38,0) IDENTITY(99999999999999999999999999999999999990, 3) NOT NULL"
+            ),
+            "got: {ddl}"
+        );
+        assert!(ddl.contains("[Name] NVARCHAR(50) NOT NULL"), "got: {ddl}");
+        assert!(ddl.contains("[Bio] NVARCHAR(MAX) NULL"), "got: {ddl}");
+        assert!(ddl.contains("[Stamp] DATETIME2(3) NULL"), "got: {ddl}");
+        // Composite PK in declared key order (Name before ID).
+        assert!(ddl.contains("PRIMARY KEY ([Name], [ID])"), "got: {ddl}");
+    }
+
+    #[test]
+    fn mssql_create_table_renders_column_defaults() {
+        let mut table = creation_table();
+        table.columns.as_mut().expect("columns")[3].default_value = Some("((0))".to_string());
+        let metadata = complete_metadata();
+
+        let ddl = mssql_create_table_ddl(&table, Some(&metadata)).expect("render");
+
+        assert!(
+            ddl.contains("[Balance] DECIMAL(12,4) NOT NULL DEFAULT ((0))"),
+            "got: {ddl}"
+        );
+    }
+
+    #[test]
+    fn mssql_create_table_escapes_brackets_in_identifiers() {
+        let mut table = creation_table();
+        table.name = "we]ird".to_string();
+        table.columns.as_mut().expect("columns")[0].name = "col]x".to_string();
+        for col in table.columns.as_mut().expect("columns") {
+            col.is_primary_key = false;
+        }
+        let mut metadata = complete_metadata();
+        metadata.table = "we]ird".to_string();
+        metadata.identity = None;
+        metadata.primary_key = None;
+
+        let ddl = mssql_create_table_ddl(&table, Some(&metadata)).expect("render");
+
+        assert!(ddl.contains("[we]]ird]"), "got: {ddl}");
+        assert!(ddl.contains("[col]]x]"), "got: {ddl}");
+    }
+
+    #[test]
+    fn mssql_create_table_renders_plain_table_without_identity_or_pk() {
+        let mut table = creation_table();
+        for col in table.columns.as_mut().expect("columns") {
+            col.is_primary_key = false;
+        }
+        let metadata = TableCreationMetadata {
+            identity: None,
+            primary_key: None,
+            ..complete_metadata()
+        };
+
+        let ddl = mssql_create_table_ddl(&table, Some(&metadata)).expect("render");
+
+        assert!(!ddl.contains("IDENTITY"), "got: {ddl}");
+        assert!(!ddl.contains("PRIMARY KEY"), "got: {ddl}");
+    }
+
+    // ── Fail-closed refusals ───────────────────────────────────────────
+
+    #[test]
+    fn mssql_create_table_without_metadata_refuses_instead_of_dropping_identity() {
+        let error = mssql_create_table_ddl(&creation_table(), None).expect_err("must refuse");
+
+        assert!(matches!(error, DbError::NotSupported(_)), "got: {error:?}");
+        let message = error.to_string();
+        assert!(
+            message.to_lowercase().contains("recapture"),
+            "must name the recovery action, got: {message}"
+        );
+    }
+
+    #[test]
+    fn mssql_create_table_refuses_incomplete_metadata() {
+        let metadata = TableCreationMetadata {
+            completeness: MetadataCompleteness::Partial {
+                missing: vec![MissingCreationMetadata::IdentitySeedOrIncrement],
+            },
+            ..complete_metadata()
+        };
+
+        let error =
+            mssql_create_table_ddl(&creation_table(), Some(&metadata)).expect_err("must refuse");
+
+        let message = error.to_string();
+        assert!(
+            message.to_lowercase().contains("identity"),
+            "must name the missing property, got: {message}"
+        );
+    }
+
+    #[test]
+    fn mssql_create_table_refuses_blocked_creation_semantics() {
+        let metadata = TableCreationMetadata {
+            blockers: vec![CreationBlocker {
+                code: "computed_column".to_string(),
+                message: "column Bio is computed".to_string(),
+                column: Some("Bio".to_string()),
+            }],
+            ..complete_metadata()
+        };
+
+        let error =
+            mssql_create_table_ddl(&creation_table(), Some(&metadata)).expect_err("must refuse");
+
+        let message = error.to_string();
+        assert!(
+            message.contains("computed_column"),
+            "must name the blocker code, got: {message}"
+        );
+    }
+
+    #[test]
+    fn mssql_create_table_refuses_metadata_bound_to_a_different_table() {
+        let metadata = TableCreationMetadata {
+            table: "other".to_string(),
+            ..complete_metadata()
+        };
+
+        assert!(
+            mssql_create_table_ddl(&creation_table(), Some(&metadata)).is_err(),
+            "table binding mismatch must refuse"
+        );
+
+        let metadata = TableCreationMetadata {
+            schema: Some("sales".to_string()),
+            ..complete_metadata()
+        };
+        assert!(
+            mssql_create_table_ddl(&creation_table(), Some(&metadata)).is_err(),
+            "schema binding mismatch must refuse"
+        );
+    }
+
+    #[test]
+    fn mssql_create_table_refuses_primary_key_columns_missing_from_the_table() {
+        let metadata = TableCreationMetadata {
+            primary_key: Some(PrimaryKeySpec {
+                columns: vec!["Name".to_string(), "Ghost".to_string()],
+            }),
+            ..complete_metadata()
+        };
+
+        assert!(
+            mssql_create_table_ddl(&creation_table(), Some(&metadata)).is_err(),
+            "unknown PK column must refuse"
+        );
+    }
+
+    #[test]
+    fn mssql_create_table_refuses_duplicate_primary_key_columns() {
+        let metadata = TableCreationMetadata {
+            primary_key: Some(PrimaryKeySpec {
+                columns: vec!["Name".to_string(), "Name".to_string()],
+            }),
+            ..complete_metadata()
+        };
+
+        assert!(
+            mssql_create_table_ddl(&creation_table(), Some(&metadata)).is_err(),
+            "duplicate PK column must refuse"
+        );
+    }
+
+    #[test]
+    fn mssql_create_table_refuses_metadata_disagreeing_with_column_pk_flags() {
+        let metadata = TableCreationMetadata {
+            primary_key: None,
+            ..complete_metadata()
+        };
+
+        assert!(
+            mssql_create_table_ddl(&creation_table(), Some(&metadata)).is_err(),
+            "a flagged PK column without a primary_key spec is inconsistent metadata"
+        );
+    }
+
+    #[test]
+    fn mssql_create_table_refuses_identity_on_a_missing_or_non_numeric_column() {
+        let metadata = TableCreationMetadata {
+            identity: Some(IdentitySpec {
+                column: "Bio".to_string(),
+                seed: "1".to_string(),
+                increment: "1".to_string(),
+            }),
+            ..complete_metadata()
+        };
+        assert!(
+            mssql_create_table_ddl(&creation_table(), Some(&metadata)).is_err(),
+            "identity on an NVARCHAR column must refuse"
+        );
+
+        let metadata = TableCreationMetadata {
+            identity: Some(IdentitySpec {
+                column: "Ghost".to_string(),
+                seed: "1".to_string(),
+                increment: "1".to_string(),
+            }),
+            ..complete_metadata()
+        };
+        assert!(
+            mssql_create_table_ddl(&creation_table(), Some(&metadata)).is_err(),
+            "identity on an unknown column must refuse"
+        );
+    }
+
+    #[test]
+    fn mssql_create_table_rejects_identity_values_outside_the_numeric38_grammar() {
+        for bad_seed in ["", "-", "+1", "--1", "1e5", "12.5", "12a", " 1", "1 "] {
+            let metadata = TableCreationMetadata {
+                identity: Some(IdentitySpec {
+                    seed: bad_seed.to_string(),
+                    ..complete_metadata().identity.expect("identity")
+                }),
+                ..complete_metadata()
+            };
+            assert!(
+                mssql_create_table_ddl(&creation_table(), Some(&metadata)).is_err(),
+                "seed {bad_seed:?} must refuse"
+            );
+        }
+
+        // A 39-digit seed exceeds numeric(38,0) and must refuse.
+        let metadata = TableCreationMetadata {
+            identity: Some(IdentitySpec {
+                seed: "9".repeat(39),
+                ..complete_metadata().identity.expect("identity")
+            }),
+            ..complete_metadata()
+        };
+        assert!(
+            mssql_create_table_ddl(&creation_table(), Some(&metadata)).is_err(),
+            "39-digit seed must refuse"
+        );
+
+        // A 38-digit negative seed is inside numeric(38,0) and must render.
+        let metadata = TableCreationMetadata {
+            identity: Some(IdentitySpec {
+                seed: format!("-{}", "9".repeat(37)),
+                ..complete_metadata().identity.expect("identity")
+            }),
+            ..complete_metadata()
+        };
+        assert!(
+            mssql_create_table_ddl(&creation_table(), Some(&metadata)).is_ok(),
+            "38-digit negative seed is representable"
         );
     }
 }
