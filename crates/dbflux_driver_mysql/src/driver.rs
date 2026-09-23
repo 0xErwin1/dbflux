@@ -1242,6 +1242,10 @@ fn build_mysql_opts(
     builder.into()
 }
 
+fn initial_database_from_opts(opts: &Opts) -> Option<String> {
+    opts.get_db_name().map(str::to_owned)
+}
+
 /// Attaches a custom root certificate to `ssl_opts` when one is configured,
 /// so the verifying SSL modes trust a private CA instead of the system store.
 fn apply_root_cert(ssl_opts: SslOpts, ssl_paths: &MysqlSslPaths) -> SslOpts {
@@ -1310,11 +1314,12 @@ impl MysqlDriver {
             query_connection_id
         );
 
+        let initial_database = initial_database_from_opts(&opts);
         Ok(Box::new(MysqlConnection {
             catalog_conn: Arc::new(Mutex::new(catalog_conn)),
             query_conn: Mutex::new(QueryConnState {
                 conn: query_conn,
-                current_database: None,
+                current_database: initial_database,
             }),
             ssh_catalog_tunnel: None,
             ssh_query_tunnel: None,
@@ -1390,11 +1395,12 @@ impl MysqlDriver {
             query_connection_id
         );
 
+        let initial_database = initial_database_from_opts(&opts);
         Ok(Box::new(MysqlConnection {
             catalog_conn: Arc::new(Mutex::new(catalog_conn)),
             query_conn: Mutex::new(QueryConnState {
                 conn: query_conn,
-                current_database: None,
+                current_database: initial_database,
             }),
             ssh_catalog_tunnel: None,
             ssh_query_tunnel: None,
@@ -1526,11 +1532,12 @@ impl MysqlDriver {
             tunnel_config.host
         );
 
+        let initial_database = initial_database_from_opts(&query_opts);
         Ok(Box::new(MysqlConnection {
             catalog_conn: Arc::new(Mutex::new(catalog_conn)),
             query_conn: Mutex::new(QueryConnState {
                 conn: query_conn,
-                current_database: None,
+                current_database: initial_database,
             }),
             ssh_catalog_tunnel: Some(ssh_catalog_tunnel),
             ssh_query_tunnel: Some(ssh_query_tunnel),
@@ -4115,8 +4122,9 @@ mod tests {
     use super::{
         GrantLineVerdict, MysqlCodeGenerator, MysqlDialect, MysqlDriver, MysqlGrantsVerdict,
         MysqlSslPaths, build_mysql_opts, classify_mysql_grant_line, classify_mysql_grants,
-        inject_password_into_mysql_uri, mysql_routine_type_to_kind, mysql_text_literal,
-        normalize_mysql_tcp_host, plan_mysql_semantic_request, resolve_write_privilege,
+        initial_database_from_opts, inject_password_into_mysql_uri, mysql_routine_type_to_kind,
+        mysql_text_literal, normalize_mysql_tcp_host, plan_mysql_semantic_request,
+        resolve_write_privilege,
     };
     use dbflux_core::{
         AddColumnRequest, AlterColumnRequest, CodeGenerator, DatabaseCategory, DbConfig, DbDriver,
@@ -4290,6 +4298,46 @@ mod tests {
             .and_then(|attrs| attrs.get("program_name"))
             .map(String::as_str);
         assert_eq!(program_name, Some(dbflux_core::client_identity()));
+    }
+
+    #[test]
+    fn initial_database_uses_uri_opts_not_profile_database() {
+        let profile_database = Some("stale_profile");
+        let opts = Opts::from_url("mysql://root@localhost:3306/uri_database")
+            .expect("uri should parse into mysql Opts");
+        assert_ne!(opts.get_db_name(), profile_database);
+        assert_eq!(
+            initial_database_from_opts(&opts).as_deref(),
+            Some("uri_database")
+        );
+    }
+
+    #[test]
+    fn initial_database_is_none_for_uri_without_database() {
+        let opts = Opts::from_url("mysql://root@localhost:3306")
+            .expect("uri should parse into mysql Opts");
+        assert_eq!(initial_database_from_opts(&opts), None);
+    }
+
+    #[test]
+    fn initial_database_uses_direct_opts() {
+        let opts = build_mysql_opts(
+            "localhost",
+            3306,
+            "root",
+            Some("direct_database"),
+            None,
+            "DISABLED",
+            &MysqlSslPaths {
+                root_cert: None,
+                client_cert: None,
+                client_key: None,
+            },
+        );
+        assert_eq!(
+            initial_database_from_opts(&opts).as_deref(),
+            Some("direct_database")
+        );
     }
 
     #[test]

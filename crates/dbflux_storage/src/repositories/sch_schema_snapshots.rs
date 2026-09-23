@@ -11,6 +11,8 @@
 //! deletes the oldest rows beyond a per-profile/database retention bound;
 //! child rows cascade via `ON DELETE CASCADE`.
 
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use rusqlite::Connection;
@@ -39,12 +41,54 @@ pub struct SchemaSnapshotSummary {
 #[derive(Clone)]
 pub struct SchemaSnapshotRepo {
     conn: Arc<Mutex<Connection>>,
+    connect_gates: Arc<Mutex<HashMap<Uuid, Arc<ConnectCaptureGate>>>>,
+}
+
+struct ConnectCaptureGate {
+    current_generation: AtomicU64,
+    operation_lock: Mutex<()>,
+}
+
+#[derive(Clone)]
+pub struct ConnectCaptureToken {
+    gate: Arc<ConnectCaptureGate>,
+    generation: u64,
 }
 
 impl SchemaSnapshotRepo {
     /// Creates a new repository wrapping the given shared connection.
     pub fn new(conn: Arc<Mutex<Connection>>) -> Self {
-        Self { conn }
+        Self {
+            conn,
+            connect_gates: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    pub fn begin_connect_capture(
+        &self,
+        profile_id: Uuid,
+    ) -> Result<ConnectCaptureToken, StorageError> {
+        let mut gates = self.connect_gates.lock().map_err(lock_err)?;
+        let gate = Arc::clone(gates.entry(profile_id).or_insert_with(|| {
+            Arc::new(ConnectCaptureGate {
+                current_generation: AtomicU64::new(0),
+                operation_lock: Mutex::new(()),
+            })
+        }));
+        let generation = gate.current_generation.fetch_add(1, Ordering::AcqRel) + 1;
+        Ok(ConnectCaptureToken { gate, generation })
+    }
+
+    pub fn with_current_connect_capture<T>(
+        &self,
+        token: &ConnectCaptureToken,
+        operation: impl FnOnce() -> Result<T, StorageError>,
+    ) -> Result<Option<T>, StorageError> {
+        let _guard = token.gate.operation_lock.lock().map_err(lock_err)?;
+        if token.generation != token.gate.current_generation.load(Ordering::Acquire) {
+            return Ok(None);
+        }
+        operation().map(Some)
     }
 
     /// Inserts a new snapshot with its table rows in a single transaction.
@@ -129,7 +173,7 @@ impl SchemaSnapshotRepo {
     }
 
     /// Lists snapshot summaries for `(profile_id, database)`, ordered by
-    /// `captured_at DESC` (most recent first).
+    /// `captured_at DESC, id DESC` (most recent first, UUIDv7 tie-break).
     pub fn list(
         &self,
         profile_id: &str,
@@ -142,7 +186,7 @@ impl SchemaSnapshotRepo {
                 "SELECT id, profile_id, database, captured_at, fingerprint, depth
                  FROM sch_schema_snapshots
                  WHERE profile_id = ?1 AND database IS ?2
-                 ORDER BY captured_at DESC",
+                 ORDER BY captured_at DESC, id DESC",
             )
             .map_err(sqlite_err)?;
 
@@ -180,7 +224,7 @@ impl SchemaSnapshotRepo {
                  AND id NOT IN (
                      SELECT id FROM sch_schema_snapshots
                      WHERE profile_id = ?1 AND database IS ?2
-                     ORDER BY captured_at DESC, rowid DESC
+                     ORDER BY captured_at DESC, id DESC
                      LIMIT ?3
                  )",
                 rusqlite::params![profile_id, database, keep as i64],
@@ -391,6 +435,125 @@ mod tests {
             tables: vec![sample_table("users"), sample_table("orders")],
             creation_metadata: Vec::new(),
         }
+    }
+
+    #[test]
+    fn stale_connect_capture_cannot_prune_newer_snapshot() {
+        let (conn, repo, profile_id) = setup("stale_connect_capture");
+        let older = repo.begin_connect_capture(profile_id).expect("begin older");
+        let newer = repo
+            .clone()
+            .begin_connect_capture(profile_id)
+            .expect("begin newer");
+        let newer_record = sample_record(profile_id, Some("db1"), 1000);
+        let older_record = sample_record(profile_id, Some("db1"), 2000);
+
+        let connection_guard = conn.lock().expect("lock connection");
+        let third = repo
+            .begin_connect_capture(profile_id)
+            .expect("begin without DB lock");
+        drop(connection_guard);
+        // Restore a current token after proving begin never needs the SQLite lock.
+        let newest = third;
+        assert!(
+            repo.with_current_connect_capture(&newer, || Ok(()))
+                .expect("stale newer")
+                .is_none()
+        );
+        repo.with_current_connect_capture(&newest, || {
+            repo.insert(&newer_record)?;
+            repo.prune(&profile_id.to_string(), Some("db1"), 1)?;
+            Ok(())
+        })
+        .expect("persist newest")
+        .expect("current");
+        let ran = std::cell::Cell::new(false);
+        assert!(
+            repo.with_current_connect_capture(&older, || {
+                ran.set(true);
+                repo.insert(&older_record)?;
+                repo.prune(&profile_id.to_string(), Some("db1"), 1)?;
+                Ok(())
+            })
+            .expect("skip older")
+            .is_none()
+        );
+        assert!(!ran.get());
+        let remaining = repo
+            .list(&profile_id.to_string(), Some("db1"))
+            .expect("list");
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].id, newer_record.id.to_string());
+    }
+
+    #[test]
+    fn running_capture_finishes_before_newer_capture_persists() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let (_, repo, profile_id) = setup("running_connect_capture");
+        let older = repo.begin_connect_capture(profile_id).expect("begin older");
+        let older_record = sample_record(profile_id, Some("db1"), 2000);
+        let newer_record = sample_record(profile_id, Some("db1"), 3000);
+        let newer_id = newer_record.id;
+        let (entered_tx, entered_rx) = mpsc::sync_channel(0);
+        let (release_tx, release_rx) = mpsc::sync_channel(0);
+        let (begun_tx, begun_rx) = mpsc::sync_channel(0);
+        let (finished_tx, finished_rx) = mpsc::sync_channel(1);
+        std::thread::scope(|scope| {
+            let first_repo = repo.clone();
+            let first = scope.spawn(move || {
+                first_repo.with_current_connect_capture(&older, || {
+                    entered_tx.send(()).expect("signal entered");
+                    release_rx
+                        .recv_timeout(Duration::from_secs(10))
+                        .expect("release older");
+                    first_repo.insert(&older_record)?;
+                    first_repo.prune(&profile_id.to_string(), Some("db1"), 1)?;
+                    Ok(())
+                })
+            });
+            entered_rx
+                .recv_timeout(Duration::from_secs(10))
+                .expect("older entered");
+            let newer = repo
+                .begin_connect_capture(profile_id)
+                .expect("begin while older runs");
+            let second_repo = repo.clone();
+            let second = scope.spawn(move || {
+                begun_tx.send(()).expect("signal attempted");
+                let result = second_repo.with_current_connect_capture(&newer, || {
+                    second_repo.insert(&newer_record)?;
+                    second_repo.prune(&profile_id.to_string(), Some("db1"), 1)?;
+                    Ok(())
+                });
+                finished_tx.send(()).expect("signal finished");
+                result
+            });
+            begun_rx
+                .recv_timeout(Duration::from_secs(10))
+                .expect("newer attempted");
+            assert!(
+                finished_rx.try_recv().is_err(),
+                "newer cannot finish while older holds gate"
+            );
+            release_tx.send(()).expect("release");
+            first
+                .join()
+                .expect("older thread")
+                .expect("older persistence")
+                .expect("older current at entry");
+            second
+                .join()
+                .expect("newer thread")
+                .expect("newer persistence")
+                .expect("newer current");
+        });
+        let remaining = repo
+            .list(&profile_id.to_string(), Some("db1"))
+            .expect("list");
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].id, newer_id.to_string());
     }
 
     #[test]
@@ -614,6 +777,31 @@ mod tests {
             tied_second.id.to_string(),
             "the later-inserted row of a captured_at tie must survive deterministically"
         );
+    }
+
+    #[test]
+    fn sch_schema_snapshots_equal_timestamp_list_and_prune_use_id_tie_break() {
+        let (_, repo, profile_id) = setup("equal_timestamp_id_tie");
+        let mut higher_id = sample_record(profile_id, Some("db1"), 2000);
+        higher_id.id = Uuid::parse_str("01900000-0000-7000-8000-000000000002").expect("uuid");
+        higher_id.depth = SnapshotDepth::Deep;
+        let mut lower_id = sample_record(profile_id, Some("db1"), 2000);
+        lower_id.id = Uuid::parse_str("01900000-0000-7000-8000-000000000001").expect("uuid");
+        repo.insert(&higher_id).expect("insert higher id first");
+        repo.insert(&lower_id).expect("insert lower id second");
+
+        let listed = repo
+            .list(&profile_id.to_string(), Some("db1"))
+            .expect("list");
+        assert_eq!(
+            listed[0].id,
+            higher_id.id.to_string(),
+            "id determines latest equal-ms row"
+        );
+        repo.prune(&profile_id.to_string(), Some("db1"), 1)
+            .expect("prune");
+        assert!(repo.get(&higher_id.id.to_string()).expect("get").is_some());
+        assert!(repo.get(&lower_id.id.to_string()).expect("get").is_none());
     }
 
     #[test]
