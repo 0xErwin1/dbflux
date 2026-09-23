@@ -64,6 +64,8 @@ directamente sobre el cliente de wire protocol
 
 ## Limitaciones
 
+- Los límites de filas solicitados (incluso cero) y los tiempos máximos de sentencia se rechazan antes de validar la consulta de solo lectura o prepararla: este driver no puede aplicarlos antes de ejecutar. Sin esas opciones, las consultas conservan su comportamiento anterior y pueden almacenar el resultado completo; no hay un límite de trabajo del servidor ni de memoria. La prueba de rechazo temprano usa PostgreSQL 16 descartable para comprobar la compatibilidad del protocolo, no un clúster Redshift.
+
 - Solo lectura: `DriverMetadata.capabilities` omite `INSERT`, `UPDATE`,
   `DELETE`, `RETURNING`, `BULK_INSERT`, `TRUNCATE_TABLE`, y todas las flags de
   DDL/DDL-transaccional. No hay edición inline en la grilla ni

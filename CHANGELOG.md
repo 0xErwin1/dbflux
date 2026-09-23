@@ -4,6 +4,10 @@ All notable changes to DBFlux will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+* ClickHouse and Redshift now refuse explicit query row limits (including zero) and statement timeouts before dispatch or preparation; unprotected queries retain existing behavior, including possible full-result buffering. ClickHouse HTTP timeout does not guarantee server cancellation, and the Redshift early-refusal regression uses PostgreSQL 16 protocol compatibility rather than a hosted Redshift cluster.
+
 ### Fixed
 
 * Redis, Turso, and InfluxDB now refuse requested row limits (including zero)
