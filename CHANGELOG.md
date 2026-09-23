@@ -154,6 +154,13 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **The inspector rail follows the active tab** — switching to a tab, or
+  closing the active one, could leave the right-side rail showing the row
+  inspector, value panel, or schema inspector of a tab that was no longer
+  active. The tab that becomes active now decides what the rail shows, and the
+  rail hides when that tab has nothing to show or when the last tab closes.
+  Code and schema diagram tabs restore their inspector when you return to them.
+
 * **A failed script no longer leaves the connection stuck in a transaction** —
   a script that opened a transaction and failed partway never reached its
   `COMMIT`, so the transaction stayed open on the connection every tab shares.
