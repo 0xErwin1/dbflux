@@ -6,6 +6,17 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Added
 
+* **Safe automatic Deep capture on connect and async snapshot picker** — a
+  relational connection with a known database captures a Deep snapshot only
+  when every table has loaded columns or sample fields. Creation metadata is
+  collected where available; capture errors leave the connection open and do
+  not persist a partial Deep snapshot. Cache hydration uses the exact row
+  selected by the capture only while that connection remains current; older
+  captures cannot prune newer ones at retention one.
+  Historic snapshots are loaded in the background, filtered to existing
+  profiles, and labeled by timestamp. Unknown databases (including Turso)
+  fail closed rather than promising a snapshot on every connect.
+
 * **Faithful MSSQL `CREATE TABLE` generation via schema diff** — the SQL
   Server driver now introspects full column type dimensions (Unicode lengths
   in characters with `MAX` support, byte lengths for character/binary types,
@@ -30,11 +41,11 @@ All notable changes to DBFlux will be documented in this file.
   programmatically — to the target connection, which generates a faithful
   `CREATE TABLE` for both preview and apply and refuses when the metadata is
   missing, incomplete, or blocked, so old snapshots can never regenerate an
-  identity-less table. The UI's automatic on-connect snapshot capture stays
-  shallow in this change: a saved reference carries creation metadata only
-  when it was captured programmatically, while a live reference needs
-  nothing stored. No UI crate branches on driver identifiers. MSSQL
-  connections also resolve the actual session database (`DB_NAME()`) at
+  identity-less table. At the generator stage, on-connect capture was shallow;
+  the separate Deep capture described above can also persist creation
+  metadata. A live reference needs nothing stored. No UI crate branches on
+  driver identifiers. MSSQL connections also resolve the actual session
+  database (`DB_NAME()`) at
   connect time for URI and direct/SSH default logins, so the driver reports
   the login's real default database instead of an unknown selection.
 

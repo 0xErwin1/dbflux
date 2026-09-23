@@ -252,12 +252,14 @@ Requires the `VIEW SERVER STATE` permission.
   must be handled manually.
 - Deep snapshots captured before creation-metadata support (DBF-161 PR1) carry
   no metadata; using one as the diff reference refuses creation and the
-  snapshot must be recaptured. The UI's automatic on-connect capture is
-  currently **shallow**, so a **saved** snapshot carries creation metadata
-  only when it was captured programmatically through the deep snapshot API;
-  when the diff reference is a **live connection**, the metadata is fetched
-  through the generic `table_creation_metadata` seam and generation works
-  without any stored snapshot.
+  snapshot must be recaptured. For a known session database, the UI now
+  captures a Deep snapshot on connect only when every table has loaded
+  columns or sample fields; it includes creation metadata where available.
+  Capture errors leave the connection open without saving a partial Deep
+  snapshot. Reconnect to obtain a new valid snapshot. A **live connection**
+  can still provide metadata through the generic `table_creation_metadata`
+  seam without a stored snapshot. Missing, incomplete, or blocked metadata
+  still refuses `CREATE TABLE` generation.
 - Tables containing any character-typed column (`char`, `varchar`, `nchar`,
   `nvarchar`, `text`, `ntext`) always refuse: `sys.columns.collation_name` is
   non-null for every character column — even when the collation was only

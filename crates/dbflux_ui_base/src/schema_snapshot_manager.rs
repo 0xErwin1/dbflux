@@ -104,9 +104,8 @@ impl SchemaSnapshotManager {
     /// Deduplication is metadata-aware: when the legacy schema fingerprint is
     /// unchanged but the new capture carries metadata the latest stored
     /// snapshot lacks (or differs from), a new row is inserted so the freshly
-    /// captured metadata is never discarded. A capture without metadata
-    /// always dedups against an identical fingerprint, preserving existing
-    /// shallow-capture behavior.
+    /// captured metadata is never discarded. A Deep capture cannot reuse a
+    /// Shallow row; a Shallow capture may reuse an identical Deep row.
     pub fn capture_with_creation_metadata(
         &mut self,
         profile_id: &str,
@@ -122,10 +121,17 @@ impl SchemaSnapshotManager {
 
         let fingerprint = SchemaFingerprint::stable_hex_many(tables);
 
-        let latest = self.repo.list(profile_id, database)?.into_iter().next();
+        let latest = self
+            .repo
+            .list(profile_id, database)?
+            .into_iter()
+            .max_by(|left, right| {
+                (left.captured_at, left.id.as_str()).cmp(&(right.captured_at, right.id.as_str()))
+            });
 
         if let Some(latest) = &latest
             && latest.fingerprint == fingerprint
+            && (depth != SnapshotDepth::Deep || latest.depth == SnapshotDepth::Deep)
             && !self.metadata_changed_since(&latest.id, creation_metadata)?
         {
             return Ok(CaptureOutcome::Deduped {
@@ -226,6 +232,13 @@ impl SchemaSnapshotManager {
                     ))
                 })?;
 
+            if detail.columns.is_none() && detail.sample_fields.is_none() {
+                return Err(StorageError::Data(format!(
+                    "deep capture failed for table '{}' in schema {:?}: incomplete deep details",
+                    table.name, table.schema
+                )));
+            }
+
             if let Some(metadata) = connection
                 .table_creation_metadata(db, table.schema.as_deref(), &table.name)
                 .map_err(|error| {
@@ -249,6 +262,18 @@ impl SchemaSnapshotManager {
             SnapshotDepth::Deep,
             retention,
         )
+    }
+
+    /// Loads details for the exact row created or deduplicated by this capture.
+    pub fn deep_details_by_id(
+        &self,
+        id: &str,
+        live_tables: &[TableInfo],
+    ) -> Result<Vec<TableInfo>, StorageError> {
+        let Some(record) = self.get(id)? else {
+            return Ok(Vec::new());
+        };
+        Ok(filter_live_deep_details(record, live_tables))
     }
 
     /// Table details from the most recent `Deep` snapshot for `(profile_id,
@@ -284,20 +309,30 @@ impl SchemaSnapshotManager {
             }
         };
 
-        let live: std::collections::HashSet<(Option<&str>, &str)> = live_tables
-            .iter()
-            .map(|table| (table.schema.as_deref(), table.name.as_str()))
-            .collect();
-
-        record
-            .tables
-            .into_iter()
-            .filter(|table| {
-                (table.columns.is_some() || table.sample_fields.is_some())
-                    && live.contains(&(table.schema.as_deref(), table.name.as_str()))
-            })
-            .collect()
+        filter_live_deep_details(record, live_tables)
     }
+}
+
+fn filter_live_deep_details(
+    record: SchemaSnapshotRecord,
+    live_tables: &[TableInfo],
+) -> Vec<TableInfo> {
+    if record.depth != SnapshotDepth::Deep {
+        return Vec::new();
+    }
+    let live: std::collections::HashSet<(Option<&str>, &str)> = live_tables
+        .iter()
+        .map(|table| (table.schema.as_deref(), table.name.as_str()))
+        .collect();
+
+    record
+        .tables
+        .into_iter()
+        .filter(|table| {
+            (table.columns.is_some() || table.sample_fields.is_some())
+                && live.contains(&(table.schema.as_deref(), table.name.as_str()))
+        })
+        .collect()
 }
 
 fn cache_key(profile_id: &str, database: Option<&str>) -> CacheKey {
@@ -370,6 +405,42 @@ mod tests {
             columns: None,
             ..table(name)
         }
+    }
+
+    #[test]
+    fn deep_details_by_id_uses_requested_row_not_latest_profile_capture() {
+        let (mut manager, profile_id) = make_manager();
+        let first = manager
+            .capture(
+                &profile_id,
+                Some("db1"),
+                &[table("original")],
+                SnapshotDepth::Deep,
+                10,
+            )
+            .expect("capture original");
+        let first_id = match first {
+            CaptureOutcome::Inserted { id } => id.to_string(),
+            CaptureOutcome::Deduped { .. } => panic!("first capture must insert"),
+        };
+        manager
+            .capture(
+                &profile_id,
+                Some("db1"),
+                &[table("newer")],
+                SnapshotDepth::Deep,
+                10,
+            )
+            .expect("capture newer");
+        let details = manager
+            .deep_details_by_id(
+                &first_id,
+                &[shallow_table("original"), shallow_table("newer")],
+            )
+            .expect("load exact snapshot");
+        assert_eq!(details.len(), 1);
+        assert_eq!(details[0].name, "original");
+        assert!(details[0].columns.is_some());
     }
 
     // --- latest_deep_details ---
@@ -562,6 +633,65 @@ mod tests {
         );
     }
 
+    #[test]
+    fn schema_snapshot_manager_deep_capture_upgrades_identical_shallow_empty_database() {
+        let (mut manager, profile_id) = make_manager();
+        let shallow = manager
+            .capture(&profile_id, Some("db1"), &[], SnapshotDepth::Shallow, 10)
+            .expect("capture shallow empty database");
+        let shallow_id = match shallow {
+            CaptureOutcome::Inserted { id } => id.to_string(),
+            CaptureOutcome::Deduped { .. } => panic!("initial capture must insert"),
+        };
+        let connection = MockConnection {
+            metadata: minimal_metadata(),
+            detail: table("unused"),
+            fail_lookup: false,
+            fail_lookup_table: None,
+            creation_metadata: None,
+            fail_metadata_lookup: false,
+        };
+        let deep = manager
+            .capture_deep(&connection, &profile_id, Some("db1"), &[], 10)
+            .expect("capture deep empty database");
+        let deep_id = match deep {
+            CaptureOutcome::Inserted { id } => id.to_string(),
+            CaptureOutcome::Deduped { .. } => panic!("deep must not reuse shallow row"),
+        };
+        assert_ne!(shallow_id, deep_id);
+        assert_eq!(
+            manager.get(&deep_id).unwrap().unwrap().depth,
+            SnapshotDepth::Deep
+        );
+        assert!(
+            manager
+                .deep_details_by_id(&deep_id, &[])
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(manager.list(&profile_id, Some("db1")).len(), 2);
+
+        let repeated = manager
+            .capture_deep(&connection, &profile_id, Some("db1"), &[], 10)
+            .expect("repeat deep capture");
+        assert_eq!(
+            repeated,
+            CaptureOutcome::Deduped {
+                existing_id: deep_id.clone()
+            }
+        );
+        let shallow_again = manager
+            .capture(&profile_id, Some("db1"), &[], SnapshotDepth::Shallow, 10)
+            .expect("shallow capture after deep");
+        assert_eq!(
+            shallow_again,
+            CaptureOutcome::Deduped {
+                existing_id: deep_id
+            }
+        );
+        assert_eq!(manager.list(&profile_id, Some("db1")).len(), 2);
+    }
+
     // --- capture_deep ---
 
     struct MockConnection {
@@ -708,6 +838,66 @@ mod tests {
         let loaded = mgr.get(&id.to_string()).unwrap().unwrap();
         assert_eq!(loaded.depth, SnapshotDepth::Deep);
         assert_eq!(loaded.tables[0].columns.as_ref().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn capture_deep_rejects_successful_shallow_details_without_persisting() {
+        let (mut manager, profile_id) = make_manager();
+        let connection = MockConnection {
+            metadata: minimal_metadata(),
+            detail: shallow_table("users"),
+            fail_lookup: false,
+            fail_lookup_table: None,
+            creation_metadata: None,
+            fail_metadata_lookup: false,
+        };
+
+        let result = manager.capture_deep(
+            &connection,
+            &profile_id,
+            Some("db1"),
+            &[shallow_table("users")],
+            10,
+        );
+        assert!(matches!(result, Err(StorageError::Data(_))), "{result:?}");
+        let error = result.unwrap_err().to_string();
+        assert!(
+            error.contains("users")
+                && error.contains("public")
+                && error.contains("incomplete deep details"),
+            "{error}"
+        );
+        assert!(manager.list(&profile_id, Some("db1")).is_empty());
+    }
+
+    #[test]
+    fn capture_deep_accepts_loaded_empty_columns() {
+        let (mut manager, profile_id) = make_manager();
+        let mut detail = table("users");
+        detail.columns = Some(Vec::new());
+        let connection = MockConnection {
+            metadata: minimal_metadata(),
+            detail,
+            fail_lookup: false,
+            fail_lookup_table: None,
+            creation_metadata: None,
+            fail_metadata_lookup: false,
+        };
+        let outcome = manager
+            .capture_deep(
+                &connection,
+                &profile_id,
+                Some("db1"),
+                &[shallow_table("users")],
+                10,
+            )
+            .expect("empty loaded columns are valid deep details");
+        let CaptureOutcome::Inserted { id } = outcome else {
+            panic!("expected inserted snapshot");
+        };
+        let record = manager.get(&id.to_string()).unwrap().unwrap();
+        assert_eq!(record.depth, SnapshotDepth::Deep);
+        assert!(record.tables[0].columns.as_ref().is_some_and(Vec::is_empty));
     }
 
     #[test]
