@@ -8,7 +8,7 @@ pub(crate) mod task;
 pub(crate) mod traits;
 pub(crate) mod value;
 
-pub use error::DbError;
+pub use error::{DbError, TransactionStateNote};
 pub use error_formatter::{
     ConnectionErrorFormatter, DefaultErrorFormatter, ErrorLocation, FormattedError,
     QueryErrorFormatter, sanitize_uri,

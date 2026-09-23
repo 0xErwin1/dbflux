@@ -446,6 +446,8 @@ fn run_gui() {
                 );
                 info!("IPC server started");
 
+                dbflux_ui_base::ui_automation::install(window, cx);
+
                 cx.new(|cx| Root::new(workspace, window, cx))
             })
             .expect("Failed to open main window");

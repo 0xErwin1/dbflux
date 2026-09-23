@@ -122,13 +122,21 @@ jobs:
             fi
           done
           sudo apt-get update
+          # The last five packages serve the vendored UI-automation MCP server
+          # (vendor/gpui-mcp): its screen capture backend, xcap, links PipeWire,
+          # libgbm, EGL and xcb-randr, and generates PipeWire bindings with bindgen.
           sudo apt-get install -y \
             mold \
             pkg-config \
             libssl-dev \
             libdbus-1-dev \
             libxkbcommon-dev \
-            libxkbcommon-x11-dev
+            libxkbcommon-x11-dev \
+            libpipewire-0.3-dev \
+            libgbm-dev \
+            libegl-dev \
+            libxcb-randr0-dev \
+            libclang-dev
 
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16  # v2
@@ -136,6 +144,11 @@ jobs:
           shared-key: ci-deterministic
           cache-targets: true
           cache-on-failure: true
+          # A cache saved from a pull request or a tag is scoped to that ref:
+          # nothing else can read it, yet it counts toward the repository's
+          # cache limit and evicts the caches main and the nightly rely on.
+          # Pull requests and releases still restore from main.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Run deterministic workspace tests
         run: cargo test --workspace --locked --features "sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,clickhouse,turso,aws"
@@ -178,6 +191,8 @@ jobs:
           shared-key: ci-live-integration
           cache-targets: true
           cache-on-failure: true
+          # Saved from main only; see the deterministic job.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # Testcontainers pulls images lazily at test time, so concurrent test
       # binaries race to pull the same tag and anonymous Docker Hub throttling
@@ -357,10 +372,12 @@ jobs:
           shared-key: ci-check-${{ matrix.os }}
           cache-targets: true
           cache-on-failure: true
+          # Saved from main only; see the deterministic job.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Cargo check
         if: needs.changes.outputs.rust != 'false'
-        run: cargo check --workspace --locked --features "sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,clickhouse,turso,aws${{ matrix.extra_features }}"
+        run: cargo check --workspace --locked --features "sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,clickhouse,turso,aws,ui-automation${{ matrix.extra_features }}"
 
       # Compiling the Windows process-containment path (Job Objects) does not prove
       # it reclaims a cancelled hook's process tree, and this is the only job that

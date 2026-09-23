@@ -24,11 +24,11 @@ use dbflux_core::{
     SchemaFeatures, SchemaForeignKeyBuilder, SchemaForeignKeyInfo, SchemaIndexBuilder,
     SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SortDirection, SqlDialect,
     SqlMutationGenerator, SshTunnelConfig, SyntaxInfo, TableBrowseRequest, TableCountRequest,
-    TableCreationMetadata, TableInfo, TransactionCapabilities, TransferFamily, Value, ViewInfo,
-    WhereOperator, field, field_password, field_required, field_use_uri, generate_delete_template,
-    generate_drop_table, generate_insert_template, generate_select_star, generate_truncate,
-    generate_update_template, render_semantic_filter_sql, sanitize_uri, ssh_tab,
-    validate_ddl_fragment, when_checked, when_unchecked, with_default,
+    TableCreationMetadata, TableInfo, TransactionCapabilities, TransactionStateNote,
+    TransferFamily, Value, ViewInfo, WhereOperator, field, field_password, field_required,
+    field_use_uri, generate_delete_template, generate_drop_table, generate_insert_template,
+    generate_select_star, generate_truncate, generate_update_template, render_semantic_filter_sql,
+    sanitize_uri, ssh_tab, validate_ddl_fragment, when_checked, when_unchecked, with_default,
 };
 use dbflux_ssh::SshTunnel;
 use tiberius::{AuthMethod, Client, Config, EncryptionLevel, SqlBrowser};
@@ -1462,6 +1462,108 @@ impl MssqlConnection {
 
         Ok(result)
     }
+
+    /// Read `@@TRANCOUNT` for the shared session.
+    ///
+    /// Runs as its own batch, so tiberius flushes whatever a previous (failed)
+    /// batch left on the wire before sending it, and the probe's stream is
+    /// fully consumed before the client is released.
+    fn transaction_count(&self) -> Result<i32, DbError> {
+        self.with_client(|runtime, client| {
+            runtime.block_on(async move {
+                let row = client
+                    .simple_query("SELECT @@TRANCOUNT")
+                    .await
+                    .map_err(|e| format_mssql_query_error(&e))?
+                    .into_row()
+                    .await
+                    .map_err(|e| format_mssql_query_error(&e))?;
+
+                row.as_ref()
+                    .map(|row| row.try_get::<i32, _>(0))
+                    .transpose()
+                    .map_err(|e| format_mssql_query_error(&e))?
+                    .flatten()
+                    .ok_or_else(|| DbError::query_failed("SELECT @@TRANCOUNT returned no value"))
+            })
+        })
+    }
+
+    /// Probe `@@TRANCOUNT` before a batch that could open a transaction.
+    ///
+    /// Returns `None` when the batch cannot open one (no round trip is spent)
+    /// or when the probe fails, in which case a failed batch is never treated
+    /// as the owner of an open transaction.
+    fn transaction_count_before_batch(&self, sql: &str) -> Option<i32> {
+        if !batch_can_open_transaction(sql) {
+            return None;
+        }
+
+        match self.transaction_count() {
+            Ok(count) => Some(count),
+            Err(error) => {
+                log::warn!("[QUERY] @@TRANCOUNT probe before batch failed: {}", error);
+                None
+            }
+        }
+    }
+
+    fn rollback_open_transaction(&self) -> Result<(), DbError> {
+        self.with_client(|runtime, client| {
+            runtime.block_on(async move {
+                client
+                    .simple_query("IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION")
+                    .await
+                    .map_err(|e| format_mssql_query_error(&e))?
+                    .into_results()
+                    .await
+                    .map_err(|e| format_mssql_query_error(&e))?;
+
+                Ok(())
+            })
+        })
+    }
+
+    /// Inspect the session after a failed batch and resolve the transaction
+    /// it may have left open.
+    ///
+    /// A transaction the batch itself opened (count went from 0 to > 0) is
+    /// rolled back; any other open transaction is left alone and reported.
+    /// If the session cannot be inspected, the original error is returned
+    /// unchanged.
+    fn resolve_failed_batch_transaction(
+        &self,
+        error: DbError,
+        transaction_count_before: Option<i32>,
+    ) -> DbError {
+        let transaction_count_after = match self.transaction_count() {
+            Ok(count) => count,
+            Err(probe_error) => {
+                log::warn!(
+                    "[QUERY] @@TRANCOUNT probe after failed batch failed: {}",
+                    probe_error
+                );
+                return error;
+            }
+        };
+
+        match failed_batch_transaction_action(transaction_count_before, transaction_count_after) {
+            FailedBatchTransactionAction::None => error,
+            FailedBatchTransactionAction::ReportStillOpen => {
+                error.with_transaction_note(TransactionStateNote::StillOpen)
+            }
+            FailedBatchTransactionAction::RollBack => match self.rollback_open_transaction() {
+                Ok(()) => error.with_transaction_note(TransactionStateNote::RolledBack),
+                Err(rollback_error) => {
+                    log::warn!(
+                        "[QUERY] Rolling back the transaction a failed batch opened failed: {}",
+                        rollback_error
+                    );
+                    error.with_transaction_note(TransactionStateNote::StillOpen)
+                }
+            },
+        }
+    }
 }
 
 /// Drive a tiberius `QueryStream` item by item, capturing column metadata from
@@ -1786,6 +1888,8 @@ impl Connection for MssqlConnection {
         };
         log::debug!("[QUERY] Executing: {}", sql_preview.replace('\n', " "));
 
+        let transaction_count_before = self.transaction_count_before_batch(&req.sql);
+
         match self.execute_simple(&req.sql) {
             Ok(result) => {
                 if self.cancelled.load(Ordering::SeqCst) {
@@ -1803,7 +1907,7 @@ impl Connection for MssqlConnection {
                 if self.cancelled.load(Ordering::SeqCst) || is_kill_error(&err) {
                     Err(DbError::Cancelled)
                 } else {
-                    Err(err)
+                    Err(self.resolve_failed_batch_transaction(err, transaction_count_before))
                 }
             }
         }
@@ -3675,6 +3779,262 @@ fn is_kill_error(err: &DbError) -> bool {
 }
 
 // ---------------------------------------------------------------------------
+// Failed-batch transaction handling
+// ---------------------------------------------------------------------------
+
+/// What to do with the session's transaction after a batch failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FailedBatchTransactionAction {
+    /// No transaction is open.
+    None,
+
+    /// The failed batch opened the open transaction, so roll it back.
+    RollBack,
+
+    /// A transaction is open that the batch is not known to have opened.
+    ReportStillOpen,
+}
+
+/// Decide how to treat the session's transaction after a failed batch.
+///
+/// `transaction_count_before` is `Some` only when the batch could open a
+/// transaction and `@@TRANCOUNT` was read before it ran. Only a transition
+/// from 0 to a positive count proves the batch opened the transaction.
+fn failed_batch_transaction_action(
+    transaction_count_before: Option<i32>,
+    transaction_count_after: i32,
+) -> FailedBatchTransactionAction {
+    if transaction_count_after <= 0 {
+        return FailedBatchTransactionAction::None;
+    }
+
+    if transaction_count_before == Some(0) {
+        FailedBatchTransactionAction::RollBack
+    } else {
+        FailedBatchTransactionAction::ReportStillOpen
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum BatchToken {
+    Word(String),
+    Comma,
+    Other,
+}
+
+/// Whether a T-SQL batch contains a statement that can open a transaction:
+/// `BEGIN TRAN[SACTION]`, `BEGIN DISTRIBUTED TRAN[SACTION]`, or a `SET` that
+/// turns on `IMPLICIT_TRANSACTIONS` (directly or through `ANSI_DEFAULTS`).
+///
+/// String literals, quoted and bracketed identifiers, and comments are
+/// skipped. Keywords are matched as adjacent tokens rather than by splitting
+/// statements, because T-SQL batches often omit semicolons. `BEGIN ... END`,
+/// `BEGIN TRY`, and `BEGIN CATCH` do not match.
+fn batch_can_open_transaction(sql: &str) -> bool {
+    let tokens = tokenize_batch(sql);
+    let mut remaining = tokens.as_slice();
+
+    while let [_, rest @ ..] = remaining {
+        if opens_explicit_transaction(remaining) || enables_implicit_transactions(remaining) {
+            return true;
+        }
+
+        remaining = rest;
+    }
+
+    false
+}
+
+fn opens_explicit_transaction(tokens: &[BatchToken]) -> bool {
+    match tokens {
+        [BatchToken::Word(begin), BatchToken::Word(keyword), ..]
+            if begin == "BEGIN" && is_transaction_keyword(keyword) =>
+        {
+            true
+        }
+        [
+            BatchToken::Word(begin),
+            BatchToken::Word(distributed),
+            BatchToken::Word(keyword),
+            ..,
+        ] if begin == "BEGIN"
+            && distributed == "DISTRIBUTED"
+            && is_transaction_keyword(keyword) =>
+        {
+            true
+        }
+        _ => false,
+    }
+}
+
+fn is_transaction_keyword(word: &str) -> bool {
+    word == "TRAN" || word == "TRANSACTION"
+}
+
+/// Matches `SET option [, option ...] ON` where one of the options turns on
+/// implicit transactions.
+fn enables_implicit_transactions(tokens: &[BatchToken]) -> bool {
+    let [BatchToken::Word(set), options @ ..] = tokens else {
+        return false;
+    };
+
+    if set != "SET" {
+        return false;
+    }
+
+    let mut remaining = options;
+    let mut enables_implicit = false;
+
+    loop {
+        let [BatchToken::Word(option), after_option @ ..] = remaining else {
+            return false;
+        };
+
+        if option == "IMPLICIT_TRANSACTIONS" || option == "ANSI_DEFAULTS" {
+            enables_implicit = true;
+        }
+
+        match after_option {
+            [BatchToken::Comma, next @ ..] => remaining = next,
+            [BatchToken::Word(value), ..] => return enables_implicit && value == "ON",
+            _ => return false,
+        }
+    }
+}
+
+/// Split a T-SQL batch into uppercase words, commas, and opaque tokens,
+/// dropping whitespace and comments. String literals and delimited
+/// identifiers become a single opaque token.
+fn tokenize_batch(sql: &str) -> Vec<BatchToken> {
+    let characters: Vec<char> = sql.chars().collect();
+    let mut tokens = Vec::new();
+    let mut index = 0;
+
+    while let Some(&current) = characters.get(index) {
+        let next = characters.get(index + 1).copied();
+
+        if current.is_whitespace() {
+            index += 1;
+            continue;
+        }
+
+        if current == '-' && next == Some('-') {
+            index = skip_line_comment(&characters, index);
+            continue;
+        }
+
+        if current == '/' && next == Some('*') {
+            index = skip_block_comment(&characters, index);
+            continue;
+        }
+
+        let closing_delimiter = match current {
+            '\'' => Some('\''),
+            '"' => Some('"'),
+            '[' => Some(']'),
+            _ => None,
+        };
+
+        if let Some(closing) = closing_delimiter {
+            index = skip_delimited(&characters, index, closing);
+            tokens.push(BatchToken::Other);
+            continue;
+        }
+
+        if is_batch_word_character(current) {
+            let start = index;
+
+            while characters
+                .get(index)
+                .is_some_and(|&character| is_batch_word_character(character))
+            {
+                index += 1;
+            }
+
+            let word: String = characters
+                .get(start..index)
+                .unwrap_or_default()
+                .iter()
+                .collect();
+            tokens.push(BatchToken::Word(word.to_ascii_uppercase()));
+            continue;
+        }
+
+        tokens.push(if current == ',' {
+            BatchToken::Comma
+        } else {
+            BatchToken::Other
+        });
+        index += 1;
+    }
+
+    tokens
+}
+
+fn is_batch_word_character(character: char) -> bool {
+    character.is_alphanumeric() || matches!(character, '_' | '@' | '#' | '$')
+}
+
+/// Returns the index just past the end of the `--` comment starting at `start`.
+fn skip_line_comment(characters: &[char], start: usize) -> usize {
+    characters
+        .get(start..)
+        .unwrap_or_default()
+        .iter()
+        .position(|&character| character == '\n')
+        .map_or(characters.len(), |offset| start + offset + 1)
+}
+
+/// Returns the index just past the `/* ... */` comment starting at `start`.
+/// SQL Server allows block comments to nest.
+fn skip_block_comment(characters: &[char], start: usize) -> usize {
+    let mut depth = 0usize;
+    let mut index = start;
+
+    while let Some(&current) = characters.get(index) {
+        let next = characters.get(index + 1).copied();
+
+        if current == '/' && next == Some('*') {
+            depth += 1;
+            index += 2;
+        } else if current == '*' && next == Some('/') {
+            depth = depth.saturating_sub(1);
+            index += 2;
+
+            if depth == 0 {
+                return index;
+            }
+        } else {
+            index += 1;
+        }
+    }
+
+    characters.len()
+}
+
+/// Returns the index just past the delimited token starting at `start`,
+/// treating a doubled closing delimiter as an escaped character.
+fn skip_delimited(characters: &[char], start: usize, closing: char) -> usize {
+    let mut index = start + 1;
+
+    while let Some(&current) = characters.get(index) {
+        if current != closing {
+            index += 1;
+            continue;
+        }
+
+        if characters.get(index + 1) == Some(&closing) {
+            index += 2;
+            continue;
+        }
+
+        return index + 1;
+    }
+
+    characters.len()
+}
+
+// ---------------------------------------------------------------------------
 // OUTPUT-clause SQL builders
 // ---------------------------------------------------------------------------
 //
@@ -5160,6 +5520,70 @@ mod tests {
         ))));
         assert!(!is_kill_error(&DbError::Cancelled));
         assert!(!is_kill_error(&DbError::NotSupported("nope".to_string())));
+    }
+
+    #[test]
+    fn batch_can_open_transaction_detects_transaction_openers() {
+        for sql in [
+            "BEGIN TRAN",
+            "begin transaction t1",
+            "BEGIN DISTRIBUTED TRANSACTION",
+            "begin distributed tran",
+            "SET IMPLICIT_TRANSACTIONS ON",
+            "SET ANSI_NULLS, IMPLICIT_TRANSACTIONS ON",
+            "SET ANSI_DEFAULTS ON",
+            "-- move stock\nBEGIN TRAN\nINSERT INTO t VALUES (1)\nCOMMIT",
+            "SELECT 1 BEGIN TRANSACTION UPDATE t SET a = 1 COMMIT",
+            "/* setup */ BEGIN TRY BEGIN TRAN; SELECT 1; COMMIT; END TRY BEGIN CATCH ROLLBACK; END CATCH",
+        ] {
+            assert!(batch_can_open_transaction(sql), "should match: {sql}");
+        }
+    }
+
+    #[test]
+    fn batch_can_open_transaction_ignores_non_transaction_begin_and_quoted_text() {
+        for sql in [
+            "BEGIN TRY SELECT 1 END TRY",
+            "BEGIN CATCH SELECT ERROR_MESSAGE() END CATCH",
+            "IF 1 = 1 BEGIN SELECT 1 END",
+            "SELECT 'BEGIN TRAN'",
+            "SELECT N'it''s BEGIN TRAN'",
+            "SELECT 1 AS [BEGIN TRAN]",
+            "SELECT 1 AS \"BEGIN TRAN\"",
+            "/* BEGIN TRAN */ SELECT 1",
+            "/* outer /* BEGIN TRAN */ still comment */ SELECT 1",
+            "-- BEGIN TRAN\nSELECT 1",
+            "SET IMPLICIT_TRANSACTIONS OFF",
+            "SET NOCOUNT ON",
+            "SET @begin = 1",
+            "COMMIT TRAN",
+        ] {
+            assert!(!batch_can_open_transaction(sql), "should not match: {sql}");
+        }
+    }
+
+    #[test]
+    fn failed_batch_rolls_back_only_a_transaction_it_opened() {
+        assert_eq!(
+            failed_batch_transaction_action(Some(0), 1),
+            FailedBatchTransactionAction::RollBack
+        );
+        assert_eq!(
+            failed_batch_transaction_action(Some(1), 2),
+            FailedBatchTransactionAction::ReportStillOpen
+        );
+        assert_eq!(
+            failed_batch_transaction_action(None, 1),
+            FailedBatchTransactionAction::ReportStillOpen
+        );
+        assert_eq!(
+            failed_batch_transaction_action(Some(0), 0),
+            FailedBatchTransactionAction::None
+        );
+        assert_eq!(
+            failed_batch_transaction_action(None, 0),
+            FailedBatchTransactionAction::None
+        );
     }
 
     fn col(name: &str) -> ColumnMeta {

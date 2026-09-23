@@ -453,13 +453,14 @@ jobs:
         # No --locked: the version stamp above mutates Cargo.toml; see the Linux build
         # step for the full rationale.
         #
-        # The amd64 entry relaxes the release profile's link-time optimization. It is
-        # the only job that holds two build trees on one runner — the cross target and
-        # the host artifacts that produce it — and `lto = "thin"` with a single codegen
-        # unit makes the final binary the peak of both memory and temporary disk. That
-        # peak is what kills rustc there with SIGBUS. Splitting the work across codegen
-        # units trades some speed and size in the Intel binary for a build that fits.
-        # Every other target keeps the profile from Cargo.toml untouched.
+        # Both macOS entries turn off the release profile's link-time optimization.
+        # With `lto = "thin"` the final `dbflux` crate is a single rustc process that
+        # needs more memory than the 7 GB runner has: it peaks near 9 GB on a Linux
+        # host, and on the runner it swapped for over 70 minutes until the job timed
+        # out, while the same build without LTO links in seconds. The amd64 cross
+        # build hit the same limit first, as a SIGBUS, because it also holds the host
+        # artifacts. Both binaries trade some size and runtime speed for a build that
+        # fits. Linux and Windows keep the profile from Cargo.toml.
         #
         # The macOS runners have 3 cores and 7 GB of memory, and these builds are
         # the slowest in the matrix. A sampler records swap usage and the largest
@@ -468,10 +469,8 @@ jobs:
         # pressure instead of guessed at. The samples are written outside the
         # build step so they survive a timeout.
         run: |
-          if [ "${{ matrix.arch }}" = "amd64" ]; then
-            export CARGO_PROFILE_RELEASE_LTO=false
-            export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
-          fi
+          export CARGO_PROFILE_RELEASE_LTO=false
+          export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
 
           SAMPLES="$RUNNER_TEMP/memory-samples.log"
           (

@@ -3042,6 +3042,8 @@ impl ConnectionManagerWindow {
         platform::apply_window_options(&mut options, 600.0, 500.0);
 
         if let Err(error) = cx.open_window(options, move |window, cx| {
+            dbflux_ui_base::ui_automation::install(window, cx);
+
             let wizard = cx.new(|cx| {
                 let mut wizard = SsoWizard::new(app_state.clone(), window, cx);
                 wizard.open(window, cx);

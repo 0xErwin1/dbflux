@@ -1348,6 +1348,16 @@ impl Workspace {
                             .map(|d| (d.id(), d.id() == *new_id))
                             .collect();
 
+                        // The newly active tab is authoritative over the rail.
+                        // Hide it first: an `OpenInspector` the tab emits from
+                        // `set_active_tab` is queued behind this and re-opens
+                        // it, while a tab that owns nothing leaves it hidden.
+                        // `hide`, not `close`: `close` emits `Closed`, which
+                        // would wipe the new tab's saved rail state.
+                        this.workspace_inspector.update(cx, |insp, cx| {
+                            insp.hide(cx);
+                        });
+
                         // Hide inactive documents first, then mount the newly
                         // active inspector last. Otherwise document ordering
                         // could let an old tab's CloseInspector event win and
@@ -1411,9 +1421,18 @@ impl Workspace {
                         this.tab_manager
                             .update(cx, |mgr, cx| mgr.focus_active(window, cx));
                     }
-                    TabManagerEvent::Opened(_)
-                    | TabManagerEvent::Closed(_)
-                    | TabManagerEvent::Reordered => {
+                    TabManagerEvent::Closed(_) => {
+                        // With a tab left, the `Activated` that follows hands
+                        // the rail over. With none, nothing owns it any more.
+                        if this.tab_manager.read(cx).active_id().is_none() {
+                            this.workspace_inspector.update(cx, |insp, cx| {
+                                insp.hide(cx);
+                            });
+                        }
+
+                        this.write_session_manifest(cx);
+                    }
+                    TabManagerEvent::Opened(_) | TabManagerEvent::Reordered => {
                         this.write_session_manifest(cx);
                     }
                 }
@@ -2216,7 +2235,7 @@ mod tab_close_request_tests {
         CloseAction, DirtySummaryEntry, UnsavedChangesOutcome, UnsavedChangesRequest,
     };
     use crate::ui::views::workspace::{
-        DocumentFlushOutcome, FocusTarget, Workspace, await_document_flush,
+        DocumentFlushOutcome, FocusTarget, Workspace, WorkspaceInspectorEvent, await_document_flush,
     };
     use dbflux_core::QueryLanguage;
     use dbflux_core::document_id::DocumentId;
@@ -3582,5 +3601,185 @@ mod tab_close_request_tests {
         );
 
         drop(task);
+    }
+
+    // === Inspector rail follows the active tab ===
+
+    /// Mounts content into the workspace rail exactly as a document does: an
+    /// `OpenInspector` relayed by the tab manager.
+    fn open_rail(window: &mut VisualTestContext, workspace: &Entity<Workspace>) {
+        window.update(|_, cx| {
+            let content: gpui::AnyView = cx.new(|_| gpui::EmptyView).into();
+            workspace.update(cx, |workspace, cx| {
+                workspace.tab_manager.update(cx, |_manager, cx| {
+                    cx.emit(TabManagerEvent::OpenInspector {
+                        title: "Row".into(),
+                        content,
+                    });
+                });
+            });
+        });
+        window.run_until_parked();
+
+        assert!(
+            rail_is_open(window, workspace),
+            "the rail starts open with content"
+        );
+    }
+
+    fn rail_is_open(window: &mut VisualTestContext, workspace: &Entity<Workspace>) -> bool {
+        window.update(|_, cx| workspace.read(cx).workspace_inspector.read(cx).is_open())
+    }
+
+    fn activate_tab(window: &mut VisualTestContext, workspace: &Entity<Workspace>, id: DocumentId) {
+        window.update(|_, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace
+                    .tab_manager
+                    .update(cx, |manager, cx| manager.activate(id, cx));
+            });
+        });
+        window.run_until_parked();
+    }
+
+    fn close_tab(window: &mut VisualTestContext, workspace: &Entity<Workspace>, id: DocumentId) {
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                assert!(
+                    workspace.close_tab(id, window, cx),
+                    "a clean tab closes immediately"
+                );
+            });
+        });
+        window.run_until_parked();
+    }
+
+    fn record_tab_events(
+        window: &mut VisualTestContext,
+        workspace: &Entity<Workspace>,
+    ) -> Rc<RefCell<Vec<TabManagerEvent>>> {
+        let events: Rc<RefCell<Vec<TabManagerEvent>>> = Rc::new(RefCell::new(Vec::new()));
+        let sink = events.clone();
+
+        window.update(|_, cx| {
+            let manager = workspace.read(cx).tab_manager.clone();
+            cx.subscribe(&manager, move |_, event: &TabManagerEvent, _| {
+                sink.borrow_mut().push(event.clone());
+            })
+            .detach();
+        });
+
+        events
+    }
+
+    /// Switching to a tab that owns nothing in the rail hides it, instead of
+    /// leaving the previous tab's content on screen. The rail is hidden, not
+    /// closed: a `Closed` would make the tab forget its saved rail state.
+    #[gpui::test]
+    fn switching_to_a_tab_that_owns_nothing_hides_the_rail(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let owns_nothing = open_code_tab(window, &workspace, &app_state);
+        let _owner = open_code_tab(window, &workspace, &app_state);
+        open_rail(window, &workspace);
+
+        let closed_events = Rc::new(Cell::new(0));
+        let closed_sink = closed_events.clone();
+        window.update(|_, cx| {
+            let inspector = workspace.read(cx).workspace_inspector.clone();
+            cx.subscribe(&inspector, move |_, event: &WorkspaceInspectorEvent, _| {
+                if matches!(event, WorkspaceInspectorEvent::Closed) {
+                    closed_sink.set(closed_sink.get() + 1);
+                }
+            })
+            .detach();
+        });
+
+        activate_tab(window, &workspace, owns_nothing);
+
+        assert!(
+            !rail_is_open(window, &workspace),
+            "a tab that owns nothing must not show the previous tab's rail"
+        );
+        assert_eq!(
+            closed_events.get(),
+            0,
+            "a tab switch hides the rail and must never close it"
+        );
+    }
+
+    /// A tab that mounts its content again when it becomes active keeps the
+    /// rail open: the hide runs first, so the tab's own `OpenInspector` wins.
+    #[gpui::test]
+    fn a_tab_that_remounts_its_content_keeps_the_rail_open(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let owner = open_code_tab(window, &workspace, &app_state);
+        let _other = open_code_tab(window, &workspace, &app_state);
+
+        window.update(|_, cx| {
+            let manager = workspace.read(cx).tab_manager.clone();
+            cx.subscribe(&manager, move |manager, event: &TabManagerEvent, cx| {
+                if matches!(event, TabManagerEvent::Activated(id) if *id == owner) {
+                    let content: gpui::AnyView = cx.new(|_| gpui::EmptyView).into();
+                    manager.update(cx, |_manager, cx| {
+                        cx.emit(TabManagerEvent::OpenInspector {
+                            title: "Row".into(),
+                            content,
+                        });
+                    });
+                }
+            })
+            .detach();
+        });
+
+        activate_tab(window, &workspace, owner);
+
+        assert!(
+            rail_is_open(window, &workspace),
+            "the active tab's own content must re-open the rail after the hide"
+        );
+    }
+
+    /// Closing the active tab runs the activation pass for the tab that takes
+    /// over, so a successor that owns nothing hides the rail.
+    #[gpui::test]
+    fn closing_the_active_tab_activates_the_tab_that_takes_over(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let successor = open_code_tab(window, &workspace, &app_state);
+        let closed = open_code_tab(window, &workspace, &app_state);
+        open_rail(window, &workspace);
+
+        let events = record_tab_events(window, &workspace);
+        close_tab(window, &workspace, closed);
+
+        let recorded = events.borrow().clone();
+        assert!(
+            matches!(
+                recorded.as_slice(),
+                [TabManagerEvent::Closed(first), TabManagerEvent::Activated(second)]
+                    if *first == closed && *second == successor
+            ),
+            "closing the active tab must activate its successor, got {recorded:?}"
+        );
+        assert!(
+            !rail_is_open(window, &workspace),
+            "a successor that owns nothing must not show the closed tab's rail"
+        );
+    }
+
+    /// With no tab left, nothing owns the rail any more.
+    #[gpui::test]
+    fn closing_the_last_tab_hides_the_rail(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let only = open_code_tab(window, &workspace, &app_state);
+        open_rail(window, &workspace);
+
+        close_tab(window, &workspace, only);
+
+        let active_id = window.update(|_, cx| workspace.read(cx).tab_manager.read(cx).active_id());
+        assert_eq!(active_id, None, "no tab is left");
+        assert!(
+            !rail_is_open(window, &workspace),
+            "closing the last tab must hide the rail"
+        );
     }
 }

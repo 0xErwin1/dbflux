@@ -44,6 +44,11 @@ members = [
     "crates/dbflux_portability",
     "crates/dbflux_driver_s3",
     "crates/dbflux_i18n",
+    # Upstream themixednuts/gpui-mcp crates for UI automation; see vendor/gpui-mcp/VENDOR.md.
+    "vendor/gpui-mcp/crates/gpui-mcp",
+    "vendor/gpui-mcp/crates/gpui-mcp-protocol",
+    "vendor/gpui-mcp/crates/gpui-mcp-server",
+    "vendor/gpui-mcp/crates/gpui-mcp-capture",
 ]
 default-members = ["crates/dbflux"]
 # The website is not a crate. Excluding it keeps cargo from descending into it
@@ -112,6 +117,7 @@ petgraph = "0.7"
 gpui = { package = "gpui-pre", version = "=0.3.5" }
 gpui-component = { version = "=0.6.1", features = ["tree-sitter"] }
 gpui-pre-platform = { version = "=0.3.5", default-features = false, features = ["wayland", "x11"] }
+gpui-mcp = { path = "vendor/gpui-mcp/crates/gpui-mcp" }
 # Grammars for the code-editor highlighter (gpui-component's highlighter::LanguageRegistry).
 # gpui-component's own `tree-sitter-languages` feature pulls in ~30 grammars; DBFlux only
 # ever asks the editor for the modes `QueryLanguage::editor_mode()` can return (sql,
@@ -207,9 +213,10 @@ indexing_slicing = "warn"
 
 # The schema visualizer pans and zooms by handing one transform to a subtree
 # (`crates/dbflux_ui_document/src/schema_viz/mod.rs`), which needs the
-# `ElementTransform` API that upstream gpui does not carry yet. The vendored
-# crate is the published gpui-pre 0.3.5 source with
-# `vendor/gpui-pre/element-transform.patch` applied; see `vendor/gpui-pre/VENDOR.md`
+# `ElementTransform` API that upstream gpui does not carry yet, and UI automation
+# needs the frame-observer hooks. The vendored crate is the published gpui-pre 0.3.5
+# source with `vendor/gpui-pre/element-transform.patch` and
+# `vendor/gpui-pre/frame-observer.patch` applied; see `vendor/gpui-pre/VENDOR.md`
 # for the provenance and `vendor/gpui-pre/refresh.sh` for the update procedure.
 [patch.crates-io]
 gpui-pre = { path = "vendor/gpui-pre" }

@@ -8,7 +8,7 @@ use crate::connection_manager::ExportTarget;
 use crate::labels::ssh_tunnels_delete_body;
 use crate::ssh_shared::{self, SshAuthSelection};
 use dbflux_components::controls::Button;
-use dbflux_components::controls::{GpuiInput as Input, InputState};
+use dbflux_components::controls::{GpuiInput as Input, InputContentType, InputState};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::focus_frame;
 use dbflux_components::primitives::{Icon as FluxIcon, Label};
@@ -367,6 +367,8 @@ impl SshTunnelsSection {
         field: SshFormField,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        let is_secret = matches!(field, SshFormField::Passphrase | SshFormField::Password);
+
         div()
             .flex()
             .flex_col()
@@ -376,7 +378,11 @@ impl SshTunnelsSection {
                 focus_frame(
                     is_focused,
                     Some(primary),
-                    layout::compact_input_shell(Input::new(input).small()),
+                    layout::compact_input_shell(
+                        Input::new(input).small().when(is_secret, |input| {
+                            input.content_type(InputContentType::Password)
+                        }),
+                    ),
                     cx,
                 )
                 .on_mouse_down(

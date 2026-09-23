@@ -2615,3 +2615,165 @@ mod tests {
         assert_ne!(en, es);
     }
 }
+
+#[cfg(test)]
+mod rail_tests {
+    use crate::code::CodeDocument;
+    use crate::handle::DocumentEvent;
+    use dbflux_components::theme;
+    use dbflux_core::{ColumnKind, ColumnMeta, QueryLanguage, QueryResult, Value};
+    use dbflux_storage::bootstrap::StorageRuntime;
+    use dbflux_ui_base::AppStateEntity;
+    use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
+    use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};
+    use std::cell::Cell;
+    use std::rc::Rc;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    fn init_test_runtime(cx: &mut TestAppContext) -> Entity<AppStateEntity> {
+        cx.update(gpui_component::init);
+        cx.update(theme::init);
+        cx.update(|cx| {
+            let host = cx.new(|_| ToastHost::new());
+            cx.set_global(ToastGlobal { host });
+        });
+
+        cx.update(|cx| {
+            cx.new(|_| {
+                let storage_runtime =
+                    StorageRuntime::in_memory().expect("isolated storage runtime");
+                AppStateEntity::new_with_storage_runtime(storage_runtime)
+                    .expect("test storage setup")
+            })
+        })
+    }
+
+    fn two_row_result() -> Arc<QueryResult> {
+        let columns = ["id", "name"]
+            .iter()
+            .map(|name| ColumnMeta {
+                name: (*name).to_string(),
+                type_name: "text".to_string(),
+                kind: ColumnKind::Text,
+                nullable: true,
+                is_primary_key: false,
+            })
+            .collect();
+        let rows = (0..2)
+            .map(|_| vec![Value::Text("v".to_string()), Value::Text("w".to_string())])
+            .collect();
+
+        Arc::new(QueryResult::table(columns, rows, None, Duration::ZERO))
+    }
+
+    /// Builds a code tab whose result grid shows the row inspector that follows
+    /// the cursor, the way it is after the user opened it on a result.
+    fn code_tab_with_row_inspector(
+        window: &mut VisualTestContext,
+        app_state: Entity<AppStateEntity>,
+    ) -> Entity<CodeDocument> {
+        let document = window.update(|window, cx| {
+            cx.new(|cx| {
+                CodeDocument::new_with_language(app_state, None, QueryLanguage::Sql, window, cx)
+            })
+        });
+
+        window.update(|window, cx| {
+            document.update(cx, |document, cx| {
+                document.setup_data_grid(two_row_result(), "SELECT 1".to_string(), window, cx);
+            });
+
+            let grid = document
+                .read(cx)
+                .active_result_grid()
+                .expect("the result opens a grid");
+            grid.update(cx, |grid, cx| {
+                grid.set_row_inspector_tracking(true, cx);
+                grid.select_first(cx);
+            });
+        });
+        window.run_until_parked();
+
+        document
+    }
+
+    /// Counts the `OpenInspector` events `document` emits from now on.
+    fn count_inspector_opens(
+        window: &mut VisualTestContext,
+        document: &Entity<CodeDocument>,
+    ) -> Rc<Cell<usize>> {
+        let opens = Rc::new(Cell::new(0));
+        let sink = opens.clone();
+
+        window.update(|_, cx| {
+            cx.subscribe(document, move |_, event: &DocumentEvent, _| {
+                if matches!(event, DocumentEvent::OpenInspector { .. }) {
+                    sink.set(sink.get() + 1);
+                }
+            })
+            .detach();
+        });
+
+        opens
+    }
+
+    fn activate(window: &mut VisualTestContext, document: &Entity<CodeDocument>) {
+        window.update(|_, cx| {
+            document.update(cx, |document, cx| document.set_active_tab(true, cx));
+        });
+        window.run_until_parked();
+    }
+
+    /// Returning to a code tab re-mounts the inspector its visible result grid
+    /// owns, since the workspace hid the rail when the tab became active.
+    #[gpui::test]
+    fn activating_a_code_tab_remounts_its_result_inspector(cx: &mut TestAppContext) {
+        let app_state = init_test_runtime(cx);
+        let window = cx.add_empty_window();
+        let document = code_tab_with_row_inspector(window, app_state);
+        let opens = count_inspector_opens(window, &document);
+
+        activate(window, &document);
+
+        assert_eq!(
+            opens.get(),
+            1,
+            "the visible result grid must re-mount its inspector"
+        );
+    }
+
+    /// A rail the user dismissed stays closed when the tab becomes active again.
+    #[gpui::test]
+    fn activating_after_the_user_closed_the_rail_does_not_remount_it(cx: &mut TestAppContext) {
+        let app_state = init_test_runtime(cx);
+        let window = cx.add_empty_window();
+        let document = code_tab_with_row_inspector(window, app_state);
+
+        window.update(|_, cx| {
+            document.update(cx, |document, cx| document.mark_inspector_closed(cx));
+        });
+        let opens = count_inspector_opens(window, &document);
+
+        activate(window, &document);
+
+        assert_eq!(opens.get(), 0, "a dismissed rail must not come back");
+    }
+
+    /// A code tab without results owns nothing in the rail.
+    #[gpui::test]
+    fn activating_a_code_tab_without_results_mounts_nothing(cx: &mut TestAppContext) {
+        let app_state = init_test_runtime(cx);
+        let window = cx.add_empty_window();
+        let document = window.update(|window, cx| {
+            cx.new(|cx| {
+                CodeDocument::new_with_language(app_state, None, QueryLanguage::Sql, window, cx)
+            })
+        });
+        let opens = count_inspector_opens(window, &document);
+
+        activate(window, &document);
+
+        assert_eq!(opens.get(), 0, "a tab without results has no inspector");
+    }
+}

@@ -8,9 +8,9 @@ use crate::typography::AppFonts;
 pub use gpui_component::RopeExt;
 pub use gpui_component::input::{
     CodeActionProvider, CompletionProvider, Enter as InputEnter, Escape as InputEscape,
-    IndentInline as InputIndentInline, Input as GpuiInput, InputEvent, InputState,
-    MoveDown as InputMoveDown, MoveUp as InputMoveUp, OutdentInline as InputOutdentInline,
-    Position as InputPosition, Rope, Search as InputSearch,
+    IndentInline as InputIndentInline, Input as GpuiInput, InputContentType, InputEvent,
+    InputState, MoveDown as InputMoveDown, MoveUp as InputMoveUp,
+    OutdentInline as InputOutdentInline, Position as InputPosition, Rope, Search as InputSearch,
 };
 
 actions!(
@@ -52,6 +52,7 @@ pub struct Input {
     w_full: bool,
     appearance: bool,
     cleanable: bool,
+    secret: bool,
 }
 
 impl Input {
@@ -64,6 +65,7 @@ impl Input {
             w_full: false,
             appearance: true,
             cleanable: false,
+            secret: false,
         }
     }
 
@@ -96,6 +98,17 @@ impl Input {
         self.cleanable = cleanable;
         self
     }
+
+    /// Marks the input as holding a secret.
+    ///
+    /// The input gets the password content type, so its value never reaches
+    /// the accessibility tree or rendered-frame observers (UI automation), even
+    /// while a show-password toggle draws it in plain text. What is drawn on
+    /// screen still follows the state's `masked` flag.
+    pub fn secret(mut self, secret: bool) -> Self {
+        self.secret = secret;
+        self
+    }
 }
 
 impl RenderOnce for Input {
@@ -121,6 +134,10 @@ impl RenderOnce for Input {
 
         if self.cleanable {
             input = input.cleanable(true);
+        }
+
+        if self.secret {
+            input = input.content_type(InputContentType::Password);
         }
 
         input

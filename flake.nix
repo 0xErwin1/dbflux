@@ -78,7 +78,7 @@
         {
           # Development shell
           devShells.default = pkgs.mkShell {
-            nativeBuildInputs = dbflux.nativeBuildInputs ++ [
+            nativeBuildInputs = dbflux.nativeBuildInputs ++ dbflux.automationNativeBuildInputs ++ [
               rustToolchain
               pkgs.rust-analyzer
               opensslStatic.dev
@@ -90,7 +90,9 @@
               pkgs.cargo-machete
             ];
 
-            buildInputs = dbflux.buildInputs;
+            # The UI-automation MCP server (vendor/gpui-mcp) is a workspace member,
+            # so `cargo check --workspace` needs its capture libraries too.
+            buildInputs = dbflux.buildInputs ++ dbflux.automationBuildInputs;
 
             LD_LIBRARY_PATH = dbflux.runtimeLibraryPath;
             ZSTD_SYS_USE_PKG_CONFIG = "1";

@@ -23,6 +23,8 @@ impl Workspace {
         platform::apply_window_options(&mut options, 600.0, 500.0);
 
         match cx.open_window(options, |window, cx| {
+            dbflux_ui_base::ui_automation::install(window, cx);
+
             let manager = cx.new(|cx| ConnectionManagerWindow::new(app_state, window, cx));
             cx.new(|cx| Root::new(manager, window, cx))
         }) {
@@ -77,6 +79,8 @@ impl Workspace {
         platform::apply_window_options(&mut options, 600.0, 500.0);
 
         if let Err(error) = cx.open_window(options, |window, cx| {
+            dbflux_ui_base::ui_automation::install(window, cx);
+
             let manager =
                 cx.new(|cx| ConnectionManagerWindow::new_for_edit(app_state, &profile, window, cx));
             cx.new(|cx| Root::new(manager, window, cx))
@@ -106,6 +110,8 @@ impl Workspace {
         platform::apply_window_options(&mut options, 600.0, 500.0);
 
         if let Err(error) = cx.open_window(options, |window, cx| {
+            dbflux_ui_base::ui_automation::install(window, cx);
+
             let manager = cx
                 .new(|cx| ConnectionManagerWindow::new_in_folder(app_state, folder_id, window, cx));
             cx.new(|cx| Root::new(manager, window, cx))

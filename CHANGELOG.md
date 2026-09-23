@@ -11,6 +11,17 @@ All notable changes to DBFlux will be documented in this file.
   selection; collapsed sidebar entry reveals a temporary preview without
   changing the explicit collapse choice.
 
+* **Opt-in UI automation for agents and tests** — a development build compiled
+  with the `ui-automation` feature exposes each window to a local MCP server
+  (vendored `gpui-mcp`) that can read the rendered element tree, click, type,
+  run app commands and take screenshots. The feature is off by default and is
+  never part of release builds; the bridge only accepts processes of the same
+  user. On Wayland compositors, screenshots require running DBFlux under
+  XWayland. Password, write-only and passphrase inputs now expose the password
+  role to accessibility clients, so their value is never readable through the
+  element tree, even while a show-password toggle displays it. See
+  `docs/UI_AUTOMATION.md`.
+
 * **Safe automatic Deep capture on connect and async snapshot picker** — a
   relational connection with a known database captures a Deep snapshot only
   when every table has loaded columns or sample fields. Creation metadata is
@@ -148,6 +159,29 @@ All notable changes to DBFlux will be documented in this file.
   `%{placeholder}` — a failure that is otherwise silent in the UI.
 
 ### Fixed
+
+* **The inspector rail follows the active tab** — switching to a tab, or
+  closing the active one, could leave the right-side rail showing the row
+  inspector, value panel, or schema inspector of a tab that was no longer
+  active. The tab that becomes active now decides what the rail shows, and the
+  rail hides when that tab has nothing to show or when the last tab closes.
+  Code and schema diagram tabs restore their inspector when you return to them.
+
+* **A failed script no longer leaves the connection stuck in a transaction** —
+  a script that opened a transaction and failed partway never reached its
+  `COMMIT`, so the transaction stayed open on the connection every tab shares.
+  On PostgreSQL every later query failed with `25P02` until a manual
+  `ROLLBACK`. On MySQL, MariaDB, SQLite, and SQL Server later queries ran inside
+  the leftover transaction, where its partial writes could be committed by
+  accident. The driver now rolls back a transaction the failed script opened
+  itself and leaves one that was already open, and the error says which of the
+  two happened.
+
+* **`ON COMMIT` no longer shows as a syntax error** — the editor flagged
+  PostgreSQL's `ON COMMIT { DROP | DELETE ROWS | PRESERVE ROWS }` clause on
+  `CREATE TEMP TABLE` as `Unexpected`, because the bundled SQL grammar has no
+  rule for it. The clause is now skipped before the editor checks the syntax,
+  and errors elsewhere in the script are still reported at their position.
 
 * **The schema diagram follows the selected language** — its toolbar, context
   menu, layout and export menus, inspector, loading and error messages, toasts,

@@ -18,13 +18,14 @@
 use crate::{
     Action, AnyDrag, AnyElement, AnyTooltip, AnyView, App, Bounds, ClickEvent, DispatchPhase,
     Display, Element, ElementId, Entity, EntityId, ExternalDragPayload, ExternalDragPayloadSource,
-    FileDropEvent, FocusHandle, Global, GlobalElementId, Hitbox, HitboxBehavior, HitboxId,
-    InspectorElementId, IntoElement, IsZero, KeyContext, KeyDownEvent, KeyUpEvent, KeyboardButton,
-    KeyboardClickEvent, LayoutId, LongPressEvent, ModifiersChangedEvent, MouseButton,
-    MouseClickEvent, MouseDownEvent, MouseExitEvent, MouseMoveEvent, MousePressureEvent,
-    MouseUpEvent, OngoingScroll, Overflow, ParentElement, PinchEvent, Pixels, Point, Render,
-    ScrollWheelEvent, SharedString, Size, Style, StyleRefinement, Styled, Task, TooltipId,
-    TouchPhase, Visibility, Window, WindowControlArea, point, px, size,
+    FileDropEvent, FocusHandle, FrameAction, FrameNodeData, Global, GlobalElementId, Hitbox,
+    HitboxBehavior, HitboxId, InspectorElementId, IntoElement, IsZero, KeyContext, KeyDownEvent,
+    KeyUpEvent, KeyboardButton, KeyboardClickEvent, LayoutId, LongPressEvent,
+    ModifiersChangedEvent, MouseButton, MouseClickEvent, MouseDownEvent, MouseExitEvent,
+    MouseMoveEvent, MousePressureEvent, MouseUpEvent, OngoingScroll, Overflow, ParentElement,
+    PinchEvent, Pixels, Point, Render, ScrollWheelEvent, SharedString, Size, Style,
+    StyleRefinement, Styled, Task, TooltipId, TouchPhase, Visibility, Window, WindowControlArea,
+    point, px, size,
 };
 use collections::HashMap;
 use gpui_util::ResultExt;
@@ -34,6 +35,7 @@ use std::{
     any::{Any, TypeId},
     cell::{Cell, RefCell},
     cmp::Ordering,
+    collections::BTreeMap,
     fmt::Debug,
     marker::PhantomData,
     mem,
@@ -1432,6 +1434,48 @@ pub trait StatefulInteractiveElement: InteractiveElement {
         self
     }
 
+    /// Set whether the control rejects user input.
+    fn aria_disabled(mut self, disabled: bool) -> Self {
+        self.interactivity().aria.disabled = disabled;
+        self
+    }
+
+    /// Exclude this element and its descendants from accessibility tools.
+    /// Give the element a stable ID so GPUI can create an accessibility node.
+    fn aria_hidden(mut self, hidden: bool) -> Self {
+        self.interactivity().aria.hidden = hidden;
+        self
+    }
+
+    /// Set whether an editable control is read-only.
+    fn aria_read_only(mut self, read_only: bool) -> Self {
+        self.interactivity().aria.read_only = read_only;
+        self
+    }
+
+    /// Attach bounded non-secret context to rendered-frame tooling.
+    fn frame_metadata(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.interactivity()
+            .frame_metadata
+            .insert(key.into(), value.into());
+        self
+    }
+
+    /// Advertise an interaction implemented by the rendered control backend.
+    fn frame_action(mut self, action: FrameAction) -> Self {
+        if !self.interactivity().frame_actions.contains(&action) {
+            self.interactivity().frame_actions.push(action);
+        }
+        self
+    }
+
+    /// Mark this element's value for redaction by rendered-frame observers.
+    /// The canonical AccessKit tree still exposes values to assistive technology.
+    fn frame_redacted(mut self, redacted: bool) -> Self {
+        self.interactivity().frame_redacted = redacted;
+        self
+    }
+
     /// Set the minimum numeric value for this element.
     fn aria_min_numeric_value(mut self, value: f64) -> Self {
         self.interactivity().aria.min_numeric_value = Some(value);
@@ -1903,10 +1947,23 @@ impl Element for Div {
         self.interactivity
             .override_role
             .filter(|role| *role != accesskit::Role::GenericContainer)
+            .or_else(|| {
+                (!self.interactivity.click_listeners.is_empty()).then_some(accesskit::Role::Button)
+            })
+            .or_else(|| {
+                self.interactivity
+                    .aria
+                    .hidden
+                    .then_some(accesskit::Role::Group)
+            })
     }
 
     fn write_a11y_info(&self, node: &mut accesskit::Node) {
         self.interactivity.write_a11y_info(node);
+    }
+
+    fn frame_node(&self) -> Option<FrameNodeData> {
+        Some(self.interactivity.frame_node())
     }
 
     fn a11y_synthetic_children(
@@ -2120,6 +2177,9 @@ pub(crate) struct AriaProperties {
     pub(crate) column_index: Option<usize>,
     pub(crate) row_count: Option<usize>,
     pub(crate) column_count: Option<usize>,
+    pub(crate) disabled: bool,
+    pub(crate) hidden: bool,
+    pub(crate) read_only: bool,
 }
 
 /// The interactivity struct. Powers all of the general-purpose
@@ -2191,6 +2251,9 @@ pub struct Interactivity {
     pub(crate) report_active_descendant_focus: bool,
     pub(crate) override_role: Option<accesskit::Role>,
     pub(crate) aria: AriaProperties,
+    pub(crate) frame_metadata: BTreeMap<String, String>,
+    pub(crate) frame_actions: Vec<FrameAction>,
+    pub(crate) frame_redacted: bool,
 
     #[cfg(any(feature = "inspector", debug_assertions))]
     pub(crate) source_location: Option<&'static core::panic::Location<'static>>,
@@ -3598,6 +3661,15 @@ impl Interactivity {
         if let Some(count) = self.aria.column_count {
             node.set_column_count(count);
         }
+        if self.aria.disabled {
+            node.set_disabled();
+        }
+        if self.aria.hidden {
+            node.set_hidden();
+        }
+        if self.aria.read_only {
+            node.set_read_only();
+        }
         if !self.click_listeners.is_empty() {
             node.add_action(accesskit::Action::Click);
         }
@@ -3606,6 +3678,43 @@ impl Interactivity {
         }
         for (action, _) in &self.a11y_action_listeners {
             node.add_action(*action);
+        }
+    }
+
+    pub(crate) fn frame_node(&self) -> FrameNodeData {
+        let mut actions = self.frame_actions.clone();
+        if self.hover_style.is_some()
+            || self.group_hover_style.is_some()
+            || self.hover_listener.is_some()
+            || !self.mouse_move_listeners.is_empty()
+            || self.tooltip_builder.is_some()
+        {
+            if !actions.contains(&FrameAction::Hover) {
+                actions.push(FrameAction::Hover);
+            }
+        }
+        if self.drag_listener.is_some() {
+            if !actions.contains(&FrameAction::Drag) {
+                actions.push(FrameAction::Drag);
+            }
+        }
+        if self.scroll_offset.is_some()
+            || self.tracked_scroll_handle.is_some()
+            || !self.scroll_wheel_listeners.is_empty()
+        {
+            if !actions.contains(&FrameAction::Scroll) {
+                actions.push(FrameAction::Scroll);
+            }
+        }
+        FrameNodeData {
+            actions,
+            metadata: self.frame_metadata.clone(),
+            redacted: self.frame_redacted,
+            fallback_role: if !self.click_listeners.is_empty() {
+                accesskit::Role::Button
+            } else {
+                accesskit::Role::Group
+            },
         }
     }
 }
@@ -4121,6 +4230,14 @@ where
 
     fn write_a11y_info(&self, node: &mut accesskit::Node) {
         self.element.write_a11y_info(node);
+    }
+
+    fn frame_node(&self) -> Option<FrameNodeData> {
+        self.element.frame_node()
+    }
+
+    fn frame_text(&self) -> Option<&str> {
+        self.element.frame_text()
     }
 
     fn a11y_synthetic_children(
