@@ -678,7 +678,8 @@ See `docs/DASHBOARDS.md` for the full reference (including instance metrics and 
 - Sidebar: `crates/dbflux_ui_sidebar/src/` displays two tabs — Connections (schema tree with folder organization, drag-drop, multi-selection) and Scripts (file/folder management for saved query files, script hooks, and other user files). Switch tabs with `q` or `e` keys. Shows tables/collections, columns, indexes per database category with lazy loading. Re-exported via a shim at `crates/dbflux_ui/src/ui/views/sidebar/mod.rs`.
 - Driver-owned child resources under collections/containers are published through generic `CollectionChildInfo` metadata. The sidebar must not infer driver-specific children from names, field types, or driver IDs.
 - Routines (functions, procedures, aggregates, window functions) appear as a per-schema "Routines" folder when the driver sets the `ROUTINES` capability and populates the `schema_routines` seam. The UI renders the folder generically; it does not special-case any driver.
-- Sidebar dock: `crates/dbflux_ui/src/ui/dock/sidebar_dock.rs` provides collapsible, resizable sidebar with ToggleSidebar command (Ctrl+B).
+- Sidebar dock: `crates/dbflux_ui/src/ui/dock/sidebar_dock.rs` remains collapsible and resizable with ToggleSidebar (Ctrl+B), and manages transient reveal separately from the explicit collapse choice.
+- `dbflux_ui_base::object_tree` provides a generic lazy hierarchy with one coordinator per `AppStateEntity`. Core/app boundaries fence session and target-slot application; sidebar and wizard adapters retain compatible IDs while keeping interaction state local to each consumer. This does not cover every sidebar-specific family.
 - Connection tree: `crates/dbflux_core/src/connection/tree.rs` models folders and connections as a tree structure; `tree_manager.rs` handles in-memory management.
 
 ### Driver System
