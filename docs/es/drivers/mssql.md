@@ -276,13 +276,15 @@ Requiere el permiso `VIEW SERVER STATE`.
   aplica como diff y debe gestionarse a mano.
 - Los snapshots profundos capturados antes del soporte de metadatos de creación
   (DBF-161 PR1) no llevan metadatos; usarlos como referencia del diff niega la
-  creación y el snapshot debe recapturarse. La captura automática al conectar
-  de la UI es actualmente **shallow**, así que un snapshot **guardado** solo
-  lleva metadatos de creación si fue capturado programáticamente mediante la
-  API de snapshots profundos; cuando la referencia del diff es una **conexión
-  viva**, los metadatos se obtienen por el seam genérico
-  `table_creation_metadata` y la generación funciona sin ningún snapshot
-  almacenado.
+  creación y el snapshot debe recapturarse. Si se conoce la base de datos de
+  la sesión, la UI captura un snapshot profundo al conectar solo cuando todas
+  las tablas tienen columnas o campos de muestra cargados; incluye metadatos
+  de creación donde estén disponibles. Los errores de captura dejan la
+  conexión abierta sin guardar un snapshot profundo parcial. Reconecta para
+  obtener uno nuevo y válido. Una **conexión viva** aún puede proporcionar
+  metadatos mediante el mecanismo genérico `table_creation_metadata` sin
+  snapshot guardado. Los metadatos ausentes, incompletos o bloqueados siguen
+  impidiendo generar `CREATE TABLE`.
 - Las tablas con cualquier columna de tipo carácter (`char`, `varchar`,
   `nchar`, `nvarchar`, `text`, `ntext`) siempre se niegan:
   `sys.columns.collation_name` no es nulo para toda columna de carácter
