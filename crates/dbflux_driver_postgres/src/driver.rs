@@ -4151,6 +4151,146 @@ impl<'a> FromSql<'a> for PgTextSearchText {
     }
 }
 
+/// Wrapper that renders `NUMERIC` values as exact decimal text.
+///
+/// The `postgres` crate's `f64` decoder only accepts FLOAT8, and a float could
+/// not hold NUMERIC's precision anyway. This decoder reproduces the server-side
+/// output of `numeric_out`, including `NaN`, `Infinity` and `-Infinity`.
+struct PgNumericText(String);
+
+const NUMERIC_SIGN_POSITIVE: u16 = 0x0000;
+const NUMERIC_SIGN_NEGATIVE: u16 = 0x4000;
+const NUMERIC_SIGN_NAN: u16 = 0xC000;
+const NUMERIC_SIGN_POSITIVE_INFINITY: u16 = 0xD000;
+const NUMERIC_SIGN_NEGATIVE_INFINITY: u16 = 0xF000;
+const NUMERIC_MAX_DISPLAY_SCALE: u16 = 0x3FFF;
+const NUMERIC_DIGIT_BASE: i16 = 10_000;
+const NUMERIC_HEADER_LENGTH: usize = 8;
+
+fn numeric_decode_error(message: &'static str) -> Box<dyn std::error::Error + Sync + Send> {
+    Box::new(std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        message,
+    ))
+}
+
+fn read_numeric_u16(
+    raw: &[u8],
+    offset: usize,
+) -> Result<u16, Box<dyn std::error::Error + Sync + Send>> {
+    let bytes = raw
+        .get(offset..offset + 2)
+        .ok_or_else(|| numeric_decode_error("numeric payload ended unexpectedly"))?
+        .try_into()
+        .map_err(|_| numeric_decode_error("invalid numeric u16 payload"))?;
+
+    Ok(u16::from_be_bytes(bytes))
+}
+
+/// Decodes the binary `NUMERIC` format: a header of digit count, weight, sign
+/// and display scale, followed by base-10000 digit groups. `weight` is the
+/// base-10000 exponent of the first group, so the value's integer part spans
+/// groups `0..=weight`. Every digit PostgreSQL itself can hold (up to 131072
+/// before the point and 16383 after) is rendered.
+fn decode_numeric(raw: &[u8]) -> Result<PgNumericText, Box<dyn std::error::Error + Sync + Send>> {
+    let digit_count = read_numeric_u16(raw, 0)? as i16;
+    let weight = read_numeric_u16(raw, 2)? as i16;
+    let sign = read_numeric_u16(raw, 4)?;
+    let display_scale = read_numeric_u16(raw, 6)?;
+
+    match sign {
+        NUMERIC_SIGN_NAN => return Ok(PgNumericText("NaN".to_string())),
+        NUMERIC_SIGN_POSITIVE_INFINITY => return Ok(PgNumericText("Infinity".to_string())),
+        NUMERIC_SIGN_NEGATIVE_INFINITY => return Ok(PgNumericText("-Infinity".to_string())),
+        NUMERIC_SIGN_POSITIVE | NUMERIC_SIGN_NEGATIVE => {}
+        _ => return Err(numeric_decode_error("invalid numeric sign")),
+    }
+
+    if display_scale > NUMERIC_MAX_DISPLAY_SCALE {
+        return Err(numeric_decode_error("invalid numeric display scale"));
+    }
+
+    let digit_count = usize::try_from(digit_count)
+        .map_err(|_| numeric_decode_error("negative numeric digit count"))?;
+    if raw.len() != NUMERIC_HEADER_LENGTH + digit_count * 2 {
+        return Err(numeric_decode_error("numeric payload length mismatch"));
+    }
+
+    let mut digit_groups = Vec::with_capacity(digit_count);
+    for index in 0..digit_count {
+        let group = read_numeric_u16(raw, NUMERIC_HEADER_LENGTH + index * 2)? as i16;
+        if !(0..NUMERIC_DIGIT_BASE).contains(&group) {
+            return Err(numeric_decode_error("numeric digit group out of range"));
+        }
+        digit_groups.push(group);
+    }
+
+    let group_at = |position: i32| -> i16 {
+        usize::try_from(position)
+            .ok()
+            .and_then(|index| digit_groups.get(index).copied())
+            .unwrap_or(0)
+    };
+
+    let weight = i32::from(weight);
+
+    let mut integer_part = String::new();
+    for position in 0..=weight {
+        integer_part.push_str(&format!("{:04}", group_at(position)));
+    }
+
+    let integer_part = integer_part.trim_start_matches('0');
+
+    let mut output = String::new();
+    if sign == NUMERIC_SIGN_NEGATIVE {
+        output.push('-');
+    }
+    if integer_part.is_empty() {
+        output.push('0');
+    } else {
+        output.push_str(integer_part);
+    }
+
+    let display_scale = usize::from(display_scale);
+    if display_scale > 0 {
+        let mut fractional_part = String::with_capacity(display_scale + 4);
+        let mut position = weight + 1;
+        while fractional_part.len() < display_scale {
+            fractional_part.push_str(&format!("{:04}", group_at(position)));
+            position += 1;
+        }
+        fractional_part.truncate(display_scale);
+
+        output.push('.');
+        output.push_str(&fractional_part);
+    }
+
+    Ok(PgNumericText(output))
+}
+
+impl<'a> FromSql<'a> for PgNumericText {
+    fn from_sql(
+        _ty: &Type,
+        raw: &'a [u8],
+    ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        decode_numeric(raw)
+    }
+
+    fn accepts(ty: &Type) -> bool {
+        *ty == Type::NUMERIC
+    }
+}
+
+/// Maps a NUMERIC decode result to a cell value. A decode failure becomes
+/// `Unsupported` rather than `Null`, so it cannot pass for a real SQL NULL.
+fn numeric_decode_to_value<E>(type_name: &str, decoded: Result<Option<PgNumericText>, E>) -> Value {
+    match decoded {
+        Ok(Some(PgNumericText(text))) => Value::Decimal(text),
+        Ok(None) => Value::Null,
+        Err(_) => Value::Unsupported(type_name.to_string()),
+    }
+}
+
 fn text_search_array_values_to_value(values: Option<Vec<Option<PgTextSearchText>>>) -> Value {
     match values {
         Some(values) => Value::Array(
@@ -4385,10 +4525,14 @@ fn postgres_value_to_value(row: &postgres::Row, idx: usize) -> Value {
             })
             .unwrap_or(Value::Null),
 
-        "float8" | "numeric" => row
+        "float8" => row
             .try_get::<_, Option<f64>>(idx)
             .map(|value| value.map(Value::Float).unwrap_or(Value::Null))
             .unwrap_or(Value::Null),
+
+        "numeric" => {
+            numeric_decode_to_value(type_name, row.try_get::<_, Option<PgNumericText>>(idx))
+        }
 
         "text" | "varchar" | "bpchar" | "name" | "citext" => row
             .try_get::<_, Option<String>>(idx)
@@ -5515,14 +5659,17 @@ fn get_schema_routines(
 #[cfg(test)]
 mod tests {
     use super::{
-        POSTGRES_DIALECT, PgTextSearchText, PgUriSslMode, PgVectorText, PostgresCodeGenerator,
-        PostgresDialect, PostgresDriver, PostgresErrorFormatter, TSQUERY_OP_AND, TSQUERY_OP_NOT,
-        TSQUERY_OP_OR, TSQUERY_OP_PHRASE, build_keyword_conn_string, decode_pgvector_halfvec,
+        NUMERIC_SIGN_NAN, NUMERIC_SIGN_NEGATIVE, NUMERIC_SIGN_NEGATIVE_INFINITY,
+        NUMERIC_SIGN_POSITIVE, NUMERIC_SIGN_POSITIVE_INFINITY, POSTGRES_DIALECT, PgNumericText,
+        PgTextSearchText, PgUriSslMode, PgVectorText, PostgresCodeGenerator, PostgresDialect,
+        PostgresDriver, PostgresErrorFormatter, TSQUERY_OP_AND, TSQUERY_OP_NOT, TSQUERY_OP_OR,
+        TSQUERY_OP_PHRASE, build_keyword_conn_string, decode_numeric, decode_pgvector_halfvec,
         decode_pgvector_sparsevec, decode_pgvector_vector, decode_tsquery, decode_tsvector,
         format_pgvector_dense, format_pgvector_float4, format_pgvector_sparse,
-        inject_password_into_pg_uri, parse_pg_uri_sslmode, pgvector_array_decode_to_value,
-        pgvector_array_values_to_value, plan_postgres_semantic_request, prokind_to_routine_kind,
-        text_search_array_values_to_value, unsupported_type_names, with_client_identity,
+        inject_password_into_pg_uri, numeric_decode_to_value, parse_pg_uri_sslmode,
+        pgvector_array_decode_to_value, pgvector_array_values_to_value,
+        plan_postgres_semantic_request, prokind_to_routine_kind, text_search_array_values_to_value,
+        unsupported_type_names, with_client_identity,
     };
     use dbflux_core::{
         AddColumnRequest, AlterColumnRequest, CodeGenerator, ColumnAssignment, ConnectionProfile,
@@ -5796,6 +5943,181 @@ mod tests {
         ]);
 
         assert!(decode_tsquery(&payload).is_err());
+    }
+
+    fn numeric_payload(weight: i16, sign: u16, display_scale: u16, groups: &[u16]) -> Vec<u8> {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&(groups.len() as u16).to_be_bytes());
+        payload.extend_from_slice(&weight.to_be_bytes());
+        payload.extend_from_slice(&sign.to_be_bytes());
+        payload.extend_from_slice(&display_scale.to_be_bytes());
+
+        for group in groups {
+            payload.extend_from_slice(&group.to_be_bytes());
+        }
+
+        payload
+    }
+
+    fn decoded_numeric(payload: &[u8]) -> String {
+        let PgNumericText(text) = decode_numeric(payload).expect("valid numeric payload");
+
+        text
+    }
+
+    #[test]
+    fn numeric_with_scale_keeps_trailing_zeros() {
+        let payload = numeric_payload(0, NUMERIC_SIGN_POSITIVE, 2, &[1123, 4000]);
+
+        assert_eq!(decoded_numeric(&payload), "1123.40");
+    }
+
+    #[test]
+    fn numeric_zero_renders_with_its_display_scale() {
+        assert_eq!(
+            decoded_numeric(&numeric_payload(0, NUMERIC_SIGN_POSITIVE, 0, &[])),
+            "0"
+        );
+        assert_eq!(
+            decoded_numeric(&numeric_payload(0, NUMERIC_SIGN_POSITIVE, 2, &[])),
+            "0.00"
+        );
+    }
+
+    #[test]
+    fn numeric_fraction_below_one_keeps_leading_zero_groups() {
+        assert_eq!(
+            decoded_numeric(&numeric_payload(-1, NUMERIC_SIGN_POSITIVE, 4, &[1])),
+            "0.0001"
+        );
+        assert_eq!(
+            decoded_numeric(&numeric_payload(-2, NUMERIC_SIGN_POSITIVE, 8, &[1])),
+            "0.00000001"
+        );
+    }
+
+    #[test]
+    fn negative_numeric_renders_its_sign() {
+        let payload = numeric_payload(0, NUMERIC_SIGN_NEGATIVE, 1, &[12, 5000]);
+
+        assert_eq!(decoded_numeric(&payload), "-12.5");
+    }
+
+    #[test]
+    fn numeric_without_scale_renders_integer_digits() {
+        assert_eq!(
+            decoded_numeric(&numeric_payload(
+                2,
+                NUMERIC_SIGN_POSITIVE,
+                0,
+                &[1, 2345, 6789]
+            )),
+            "123456789"
+        );
+        assert_eq!(
+            decoded_numeric(&numeric_payload(1, NUMERIC_SIGN_POSITIVE, 0, &[1])),
+            "10000"
+        );
+    }
+
+    #[test]
+    fn numeric_with_large_weight_is_not_capped() {
+        assert_eq!(
+            decoded_numeric(&numeric_payload(100, NUMERIC_SIGN_POSITIVE, 0, &[1])),
+            format!("1{}", "0".repeat(400))
+        );
+
+        let largest = decoded_numeric(&numeric_payload(
+            i16::MAX,
+            NUMERIC_SIGN_POSITIVE,
+            0,
+            &[9999],
+        ));
+        assert_eq!(largest.len(), 131_072);
+        assert!(largest.starts_with("99990"));
+    }
+
+    #[test]
+    fn numeric_accepts_postgres_maximum_display_scale() {
+        let text = decoded_numeric(&numeric_payload(-1, NUMERIC_SIGN_POSITIVE, 16_383, &[5000]));
+
+        assert_eq!(text.len(), "0.".len() + 16_383);
+        assert!(text.starts_with("0.5000"));
+
+        let payload = numeric_payload(-1, NUMERIC_SIGN_POSITIVE, 16_384, &[5000]);
+        assert!(decode_numeric(&payload).is_err());
+    }
+
+    #[test]
+    fn numeric_special_values_render_like_postgres() {
+        assert_eq!(
+            decoded_numeric(&numeric_payload(0, NUMERIC_SIGN_NAN, 0, &[])),
+            "NaN"
+        );
+        assert_eq!(
+            decoded_numeric(&numeric_payload(0, NUMERIC_SIGN_POSITIVE_INFINITY, 0, &[])),
+            "Infinity"
+        );
+        assert_eq!(
+            decoded_numeric(&numeric_payload(0, NUMERIC_SIGN_NEGATIVE_INFINITY, 0, &[])),
+            "-Infinity"
+        );
+    }
+
+    #[test]
+    fn malformed_numeric_payloads_are_rejected() {
+        let valid = numeric_payload(0, NUMERIC_SIGN_POSITIVE, 2, &[1123, 4000]);
+
+        let mut truncated_digits = valid.clone();
+        truncated_digits.pop();
+
+        let mut trailing_bytes = valid.clone();
+        trailing_bytes.push(0);
+
+        let mut negative_digit_count = valid.clone();
+        negative_digit_count[..2].copy_from_slice(&(-1i16).to_be_bytes());
+
+        let malformed_payloads = [
+            valid[..7].to_vec(),
+            truncated_digits,
+            trailing_bytes,
+            negative_digit_count,
+            numeric_payload(0, NUMERIC_SIGN_POSITIVE, 0, &[10_000]),
+            numeric_payload(0, 0x8000, 0, &[1]),
+        ];
+
+        for payload in malformed_payloads {
+            assert!(decode_numeric(&payload).is_err(), "{payload:?}");
+        }
+    }
+
+    #[test]
+    fn numeric_decoder_accepts_only_numeric_columns() {
+        assert!(<PgNumericText as FromSql>::accepts(&Type::NUMERIC));
+        assert!(!<PgNumericText as FromSql>::accepts(&Type::FLOAT8));
+    }
+
+    #[test]
+    fn numeric_cells_keep_null_distinct_from_decode_failures() {
+        let payload = numeric_payload(0, NUMERIC_SIGN_POSITIVE, 2, &[1123, 4000]);
+
+        let decoded = Option::<PgNumericText>::from_sql_nullable(&Type::NUMERIC, Some(&payload));
+        assert_eq!(
+            numeric_decode_to_value("numeric", decoded),
+            Value::Decimal("1123.40".to_string())
+        );
+
+        let null = Option::<PgNumericText>::from_sql_nullable(&Type::NUMERIC, None);
+        assert_eq!(numeric_decode_to_value("numeric", null), Value::Null);
+
+        let malformed = Option::<PgNumericText>::from_sql_nullable(&Type::NUMERIC, Some(&[0, 1]));
+        let value = numeric_decode_to_value("numeric", malformed);
+
+        assert_eq!(value, Value::Unsupported("numeric".to_string()));
+        assert_eq!(
+            unsupported_type_names(&[vec![value]]),
+            ["numeric".to_string()].into()
+        );
     }
 
     #[test]

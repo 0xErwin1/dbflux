@@ -75,6 +75,12 @@ impl CommandDispatcher for Workspace {
             }
         }
 
+        #[cfg(feature = "mcp")]
+        if cmd == Command::Cancel && self.active_governance_panel.is_some() {
+            self.close_governance_panel(window, cx);
+            return true;
+        }
+
         if self.focus_target == FocusTarget::Sidebar
             && self.sidebar.read(cx).search_input_is_focused(window, cx)
             && sidebar_tree_command_is_blocked_by_search_focus(cmd)

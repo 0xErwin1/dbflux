@@ -160,6 +160,27 @@ All notable changes to DBFlux will be documented in this file.
   table. `table_details` now reports `ObjectNotFound` for absent relations;
   real zero-column tables and supported views, partitioned tables and
   partitions keep loading normally (#675).
+
+* **The MCP approvals overlay can be closed** — once opened, the approvals
+  overlay stayed on screen until the audit viewer was opened. It now closes
+  from the close button in its header, with Escape, or with a click on the
+  dimmed area around it, and keyboard focus returns to where it was before.
+
+* **PostgreSQL `NUMERIC` columns show their values** — `NUMERIC` and `DECIMAL`
+  values read back as `NULL` in query results, table browsing, MCP
+  `select_data`, exports, and the rows returned after an insert, update, or
+  delete. They now show the exact decimal PostgreSQL stores, including the
+  declared scale (`1123.40`), very large or very precise values, and `NaN`,
+  `Infinity`, and `-Infinity`. A value that still cannot be decoded is reported
+  as an unsupported type instead of passing for `NULL`.
+
+* **The inspector rail follows the active tab** — switching to a tab, or
+  closing the active one, could leave the right-side rail showing the row
+  inspector, value panel, or schema inspector of a tab that was no longer
+  active. The tab that becomes active now decides what the rail shows, and the
+  rail hides when that tab has nothing to show or when the last tab closes.
+  Code and schema diagram tabs restore their inspector when you return to them.
+
 * **A failed script no longer leaves the connection stuck in a transaction** —
   a script that opened a transaction and failed partway never reached its
   `COMMIT`, so the transaction stayed open on the connection every tab shares.

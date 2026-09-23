@@ -101,7 +101,7 @@ impl CodeDocument {
             // set_active_tab
             {
                 let e = entity.clone();
-                Box::new(move |active, cx| e.update(cx, |d, _cx| d.set_active_tab(active)))
+                Box::new(move |active, cx| e.update(cx, |d, cx| d.set_active_tab(active, cx)))
             },
             // set_refresh_policy
             {
@@ -136,6 +136,13 @@ impl CodeDocument {
                 })
             },
         );
+
+        handle.mark_inspector_closed = Some({
+            let e = entity.clone();
+            Box::new(move |cx| {
+                e.update(cx, |d, cx| d.mark_inspector_closed(cx));
+            })
+        });
 
         handle.on_close = Some({
             let entity = entity.clone();
