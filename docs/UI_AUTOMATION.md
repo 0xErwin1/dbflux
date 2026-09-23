@@ -47,6 +47,11 @@ flowchart LR
   DBFlux. That includes every string DBFlux draws: connection names, hosts, query
   text and query results. Only enable the feature on a machine and account you
   trust, and only for development or testing.
+- The bridge acts as the user. A query an agent types into an editor and runs
+  goes through the same path as one you type yourself, not through the database
+  MCP server, so the MCP policies, approvals and MCP audit trail do not apply to
+  it. Do not point an automation session at a connection whose data you would
+  not let an unattended script modify.
 - The descriptor is removed when the window closes or DBFlux exits.
 
 ## Building
