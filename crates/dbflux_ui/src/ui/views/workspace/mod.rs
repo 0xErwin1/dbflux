@@ -3554,4 +3554,99 @@ mod tab_close_request_tests {
             "closing the last tab must hide the rail"
         );
     }
+
+    #[cfg(feature = "mcp")]
+    fn open_approvals_overlay(window: &mut VisualTestContext, workspace: &Entity<Workspace>) {
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.dispatch(Command::OpenMcpApprovals, window, cx);
+            });
+        });
+        window.run_until_parked();
+
+        assert!(
+            approvals_overlay_is_open(window, workspace),
+            "opening the approvals must show the overlay"
+        );
+    }
+
+    #[cfg(feature = "mcp")]
+    fn approvals_overlay_is_open(
+        window: &mut VisualTestContext,
+        workspace: &Entity<Workspace>,
+    ) -> bool {
+        window.update(|_, cx| workspace.read(cx).active_governance_panel.is_some())
+    }
+
+    /// Regression: Cancel had no handler for the approvals overlay, so the
+    /// only way out was opening the audit viewer.
+    #[cfg(feature = "mcp")]
+    #[gpui::test]
+    fn cancel_closes_the_approvals_overlay(cx: &mut TestAppContext) {
+        let (workspace, _app_state, window) = new_workspace(cx);
+        open_approvals_overlay(window, &workspace);
+
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.dispatch(Command::Cancel, window, cx);
+            });
+        });
+        window.run_until_parked();
+
+        assert!(
+            !approvals_overlay_is_open(window, &workspace),
+            "Cancel must close the approvals overlay"
+        );
+    }
+
+    /// Escape travels the real key path: the workspace keymap resolves it to
+    /// Cancel only if the overlay left keyboard focus inside the workspace.
+    #[cfg(feature = "mcp")]
+    #[gpui::test]
+    fn escape_closes_the_approvals_overlay(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        open_code_tab(window, &workspace, &app_state);
+        open_approvals_overlay(window, &workspace);
+
+        window.simulate_keystrokes("escape");
+
+        assert!(
+            !approvals_overlay_is_open(window, &workspace),
+            "Escape must close the approvals overlay"
+        );
+    }
+
+    /// A click on the dimmed backdrop closes the overlay, while a click inside
+    /// the panel must leave it open.
+    #[cfg(feature = "mcp")]
+    #[gpui::test]
+    fn backdrop_click_closes_the_approvals_overlay(cx: &mut TestAppContext) {
+        use gpui::{Modifiers, point, px};
+
+        let (workspace, _app_state, window) = new_workspace(cx);
+        open_approvals_overlay(window, &workspace);
+
+        let viewport = window.update(|window, _| window.viewport_size());
+        assert!(
+            viewport.width > px(1080.0) && viewport.height > px(680.0),
+            "the test window must leave backdrop visible around the panel, got {viewport:?}"
+        );
+
+        let panel_center = point(viewport.width / 2.0, viewport.height / 2.0);
+        window.simulate_click(panel_center, Modifiers::none());
+        window.run_until_parked();
+
+        assert!(
+            approvals_overlay_is_open(window, &workspace),
+            "a click inside the panel must not close the overlay"
+        );
+
+        window.simulate_click(point(px(4.0), px(4.0)), Modifiers::none());
+        window.run_until_parked();
+
+        assert!(
+            !approvals_overlay_is_open(window, &workspace),
+            "a click on the backdrop must close the overlay"
+        );
+    }
 }

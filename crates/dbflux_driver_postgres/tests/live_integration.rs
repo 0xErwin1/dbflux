@@ -541,6 +541,96 @@ fn postgres_text_search_text_matches_server_output() -> Result<(), DbError> {
     })
 }
 
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_numeric_values_read_as_exact_decimals() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE numeric_display (
+                id INTEGER PRIMARY KEY,
+                amount NUMERIC(10, 2),
+                unconstrained NUMERIC
+            )",
+        ))?;
+        connection.execute(&QueryRequest::new(
+            "INSERT INTO numeric_display VALUES
+                (1, 1123.40, 0.0001),
+                (2, -12.5, 'NaN'),
+                (3, 0, 'Infinity'),
+                (4, NULL, '-Infinity'),
+                (5, 99999999.99, ('1' || repeat('0', 400) || '.000125')::numeric)",
+        ))?;
+
+        let mut result = connection.execute(&QueryRequest::new(
+            "SELECT amount, amount::text, unconstrained, unconstrained::text
+             FROM numeric_display ORDER BY id",
+        ))?;
+        assert!(result.take_unsupported_types().is_empty());
+
+        for row in &result.rows {
+            for (value_index, text_index) in [(0, 1), (2, 3)] {
+                match (&row[value_index], &row[text_index]) {
+                    (Value::Null, Value::Null) => {}
+                    (Value::Decimal(decimal), Value::Text(text)) => assert_eq!(decimal, text),
+                    (value, text) => {
+                        panic!("NUMERIC value {value:?} does not match server text {text:?}")
+                    }
+                }
+            }
+        }
+
+        let rows = &result.rows;
+        assert_eq!(rows[0][0], Value::Decimal("1123.40".to_string()));
+        assert_eq!(rows[0][2], Value::Decimal("0.0001".to_string()));
+        assert_eq!(rows[1][0], Value::Decimal("-12.50".to_string()));
+        assert_eq!(rows[1][2], Value::Decimal("NaN".to_string()));
+        assert_eq!(rows[2][0], Value::Decimal("0.00".to_string()));
+        assert_eq!(rows[2][2], Value::Decimal("Infinity".to_string()));
+        assert_eq!(rows[3][0], Value::Null);
+        assert_eq!(rows[3][2], Value::Decimal("-Infinity".to_string()));
+        assert_eq!(
+            rows[4][2],
+            Value::Decimal(format!("1{}.000125", "0".repeat(400)))
+        );
+
+        let browsed = connection.browse_table(
+            &TableBrowseRequest::new(TableRef::with_schema("public", "numeric_display"))
+                .with_filter("id = 1")
+                .with_pagination(Pagination::Offset {
+                    limit: 10,
+                    offset: 0,
+                }),
+        )?;
+        assert_eq!(
+            browsed.rows,
+            vec![vec![
+                Value::Int(1),
+                Value::Decimal("1123.40".to_string()),
+                Value::Decimal("0.0001".to_string()),
+            ]]
+        );
+
+        let inserted = connection.insert_row(&RowInsert::new(
+            "numeric_display".to_string(),
+            Some("public".to_string()),
+            vec!["id".to_string(), "amount".to_string()],
+            vec![Value::Int(6), Value::Decimal("1123.4".to_string())],
+        ))?;
+        assert_eq!(
+            inserted.returning_row,
+            Some(vec![
+                Value::Int(6),
+                Value::Decimal("1123.40".to_string()),
+                Value::Null,
+            ])
+        );
+
+        Ok(())
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Browse and count
 // ---------------------------------------------------------------------------
