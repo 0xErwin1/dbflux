@@ -37,7 +37,10 @@ use dbflux_ssh::SshTunnel;
 use half::f16;
 use native_tls::TlsConnector;
 use postgres::types::{FromSql, Kind, Type};
-use postgres::{CancelToken as PgCancelToken, Client, NoTls, SimpleQueryMessage};
+use postgres::{
+    CancelToken as PgCancelToken, Client, NoTls, SimpleQueryMessage,
+    fallible_iterator::FallibleIterator,
+};
 use postgres_native_tls::MakeTlsConnector;
 use serde_json::Value as JsonValue;
 use uuid::Uuid;
@@ -1659,6 +1662,24 @@ impl Connection for PostgresConnection {
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
         self.cancelled.store(false, Ordering::SeqCst);
 
+        if req.statement_timeout.is_some() {
+            return Err(DbError::NotSupported(
+                "PostgreSQL: requested statement timeout is unsupported; rejected before execution"
+                    .to_string(),
+            ));
+        }
+        if req.limit.is_some()
+            && let Some(
+                ExecutionSourceContext::InstanceMetricQuery { .. }
+                | ExecutionSourceContext::InstanceInspectorQuery { .. },
+            ) = req
+                .execution_context
+                .as_ref()
+                .and_then(|context| context.source.as_ref())
+        {
+            return Err(DbError::NotSupported("PostgreSQL: row limits on instance catalog queries are unsupported; rejected before execution".to_string()));
+        }
+
         if let Some(source) = req
             .execution_context
             .as_ref()
@@ -1707,8 +1728,11 @@ impl Connection for PostgresConnection {
         // which rejects more than one command per statement (SQLSTATE 42601).
         // Route it through the simple query protocol, which executes the whole
         // batch and returns one result set per statement.
-        if QueryLanguage::Sql.statement_count(&req.sql) > 1 {
+        if req.limit.is_none() && QueryLanguage::Sql.statement_count(&req.sql) > 1 {
             return execute_statement_batch(&mut client, &req.sql, query_id, start, req.limit);
+        }
+        if let Some(limit) = req.limit {
+            return execute_bounded_single_statement(&mut client, &req.sql, query_id, start, limit);
         }
 
         let (columns, rows) = {
@@ -4841,6 +4865,124 @@ fn execute_statement_batch(
     }
 
     Ok(primary)
+}
+
+/// Whether a split SQL segment contains only whitespace and comments.
+/// PostgreSQL permits nested block comments, unlike `strip_leading_comments`.
+fn comment_only_segment(segment: &str) -> bool {
+    let mut remaining = segment.trim_start();
+    loop {
+        if remaining.is_empty() {
+            return true;
+        }
+        if let Some(line) = remaining.strip_prefix("--") {
+            remaining = line
+                .split_once('\n')
+                .map_or("", |(_, rest)| rest)
+                .trim_start();
+            continue;
+        }
+        if remaining.starts_with("/*") {
+            let bytes = remaining.as_bytes();
+            let mut depth = 1usize;
+            let mut index = 2;
+            while index + 1 < bytes.len() {
+                if bytes.get(index..index + 2) == Some(b"/*") {
+                    depth += 1;
+                    index += 2;
+                } else if bytes.get(index..index + 2) == Some(b"*/") {
+                    depth -= 1;
+                    index += 2;
+                    if depth == 0 {
+                        break;
+                    }
+                } else {
+                    index += 1;
+                }
+            }
+            if depth != 0 {
+                return false;
+            }
+            remaining = remaining[index..].trim_start();
+            continue;
+        }
+        return false;
+    }
+}
+
+/// Retain only the requested rows while draining the complete statement, including mutations.
+fn execute_bounded_single_statement(
+    client: &mut Client,
+    sql: &str,
+    query_id: Uuid,
+    start: Instant,
+    limit: u32,
+) -> Result<QueryResult, DbError> {
+    let stmt = client.prepare(sql).map_err(|error| {
+        if error.code() == Some(&postgres::error::SqlState::QUERY_CANCELED) {
+            return DbError::Cancelled;
+        }
+        // Parse is the final authority: even if the splitter misses a boundary,
+        // preparation never executes any statement. Ignore comment-only segments
+        // when identifying a batch, and keep ordinary syntax errors unchanged.
+        if error.code() == Some(&postgres::error::SqlState::SYNTAX_ERROR)
+            && QueryLanguage::Sql
+                .split_statements(sql)
+                .iter()
+                .filter(|segment| !comment_only_segment(segment))
+                .take(2)
+                .count()
+                > 1
+        {
+            return DbError::NotSupported("PostgreSQL: a row limit cannot be enforced on a multi-statement batch; rejected before execution".to_string());
+        }
+        format_pg_statement_error(&error)
+    })?;
+    let columns: Vec<ColumnMeta> = stmt
+        .columns()
+        .iter()
+        .map(|column| ColumnMeta {
+            name: column.name().to_string(),
+            type_name: column.type_().name().to_string(),
+            kind: pg_oid_to_kind(column.type_().oid()),
+            nullable: true,
+            is_primary_key: false,
+        })
+        .collect();
+    let mut stream = client
+        .query_raw(&stmt, std::iter::empty::<i32>())
+        .map_err(|error| {
+            if error.code() == Some(&postgres::error::SqlState::QUERY_CANCELED) {
+                DbError::Cancelled
+            } else {
+                format_pg_statement_error(&error)
+            }
+        })?;
+    let mut rows: Vec<Row> = Vec::new();
+    let mut truncated = false;
+    loop {
+        match stream.next() {
+            Ok(Some(row)) if rows.len() < limit as usize => rows.push(
+                (0..columns.len())
+                    .map(|index| postgres_value_to_value(&row, index))
+                    .collect(),
+            ),
+            Ok(Some(_)) => truncated = true,
+            Ok(None) => break,
+            Err(error) if error.code() == Some(&postgres::error::SqlState::QUERY_CANCELED) => {
+                log::info!("[QUERY] Query {} was cancelled", query_id);
+                return Err(DbError::Cancelled);
+            }
+            Err(error) => return Err(format_pg_statement_error(&error)),
+        }
+    }
+    let affected = stream.rows_affected();
+    drop(stream);
+    let affected_rows = if columns.is_empty() { affected } else { None };
+    let mut result = QueryResult::table(columns, rows, affected_rows, start.elapsed());
+    result.set_rows_truncated(truncated);
+    result.set_unsupported_types(unsupported_type_names(&result.rows));
+    Ok(result)
 }
 
 /// Groups the flat stream of [`SimpleQueryMessage`]s into one [`QueryResult`]

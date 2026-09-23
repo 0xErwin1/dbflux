@@ -6,6 +6,8 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Added
 
+* **PostgreSQL bounded query execution** — single-statement row limits retain only the requested rows while draining execution to completion; unsupported bounded batches, instance catalog requests, and statement deadlines are rejected before execution.
+
 * **Opt-in UI automation for agents and tests** — a development build compiled
   with the `ui-automation` feature exposes each window to a local MCP server
   (vendored `gpui-mcp`) that can read the rendered element tree, click, type,

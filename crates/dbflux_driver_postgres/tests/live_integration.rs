@@ -1144,3 +1144,300 @@ fn postgres_failed_script_leaves_an_earlier_transaction_aborted() -> Result<(), 
         Ok(())
     })
 }
+
+fn assert_no_rows_truncated(result: &dbflux_core::QueryResult, count: usize) {
+    assert_eq!(result.rows.len(), count);
+    assert!(!result.rows_truncated());
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_query_safety_limit_below_exact_and_over_retains_and_flags() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+        let sql = "SELECT g FROM generate_series(1, 5) g";
+        assert_no_rows_truncated(&connection.execute(&QueryRequest::new(sql))?, 5);
+        assert_no_rows_truncated(
+            &connection.execute(&QueryRequest::new(sql).with_limit(8))?,
+            5,
+        );
+        assert_no_rows_truncated(
+            &connection.execute(&QueryRequest::new(sql).with_limit(5))?,
+            5,
+        );
+        let over = connection.execute(&QueryRequest::new(sql).with_limit(3))?;
+        assert_eq!(over.rows.len(), 3);
+        assert_eq!(over.rows[0][0], Value::Int(1));
+        assert!(over.rows_truncated());
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_query_safety_zero_limit_retains_nothing_only_when_rows_exist() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+        let nonempty = connection.execute(&QueryRequest::new("SELECT 1").with_limit(0))?;
+        assert!(nonempty.rows.is_empty());
+        assert!(nonempty.rows_truncated());
+        let empty = connection.execute(&QueryRequest::new("SELECT 1 WHERE FALSE").with_limit(0))?;
+        assert!(empty.rows.is_empty());
+        assert!(!empty.rows_truncated());
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_query_safety_returning_above_cap_completes_effects_and_truncates() -> Result<(), DbError>
+{
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE safety_returning (id INTEGER PRIMARY KEY, v INTEGER DEFAULT 0)",
+        ))?;
+        let inserted = connection.execute(&QueryRequest::new("INSERT INTO safety_returning (id) SELECT g FROM generate_series(1, 5) g RETURNING id").with_limit(2))?;
+        assert_eq!(inserted.rows.len(), 2);
+        assert!(inserted.rows_truncated());
+        assert_eq!(
+            connection
+                .execute(&QueryRequest::new("SELECT COUNT(*) FROM safety_returning"))?
+                .rows[0][0],
+            Value::Int(5)
+        );
+        let updated = connection.execute(
+            &QueryRequest::new("UPDATE safety_returning SET v = 100 RETURNING id").with_limit(1),
+        )?;
+        assert_eq!(updated.rows.len(), 1);
+        assert!(updated.rows_truncated());
+        assert_eq!(
+            connection
+                .execute(&QueryRequest::new(
+                    "SELECT COUNT(*) FROM safety_returning WHERE v = 100"
+                ))?
+                .rows[0][0],
+            Value::Int(5)
+        );
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_query_safety_late_stream_error_propagates_after_cap_reached() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+        let result = connection.execute(
+            &QueryRequest::new("SELECT g, 1 / (g - 3) FROM generate_series(1, 10) g").with_limit(2),
+        );
+        assert!(
+            matches!(result, Err(DbError::QueryFailed(_))),
+            "late division error must propagate: {result:?}"
+        );
+        assert_eq!(
+            connection
+                .execute(&QueryRequest::new("SELECT 1"))?
+                .rows
+                .len(),
+            1
+        );
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_query_safety_bounded_batch_rejected_without_effects_and_reusable() -> Result<(), DbError>
+{
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE safety_batch (n INTEGER PRIMARY KEY)",
+        ))?;
+        let result = connection.execute(
+            &QueryRequest::new(
+                "INSERT INTO safety_batch VALUES (1); INSERT INTO safety_batch VALUES (2)",
+            )
+            .with_limit(1),
+        );
+        assert!(
+            matches!(result, Err(DbError::NotSupported(_))),
+            "bounded batch must be refused: {result:?}"
+        );
+        assert_eq!(
+            connection
+                .execute(&QueryRequest::new("SELECT COUNT(*) FROM safety_batch"))?
+                .rows[0][0],
+            Value::Int(0)
+        );
+        assert_eq!(
+            connection
+                .execute(&QueryRequest::new("SELECT 1").with_limit(1))?
+                .rows
+                .len(),
+            1
+        );
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_query_safety_uncapped_batch_still_executes_later_statements() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE safety_legacy (n INTEGER); INSERT INTO safety_legacy VALUES (1), (2)",
+        ))?;
+        assert_eq!(
+            connection
+                .execute(&QueryRequest::new("SELECT COUNT(*) FROM safety_legacy"))?
+                .rows[0][0],
+            Value::Int(2)
+        );
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_query_safety_statement_timeout_rejected_before_execution() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE safety_timeout (n INTEGER)",
+        ))?;
+        let mut request = QueryRequest::new("INSERT INTO safety_timeout VALUES (1)");
+        request.statement_timeout = Some(Duration::from_secs(5));
+        let result = connection.execute(&request);
+        assert!(
+            matches!(result, Err(DbError::NotSupported(_))),
+            "deadline must be refused: {result:?}"
+        );
+        assert_eq!(
+            connection
+                .execute(&QueryRequest::new("SELECT COUNT(*) FROM safety_timeout"))?
+                .rows[0][0],
+            Value::Int(0)
+        );
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_query_safety_bounded_metric_context_rejected_and_uncapped_control_runs()
+-> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+        for limit in [0, 1] {
+            let mut request = QueryRequest::new("SELECT 1").with_limit(limit);
+            request.execution_context = Some(dbflux_core::ExecutionContext {
+                source: Some(dbflux_core::ExecutionSourceContext::InstanceMetricQuery {
+                    metric_id: "pg.tps".to_string(),
+                    start_ms: 0,
+                    end_ms: 1,
+                }),
+                ..Default::default()
+            });
+            let result = connection.execute(&request);
+            assert!(
+                matches!(result, Err(DbError::NotSupported(_))),
+                "bounded metric must be refused: {result:?}"
+            );
+        }
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_query_safety_bounded_inspector_context_rejected_and_uncapped_control_runs()
+-> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+        for limit in [0, 1] {
+            let mut request = QueryRequest::new("SELECT 1").with_limit(limit);
+            request.execution_context = Some(dbflux_core::ExecutionContext {
+                source: Some(
+                    dbflux_core::ExecutionSourceContext::InstanceInspectorQuery {
+                        metric_id: "pg.activity".to_string(),
+                    },
+                ),
+                ..Default::default()
+            });
+            let result = connection.execute(&request);
+            assert!(
+                matches!(result, Err(DbError::NotSupported(_))),
+                "bounded inspector must be refused: {result:?}"
+            );
+        }
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_query_safety_capped_single_statement_with_trailing_comments_executes()
+-> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+        for sql in [
+            "SELECT 1; -- trailing line comment",
+            "SELECT 1; /* trailing block comment */",
+        ] {
+            assert_no_rows_truncated(
+                &connection.execute(&QueryRequest::new(sql).with_limit(1))?,
+                1,
+            );
+        }
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_query_safety_capped_quoted_semicolons_and_dollar_quotes_execute() -> Result<(), DbError>
+{
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+        for (sql, expected) in [("SELECT ';'::text", ";"), ("SELECT $$a;b$$::text", "a;b")] {
+            let result = connection.execute(&QueryRequest::new(sql).with_limit(1))?;
+            assert_no_rows_truncated(&result, 1);
+            assert_eq!(result.rows[0][0], Value::Text(expected.to_string()));
+        }
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_query_safety_capped_single_statement_with_trailing_nested_comment_executes()
+-> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+        let result = connection.execute(
+            &QueryRequest::new("SELECT 1; /* outer /* inner */ still outer */").with_limit(1),
+        )?;
+        assert_no_rows_truncated(&result, 1);
+        assert_eq!(result.rows[0][0], Value::Int(1));
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_query_safety_invalid_single_statement_with_trailing_nested_comment_reports_syntax_error()
+-> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+        let result = connection
+            .execute(&QueryRequest::new("SELECT FROM; /* outer /* inner */ tail */").with_limit(1));
+        assert!(
+            matches!(result, Err(DbError::SyntaxError(_))),
+            "invalid single statement must report PostgreSQL query failure: {result:?}"
+        );
+        Ok(())
+    })
+}
