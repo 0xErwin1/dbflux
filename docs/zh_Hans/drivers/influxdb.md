@@ -79,6 +79,8 @@
 
 ## 限制
 
+- `execute()` 对任何请求的行数限制（包括零）或语句超时，在发送 HTTP 请求或分派实例上下文前返回 `NotSupported`。未请求这些保护的查询仍可执行；默认编辑器无法保证这些保护。
+
 - **不支持查询取消** —— `cancel()` 返回 `NotSupported`；进行中的查询无法从界面中止（未声明 `QUERY_CANCELLATION`）。
 - **不生成变更语句** —— `QueryGenerator::generate_mutation` 始终返回 `None`；只生成读取模板，这与只读的查询 API 一致。
 - **v1 不支持 Flux** —— 对 v1 连接运行 Flux 查询会立即返回错误，不会发出 HTTP 请求。
