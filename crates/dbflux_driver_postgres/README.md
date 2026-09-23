@@ -44,7 +44,14 @@ Exposes tabular snapshots of running server state:
 - `pg.activity` — current sessions from `pg_stat_activity` (query text, state, wait event, duration)
 - `pg.locks` — active locks from `pg_locks` joined with `pg_class`
 
+- Single-statement row limits stream results, retain at most the requested count, and report whether rows were omitted; execution always drains to completion.
+- Unsupported bounded batches and requested statement timeouts are rejected before execution.
+
 ## Limitations
+
+- Row limits cap retained rows, not server work, network traffic, or execution time; mutations still complete all effects.
+- Row limits on instance metrics and inspectors are rejected before dispatch. Unbounded batches retain their buffered behavior.
+
 
 - Batched (multi-statement) result columns carry no type metadata; values are returned as text and chart auto-detection is disabled for them. Run a single statement to get fully typed columns.
 

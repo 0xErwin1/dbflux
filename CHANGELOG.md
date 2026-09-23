@@ -22,6 +22,8 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Added
 
+* **PostgreSQL bounded query execution** — single-statement row limits retain only the requested rows while draining execution to completion; unsupported bounded batches, instance catalog requests, and statement deadlines are rejected before execution.
+
 * **DynamoDB execution safety** — requested timeouts and row-limited writes
   now fail before execution; scan/query use the smaller request/envelope cap
   including zero. PartiQL SELECT rejects zero limits and retains existing
