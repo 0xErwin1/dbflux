@@ -9,7 +9,8 @@
 use dbflux_core::{
     ConnectionProfile, DbConfig, DbDriver, DbError, DbKind, DescribeRequest, ExplainRequest,
     OrderByColumn, Pagination, QueryRequest, RecordIdentity, RowDelete, RowInsert, RowPatch,
-    SchemaLoadingStrategy, TableBrowseRequest, TableCountRequest, TableRef, Value,
+    SchemaLoadingStrategy, TableBrowseRequest, TableCountRequest, TableRef, TransactionStateNote,
+    Value,
 };
 use dbflux_driver_mysql::MysqlDriver;
 use dbflux_test_support::containers;
@@ -461,6 +462,105 @@ fn mysql_set_referential_integrity_disables_and_restores_fk_checks() -> Result<(
         assert!(
             still_violates.is_err(),
             "FK violation must fail again after RI is restored"
+        );
+
+        Ok(())
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Transaction state after a failed execution
+//
+// MySQL rejects `START TRANSACTION` and `BEGIN` in the prepared-statement
+// protocol the editor path uses (error 1295), so these tests open their
+// transactions by turning `autocommit` off, which MySQL and MariaDB both accept
+// there.
+// ---------------------------------------------------------------------------
+
+fn assert_transaction_note(error: &DbError, note: TransactionStateNote) {
+    let hint = error
+        .formatted()
+        .and_then(|formatted| formatted.hint.as_deref());
+
+    assert!(
+        hint.is_some_and(|hint| hint.contains(note.message())),
+        "expected {note:?} in the error hint, got {error:?}"
+    );
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mysql_failed_transaction_script_rolls_back_the_transaction_it_opened() -> Result<(), DbError> {
+    containers::with_mysql_url(|uri| {
+        let (connection, _) = connect_mysql(uri)?;
+
+        connection.set_active_database(Some("testdb"))?;
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE tx_failed_script (id INT PRIMARY KEY)",
+        ))?;
+
+        let Err(error) = connection.execute(&QueryRequest::new(
+            "SET autocommit = 0; \
+             INSERT INTO tx_failed_script VALUES (1); \
+             INSERT INTO tx_failed_script VALUES (1); \
+             COMMIT;",
+        )) else {
+            panic!("the duplicate key must fail the script");
+        };
+        assert_transaction_note(&error, TransactionStateNote::RolledBack);
+
+        let rows = connection
+            .execute(&QueryRequest::new("SELECT id FROM tx_failed_script"))?
+            .rows;
+        assert!(rows.is_empty(), "the partial insert must be rolled back");
+
+        connection.execute(&QueryRequest::new(
+            "SET autocommit = 1; INSERT INTO tx_failed_script VALUES (2);",
+        ))?;
+
+        let rows = connection
+            .execute(&QueryRequest::new("SELECT id FROM tx_failed_script"))?
+            .rows;
+        assert_eq!(rows, vec![vec![Value::Int(2)]]);
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mysql_failed_statement_leaves_an_earlier_transaction_open() -> Result<(), DbError> {
+    containers::with_mysql_url(|uri| {
+        let (connection, _) = connect_mysql(uri)?;
+
+        connection.set_active_database(Some("testdb"))?;
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE tx_earlier (id INT PRIMARY KEY)",
+        ))?;
+
+        connection.execute(&QueryRequest::new("SET autocommit = 0"))?;
+        connection.execute(&QueryRequest::new("INSERT INTO tx_earlier VALUES (1)"))?;
+
+        let Err(error) =
+            connection.execute(&QueryRequest::new("INSERT INTO tx_earlier VALUES (1)"))
+        else {
+            panic!("the duplicate key must fail the statement");
+        };
+        assert_transaction_note(&error, TransactionStateNote::StillOpen);
+
+        let rows = connection
+            .execute(&QueryRequest::new("SELECT id FROM tx_earlier"))?
+            .rows;
+        assert_eq!(rows.len(), 1, "the earlier insert must still be visible");
+
+        connection.execute(&QueryRequest::new("ROLLBACK"))?;
+
+        let rows = connection
+            .execute(&QueryRequest::new("SELECT id FROM tx_earlier"))?
+            .rows;
+        assert!(
+            rows.is_empty(),
+            "ROLLBACK must discard the earlier insert, proving the transaction stayed open"
         );
 
         Ok(())
