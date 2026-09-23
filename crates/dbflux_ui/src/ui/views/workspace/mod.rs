@@ -667,9 +667,6 @@ impl Workspace {
                         state.set_active_connection(*profile_id);
                         cx.emit(AppStateChanged);
                     });
-                    if this.is_sidebar_collapsed(cx) {
-                        this.toggle_sidebar(cx);
-                    }
                     this.pending_focus = Some(FocusTarget::Sidebar);
                     cx.notify();
                 }
@@ -1933,11 +1930,9 @@ impl Workspace {
     }
 
     pub fn set_focus(&mut self, target: FocusTarget, window: &mut Window, cx: &mut Context<Self>) {
-        let target = if target == FocusTarget::Sidebar && self.is_sidebar_collapsed(cx) {
-            FocusTarget::Document
-        } else {
-            target
-        };
+        self.sidebar_dock.update(cx, |dock, cx| {
+            dock.set_sidebar_focused(target == FocusTarget::Sidebar, cx);
+        });
 
         log::debug!("Focus changed to: {:?}", target);
         self.focus_target = target;
@@ -2200,22 +2195,12 @@ impl Workspace {
         });
     }
 
-    /// Get next focus target, skipping sidebar if collapsed
-    fn next_focus_target(&self, cx: &Context<Self>) -> FocusTarget {
-        let mut target = self.focus_target.next();
-        if target == FocusTarget::Sidebar && self.is_sidebar_collapsed(cx) {
-            target = target.next();
-        }
-        target
+    fn next_focus_target(&self, _cx: &Context<Self>) -> FocusTarget {
+        self.focus_target.next()
     }
 
-    /// Get previous focus target, skipping sidebar if collapsed
-    fn prev_focus_target(&self, cx: &Context<Self>) -> FocusTarget {
-        let mut target = self.focus_target.prev();
-        if target == FocusTarget::Sidebar && self.is_sidebar_collapsed(cx) {
-            target = target.prev();
-        }
-        target
+    fn prev_focus_target(&self, _cx: &Context<Self>) -> FocusTarget {
+        self.focus_target.prev()
     }
 }
 
@@ -2226,10 +2211,13 @@ mod tab_close_request_tests {
     use crate::keymap::{Command, CommandDispatcher};
     use crate::ui::document::pane::CloseDisposition;
     use crate::ui::document::{CodeDocument, InspectorPanel, Tab, TabBarEvent, TabManagerEvent};
+    use crate::ui::overlays::command_palette::PaletteSelection;
     use crate::ui::overlays::modals::{
         CloseAction, DirtySummaryEntry, UnsavedChangesOutcome, UnsavedChangesRequest,
     };
-    use crate::ui::views::workspace::{DocumentFlushOutcome, Workspace, await_document_flush};
+    use crate::ui::views::workspace::{
+        DocumentFlushOutcome, FocusTarget, Workspace, await_document_flush,
+    };
     use dbflux_core::QueryLanguage;
     use dbflux_core::document_id::DocumentId;
     use dbflux_ui_base::AppStateEntity;
@@ -2317,6 +2305,248 @@ mod tab_close_request_tests {
         });
 
         document_id
+    }
+
+    #[gpui::test]
+    fn sidebar_dock_hover_waits_cancels_and_preserves_focus(cx: &mut TestAppContext) {
+        let (workspace, _, window) = new_workspace(cx);
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.set_focus(FocusTarget::Document, window, cx);
+                workspace
+                    .sidebar_dock
+                    .update(cx, |dock, cx| dock.toggle(cx));
+                let start = std::time::Instant::now();
+                workspace.sidebar_dock.update(cx, |dock, cx| {
+                    dock.pointer_enter(start, cx);
+                    dock.process_hover_deadline(start + std::time::Duration::from_millis(249), cx);
+                    assert!(dock.is_collapsed());
+                    dock.pointer_leave(cx);
+                    dock.process_hover_deadline(start + std::time::Duration::from_secs(1), cx);
+                    assert!(dock.is_collapsed());
+                    dock.pointer_enter(start, cx);
+                    dock.process_hover_deadline(start + std::time::Duration::from_millis(250), cx);
+                    assert!(!dock.is_collapsed());
+                });
+                assert_eq!(workspace.focus_target, FocusTarget::Document);
+                workspace.set_focus(FocusTarget::Sidebar, window, cx);
+                workspace
+                    .sidebar_dock
+                    .update(cx, |dock, cx| dock.pointer_leave(cx));
+                assert!(!workspace.sidebar_dock.read(cx).is_collapsed());
+                workspace.set_focus(FocusTarget::Document, window, cx);
+                assert!(workspace.sidebar_dock.read(cx).is_collapsed());
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn sidebar_dock_menu_closure_dismisses_after_pointer_and_focus_leave(cx: &mut TestAppContext) {
+        let (workspace, _, window) = new_workspace(cx);
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.set_focus(FocusTarget::Document, window, cx);
+                workspace.sidebar_dock.update(cx, |dock, cx| {
+                    dock.toggle(cx);
+                    let start = std::time::Instant::now();
+                    dock.pointer_enter(start, cx);
+                    dock.process_hover_deadline(start + std::time::Duration::from_millis(250), cx);
+                });
+                let id = dbflux_core::SchemaNodeId::Profile {
+                    profile_id: uuid::Uuid::new_v4(),
+                }
+                .to_string();
+                workspace.sidebar.update(cx, |sidebar, cx| {
+                    sidebar.open_menu_for_item(&id, gpui::point(gpui::px(5.0), gpui::px(5.0)), cx);
+                    assert!(sidebar.has_transient_interaction());
+                });
+                workspace
+                    .sidebar_dock
+                    .update(cx, |dock, cx| dock.pointer_leave(cx));
+                assert!(!workspace.sidebar_dock.read(cx).is_collapsed());
+                workspace
+                    .sidebar
+                    .update(cx, |sidebar, cx| sidebar.close_context_menu(cx));
+            });
+        });
+        window.run_until_parked();
+        window.update(|_, cx| {
+            assert!(workspace.read(cx).sidebar_dock.read(cx).is_collapsed());
+        });
+    }
+
+    #[gpui::test]
+    fn sidebar_dock_toggle_on_transient_reveal_collapses_instead_of_expanding(
+        cx: &mut TestAppContext,
+    ) {
+        let (workspace, _, window) = new_workspace(cx);
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.set_focus(FocusTarget::Document, window, cx);
+                workspace.sidebar_dock.update(cx, |dock, cx| {
+                    dock.toggle(cx);
+                    dock.reveal_transiently(cx);
+                    assert!(!dock.is_collapsed());
+                    dock.toggle(cx);
+                    assert!(
+                        dock.is_collapsed(),
+                        "visible left-chevron must close the transient reveal"
+                    );
+                });
+                workspace.set_focus(FocusTarget::Document, window, cx);
+                assert!(workspace.sidebar_dock.read(cx).is_collapsed());
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn sidebar_dock_dispatched_focus_preserves_collapsed_preference(cx: &mut TestAppContext) {
+        let (workspace, _, window) = new_workspace(cx);
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.set_focus(FocusTarget::Document, window, cx);
+                workspace
+                    .sidebar_dock
+                    .update(cx, |dock, cx| dock.toggle(cx));
+                assert!(workspace.sidebar_dock.read(cx).is_collapsed());
+                assert!(workspace.dispatch(Command::FocusSidebar, window, cx));
+                assert_eq!(workspace.focus_target, FocusTarget::Sidebar);
+                assert!(!workspace.sidebar_dock.read(cx).is_collapsed());
+                workspace.set_focus(FocusTarget::Document, window, cx);
+                assert!(workspace.sidebar_dock.read(cx).is_collapsed());
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn sidebar_dock_palette_focus_preserves_collapsed_preference(cx: &mut TestAppContext) {
+        let (workspace, _, window) = new_workspace(cx);
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.set_focus(FocusTarget::Document, window, cx);
+                workspace
+                    .sidebar_dock
+                    .update(cx, |dock, cx| dock.toggle(cx));
+                assert!(workspace.sidebar_dock.read(cx).is_collapsed());
+                workspace.command_palette.update(cx, |_, cx| {
+                    cx.emit(PaletteSelection::FocusConnection {
+                        profile_id: uuid::Uuid::new_v4(),
+                    });
+                });
+            });
+        });
+        window.run_until_parked();
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                assert_eq!(workspace.focus_target, FocusTarget::Sidebar);
+                assert!(!workspace.sidebar_dock.read(cx).is_collapsed());
+                workspace.set_focus(FocusTarget::Document, window, cx);
+                assert!(workspace.sidebar_dock.read(cx).is_collapsed());
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn sidebar_dock_focus_left_enters_explicitly_collapsed_sidebar(cx: &mut TestAppContext) {
+        let (workspace, _, window) = new_workspace(cx);
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.set_focus(FocusTarget::Document, window, cx);
+                workspace
+                    .sidebar_dock
+                    .update(cx, |dock, cx| dock.toggle(cx));
+                assert!(workspace.dispatch(Command::FocusLeft, window, cx));
+                assert_eq!(workspace.focus_target, FocusTarget::Sidebar);
+                assert!(!workspace.sidebar_dock.read(cx).is_collapsed());
+                workspace.set_focus(FocusTarget::Document, window, cx);
+                assert!(workspace.sidebar_dock.read(cx).is_collapsed());
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn sidebar_dock_focus_cycle_enters_explicitly_collapsed_sidebar(cx: &mut TestAppContext) {
+        let (workspace, _, window) = new_workspace(cx);
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.set_focus(FocusTarget::Document, window, cx);
+                workspace
+                    .sidebar_dock
+                    .update(cx, |dock, cx| dock.toggle(cx));
+                assert!(workspace.dispatch(Command::CycleFocusForward, window, cx));
+                assert_eq!(workspace.focus_target, FocusTarget::Sidebar);
+                assert!(!workspace.sidebar_dock.read(cx).is_collapsed());
+                workspace.set_focus(FocusTarget::BackgroundTasks, window, cx);
+                assert!(workspace.sidebar_dock.read(cx).is_collapsed());
+                assert!(workspace.dispatch(Command::CycleFocusBackward, window, cx));
+                assert_eq!(workspace.focus_target, FocusTarget::Sidebar);
+                assert!(!workspace.sidebar_dock.read(cx).is_collapsed());
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn sidebar_dock_transient_resize_survives_dismiss_and_reveal(cx: &mut TestAppContext) {
+        let (workspace, _, window) = new_workspace(cx);
+        window.update(|_, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.sidebar_dock.update(cx, |dock, cx| {
+                    dock.toggle(cx);
+                    dock.reveal_transiently(cx);
+                    dock.begin_resize(gpui::px(270.0), cx);
+                    dock.handle_resize_move(gpui::px(340.0), cx);
+                    assert_eq!(dock.current_width(), gpui::px(350.0));
+                    dock.finish_resize(cx);
+                    dock.dismiss_transient(cx);
+                    assert!(dock.is_collapsed());
+                    dock.reveal_transiently(cx);
+                    assert_eq!(dock.current_width(), gpui::px(350.0));
+                });
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn sidebar_dock_window_exit_clears_transient_reveal(cx: &mut TestAppContext) {
+        let (workspace, _, window) = new_workspace(cx);
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.set_focus(FocusTarget::Document, window, cx);
+                workspace.sidebar_dock.update(cx, |dock, cx| {
+                    dock.toggle(cx);
+                    let start = std::time::Instant::now();
+                    dock.pointer_enter(start, cx);
+                    dock.process_hover_deadline(start + std::time::Duration::from_millis(250), cx);
+                    assert!(!dock.is_collapsed());
+                });
+            });
+        });
+        window.run_until_parked();
+        window.update(|window, cx| {
+            window.dispatch_event(
+                gpui::PlatformInput::MouseExited(gpui::MouseExitEvent::default()),
+                cx,
+            );
+            assert!(workspace.read(cx).sidebar_dock.read(cx).is_collapsed());
+        });
+    }
+
+    #[gpui::test]
+    fn sidebar_dock_keyboard_reveal_preserves_explicit_collapse(cx: &mut TestAppContext) {
+        let (workspace, _, window) = new_workspace(cx);
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace
+                    .sidebar_dock
+                    .update(cx, |dock, cx| dock.toggle(cx));
+                assert!(workspace.sidebar_dock.read(cx).is_collapsed());
+                workspace.set_focus(FocusTarget::Sidebar, window, cx);
+                assert_eq!(workspace.focus_target, FocusTarget::Sidebar);
+                assert!(!workspace.sidebar_dock.read(cx).is_collapsed());
+                workspace.set_focus(FocusTarget::Document, window, cx);
+                assert!(workspace.sidebar_dock.read(cx).is_collapsed());
+            });
+        });
     }
 
     /// Regression: the document's close request only ends the tab because the

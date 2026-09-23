@@ -1041,6 +1041,15 @@ pub struct DeleteModalState<'a> {
 impl EventEmitter<SidebarEvent> for Sidebar {}
 
 impl Sidebar {
+    pub fn has_transient_interaction(&self) -> bool {
+        self.context_menu.is_some()
+            || self.add_menu_open
+            || self.child_picker.is_some()
+            || self.drag_hover_folder.is_some()
+            || self.drop_target.is_some()
+            || self.scripts_drop_target.is_some()
+    }
+
     pub fn new(
         app_state: Entity<AppStateEntity>,
         window: &mut Window,
