@@ -105,6 +105,45 @@ read-only code document showing its definition. The document is non-editable but
 you can still select and copy its text; execution and mutation controls are
 hidden.
 
+### Schema diagram
+
+Relational connections whose driver reports foreign-key support (for example
+PostgreSQL, MySQL/MariaDB, SQLite, and SQL Server) can draw tables and their
+foreign keys as a diagram. Open it from the sidebar context menu:
+
+- **View Schema Diagram** on a loaded database draws every table in it, up to
+  100. A larger database shows the notice "Showing first 100 tables — the
+  schema has more."
+- **View Relationships** on a table draws that table, the tables it references,
+  and the tables that reference it.
+
+The diagram opens in its own tab, and opening the same diagram again switches to
+that tab. Loading runs as a background task ("Schema diagram: _database_") that
+you can cancel from the Tasks panel. Each table lists its columns with `PK`,
+`FK`, and `NN` (not null) badges, and lines connect each foreign key to the
+table it references.
+
+| Toolbar control | What it does |
+|---|---|
+| `+` / `-` | Zoom in / out, between 25% and 400%. The current zoom is shown beside them. |
+| **Reset** | Returns to 100% zoom and the starting position. |
+| **Arrange** | Discards the positions of tables you moved and recomputes the layout. |
+| **Fit** | Zooms and pans so every table is visible. |
+| Layout dropdown | **Left-Right** (default) places tables that hold foreign keys on the left and the tables they reference on the right. **Snowflake** puts one table in the center and its direct neighbors in a circle around it: the chosen table for **View Relationships**, the most connected table for a database diagram. **Compact** packs tables into a tight grid sorted by name. Changing the layout also resets zoom, position, and moved tables. |
+| **Export** | **Copy as DBML** or **Copy as SQL** copies the tables shown in the diagram to the clipboard. The SQL is `CREATE TABLE` statements plus `ALTER TABLE ... ADD CONSTRAINT` for the foreign keys. |
+| _N_ tables · _M_ relations | How many tables and foreign keys the diagram shows. |
+| **Types** / **Indexes** | Show column types (on by default) / an index list under each table (off by default). |
+
+Drag empty space to pan, drag a table to move it (it snaps to the grid), and use
+the mouse wheel to zoom around the pointer. Click a table to select it. Right-click
+opens a context menu with **Zoom In**, **Zoom Out**, **Layout**, and **Copy as**.
+Right-clicking a table also selects it, and while a table is selected the menu
+adds **Inspect schema**. **Inspect schema**, or a double-click on a table, opens
+the table in the inspector panel on the right, with
+TABLE, COLUMNS, INDEXES, and FOREIGN KEYS sections. The last two appear only when
+the table has indexes or declares foreign keys. Keyboard shortcuts are listed in
+the [Keyboard Reference](#7-keyboard-reference).
+
 ---
 
 ## 3. Running Queries
@@ -540,6 +579,18 @@ stay `Ctrl` on all platforms (to avoid clashing with macOS system shortcuts).
 | `Ctrl+c` / `Cmd+c` | Copy cell(s) |
 | `z` | Toggle panel collapse |
 | `m` (or `Shift+F10`) | Open context menu |
+
+### Schema diagram
+
+| Keys | Action |
+|------|--------|
+| `+` (or `=`) / `-` | Zoom in / out |
+| `h` / `j` / `k` / `l` (or arrow keys) | Pan the view |
+| `Shift` + `h` / `j` / `k` / `l` (or arrow keys) | Select the next table in that direction and center on it |
+| `Alt` + `h` / `j` / `k` / `l` (or arrow keys) | Move the selected table |
+| `r` / `s` / `c` | Left-Right / Snowflake / Compact layout |
+| `m` | Open context menu |
+| `Escape` | Clear the selection |
 
 ### Background Tasks
 
