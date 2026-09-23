@@ -239,6 +239,8 @@ impl Render for TabBar {
             .border_color(border_color)
             .child(
                 div()
+                    .id("document-tab-list")
+                    .role(Role::TabList)
                     .flex()
                     .items_center()
                     .overflow_x_hidden()
@@ -304,6 +306,8 @@ impl TabBar {
 
         div()
             .id(ElementId::Name(format!("tab-{}", id.0).into()))
+            .role(Role::Tab)
+            .aria_selected(is_active)
             .relative()
             .h_full()
             .min_w(px(100.0))
@@ -488,15 +492,24 @@ mod tests {
         TAB_MENU_CLOSE_RIGHT, TAB_MENU_SEPARATOR, TabBar, TabBarEvent, next_actionable_index,
         prev_actionable_index,
     };
+    use crate::code::CodeDocument;
+    use crate::tab_manager::Tab;
     use crate::tab_manager::TabManager;
     use crate::types::DocumentId;
     use dbflux_components::theme;
     use dbflux_components::tokens::FontSizes;
     use dbflux_components::typography::AppFonts;
-    use gpui::{AppContext as _, TestAppContext};
+    use dbflux_core::QueryLanguage;
+    use dbflux_storage::bootstrap::StorageRuntime;
+    use dbflux_ui_base::AppStateEntity;
+    use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
+    use gpui::{
+        AccessibilityFrame, AppContext as _, FrameObserver, Role, TestAppContext, VisualTestContext,
+    };
     use gpui_component::theme::Theme;
     use std::cell::RefCell;
     use std::rc::Rc;
+    use std::sync::{Arc, Mutex};
 
     #[test]
     fn build_tab_menu_items_returns_correct_structure() {
@@ -664,5 +677,90 @@ mod tests {
             matches!(recorded.as_slice(), [TabBarEvent::CloseTab(got)] if *got == id),
             "every close gesture shares one close request, got {recorded:?}"
         );
+    }
+
+    /// Keeps the latest rendered accessibility frame of the window it observes.
+    #[derive(Default)]
+    struct FrameCapture(Mutex<Option<AccessibilityFrame>>);
+
+    impl FrameObserver for FrameCapture {
+        fn accessibility_updated(&self, frame: &AccessibilityFrame) {
+            *self.0.lock().expect("frame capture lock") = Some(frame.clone());
+        }
+    }
+
+    /// Document tabs are exposed as tabs inside one tab list, and only the
+    /// active tab reports itself selected.
+    #[gpui::test]
+    fn tabs_are_exposed_as_selectable_tabs_in_a_tab_list(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        cx.update(theme::init);
+        cx.update(|cx| {
+            let host = cx.new(|_| ToastHost::new());
+            cx.set_global(ToastGlobal { host });
+        });
+
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                AppStateEntity::new_with_storage_runtime(
+                    StorageRuntime::in_memory().expect("isolated storage runtime"),
+                )
+                .expect("test storage setup")
+            })
+        });
+        let manager = cx.update(|cx| cx.new(|_| TabManager::new()));
+
+        let capture = Arc::new(FrameCapture::default());
+        let (_bar, window) = cx.add_window_view({
+            let manager = manager.clone();
+            let capture = capture.clone();
+            move |window, cx| {
+                window.observe_frames(&capture);
+                TabBar::new(manager, cx)
+            }
+        });
+
+        let open_tab = |window: &mut VisualTestContext| {
+            let app_state = app_state.clone();
+            let manager = manager.clone();
+            window.update(|window, cx| {
+                let document = cx.new(|cx| {
+                    CodeDocument::new_with_language(app_state, None, QueryLanguage::Sql, window, cx)
+                });
+                let document_id = document.read(cx).id();
+                let pane = CodeDocument::into_pane(document, cx);
+                manager.update(cx, |manager, cx| {
+                    manager.open(Tab::Pane(Box::new(pane)), cx)
+                });
+                document_id
+            })
+        };
+        let background = open_tab(window);
+        let active = open_tab(window);
+
+        window.update(|window, _| window.refresh());
+        window.run_until_parked();
+
+        let frame = capture
+            .0
+            .lock()
+            .expect("frame capture lock")
+            .clone()
+            .expect("the window rendered a frame");
+        let node = |id: &str| {
+            frame
+                .nodes()
+                .find(|(_, node)| node.id() == id)
+                .and_then(|(_, node)| frame.accessibility_node(node))
+                .unwrap_or_else(|| panic!("no accessible node {id}"))
+        };
+
+        assert_eq!(node("document-tab-list").role(), Role::TabList);
+
+        for (id, selected) in [(active, true), (background, false)] {
+            let tab = node(&format!("tab-{}", id.0));
+            assert_eq!(tab.role(), Role::Tab);
+            assert_eq!(tab.is_selected(), Some(selected), "tab {id:?}");
+        }
     }
 }

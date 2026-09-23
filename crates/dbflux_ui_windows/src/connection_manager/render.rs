@@ -21,7 +21,9 @@ use gpui_component::checkbox::Checkbox;
 /// Label column width for horizontal field rows (matches design spec).
 const FIELD_LABEL_WIDTH: Pixels = px(140.0);
 
-use super::{ActiveTab, ConnectionManagerWindow, EditState, FormFocus, TestStatus, View};
+use super::{
+    ActiveTab, ConnectionManagerWindow, EditState, FormFocus, TestStatus, View, cm_field_id,
+};
 
 impl ConnectionManagerWindow {
     /// Build a standard horizontal form row: 140 px label column on the left, flex-1 control
@@ -155,6 +157,8 @@ impl ConnectionManagerWindow {
                             )
                             .child(
                                 Input::new(&self.form.input_password)
+                                    .id(cm_field_id("password"))
+                                    .aria_label(label.to_string())
                                     .content_type(InputContentType::Password),
                             ),
                     )
@@ -337,6 +341,7 @@ impl ConnectionManagerWindow {
                     .child(div().flex_1())
                     .child(self.form_field_input_inline(
                         &dbflux_i18n::t!("connection_manager.field.name"),
+                        "name",
                         &self.form.input_name,
                         show_focus && focus == FormFocus::Name,
                         ring_color,
@@ -626,7 +631,12 @@ impl ConnectionManagerWindow {
                                         }),
                                     )
                                 })
-                                .child(Input::new(input_state).disabled(!field_enabled)),
+                                .child(
+                                    Input::new(input_state)
+                                        .id(cm_field_id(&field_def.id))
+                                        .aria_label(field_def.label.clone())
+                                        .disabled(!field_enabled),
+                                ),
                         );
 
                     return Self::field_row_cm(
@@ -675,6 +685,8 @@ impl ConnectionManagerWindow {
                     })
                     .child(
                         Input::new(input_state)
+                            .id(cm_field_id(&field_def.id))
+                            .aria_label(field_def.label.clone())
                             .disabled(!field_enabled)
                             .when(form_renderer::is_secret_field(&field_def.kind), |input| {
                                 input.content_type(InputContentType::Password)
@@ -717,7 +729,11 @@ impl ConnectionManagerWindow {
                                     }
                                 }),
                             )
-                            .child(Input::new(input_state)),
+                            .child(
+                                Input::new(input_state)
+                                    .id(cm_field_id(&field_def.id))
+                                    .aria_label(field_def.label.clone()),
+                            ),
                     )
                     .child(
                         div()
@@ -1077,6 +1093,11 @@ impl ConnectionManagerWindow {
             )
         };
 
+        let primary_field_id = match uri_field {
+            Some(uri_field) if using_uri => &uri_field.id,
+            _ => &host_field.id,
+        };
+
         let port_enabled = !using_uri && self.is_field_enabled(port_field);
 
         let selector_focused = show_focus && self.form_focus == FormFocus::HostValueSource;
@@ -1130,7 +1151,12 @@ impl ConnectionManagerWindow {
                             }),
                         )
                     })
-                    .child(Input::new(primary_input).disabled(!primary_enabled)),
+                    .child(
+                        Input::new(primary_input)
+                            .id(cm_field_id(primary_field_id))
+                            .aria_label(primary_label.clone())
+                            .disabled(!primary_enabled),
+                    ),
             )
             .when(!using_uri, |d| {
                 d.child(
@@ -1151,7 +1177,12 @@ impl ConnectionManagerWindow {
                                 }),
                             )
                         })
-                        .child(Input::new(port_input).disabled(!port_enabled)),
+                        .child(
+                            Input::new(port_input)
+                                .id(cm_field_id(&port_field.id))
+                                .aria_label(port_field.label.clone())
+                                .disabled(!port_enabled),
+                        ),
                 )
             });
 
@@ -1169,6 +1200,7 @@ impl ConnectionManagerWindow {
     pub(super) fn form_field_input(
         &self,
         label: &str,
+        field_id: &str,
         input: &Entity<InputState>,
         required: bool,
         focused: bool,
@@ -1196,12 +1228,18 @@ impl ConnectionManagerWindow {
                     .mb_1()
                     .child(Label::new(label.to_string()).required(required)),
             )
-            .child(Input::new(input))
+            .child(
+                Input::new(input)
+                    .id(cm_field_id(field_id))
+                    .aria_label(label.to_string()),
+            )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn form_field_input_inline(
         &self,
         label: &str,
+        field_id: &str,
         input: &Entity<InputState>,
         focused: bool,
         ring_color: Hsla,
@@ -1227,7 +1265,11 @@ impl ConnectionManagerWindow {
                             this.enter_edit_mode_for_field(field, window, cx);
                         }),
                     )
-                    .child(Input::new(input)),
+                    .child(
+                        Input::new(input)
+                            .id(cm_field_id(field_id))
+                            .aria_label(label.to_string()),
+                    ),
             )
     }
 

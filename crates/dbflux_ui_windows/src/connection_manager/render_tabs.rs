@@ -19,7 +19,7 @@ use gpui_component::scroll::ScrollableElement;
 
 use dbflux_components::typography::SubSectionLabel;
 
-use super::{ActiveTab, ConnectionManagerWindow, EditState, FormFocus};
+use super::{ActiveTab, ConnectionManagerWindow, EditState, FormFocus, cm_setting_id};
 
 impl ConnectionManagerWindow {
     pub(super) fn render_tab_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -28,6 +28,8 @@ impl ConnectionManagerWindow {
         let show_access_tab = !self.uses_file_form();
 
         div()
+            .id("cm-tab-list")
+            .role(Role::TabList)
             .flex()
             .items_center()
             .border_b_1()
@@ -86,6 +88,8 @@ impl ConnectionManagerWindow {
 
         div()
             .id(id)
+            .role(Role::Tab)
+            .aria_selected(is_active)
             .px_4()
             .py_2()
             .cursor_pointer()
@@ -349,6 +353,9 @@ impl ConnectionManagerWindow {
             }
         };
 
+        let refresh_interval_label =
+            dbflux_i18n::t!("connection_manager.overrides.refresh_interval");
+
         let override_rows = div()
             .flex()
             .flex_col()
@@ -441,9 +448,12 @@ impl ConnectionManagerWindow {
                                 cx.notify();
                             })),
                     )
-                    .child(div().w(px(180.0)).text_sm().child(dbflux_i18n::t!(
-                        "connection_manager.overrides.refresh_interval"
-                    )))
+                    .child(
+                        div()
+                            .w(px(180.0))
+                            .text_sm()
+                            .child(refresh_interval_label.clone()),
+                    )
                     .child(
                         div()
                             .w(px(100.0))
@@ -454,6 +464,8 @@ impl ConnectionManagerWindow {
                             })
                             .child(
                                 Input::new(&self.settings_tab.conn_refresh_interval_input)
+                                    .id(cm_setting_id("refresh_interval"))
+                                    .aria_label(refresh_interval_label)
                                     .small()
                                     .disabled(!self.settings_tab.conn_override_refresh_interval),
                             ),
@@ -752,9 +764,14 @@ impl ConnectionManagerWindow {
                                                 )),
                                         )
                                         .child(
-                                            Input::new(&input).small().disabled(!enabled).secret(
-                                                form_renderer::is_secret_field(&field.kind),
-                                            ),
+                                            Input::new(&input)
+                                                .id(cm_setting_id(&field.id))
+                                                .aria_label(field.label.clone())
+                                                .small()
+                                                .disabled(!enabled)
+                                                .secret(form_renderer::is_secret_field(
+                                                    &field.kind,
+                                                )),
                                         )
                                         .into_any_element(),
                                 )
@@ -911,7 +928,10 @@ impl ConnectionManagerWindow {
                                 .update(cx, |state, cx| state.focus(window, cx));
                         }),
                     )
-                    .child(Input::new(&self.mcp_tab.conn_mcp_client_filter_input)),
+                    .child(
+                        Input::new(&self.mcp_tab.conn_mcp_client_filter_input)
+                            .id("cm-mcp-client-filter"),
+                    ),
             )
             .child(div().flex_1().min_h_0().child(list));
 

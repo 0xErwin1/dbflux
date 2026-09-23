@@ -1,16 +1,20 @@
 //! Wizard-owned tree selection model backing the source/target table
-//! pickers: deterministic node ids over connection/database/schema/table
-//! payloads (looked up by id — never parsed back out of the id string),
-//! per-node lazy-load state, and the wizard's own checked-table
-//! multi-select. `TreeNav` itself is a pure nav model that renders nothing,
-//! so checkbox state has no business living there (design ADR #3) — it
-//! lives here instead. Pure data, no GPUI, unit testable without a wizard
-//! entity. `source_target` turns live metadata into `TreeNavNode`s keyed by
-//! these same ids and hands them to `TreeNav::set_nodes`.
+//! pickers: deterministic node ids over the shared object-tree hierarchy
+//! (looked up by id — never parsed back out of the id string), the wizard's
+//! own checked-table multi-select, and the `NodeLoad` state the Tables
+//! Mapping grid uses for its target-table-existence lookup. The pickers'
+//! hierarchy nodes and lazy-load state come from the shared
+//! `dbflux_ui_base::object_tree` projection and coordinator; only UI identity
+//! ([`TreePayload`] keyed by these ids), checked state, and the mapping
+//! grid's row status live here. Pure data, no GPUI entity, unit testable
+//! without a wizard. `source_target` turns the shared
+//! [`dbflux_ui_base::object_tree::ObjectTreeSnapshot`] into `TreeNavNode`s
+//! keyed by these same ids and hands them to `TreeNav::set_nodes`.
 
 use std::collections::{HashMap, HashSet};
 
 use dbflux_core::TableRef;
+use dbflux_ui_base::object_tree::{ObjectTreeKey, ObjectTreeRequestKey};
 use gpui::SharedString;
 use uuid::Uuid;
 
@@ -35,9 +39,33 @@ pub enum TreePayload {
     },
 }
 
-/// Per-node lazy-load state. Reused by the Tables Mapping grid for its own
-/// target-table-existence lookup, so `Loaded` carries no payload here — the
-/// grid reads the result from its own row state.
+impl TreePayload {
+    /// The shared-coordinator request whose settle drives this node's
+    /// loading state: a connection root loads its database list, a database
+    /// node loads its schemas/tables. Table and schema payloads are fully
+    /// materialized by the shared projection and never load anything.
+    pub fn request_key(&self) -> Option<ObjectTreeRequestKey> {
+        match self {
+            TreePayload::Connection(profile_id) => Some(ObjectTreeRequestKey::DatabaseList {
+                profile_id: *profile_id,
+            }),
+            TreePayload::Database {
+                profile_id,
+                database,
+            } => Some(ObjectTreeRequestKey::DatabaseSchema {
+                profile_id: *profile_id,
+                database: database.clone(),
+            }),
+            TreePayload::Schema { .. } | TreePayload::Table { .. } => None,
+        }
+    }
+}
+
+/// Per-node load status for the Tables Mapping grid's own target-table
+/// lookup, so `Loaded` carries no payload here — the grid reads the result
+/// from its own row state. The pickers no longer keep per-node load state:
+/// the shared coordinator's pending flag and settled outcome are
+/// authoritative for them.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum NodeLoad {
     #[default]
@@ -73,6 +101,37 @@ pub fn table_node_id(
     }
 }
 
+/// Maps a typed shared-hierarchy key to the wizard's stable UI id for the
+/// same object. The bytes are exactly the pre-adapter picker ids, so saved
+/// selection/expansion state keyed by those ids keeps working across the
+/// migration onto the shared coordinator.
+pub fn object_tree_node_id(key: &ObjectTreeKey) -> SharedString {
+    match key {
+        ObjectTreeKey::Profile { profile_id } => connection_node_id(*profile_id),
+        ObjectTreeKey::Database {
+            profile_id,
+            database,
+        } => database_node_id(*profile_id, database),
+        ObjectTreeKey::Schema {
+            profile_id,
+            database,
+            schema,
+        } => schema_node_id(*profile_id, database, schema),
+        ObjectTreeKey::Table {
+            profile_id,
+            database,
+            schema,
+            table,
+        } => table_node_id(*profile_id, database, schema.as_deref(), table),
+        ObjectTreeKey::View {
+            profile_id,
+            database,
+            schema,
+            view,
+        } => SharedString::from(format!("view:{profile_id}:{database}:{schema:?}:{view}")),
+    }
+}
+
 /// The ids a caller should hand to `TreeNav` after seeding pre-selection:
 /// which ancestor group ids to expand, and which table row to move the
 /// cursor to via `TreeNav::select_by_id`.
@@ -84,7 +143,6 @@ pub struct SeedResult {
 #[derive(Default)]
 pub struct TreeModel {
     node_payloads: HashMap<SharedString, TreePayload>,
-    node_load: HashMap<SharedString, NodeLoad>,
     checked: HashSet<SharedString>,
 }
 
@@ -97,16 +155,19 @@ impl TreeModel {
         self.node_payloads.insert(id, payload);
     }
 
+    /// Drops the whole payload map so the next build re-registers ONLY the
+    /// nodes of the current shared projection. Checked ids live separately
+    /// and are deliberately kept: a checked table whose row was removed
+    /// stops resolving (no payload) but keeps its check intent, so if the
+    /// table reappears its checkbox comes back. Selections must resolve
+    /// against current membership — an insert-only map would let removed
+    /// rows silently count toward the advance guard.
+    pub fn clear_payloads(&mut self) {
+        self.node_payloads.clear();
+    }
+
     pub fn payload(&self, id: &str) -> Option<&TreePayload> {
         self.node_payloads.get(id)
-    }
-
-    pub fn set_load(&mut self, id: SharedString, load: NodeLoad) {
-        self.node_load.insert(id, load);
-    }
-
-    pub fn load(&self, id: &str) -> NodeLoad {
-        self.node_load.get(id).cloned().unwrap_or_default()
     }
 
     /// Flips `id`'s checked state and returns the new state — mirrors the
@@ -248,28 +309,6 @@ mod tests {
     }
 
     #[test]
-    fn node_load_transitions_not_loaded_loading_loaded_or_failed() {
-        let mut model = TreeModel::new();
-        let id = SharedString::from("schema:x");
-
-        assert_eq!(model.load(&id), NodeLoad::NotLoaded);
-
-        model.set_load(id.clone(), NodeLoad::Loading);
-        assert_eq!(model.load(&id), NodeLoad::Loading);
-
-        model.set_load(id.clone(), NodeLoad::Loaded);
-        assert_eq!(model.load(&id), NodeLoad::Loaded);
-
-        let failing_id = SharedString::from("schema:y");
-        model.set_load(failing_id.clone(), NodeLoad::Loading);
-        model.set_load(failing_id.clone(), NodeLoad::Failed("boom".to_string()));
-        assert_eq!(
-            model.load(&failing_id),
-            NodeLoad::Failed("boom".to_string())
-        );
-    }
-
-    #[test]
     fn toggle_checked_flips_state_and_reports_the_new_value() {
         let mut model = TreeModel::new();
         let id = SharedString::from("table:1");
@@ -293,6 +332,88 @@ mod tests {
 
         model.clear_checked();
         assert_eq!(model.checked_count(), 0);
+    }
+
+    #[test]
+    fn object_tree_key_maps_to_the_stable_wizard_ui_id() {
+        let profile_id = uuid(7);
+        assert_eq!(
+            object_tree_node_id(&ObjectTreeKey::Profile { profile_id }),
+            connection_node_id(profile_id)
+        );
+        assert_eq!(
+            object_tree_node_id(&ObjectTreeKey::Database {
+                profile_id,
+                database: "app".to_string(),
+            }),
+            database_node_id(profile_id, "app")
+        );
+        assert_eq!(
+            object_tree_node_id(&ObjectTreeKey::Schema {
+                profile_id,
+                database: "app".to_string(),
+                schema: "public".to_string(),
+            }),
+            schema_node_id(profile_id, "app", "public")
+        );
+        assert_eq!(
+            object_tree_node_id(&ObjectTreeKey::Table {
+                profile_id,
+                database: "app".to_string(),
+                schema: Some("public".to_string()),
+                table: "users".to_string(),
+            }),
+            table_node_id(profile_id, "app", Some("public"), "users")
+        );
+        // Schema-less tables keep the `::` separator id.
+        assert_eq!(
+            object_tree_node_id(&ObjectTreeKey::Table {
+                profile_id,
+                database: "app".to_string(),
+                schema: None,
+                table: "loose".to_string(),
+            }),
+            table_node_id(profile_id, "app", None, "loose")
+        );
+    }
+
+    #[test]
+    fn request_key_is_only_defined_for_loadable_payloads() {
+        let profile_id = uuid(8);
+        assert_eq!(
+            TreePayload::Connection(profile_id).request_key(),
+            Some(ObjectTreeRequestKey::DatabaseList { profile_id })
+        );
+        assert_eq!(
+            TreePayload::Database {
+                profile_id,
+                database: "app".to_string(),
+            }
+            .request_key(),
+            Some(ObjectTreeRequestKey::DatabaseSchema {
+                profile_id,
+                database: "app".to_string(),
+            })
+        );
+        assert_eq!(
+            TreePayload::Schema {
+                profile_id,
+                database: "app".to_string(),
+                schema: "public".to_string(),
+            }
+            .request_key(),
+            None
+        );
+        assert_eq!(
+            TreePayload::Table {
+                profile_id,
+                database: "app".to_string(),
+                schema: None,
+                table: TableRef::new("users"),
+            }
+            .request_key(),
+            None
+        );
     }
 
     #[test]

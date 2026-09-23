@@ -6,6 +6,11 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Added
 
+* **Shared lazy object hierarchy and collapsed sidebar preview** — the sidebar
+  and migration wizard share coordinated loading while keeping independent
+  selection; collapsed sidebar entry reveals a temporary preview without
+  changing the explicit collapse choice.
+
 * **Opt-in UI automation for agents and tests** — a development build compiled
   with the `ui-automation` feature exposes each window to a local MCP server
   (vendored `gpui-mcp`) that can read the rendered element tree, click, type,
@@ -16,6 +21,7 @@ All notable changes to DBFlux will be documented in this file.
   role to accessibility clients, so their value is never readable through the
   element tree, even while a show-password toggle displays it. See
   `docs/UI_AUTOMATION.md`.
+
 * **Safe automatic Deep capture on connect and async snapshot picker** — a
   relational connection with a known database captures a Deep snapshot only
   when every table has loaded columns or sample fields. Creation metadata is
@@ -160,6 +166,15 @@ All notable changes to DBFlux will be documented in this file.
   table. `table_details` now reports `ObjectNotFound` for absent relations;
   real zero-column tables and supported views, partitioned tables and
   partitions keep loading normally (#675).
+
+* **Connection Manager inputs and tabs are named for assistive technology** —
+  text inputs in the Connection Manager were announced by their placeholder
+  (the Host input read as "localhost") and carried ids generated from runtime
+  entity ids, so UI automation could not address them across runs. Each input
+  now reports the label shown next to it and a stable id derived from its form
+  field (`cm-field-host`, `cm-field-ssh_user`, `cm-setting-refresh_interval`).
+  Document tabs and Connection Manager tabs are exposed as tabs inside a tab
+  list, with the active tab reported as selected, instead of as buttons.
 
 * **The MCP approvals overlay can be closed** — once opened, the approvals
   overlay stayed on screen until the audit viewer was opened. It now closes
