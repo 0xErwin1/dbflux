@@ -144,6 +144,11 @@ jobs:
           shared-key: ci-deterministic
           cache-targets: true
           cache-on-failure: true
+          # A cache saved from a pull request or a tag is scoped to that ref:
+          # nothing else can read it, yet it counts toward the repository's
+          # cache limit and evicts the caches main and the nightly rely on.
+          # Pull requests and releases still restore from main.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Run deterministic workspace tests
         run: cargo test --workspace --locked --features "sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,clickhouse,turso,aws"
@@ -186,6 +191,8 @@ jobs:
           shared-key: ci-live-integration
           cache-targets: true
           cache-on-failure: true
+          # Saved from main only; see the deterministic job.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # Testcontainers pulls images lazily at test time, so concurrent test
       # binaries race to pull the same tag and anonymous Docker Hub throttling
@@ -365,6 +372,8 @@ jobs:
           shared-key: ci-check-${{ matrix.os }}
           cache-targets: true
           cache-on-failure: true
+          # Saved from main only; see the deterministic job.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Cargo check
         if: needs.changes.outputs.rust != 'false'
