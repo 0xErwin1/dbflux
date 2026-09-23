@@ -144,6 +144,13 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **The schema diagram follows the selected language** — its toolbar, context
+  menu, layout and export menus, inspector, loading and error messages, toasts,
+  tab title, and the sidebar entries that open it ("View Schema Diagram", "View
+  Relationships") were always shown in English. They now use the Spanish,
+  Korean, and Simplified Chinese catalogs. Audit log summaries stay in English,
+  like every other audit event.
+
 * **Ayu colors on buttons and checkboxes** — primary buttons such as Save and
   checked checkboxes now use the selected theme's amber accent instead of the
   component library's default white fill. Component colors, including hover and

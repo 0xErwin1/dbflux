@@ -43,12 +43,7 @@ impl SchemaVizDocument {
                 let e = entity.clone();
                 Box::new(move |cx| {
                     let d = e.read(cx);
-                    let title = match d.table_name() {
-                        Some(t) => format!("Schema: {}", t),
-                        None => {
-                            format!("Schema: {}", d.database.as_deref().unwrap_or("database"))
-                        }
-                    };
+                    let title = d.title();
                     DocumentMetaSnapshot {
                         id,
                         kind: DocumentKind::SchemaViz,
@@ -63,13 +58,7 @@ impl SchemaVizDocument {
             // tab_title
             {
                 let e = entity.clone();
-                Box::new(move |cx| {
-                    let d = e.read(cx);
-                    match d.table_name() {
-                        Some(t) => format!("Schema: {}", t),
-                        None => format!("Schema: {}", d.database.as_deref().unwrap_or("database")),
-                    }
-                })
+                Box::new(move |cx| e.read(cx).title())
             },
             // can_close — SchemaViz is always closable (no unsaved state)
             Box::new(|_cx| true),

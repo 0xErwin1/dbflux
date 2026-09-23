@@ -77,25 +77,34 @@ impl Render for SchemaInspector {
             .flex_col()
             .overflow_y_scroll()
             .track_focus(&self.focus_handle)
-            .child(render_section_header("TABLE", theme))
+            .child(render_section_header(
+                dbflux_i18n::t!("document.schema_viz.inspector.table"),
+                theme,
+            ))
             .child(render_table_summary(&node, theme))
-            .child(render_section_header("COLUMNS", theme))
+            .child(render_section_header(
+                dbflux_i18n::t!("document.schema_viz.inspector.columns"),
+                theme,
+            ))
             .children(node.columns.iter().map(|col| render_column_row(col, theme)))
             .when(has_indexes, |d| {
-                d.child(render_section_header("INDEXES", theme))
-                    .children(node.indexes.iter().map(|idx| render_index_row(idx, theme)))
+                d.child(render_section_header(
+                    dbflux_i18n::t!("document.schema_viz.inspector.indexes"),
+                    theme,
+                ))
+                .children(node.indexes.iter().map(|idx| render_index_row(idx, theme)))
             })
             .when(has_outgoing, |d| {
-                d.child(render_section_header("FOREIGN KEYS", theme))
-                    .children(outgoing.iter().map(|fk| render_outgoing_fk(fk, theme)))
+                d.child(render_section_header(
+                    dbflux_i18n::t!("document.schema_viz.inspector.foreign_keys"),
+                    theme,
+                ))
+                .children(outgoing.iter().map(|fk| render_outgoing_fk(fk, theme)))
             })
     }
 }
 
-fn render_section_header(
-    label: &'static str,
-    theme: &gpui_component::theme::Theme,
-) -> impl IntoElement {
+fn render_section_header(label: String, theme: &gpui_component::theme::Theme) -> impl IntoElement {
     div()
         .px(Spacing::SM)
         .py(Spacing::XS)
@@ -139,7 +148,11 @@ fn render_table_summary(
             div()
                 .text_size(FontSizes::XS)
                 .text_color(theme.muted_foreground)
-                .child(format!("{} columns · {} indexes", col_count, idx_count)),
+                .child(dbflux_i18n::t!(
+                    "document.schema_viz.inspector.summary",
+                    columns = col_count,
+                    indexes = idx_count
+                )),
         )
 }
 

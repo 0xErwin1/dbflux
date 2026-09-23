@@ -104,29 +104,52 @@ impl SchemaVizMenuAction {
 
         match self {
             SchemaVizMenuAction::Separator => MenuItem::separator(),
-            SchemaVizMenuAction::ZoomIn => MenuItem::new("Zoom In").icon(AppIcon::ZoomIn),
-            SchemaVizMenuAction::ZoomOut => MenuItem::new("Zoom Out").icon(AppIcon::ZoomOut),
+            SchemaVizMenuAction::ZoomIn => {
+                MenuItem::new(dbflux_i18n::t!("document.schema_viz.menu.zoom_in"))
+                    .icon(AppIcon::ZoomIn)
+            }
+            SchemaVizMenuAction::ZoomOut => {
+                MenuItem::new(dbflux_i18n::t!("document.schema_viz.menu.zoom_out"))
+                    .icon(AppIcon::ZoomOut)
+            }
             SchemaVizMenuAction::LayoutSubmenu => {
-                MenuItem::new("Layout").icon(AppIcon::Layers).submenu()
+                MenuItem::new(dbflux_i18n::t!("document.schema_viz.menu.layout"))
+                    .icon(AppIcon::Layers)
+                    .submenu()
             }
             SchemaVizMenuAction::CopyAsSubmenu => {
-                MenuItem::new("Copy as").icon(AppIcon::Database).submenu()
+                MenuItem::new(dbflux_i18n::t!("document.schema_viz.menu.copy_as"))
+                    .icon(AppIcon::Database)
+                    .submenu()
             }
             SchemaVizMenuAction::FocusOnTable => {
-                MenuItem::new("Focus on this table").icon(AppIcon::Maximize2)
+                MenuItem::new(dbflux_i18n::t!("document.schema_viz.menu.focus_table"))
+                    .icon(AppIcon::Maximize2)
             }
             SchemaVizMenuAction::InspectTable => {
-                MenuItem::new("Inspect schema").icon(AppIcon::Table)
+                MenuItem::new(dbflux_i18n::t!("document.schema_viz.menu.inspect_schema"))
+                    .icon(AppIcon::Table)
             }
             SchemaVizMenuAction::LayoutLeftRight => {
-                MenuItem::new("Left-Right").icon(AppIcon::ArrowLeftRight)
+                MenuItem::new(SchemaVizDocument::layout_label(LayoutFormat::LeftRight))
+                    .icon(AppIcon::ArrowLeftRight)
             }
             SchemaVizMenuAction::LayoutSnowflake => {
-                MenuItem::new("Snowflake").icon(AppIcon::Snowflake)
+                MenuItem::new(SchemaVizDocument::layout_label(LayoutFormat::Snowflake))
+                    .icon(AppIcon::Snowflake)
             }
-            SchemaVizMenuAction::LayoutCompact => MenuItem::new("Compact").icon(AppIcon::Grid3x3),
-            SchemaVizMenuAction::CopyAsDbml => MenuItem::new("Copy as DBML").icon(AppIcon::Copy),
-            SchemaVizMenuAction::CopyAsSql => MenuItem::new("Copy as SQL").icon(AppIcon::Code),
+            SchemaVizMenuAction::LayoutCompact => {
+                MenuItem::new(SchemaVizDocument::layout_label(LayoutFormat::Compact))
+                    .icon(AppIcon::Grid3x3)
+            }
+            SchemaVizMenuAction::CopyAsDbml => {
+                MenuItem::new(dbflux_i18n::t!("document.schema_viz.menu.copy_as_dbml"))
+                    .icon(AppIcon::Copy)
+            }
+            SchemaVizMenuAction::CopyAsSql => {
+                MenuItem::new(dbflux_i18n::t!("document.schema_viz.menu.copy_as_sql"))
+                    .icon(AppIcon::Code)
+            }
         }
     }
 
@@ -380,6 +403,18 @@ impl SchemaVizDocument {
         }
     }
 
+    /// Tab title: the focal table in focused mode, otherwise the database.
+    pub(crate) fn title(&self) -> String {
+        let name = match self.table_name() {
+            Some(table) => table.to_string(),
+            None => self.database.clone().unwrap_or_else(|| {
+                dbflux_i18n::t!("document.schema_viz.view.title_default_database")
+            }),
+        };
+
+        dbflux_i18n::t!("document.schema_viz.view.title", name = name)
+    }
+
     /// Creates a new SchemaVizDocument and starts async loading.
     /// NOTE: This must be called from within a `cx.new(|cx| ...)` closure
     /// where `cx` is `Context<Self>`. The caller is responsible for wrapping
@@ -536,8 +571,11 @@ impl SchemaVizDocument {
     ) {
         // Register the task with the TasksPanel before spawning
         let (task_id, cancel_token) = {
-            let database_label = database.as_deref().unwrap_or("global");
-            let description = format!("Schema diagram: {}", database_label);
+            let database_label = database
+                .clone()
+                .unwrap_or_else(|| dbflux_i18n::t!("document.schema_viz.task.global_scope"));
+            let description =
+                dbflux_i18n::t!("document.schema_viz.task.load", database = database_label);
             let target = TaskTarget {
                 profile_id,
                 database: database.clone(),
@@ -556,7 +594,9 @@ impl SchemaVizDocument {
                 Some(connection) => {
                     Self::load_focused_schema_blocking(database, mode, &connection, cancel_token)
                 }
-                None => Err("Connection not found or not active".to_string()),
+                None => Err(dbflux_i18n::t!(
+                    "document.schema_viz.error.connection_unavailable"
+                )),
             }
         });
 
@@ -971,7 +1011,8 @@ impl SchemaVizDocument {
         source: &dyn MetadataSource,
         cancel_token: Arc<CancelToken>,
     ) -> Result<LoadedSchemaData, String> {
-        let db_name = database.ok_or_else(|| "No database specified".to_string())?;
+        let db_name =
+            database.ok_or_else(|| dbflux_i18n::t!("document.schema_viz.error.no_database"))?;
 
         match mode {
             SchemaVizMode::Focused { table, schema } => {
@@ -980,7 +1021,9 @@ impl SchemaVizDocument {
                     .capabilities
                     .contains(dbflux_core::DriverCapabilities::FOREIGN_KEYS)
                 {
-                    return Err("Foreign keys not supported by this driver".to_string());
+                    return Err(dbflux_i18n::t!(
+                        "document.schema_viz.error.foreign_keys_unsupported"
+                    ));
                 }
 
                 if cancel_token.is_cancelled() {
@@ -1007,7 +1050,10 @@ impl SchemaVizDocument {
                 ) {
                     LoadedRelation::Loaded(details) => details,
                     LoadedRelation::Failed(e) => {
-                        return Err(format!("Failed to fetch table details: {}", e));
+                        return Err(dbflux_i18n::t!(
+                            "document.schema_viz.error.fetch_table_details_failed",
+                            error = e
+                        ));
                     }
                     LoadedRelation::Cancelled => return Err("Cancelled".into()),
                 };
@@ -1146,13 +1192,15 @@ impl SchemaVizDocument {
                     .capabilities
                     .contains(dbflux_core::DriverCapabilities::FOREIGN_KEYS)
                 {
-                    return Err("Foreign keys not supported by this driver".to_string());
+                    return Err(dbflux_i18n::t!(
+                        "document.schema_viz.error.foreign_keys_unsupported"
+                    ));
                 }
 
                 // Load ALL tables in the database
-                let schema_info = source
-                    .schema_for_database(&db_name)
-                    .map_err(|e| format!("Failed to list tables: {}", e))?;
+                let schema_info = source.schema_for_database(&db_name).map_err(|e| {
+                    dbflux_i18n::t!("document.schema_viz.error.list_tables_failed", error = e)
+                })?;
 
                 if cancel_token.is_cancelled() {
                     return Err("Cancelled".into());
@@ -1696,7 +1744,7 @@ impl SchemaVizDocument {
                 cx.write_to_clipboard(ClipboardItem::new_string(dbml_text));
 
                 self.pending_toast = Some(PendingToast {
-                    message: "Schema exported to DBML (copied to clipboard)".into(),
+                    message: dbflux_i18n::t!("document.schema_viz.toast.dbml_copied"),
                     is_error: false,
                 });
 
@@ -1719,7 +1767,7 @@ impl SchemaVizDocument {
                 log::error!("DBML export failed: {}", e);
 
                 self.pending_toast = Some(PendingToast {
-                    message: format!("DBML export failed: {}", e),
+                    message: dbflux_i18n::t!("document.schema_viz.toast.dbml_failed", error = e),
                     is_error: true,
                 });
 
@@ -1754,7 +1802,7 @@ impl SchemaVizDocument {
                 cx.write_to_clipboard(ClipboardItem::new_string(sql_text.clone()));
 
                 self.pending_toast = Some(PendingToast {
-                    message: "Schema exported as SQL (copied to clipboard)".into(),
+                    message: dbflux_i18n::t!("document.schema_viz.toast.sql_copied"),
                     is_error: false,
                 });
 
@@ -1777,7 +1825,7 @@ impl SchemaVizDocument {
                 log::error!("SQL export failed: {}", e);
 
                 self.pending_toast = Some(PendingToast {
-                    message: format!("SQL export failed: {}", e),
+                    message: dbflux_i18n::t!("document.schema_viz.toast.sql_failed", error = e),
                     is_error: true,
                 });
 
@@ -1853,7 +1901,7 @@ impl SchemaVizDocument {
                         div()
                             .text_size(FontSizes::SM)
                             .text_color(theme.muted_foreground)
-                            .child("Loading schema…"),
+                            .child(dbflux_i18n::t!("document.schema_viz.status.loading")),
                     ),
             )
             .child(
@@ -1887,11 +1935,10 @@ impl SchemaVizDocument {
             .size_full()
             .items_center()
             .justify_center()
-            .child(
-                div()
-                    .text_color(gpui::red())
-                    .child(format!("Error: {}", msg)),
-            )
+            .child(div().text_color(gpui::red()).child(dbflux_i18n::t!(
+                "document.shared.error_prefix",
+                message = msg
+            )))
     }
 
     fn render_not_supported(&self) -> Div {
@@ -1900,20 +1947,20 @@ impl SchemaVizDocument {
             .size_full()
             .items_center()
             .justify_center()
-            .child("Schema diagram is not available for this database type")
+            .child(dbflux_i18n::t!("document.schema_viz.status.unsupported"))
     }
 
-    pub(crate) fn layout_label(format: LayoutFormat) -> &'static str {
+    pub(crate) fn layout_label(format: LayoutFormat) -> String {
         match format {
-            LayoutFormat::LeftRight => "Left-Right",
-            LayoutFormat::Snowflake => "Snowflake",
-            LayoutFormat::Compact => "Compact",
+            LayoutFormat::LeftRight => dbflux_i18n::t!("document.schema_viz.layout.left_right"),
+            LayoutFormat::Snowflake => dbflux_i18n::t!("document.schema_viz.layout.snowflake"),
+            LayoutFormat::Compact => dbflux_i18n::t!("document.schema_viz.layout.compact"),
         }
     }
 
     fn make_layout_menu_item(
         &self,
-        label: &'static str,
+        label: String,
         format: LayoutFormat,
         theme: &gpui_component::theme::Theme,
         cx: &mut Context<Self>,
@@ -1954,9 +2001,24 @@ impl SchemaVizDocument {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let items = vec![
-            self.make_layout_menu_item("Left-Right", LayoutFormat::LeftRight, theme, cx),
-            self.make_layout_menu_item("Snowflake", LayoutFormat::Snowflake, theme, cx),
-            self.make_layout_menu_item("Compact", LayoutFormat::Compact, theme, cx),
+            self.make_layout_menu_item(
+                Self::layout_label(LayoutFormat::LeftRight),
+                LayoutFormat::LeftRight,
+                theme,
+                cx,
+            ),
+            self.make_layout_menu_item(
+                Self::layout_label(LayoutFormat::Snowflake),
+                LayoutFormat::Snowflake,
+                theme,
+                cx,
+            ),
+            self.make_layout_menu_item(
+                Self::layout_label(LayoutFormat::Compact),
+                LayoutFormat::Compact,
+                theme,
+                cx,
+            ),
         ];
 
         self.build_dropdown_menu(items, cx)
@@ -1985,7 +2047,11 @@ impl SchemaVizDocument {
                         cx.notify();
                     }),
                 )
-                .child(div().text_size(FontSizes::SM).child("Copy as DBML")),
+                .child(
+                    div()
+                        .text_size(FontSizes::SM)
+                        .child(dbflux_i18n::t!("document.schema_viz.menu.copy_as_dbml")),
+                ),
             div()
                 .flex()
                 .items_center()
@@ -2003,7 +2069,11 @@ impl SchemaVizDocument {
                         cx.notify();
                     }),
                 )
-                .child(div().text_size(FontSizes::SM).child("Copy as SQL")),
+                .child(
+                    div()
+                        .text_size(FontSizes::SM)
+                        .child(dbflux_i18n::t!("document.schema_viz.menu.copy_as_sql")),
+                ),
         ];
 
         self.build_dropdown_menu(items, cx)
@@ -2380,13 +2450,17 @@ impl SchemaVizDocument {
             None => div()
                 .size_full()
                 .bg(background)
-                .child(self.render_error("No layout computed")),
+                .child(self.render_error(&dbflux_i18n::t!("document.schema_viz.error.no_layout"))),
         };
 
         // T22: Toolbar — left group (zoom, layout, export) + flex-1 spacer + right group (counter + toggles)
         let n_tables = self.layout.as_ref().map(|l| l.nodes.len()).unwrap_or(0);
         let n_relations = self.layout.as_ref().map(|l| l.edges.len()).unwrap_or(0);
-        let counter_label = format!("{} tables · {} relations", n_tables, n_relations);
+        let counter_label = dbflux_i18n::t!(
+            "document.schema_viz.toolbar.counter",
+            tables = n_tables,
+            relations = n_relations
+        );
 
         // Clone entity once before building the toolbar so Checkbox closures can
         // call back into self via update().
@@ -2412,7 +2486,7 @@ impl SchemaVizDocument {
             .child(
                 Checkbox::new("schema-viz-show-types")
                     .checked(show_types_val)
-                    .label("Types")
+                    .label(dbflux_i18n::t!("document.schema_viz.toolbar.types"))
                     .on_click(move |checked: &bool, _window: &mut Window, cx: &mut App| {
                         entity_for_types.update(cx, |this, cx| {
                             this.set_show_types(*checked, cx);
@@ -2422,7 +2496,7 @@ impl SchemaVizDocument {
             .child(
                 Checkbox::new("schema-viz-show-indexes")
                     .checked(show_indexes_val)
-                    .label("Indexes")
+                    .label(dbflux_i18n::t!("document.schema_viz.toolbar.indexes"))
                     .on_click(move |checked: &bool, _window: &mut Window, cx: &mut App| {
                         entity_for_indexes.update(cx, |this, cx| {
                             this.set_show_indexes(*checked, cx);
@@ -2502,7 +2576,7 @@ impl SchemaVizDocument {
                                     cx.notify();
                                 }),
                             )
-                            .child("Reset"),
+                            .child(dbflux_i18n::t!("document.schema_viz.toolbar.reset")),
                     )
                     .child(
                         div()
@@ -2518,7 +2592,7 @@ impl SchemaVizDocument {
                                     cx.notify();
                                 }),
                             )
-                            .child("Arrange"),
+                            .child(dbflux_i18n::t!("document.schema_viz.toolbar.arrange")),
                     )
                     .child(
                         div()
@@ -2533,7 +2607,7 @@ impl SchemaVizDocument {
                                     cx.notify();
                                 }),
                             )
-                            .child("Fit"),
+                            .child(dbflux_i18n::t!("document.schema_viz.toolbar.fit")),
                     )
                     .child(div().w(px(1.0)).h(Spacing::LG).bg(border.opacity(0.5)))
                     // Layout dropdown
@@ -2606,7 +2680,9 @@ impl SchemaVizDocument {
                                         div()
                                             .text_size(FontSizes::SM)
                                             .text_color(theme.foreground)
-                                            .child("Export"),
+                                            .child(dbflux_i18n::t!(
+                                                "document.schema_viz.toolbar.export"
+                                            )),
                                     )
                                     .child(
                                         svg()
@@ -3013,7 +3089,7 @@ impl SchemaVizDocument {
                 .border_color(theme.border)
                 .text_size(FontSizes::XS)
                 .text_color(theme.muted_foreground)
-                .child("Showing first 100 tables — the schema has more.")
+                .child(dbflux_i18n::t!("document.schema_viz.status.table_cap"))
         });
 
         // Clone entity before rendering to avoid borrow conflicts with canvas below.
@@ -3135,7 +3211,10 @@ impl SchemaVizDocument {
             Some(s) => format!("{}.{}", s, node.id.name),
             None => node.id.name.clone(),
         };
-        let col_count_label = format!("{} cols", node.columns.len());
+        let col_count_label = dbflux_i18n::t!(
+            "document.schema_viz.node.column_count",
+            count = node.columns.len()
+        );
 
         let node_header = div()
             .flex()
@@ -3282,7 +3361,7 @@ impl SchemaVizDocument {
                             .text_size(FontSizes::XS)
                             .text_color(muted_fg)
                             .font_weight(gpui::FontWeight::BOLD)
-                            .child("Indexes"),
+                            .child(dbflux_i18n::t!("document.schema_viz.node.indexes")),
                     )
                     .children(index_rows),
             )

@@ -537,6 +537,12 @@ crates/
       audit.rs              # AuditEventDto가 있는 AuditRepository
       *.rs                  # 기타 도메인 리포지토리
     src/legacy.rs           # JSON-to-SQLite 가져오기
+  dbflux_schema_viz/        # 스키마 시각화
+    src/lib.rs              # 재내보내기: graph, layout, dbml, sql 모듈, DbmlScope, SqlScope
+    src/graph.rs            # SchemaGraph, TableNode, FkEdge
+    src/layout.rs           # 레이아웃 알고리즘: LeftRight, Snowflake, Compact
+    src/dbml.rs             # DBML 내보내기 (3가지 범위: FocalTable, Subgraph, FullSchema)
+    src/sql.rs              # SQL DDL 내보내기: CREATE TABLE + ALTER TABLE ADD CONSTRAINT (같은 3가지 범위)
   dbflux_test_support/       # 통합 테스트용 Docker 컨테이너 및 픽스처
     src/containers.rs       # Docker 컨테이너 수명 주기 (Postgres, MySQL, MongoDB, Redis, DynamoDB Local)
     src/fixtures.rs         # 테스트 픽스처 헬퍼
@@ -640,6 +646,7 @@ crates/
 - **데이터 테이블**: `crates/dbflux_components/src/components/data_table/` — 정렬, 선택, phantom scroller 패턴을 통한 가로 스크롤, 키보드 탐색, 열 크기 조정, CRUD 작업이 있는 상황에 맞는 메뉴를 갖춘 사용자 정의 가상화 테이블입니다.
 - **문서 트리**: `crates/dbflux_components/src/components/document_tree/` — 키보드 탐색(j/k/h/l), 검색(Ctrl+F 또는 /), 접을 수 있는 노드, 뷰 모드(Keys Only, Keys+Preview, Full Values)를 갖춘 문서 데이터베이스용 계층적 JSON/BSON 뷰어입니다.
 - **키-값 뷰**: `crates/dbflux_ui_document/src/key_value/` — 타입별 렌더링(String, Hash, List, Set, SortedSet, Stream), 페이지 나누기, 변경, 상황에 맞는 메뉴를 갖춘 Redis 전용 문서 탭입니다. `key_value/pane.rs`에서 생성된 `PaneHandle`을 통해 워크스페이스와 통합됩니다.
+- **스키마 시각화**: `crates/dbflux_schema_viz/`는 `SchemaGraph`(테이블 노드와 외래 키 간선), 레이아웃 알고리즘(LeftRight, Snowflake, Compact), DBML 내보내기, SQL DDL 내보내기를 제공합니다. `crates/dbflux_ui_document/src/schema_viz/mod.rs`의 `SchemaVizDocument`를 통해 사용하며, 도구 모음 드롭다운(Layout, Export), 토스트 피드백, 감사 이벤트, 취소 가능한 백그라운드 작업 로딩을 갖추고 있습니다. `schema_viz/pane.rs`에서 생성된 `PaneHandle`을 통해 워크스페이스와 통합됩니다.
 - 셀 편집기 모달: `crates/dbflux_components/src/modals/cell_editor.rs`는 JSON 검증과 포맷팅을 갖춘, JSON 열과 길거나 여러 줄인 텍스트용 모달 편집기를 제공합니다. (`dbflux_ui`의 기존 오버레이 경로에 셰임(shim)이 있습니다.)
 - 문서 미리보기 모달: `crates/dbflux_components/src/modals/document_preview.rs` — 인라인 JSON 편집기가 있는 전체 화면 JSON 문서 미리보기입니다. (`dbflux_ui`의 기존 오버레이 경로에 셰임(shim)이 있습니다.)
 - 명령 팔레트: `crates/dbflux_ui/src/ui/overlays/command_palette.rs` — 모든 앱 액션을 위한 퍼지 검색 명령 팔레트입니다.
