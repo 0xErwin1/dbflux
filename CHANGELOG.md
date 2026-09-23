@@ -8,6 +8,11 @@ All notable changes to DBFlux will be documented in this file.
 
 * **PostgreSQL bounded query execution** — single-statement row limits retain only the requested rows while draining execution to completion; unsupported bounded batches, instance catalog requests, and statement deadlines are rejected before execution.
 
+* **Shared lazy object hierarchy and collapsed sidebar preview** — the sidebar
+  and migration wizard share coordinated loading while keeping independent
+  selection; collapsed sidebar entry reveals a temporary preview without
+  changing the explicit collapse choice.
+
 * **Opt-in UI automation for agents and tests** — a development build compiled
   with the `ui-automation` feature exposes each window to a local MCP server
   (vendored `gpui-mcp`) that can read the rendered element tree, click, type,
@@ -18,6 +23,7 @@ All notable changes to DBFlux will be documented in this file.
   role to accessibility clients, so their value is never readable through the
   element tree, even while a show-password toggle displays it. See
   `docs/UI_AUTOMATION.md`.
+
 * **Safe automatic Deep capture on connect and async snapshot picker** — a
   relational connection with a known database captures a Deep snapshot only
   when every table has loaded columns or sample fields. Creation metadata is

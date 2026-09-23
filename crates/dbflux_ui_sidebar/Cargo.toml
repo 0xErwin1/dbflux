@@ -26,6 +26,7 @@ rfd.workspace = true
 dirs.workspace = true
 
 [dev-dependencies]
+secrecy.workspace = true
 rusqlite.workspace = true
 gpui = { workspace = true, features = ["test-support"] }
 

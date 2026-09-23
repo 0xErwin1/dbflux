@@ -1,3 +1,6 @@
+//! Sidebar crate root.
+#![recursion_limit = "2048"]
+
 mod code_generation;
 mod context_menu;
 mod deletion;
@@ -764,7 +767,7 @@ impl ItemIdParts {
 }
 
 /// Action to execute after table/type details finish loading.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 enum PendingAction {
     ViewSchema {
         item_id: String,
@@ -881,6 +884,14 @@ fn compute_gutter_map(items: &[TreeItem]) -> HashMap<String, GutterInfo> {
     map
 }
 
+type SessionRequest = (dbflux_ui_base::object_tree::ObjectTreeRequestKey, u64);
+type TableDetailsRetry = (
+    dbflux_ui_base::object_tree::ObjectTreeRequestKey,
+    std::sync::Weak<dyn dbflux_core::Connection>,
+    u64,
+);
+type KnownInvalidatedDatabase = (std::sync::Weak<dyn dbflux_core::Connection>, u64);
+
 pub struct Sidebar {
     app_state: Entity<AppStateEntity>,
     tree_state: Entity<TreeState>,
@@ -900,8 +911,25 @@ pub struct Sidebar {
     context_menu: Option<ContextMenuState>,
     /// Actions to execute after table/type details finish loading, keyed by item_id
     pending_actions: HashMap<String, PendingAction>,
+    table_details_requests: HashMap<String, SessionRequest>,
+    table_refresh_tasks: HashMap<String, (TaskId, dbflux_core::CancelToken)>,
+    superseded_details_cancellations: HashSet<SessionRequest>,
+    table_details_actions: HashMap<String, PendingAction>,
+    table_details_retry: std::cell::RefCell<HashMap<String, TableDetailsRetry>>,
+    table_details_recovery: HashMap<String, SessionRequest>,
+    recovered_table_databases: HashMap<(Uuid, String), (String, u64)>,
+    known_invalidated_databases:
+        std::cell::RefCell<HashMap<(Uuid, String), KnownInvalidatedDatabase>>,
     /// Item IDs currently being fetched (tables, type/index/FK folders)
     loading_items: HashSet<String>,
+    view_refresh_tasks: HashMap<
+        String,
+        (
+            TaskId,
+            dbflux_core::RefreshViewsParams,
+            dbflux_core::CancelToken,
+        ),
+    >,
     /// Maps profile_id -> active database name (for styling in render)
     active_databases: HashMap<Uuid, String>,
     syncing_expansion: bool,
@@ -1013,6 +1041,15 @@ pub struct DeleteModalState<'a> {
 impl EventEmitter<SidebarEvent> for Sidebar {}
 
 impl Sidebar {
+    pub fn has_transient_interaction(&self) -> bool {
+        self.context_menu.is_some()
+            || self.add_menu_open
+            || self.child_picker.is_some()
+            || self.drag_hover_folder.is_some()
+            || self.drop_target.is_some()
+            || self.scripts_drop_target.is_some()
+    }
+
     pub fn new(
         app_state: Entity<AppStateEntity>,
         window: &mut Window,
@@ -1057,6 +1094,23 @@ impl Sidebar {
 
                 this.refresh_tree(cx);
                 this.refresh_scripts_tree(cx);
+            },
+        );
+
+        let object_tree_subscription = cx.subscribe(
+            &app_state,
+            |this, _, event: &dbflux_ui_base::object_tree::ObjectTreeEvent, cx| match event.key {
+                dbflux_ui_base::object_tree::ObjectTreeRequestKey::TableDetails { .. } => {
+                    this.settle_table_details(event, cx)
+                }
+                dbflux_ui_base::object_tree::ObjectTreeRequestKey::DatabaseSchema { .. } => {
+                    this.settle_details_recovery_schema(event, cx);
+                    this.rebuild_tree_with_overrides(cx);
+                }
+                dbflux_ui_base::object_tree::ObjectTreeRequestKey::DatabaseList { .. } => {
+                    this.reconcile_known_databases(this.app_state.read(cx));
+                    this.rebuild_tree_with_overrides(cx);
+                }
             },
         );
 
@@ -1161,12 +1215,22 @@ impl Sidebar {
             expansion_overrides: HashMap::new(),
             context_menu: None,
             pending_actions: HashMap::new(),
+            table_details_requests: HashMap::new(),
+            table_refresh_tasks: HashMap::new(),
+            superseded_details_cancellations: HashSet::new(),
+            table_details_actions: HashMap::new(),
+            table_details_retry: std::cell::RefCell::new(HashMap::new()),
+            table_details_recovery: HashMap::new(),
+            recovered_table_databases: HashMap::new(),
+            known_invalidated_databases: std::cell::RefCell::new(HashMap::new()),
             loading_items: HashSet::new(),
+            view_refresh_tasks: HashMap::new(),
             active_databases: HashMap::new(),
             syncing_expansion: false,
             tracked_operation_tasks: HashMap::new(),
             _subscriptions: vec![
                 app_state_subscription,
+                object_tree_subscription,
                 rename_subscription,
                 connections_search_subscription,
                 scripts_search_subscription,
@@ -1367,6 +1431,54 @@ impl Sidebar {
                 self.metric_fetch_errors.remove(&error_key);
                 self.spawn_fetch_metric_namespaces(profile_id, database, cx);
             }
+            return;
+        }
+
+        if let Some(table_item) = item_id.strip_prefix("object-retry|") {
+            if let Some(SchemaNodeId::Profile { profile_id }) = parse_node_id(table_item) {
+                self.app_state.update(cx, |state, cx| {
+                    state.object_tree_retry(
+                        dbflux_ui_base::object_tree::ObjectTreeRequestKey::DatabaseList {
+                            profile_id,
+                        },
+                        cx,
+                    );
+                });
+                self.rebuild_tree_with_overrides(cx);
+                return;
+            }
+            if let Some(SchemaNodeId::Database { profile_id, name }) = parse_node_id(table_item) {
+                self.app_state.update(cx, |state, cx| {
+                    state.object_tree_retry(
+                        dbflux_ui_base::object_tree::ObjectTreeRequestKey::DatabaseSchema {
+                            profile_id,
+                            database: name,
+                        },
+                        cx,
+                    );
+                });
+                self.rebuild_tree_with_overrides(cx);
+                return;
+            }
+            self.reconcile_table_details_retry(self.app_state.read(cx));
+            let key = self
+                .table_details_retry
+                .borrow()
+                .get(table_item)
+                .map(|(key, _, generation)| (key.clone(), *generation));
+            if let Some((key, generation)) = key {
+                self.table_details_recovery
+                    .insert(table_item.to_string(), (key.clone(), generation));
+                let schema_key =
+                    dbflux_ui_base::object_tree::ObjectTreeRequestKey::DatabaseSchema {
+                        profile_id: key.profile_id(),
+                        database: key.node_key().database().unwrap_or_default().to_string(),
+                    };
+                self.app_state.update(cx, |state, cx| {
+                    state.object_tree_retry(schema_key, cx);
+                });
+            }
+            self.rebuild_tree_with_overrides(cx);
             return;
         }
 

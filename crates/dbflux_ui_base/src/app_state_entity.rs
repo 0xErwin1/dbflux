@@ -16,6 +16,7 @@ use gpui_component::Root;
 use uuid::Uuid;
 
 use crate::dashboard_manager::DashboardManager;
+use crate::object_tree::{ObjectTreeCoordinator, ObjectTreeEvent};
 use crate::saved_chart_manager::SavedChartManager;
 use crate::saved_query_manager::SavedQueryManager;
 use crate::schema_snapshot_manager::SchemaSnapshotManager;
@@ -179,6 +180,12 @@ pub struct AppStateEntity {
     /// (on-connect auto-capture and the explicit deep-capture path).
     pub schema_snapshots: SchemaSnapshotManager,
 
+    /// Shared DB object-tree coordinator. ONE instance per entity: the
+    /// sidebar and the wizard adapters both reach it through this entity, so
+    /// identical requests dedupe into one driver execution and every
+    /// subscriber is notified of each settle via [`ObjectTreeEvent`].
+    pub object_tree: ObjectTreeCoordinator,
+
     /// Set by the Connection Manager after editing a profile that is currently
     /// connected. The sidebar consumes this on the next `AppStateChanged` to
     /// surface a "Reconnect now / Later" prompt — the edit itself is already
@@ -230,6 +237,7 @@ impl AppStateEntity {
             dashboards,
             saved_queries,
             schema_snapshots,
+            object_tree: ObjectTreeCoordinator::default(),
             pending_edit_reconnect_prompt: None,
             pending_reconnect_request: None,
             unread_error_count: 0,
@@ -266,6 +274,7 @@ impl AppStateEntity {
             dashboards,
             saved_queries,
             schema_snapshots,
+            object_tree: ObjectTreeCoordinator::default(),
             pending_edit_reconnect_prompt: None,
             pending_reconnect_request: None,
             unread_error_count: 0,
@@ -351,6 +360,7 @@ impl std::ops::DerefMut for AppStateEntity {
 
 impl EventEmitter<AppStateChanged> for AppStateEntity {}
 impl EventEmitter<AuthProfileCreated> for AppStateEntity {}
+impl EventEmitter<ObjectTreeEvent> for AppStateEntity {}
 impl EventEmitter<UserErrorReported> for AppStateEntity {}
 impl EventEmitter<OpenAuditRequested> for AppStateEntity {}
 
