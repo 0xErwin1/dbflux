@@ -22,6 +22,10 @@ use dbflux_core::{
     QueryLanguage, ReadOnlyReason, RefreshPolicy, RiskedChange, SchemaChange, TableInfo, TableRef,
     diff_schema,
 };
+use dbflux_storage::error::StorageError;
+use dbflux_storage::repositories::sch_schema_snapshots::{
+    SchemaSnapshotRepo, SchemaSnapshotSummary,
+};
 use dbflux_ui_base::sql_preview_modal::SqlPreviewModal;
 use dbflux_ui_base::toast::{PendingToast, flush_pending_toast};
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error, report_error_async};
@@ -43,6 +47,60 @@ use super::diff_source::{
 };
 use crate::handle::DocumentEvent;
 use crate::types::{DocumentIcon, DocumentId, DocumentKind, DocumentMetaSnapshot, DocumentState};
+
+fn load_existing_profile_snapshots(
+    repo: &SchemaSnapshotRepo,
+    profile_id: &str,
+    database: Option<&str>,
+) -> Result<Vec<SchemaSnapshotSummary>, StorageError> {
+    if !repo.profile_exists(profile_id)? {
+        return Ok(Vec::new());
+    }
+    repo.list(profile_id, database)
+}
+
+#[allow(clippy::too_many_arguments)] // Keep every completion identity explicit at the foreground boundary.
+fn apply_snapshot_load_result(
+    snapshots: &mut Vec<SchemaSnapshotSummary>,
+    requested_ticket: u64,
+    current_ticket: u64,
+    mode: DiffMode,
+    requested_profile: Uuid,
+    current_profile: Uuid,
+    requested_database: Option<&str>,
+    current_database: Option<&str>,
+    profile_exists: bool,
+    result: &Result<Vec<SchemaSnapshotSummary>, StorageError>,
+) -> bool {
+    if requested_ticket != current_ticket
+        || mode != DiffMode::SnapshotVsLive
+        || requested_profile != current_profile
+        || requested_database != current_database
+        || !profile_exists
+    {
+        return false;
+    }
+    if let Ok(loaded) = result {
+        *snapshots = loaded.clone();
+    }
+    true
+}
+
+fn invalidate_snapshot_profile_if_missing(
+    snapshots: &mut Vec<SchemaSnapshotSummary>,
+    selected: &mut Option<Uuid>,
+    ticket: &mut u64,
+    profile: Uuid,
+    profiles: &[Uuid],
+) -> bool {
+    if profiles.contains(&profile) {
+        return false;
+    }
+    *ticket = ticket.wrapping_add(1);
+    snapshots.clear();
+    *selected = None;
+    true
+}
 
 /// One table's slice of the diff, grouped for rendering.
 struct TableDiffGroup {
@@ -366,7 +424,12 @@ pub struct SchemaDiffDocument {
     selected_table_actions: HashSet<usize>,
     /// Snapshot summaries for the target profile/database, loaded when the
     /// snapshot-to-live mode is selected.
-    snapshots: Vec<dbflux_storage::repositories::sch_schema_snapshots::SchemaSnapshotSummary>,
+    snapshots: Vec<SchemaSnapshotSummary>,
+    snapshot_load_ticket: u64,
+    #[cfg(test)]
+    snapshot_load_pause: Option<std::sync::mpsc::Sender<()>>,
+    #[cfg(test)]
+    snapshot_load_done: Option<std::sync::mpsc::Sender<()>>,
 
     compute_state: ComputeState,
     active_compute: Option<ComputeBinding>,
@@ -412,6 +475,23 @@ impl SchemaDiffDocument {
             cx.subscribe(&app_state, |this: &mut Self, _, _: &AppStateChanged, cx| {
                 this.invalidate_preparation_if_context_changed(cx);
                 this.invalidate_compute_if_context_changed(cx);
+                let profiles: Vec<Uuid> = this
+                    .app_state
+                    .read(cx)
+                    .profiles()
+                    .iter()
+                    .map(|p| p.id)
+                    .collect();
+                if invalidate_snapshot_profile_if_missing(
+                    &mut this.snapshots,
+                    &mut this.picker.selected_snapshot,
+                    &mut this.snapshot_load_ticket,
+                    this.profile_id,
+                    &profiles,
+                ) {
+                    this.reset_after_reference_change();
+                    cx.notify();
+                }
             });
 
         let title = match &database {
@@ -432,6 +512,11 @@ impl SchemaDiffDocument {
             selected: HashSet::new(),
             selected_table_actions: HashSet::new(),
             snapshots: Vec::new(),
+            snapshot_load_ticket: 0,
+            #[cfg(test)]
+            snapshot_load_pause: None,
+            #[cfg(test)]
+            snapshot_load_done: None,
             compute_state: ComputeState::Idle,
             active_compute: None,
             compute_ticket: 0,
@@ -586,6 +671,9 @@ impl SchemaDiffDocument {
         match mode {
             DiffMode::SnapshotVsLive => self.load_snapshots(cx),
             DiffMode::LiveVsLive => {
+                self.snapshot_load_ticket = self.snapshot_load_ticket.wrapping_add(1);
+                self.snapshots.clear();
+                self.picker.selected_snapshot = None;
                 if self.connection_databases.is_empty() {
                     self.load_connection_databases(cx);
                 }
@@ -595,17 +683,92 @@ impl SchemaDiffDocument {
     }
 
     fn load_snapshots(&mut self, cx: &mut Context<Self>) {
-        let profile_id = self.profile_id.to_string();
+        self.snapshot_load_ticket = self.snapshot_load_ticket.wrapping_add(1);
+        let ticket = self.snapshot_load_ticket;
+        self.snapshots.clear();
+        self.picker.selected_snapshot = None;
+        cx.notify();
+
+        let profile = self.profile_id;
+        let profile_id = profile.to_string();
         let database = self.database.clone();
-        let snapshots = self.app_state.update(cx, |state, _| {
-            state
-                .schema_snapshots
-                .list(&profile_id, database.as_deref())
+        let repo = Arc::clone(&self.app_state.read(cx).inner.schema_snapshot_repo);
+        let task = cx.background_executor().spawn(async move {
+            load_existing_profile_snapshots(&repo, &profile_id, database.as_deref())
         });
-        self.snapshots = snapshots;
+        let requested_database = self.database.clone();
+        #[cfg(test)]
+        let pause = self.snapshot_load_pause.take();
+        #[cfg(test)]
+        let done = self.snapshot_load_done.take();
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            #[cfg(test)]
+            if let Some(entered) = pause {
+                entered.send(()).expect("snapshot load pause receiver");
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(60))
+                    .await;
+            }
+            let update_result = cx.update(|cx| {
+                this.update(cx, |doc, cx| {
+                    let profile_exists = doc
+                        .app_state
+                        .read(cx)
+                        .profiles()
+                        .iter()
+                        .any(|p| p.id == profile);
+                    if !apply_snapshot_load_result(
+                        &mut doc.snapshots,
+                        ticket,
+                        doc.snapshot_load_ticket,
+                        doc.picker.mode,
+                        profile,
+                        doc.profile_id,
+                        requested_database.as_deref(),
+                        doc.database.as_deref(),
+                        profile_exists,
+                        &result,
+                    ) {
+                        return;
+                    }
+                    if let Err(error) = result {
+                        report_error(
+                            UserFacingError::new(
+                                ErrorKind::Storage,
+                                format!(
+                                    "{}: {error}",
+                                    dbflux_i18n::t!(
+                                        "document.schema_diff.toast.snapshot_load_failed"
+                                    )
+                                ),
+                            ),
+                            cx,
+                        );
+                    }
+                    cx.notify();
+                })
+            });
+            #[cfg(test)]
+            if let Some(done) = done {
+                update_result.as_ref().expect("snapshot foreground update");
+                done.send(()).expect("snapshot load completion receiver");
+            }
+            update_result.ok();
+        })
+        .detach();
     }
 
     fn select_snapshot(&mut self, snapshot_id: Uuid, cx: &mut Context<Self>) {
+        if !self
+            .app_state
+            .read(cx)
+            .profiles()
+            .iter()
+            .any(|p| p.id == self.profile_id)
+        {
+            return;
+        }
         self.invalidate_active_compute();
         self.invalidate_preparation();
         self.picker.selected_snapshot = Some(snapshot_id);
@@ -2058,7 +2221,14 @@ impl SchemaDiffDocument {
             (theme.primary, theme.muted)
         };
 
-        if self.snapshots.is_empty() {
+        if self.snapshots.is_empty()
+            || !self
+                .app_state
+                .read(cx)
+                .profiles()
+                .iter()
+                .any(|p| p.id == self.profile_id)
+        {
             return div()
                 .child(
                     Text::caption(dbflux_i18n::t!(
@@ -2447,10 +2617,13 @@ mod tests {
     // Import only what the tests need — deliberately NOT `use super::*`, which
     // would re-glob `gpui::*` into this module and trigger pathological
     // `#[test]` macro-expansion recursion in this GPUI-heavy crate.
+    use super::SchemaDiffDocument;
     use super::{
         ComputeBinding, ComputeState, PreparationBinding, PreparationContext, PreparationState,
-        apply_completion_disposition, binding_is_current, deep_resolve, document_state_for,
-        read_only_toast_message, release_stale_apply_loading, schema_diff_is_busy,
+        apply_completion_disposition, apply_snapshot_load_result, binding_is_current, deep_resolve,
+        document_state_for, invalidate_snapshot_profile_if_missing,
+        load_existing_profile_snapshots, read_only_toast_message, release_stale_apply_loading,
+        schema_diff_is_busy,
     };
     use crate::schema_diff::diff_source::{DiffMode, ReferenceTarget};
     use crate::types::DocumentState;
@@ -2461,7 +2634,262 @@ mod tests {
         NoOpCodeGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult, ReadOnlyReason,
         SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, TableInfo,
     };
+    use dbflux_core::{ConnectionProfile, DbConfig, SchemaSnapshotRecord, SnapshotDepth};
+    use dbflux_storage::bootstrap::StorageRuntime;
+    use dbflux_storage::repositories::sch_schema_snapshots::SchemaSnapshotRepo;
+    use dbflux_ui_base::AppStateEntity;
+    use gpui::{AppContext, TestAppContext, WindowOptions};
+    use std::sync::{Arc, Mutex, mpsc};
+    use std::time::Duration;
     use uuid::Uuid;
+
+    #[gpui::test]
+    fn schema_diff_scheduled_mode_switch_discards_completion(cx: &mut TestAppContext) {
+        scheduled_snapshot_completion(cx, false);
+    }
+
+    #[gpui::test]
+    fn schema_diff_scheduled_profile_deletion_discards_completion(cx: &mut TestAppContext) {
+        scheduled_snapshot_completion(cx, true);
+    }
+
+    fn scheduled_snapshot_completion(cx: &mut TestAppContext, delete_profile: bool) {
+        cx.update(gpui_component::init);
+        cx.update(dbflux_components::theme::init);
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                AppStateEntity::new_with_storage_runtime(
+                    StorageRuntime::in_memory().expect("storage"),
+                )
+                .expect("app state")
+            })
+        });
+        let profile = ConnectionProfile::new("test", DbConfig::default_sqlite());
+        let profile_id = profile.id;
+        app_state.update(cx, |state, _| state.add_profile_in_folder(profile, None));
+        let repo = cx.update(|cx| Arc::clone(&app_state.read(cx).inner.schema_snapshot_repo));
+        repo.insert(&SchemaSnapshotRecord {
+            id: Uuid::now_v7(),
+            profile_id,
+            database: Some("db".into()),
+            captured_at: 1,
+            fingerprint: "fingerprint".into(),
+            depth: SnapshotDepth::Shallow,
+            tables: Vec::new(),
+            creation_metadata: Vec::new(),
+        })
+        .expect("snapshot");
+        let window = cx
+            .update(|cx| {
+                cx.open_window(WindowOptions::default(), |window, cx| {
+                    cx.new(|cx| {
+                        SchemaDiffDocument::new(
+                            profile_id,
+                            Some("db".into()),
+                            app_state.clone(),
+                            window,
+                            cx,
+                        )
+                    })
+                })
+            })
+            .expect("window");
+        let (entered, received) = mpsc::channel();
+        let (completed, completion) = mpsc::channel();
+        window
+            .update(cx, |doc, _, cx| {
+                doc.snapshot_load_pause = Some(entered);
+                doc.snapshot_load_done = Some(completed);
+                doc.set_mode(DiffMode::SnapshotVsLive, cx);
+            })
+            .expect("start load");
+        cx.run_until_parked();
+        received
+            .recv_timeout(Duration::from_secs(5))
+            .expect("background read completed");
+        if delete_profile {
+            app_state.update(cx, |state, cx| {
+                state.remove_profile(0).expect("remove profile");
+                cx.emit(dbflux_ui_base::AppStateChanged);
+            });
+            assert!(
+                !repo
+                    .profile_exists(&profile_id.to_string())
+                    .expect("profile lookup")
+            );
+        } else {
+            window
+                .update(cx, |doc, _, cx| doc.set_mode(DiffMode::LiveVsLive, cx))
+                .expect("switch mode");
+        }
+        cx.executor().advance_clock(Duration::from_secs(60));
+        cx.run_until_parked();
+        completion
+            .recv_timeout(Duration::from_secs(5))
+            .expect("foreground snapshot completion finished");
+        window
+            .read_with(cx, |doc, _| assert!(doc.snapshots.is_empty()))
+            .expect("stale completion discarded");
+        if delete_profile {
+            assert_eq!(
+                app_state.read_with(cx, |state, _| state.unread_error_count),
+                0
+            );
+        } else {
+            window
+                .update(cx, |doc, _, cx| doc.set_mode(DiffMode::SnapshotVsLive, cx))
+                .expect("reload");
+            cx.run_until_parked();
+            window
+                .read_with(cx, |doc, _| assert_eq!(doc.snapshots.len(), 1))
+                .expect("current completion applied");
+        }
+    }
+
+    #[test]
+    fn schema_diff_deleted_profile_invalidates_loaded_snapshots() {
+        let profile = Uuid::now_v7();
+        let mut snapshots = vec![
+            dbflux_storage::repositories::sch_schema_snapshots::SchemaSnapshotSummary {
+                id: Uuid::now_v7().to_string(),
+                profile_id: profile.to_string(),
+                database: None,
+                captured_at: 1,
+                fingerprint: "fp".into(),
+                depth: dbflux_core::SnapshotDepth::Shallow,
+            },
+        ];
+        let mut selected = Uuid::parse_str(&snapshots[0].id).ok();
+        let mut ticket = 1;
+        let profiles = vec![profile];
+        assert!(!invalidate_snapshot_profile_if_missing(
+            &mut snapshots,
+            &mut selected,
+            &mut ticket,
+            profile,
+            &profiles,
+        ));
+        assert_eq!(snapshots.len(), 1);
+        assert!(invalidate_snapshot_profile_if_missing(
+            &mut snapshots,
+            &mut selected,
+            &mut ticket,
+            profile,
+            &[],
+        ));
+        assert!(snapshots.is_empty());
+        assert_eq!(selected, None);
+        assert_eq!(ticket, 2);
+    }
+
+    #[test]
+    fn schema_diff_snapshot_completion_requires_current_context() {
+        let profile = Uuid::now_v7();
+        let other_profile = Uuid::now_v7();
+        let summary = dbflux_storage::repositories::sch_schema_snapshots::SchemaSnapshotSummary {
+            id: Uuid::now_v7().to_string(),
+            profile_id: profile.to_string(),
+            database: Some("db".into()),
+            captured_at: 1,
+            fingerprint: "fp".into(),
+            depth: dbflux_core::SnapshotDepth::Shallow,
+        };
+        let mut snapshots = Vec::new();
+        for (ticket, mode, current_profile, database, exists) in [
+            (2, DiffMode::SnapshotVsLive, profile, Some("db"), true),
+            (1, DiffMode::LiveVsLive, profile, Some("db"), true),
+            (1, DiffMode::SnapshotVsLive, profile, Some("db"), false),
+            (1, DiffMode::SnapshotVsLive, other_profile, Some("db"), true),
+            (1, DiffMode::SnapshotVsLive, profile, Some("other"), true),
+        ] {
+            assert!(!apply_snapshot_load_result(
+                &mut snapshots,
+                1,
+                ticket,
+                mode,
+                profile,
+                current_profile,
+                Some("db"),
+                database,
+                exists,
+                &Ok(vec![summary.clone()]),
+            ));
+            assert!(snapshots.is_empty());
+        }
+        assert!(apply_snapshot_load_result(
+            &mut snapshots,
+            1,
+            1,
+            DiffMode::SnapshotVsLive,
+            profile,
+            profile,
+            Some("db"),
+            Some("db"),
+            true,
+            &Ok(vec![summary.clone()]),
+        ));
+        assert_eq!(snapshots, vec![summary]);
+    }
+
+    #[test]
+    fn schema_diff_snapshot_picker_excludes_deleted_profile_and_propagates_lookup_error() {
+        let runtime = StorageRuntime::in_memory().expect("storage");
+        let connection = Arc::new(Mutex::new(runtime.open_dbflux_db().expect("connection")));
+        let repo = SchemaSnapshotRepo::new(Arc::clone(&connection));
+        let profile = Uuid::now_v7();
+        let profile_id = profile.to_string();
+        {
+            let conn = connection.lock().expect("lock");
+            conn.execute(
+                "INSERT INTO cfg_connection_profiles (id, name) VALUES (?1, 'test')",
+                [&profile_id],
+            )
+            .expect("insert profile");
+        }
+        let record = dbflux_core::SchemaSnapshotRecord {
+            id: Uuid::now_v7(),
+            profile_id: profile,
+            database: None,
+            captured_at: 1,
+            fingerprint: "fingerprint".into(),
+            depth: dbflux_core::SnapshotDepth::Shallow,
+            tables: Vec::new(),
+            creation_metadata: Vec::new(),
+        };
+        repo.insert(&record).expect("insert snapshot");
+        assert_eq!(repo.list(&profile_id, None).expect("direct list").len(), 1);
+        assert_eq!(
+            load_existing_profile_snapshots(&repo, &profile_id, None)
+                .expect("picker list")
+                .len(),
+            1
+        );
+        connection
+            .lock()
+            .expect("lock")
+            .execute(
+                "DELETE FROM cfg_connection_profiles WHERE id = ?1",
+                [&profile_id],
+            )
+            .expect("delete profile");
+        assert_eq!(
+            repo.list(&profile_id, None)
+                .expect("orphan directly listable")
+                .len(),
+            1
+        );
+        assert!(
+            load_existing_profile_snapshots(&repo, &profile_id, None)
+                .expect("picker must exclude orphan")
+                .is_empty()
+        );
+        connection
+            .lock()
+            .expect("lock")
+            .execute("DROP TABLE cfg_connection_profiles", [])
+            .expect("drop profiles");
+        assert!(load_existing_profile_snapshots(&repo, &profile_id, None).is_err());
+    }
 
     // ── FIX-2: identical-schema comparison is Empty (Clean), not Error ──────
 
