@@ -14,6 +14,7 @@ pub mod hook_phase_runner;
 pub mod keymap;
 pub mod modal_frame;
 pub mod modals;
+pub mod object_tree;
 pub mod open_external;
 pub mod platform;
 pub mod saved_chart_manager;
@@ -39,6 +40,12 @@ pub use dashboard_manager::{
     DraftGridLayout,
 };
 pub use keymap::{default_keymap, key_chord_from_gpui};
+pub use object_tree::{
+    IMPLICIT_DATABASE_LABEL, NodeContent, ObjectTreeCoordinator, ObjectTreeEvent,
+    ObjectTreeInstallKey, ObjectTreeKey, ObjectTreeNode, ObjectTreeOutcome, ObjectTreeRejection,
+    ObjectTreeRequestKey, ObjectTreeRequestStatus, ObjectTreeSnapshot, database_display_label,
+    project_object_tree, project_profile_tree,
+};
 pub use saved_chart_manager::SavedChartManager;
 pub use saved_query_manager::{ConnectionTableProbe, SavedQueryManager, TableProbe};
 pub use schema_snapshot_manager::{CaptureOutcome, SchemaSnapshotManager};

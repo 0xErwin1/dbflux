@@ -2165,6 +2165,10 @@ impl Connection for MysqlConnection {
         self.cancel_active()
     }
 
+    fn schema_snapshot_authority(&self) -> dbflux_core::SchemaSnapshotAuthority {
+        dbflux_core::SchemaSnapshotAuthority::EnumerationOnly
+    }
+
     fn schema(&self) -> Result<SchemaSnapshot, DbError> {
         let databases = self.list_databases()?;
         log::debug!("[SCHEMA] Found {} databases", databases.len());

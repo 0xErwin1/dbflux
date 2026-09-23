@@ -47,9 +47,14 @@ use crate::config_loader::EditableGlobalHook;
 use crate::rpc_services::ExternalDriverDiagnostic;
 
 pub use dbflux_core::{
-    ConnectProfileParams, ConnectedProfile, DangerousQuerySuppressions, FetchDatabaseSchemaParams,
-    FetchSchemaForeignKeysParams, FetchSchemaIndexesParams, FetchSchemaRoutinesParams,
-    FetchSchemaTypesParams, FetchTableDetailsParams, SwitchDatabaseParams,
+    ApplyFetchOutcome, ConnectProfileParams, ConnectedProfile, DangerousQuerySuppressions,
+    FencedTableDetailsParams, FetchDatabaseListParams, FetchDatabaseSchemaParams,
+    FetchExplicitDatabaseSchemaParams, FetchSchemaForeignKeysParams, FetchSchemaIndexesParams,
+    FetchSchemaRoutinesParams, FetchSchemaTypesParams, FetchTableDetailsParams,
+    FetchedDatabaseList, FetchedExplicitDatabaseSchema, FetchedTableDetails,
+    GuardedDatabaseConnectionInstall, GuardedInstalledDatabaseConnection,
+    InstallDatabaseConnectionOutcome, StaleFetchReason, StaleInstallReason, SwitchDatabaseParams,
+    TableDetailsPrepareError,
 };
 
 /// Records that `ScriptsDirectory::new()` failed during startup.
@@ -686,6 +691,103 @@ impl AppState {
             .prepare_fetch_database_schema(profile_id, database)
     }
 
+    /// Primary schema authority captured with the connected profile's session.
+    pub fn schema_snapshot_authority(
+        &self,
+        profile_id: Uuid,
+    ) -> Option<dbflux_core::SchemaSnapshotAuthority> {
+        self.facade
+            .connections
+            .schema_snapshot_authority(profile_id)
+    }
+
+    /// Read-only identity for a connected profile session, including same-Arc reinstalls.
+    pub fn profile_session_generation(&self, profile_id: Uuid) -> Option<u64> {
+        self.facade
+            .connections
+            .profile_session_generation(profile_id)
+    }
+
+    pub fn needs_database_list(&self, profile_id: Uuid) -> bool {
+        self.facade.connections.needs_database_list(profile_id)
+    }
+
+    #[allow(dead_code)]
+    pub fn get_database_list(&self, profile_id: Uuid) -> Option<&Vec<dbflux_core::DatabaseInfo>> {
+        self.facade.connections.get_database_list(profile_id)
+    }
+
+    pub fn prepare_fetch_database_list(
+        &self,
+        profile_id: Uuid,
+    ) -> Result<FetchDatabaseListParams, String> {
+        self.facade
+            .connections
+            .prepare_fetch_database_list(profile_id)
+    }
+
+    pub fn apply_fetch_database_list(&mut self, fetched: FetchedDatabaseList) -> ApplyFetchOutcome {
+        self.facade.connections.apply_fetch_database_list(fetched)
+    }
+
+    pub fn prepare_fetch_explicit_database_schema(
+        &self,
+        profile_id: Uuid,
+        database: &str,
+    ) -> Result<FetchExplicitDatabaseSchemaParams, String> {
+        self.facade
+            .connections
+            .prepare_fetch_explicit_database_schema(profile_id, database)
+    }
+
+    pub fn apply_fetch_explicit_database_schema(
+        &mut self,
+        fetched: FetchedExplicitDatabaseSchema,
+    ) -> ApplyFetchOutcome {
+        self.facade
+            .connections
+            .apply_fetch_explicit_database_schema(fetched)
+    }
+
+    pub fn invalidate_database_schema_target(
+        &mut self,
+        profile_id: Uuid,
+        database: &str,
+    ) -> Option<DbSchemaInfo> {
+        self.facade
+            .connections
+            .invalidate_database_schema_target(profile_id, database)
+    }
+
+    pub fn capture_database_refresh_guard(
+        &self,
+        profile_id: Uuid,
+        database: &str,
+    ) -> Option<dbflux_core::DatabaseRefreshGuard> {
+        self.facade
+            .connections
+            .capture_database_refresh_guard(profile_id, database)
+    }
+
+    pub fn database_refresh_guard_is_current(
+        &self,
+        guard: &dbflux_core::DatabaseRefreshGuard,
+    ) -> bool {
+        self.facade
+            .connections
+            .database_refresh_guard_is_current(guard)
+    }
+
+    pub fn invalidate_database_schema(
+        &mut self,
+        profile_id: Uuid,
+        database: &str,
+    ) -> Option<DbSchemaInfo> {
+        self.facade
+            .connections
+            .invalidate_database_schema(profile_id, database)
+    }
+
     #[allow(dead_code)]
     pub fn prepare_fetch_table_details(
         &self,
@@ -697,6 +799,82 @@ impl AppState {
         self.facade
             .connections
             .prepare_fetch_table_details(profile_id, database, schema, table)
+    }
+
+    /// Prepares a session-fenced table-details fetch for the shared object
+    /// tree. The consumer must validate and write details and dependents in
+    /// ONE synchronous update via [`AppState::apply_fetched_table_details`].
+    pub fn prepare_fetch_table_details_fenced(
+        &self,
+        profile_id: Uuid,
+        database: &str,
+        schema: Option<&str>,
+        table: &str,
+    ) -> Result<FencedTableDetailsParams, TableDetailsPrepareError> {
+        self.facade
+            .connections
+            .prepare_fetch_table_details_fenced(profile_id, database, schema, table)
+    }
+
+    pub fn apply_fetched_table_details(
+        &mut self,
+        fetched: FetchedTableDetails,
+    ) -> ApplyFetchOutcome {
+        self.facade.connections.apply_fetched_table_details(fetched)
+    }
+
+    /// Prepares a per-database connection for a missing target database
+    /// without switching the active browsing context. Execute off the UI
+    /// thread, then install through
+    /// [`AppState::apply_guarded_database_connection`].
+    pub fn prepare_database_connection_guarded(
+        &self,
+        profile_id: Uuid,
+        database: &str,
+    ) -> Result<GuardedDatabaseConnectionInstall, String> {
+        self.facade.connections.prepare_database_connection_guarded(
+            profile_id,
+            database,
+            &self.facade.secrets.secret_store_arc(),
+        )
+    }
+
+    pub fn apply_guarded_database_connection(
+        &mut self,
+        installed: GuardedInstalledDatabaseConnection,
+    ) -> InstallDatabaseConnectionOutcome {
+        self.facade
+            .connections
+            .apply_guarded_database_connection(installed)
+    }
+
+    /// Takes the per-database connection entry out of its slot for
+    /// held-ownership flows (refresh holds, drop releases, close with
+    /// cancel), advancing the target's slot revision. The active database is
+    /// not touched; ownership of the returned entry transfers to the caller.
+    pub fn take_database_connection(
+        &mut self,
+        profile_id: Uuid,
+        database: &str,
+    ) -> Option<dbflux_core::DatabaseConnection> {
+        self.facade
+            .connections
+            .take_database_connection(profile_id, database)
+    }
+
+    /// Restores a previously taken per-database connection entry, advancing
+    /// the target's slot revision so captures made before the take cannot
+    /// apply afterwards. Returns `false` when the profile is no longer
+    /// connected; the entry is then dropped.
+    pub fn restore_database_connection(
+        &mut self,
+        profile_id: Uuid,
+        database: String,
+        entry: dbflux_core::DatabaseConnection,
+    ) -> bool {
+        self.facade
+            .connections
+            .restore_database_connection(profile_id, database, entry)
     }
 
     pub fn prepare_fetch_collection_children(
@@ -2613,6 +2791,14 @@ mod tests {
         ServiceRpcApiContract,
     };
     use dbflux_driver_ipc::IpcDriver;
+
+    #[test]
+    fn profile_session_generation_absent_profile_is_none() {
+        let runtime = dbflux_storage::bootstrap::StorageRuntime::in_memory()
+            .expect("in-memory storage runtime");
+        let state = AppState::new_with_storage_runtime(runtime).expect("build app state");
+        assert_eq!(state.profile_session_generation(Uuid::new_v4()), None);
+    }
 
     fn fake_probe() -> crate::rpc_services::DriverProbe {
         let metadata = DriverMetadataBuilder::new(

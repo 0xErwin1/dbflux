@@ -50,17 +50,21 @@ pub use instance_catalog::{
 };
 pub use item_manager::{AuthProfileManager, Identifiable, ItemManager};
 pub use manager::{
-    CacheEntry, CacheKey, ConnectProfileParams, ConnectProfileResult, ConnectedProfile,
-    ConnectionManager, ConnectionResolutionError, DatabaseConnection,
-    DefaultMutationPolicyResolver, FetchCollectionChildrenParams, FetchCollectionChildrenResult,
-    FetchDatabaseSchemaParams, FetchDatabaseSchemaResult, FetchSchemaColumnsParams,
-    FetchSchemaColumnsResult, FetchSchemaForeignKeysParams, FetchSchemaForeignKeysResult,
-    FetchSchemaIndexesParams, FetchSchemaIndexesResult, FetchSchemaRoutinesParams,
-    FetchSchemaRoutinesResult, FetchSchemaTypesParams, FetchSchemaTypesResult,
-    FetchTableDetailsParams, FetchTableDetailsResult, HookExecutionContext, MutationPolicy,
-    OwnedCacheEntry, PendingOperation, PrepareConnectError, ProfilePolicyResolver, ReadOnlyReason,
-    RedisKeyCache, RedisKeyCacheEntry, ResolvedProxy, SchemaCacheKey, SwitchDatabaseParams,
-    SwitchDatabaseResult, WritePrivilege, compose_mutation_policy,
+    ApplyFetchOutcome, CacheEntry, CacheKey, ConnectProfileParams, ConnectProfileResult,
+    ConnectedProfile, ConnectionManager, ConnectionResolutionError, DatabaseConnection,
+    DatabaseRefreshGuard, DefaultMutationPolicyResolver, FencedTableDetailsParams,
+    FetchCollectionChildrenParams, FetchCollectionChildrenResult, FetchDatabaseListParams,
+    FetchDatabaseSchemaParams, FetchDatabaseSchemaResult, FetchExplicitDatabaseSchemaParams,
+    FetchSchemaColumnsParams, FetchSchemaColumnsResult, FetchSchemaForeignKeysParams,
+    FetchSchemaForeignKeysResult, FetchSchemaIndexesParams, FetchSchemaIndexesResult,
+    FetchSchemaRoutinesParams, FetchSchemaRoutinesResult, FetchSchemaTypesParams,
+    FetchSchemaTypesResult, FetchTableDetailsParams, FetchTableDetailsResult, FetchedDatabaseList,
+    FetchedExplicitDatabaseSchema, FetchedTableDetails, GuardedDatabaseConnectionInstall,
+    GuardedInstalledDatabaseConnection, HookExecutionContext, InstallDatabaseConnectionOutcome,
+    MutationPolicy, OwnedCacheEntry, PendingOperation, PrepareConnectError, ProfilePolicyResolver,
+    ReadOnlyReason, RedisKeyCache, RedisKeyCacheEntry, ResolvedProxy, SchemaCacheKey,
+    StaleFetchReason, StaleInstallReason, SwitchDatabaseParams, SwitchDatabaseResult,
+    TableDetailsPrepareError, WritePrivilege, compose_mutation_policy,
 };
 #[allow(deprecated)]
 pub use profile::{

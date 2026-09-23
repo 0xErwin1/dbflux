@@ -26,6 +26,7 @@ pub use traits::{
     ExecutionSession, ExecutionSessionFactory, KeyValueApi, KeyValueConnection, NoopCancelHandle,
     ObjectListingPage, ObjectMetadata, ObjectStoreConnection, ObjectSummary, ObjectVersionSummary,
     PresignMethod, QueryCancelHandle, RelationalConnection, SchemaDropTarget, SchemaFeatures,
-    SchemaLoadingStrategy, SchemaObjectKind, SourceContextSpec, SourceQueryMode, VersioningStatus,
+    SchemaLoadingStrategy, SchemaObjectKind, SchemaSnapshotAuthority, SourceContextSpec,
+    SourceQueryMode, VersioningStatus,
 };
 pub use value::Value;

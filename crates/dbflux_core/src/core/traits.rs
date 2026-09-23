@@ -939,6 +939,16 @@ pub trait ExecutionSession: Send + Sync {
     fn is_closed(&self) -> bool;
 }
 
+/// Whether `Connection::schema()` describes the primary database's objects or
+/// only enumerates database names. This is a producer declaration, not a
+/// deduction from the snapshot's empty collections.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SchemaSnapshotAuthority {
+    Authoritative,
+    EnumerationOnly,
+    Unknown,
+}
+
 /// Active database connection.
 ///
 /// The UI interacts exclusively through this trait, never accessing driver internals.
@@ -1036,6 +1046,13 @@ pub trait Connection: Send + Sync {
     ///
     /// Called after connecting and when the user requests a schema refresh.
     fn schema(&self) -> Result<SchemaSnapshot, DbError>;
+
+    /// Declares whether `schema()` contains authoritative primary object
+    /// content. Remote providers without a verified declaration return
+    /// `Unknown`; consumers must not treat that as enumeration-only.
+    fn schema_snapshot_authority(&self) -> SchemaSnapshotAuthority {
+        SchemaSnapshotAuthority::Authoritative
+    }
 
     /// List all databases available on the server.
     ///

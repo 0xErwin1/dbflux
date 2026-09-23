@@ -225,6 +225,20 @@ impl Sidebar {
     ) -> bool {
         let parsed = parse_node_id(item_id);
 
+        if let Some(SchemaNodeId::Database { profile_id, name }) = &parsed
+            && self
+                .app_state
+                .read(cx)
+                .connections()
+                .get(profile_id)
+                .is_some_and(|connected| {
+                    connected.connection.schema_loading_strategy()
+                        == dbflux_core::SchemaLoadingStrategy::LazyPerDatabase
+                })
+        {
+            self.handle_lazy_database_click(*profile_id, name, cx);
+        }
+
         if matches!(parsed, Some(SchemaNodeId::Table { .. })) {
             let pending = PendingAction::ViewSchema {
                 item_id: item_id.to_string(),
@@ -395,10 +409,22 @@ impl Sidebar {
             self.spawn_fetch_instance_catalog(*profile_id, cx);
         }
 
-        if let Some(SchemaNodeId::Profile { profile_id }) = &parsed
-            && self.profile_category(*profile_id, cx) == Some(DatabaseCategory::ObjectStorage)
-        {
-            self.spawn_fetch_buckets(*profile_id, cx);
+        if let Some(SchemaNodeId::Profile { profile_id }) = &parsed {
+            if self.profile_category(*profile_id, cx) == Some(DatabaseCategory::ObjectStorage) {
+                self.spawn_fetch_buckets(*profile_id, cx);
+            } else {
+                let key = dbflux_ui_base::object_tree::ObjectTreeRequestKey::DatabaseList {
+                    profile_id: *profile_id,
+                };
+                self.app_state.update(cx, |state, cx| {
+                    if state.get_database_list(*profile_id).is_none()
+                        && !state.object_tree_is_pending(&key)
+                        && state.object_tree_outcome(&key).is_none()
+                    {
+                        state.object_tree_request(key, cx);
+                    }
+                });
+            }
         }
 
         if matches!(parsed, Some(SchemaNodeId::Database { .. })) {
@@ -974,20 +1000,48 @@ impl Sidebar {
         db_name: &str,
         cx: &mut Context<Self>,
     ) {
+        self.table_details_retry
+            .borrow_mut()
+            .retain(|_, (key, _, _)| {
+                key.profile_id() != profile_id || key.node_key().database() != Some(db_name)
+            });
+        self.table_details_recovery.retain(|_, (key, _)| {
+            key.profile_id() != profile_id || key.node_key().database() != Some(db_name)
+        });
+        let state = self.app_state.read(cx);
+        if let (Some(connection), Some(generation)) = (
+            state
+                .connections()
+                .get(&profile_id)
+                .map(|connected| connected.connection.clone()),
+            state.profile_session_generation(profile_id),
+        ) {
+            self.known_invalidated_databases.borrow_mut().insert(
+                (profile_id, db_name.to_string()),
+                (std::sync::Arc::downgrade(&connection), generation),
+            );
+        }
         self.app_state.update(cx, |state, _cx| {
+            state.invalidate_database_schema(profile_id, db_name);
             if let Some(conn) = state.connections_mut().get_mut(&profile_id) {
-                conn.database_schemas.remove(db_name);
                 conn.table_details.retain(|(db, _, _), _| db != db_name);
                 conn.collection_children.retain(|(db, _), _| db != db_name);
                 conn.schema_types.retain(|key, _| key.database != db_name);
                 conn.schema_indexes.retain(|key, _| key.database != db_name);
                 conn.schema_foreign_keys
                     .retain(|key, _| key.database != db_name);
-                conn.database_connections.remove(db_name);
 
                 if let Some(schema) = conn.schema.as_mut() {
                     Self::remove_database_from_snapshot(schema, db_name);
                 }
+            }
+
+            // Slot removal goes through the manager seam so the per-target
+            // slot revision advances; the dropped entry is discarded, exactly
+            // like the previous raw map removal, without touching the active
+            // database.
+            if let Some(db_conn) = state.take_database_connection(profile_id, db_name) {
+                drop(db_conn);
             }
         });
     }

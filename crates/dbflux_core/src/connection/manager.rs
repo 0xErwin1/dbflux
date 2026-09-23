@@ -1,10 +1,11 @@
 use crate::LogErr;
 use crate::{
     CollectionChildrenCache, CollectionChildrenPage, CollectionChildrenRequest, CollectionRef,
-    Connection, ConnectionHooks, ConnectionProfile, CustomTypeInfo, DbDriver, DbError, DbKind,
-    DbSchemaInfo, HookContext, ProxyProfile, RelationRef, RoutineInfo, SchemaColumnInfo,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SecretStore,
-    ShutdownCoordinator, ShutdownPhase, SshTunnelProfile, TableInfo, TaskTarget,
+    Connection, ConnectionHooks, ConnectionProfile, CustomTypeInfo, DatabaseInfo, DbDriver,
+    DbError, DbKind, DbSchemaInfo, HookContext, ProxyProfile, RelationRef, RoutineInfo,
+    SchemaColumnInfo, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot,
+    SchemaSnapshotAuthority, SecretStore, ShutdownCoordinator, ShutdownPhase, SshTunnelProfile,
+    TableInfo, TaskTarget,
 };
 use log::{error, info};
 use secrecy::SecretString;
@@ -453,6 +454,18 @@ pub struct ConnectedProfile {
     pub active_database: Option<String>,
     pub redis_key_cache: RedisKeyCache,
     /// Per-database connections keyed by database name (`ConnectionPerDatabase` drivers).
+    /// Per-database connections (for `ConnectionPerDatabase` drivers).
+    ///
+    /// Compatibility contract: this map stays public so existing
+    /// `ConnectedProfile` struct literals and read-only lookups keep
+    /// compiling, and in-place schema-content edits through it remain
+    /// supported. Structural slot mutation for a live session (inserting,
+    /// replacing or removing an entry) MUST go through the manager-backed
+    /// methods (`add_database_connection`, `remove_database_connection`,
+    /// `take_database_connection`, `restore_database_connection`, guarded
+    /// installation) so the per-target slot revision ledger stays in sync;
+    /// raw external map writes or whole-profile replacement are an escape
+    /// hatch that cannot be claimed fenced against ABA.
     pub database_connections: HashMap<String, DatabaseConnection>,
     /// Type-erased proxy tunnel handle kept alive for RAII drop semantics.
     #[allow(dead_code)]
@@ -715,6 +728,36 @@ pub struct ConnectionManager {
     pub connections: HashMap<Uuid, ConnectedProfile>,
     pub active_connection_id: Option<Uuid>,
     pub pending_operations: HashSet<PendingOperation>,
+    /// Cached explicit database lists per profile, used by the shared object
+    /// tree. Kept beside `ConnectedProfile` so its public layout stays stable.
+    /// Session-owned: cleared whenever that profile's session is replaced.
+    database_lists: HashMap<Uuid, Vec<DatabaseInfo>>,
+    /// Declared primary-snapshot authority, captured with each installed session.
+    /// Kept off ConnectedProfile to preserve external struct-literal compatibility.
+    snapshot_authorities: HashMap<Uuid, (u64, SchemaSnapshotAuthority)>,
+    /// Monotonic session generation, assigned afresh on every connect or
+    /// context replacement. Unlike connection pointer identity it never
+    /// repeats for the same profile, so an old result cannot pass fencing by
+    /// reusing the same connection object. `u64` at one assignment per
+    /// connect does not wrap within any realistic process lifetime.
+    next_session_generation: u64,
+    /// Session generation currently installed for each connected profile.
+    /// Entries exist exactly while the profile is connected; `disconnect`
+    /// removes them, so no per-profile tombstones are retained.
+    session_generations: HashMap<Uuid, u64>,
+    /// Per-profile invalidation revision. Bumped whenever that profile's
+    /// cached hierarchy data is invalidated; captured by session-fenced fetch
+    /// requests and rechecked when their results are applied.
+    invalidation_revisions: HashMap<Uuid, u64>,
+    /// Per-`(profile_id, database)` slot revision ledger. Advanced by every
+    /// supported per-database slot mutation (insert, replacement, removal,
+    /// take, restore and guarded installation) so session-fenced captures for
+    /// that target cannot survive an ABA remove/reinstall of the same
+    /// connection. Revisions are retained across removal as tombstones and
+    /// cleared only at a profile generation boundary (connect, context
+    /// switch, disconnect); within one session, revision zero means "no slot
+    /// mutation since the boundary".
+    slot_revisions: HashMap<(Uuid, String), u64>,
     policy_resolver: Box<dyn ProfilePolicyResolver>,
 }
 
@@ -725,6 +768,12 @@ impl ConnectionManager {
             connections: HashMap::new(),
             active_connection_id: None,
             pending_operations: HashSet::new(),
+            database_lists: HashMap::new(),
+            snapshot_authorities: HashMap::new(),
+            next_session_generation: 0,
+            session_generations: HashMap::new(),
+            invalidation_revisions: HashMap::new(),
+            slot_revisions: HashMap::new(),
             policy_resolver: Box::new(DefaultMutationPolicyResolver),
         }
     }
@@ -812,6 +861,25 @@ impl ConnectionManager {
         let id = profile.id;
         let resolved_policy = self.policy_resolver.resolve(&profile, is_mcp_actor);
         let (mutation_policy, read_only_reason) = compose_mutation_policy(resolved_policy, probe);
+
+        // A fresh session replaces any previous one for this profile, even
+        // when the same connection object is reinstalled: hand out a new
+        // generation and drop the old session's cached database list.
+        self.next_session_generation += 1;
+        self.session_generations
+            .insert(id, self.next_session_generation);
+        self.snapshot_authorities.insert(
+            id,
+            (
+                self.next_session_generation,
+                connection.schema_snapshot_authority(),
+            ),
+        );
+        self.database_lists.remove(&id);
+        self.clear_profile_slot_revisions(id);
+        self.pending_operations
+            .retain(|operation| operation.profile_id != id);
+
         self.connections.insert(
             id,
             ConnectedProfile {
@@ -855,6 +923,13 @@ impl ConnectionManager {
         if self.active_connection_id == Some(profile_id) {
             self.active_connection_id = self.connections.keys().next().copied();
         }
+        self.database_lists.remove(&profile_id);
+        self.snapshot_authorities.remove(&profile_id);
+        self.session_generations.remove(&profile_id);
+        self.invalidation_revisions.remove(&profile_id);
+        self.clear_profile_slot_revisions(profile_id);
+        self.pending_operations
+            .retain(|operation| operation.profile_id != profile_id);
         teardown
     }
 
@@ -1204,6 +1279,7 @@ impl ConnectionManager {
     }
 
     /// Store a per-database connection for a `ConnectionPerDatabase` driver.
+    /// Insertion or replacement of the slot advances its revision.
     pub fn add_database_connection(
         &mut self,
         profile_id: Uuid,
@@ -1212,7 +1288,11 @@ impl ConnectionManager {
         schema: Option<SchemaSnapshot>,
     ) {
         if let Some(connected) = self.connections.get_mut(&profile_id) {
-            connected.add_database_connection(database, DatabaseConnection { connection, schema });
+            connected.add_database_connection(
+                database.clone(),
+                DatabaseConnection { connection, schema },
+            );
+            self.advance_slot_revision(profile_id, &database);
         }
     }
 
@@ -1229,8 +1309,52 @@ impl ConnectionManager {
                 .as_ref()
                 .and_then(|schema| schema.current_database().map(String::from));
         }
+        if removed {
+            self.advance_slot_revision(profile_id, database);
+        }
 
         removed
+    }
+
+    /// Removes and returns the per-database connection entry for
+    /// held-ownership flows (refresh holds, drop releases, close with
+    /// cancel), advancing the target's slot revision so in-flight
+    /// session-fenced work for that database is rejected. Ownership of the
+    /// returned entry transfers to the caller; unlike
+    /// [`ConnectionManager::remove_database_connection`] this does not touch
+    /// the active database — the caller keeps its site-specific active-state
+    /// behavior.
+    #[allow(dead_code)]
+    pub fn take_database_connection(
+        &mut self,
+        profile_id: Uuid,
+        database: &str,
+    ) -> Option<DatabaseConnection> {
+        let connected = self.connections.get_mut(&profile_id)?;
+        let taken = connected.remove_database_connection(database);
+        if taken.is_some() {
+            self.advance_slot_revision(profile_id, database);
+        }
+        taken
+    }
+
+    /// Restores a previously taken per-database connection entry, advancing
+    /// the target's slot revision so captures made before the take cannot
+    /// apply after the restore (same-connection ABA). Returns `false` when
+    /// the profile is no longer connected; the entry is then dropped.
+    #[allow(dead_code)]
+    pub fn restore_database_connection(
+        &mut self,
+        profile_id: Uuid,
+        database: String,
+        entry: DatabaseConnection,
+    ) -> bool {
+        let Some(connected) = self.connections.get_mut(&profile_id) else {
+            return false;
+        };
+        connected.add_database_connection(database.clone(), entry);
+        self.advance_slot_revision(profile_id, &database);
+        true
     }
 
     // --- Pending operations ---
@@ -1490,6 +1614,27 @@ impl ConnectionManager {
             })
             .unwrap_or_default();
 
+        // The whole context is replaced: drop the cached database list, hand
+        // out a fresh session generation, and fence any in-flight
+        // session-fenced fetch for this profile.
+        self.database_lists.remove(&profile_id);
+        self.next_session_generation += 1;
+        self.session_generations
+            .insert(profile_id, self.next_session_generation);
+        self.snapshot_authorities.insert(
+            profile_id,
+            (
+                self.next_session_generation,
+                connection.schema_snapshot_authority(),
+            ),
+        );
+        self.bump_invalidation_revision(profile_id);
+        self.clear_profile_slot_revisions(profile_id);
+        // Operations belong to the previous profile session; their late
+        // completions must not block a replacement session's requests.
+        self.pending_operations
+            .retain(|operation| operation.profile_id != profile_id);
+
         self.connections.insert(
             profile_id,
             ConnectedProfile {
@@ -1713,6 +1858,483 @@ impl ConnectionManager {
         })
     }
 
+    // --- Session-fenced shared-tree fetches ---
+
+    /// Identifies the currently connected session of this profile.
+    /// Unrelated profiles and database-slot revisions do not change it.
+    /// Authority captured at the same generation as the installed connection.
+    /// Unmanaged public map replacements have no supported fencing contract.
+    pub fn schema_snapshot_authority(&self, profile_id: Uuid) -> Option<SchemaSnapshotAuthority> {
+        let generation = self.session_generations.get(&profile_id)?;
+        self.snapshot_authorities
+            .get(&profile_id)
+            .and_then(|(captured, authority)| {
+                (captured == generation && self.connections.contains_key(&profile_id))
+                    .then_some(*authority)
+            })
+    }
+
+    pub fn profile_session_generation(&self, profile_id: Uuid) -> Option<u64> {
+        self.session_generations.get(&profile_id).copied()
+    }
+
+    fn current_session_generation(&self, profile_id: Uuid) -> u64 {
+        self.session_generations
+            .get(&profile_id)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn current_invalidation_revision(&self, profile_id: Uuid) -> u64 {
+        self.invalidation_revisions
+            .get(&profile_id)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn bump_invalidation_revision(&mut self, profile_id: Uuid) {
+        self.invalidation_revisions
+            .entry(profile_id)
+            .and_modify(|revision| *revision += 1)
+            .or_insert(1);
+    }
+
+    /// Current slot revision for `(profile_id, database)`. Zero means no slot
+    /// mutation happened since the profile's last generation boundary.
+    fn current_slot_revision(&self, profile_id: Uuid, database: &str) -> u64 {
+        self.slot_revisions
+            .get(&(profile_id, database.to_string()))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// Single ledger bump path for every supported per-database slot
+    /// mutation. Never recreates a revision-zero entry: the first mutation
+    /// after a generation boundary moves the revision to one.
+    fn advance_slot_revision(&mut self, profile_id: Uuid, database: &str) {
+        self.slot_revisions
+            .entry((profile_id, database.to_string()))
+            .and_modify(|revision| *revision += 1)
+            .or_insert(1);
+    }
+
+    /// Drops the ledger entries of one profile. Only called at a profile
+    /// generation boundary, where generation fencing already rejects every
+    /// capture from the previous session.
+    fn clear_profile_slot_revisions(&mut self, profile_id: Uuid) {
+        self.slot_revisions.retain(|(id, _), _| id != &profile_id);
+    }
+
+    /// Removes a database's cached schema and bumps the profile's invalidation
+    /// revision, so in-flight session-fenced fetches are rejected when their
+    /// results are applied.
+    pub fn invalidate_database_schema(
+        &mut self,
+        profile_id: Uuid,
+        database: &str,
+    ) -> Option<DbSchemaInfo> {
+        let connected = self.connections.get_mut(&profile_id)?;
+        let removed = connected.invalidate_database_schema(database);
+        self.bump_invalidation_revision(profile_id);
+        removed
+    }
+
+    /// Invalidates one database without rejecting fetches for sibling targets or the list.
+    /// The slot revision also fences pending schema and table-details fetches
+    /// when no per-database connection is installed.
+    pub fn invalidate_database_schema_target(
+        &mut self,
+        profile_id: Uuid,
+        database: &str,
+    ) -> Option<DbSchemaInfo> {
+        let connected = self.connections.get_mut(&profile_id)?;
+        let removed = connected.invalidate_database_schema(database);
+        self.advance_slot_revision(profile_id, database);
+        removed
+    }
+
+    /// Captures refresh authority after the target has been invalidated and
+    /// any held per-database slot has been taken. A replacement slot or profile
+    /// cannot acquire this authority, even if it reuses the same Arc.
+    pub fn capture_database_refresh_guard(
+        &self,
+        profile_id: Uuid,
+        database: &str,
+    ) -> Option<DatabaseRefreshGuard> {
+        let connected = self.connections.get(&profile_id)?;
+        if connected.database_connections.contains_key(database) {
+            return None;
+        }
+        Some(DatabaseRefreshGuard {
+            profile_id,
+            database: database.to_string(),
+            generation: self.current_session_generation(profile_id),
+            primary_connection: connected.connection.clone(),
+            slot_revision: self.current_slot_revision(profile_id, database),
+        })
+    }
+
+    pub fn database_refresh_guard_is_current(&self, guard: &DatabaseRefreshGuard) -> bool {
+        self.connections
+            .get(&guard.profile_id)
+            .is_some_and(|connected| {
+                self.current_session_generation(guard.profile_id) == guard.generation
+                    && Arc::ptr_eq(&connected.connection, &guard.primary_connection)
+                    && !connected.database_connections.contains_key(&guard.database)
+                    && self.current_slot_revision(guard.profile_id, &guard.database)
+                        == guard.slot_revision
+            })
+    }
+
+    /// Returns `true` when the profile is connected and has no cached database
+    /// list. An empty cached list still counts as cached.
+    pub fn needs_database_list(&self, profile_id: Uuid) -> bool {
+        self.connections.contains_key(&profile_id) && !self.database_lists.contains_key(&profile_id)
+    }
+
+    /// Returns the cached database list for a profile, if one was applied.
+    pub fn get_database_list(&self, profile_id: Uuid) -> Option<&Vec<DatabaseInfo>> {
+        self.database_lists.get(&profile_id)
+    }
+
+    /// Prepares an explicit database-list fetch for the shared object tree.
+    /// Unlike ad-hoc connection reads, the captured request fences its result
+    /// by session identity and invalidation revision at apply time.
+    pub fn prepare_fetch_database_list(
+        &self,
+        profile_id: Uuid,
+    ) -> Result<FetchDatabaseListParams, String> {
+        let connected = self
+            .connections
+            .get(&profile_id)
+            .ok_or_else(|| "Profile not connected".to_string())?;
+
+        if self.database_lists.contains_key(&profile_id) {
+            return Err("Database list already cached".to_string());
+        }
+
+        Ok(FetchDatabaseListParams {
+            session: FetchSession {
+                profile_id,
+                connection: connected.connection.clone(),
+                generation: self.current_session_generation(profile_id),
+                invalidation_revision: self.current_invalidation_revision(profile_id),
+                slot_revision: 0,
+            },
+        })
+    }
+
+    /// Applies a fetched database list, rejecting results whose session was
+    /// replaced or invalidated while the fetch was in flight. A rejected
+    /// result never touches the current cache.
+    pub fn apply_fetch_database_list(&mut self, fetched: FetchedDatabaseList) -> ApplyFetchOutcome {
+        let profile_id = fetched.session.profile_id;
+        let Some(connected) = self.connections.get(&profile_id) else {
+            return ApplyFetchOutcome::Rejected(StaleFetchReason::ProfileDisconnected);
+        };
+        if self.current_session_generation(profile_id) != fetched.session.generation
+            || !Arc::ptr_eq(&fetched.session.connection, &connected.connection)
+        {
+            return ApplyFetchOutcome::Rejected(StaleFetchReason::ConnectionReplaced);
+        }
+        if self.current_invalidation_revision(profile_id) != fetched.session.invalidation_revision {
+            return ApplyFetchOutcome::Rejected(StaleFetchReason::RequestInvalidated);
+        }
+        self.database_lists.insert(profile_id, fetched.databases);
+        ApplyFetchOutcome::Applied
+    }
+
+    /// Prepares an explicit database-schema fetch without a schema-loading
+    /// strategy gate, so shared-tree browsing can target non-active databases
+    /// on eager-schema drivers. The legacy strategy gate stays on
+    /// [`ConnectionManager::prepare_fetch_database_schema`] for existing
+    /// sidebar callers.
+    ///
+    /// Routing follows the generic strategy: per-database drivers serve a
+    /// database only through its prepared slot or their bound primary; a
+    /// connection is never asked to relabel its own content as another
+    /// database. Callers must prepare a missing slot (see
+    /// [`ConnectionManager::prepare_database_connection`]) and retry.
+    pub fn prepare_fetch_explicit_database_schema(
+        &self,
+        profile_id: Uuid,
+        database: &str,
+    ) -> Result<FetchExplicitDatabaseSchemaParams, String> {
+        let connected = self
+            .connections
+            .get(&profile_id)
+            .ok_or_else(|| "Profile not connected".to_string())?;
+
+        let key = CacheKey::database_schema(database);
+        if connected.cache_contains(&key) {
+            return Err("Schema already cached".to_string());
+        }
+
+        let connection = match connected.resolve_connection_for_execution(Some(database)) {
+            Ok(connection) => connection,
+            Err(ConnectionResolutionError::PendingDatabaseConnection { database: missing }) => {
+                return Err(format!(
+                    "No prepared connection for database '{missing}'; prepare it before fetching its schema"
+                ));
+            }
+        };
+
+        Ok(FetchExplicitDatabaseSchemaParams {
+            database: database.to_string(),
+            session: FetchSession {
+                profile_id,
+                connection,
+                generation: self.current_session_generation(profile_id),
+                invalidation_revision: self.current_invalidation_revision(profile_id),
+                slot_revision: self.current_slot_revision(profile_id, database),
+            },
+        })
+    }
+
+    /// Applies a fetched explicit database schema, rejecting results whose
+    /// session was replaced or invalidated while the fetch was in flight. A
+    /// rejected result never touches the current cache.
+    pub fn apply_fetch_explicit_database_schema(
+        &mut self,
+        fetched: FetchedExplicitDatabaseSchema,
+    ) -> ApplyFetchOutcome {
+        let profile_id = fetched.session.profile_id;
+        let Some(connected) = self.connections.get(&profile_id) else {
+            return ApplyFetchOutcome::Rejected(StaleFetchReason::ProfileDisconnected);
+        };
+        // Apply must resolve the target exactly like prepare: after a slot
+        // removal or replacement the result must not fall back unsafely. The
+        // slot revision additionally fences same-connection remove/reinstall
+        // cycles for this target (per-database ABA).
+        let target_matches =
+            match connected.resolve_connection_for_execution(Some(&fetched.database)) {
+                Ok(current) => Arc::ptr_eq(&fetched.session.connection, &current),
+                Err(ConnectionResolutionError::PendingDatabaseConnection { .. }) => false,
+            };
+        if self.current_session_generation(profile_id) != fetched.session.generation
+            || !target_matches
+            || self.current_slot_revision(profile_id, &fetched.database)
+                != fetched.session.slot_revision
+        {
+            return ApplyFetchOutcome::Rejected(StaleFetchReason::ConnectionReplaced);
+        }
+        if self.current_invalidation_revision(profile_id) != fetched.session.invalidation_revision {
+            return ApplyFetchOutcome::Rejected(StaleFetchReason::RequestInvalidated);
+        }
+        self.set_database_schema(profile_id, fetched.database, fetched.schema);
+        ApplyFetchOutcome::Applied
+    }
+
+    /// Prepares a fenced table-details fetch for the shared object tree.
+    /// Unlike the legacy [`ConnectionManager::prepare_fetch_table_details`],
+    /// the request is bound to the session and to the connection resolved
+    /// through the generic routing rules: it fails with
+    /// [`TableDetailsPrepareError::PendingDatabaseConnection`] instead of
+    /// falling back to the primary connection for an unprepared per-database
+    /// target.
+    ///
+    /// Once the fetch completes, the UI consumer validates and writes details
+    /// and dependents in ONE synchronous update through
+    /// [`ConnectionManager::apply_fetched_table_details`]. The legacy
+    /// preparation path and its signatures stay untouched for existing
+    /// callers.
+    pub fn prepare_fetch_table_details_fenced(
+        &self,
+        profile_id: Uuid,
+        database: &str,
+        schema: Option<&str>,
+        table: &str,
+    ) -> Result<FencedTableDetailsParams, TableDetailsPrepareError> {
+        let connected = self
+            .connections
+            .get(&profile_id)
+            .ok_or(TableDetailsPrepareError::ProfileDisconnected)?;
+
+        let cache_key = (
+            database.to_string(),
+            schema.map(String::from),
+            table.to_string(),
+        );
+        if let Some(details) = connected.table_details.get(&cache_key)
+            && (details.columns.is_some() || details.sample_fields.is_some())
+        {
+            return Err(TableDetailsPrepareError::AlreadyCached);
+        }
+
+        let connection = connected
+            .resolve_connection_for_execution(Some(database))
+            .map_err(
+                |ConnectionResolutionError::PendingDatabaseConnection { database }| {
+                    TableDetailsPrepareError::PendingDatabaseConnection { database }
+                },
+            )?;
+
+        Ok(FencedTableDetailsParams {
+            session: FetchSession {
+                profile_id,
+                connection,
+                generation: self.current_session_generation(profile_id),
+                invalidation_revision: self.current_invalidation_revision(profile_id),
+                slot_revision: self.current_slot_revision(profile_id, database),
+            },
+            database: database.to_string(),
+            schema: schema.map(String::from),
+            table: table.to_string(),
+        })
+    }
+
+    /// Applies fetched table details and their dependents in a single
+    /// synchronous update, rejecting results whose session was replaced or
+    /// invalidated while the fetch was in flight. A rejected result never
+    /// touches the cache.
+    pub fn apply_fetched_table_details(
+        &mut self,
+        fetched: FetchedTableDetails,
+    ) -> ApplyFetchOutcome {
+        let profile_id = fetched.session.profile_id;
+        let Some(connected) = self.connections.get_mut(&profile_id) else {
+            return ApplyFetchOutcome::Rejected(StaleFetchReason::ProfileDisconnected);
+        };
+        // Apply must resolve the target exactly like prepare: after a slot
+        // removal or replacement the result must not fall back unsafely. The
+        // slot revision additionally fences same-connection remove/reinstall
+        // cycles for this target (per-database ABA).
+        let target_matches =
+            match connected.resolve_connection_for_execution(Some(&fetched.database)) {
+                Ok(current) => Arc::ptr_eq(&fetched.session.connection, &current),
+                Err(ConnectionResolutionError::PendingDatabaseConnection { .. }) => false,
+            };
+        // Direct field reads: the shared helpers borrow all of `self`, which
+        // would conflict with the `connections` entry borrow above.
+        let slot_revision = self
+            .slot_revisions
+            .get(&(profile_id, fetched.database.clone()))
+            .copied()
+            .unwrap_or(0);
+        if self.session_generations.get(&profile_id).copied() != Some(fetched.session.generation)
+            || !target_matches
+            || slot_revision != fetched.session.slot_revision
+        {
+            return ApplyFetchOutcome::Rejected(StaleFetchReason::ConnectionReplaced);
+        }
+        if self
+            .invalidation_revisions
+            .get(&profile_id)
+            .copied()
+            .unwrap_or(0)
+            != fetched.session.invalidation_revision
+        {
+            return ApplyFetchOutcome::Rejected(StaleFetchReason::RequestInvalidated);
+        }
+
+        let FetchedTableDetails {
+            session: _,
+            database,
+            schema,
+            table,
+            details,
+            dependents,
+        } = fetched;
+        connected.cache_set(OwnedCacheEntry::TableDetails {
+            database: database.clone(),
+            schema: schema.clone(),
+            table: table.clone(),
+            details,
+        });
+        connected.populate_dependents(database, schema, table, dependents);
+        ApplyFetchOutcome::Applied
+    }
+
+    /// Prepares a per-database connection for a missing target database
+    /// without any switch semantics, guarded so the asynchronously opened
+    /// connection can be installed only into the session it was prepared
+    /// for. Reuses the existing
+    /// [`ConnectionManager::prepare_database_connection`] rules.
+    pub fn prepare_database_connection_guarded(
+        &self,
+        profile_id: Uuid,
+        database: &str,
+        secret_store: &Arc<RwLock<Box<dyn SecretStore>>>,
+    ) -> Result<GuardedDatabaseConnectionInstall, String> {
+        let connected = self
+            .connections
+            .get(&profile_id)
+            .ok_or_else(|| "Profile not connected".to_string())?;
+        let guard = FetchSession {
+            profile_id,
+            connection: connected.connection.clone(),
+            generation: self.current_session_generation(profile_id),
+            invalidation_revision: self.current_invalidation_revision(profile_id),
+            slot_revision: self.current_slot_revision(profile_id, database),
+        };
+        let install = self.prepare_database_connection(profile_id, database, secret_store)?;
+
+        Ok(GuardedDatabaseConnectionInstall { install, guard })
+    }
+
+    /// Installs an asynchronously prepared per-database connection,
+    /// rejecting the result when the session was replaced, the request was
+    /// invalidated, or a slot for the target database appeared meanwhile. A
+    /// successful install never mutates the active connection, the active
+    /// database, or the session generation.
+    pub fn apply_guarded_database_connection(
+        &mut self,
+        installed: GuardedInstalledDatabaseConnection,
+    ) -> InstallDatabaseConnectionOutcome {
+        let GuardedInstalledDatabaseConnection {
+            guard,
+            database,
+            connection,
+            schema,
+        } = installed;
+        let profile_id = guard.profile_id;
+        let Some(connected) = self.connections.get_mut(&profile_id) else {
+            return InstallDatabaseConnectionOutcome::Rejected(
+                StaleInstallReason::ProfileDisconnected,
+            );
+        };
+        // Direct field reads: the shared helpers borrow all of `self`, which
+        // would conflict with the `connections` entry borrow above.
+        if self.session_generations.get(&profile_id).copied() != Some(guard.generation)
+            || !Arc::ptr_eq(&guard.connection, &connected.connection)
+        {
+            return InstallDatabaseConnectionOutcome::Rejected(
+                StaleInstallReason::ConnectionReplaced,
+            );
+        }
+        if self
+            .invalidation_revisions
+            .get(&profile_id)
+            .copied()
+            .unwrap_or(0)
+            != guard.invalidation_revision
+        {
+            return InstallDatabaseConnectionOutcome::Rejected(
+                StaleInstallReason::RequestInvalidated,
+            );
+        }
+        // A slot revision change since preparation covers the add/remove
+        // cycle that a bare presence check cannot see; the presence check
+        // remains as the explicit newer-slot guard.
+        let slot_revision = self
+            .slot_revisions
+            .get(&(profile_id, database.clone()))
+            .copied()
+            .unwrap_or(0);
+        if slot_revision != guard.slot_revision
+            || connected.database_connections.contains_key(&database)
+        {
+            return InstallDatabaseConnectionOutcome::Rejected(
+                StaleInstallReason::TargetSlotReplaced,
+            );
+        }
+
+        // Route through the shared insertion path so the installation bumps
+        // the target's slot revision like any other slot mutation.
+        self.add_database_connection(profile_id, database, connection, schema);
+        InstallDatabaseConnectionOutcome::Installed
+    }
+
     // --- Shutdown ---
 
     pub fn close_all_connections(
@@ -1728,6 +2350,10 @@ impl ConnectionManager {
         let count = self.connections.len();
         let connections = std::mem::take(&mut self.connections);
         self.active_connection_id = None;
+        self.database_lists.clear();
+        self.session_generations.clear();
+        self.invalidation_revisions.clear();
+        self.slot_revisions.clear();
         info!(
             "Scheduling teardown for {} connections during shutdown",
             count
@@ -2207,12 +2833,316 @@ pub struct FetchSchemaRoutinesResult {
     pub routines: Vec<RoutineInfo>,
 }
 
+/// Why a session-fenced fetch result was rejected at apply time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StaleFetchReason {
+    /// The profile is no longer connected.
+    ProfileDisconnected,
+    /// The connection captured when the request was prepared was replaced by
+    /// a reconnect or a per-database connection swap.
+    ConnectionReplaced,
+    /// The profile's cached hierarchy data was invalidated while the fetch
+    /// was in flight.
+    RequestInvalidated,
+}
+
+/// Outcome of applying a session-fenced fetch result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApplyFetchOutcome {
+    /// The result matched the current session and was written to the cache.
+    Applied,
+    /// The result was stale; the cache was left untouched.
+    Rejected(StaleFetchReason),
+}
+
+/// Session identity captured when a fenced fetch is prepared and rechecked
+/// when its result is applied.
+///
+/// Connection identity fences results that outlived a reconnect or a
+/// per-database connection swap; the invalidation revision fences results
+/// that outlived a cache invalidation within one session.
+/// Opaque authority for a database refresh while its target slot is held out
+/// of the manager. Captured only after invalidation and slot take.
+#[derive(Clone)]
+pub struct DatabaseRefreshGuard {
+    profile_id: Uuid,
+    database: String,
+    generation: u64,
+    primary_connection: Arc<dyn Connection>,
+    slot_revision: u64,
+}
+
+pub struct FetchSession {
+    profile_id: Uuid,
+    connection: Arc<dyn Connection>,
+    /// Monotonic generation of the session the request was prepared in.
+    /// Unlike pointer identity it never repeats, fencing old results when a
+    /// caller reconnects with the same connection object.
+    generation: u64,
+    invalidation_revision: u64,
+    /// Slot revision of the request's target database at prepare time.
+    /// Validated at apply time so a remove/reinstall of the same connection
+    /// (per-database ABA) rejects the result. Slot-unbound requests (the
+    /// primary-connection database list) capture zero and skip this check.
+    slot_revision: u64,
+}
+
+/// Parameters for fetching the server's database list through the primary
+/// connection, prepared with session identity for fenced application.
+pub struct FetchDatabaseListParams {
+    session: FetchSession,
+}
+
+/// A database list fetched for a captured session, awaiting fenced
+/// application through `ConnectionManager::apply_fetch_database_list`.
+pub struct FetchedDatabaseList {
+    session: FetchSession,
+    pub databases: Vec<DatabaseInfo>,
+}
+
+impl FetchDatabaseListParams {
+    pub fn execute(self) -> Result<FetchedDatabaseList, DbError> {
+        let databases = self.session.connection.list_databases()?;
+        Ok(FetchedDatabaseList {
+            session: self.session,
+            databases,
+        })
+    }
+}
+
+/// Parameters for fetching one database's schema without a schema-loading
+/// strategy gate, prepared with session identity for fenced application. The
+/// captured target is immutable: results are applied to the database they
+/// were prepared for.
+pub struct FetchExplicitDatabaseSchemaParams {
+    session: FetchSession,
+    database: String,
+}
+
+/// A database schema fetched for a captured session, awaiting fenced
+/// application through
+/// `ConnectionManager::apply_fetch_explicit_database_schema`.
+pub struct FetchedExplicitDatabaseSchema {
+    session: FetchSession,
+    pub profile_id: Uuid,
+    database: String,
+    pub schema: DbSchemaInfo,
+}
+
+impl FetchedExplicitDatabaseSchema {
+    /// The database this result was prepared for; application ignores any
+    /// other key.
+    pub fn database(&self) -> &str {
+        &self.database
+    }
+}
+
+impl FetchExplicitDatabaseSchemaParams {
+    /// The database this request was prepared for.
+    pub fn database(&self) -> &str {
+        &self.database
+    }
+
+    pub fn execute(self) -> Result<FetchedExplicitDatabaseSchema, DbError> {
+        let FetchExplicitDatabaseSchemaParams { session, database } = self;
+        let schema = session.connection.schema_for_database(&database)?;
+        Ok(FetchedExplicitDatabaseSchema {
+            profile_id: session.profile_id,
+            database,
+            schema,
+            session,
+        })
+    }
+}
+
+/// Why preparing a fenced table-details fetch failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TableDetailsPrepareError {
+    /// The profile is no longer connected.
+    ProfileDisconnected,
+    /// Details for the target table are already cached.
+    AlreadyCached,
+    /// The target database has no prepared connection and the driver's
+    /// strategy cannot relabel another connection's content. Prepare the
+    /// missing per-database connection (see
+    /// [`ConnectionManager::prepare_database_connection`]) and retry.
+    PendingDatabaseConnection { database: String },
+}
+
+/// Opaque capture of the session state needed to fetch and apply table
+/// details safely. Unlike the legacy
+/// [`ConnectionManager::prepare_fetch_table_details`], the request is bound
+/// to the session and to the connection resolved through the generic routing
+/// rules; the captured target is immutable and its provenance stays private,
+/// so a caller cannot retarget the result before application.
+pub struct FencedTableDetailsParams {
+    session: FetchSession,
+    database: String,
+    schema: Option<String>,
+    table: String,
+}
+
+impl FencedTableDetailsParams {
+    /// The database this request was prepared for.
+    pub fn database(&self) -> &str {
+        &self.database
+    }
+
+    /// The schema this request was prepared for, if any.
+    pub fn schema(&self) -> Option<&str> {
+        self.schema.as_deref()
+    }
+
+    /// The table this request was prepared for.
+    pub fn table(&self) -> &str {
+        &self.table
+    }
+
+    pub fn execute(self) -> Result<FetchedTableDetails, DbError> {
+        let details = self.session.connection.table_details(
+            &self.database,
+            self.schema.as_deref(),
+            &self.table,
+        )?;
+        let dependents = self
+            .session
+            .connection
+            .fetch_dependents(&self.database, self.schema.as_deref(), &self.table)
+            .unwrap_or_default();
+
+        Ok(FetchedTableDetails {
+            session: self.session,
+            database: self.database,
+            schema: self.schema,
+            table: self.table,
+            details,
+            dependents,
+        })
+    }
+}
+
+/// Table details and dependents fetched for a captured session, awaiting
+/// fenced application through `ConnectionManager::apply_fetched_table_details`.
+pub struct FetchedTableDetails {
+    session: FetchSession,
+    database: String,
+    schema: Option<String>,
+    table: String,
+    pub details: TableInfo,
+    pub dependents: Vec<RelationRef>,
+}
+
+impl FetchedTableDetails {
+    /// The profile this result was fetched for.
+    pub fn profile_id(&self) -> Uuid {
+        self.session.profile_id
+    }
+
+    /// The database this result was fetched for; application ignores any
+    /// other key.
+    pub fn database(&self) -> &str {
+        &self.database
+    }
+
+    /// The schema this result was fetched for, if any.
+    pub fn schema(&self) -> Option<&str> {
+        self.schema.as_deref()
+    }
+
+    /// The table this result was fetched for.
+    pub fn table(&self) -> &str {
+        &self.table
+    }
+}
+
+/// Guards an asynchronously prepared per-database connection so that its
+/// installation cannot land in a replaced session, overwrite a newer slot,
+/// or mutate the active browsing context. The wrapped installation
+/// parameters stay private; callers can only execute and apply.
+pub struct GuardedDatabaseConnectionInstall {
+    install: SwitchDatabaseParams,
+    guard: FetchSession,
+}
+
+impl GuardedDatabaseConnectionInstall {
+    /// The profile this installation was prepared for.
+    pub fn profile_id(&self) -> Uuid {
+        self.install.profile_id
+    }
+
+    /// The target database this installation was prepared for.
+    pub fn database(&self) -> &str {
+        &self.install.database
+    }
+
+    pub fn execute(self) -> Result<GuardedInstalledDatabaseConnection, String> {
+        let GuardedDatabaseConnectionInstall { install, guard } = self;
+        let database = install.database.clone();
+        let SwitchDatabaseResult {
+            connection, schema, ..
+        } = install.execute()?;
+
+        Ok(GuardedInstalledDatabaseConnection {
+            guard,
+            database,
+            connection,
+            schema,
+        })
+    }
+}
+
+/// A per-database connection opened for a captured session, awaiting guarded
+/// application through `ConnectionManager::apply_guarded_database_connection`.
+pub struct GuardedInstalledDatabaseConnection {
+    guard: FetchSession,
+    database: String,
+    connection: Arc<dyn Connection>,
+    schema: Option<SchemaSnapshot>,
+}
+
+impl GuardedInstalledDatabaseConnection {
+    /// The profile this installation was prepared for.
+    pub fn profile_id(&self) -> Uuid {
+        self.guard.profile_id
+    }
+
+    /// The target database this installation was prepared for.
+    pub fn database(&self) -> &str {
+        &self.database
+    }
+}
+
+/// Outcome of applying a guarded per-database connection installation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstallDatabaseConnectionOutcome {
+    /// The slot was installed; the active connection, the active database and
+    /// the session generation were left untouched.
+    Installed,
+    /// The installation was rejected; no slot or context was touched.
+    Rejected(StaleInstallReason),
+}
+
+/// Why a guarded connection installation was rejected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StaleInstallReason {
+    /// The profile is no longer connected.
+    ProfileDisconnected,
+    /// The owning session was replaced by a reconnect after preparation.
+    ConnectionReplaced,
+    /// The profile's cached hierarchy data was invalidated while the
+    /// connection was being opened.
+    RequestInvalidated,
+    /// A per-database connection for the target database was installed after
+    /// this one was prepared; the newer slot was left untouched.
+    TargetSlotReplaced,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{
         DbConfig, DbError, DbKind, DriverCapabilities, DriverMetadata, NoopSecretStore,
-        QueryLanguage,
+        QueryLanguage, RelationKind, TableStorageHint,
     };
     use secrecy::ExposeSecret;
 
@@ -3059,6 +3989,39 @@ mod tests {
     }
 
     #[test]
+    fn replacing_session_retires_only_old_profile_pending_operations() {
+        let mut manager = ConnectionManager::new(HashMap::new());
+        let profile = ConnectionProfile::new("pg", DbConfig::default_postgres());
+        let sibling = ConnectionProfile::new("other", DbConfig::default_postgres());
+        let primary = make_connection(
+            DbKind::Postgres,
+            SchemaLoadingStrategy::ConnectionPerDatabase,
+        );
+        manager.add_connection(
+            profile.clone(),
+            primary.clone(),
+            None,
+            None,
+            false,
+            WritePrivilege::Unknown,
+        );
+        assert!(manager.start_pending_operation(profile.id, Some("reporting")));
+        assert!(manager.start_pending_operation(sibling.id, Some("other")));
+        manager.add_connection(
+            profile.clone(),
+            primary,
+            None,
+            None,
+            false,
+            WritePrivilege::Unknown,
+        );
+        assert!(!manager.is_operation_pending(profile.id, Some("reporting")));
+        assert!(manager.is_operation_pending(sibling.id, Some("other")));
+        assert!(manager.start_pending_operation(profile.id, Some("reporting")));
+        manager.finish_pending_operation(profile.id, Some("reporting"));
+    }
+
+    #[test]
     fn dependents_cache_keeps_same_named_tables_in_different_schemas_distinct() {
         use crate::{RelationKind, RelationRef};
 
@@ -3627,5 +4590,2080 @@ mod tests {
             manager.disconnect(Uuid::new_v4()).is_none(),
             "unknown profile must not spawn a teardown thread"
         );
+    }
+
+    // --- Session-fenced shared-tree fetch tests ---
+
+    use crate::DatabaseInfo;
+
+    struct IntrospectionTestConnection {
+        kind: DbKind,
+        strategy: SchemaLoadingStrategy,
+        metadata: DriverMetadata,
+        databases: Vec<DatabaseInfo>,
+        /// Marker embedded in `schema_for_database` results so tests can tell
+        /// which connection instance served a fetch.
+        schema_marker: String,
+    }
+
+    impl IntrospectionTestConnection {
+        fn new(
+            strategy: SchemaLoadingStrategy,
+            databases: Vec<DatabaseInfo>,
+            schema_marker: &str,
+        ) -> Self {
+            Self {
+                kind: DbKind::Postgres,
+                strategy,
+                metadata: DriverMetadata {
+                    id: "test-introspection".to_string(),
+                    display_name: "IntrospectionTest".to_string(),
+                    description: "test".to_string(),
+                    category: crate::DatabaseCategory::Relational,
+                    transfer_family: crate::TransferFamily::Sql,
+                    deployment_class: None,
+                    query_language: QueryLanguage::Sql,
+                    capabilities: DriverCapabilities::empty(),
+                    default_port: None,
+                    uri_scheme: "test".to_string(),
+                    icon: crate::Icon::Database,
+                    syntax: None,
+                    query: None,
+                    mutation: None,
+                    ddl: None,
+                    transactions: None,
+                    limits: None,
+                    ssl_modes: None,
+                    ssl_cert_fields: None,
+                    classification_override: None,
+                    default_chunk_size: None,
+                    supports_lock_timeout: false,
+                    editor_profile: None,
+                },
+                databases,
+                schema_marker: schema_marker.to_string(),
+            }
+        }
+    }
+
+    impl Connection for IntrospectionTestConnection {
+        fn metadata(&self) -> &DriverMetadata {
+            &self.metadata
+        }
+
+        fn ping(&self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn close(&mut self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn execute(&self, _req: &crate::QueryRequest) -> Result<crate::QueryResult, DbError> {
+            Err(DbError::NotSupported("test connection".to_string()))
+        }
+
+        fn cancel(&self, _handle: &crate::QueryHandle) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn schema(&self) -> Result<SchemaSnapshot, DbError> {
+            Ok(SchemaSnapshot::default())
+        }
+
+        fn kind(&self) -> DbKind {
+            self.kind
+        }
+
+        fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
+            self.strategy
+        }
+
+        fn dialect(&self) -> &dyn crate::SqlDialect {
+            &crate::DefaultSqlDialect
+        }
+
+        fn list_databases(&self) -> Result<Vec<DatabaseInfo>, DbError> {
+            Ok(self.databases.clone())
+        }
+
+        fn schema_for_database(&self, database: &str) -> Result<DbSchemaInfo, DbError> {
+            Ok(schema_with_marker(&self.schema_marker, database))
+        }
+    }
+
+    fn schema_with_marker(marker: &str, database: &str) -> DbSchemaInfo {
+        DbSchemaInfo {
+            name: database.to_string(),
+            tables: vec![TableInfo {
+                name: format!("{marker}-{database}"),
+                schema: None,
+                columns: None,
+                indexes: None,
+                foreign_keys: None,
+                constraints: None,
+                sample_fields: None,
+                presentation: Default::default(),
+                child_items: None,
+                storage_hints: None,
+            }],
+            views: Vec::new(),
+            custom_types: None,
+        }
+    }
+
+    fn introspection_connection(
+        strategy: SchemaLoadingStrategy,
+        databases: Vec<DatabaseInfo>,
+        schema_marker: &str,
+    ) -> Arc<IntrospectionTestConnection> {
+        Arc::new(IntrospectionTestConnection::new(
+            strategy,
+            databases,
+            schema_marker,
+        ))
+    }
+
+    /// A realistic per-database connection: bound to one database. Mirrors
+    /// real drivers such as PostgreSQL, whose `schema_for_database`
+    /// introspects the bound client and only labels the result with the
+    /// requested name — the content always comes from the bound database.
+    struct BoundPerDatabaseConnection {
+        kind: DbKind,
+        metadata: DriverMetadata,
+        bound_database: String,
+    }
+
+    impl BoundPerDatabaseConnection {
+        fn new(bound_database: &str) -> Arc<Self> {
+            Arc::new(Self {
+                kind: DbKind::Postgres,
+                metadata: postgres_metadata("test-bound-pd"),
+                bound_database: bound_database.to_string(),
+            })
+        }
+    }
+
+    impl Connection for BoundPerDatabaseConnection {
+        fn metadata(&self) -> &DriverMetadata {
+            &self.metadata
+        }
+
+        fn ping(&self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn close(&mut self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn execute(&self, _req: &crate::QueryRequest) -> Result<crate::QueryResult, DbError> {
+            Err(DbError::NotSupported("test connection".to_string()))
+        }
+
+        fn cancel(&self, _handle: &crate::QueryHandle) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn schema(&self) -> Result<SchemaSnapshot, DbError> {
+            Ok(SchemaSnapshot::default())
+        }
+
+        fn kind(&self) -> DbKind {
+            self.kind
+        }
+
+        fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
+            SchemaLoadingStrategy::ConnectionPerDatabase
+        }
+
+        fn dialect(&self) -> &dyn crate::SqlDialect {
+            &crate::DefaultSqlDialect
+        }
+
+        fn schema_for_database(&self, requested: &str) -> Result<DbSchemaInfo, DbError> {
+            Ok(DbSchemaInfo {
+                name: requested.to_string(),
+                tables: vec![TableInfo {
+                    name: format!("{}-tables", self.bound_database),
+                    schema: None,
+                    columns: None,
+                    indexes: None,
+                    foreign_keys: None,
+                    constraints: None,
+                    sample_fields: None,
+                    presentation: Default::default(),
+                    child_items: None,
+                    storage_hints: None,
+                }],
+                views: Vec::new(),
+                custom_types: None,
+            })
+        }
+    }
+
+    fn connect_profile_with_schema(
+        manager: &mut ConnectionManager,
+        profile: &ConnectionProfile,
+        connection: Arc<dyn Connection>,
+        schema: Option<SchemaSnapshot>,
+    ) {
+        manager.add_connection(
+            profile.clone(),
+            connection,
+            schema,
+            None,
+            false,
+            WritePrivilege::Unknown,
+        );
+    }
+
+    fn connect_profile(
+        manager: &mut ConnectionManager,
+        profile: &ConnectionProfile,
+        connection: Arc<dyn Connection>,
+    ) {
+        connect_profile_with_schema(manager, profile, connection, None);
+    }
+
+    fn new_manager_with_connection(
+        connection: Arc<dyn Connection>,
+    ) -> (ConnectionManager, ConnectionProfile) {
+        let profile = ConnectionProfile::new("pg", DbConfig::default_postgres());
+        let mut manager = ConnectionManager::new(HashMap::new());
+        connect_profile(&mut manager, &profile, connection);
+        (manager, profile)
+    }
+
+    fn new_manager_with_connection_and_schema(
+        connection: Arc<dyn Connection>,
+        schema: Option<SchemaSnapshot>,
+    ) -> (ConnectionManager, ConnectionProfile) {
+        let profile = ConnectionProfile::new("pg", DbConfig::default_postgres());
+        let mut manager = ConnectionManager::new(HashMap::new());
+        manager.add_connection(
+            profile.clone(),
+            connection,
+            schema,
+            None,
+            false,
+            WritePrivilege::Unknown,
+        );
+        (manager, profile)
+    }
+
+    fn expect_prepare_error<T>(result: Result<T, String>) -> String {
+        match result {
+            Ok(_) => panic!("expected prepare to fail"),
+            Err(error) => error,
+        }
+    }
+
+    #[test]
+    fn profile_session_generation_reinstall_and_slot_are_distinct() {
+        let connection = introspection_connection(
+            SchemaLoadingStrategy::LazyPerDatabase,
+            vec![DatabaseInfo {
+                name: "app".to_string(),
+                is_current: true,
+            }],
+            "primary",
+        );
+        let (mut manager, profile) = new_manager_with_connection(connection.clone());
+        let first = manager
+            .profile_session_generation(profile.id)
+            .expect("connected generation");
+        let other_profile = ConnectionProfile::new("other", DbConfig::default_postgres());
+        manager.add_connection(
+            other_profile.clone(),
+            connection.clone(),
+            None,
+            None,
+            false,
+            WritePrivilege::Unknown,
+        );
+        assert_eq!(
+            manager.profile_session_generation(profile.id),
+            Some(first),
+            "other profile cannot advance target session"
+        );
+        manager.add_database_connection(
+            profile.id,
+            "other-db".to_string(),
+            connection.clone(),
+            None,
+        );
+        assert_eq!(
+            manager.profile_session_generation(profile.id),
+            Some(first),
+            "slot mutation cannot advance profile session"
+        );
+        manager.add_connection(
+            profile.clone(),
+            connection.clone(),
+            None,
+            None,
+            false,
+            WritePrivilege::Unknown,
+        );
+        let second = manager
+            .profile_session_generation(profile.id)
+            .expect("reinstalled generation");
+        assert_ne!(
+            first, second,
+            "same Arc reinstall must have a new generation"
+        );
+        drop(manager.disconnect(profile.id));
+        assert_eq!(
+            manager.profile_session_generation(profile.id),
+            None,
+            "disconnected profile has no token"
+        );
+        manager.add_connection(
+            profile.clone(),
+            connection,
+            None,
+            None,
+            false,
+            WritePrivilege::Unknown,
+        );
+        assert_ne!(
+            manager.profile_session_generation(profile.id),
+            Some(second),
+            "reconnect cannot reuse a generation"
+        );
+    }
+
+    #[test]
+    fn session_fetch_database_list_apply_accepts_result_from_current_session() {
+        let primary = introspection_connection(
+            SchemaLoadingStrategy::LazyPerDatabase,
+            vec![DatabaseInfo {
+                name: "app".to_string(),
+                is_current: true,
+            }],
+            "primary",
+        );
+        let (mut manager, profile) = new_manager_with_connection(primary);
+
+        assert!(manager.needs_database_list(profile.id));
+
+        let params = manager
+            .prepare_fetch_database_list(profile.id)
+            .expect("prepare should succeed for a connected profile");
+        let fetched = params.execute().expect("execute should succeed");
+        assert_eq!(fetched.databases.len(), 1);
+
+        assert_eq!(
+            manager.apply_fetch_database_list(fetched),
+            ApplyFetchOutcome::Applied
+        );
+
+        let cached = manager
+            .get_database_list(profile.id)
+            .expect("applied list should be cached");
+        assert_eq!(cached[0].name, "app");
+        assert!(!manager.needs_database_list(profile.id));
+    }
+
+    #[test]
+    fn session_fetch_database_list_apply_rejects_result_after_reconnect() {
+        let first = introspection_connection(
+            SchemaLoadingStrategy::LazyPerDatabase,
+            vec![DatabaseInfo {
+                name: "old".to_string(),
+                is_current: true,
+            }],
+            "first",
+        );
+        let (mut manager, profile) = new_manager_with_connection(first);
+
+        let params = manager
+            .prepare_fetch_database_list(profile.id)
+            .expect("prepare should succeed before disconnect");
+
+        manager.disconnect(profile.id);
+
+        let second = introspection_connection(
+            SchemaLoadingStrategy::LazyPerDatabase,
+            vec![DatabaseInfo {
+                name: "new".to_string(),
+                is_current: true,
+            }],
+            "second",
+        );
+        connect_profile(&mut manager, &profile, second);
+
+        let fetched = params.execute().expect("old request still executes");
+        assert_eq!(
+            manager.apply_fetch_database_list(fetched),
+            ApplyFetchOutcome::Rejected(StaleFetchReason::ConnectionReplaced)
+        );
+
+        assert!(
+            manager.get_database_list(profile.id).is_none(),
+            "stale result must not touch the new session's cache"
+        );
+        assert!(manager.needs_database_list(profile.id));
+    }
+
+    #[test]
+    fn session_fetch_database_list_apply_rejects_result_after_disconnect() {
+        let primary = introspection_connection(
+            SchemaLoadingStrategy::LazyPerDatabase,
+            vec![DatabaseInfo {
+                name: "app".to_string(),
+                is_current: true,
+            }],
+            "primary",
+        );
+        let (mut manager, profile) = new_manager_with_connection(primary);
+
+        let params = manager
+            .prepare_fetch_database_list(profile.id)
+            .expect("prepare should succeed before disconnect");
+
+        manager.disconnect(profile.id);
+
+        let fetched = params.execute().expect("old request still executes");
+        assert_eq!(
+            manager.apply_fetch_database_list(fetched),
+            ApplyFetchOutcome::Rejected(StaleFetchReason::ProfileDisconnected)
+        );
+        assert!(manager.get_database_list(profile.id).is_none());
+    }
+
+    #[test]
+    fn session_fetch_database_list_empty_result_is_cached_success() {
+        let primary = introspection_connection(
+            SchemaLoadingStrategy::LazyPerDatabase,
+            Vec::new(),
+            "primary",
+        );
+        let (mut manager, profile) = new_manager_with_connection(primary);
+
+        let params = manager
+            .prepare_fetch_database_list(profile.id)
+            .expect("prepare should succeed");
+        let fetched = params.execute().expect("execute should succeed");
+        assert!(fetched.databases.is_empty());
+
+        assert_eq!(
+            manager.apply_fetch_database_list(fetched),
+            ApplyFetchOutcome::Applied
+        );
+
+        let cached = manager
+            .get_database_list(profile.id)
+            .expect("an empty result is a cached success, not a missing entry");
+        assert!(cached.is_empty());
+        assert!(
+            !manager.needs_database_list(profile.id),
+            "an empty cached list must not read as unloaded"
+        );
+    }
+
+    #[test]
+    fn session_fetch_database_list_replacement_connection_clears_cached_list() {
+        let first = introspection_connection(
+            SchemaLoadingStrategy::LazyPerDatabase,
+            vec![DatabaseInfo {
+                name: "old".to_string(),
+                is_current: true,
+            }],
+            "first",
+        );
+        let (mut manager, profile) = new_manager_with_connection(first);
+
+        let params = manager
+            .prepare_fetch_database_list(profile.id)
+            .expect("prepare should succeed");
+        let fetched = params.execute().expect("execute should succeed");
+        assert_eq!(
+            manager.apply_fetch_database_list(fetched),
+            ApplyFetchOutcome::Applied
+        );
+        assert!(manager.get_database_list(profile.id).is_some());
+
+        // Replace the session without disconnecting first: the cached list
+        // belongs to the replaced session and must not survive.
+        let second = introspection_connection(
+            SchemaLoadingStrategy::LazyPerDatabase,
+            vec![DatabaseInfo {
+                name: "new".to_string(),
+                is_current: true,
+            }],
+            "second",
+        );
+        connect_profile(&mut manager, &profile, second);
+
+        assert!(
+            manager.get_database_list(profile.id).is_none(),
+            "the cached list belongs to the replaced session"
+        );
+        assert!(
+            manager.needs_database_list(profile.id),
+            "a replacement session must read as unloaded"
+        );
+    }
+
+    #[test]
+    fn session_fetch_database_list_apply_rejects_old_result_when_session_arc_is_reused() {
+        let primary = introspection_connection(
+            SchemaLoadingStrategy::LazyPerDatabase,
+            vec![DatabaseInfo {
+                name: "old".to_string(),
+                is_current: true,
+            }],
+            "primary",
+        );
+        let (mut manager, profile) = new_manager_with_connection(primary.clone());
+
+        let params = manager
+            .prepare_fetch_database_list(profile.id)
+            .expect("prepare should succeed before disconnect");
+
+        manager.disconnect(profile.id);
+
+        // A caller reconnects reusing the very same connection object: pointer
+        // identity alone must not admit the old request's result.
+        connect_profile(&mut manager, &profile, primary);
+
+        let fetched = params.execute().expect("old request still executes");
+        assert_eq!(
+            manager.apply_fetch_database_list(fetched),
+            ApplyFetchOutcome::Rejected(StaleFetchReason::ConnectionReplaced)
+        );
+        assert!(
+            manager.get_database_list(profile.id).is_none(),
+            "a reused-Arc old result must not touch the new session's cache"
+        );
+        assert!(manager.needs_database_list(profile.id));
+    }
+
+    #[test]
+    fn session_fetch_database_list_prepare_reports_cache_hit() {
+        let primary = introspection_connection(
+            SchemaLoadingStrategy::LazyPerDatabase,
+            vec![DatabaseInfo {
+                name: "app".to_string(),
+                is_current: true,
+            }],
+            "primary",
+        );
+        let (mut manager, profile) = new_manager_with_connection(primary);
+
+        let params = manager
+            .prepare_fetch_database_list(profile.id)
+            .expect("prepare should succeed");
+        let fetched = params.execute().expect("execute should succeed");
+        assert_eq!(
+            manager.apply_fetch_database_list(fetched),
+            ApplyFetchOutcome::Applied
+        );
+
+        let error = expect_prepare_error(manager.prepare_fetch_database_list(profile.id));
+        assert!(
+            error.contains("already cached"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn session_fetch_prepare_requires_connected_profile() {
+        let manager = ConnectionManager::new(HashMap::new());
+        let profile_id = Uuid::new_v4();
+
+        let list_error = expect_prepare_error(manager.prepare_fetch_database_list(profile_id));
+        assert!(list_error.contains("not connected"));
+
+        let schema_error =
+            expect_prepare_error(manager.prepare_fetch_explicit_database_schema(profile_id, "app"));
+        assert!(schema_error.contains("not connected"));
+    }
+
+    #[test]
+    fn session_fetch_explicit_schema_apply_accepts_result_for_current_session() {
+        // Eager-schema driver: the true primary target — the database this
+        // session is bound to — is served by the primary connection itself.
+        let primary = BoundPerDatabaseConnection::new("app");
+        let (mut manager, profile) = new_manager_with_connection_and_schema(
+            primary,
+            Some(relational_schema_with_current_database("app")),
+        );
+
+        assert!(manager.needs_database_schema(profile.id, "app"));
+
+        let params = manager
+            .prepare_fetch_explicit_database_schema(profile.id, "app")
+            .expect("the bound primary database must be preparable");
+        // Provenance invariant: the request is bound to the target it was
+        // prepared for and cannot be retargeted before execution.
+        assert_eq!(params.database(), "app");
+        let fetched = params.execute().expect("execute should succeed");
+        assert_eq!(fetched.database(), "app");
+
+        assert_eq!(
+            manager.apply_fetch_explicit_database_schema(fetched),
+            ApplyFetchOutcome::Applied
+        );
+
+        let cached = manager
+            .get_database_schema(profile.id, "app")
+            .expect("applied schema should be cached");
+        assert_eq!(cached.tables[0].name, "app-tables");
+        assert!(!manager.needs_database_schema(profile.id, "app"));
+
+        let error =
+            expect_prepare_error(manager.prepare_fetch_explicit_database_schema(profile.id, "app"));
+        assert!(
+            error.contains("already cached"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn session_fetch_explicit_schema_missing_slot_rejected_for_per_database_strategy() {
+        let primary = BoundPerDatabaseConnection::new("app");
+        let (manager, profile) = new_manager_with_connection_and_schema(
+            primary,
+            Some(relational_schema_with_current_database("app")),
+        );
+
+        // No per-database slot exists for "analytics": the primary connection
+        // is bound to "app" and would label its own tables as "analytics".
+        let error = expect_prepare_error(
+            manager.prepare_fetch_explicit_database_schema(profile.id, "analytics"),
+        );
+        assert!(
+            error.contains("analytics"),
+            "error must name the unprepared target: {error}"
+        );
+        assert!(
+            manager.needs_database_schema(profile.id, "analytics"),
+            "a rejected preparation must not cache anything"
+        );
+    }
+
+    #[test]
+    fn session_fetch_explicit_schema_single_connection_strategy_serves_requested_database() {
+        // LazyPerDatabase drivers introspect any database by name over one
+        // connection, so no per-database slot is required.
+        let primary = introspection_connection(
+            SchemaLoadingStrategy::LazyPerDatabase,
+            Vec::new(),
+            "primary",
+        );
+        let (mut manager, profile) = new_manager_with_connection(primary);
+
+        let params = manager
+            .prepare_fetch_explicit_database_schema(profile.id, "analytics")
+            .expect("single-connection strategies need no per-database slot");
+        let fetched = params.execute().expect("execute should succeed");
+
+        assert_eq!(
+            manager.apply_fetch_explicit_database_schema(fetched),
+            ApplyFetchOutcome::Applied
+        );
+        let cached = manager
+            .get_database_schema(profile.id, "analytics")
+            .expect("applied schema should be cached");
+        assert_eq!(cached.tables[0].name, "primary-analytics");
+    }
+
+    #[test]
+    fn session_fetch_explicit_schema_apply_rejects_after_target_slot_removal() {
+        let primary = BoundPerDatabaseConnection::new("app");
+        let analytics = BoundPerDatabaseConnection::new("analytics");
+        let (mut manager, profile) = new_manager_with_connection_and_schema(
+            primary,
+            Some(relational_schema_with_current_database("app")),
+        );
+        manager.add_database_connection(profile.id, "analytics".to_string(), analytics, None);
+
+        let params = manager
+            .prepare_fetch_explicit_database_schema(profile.id, "analytics")
+            .expect("a prepared non-primary slot must be usable");
+
+        assert!(manager.remove_database_connection(profile.id, "analytics"));
+
+        let fetched = params.execute().expect("old request still executes");
+        assert_eq!(
+            manager.apply_fetch_explicit_database_schema(fetched),
+            ApplyFetchOutcome::Rejected(StaleFetchReason::ConnectionReplaced),
+            "after the target slot is removed the result must not fall back to another connection"
+        );
+        assert!(
+            manager
+                .get_database_schema(profile.id, "analytics")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn session_fetch_explicit_schema_apply_rejects_result_after_reconnect() {
+        let first = introspection_connection(
+            SchemaLoadingStrategy::ConnectionPerDatabase,
+            Vec::new(),
+            "first",
+        );
+        let (mut manager, profile) = new_manager_with_connection_and_schema(
+            first,
+            Some(relational_schema_with_current_database("app")),
+        );
+
+        // Target the bound primary database so prepare succeeds on routing.
+        let params = manager
+            .prepare_fetch_explicit_database_schema(profile.id, "app")
+            .expect("prepare should succeed before disconnect");
+
+        manager.disconnect(profile.id);
+
+        let second = introspection_connection(
+            SchemaLoadingStrategy::ConnectionPerDatabase,
+            Vec::new(),
+            "second",
+        );
+        connect_profile(&mut manager, &profile, second);
+
+        let fetched = params.execute().expect("old request still executes");
+        assert_eq!(
+            manager.apply_fetch_explicit_database_schema(fetched),
+            ApplyFetchOutcome::Rejected(StaleFetchReason::ConnectionReplaced)
+        );
+
+        assert!(
+            manager.get_database_schema(profile.id, "app").is_none(),
+            "stale result must not touch the new session's cache"
+        );
+        assert!(manager.needs_database_schema(profile.id, "app"));
+    }
+
+    #[test]
+    fn session_fetch_explicit_schema_apply_rejects_old_result_when_session_arc_is_reused() {
+        let primary = introspection_connection(
+            SchemaLoadingStrategy::ConnectionPerDatabase,
+            Vec::new(),
+            "primary",
+        );
+        let (mut manager, profile) = new_manager_with_connection_and_schema(
+            primary.clone(),
+            Some(relational_schema_with_current_database("app")),
+        );
+
+        // Target the bound primary database: the captured Arc is the primary,
+        // so only generation fencing can reject the old completion.
+        let params = manager
+            .prepare_fetch_explicit_database_schema(profile.id, "app")
+            .expect("prepare should succeed before disconnect");
+
+        manager.disconnect(profile.id);
+
+        // Reconnect with the same connection object AND the same primary
+        // snapshot: routing resolves the target back to the primary Arc, so
+        // the rejection below isolates generation fencing rather than a
+        // missing-snapshot routing failure.
+        connect_profile_with_schema(
+            &mut manager,
+            &profile,
+            primary,
+            Some(relational_schema_with_current_database("app")),
+        );
+
+        let fetched = params.execute().expect("old request still executes");
+        assert_eq!(
+            manager.apply_fetch_explicit_database_schema(fetched),
+            ApplyFetchOutcome::Rejected(StaleFetchReason::ConnectionReplaced)
+        );
+
+        assert!(
+            manager.get_database_schema(profile.id, "app").is_none(),
+            "a reused-Arc old result must not touch the new session's cache"
+        );
+        assert!(manager.needs_database_schema(profile.id, "app"));
+    }
+
+    #[test]
+    fn session_fetch_explicit_schema_apply_rejects_result_after_invalidation() {
+        let primary = introspection_connection(
+            SchemaLoadingStrategy::ConnectionPerDatabase,
+            Vec::new(),
+            "primary",
+        );
+        let (mut manager, profile) = new_manager_with_connection_and_schema(
+            primary,
+            Some(relational_schema_with_current_database("app")),
+        );
+
+        // Target the bound primary database so prepare succeeds on routing.
+        let params = manager
+            .prepare_fetch_explicit_database_schema(profile.id, "app")
+            .expect("prepare should succeed");
+
+        assert!(
+            manager
+                .invalidate_database_schema(profile.id, "app")
+                .is_none(),
+            "nothing was cached yet, so nothing is removed"
+        );
+
+        let fetched = params.execute().expect("execute should succeed");
+        assert_eq!(
+            manager.apply_fetch_explicit_database_schema(fetched),
+            ApplyFetchOutcome::Rejected(StaleFetchReason::RequestInvalidated)
+        );
+
+        assert!(
+            manager.get_database_schema(profile.id, "app").is_none(),
+            "invalidated-in-flight result must not touch the cache"
+        );
+    }
+
+    #[test]
+    fn session_fetch_explicit_schema_invalidate_fences_in_flight_request_and_allows_retry() {
+        let primary = introspection_connection(
+            SchemaLoadingStrategy::ConnectionPerDatabase,
+            Vec::new(),
+            "primary",
+        );
+        let (mut manager, profile) = new_manager_with_connection_and_schema(
+            primary,
+            Some(relational_schema_with_current_database("app")),
+        );
+
+        // Target the bound primary database so prepare succeeds on routing.
+        let first = manager
+            .prepare_fetch_explicit_database_schema(profile.id, "app")
+            .expect("prepare should succeed");
+        let first_fetched = first.execute().expect("execute should succeed");
+
+        // A second request for the same key completes first and populates the
+        // cache, then an invalidation drops it and bumps the revision.
+        let second = manager
+            .prepare_fetch_explicit_database_schema(profile.id, "app")
+            .expect("cache is still empty, so a second prepare succeeds");
+        let second_fetched = second.execute().expect("execute should succeed");
+        assert_eq!(
+            manager.apply_fetch_explicit_database_schema(second_fetched),
+            ApplyFetchOutcome::Applied
+        );
+        assert!(manager.get_database_schema(profile.id, "app").is_some());
+
+        let removed = manager
+            .invalidate_database_schema(profile.id, "app")
+            .expect("cached schema should be removed");
+        assert_eq!(removed.name, "app");
+
+        // The request prepared before the invalidation must be rejected...
+        assert_eq!(
+            manager.apply_fetch_explicit_database_schema(first_fetched),
+            ApplyFetchOutcome::Rejected(StaleFetchReason::RequestInvalidated)
+        );
+
+        // ...and the retry prepared after it must apply.
+        let retry = manager
+            .prepare_fetch_explicit_database_schema(profile.id, "app")
+            .expect("cache is empty again, so a retry prepares");
+        let retry_fetched = retry.execute().expect("execute should succeed");
+        assert_eq!(
+            manager.apply_fetch_explicit_database_schema(retry_fetched),
+            ApplyFetchOutcome::Applied
+        );
+        assert!(manager.get_database_schema(profile.id, "app").is_some());
+    }
+
+    #[test]
+    fn session_fetch_explicit_schema_prepare_prefers_per_database_connection() {
+        let primary = BoundPerDatabaseConnection::new("app");
+        let analytics = BoundPerDatabaseConnection::new("analytics");
+        let (mut manager, profile) = new_manager_with_connection_and_schema(
+            primary,
+            Some(relational_schema_with_current_database("app")),
+        );
+
+        manager.add_database_connection(profile.id, "analytics".to_string(), analytics, None);
+
+        let params = manager
+            .prepare_fetch_explicit_database_schema(profile.id, "analytics")
+            .expect("a prepared non-primary slot must be usable");
+        let fetched = params.execute().expect("execute should succeed");
+
+        assert_eq!(
+            manager.apply_fetch_explicit_database_schema(fetched),
+            ApplyFetchOutcome::Applied
+        );
+
+        let cached = manager
+            .get_database_schema(profile.id, "analytics")
+            .expect("applied schema should be cached");
+        assert_eq!(
+            cached.tables[0].name, "analytics-tables",
+            "the prepared per-database connection must serve the fetch, not the primary"
+        );
+    }
+
+    #[test]
+    fn session_fetch_legacy_schema_prepare_keeps_strategy_gate() {
+        let primary = introspection_connection(
+            SchemaLoadingStrategy::ConnectionPerDatabase,
+            Vec::new(),
+            "primary",
+        );
+        let (manager, profile) = new_manager_with_connection(primary);
+
+        let error =
+            expect_prepare_error(manager.prepare_fetch_database_schema(profile.id, "analytics"));
+        assert!(error.contains("not supported"), "unexpected error: {error}");
+    }
+
+    /// Shared `DriverMetadata` for the per-database test fakes below.
+    fn postgres_metadata(id: &str) -> DriverMetadata {
+        DriverMetadata {
+            id: id.to_string(),
+            display_name: "TestPG".to_string(),
+            description: "test".to_string(),
+            category: DatabaseCategory::Relational,
+            transfer_family: crate::TransferFamily::Sql,
+            deployment_class: None,
+            query_language: QueryLanguage::Sql,
+            capabilities: DriverCapabilities::empty(),
+            default_port: Some(5432),
+            uri_scheme: "postgres".to_string(),
+            icon: crate::Icon::Database,
+            syntax: None,
+            query: None,
+            mutation: None,
+            ddl: None,
+            transactions: None,
+            limits: None,
+            ssl_modes: None,
+            ssl_cert_fields: None,
+            classification_override: None,
+            default_chunk_size: None,
+            supports_lock_timeout: false,
+            editor_profile: None,
+        }
+    }
+
+    /// A connection that reports which bound database served a request, so
+    /// table-details fence tests can assert routing instead of name echoing.
+    struct TableDetailsBoundConnection {
+        kind: DbKind,
+        strategy: SchemaLoadingStrategy,
+        metadata: DriverMetadata,
+        bound_database: String,
+        schema_barriers: Option<(Arc<std::sync::Barrier>, Arc<std::sync::Barrier>)>,
+        details_barriers: Option<(Arc<std::sync::Barrier>, Arc<std::sync::Barrier>)>,
+    }
+
+    impl TableDetailsBoundConnection {
+        fn new(strategy: SchemaLoadingStrategy, bound_database: &str) -> Arc<Self> {
+            Arc::new(Self {
+                kind: DbKind::Postgres,
+                strategy,
+                metadata: postgres_metadata("test-details-bound"),
+                bound_database: bound_database.to_string(),
+                schema_barriers: None,
+                details_barriers: None,
+            })
+        }
+
+        fn boxed(strategy: SchemaLoadingStrategy, bound_database: &str) -> Box<Self> {
+            Box::new(Self {
+                kind: DbKind::Postgres,
+                strategy,
+                metadata: postgres_metadata("test-details-bound"),
+                bound_database: bound_database.to_string(),
+                schema_barriers: None,
+                details_barriers: None,
+            })
+        }
+    }
+
+    impl Connection for TableDetailsBoundConnection {
+        fn metadata(&self) -> &DriverMetadata {
+            &self.metadata
+        }
+
+        fn ping(&self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn close(&mut self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn execute(&self, _req: &crate::QueryRequest) -> Result<crate::QueryResult, DbError> {
+            Err(DbError::NotSupported("test connection".to_string()))
+        }
+
+        fn cancel(&self, _handle: &crate::QueryHandle) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn schema(&self) -> Result<SchemaSnapshot, DbError> {
+            Ok(SchemaSnapshot::default())
+        }
+
+        fn kind(&self) -> DbKind {
+            self.kind
+        }
+
+        fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
+            self.strategy
+        }
+
+        fn dialect(&self) -> &dyn crate::SqlDialect {
+            &crate::DefaultSqlDialect
+        }
+
+        fn schema_for_database(&self, requested: &str) -> Result<DbSchemaInfo, DbError> {
+            if let Some((started, release)) = &self.schema_barriers {
+                started.wait();
+                release.wait();
+            }
+            Ok(schema_with_marker(&self.bound_database, requested))
+        }
+
+        fn table_details(
+            &self,
+            _database: &str,
+            _schema: Option<&str>,
+            table: &str,
+        ) -> Result<TableInfo, DbError> {
+            if let Some((started, release)) = &self.details_barriers {
+                started.wait();
+                release.wait();
+            }
+            Ok(TableInfo {
+                name: table.to_string(),
+                schema: None,
+                columns: Some(Vec::new()),
+                indexes: None,
+                foreign_keys: None,
+                constraints: None,
+                sample_fields: None,
+                presentation: Default::default(),
+                child_items: None,
+                storage_hints: Some(vec![TableStorageHint {
+                    label: format!("bound-{}", self.bound_database),
+                    columns: Vec::new(),
+                    detail: None,
+                }]),
+            })
+        }
+
+        fn fetch_dependents(
+            &self,
+            _database: &str,
+            _schema: Option<&str>,
+            table: &str,
+        ) -> Result<Vec<RelationRef>, DbError> {
+            Ok(vec![RelationRef {
+                kind: RelationKind::View,
+                qualified_name: format!("{}.{}", self.bound_database, table),
+            }])
+        }
+    }
+
+    /// A driver that supports per-database connection preparation, so
+    /// guarded-install tests exercise the real
+    /// `prepare_database_connection` rules end to end.
+    struct PerDatabaseSwitchDriver {
+        metadata: DriverMetadata,
+        form: &'static DriverFormDef,
+    }
+
+    impl PerDatabaseSwitchDriver {
+        fn postgres() -> Arc<Self> {
+            Arc::new(Self {
+                metadata: postgres_metadata("test-pg-switch"),
+                form: &TEST_FORM,
+            })
+        }
+    }
+
+    impl DbDriver for PerDatabaseSwitchDriver {
+        fn kind(&self) -> DbKind {
+            DbKind::Postgres
+        }
+
+        fn metadata(&self) -> &DriverMetadata {
+            &self.metadata
+        }
+
+        fn form_definition(&self) -> &DriverFormDef {
+            self.form
+        }
+
+        fn driver_key(&self) -> crate::DriverKey {
+            "builtin:test-pg-switch".to_string()
+        }
+
+        fn build_config(&self, _values: &FormValues) -> Result<DbConfig, DbError> {
+            Ok(DbConfig::default_postgres())
+        }
+
+        fn extract_values(&self, _config: &DbConfig) -> FormValues {
+            FormValues::new()
+        }
+
+        fn connect_with_secrets(
+            &self,
+            profile: &ConnectionProfile,
+            _password: Option<&SecretString>,
+            _ssh_secret: Option<&SecretString>,
+        ) -> Result<Box<dyn Connection>, DbError> {
+            let bound = match &profile.config {
+                DbConfig::Postgres { database, .. } => database.clone(),
+                _ => "unknown".to_string(),
+            };
+            Ok(TableDetailsBoundConnection::boxed(
+                SchemaLoadingStrategy::ConnectionPerDatabase,
+                &bound,
+            ))
+        }
+
+        fn test_connection(&self, _profile: &ConnectionProfile) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn with_database(&self, config: &DbConfig, database: &str) -> Option<DbConfig> {
+            match config {
+                DbConfig::Postgres {
+                    use_uri,
+                    uri,
+                    host,
+                    port,
+                    user,
+                    database: _,
+                    ssl_mode,
+                    ssl_root_cert_path,
+                    ssl_client_cert_path,
+                    ssl_client_key_path,
+                    ssh_tunnel,
+                    ssh_tunnel_profile_id,
+                } => Some(DbConfig::Postgres {
+                    use_uri: *use_uri,
+                    uri: uri.clone(),
+                    host: host.clone(),
+                    port: *port,
+                    user: user.clone(),
+                    database: database.to_string(),
+                    ssl_mode: ssl_mode.clone(),
+                    ssl_root_cert_path: ssl_root_cert_path.clone(),
+                    ssl_client_cert_path: ssl_client_cert_path.clone(),
+                    ssl_client_key_path: ssl_client_key_path.clone(),
+                    ssh_tunnel: ssh_tunnel.clone(),
+                    ssh_tunnel_profile_id: ssh_tunnel_profile_id.clone(),
+                }),
+                _ => None,
+            }
+        }
+    }
+
+    fn new_per_database_manager_with_driver(
+        primary: Arc<dyn Connection>,
+    ) -> (ConnectionManager, ConnectionProfile) {
+        let profile = ConnectionProfile::new("pg", DbConfig::default_postgres());
+        let mut manager = ConnectionManager::new(HashMap::new());
+        manager
+            .drivers
+            .insert("postgres".to_string(), PerDatabaseSwitchDriver::postgres());
+        connect_profile_with_schema(
+            &mut manager,
+            &profile,
+            primary,
+            Some(relational_schema_with_current_database("app")),
+        );
+        (manager, profile)
+    }
+
+    fn noop_secret_store() -> Arc<RwLock<Box<dyn SecretStore>>> {
+        Arc::new(RwLock::new(Box::new(NoopSecretStore)))
+    }
+
+    #[test]
+    fn table_details_fence_applies_details_and_dependents_for_current_session() {
+        // SingleDatabase strategy: the primary connection serves every table.
+        let primary =
+            TableDetailsBoundConnection::new(SchemaLoadingStrategy::SingleDatabase, "main");
+        let (mut manager, profile) = new_manager_with_connection(primary);
+
+        let params = manager
+            .prepare_fetch_table_details_fenced(profile.id, "main", None, "users")
+            .expect("prepare should succeed for a connected profile");
+        assert_eq!(params.database(), "main");
+        assert_eq!(params.schema(), None);
+        assert_eq!(params.table(), "users");
+
+        let fetched = params.execute().expect("execute should succeed");
+        assert_eq!(fetched.profile_id(), profile.id);
+        assert_eq!(fetched.database(), "main");
+        assert_eq!(fetched.table(), "users");
+
+        assert_eq!(
+            manager.apply_fetched_table_details(fetched),
+            ApplyFetchOutcome::Applied
+        );
+
+        let cached = manager
+            .get_table_details(profile.id, "main", None, "users")
+            .expect("applied details should be cached");
+        let hints = cached
+            .storage_hints
+            .as_ref()
+            .expect("the fake marks the serving connection");
+        assert_eq!(hints[0].label, "bound-main");
+
+        let dependents = manager
+            .connections
+            .get(&profile.id)
+            .expect("still connected")
+            .dependents("main", None, "users");
+        assert_eq!(dependents.len(), 1);
+        assert_eq!(dependents[0].qualified_name, "main.users");
+
+        let error =
+            match manager.prepare_fetch_table_details_fenced(profile.id, "main", None, "users") {
+                Ok(_) => panic!("expected prepare to fail for cached details"),
+                Err(error) => error,
+            };
+        assert_eq!(error, TableDetailsPrepareError::AlreadyCached);
+    }
+
+    #[test]
+    fn table_details_fence_prepare_reports_typed_missing_target() {
+        let primary = BoundPerDatabaseConnection::new("app");
+        let (manager, profile) = new_manager_with_connection_and_schema(
+            primary,
+            Some(relational_schema_with_current_database("app")),
+        );
+
+        let error = match manager.prepare_fetch_table_details_fenced(
+            profile.id,
+            "analytics",
+            None,
+            "users",
+        ) {
+            Ok(_) => panic!("expected prepare to fail for an unprepared per-database target"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error,
+            TableDetailsPrepareError::PendingDatabaseConnection {
+                database: "analytics".to_string()
+            }
+        );
+        assert!(
+            manager
+                .get_table_details(profile.id, "analytics", None, "users")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn table_details_fence_apply_rejects_result_after_reconnect() {
+        let first =
+            TableDetailsBoundConnection::new(SchemaLoadingStrategy::LazyPerDatabase, "first");
+        let (mut manager, profile) = new_manager_with_connection(first);
+
+        let params = manager
+            .prepare_fetch_table_details_fenced(profile.id, "app", None, "users")
+            .expect("prepare should succeed before disconnect");
+
+        manager.disconnect(profile.id);
+
+        let second =
+            TableDetailsBoundConnection::new(SchemaLoadingStrategy::LazyPerDatabase, "second");
+        connect_profile(&mut manager, &profile, second);
+
+        let fetched = params.execute().expect("old request still executes");
+        assert_eq!(
+            manager.apply_fetched_table_details(fetched),
+            ApplyFetchOutcome::Rejected(StaleFetchReason::ConnectionReplaced)
+        );
+        assert!(
+            manager
+                .get_table_details(profile.id, "app", None, "users")
+                .is_none()
+        );
+        assert!(
+            manager
+                .connections
+                .get(&profile.id)
+                .expect("reconnected")
+                .dependents("app", None, "users")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn table_details_fence_apply_rejects_old_result_when_session_arc_is_reused() {
+        let primary =
+            TableDetailsBoundConnection::new(SchemaLoadingStrategy::LazyPerDatabase, "primary");
+        let (mut manager, profile) = new_manager_with_connection(primary.clone());
+
+        let params = manager
+            .prepare_fetch_table_details_fenced(profile.id, "app", None, "users")
+            .expect("prepare should succeed before disconnect");
+
+        manager.disconnect(profile.id);
+
+        // Same connection object reconnected: only generation fencing can
+        // reject the old completion.
+        connect_profile(&mut manager, &profile, primary);
+
+        let fetched = params.execute().expect("old request still executes");
+        assert_eq!(
+            manager.apply_fetched_table_details(fetched),
+            ApplyFetchOutcome::Rejected(StaleFetchReason::ConnectionReplaced)
+        );
+        assert!(
+            manager
+                .get_table_details(profile.id, "app", None, "users")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn table_details_fence_apply_rejects_result_after_invalidation() {
+        let primary =
+            TableDetailsBoundConnection::new(SchemaLoadingStrategy::LazyPerDatabase, "primary");
+        let (mut manager, profile) = new_manager_with_connection(primary);
+
+        let params = manager
+            .prepare_fetch_table_details_fenced(profile.id, "app", None, "users")
+            .expect("prepare should succeed");
+
+        // Bumping the revision without any cached schema is enough.
+        assert!(
+            manager
+                .invalidate_database_schema(profile.id, "app")
+                .is_none()
+        );
+
+        let fetched = params.execute().expect("execute should succeed");
+        assert_eq!(
+            manager.apply_fetched_table_details(fetched),
+            ApplyFetchOutcome::Rejected(StaleFetchReason::RequestInvalidated)
+        );
+        assert!(
+            manager
+                .get_table_details(profile.id, "app", None, "users")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn table_details_fence_apply_rejects_after_target_slot_replacement() {
+        let primary = BoundPerDatabaseConnection::new("app");
+        let (mut manager, profile) = new_manager_with_connection_and_schema(
+            primary,
+            Some(relational_schema_with_current_database("app")),
+        );
+        manager.add_database_connection(
+            profile.id,
+            "analytics".to_string(),
+            TableDetailsBoundConnection::new(
+                SchemaLoadingStrategy::ConnectionPerDatabase,
+                "analytics",
+            ),
+            None,
+        );
+
+        let params = manager
+            .prepare_fetch_table_details_fenced(profile.id, "analytics", None, "users")
+            .expect("a prepared non-primary slot must be usable");
+
+        // Replace the slot with a different connection before the fetch applies.
+        assert!(manager.remove_database_connection(profile.id, "analytics"));
+        manager.add_database_connection(
+            profile.id,
+            "analytics".to_string(),
+            TableDetailsBoundConnection::new(
+                SchemaLoadingStrategy::ConnectionPerDatabase,
+                "replacement",
+            ),
+            None,
+        );
+
+        let fetched = params.execute().expect("old request still executes");
+        assert_eq!(
+            manager.apply_fetched_table_details(fetched),
+            ApplyFetchOutcome::Rejected(StaleFetchReason::ConnectionReplaced)
+        );
+        assert!(
+            manager
+                .get_table_details(profile.id, "analytics", None, "users")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn guarded_connection_install_reaches_slot_without_touching_active_context() {
+        let (mut manager, profile) =
+            new_per_database_manager_with_driver(BoundPerDatabaseConnection::new("app"));
+        manager.set_active_database(profile.id, Some("app".to_string()));
+        let primary = manager
+            .connections
+            .get(&profile.id)
+            .expect("connected")
+            .connection
+            .clone();
+
+        let install = manager
+            .prepare_database_connection_guarded(profile.id, "analytics", &noop_secret_store())
+            .expect("prepare should succeed for a missing target");
+        assert_eq!(install.profile_id(), profile.id);
+        assert_eq!(install.database(), "analytics");
+
+        let installed = install.execute().expect("execute should succeed");
+        assert_eq!(installed.profile_id(), profile.id);
+        assert_eq!(installed.database(), "analytics");
+        assert_eq!(
+            manager.apply_guarded_database_connection(installed),
+            InstallDatabaseConnectionOutcome::Installed
+        );
+
+        let connected = manager
+            .connections
+            .get(&profile.id)
+            .expect("still connected");
+        let slot = connected
+            .database_connection("analytics")
+            .expect("target slot installed");
+        assert!(
+            slot.schema.is_some(),
+            "the opened connection's schema lands in the slot"
+        );
+        assert!(
+            Arc::ptr_eq(&connected.connection, &primary),
+            "the primary connection is untouched"
+        );
+        assert_eq!(
+            manager.get_active_database(profile.id),
+            Some("app".to_string()),
+            "active browsing context unchanged"
+        );
+    }
+
+    #[test]
+    fn guarded_connection_install_rejects_result_after_reconnect() {
+        let primary = BoundPerDatabaseConnection::new("app");
+        let (mut manager, profile) = new_per_database_manager_with_driver(primary.clone());
+
+        let install = manager
+            .prepare_database_connection_guarded(profile.id, "analytics", &noop_secret_store())
+            .expect("prepare should succeed before disconnect");
+
+        manager.disconnect(profile.id);
+
+        // Same connection object reconnected: only generation fencing can
+        // reject the old completion.
+        connect_profile(&mut manager, &profile, primary);
+
+        let installed = install.execute().expect("old install still executes");
+        assert_eq!(
+            manager.apply_guarded_database_connection(installed),
+            InstallDatabaseConnectionOutcome::Rejected(StaleInstallReason::ConnectionReplaced)
+        );
+        assert!(
+            manager
+                .connections
+                .get(&profile.id)
+                .expect("reconnected")
+                .database_connection("analytics")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn guarded_connection_install_rejects_result_after_disconnect() {
+        let (mut manager, profile) =
+            new_per_database_manager_with_driver(BoundPerDatabaseConnection::new("app"));
+
+        let install = manager
+            .prepare_database_connection_guarded(profile.id, "analytics", &noop_secret_store())
+            .expect("prepare should succeed before disconnect");
+
+        manager.disconnect(profile.id);
+
+        let installed = install.execute().expect("old install still executes");
+        assert_eq!(
+            manager.apply_guarded_database_connection(installed),
+            InstallDatabaseConnectionOutcome::Rejected(StaleInstallReason::ProfileDisconnected)
+        );
+    }
+
+    #[test]
+    fn guarded_connection_install_rejects_result_after_invalidation() {
+        let (mut manager, profile) =
+            new_per_database_manager_with_driver(BoundPerDatabaseConnection::new("app"));
+
+        let install = manager
+            .prepare_database_connection_guarded(profile.id, "analytics", &noop_secret_store())
+            .expect("prepare should succeed");
+
+        // Bumping the revision without any cached schema is enough.
+        assert!(
+            manager
+                .invalidate_database_schema(profile.id, "app")
+                .is_none()
+        );
+
+        let installed = install.execute().expect("execute should succeed");
+        assert_eq!(
+            manager.apply_guarded_database_connection(installed),
+            InstallDatabaseConnectionOutcome::Rejected(StaleInstallReason::RequestInvalidated)
+        );
+        assert!(
+            manager
+                .connections
+                .get(&profile.id)
+                .expect("connected")
+                .database_connection("analytics")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn guarded_connection_install_does_not_overwrite_intervening_slot() {
+        let (mut manager, profile) =
+            new_per_database_manager_with_driver(BoundPerDatabaseConnection::new("app"));
+
+        let install = manager
+            .prepare_database_connection_guarded(profile.id, "analytics", &noop_secret_store())
+            .expect("prepare should succeed");
+
+        // Another task installs a slot for the same target first.
+        let newer: Arc<dyn Connection> = BoundPerDatabaseConnection::new("analytics");
+        manager.add_database_connection(
+            profile.id,
+            "analytics".to_string(),
+            newer.clone(),
+            Some(relational_schema_with_current_database("analytics")),
+        );
+
+        let installed = install.execute().expect("execute should succeed");
+        assert_eq!(
+            manager.apply_guarded_database_connection(installed),
+            InstallDatabaseConnectionOutcome::Rejected(StaleInstallReason::TargetSlotReplaced)
+        );
+
+        let connected = manager.connections.get(&profile.id).expect("connected");
+        let slot = connected
+            .database_connection("analytics")
+            .expect("the newer slot survives");
+        assert!(
+            Arc::ptr_eq(&slot.connection, &newer),
+            "the newer slot was not overwritten"
+        );
+        assert_eq!(
+            slot.schema
+                .as_ref()
+                .and_then(|schema| schema.current_database()),
+            Some("analytics")
+        );
+    }
+
+    #[test]
+    fn guarded_connection_prepare_rejects_existing_slot_and_missing_profile() {
+        let (mut manager, profile) =
+            new_per_database_manager_with_driver(BoundPerDatabaseConnection::new("app"));
+        manager.add_database_connection(
+            profile.id,
+            "analytics".to_string(),
+            BoundPerDatabaseConnection::new("analytics"),
+            None,
+        );
+
+        let slot_error = expect_prepare_error(manager.prepare_database_connection_guarded(
+            profile.id,
+            "analytics",
+            &noop_secret_store(),
+        ));
+        assert!(
+            slot_error.contains("Already connected"),
+            "unexpected error: {slot_error}"
+        );
+
+        let missing_error = expect_prepare_error(manager.prepare_database_connection_guarded(
+            Uuid::new_v4(),
+            "analytics",
+            &noop_secret_store(),
+        ));
+        assert!(
+            missing_error.contains("not connected"),
+            "unexpected error: {missing_error}"
+        );
+    }
+
+    // --- Slot revision ledger: per-database ABA correction ---
+
+    #[test]
+    fn slot_revision_guarded_install_rejects_after_remove_reinstall_aba() {
+        let (mut manager, profile) =
+            new_per_database_manager_with_driver(BoundPerDatabaseConnection::new("app"));
+
+        let install = manager
+            .prepare_database_connection_guarded(profile.id, "analytics", &noop_secret_store())
+            .expect("prepare should succeed for a missing target");
+
+        // Another task installs the target and it is removed again before
+        // the old completion applies: a bare slot-presence check cannot see
+        // this cycle.
+        manager.add_database_connection(
+            profile.id,
+            "analytics".to_string(),
+            BoundPerDatabaseConnection::new("analytics"),
+            None,
+        );
+        assert!(manager.remove_database_connection(profile.id, "analytics"));
+
+        let installed = install.execute().expect("old install still executes");
+        assert_eq!(
+            manager.apply_guarded_database_connection(installed),
+            InstallDatabaseConnectionOutcome::Rejected(StaleInstallReason::TargetSlotReplaced),
+            "an add/remove cycle for the same target must reject the old install"
+        );
+        assert!(
+            manager
+                .connections
+                .get(&profile.id)
+                .expect("connected")
+                .database_connection("analytics")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn slot_revision_fenced_details_reject_same_arc_remove_reinstall() {
+        let primary = BoundPerDatabaseConnection::new("app");
+        let (mut manager, profile) = new_manager_with_connection_and_schema(
+            primary,
+            Some(relational_schema_with_current_database("app")),
+        );
+        let analytics = TableDetailsBoundConnection::new(
+            SchemaLoadingStrategy::ConnectionPerDatabase,
+            "analytics",
+        );
+        manager.add_database_connection(
+            profile.id,
+            "analytics".to_string(),
+            analytics.clone(),
+            None,
+        );
+
+        let params = manager
+            .prepare_fetch_table_details_fenced(profile.id, "analytics", None, "users")
+            .expect("a prepared slot must be usable");
+
+        // Remove and reinstall the very same connection Arc: pointer identity
+        // alone cannot fence this ABA cycle.
+        assert!(manager.remove_database_connection(profile.id, "analytics"));
+        manager.add_database_connection(profile.id, "analytics".to_string(), analytics, None);
+
+        let fetched = params.execute().expect("old request still executes");
+        assert_eq!(
+            manager.apply_fetched_table_details(fetched),
+            ApplyFetchOutcome::Rejected(StaleFetchReason::ConnectionReplaced),
+            "same-Arc slot remove/reinstall must reject the old details"
+        );
+        assert!(
+            manager
+                .get_table_details(profile.id, "analytics", None, "users")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn slot_revision_explicit_schema_rejects_same_arc_remove_reinstall() {
+        let primary = BoundPerDatabaseConnection::new("app");
+        let (mut manager, profile) = new_manager_with_connection_and_schema(
+            primary,
+            Some(relational_schema_with_current_database("app")),
+        );
+        let analytics = BoundPerDatabaseConnection::new("analytics");
+        manager.add_database_connection(
+            profile.id,
+            "analytics".to_string(),
+            analytics.clone(),
+            None,
+        );
+
+        let params = manager
+            .prepare_fetch_explicit_database_schema(profile.id, "analytics")
+            .expect("a prepared slot must be usable");
+
+        // Same connection Arc reinstalled: only the slot revision can fence
+        // this cycle.
+        assert!(manager.remove_database_connection(profile.id, "analytics"));
+        manager.add_database_connection(profile.id, "analytics".to_string(), analytics, None);
+
+        let fetched = params.execute().expect("old request still executes");
+        assert_eq!(
+            manager.apply_fetch_explicit_database_schema(fetched),
+            ApplyFetchOutcome::Rejected(StaleFetchReason::ConnectionReplaced),
+            "same-Arc slot remove/reinstall must reject the old schema"
+        );
+        assert!(
+            manager
+                .get_database_schema(profile.id, "analytics")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn target_refresh_invalidation_preserves_other_database_fetch() {
+        let (mut manager, profile) =
+            new_per_database_manager_with_driver(BoundPerDatabaseConnection::new("app"));
+        for database in ["analytics", "reporting"] {
+            manager.add_database_connection(
+                profile.id,
+                database.to_string(),
+                TableDetailsBoundConnection::new(
+                    SchemaLoadingStrategy::ConnectionPerDatabase,
+                    database,
+                ),
+                None,
+            );
+        }
+        let list = manager
+            .prepare_fetch_database_list(profile.id)
+            .expect("list prepared");
+        let analytics_details = manager
+            .prepare_fetch_table_details_fenced(profile.id, "analytics", None, "users")
+            .expect("analytics details prepared");
+        let reporting_details = manager
+            .prepare_fetch_table_details_fenced(profile.id, "reporting", None, "users")
+            .expect("reporting details prepared");
+        let analytics = manager
+            .prepare_fetch_explicit_database_schema(profile.id, "analytics")
+            .expect("analytics prepared");
+        let reporting = manager
+            .prepare_fetch_explicit_database_schema(profile.id, "reporting")
+            .expect("reporting prepared");
+        manager.invalidate_database_schema_target(profile.id, "analytics");
+        assert!(matches!(
+            manager.apply_fetch_explicit_database_schema(
+                analytics.execute().expect("analytics fetch")
+            ),
+            ApplyFetchOutcome::Rejected(_)
+        ));
+        assert_eq!(
+            manager.apply_fetch_explicit_database_schema(
+                reporting.execute().expect("reporting fetch")
+            ),
+            ApplyFetchOutcome::Applied,
+            "refresh of analytics must not invalidate reporting"
+        );
+        assert!(matches!(
+            manager.apply_fetched_table_details(
+                analytics_details.execute().expect("analytics details")
+            ),
+            ApplyFetchOutcome::Rejected(_)
+        ));
+        assert_eq!(
+            manager.apply_fetched_table_details(
+                reporting_details.execute().expect("reporting details")
+            ),
+            ApplyFetchOutcome::Applied
+        );
+        assert_eq!(
+            manager.apply_fetch_database_list(list.execute().expect("list fetch")),
+            ApplyFetchOutcome::Applied
+        );
+    }
+
+    #[test]
+    fn executed_schema_and_details_cannot_install_after_target_refresh_invalidation() {
+        let (mut manager, profile) =
+            new_per_database_manager_with_driver(BoundPerDatabaseConnection::new("app"));
+        let started = Arc::new(std::sync::Barrier::new(3));
+        let release = Arc::new(std::sync::Barrier::new(3));
+        let mut target = TableDetailsBoundConnection::new(
+            SchemaLoadingStrategy::ConnectionPerDatabase,
+            "analytics",
+        );
+        let target_mut = Arc::get_mut(&mut target).expect("unique target");
+        target_mut.schema_barriers = Some((started.clone(), release.clone()));
+        target_mut.details_barriers = Some((started.clone(), release.clone()));
+        manager.add_database_connection(profile.id, "analytics".into(), target, None);
+        manager.add_database_connection(
+            profile.id,
+            "reporting".into(),
+            TableDetailsBoundConnection::new(
+                SchemaLoadingStrategy::ConnectionPerDatabase,
+                "reporting",
+            ),
+            None,
+        );
+        let schema = manager
+            .prepare_fetch_explicit_database_schema(profile.id, "analytics")
+            .expect("prepare target schema");
+        let details = manager
+            .prepare_fetch_table_details_fenced(profile.id, "analytics", None, "users")
+            .expect("prepare target details");
+        let sibling = manager
+            .prepare_fetch_explicit_database_schema(profile.id, "reporting")
+            .expect("prepare sibling schema");
+        let list = manager
+            .prepare_fetch_database_list(profile.id)
+            .expect("prepare list");
+        let schema_thread =
+            std::thread::spawn(move || schema.execute().expect("old schema fetched"));
+        let details_thread =
+            std::thread::spawn(move || details.execute().expect("old details fetched"));
+        started.wait(); // Both driver methods entered before invalidation.
+        manager.invalidate_database_schema_target(profile.id, "analytics");
+        assert_eq!(
+            manager.apply_fetch_explicit_database_schema(sibling.execute().expect("sibling fetch")),
+            ApplyFetchOutcome::Applied
+        );
+        assert_eq!(
+            manager.apply_fetch_database_list(list.execute().expect("list fetch")),
+            ApplyFetchOutcome::Applied
+        );
+        release.wait();
+        let old_schema = schema_thread.join().expect("old schema thread");
+        let old_details = details_thread.join().expect("old details thread");
+        assert_eq!(
+            manager.apply_fetch_explicit_database_schema(old_schema),
+            ApplyFetchOutcome::Rejected(StaleFetchReason::ConnectionReplaced)
+        );
+        assert_eq!(
+            manager.apply_fetched_table_details(old_details),
+            ApplyFetchOutcome::Rejected(StaleFetchReason::ConnectionReplaced)
+        );
+        let connected = manager.connections.get(&profile.id).expect("connected");
+        assert!(!connected.database_schemas.contains_key("analytics"));
+        assert!(
+            !connected
+                .table_details
+                .contains_key(&("analytics".into(), None, "users".into()))
+        );
+    }
+
+    #[test]
+    fn database_refresh_guard_rejects_same_arc_session_and_target_slot_aba() {
+        let connection = BoundPerDatabaseConnection::new("app");
+        let (mut manager, profile) = new_per_database_manager_with_driver(connection.clone());
+        manager.invalidate_database_schema_target(profile.id, "analytics");
+        let guard = manager
+            .capture_database_refresh_guard(profile.id, "analytics")
+            .expect("capture after invalidation");
+        assert!(manager.database_refresh_guard_is_current(&guard));
+        manager.add_database_connection(profile.id, "analytics".into(), connection.clone(), None);
+        assert!(manager.remove_database_connection(profile.id, "analytics"));
+        assert!(!manager.database_refresh_guard_is_current(&guard));
+
+        let next_guard = manager
+            .capture_database_refresh_guard(profile.id, "analytics")
+            .expect("capture after slot removal");
+        assert!(manager.database_refresh_guard_is_current(&next_guard));
+        manager.apply_connect_profile(
+            profile.clone(),
+            connection.clone(),
+            None,
+            None,
+            false,
+            WritePrivilege::Unknown,
+        );
+        assert!(!manager.database_refresh_guard_is_current(&next_guard));
+    }
+
+    #[test]
+    fn slot_revision_other_target_churn_keeps_requests_valid() {
+        let (mut manager, profile) =
+            new_per_database_manager_with_driver(BoundPerDatabaseConnection::new("app"));
+        manager.add_database_connection(
+            profile.id,
+            "analytics".to_string(),
+            TableDetailsBoundConnection::new(
+                SchemaLoadingStrategy::ConnectionPerDatabase,
+                "analytics",
+            ),
+            None,
+        );
+
+        let install = manager
+            .prepare_database_connection_guarded(profile.id, "reporting", &noop_secret_store())
+            .expect("prepare should succeed for a missing target");
+        let details = manager
+            .prepare_fetch_table_details_fenced(profile.id, "analytics", None, "users")
+            .expect("prepare should succeed");
+        let schema = manager
+            .prepare_fetch_explicit_database_schema(profile.id, "analytics")
+            .expect("prepare should succeed");
+
+        // Churn on an unrelated target must not invalidate these requests.
+        manager.add_database_connection(
+            profile.id,
+            "other".to_string(),
+            BoundPerDatabaseConnection::new("other"),
+            None,
+        );
+        assert!(manager.remove_database_connection(profile.id, "other"));
+
+        let installed = install.execute().expect("install should execute");
+        assert_eq!(
+            manager.apply_guarded_database_connection(installed),
+            InstallDatabaseConnectionOutcome::Installed
+        );
+
+        let fetched_details = details.execute().expect("details should execute");
+        assert_eq!(
+            manager.apply_fetched_table_details(fetched_details),
+            ApplyFetchOutcome::Applied
+        );
+
+        let fetched_schema = schema.execute().expect("schema should execute");
+        assert_eq!(
+            manager.apply_fetch_explicit_database_schema(fetched_schema),
+            ApplyFetchOutcome::Applied
+        );
+    }
+
+    #[test]
+    fn slot_revision_take_restore_and_tombstone_fence_details_requests() {
+        let (mut manager, profile) =
+            new_per_database_manager_with_driver(BoundPerDatabaseConnection::new("app"));
+
+        // The guarded install itself advances the target's revision through
+        // the shared insertion path.
+        let install = manager
+            .prepare_database_connection_guarded(profile.id, "analytics", &noop_secret_store())
+            .expect("prepare should succeed");
+        let installed = install.execute().expect("execute should succeed");
+        assert_eq!(
+            manager.apply_guarded_database_connection(installed),
+            InstallDatabaseConnectionOutcome::Installed
+        );
+
+        let before_take = manager
+            .prepare_fetch_table_details_fenced(profile.id, "analytics", None, "users")
+            .expect("prepare should succeed");
+
+        // Held-ownership take transfers the entry out; a second take finds
+        // nothing left.
+        let held = manager
+            .take_database_connection(profile.id, "analytics")
+            .expect("take should return the held entry");
+        assert!(
+            manager
+                .take_database_connection(profile.id, "analytics")
+                .is_none()
+        );
+
+        let held_error = match manager.prepare_fetch_table_details_fenced(
+            profile.id,
+            "analytics",
+            None,
+            "users",
+        ) {
+            Ok(_) => panic!("expected prepare to fail while the slot is held"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            held_error,
+            TableDetailsPrepareError::PendingDatabaseConnection {
+                database: "analytics".to_string()
+            }
+        );
+
+        // Restoring the same entry advances the revision again: the request
+        // prepared before the take must not apply (same-connection ABA).
+        assert!(manager.restore_database_connection(profile.id, "analytics".to_string(), held));
+        let fetched = before_take.execute().expect("old request still executes");
+        assert_eq!(
+            manager.apply_fetched_table_details(fetched),
+            ApplyFetchOutcome::Rejected(StaleFetchReason::ConnectionReplaced)
+        );
+
+        // Removal leaves a tombstone that still fences requests.
+        let after_restore = manager
+            .prepare_fetch_table_details_fenced(profile.id, "analytics", None, "users")
+            .expect("prepare should succeed after restore");
+        assert!(manager.remove_database_connection(profile.id, "analytics"));
+        let fetched_after = after_restore.execute().expect("old request still executes");
+        assert_eq!(
+            manager.apply_fetched_table_details(fetched_after),
+            ApplyFetchOutcome::Rejected(StaleFetchReason::ConnectionReplaced)
+        );
+
+        // A request prepared after a fresh insertion is valid again.
+        manager.add_database_connection(
+            profile.id,
+            "analytics".to_string(),
+            TableDetailsBoundConnection::new(
+                SchemaLoadingStrategy::ConnectionPerDatabase,
+                "analytics",
+            ),
+            None,
+        );
+        let fresh = manager
+            .prepare_fetch_table_details_fenced(profile.id, "analytics", None, "users")
+            .expect("prepare should succeed after reinstall");
+        let fetched_fresh = fresh.execute().expect("execute should succeed");
+        assert_eq!(
+            manager.apply_fetched_table_details(fetched_fresh),
+            ApplyFetchOutcome::Applied
+        );
+    }
+
+    #[test]
+    fn slot_revision_take_transfers_entry_and_restore_reports_missing_profile() {
+        let (mut manager, profile) =
+            new_per_database_manager_with_driver(BoundPerDatabaseConnection::new("app"));
+        let slot_connection: Arc<dyn Connection> = TableDetailsBoundConnection::new(
+            SchemaLoadingStrategy::ConnectionPerDatabase,
+            "analytics",
+        );
+        manager.add_database_connection(
+            profile.id,
+            "analytics".to_string(),
+            slot_connection.clone(),
+            Some(relational_schema_with_current_database("analytics")),
+        );
+
+        let held = manager
+            .take_database_connection(profile.id, "analytics")
+            .expect("take should return the slot entry");
+        assert!(
+            Arc::ptr_eq(&held.connection, &slot_connection),
+            "take must transfer the slot entry itself, not a copy"
+        );
+        assert!(held.schema.is_some(), "take preserves the slot schema");
+
+        assert!(
+            !manager.restore_database_connection(Uuid::new_v4(), "analytics".to_string(), held),
+            "restoring into a missing profile must report failure"
+        );
+    }
+
+    #[test]
+    fn remove_database_connection_keeps_bool_and_active_fallback_contract() {
+        let primary = BoundPerDatabaseConnection::new("app");
+        let (mut manager, profile) = new_per_database_manager_with_driver(primary);
+
+        manager.add_database_connection(
+            profile.id,
+            "analytics".to_string(),
+            TableDetailsBoundConnection::new(
+                SchemaLoadingStrategy::ConnectionPerDatabase,
+                "analytics",
+            ),
+            None,
+        );
+        manager.set_active_database(profile.id, Some("analytics".to_string()));
+
+        assert!(manager.remove_database_connection(profile.id, "analytics"));
+        assert_eq!(
+            manager.get_active_database(profile.id),
+            Some("app".to_string()),
+            "removal falls back to the primary schema's current database"
+        );
+        assert!(!manager.remove_database_connection(profile.id, "analytics"));
     }
 }
