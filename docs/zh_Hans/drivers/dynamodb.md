@@ -15,7 +15,7 @@ AWS 托管的 NoSQL 键值与文档数据库。
 - 托管型 NoSQL 驱动程序，归类为 `DatabaseCategory::Document`，使用 `QueryLanguage::Custom("DynamoDB")` 命令信封；编辑器使用的是 DynamoDB 专用语法，而非 SQL。
 - 通过区域、具名配置文件以及可选的端点覆盖（用于 DynamoDB Local 或 VPC 端点）完成 AWS 连接配置。`deployment_class` 为 `CloudManaged`。
 - 通过 `ListTables` 与 `DescribeTable` 发现表，把分区键（PK）、排序键（SK）以及全局/本地二级索引（GSI/LSI）的键元数据映射为 DBFlux 的 Schema 抽象。
-- `scan`、`query`、`put`、`update` 与 `delete` 的原生命令信封执行。查询生成器会发出 scan 形状的预览信封，并注明当筛选条件匹配表的键结构时，执行可能会优化为 `Query`。
+- `scan`、`query`、`put`、`update` 与 `delete` 的原生命令信封执行。查询生成器会发出 scan 形状的预览信封，并注明当筛选条件匹配表的键结构时，执行可能会优化为 `Query`。读取限制保留零行结果；当信封和请求均指定限制时采用较小值。
 - 读取选项支持索引定向、一致性读控制，以及筛选转换的回退策略（服务端筛选 vs. 客户端回退；当回退策略设为拒绝时，客户端筛选会被拒绝）。
 - 语义筛选中的 WHERE 运算符：`Eq`、`Ne`、`Gt`、`Gte`、`Lt`、`Lte`、`In`、`NotIn`，以及逻辑 `And`/`Or`（`Not` 见限制部分）。
 - 变更：插入（`put`）、更新与删除（`INSERT`/`UPDATE`/`DELETE`）。批量写入最多支持 25 项（`max_insert_values: 25`，`supports_batch: true`），并对未处理的批量写入项做有界重试。
@@ -29,7 +29,9 @@ AWS 托管的 NoSQL 键值与文档数据库。
 ## 限制
 
 - `profile` 字段（AWS 具名配置文件）是一个 `AuthProfileRef` 表单字段。通用的可移植性接缝（`DbDriver::export_field_hint`）把所有 `AuthProfileRef` 字段映射为 `RequiredOnImport`，因此该字段值不会出现在任何导出的包中，接收方必须在导入时提供或创建匹配的认证配置文件。无需为此做针对特定驱动程序的覆盖。
-- 不支持查询取消；驱动程序对取消请求返回 `NotSupported`。
+- 显式语句超时（包括零时长）在执行前被拒绝。不支持查询取消；驱动程序对取消请求返回 `NotSupported`。
+- 信封写入和 PartiQL 写入中的显式请求行数限制在变更前被拒绝。PartiQL `SELECT` 通过 SDK 支持正数限制；零限制在发送请求前被拒绝。PartiQL 只返回第一页并提供下一页令牌，但 `QueryRequest` 无法传入令牌。
+- 行数限制仅约束返回的行数，不限制字节数或 DynamoDB 服务端工作量。没有观察到遗漏行时不宣称结果被截断。
 - 命令信封 API 不暴露 PartiQL 或 DynamoDB 事务操作；事务被禁用（`supports_transactions: false`）。
 - 支持单条 upsert（`supports_upsert: true`）；`many=true` 与 `upsert=true` 同时出现的 `update` 会被拒绝（`update_many_with_upsert`）。
 - 不支持批量更新与批量删除（`supports_bulk_update: false`、`supports_bulk_delete: false`），也不支持 `RETURNING`。

@@ -21,6 +21,12 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Added
 
+* **DynamoDB execution safety** — requested timeouts and row-limited writes
+  now fail before execution; scan/query use the smaller request/envelope cap
+  including zero. PartiQL SELECT rejects zero limits and retains existing
+  positive-limit first-page behavior. Limits do not bound bytes or server work;
+  hosted AWS behavior was not validated.
+
 * **Shared lazy object hierarchy and collapsed sidebar preview** — the sidebar
   and migration wizard share coordinated loading while keeping independent
   selection; collapsed sidebar entry reveals a temporary preview without
