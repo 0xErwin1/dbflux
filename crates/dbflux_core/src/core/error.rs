@@ -144,4 +144,95 @@ impl DbError {
             _ => false,
         }
     }
+
+    /// Appends a note about the session's transaction to the error's hint.
+    ///
+    /// Drivers call this after a failed execution so the user learns what
+    /// happened to the transaction the failure touched. Variants without a
+    /// [`FormattedError`] carry no hint and are returned unchanged.
+    pub fn with_transaction_note(mut self, note: TransactionStateNote) -> Self {
+        let formatted = match &mut self {
+            Self::ConnectionFailed(f)
+            | Self::QueryFailed(f)
+            | Self::AuthFailed(f)
+            | Self::ConstraintViolation(f)
+            | Self::SyntaxError(f)
+            | Self::PermissionDenied(f)
+            | Self::ObjectNotFound(f) => f,
+            _ => return self,
+        };
+
+        formatted.hint = Some(match formatted.hint.take() {
+            Some(hint) => format!("{hint} {}", note.message()),
+            None => note.message().to_string(),
+        });
+
+        self
+    }
+}
+
+/// What a failed execution left behind in the session's transaction state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransactionStateNote {
+    /// The failed execution opened a transaction and the driver rolled it back.
+    RolledBack,
+
+    /// A transaction opened before the failed execution is still open.
+    StillOpen,
+
+    /// The session is inside a transaction the server has aborted.
+    Aborted,
+}
+
+impl TransactionStateNote {
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::RolledBack => "The transaction this script opened was rolled back.",
+            Self::StillOpen => {
+                "The connection is still inside a transaction. Run COMMIT or ROLLBACK to end it."
+            }
+            Self::Aborted => {
+                "The connection is inside an aborted transaction. Run ROLLBACK to end it."
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transaction_note_becomes_the_hint() {
+        let error =
+            DbError::query_failed("boom").with_transaction_note(TransactionStateNote::RolledBack);
+
+        assert_eq!(
+            error.formatted().and_then(|f| f.hint.as_deref()),
+            Some(TransactionStateNote::RolledBack.message())
+        );
+    }
+
+    #[test]
+    fn transaction_note_is_appended_to_an_existing_hint() {
+        let error = DbError::QueryFailed(FormattedError::new("boom").with_hint("Check the key."))
+            .with_transaction_note(TransactionStateNote::StillOpen);
+
+        assert_eq!(
+            error.formatted().and_then(|f| f.hint.as_deref()),
+            Some(
+                format!(
+                    "Check the key. {}",
+                    TransactionStateNote::StillOpen.message()
+                )
+                .as_str()
+            )
+        );
+    }
+
+    #[test]
+    fn transaction_note_leaves_variants_without_formatted_error_unchanged() {
+        let error = DbError::Timeout.with_transaction_note(TransactionStateNote::Aborted);
+        assert!(matches!(error, DbError::Timeout));
+    }
 }

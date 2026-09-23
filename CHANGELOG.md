@@ -154,6 +154,16 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **A failed script no longer leaves the connection stuck in a transaction** —
+  a script that opened a transaction and failed partway never reached its
+  `COMMIT`, so the transaction stayed open on the connection every tab shares.
+  On PostgreSQL every later query failed with `25P02` until a manual
+  `ROLLBACK`. On MySQL, MariaDB, SQLite, and SQL Server later queries ran inside
+  the leftover transaction, where its partial writes could be committed by
+  accident. The driver now rolls back a transaction the failed script opened
+  itself and leaves one that was already open, and the error says which of the
+  two happened.
+
 * **`ON COMMIT` no longer shows as a syntax error** — the editor flagged
   PostgreSQL's `ON COMMIT { DROP | DELETE ROWS | PRESERVE ROWS }` clause on
   `CREATE TEMP TABLE` as `Unexpected`, because the bundled SQL grammar has no

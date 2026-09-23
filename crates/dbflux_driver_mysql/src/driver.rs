@@ -24,10 +24,11 @@ use dbflux_core::{
     SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan,
     SemanticPlanKind, SemanticRequest, SortDirection, SqlDialect, SqlMutationGenerator,
     SqlQueryBuilder, SshTunnelConfig, SyntaxInfo, TableInfo, TransactionCapabilities,
-    TransferFamily, Value, ViewInfo, WhereOperator, field, field_password, field_required,
-    field_use_uri, generate_delete_template, generate_drop_table, generate_insert_template,
-    generate_select_star, generate_truncate, generate_update_template, render_semantic_filter_sql,
-    sanitize_uri, ssh_tab, validate_ddl_fragment, when_checked, when_unchecked, with_default,
+    TransactionStateNote, TransferFamily, Value, ViewInfo, WhereOperator, field, field_password,
+    field_required, field_use_uri, generate_delete_template, generate_drop_table,
+    generate_insert_template, generate_select_star, generate_truncate, generate_update_template,
+    render_semantic_filter_sql, sanitize_uri, ssh_tab, validate_ddl_fragment, when_checked,
+    when_unchecked, with_default,
 };
 use dbflux_ssh::SshTunnel;
 use mysql::prelude::*;
@@ -2124,31 +2125,26 @@ impl Connection for MysqlConnection {
             state.current_database = Some(db.clone());
         }
 
-        // The mysql prepared-statement protocol rejects a batch with more than
-        // one command, so a script must be split and run statement by
-        // statement, each through the typed prepared path. Each statement
-        // becomes a result set; the first is primary and the rest are attached
-        // as additional results.
         let statements = QueryLanguage::Sql.split_statements(&req.sql);
-        if statements.len() > 1 {
-            let mut result_sets: Vec<QueryResult> = Vec::with_capacity(statements.len());
-            for statement in &statements {
-                result_sets.push(mysql_execute_one_statement(
-                    &mut state.conn,
-                    statement,
-                    start,
-                    &self.cancelled,
-                )?);
-            }
 
-            let mut primary = result_sets.remove(0);
-            for extra in result_sets {
-                primary.push_additional_result(extra);
-            }
-            return Ok(primary);
-        }
+        let in_transaction_before = if statements
+            .iter()
+            .any(|statement| may_open_transaction(statement))
+        {
+            probe_in_transaction(&mut state.conn)
+        } else {
+            None
+        };
 
-        mysql_execute_one_statement(&mut state.conn, &req.sql, start, &self.cancelled)
+        let result = if statements.len() > 1 {
+            mysql_execute_script(&mut state.conn, &statements, start, &self.cancelled)
+        } else {
+            mysql_execute_one_statement(&mut state.conn, &req.sql, start, &self.cancelled)
+        };
+
+        result.map_err(|error| {
+            settle_failed_transaction(&mut state.conn, in_transaction_before, error)
+        })
     }
 
     fn cancel_active(&self) -> Result<(), DbError> {
@@ -2990,6 +2986,128 @@ impl ConnectionExt for MysqlConnection {
 
     fn as_keyvalue(&self) -> Option<&dyn KeyValueConnection> {
         None
+    }
+}
+
+/// Runs a multi-statement script, stopping at the first failing statement.
+///
+/// The mysql prepared-statement protocol rejects a batch with more than one
+/// command, so each statement runs through the typed prepared path on its
+/// own. The first result set is primary and the rest are attached as
+/// additional results.
+fn mysql_execute_script(
+    conn: &mut Conn,
+    statements: &[String],
+    start: Instant,
+    cancelled: &AtomicBool,
+) -> Result<QueryResult, DbError> {
+    let mut result_sets: Vec<QueryResult> = Vec::with_capacity(statements.len());
+    for statement in statements {
+        result_sets.push(mysql_execute_one_statement(
+            conn, statement, start, cancelled,
+        )?);
+    }
+
+    let mut primary = result_sets.remove(0);
+    for extra in result_sets {
+        primary.push_additional_result(extra);
+    }
+
+    Ok(primary)
+}
+
+/// Whether a statement can leave the session inside a transaction once it
+/// succeeds: an explicit `START TRANSACTION` / `BEGIN`, or a change to
+/// `autocommit`. Only these statements justify probing the transaction state
+/// before an execution runs.
+fn may_open_transaction(statement: &str) -> bool {
+    let normalized = dbflux_core::strip_leading_comments(statement).to_ascii_uppercase();
+    let mut words = normalized.split_whitespace();
+
+    match words.next() {
+        Some("START") => words.next() == Some("TRANSACTION"),
+        Some("BEGIN") => true,
+        Some("SET") => normalized.contains("AUTOCOMMIT"),
+        _ => false,
+    }
+}
+
+/// Reports whether the session is inside a transaction, or `None` when no
+/// probe the server accepts could tell.
+///
+/// The `mysql` crate keeps the server's `SERVER_STATUS_IN_TRANS` flag private,
+/// so the state is read with a query. MariaDB exposes that exact flag as
+/// `@@in_transaction`, and MySQL rejects the variable as unknown, so it is
+/// tried first whatever the profile's kind. MySQL's live source is
+/// `performance_schema.events_transactions_current`, which needs `SELECT` on
+/// that table and the default-on transaction instrumentation; with the
+/// instrumentation off it reports no transaction. `information_schema.innodb_trx`
+/// is not used: InnoDB serves it from a cache refreshed at most every 100 ms,
+/// so it misses a transaction opened by the statement that just ran.
+fn probe_in_transaction(conn: &mut Conn) -> Option<bool> {
+    match read_in_transaction_variable(conn) {
+        Ok(in_transaction) => return Some(in_transaction),
+        Err(error) => log::debug!("[TRANSACTION] @@in_transaction probe failed: {}", error),
+    }
+
+    match read_active_transaction_event(conn) {
+        Ok(in_transaction) => Some(in_transaction),
+        Err(error) => {
+            log::debug!("[TRANSACTION] performance_schema probe failed: {}", error);
+            None
+        }
+    }
+}
+
+fn read_in_transaction_variable(conn: &mut Conn) -> Result<bool, mysql::Error> {
+    let value: Option<i64> = conn.query_first("SELECT @@in_transaction")?;
+
+    Ok(value.unwrap_or(0) != 0)
+}
+
+fn read_active_transaction_event(conn: &mut Conn) -> Result<bool, mysql::Error> {
+    let count: Option<i64> = conn.query_first(
+        "SELECT COUNT(*) FROM performance_schema.events_transactions_current \
+         WHERE THREAD_ID = PS_CURRENT_THREAD_ID() AND STATE = 'ACTIVE'",
+    )?;
+
+    Ok(count.unwrap_or(0) > 0)
+}
+
+/// Resolves what a failed execution left in the session's transaction and
+/// notes it on the error.
+///
+/// A transaction that was provably closed before the execution and is open
+/// after it was opened by the execution, so it is rolled back. A transaction
+/// that was already open, or whose earlier state is unknown, is left alone and
+/// reported as still open. Cancellation is returned unchanged, because the
+/// cancel path may have killed the session.
+fn settle_failed_transaction(
+    conn: &mut Conn,
+    in_transaction_before: Option<bool>,
+    error: DbError,
+) -> DbError {
+    if matches!(error, DbError::Cancelled) {
+        return error;
+    }
+
+    if probe_in_transaction(conn) != Some(true) {
+        return error;
+    }
+
+    if in_transaction_before != Some(false) {
+        return error.with_transaction_note(TransactionStateNote::StillOpen);
+    }
+
+    match conn.query_drop("ROLLBACK") {
+        Ok(()) => error.with_transaction_note(TransactionStateNote::RolledBack),
+        Err(rollback_error) => {
+            log::warn!(
+                "[TRANSACTION] Rollback after failed execution failed: {}",
+                rollback_error
+            );
+            error.with_transaction_note(TransactionStateNote::StillOpen)
+        }
     }
 }
 
@@ -4122,9 +4240,9 @@ mod tests {
     use super::{
         GrantLineVerdict, MysqlCodeGenerator, MysqlDialect, MysqlDriver, MysqlGrantsVerdict,
         MysqlSslPaths, build_mysql_opts, classify_mysql_grant_line, classify_mysql_grants,
-        initial_database_from_opts, inject_password_into_mysql_uri, mysql_routine_type_to_kind,
-        mysql_text_literal, normalize_mysql_tcp_host, plan_mysql_semantic_request,
-        resolve_write_privilege,
+        initial_database_from_opts, inject_password_into_mysql_uri, may_open_transaction,
+        mysql_routine_type_to_kind, mysql_text_literal, normalize_mysql_tcp_host,
+        plan_mysql_semantic_request, resolve_write_privilege,
     };
     use dbflux_core::{
         AddColumnRequest, AlterColumnRequest, CodeGenerator, DatabaseCategory, DbConfig, DbDriver,
@@ -4412,6 +4530,22 @@ mod tests {
         assert_eq!(normalize_mysql_tcp_host("LOCALHOST"), "127.0.0.1");
         assert_eq!(normalize_mysql_tcp_host("127.0.0.1"), "127.0.0.1");
         assert_eq!(normalize_mysql_tcp_host("db.internal"), "db.internal");
+    }
+
+    #[test]
+    fn may_open_transaction_detects_transaction_starting_statements() {
+        assert!(may_open_transaction("START TRANSACTION"));
+        assert!(may_open_transaction("  start transaction read only"));
+        assert!(may_open_transaction("BEGIN"));
+        assert!(may_open_transaction("begin work"));
+        assert!(may_open_transaction("-- open it\nBEGIN"));
+        assert!(may_open_transaction("/* note */ SET autocommit = 0"));
+
+        assert!(!may_open_transaction("SELECT 'START TRANSACTION'"));
+        assert!(!may_open_transaction("INSERT INTO t VALUES (1)"));
+        assert!(!may_open_transaction("START SLAVE"));
+        assert!(!may_open_transaction("SET NAMES utf8mb4"));
+        assert!(!may_open_transaction("COMMIT"));
     }
 
     #[test]

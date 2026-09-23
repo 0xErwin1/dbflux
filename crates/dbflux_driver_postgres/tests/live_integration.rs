@@ -11,7 +11,7 @@ use dbflux_core::{
     DescribeRequest, ExplainRequest, MutationRequest, OrderByColumn, Pagination, QueryRequest,
     RecordIdentity, RowDelete, RowInsert, RowPatch, SchemaLoadingStrategy, SemanticFilter,
     SemanticRequest, SqlUpdateRequest, SqlUpsertRequest, TableBrowseRequest, TableCountRequest,
-    TableRef, Value, WhereOperator,
+    TableRef, TransactionStateNote, Value, WhereOperator,
 };
 use dbflux_driver_postgres::PostgresDriver;
 use dbflux_test_support::containers;
@@ -47,6 +47,18 @@ fn connect_postgres(
         })?;
 
     Ok((connection, driver))
+}
+
+fn error_hint(error: &DbError) -> Option<&str> {
+    error
+        .formatted()
+        .and_then(|formatted| formatted.hint.as_deref())
+}
+
+fn error_code(error: &DbError) -> Option<&str> {
+    error
+        .formatted()
+        .and_then(|formatted| formatted.code.as_deref())
 }
 
 fn assert_text_array_matches_server_text(decoded: &Value, server_text: &Value) {
@@ -1051,6 +1063,83 @@ fn postgres_set_referential_integrity_disables_and_restores_fk_checks() -> Resul
             still_violates.is_err(),
             "FK violation must fail again after RI is restored"
         );
+
+        Ok(())
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Transaction state after a failed script
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_failed_script_rolls_back_the_transaction_it_opened() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE failed_script_rollback (id INT PRIMARY KEY)",
+        ))?;
+
+        let error = connection
+            .execute(&QueryRequest::new(
+                "BEGIN; \
+                 INSERT INTO failed_script_rollback VALUES (1); \
+                 INSERT INTO failed_script_rollback VALUES (1); \
+                 COMMIT;",
+            ))
+            .expect_err("duplicate key must fail the script");
+
+        let hint = error_hint(&error).expect("failed script error must carry a hint");
+        assert!(
+            hint.contains(TransactionStateNote::RolledBack.message()),
+            "hint must report the rollback, got {hint:?}"
+        );
+
+        connection.execute(&QueryRequest::new("SELECT 1"))?;
+
+        let rows = connection
+            .execute(&QueryRequest::new("SELECT id FROM failed_script_rollback"))?
+            .rows;
+        assert!(rows.is_empty(), "the partial insert must be rolled back");
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_failed_script_leaves_an_earlier_transaction_aborted() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE failed_script_aborted (id INT PRIMARY KEY)",
+        ))?;
+
+        connection.execute(&QueryRequest::new("BEGIN"))?;
+
+        let error = connection
+            .execute(&QueryRequest::new(
+                "INSERT INTO failed_script_aborted VALUES (1); \
+                 INSERT INTO failed_script_aborted VALUES (1);",
+            ))
+            .expect_err("duplicate key must fail the script");
+
+        let hint = error_hint(&error).expect("failed script error must carry a hint");
+        assert!(
+            hint.contains(TransactionStateNote::Aborted.message()),
+            "hint must report the aborted transaction, got {hint:?}"
+        );
+
+        let probe_error = connection
+            .execute(&QueryRequest::new("SELECT 1"))
+            .expect_err("the earlier transaction must still be aborted");
+        assert_eq!(error_code(&probe_error), Some("25P02"));
+
+        connection.execute(&QueryRequest::new("ROLLBACK"))?;
+        connection.execute(&QueryRequest::new("SELECT 1"))?;
 
         Ok(())
     })

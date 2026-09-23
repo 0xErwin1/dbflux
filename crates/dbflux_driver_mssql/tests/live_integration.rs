@@ -9,7 +9,8 @@
 use dbflux_core::{
     CollectionRef, Connection, ConnectionProfile, DbConfig, DbDriver, DbError, DescribeRequest,
     ExplainRequest, OrderByColumn, Pagination, QueryRequest, RecordIdentity, RowDelete, RowInsert,
-    RowPatch, SchemaLoadingStrategy, TableBrowseRequest, TableCountRequest, TableRef, Value,
+    RowPatch, SchemaLoadingStrategy, TableBrowseRequest, TableCountRequest, TableRef,
+    TransactionStateNote, Value,
 };
 use dbflux_driver_mssql::MssqlDriver;
 use dbflux_test_support::containers;
@@ -131,6 +132,7 @@ fn cleanup_test_tables(conn: &dyn Connection) {
         "describe_test",
         "codegen_test",
         "cancel_test",
+        "transaction_test",
     ] {
         let _ = conn.execute(&QueryRequest::new(format!(
             "DROP TABLE IF EXISTS dbo.[{}]",
@@ -550,6 +552,91 @@ fn mssql_cancel_query_kills_session_and_reconnects() -> Result<(), DbError> {
         assert_eq!(result.rows.len(), 1);
         assert_eq!(result.rows[0][0], Value::Int(1));
 
+        Ok(())
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Failed batches and the session's transaction
+// ---------------------------------------------------------------------------
+
+fn transaction_note(error: &DbError) -> Option<&str> {
+    error
+        .formatted()
+        .and_then(|formatted| formatted.hint.as_deref())
+}
+
+fn single_value(connection: &dyn Connection, sql: &str) -> Result<Value, DbError> {
+    let result = connection.execute(&QueryRequest::new(sql))?;
+    Ok(result.rows[0][0].clone())
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mssql_failed_batch_rolls_back_the_transaction_it_opened() -> Result<(), DbError> {
+    containers::with_mssql_url(|uri| {
+        let (connection, _) = connect_mssql(uri)?;
+        cleanup_test_tables(&*connection);
+
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE transaction_test (id INT PRIMARY KEY)",
+        ))?;
+
+        let error = connection
+            .execute(&QueryRequest::new(
+                "BEGIN TRAN; INSERT INTO transaction_test (id) VALUES (1); \
+                 SELECT * FROM missing_table; COMMIT;",
+            ))
+            .expect_err("batch referencing a missing table should fail");
+
+        let hint = transaction_note(&error).unwrap_or_default();
+        assert!(
+            hint.contains(TransactionStateNote::RolledBack.message()),
+            "error should report the rollback, got hint: {hint:?}"
+        );
+
+        assert_eq!(
+            single_value(&*connection, "SELECT @@TRANCOUNT AS open_transactions")?,
+            Value::Int(0)
+        );
+        assert_eq!(
+            single_value(
+                &*connection,
+                "SELECT COUNT(*) AS row_count FROM transaction_test"
+            )?,
+            Value::Int(0),
+            "the row inserted inside the rolled-back transaction must not be visible"
+        );
+
+        cleanup_test_tables(&*connection);
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mssql_failed_batch_leaves_an_earlier_transaction_open() -> Result<(), DbError> {
+    containers::with_mssql_url(|uri| {
+        let (connection, _) = connect_mssql(uri)?;
+
+        connection.execute(&QueryRequest::new("BEGIN TRAN"))?;
+
+        let error = connection
+            .execute(&QueryRequest::new("SELECT * FROM missing_table"))
+            .expect_err("query against a missing table should fail");
+
+        let hint = transaction_note(&error).unwrap_or_default();
+        assert!(
+            hint.contains(TransactionStateNote::StillOpen.message()),
+            "error should report the open transaction, got hint: {hint:?}"
+        );
+
+        assert_eq!(
+            single_value(&*connection, "SELECT @@TRANCOUNT AS open_transactions")?,
+            Value::Int(1)
+        );
+
+        connection.execute(&QueryRequest::new("ROLLBACK TRANSACTION"))?;
         Ok(())
     })
 }
