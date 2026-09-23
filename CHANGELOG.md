@@ -6,6 +6,16 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Added
 
+* **Opt-in UI automation for agents and tests** — a development build compiled
+  with the `ui-automation` feature exposes each window to a local MCP server
+  (vendored `gpui-mcp`) that can read the rendered element tree, click, type,
+  run app commands and take screenshots. The feature is off by default and is
+  never part of release builds; the bridge only accepts processes of the same
+  user. On Wayland compositors, screenshots require running DBFlux under
+  XWayland. Password, write-only and passphrase inputs now expose the password
+  role to accessibility clients, so their value is never readable through the
+  element tree, even while a show-password toggle displays it. See
+  `docs/UI_AUTOMATION.md`.
 * **Safe automatic Deep capture on connect and async snapshot picker** — a
   relational connection with a known database captures a Deep snapshot only
   when every table has loaded columns or sample fields. Creation metadata is
