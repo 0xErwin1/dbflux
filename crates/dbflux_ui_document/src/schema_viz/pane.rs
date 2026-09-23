@@ -20,7 +20,7 @@ impl SchemaVizDocument {
     pub fn into_pane(entity: Entity<Self>, cx: &App) -> PaneHandle {
         let id = entity.read(cx).id();
 
-        PaneHandle::new_chart(
+        let mut handle = PaneHandle::new_chart(
             id,
             DocumentKind::SchemaViz,
             // render
@@ -78,8 +78,11 @@ impl SchemaVizDocument {
             Box::new(|_cx| RefreshPolicy::Manual),
             // flush_auto_save — SchemaViz has no auto-save
             Box::new(|_cx| {}),
-            // set_active_tab — SchemaViz does not track active-tab state
-            Box::new(|_active, _cx| {}),
+            // set_active_tab
+            {
+                let e = entity.clone();
+                Box::new(move |active, cx| e.update(cx, |d, cx| d.set_active_tab(active, cx)))
+            },
             // set_refresh_policy — SchemaViz does not use a refresh policy
             Box::new(|_policy, _cx| {}),
             // matches_dedup_key
@@ -120,6 +123,15 @@ impl SchemaVizDocument {
                     cx.subscribe(&e, move |_, ev: &DocumentEvent, cx| cb(ev, cx))
                 })
             },
-        )
+        );
+
+        handle.mark_inspector_closed = Some({
+            let e = entity.clone();
+            Box::new(move |cx| {
+                e.update(cx, |d, _cx| d.mark_inspector_closed());
+            })
+        });
+
+        handle
     }
 }
