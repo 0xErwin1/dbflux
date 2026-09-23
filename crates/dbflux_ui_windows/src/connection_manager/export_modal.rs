@@ -1328,7 +1328,11 @@ impl ExportBundleModal {
                         .flex()
                         .items_center()
                         .gap(Spacing::XS)
-                        .child(div().flex_1().child(Input::new(&self.passphrase_input)))
+                        .child(
+                            div()
+                                .flex_1()
+                                .child(Input::new(&self.passphrase_input).secret(true)),
+                        )
                         .child(toggle),
                 )
                 .child(
@@ -1337,7 +1341,7 @@ impl ExportBundleModal {
                     ))
                     .color(theme.muted_foreground),
                 )
-                .child(Input::new(&self.confirm_input))
+                .child(Input::new(&self.confirm_input).secret(true))
                 .into_any_element()
         };
 

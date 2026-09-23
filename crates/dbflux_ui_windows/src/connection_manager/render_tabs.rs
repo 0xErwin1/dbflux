@@ -751,7 +751,11 @@ impl ConnectionManagerWindow {
                                                     ),
                                                 )),
                                         )
-                                        .child(Input::new(&input).small().disabled(!enabled))
+                                        .child(
+                                            Input::new(&input).small().disabled(!enabled).secret(
+                                                form_renderer::is_secret_field(&field.kind),
+                                            ),
+                                        )
                                         .into_any_element(),
                                 )
                             }

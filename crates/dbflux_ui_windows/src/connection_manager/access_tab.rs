@@ -1224,7 +1224,10 @@ impl ConnectionManagerWindow {
                                                 );
                                             }),
                                         )
-                                        .child(Input::new(&self.access.input_ssh_key_passphrase)),
+                                        .child(
+                                            Input::new(&self.access.input_ssh_key_passphrase)
+                                                .secret(true),
+                                        ),
                                 )
                                 .child(
                                     Self::render_password_toggle(
@@ -1305,7 +1308,10 @@ impl ConnectionManagerWindow {
                                                 );
                                             }),
                                         )
-                                        .child(Input::new(&self.access.input_ssh_password)),
+                                        .child(
+                                            Input::new(&self.access.input_ssh_password)
+                                                .secret(true),
+                                        ),
                                 )
                                 .child(
                                     Self::render_password_toggle(

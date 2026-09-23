@@ -1426,7 +1426,12 @@ impl DriversSection {
                                                 .gap_1()
                                                 .child(Label::new(field.label.clone()))
                                                 .child(
-                                                    Input::new(&input).small().disabled(!enabled),
+                                                    Input::new(&input)
+                                                        .small()
+                                                        .disabled(!enabled)
+                                                        .secret(form_renderer::is_secret_field(
+                                                            &field.kind,
+                                                        )),
                                                 )
                                                 .into_any_element(),
                                         )

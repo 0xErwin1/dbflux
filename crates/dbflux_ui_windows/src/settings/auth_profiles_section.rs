@@ -5,6 +5,7 @@ use super::layout;
 use super::section_trait::{SectionFocusEvent, SectionPortabilityEvent};
 use crate::connection_manager::ExportTarget;
 use dbflux_app::keymap::Modifiers;
+use dbflux_components::components::form_renderer;
 use dbflux_components::controls::InputState;
 use dbflux_components::controls::{Button, Checkbox, Input};
 use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChanged};
@@ -2028,6 +2029,7 @@ impl AuthProfilesSection {
         label: &str,
         input: &Entity<InputState>,
         field: AuthFormField,
+        is_secret: bool,
         is_focused: bool,
         disabled: bool,
         disabled_hint: Option<String>,
@@ -2066,7 +2068,7 @@ impl AuthProfilesSection {
             focus_frame(
                 is_focused,
                 Some(primary),
-                layout::compact_input_shell(Input::new(input).small()),
+                layout::compact_input_shell(Input::new(input).small().secret(is_secret)),
                 cx,
             )
             .on_mouse_down(
@@ -2462,6 +2464,7 @@ impl AuthProfilesSection {
                         &field.label,
                         input,
                         form_field,
+                        form_renderer::is_secret_field(&field.kind),
                         is_focused,
                         disabled,
                         disabled_hint,
@@ -2570,6 +2573,7 @@ impl AuthProfilesSection {
                         &name_label,
                         &self.input_name,
                         AuthFormField::Name,
+                        false,
                         is_focused,
                         is_reflected,
                         name_hint,

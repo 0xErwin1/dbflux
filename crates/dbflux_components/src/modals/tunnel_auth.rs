@@ -191,6 +191,7 @@ impl Render for ModalTunnelAuth {
             .child(
                 div().w_full().child(
                     Input::new(&self.passphrase_input)
+                        .secret(true)
                         .w_full()
                         .placeholder(dbflux_i18n::t!("modals.tunnel_auth.placeholder")),
                 ),
