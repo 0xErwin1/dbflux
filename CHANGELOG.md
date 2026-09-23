@@ -154,6 +154,11 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **The MCP approvals overlay can be closed** — once opened, the approvals
+  overlay stayed on screen until the audit viewer was opened. It now closes
+  from the close button in its header, with Escape, or with a click on the
+  dimmed area around it, and keyboard focus returns to where it was before.
+
 * **The inspector rail follows the active tab** — switching to a tab, or
   closing the active one, could leave the right-side rail showing the row
   inspector, value panel, or schema inspector of a tab that was no longer
