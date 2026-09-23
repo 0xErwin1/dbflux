@@ -1951,6 +1951,27 @@ impl Connection for PostgresConnection {
             .lock()
             .map_err(|e| DbError::QueryFailed(format!("Lock error: {}", e).into()))?;
 
+        // Catalog queries return no rows both for absent relations and real zero-column tables.
+        let exists = client
+            .query_opt(
+                r#"
+                SELECT 1
+                FROM pg_catalog.pg_class c
+                JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+                WHERE n.nspname = $1
+                  AND c.relname = $2
+                  AND c.relkind IN ('r', 'v', 'm', 'p', 'f')
+                "#,
+                &[&schema_name, &table],
+            )
+            .map_err(|e| format_pg_query_error(&e))?;
+
+        if exists.is_none() {
+            return Err(DbError::ObjectNotFound(
+                format!("Relation '{}.{}' not found", schema_name, table).into(),
+            ));
+        }
+
         let columns = get_columns(&mut client, schema_name, table)?;
         let indexes = get_indexes(&mut client, schema_name, table)?;
         let foreign_keys = get_foreign_keys(&mut client, schema_name, table)?;

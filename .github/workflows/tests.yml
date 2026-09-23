@@ -247,6 +247,9 @@ jobs:
       - name: Run PostgreSQL live integration tests
         run: cargo test -p dbflux_driver_postgres --locked --test live_integration -- --ignored
 
+      - name: Run PostgreSQL DDL integration tests
+        run: cargo test -p dbflux_driver_postgres --locked --test ddl_integration -- --ignored
+
       - name: Run PostgreSQL bulk schema columns live integration tests
         run: cargo test -p dbflux_driver_postgres --locked --test schema_columns_live -- --ignored
 
