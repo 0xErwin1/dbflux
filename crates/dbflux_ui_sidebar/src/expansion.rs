@@ -892,7 +892,11 @@ impl Sidebar {
     }
 
     pub(super) fn rebuild_tree_with_overrides(&mut self, cx: &mut Context<Self>) {
-        let selected_index = self.tree_state.read(cx).selected_index();
+        let selected_id = self
+            .tree_state
+            .read(cx)
+            .selected_entry()
+            .map(|entry| entry.item().id.to_string());
         self.active_databases = Self::extract_active_databases(self.app_state.read(cx));
 
         let items = self.build_tree_items_with_overrides(cx);
@@ -900,20 +904,24 @@ impl Sidebar {
         self.visible_entry_count = Self::count_visible_entries(&items);
         self.gutter_metadata = compute_gutter_map(&items);
 
+        let selected_index = selected_id
+            .as_deref()
+            .and_then(|id| Self::find_item_index_in_tree(&items, id, &mut 0));
         self.syncing_expansion = true;
         self.tree_state.update(cx, |state, cx| {
             state.set_items(items, cx);
-            if let Some(idx) = selected_index {
-                let new_idx = idx.min(self.visible_entry_count.saturating_sub(1));
-                state.set_selected_index(Some(new_idx), cx);
-            }
+            state.set_selected_index(selected_index, cx);
         });
         self.syncing_expansion = false;
         cx.notify();
     }
 
     pub(super) fn refresh_tree(&mut self, cx: &mut Context<Self>) {
-        let selected_index = self.tree_state.read(cx).selected_index();
+        let selected_id = self
+            .tree_state
+            .read(cx)
+            .selected_entry()
+            .map(|entry| entry.item().id.to_string());
         self.active_databases = Self::extract_active_databases(self.app_state.read(cx));
 
         // Evict catalog cache entries for profiles that are no longer
@@ -979,14 +987,14 @@ impl Sidebar {
             self.context_menu = None;
         }
 
+        let selected_index = selected_id
+            .as_deref()
+            .and_then(|id| Self::find_item_index_in_tree(&items, id, &mut 0));
         self.syncing_expansion = true;
         self.tree_state.update(cx, |state, cx| {
             state.set_items(items, cx);
 
-            if let Some(idx) = selected_index {
-                let new_idx = idx.min(self.visible_entry_count.saturating_sub(1));
-                state.set_selected_index(Some(new_idx), cx);
-            }
+            state.set_selected_index(selected_index, cx);
         });
         self.syncing_expansion = false;
         cx.notify();

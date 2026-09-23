@@ -1535,6 +1535,105 @@ mod object_tree_adapter_tests {
         }
     }
 
+    #[gpui::test]
+    async fn selection_rebuild_tracks_visible_table_identity(cx: &mut TestAppContext) {
+        let state = test_app_state(cx);
+        let profile_id = Uuid::new_v4();
+        connect_profile(
+            &state,
+            cx,
+            profile_id,
+            AdapterFakeConnection::lazy(),
+            Some(snapshot_naming(vec![dbflux_core::DatabaseInfo {
+                name: "app".into(),
+                is_current: true,
+            }])),
+        );
+        state.update(cx, |state, _| {
+            state.set_database_schema(
+                profile_id,
+                "app".into(),
+                fake_db_schema(
+                    "app",
+                    vec![fake_table("public", "alpha"), fake_table("public", "beta")],
+                ),
+            );
+        });
+        let window = cx.add_window(|window, cx| crate::Sidebar::new(state.clone(), window, cx));
+        let database_id = SchemaNodeId::Database {
+            profile_id,
+            name: "app".into(),
+        }
+        .to_string();
+        let table_id = SchemaNodeId::Table {
+            profile_id,
+            database: Some("app".into()),
+            schema: "public".into(),
+            name: "beta".into(),
+        }
+        .to_string();
+        window
+            .update(cx, |sidebar, _, cx| {
+                sidebar.set_expanded(&database_id, true, cx);
+                let items = sidebar.build_tree_items_with_overrides(cx);
+                let index = crate::Sidebar::find_item_index_in_tree(&items, &table_id, &mut 0)
+                    .expect("visible table");
+                sidebar
+                    .tree_state
+                    .update(cx, |tree, cx| tree.set_selected_index(Some(index), cx));
+                assert_eq!(
+                    sidebar
+                        .tree_state
+                        .read(cx)
+                        .selected_entry()
+                        .map(|entry| entry.item().id.as_ref()),
+                    Some(table_id.as_str())
+                );
+            })
+            .expect("sidebar alive");
+
+        state.update(cx, |state, _| {
+            state.set_database_schema(
+                profile_id,
+                "app".into(),
+                fake_db_schema(
+                    "app",
+                    vec![fake_table("public", "beta"), fake_table("public", "alpha")],
+                ),
+            );
+        });
+        window
+            .update(cx, |sidebar, _, cx| {
+                sidebar.rebuild_tree_with_overrides(cx);
+                assert_eq!(
+                    sidebar
+                        .tree_state
+                        .read(cx)
+                        .selected_entry()
+                        .map(|entry| entry.item().id.as_ref()),
+                    Some(table_id.as_str())
+                );
+            })
+            .expect("sidebar alive");
+
+        state.update(cx, |state, _| {
+            state.set_database_schema(
+                profile_id,
+                "app".into(),
+                fake_db_schema("app", vec![fake_table("public", "alpha")]),
+            );
+        });
+        window
+            .update(cx, |sidebar, _, cx| {
+                sidebar.refresh_tree(cx);
+                assert!(
+                    sidebar.tree_state.read(cx).selected_entry().is_none(),
+                    "removed table must not dispatch its neighbor"
+                );
+            })
+            .expect("sidebar alive");
+    }
+
     // --- RED/GREEN behavioral tests ---
 
     #[gpui::test]
