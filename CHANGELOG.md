@@ -6,6 +6,11 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Added
 
+* **Shared lazy object hierarchy and collapsed sidebar preview** — the sidebar
+  and migration wizard share coordinated loading while keeping independent
+  selection; collapsed sidebar entry reveals a temporary preview without
+  changing the explicit collapse choice.
+
 * **Safe automatic Deep capture on connect and async snapshot picker** — a
   relational connection with a known database captures a Deep snapshot only
   when every table has loaded columns or sample fields. Creation metadata is
