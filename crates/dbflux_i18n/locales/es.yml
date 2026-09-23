@@ -2123,6 +2123,59 @@ document:
       unsupported_action:
         create: Crear tabla
         drop: Eliminar tabla
+  schema_viz:
+    error:
+      connection_unavailable: La conexión no existe o no está activa
+      fetch_table_details_failed: "Error al obtener los detalles de la tabla: %{error}"
+      foreign_keys_unsupported: Este controlador no admite claves foráneas
+      list_tables_failed: "Error al listar las tablas: %{error}"
+      no_database: No se especificó ninguna base de datos
+      no_layout: No se calculó ningún diseño
+    inspector:
+      columns: COLUMNAS
+      foreign_keys: CLAVES FORÁNEAS
+      indexes: ÍNDICES
+      summary: "%{columns} columnas · %{indexes} índices"
+      table: TABLA
+    layout:
+      compact: Compacto
+      left_right: Izquierda-Derecha
+      snowflake: Copo de nieve
+    menu:
+      copy_as: Copiar como
+      copy_as_dbml: Copiar como DBML
+      copy_as_sql: Copiar como SQL
+      focus_table: Enfocar esta tabla
+      inspect_schema: Inspeccionar esquema
+      layout: Diseño
+      zoom_in: Acercar
+      zoom_out: Alejar
+    node:
+      column_count: "%{count} cols"
+      indexes: Índices
+    status:
+      loading: "Cargando esquema…"
+      table_cap: "Se muestran las primeras 100 tablas — el esquema tiene más."
+      unsupported: El diagrama de esquema no está disponible para este tipo de base de datos
+    task:
+      global_scope: global
+      load: "Diagrama de esquema: %{database}"
+    toast:
+      dbml_copied: Esquema exportado a DBML (copiado al portapapeles)
+      dbml_failed: "Error al exportar a DBML: %{error}"
+      sql_copied: Esquema exportado como SQL (copiado al portapapeles)
+      sql_failed: "Error al exportar como SQL: %{error}"
+    toolbar:
+      arrange: Organizar
+      counter: "%{tables} tablas · %{relations} relaciones"
+      export: Exportar
+      fit: Ajustar
+      indexes: Índices
+      reset: Restablecer
+      types: Tipos
+    view:
+      title: "Esquema: %{name}"
+      title_default_database: base de datos
   shared:
     add: Agregar
     error_prefix: "Error: %{message}"
@@ -3361,6 +3414,8 @@ sidebar:
     open: Abrir
     browse_event_streams: Explorar flujos de eventos
     view_schema: Ver esquema
+    view_schema_diagram: Ver diagrama de esquema
+    view_relationships: Ver relaciones
     refresh: Actualizar
     generate_sql: Generar SQL
     export_table: Exportar tabla…

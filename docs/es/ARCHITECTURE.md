@@ -564,10 +564,10 @@ crates/
     src/legacy.rs           # JSON-to-SQLite import
   dbflux_schema_viz/        # Schema visualization
     src/lib.rs              # Re-exports: graph, layout, dbml, sql modules, DbmlScope, SqlScope
-    src/graph.rs            # SchemaGraph, TableNode, ForeignKeyEdge, ColumnRefNode
-    src/layout.rs           # Layout algorithms: ForceBased, Tree, Radial, Grid
-    src/dbml.rs             # DBML export (3 scopes: FocalTable, Subgraph, Full)
-    src/sql.rs              # SQL DDL export (3 scopes: CREATE TABLE + ALTER TABLE)
+    src/graph.rs            # SchemaGraph, TableNode, FkEdge
+    src/layout.rs           # Layout algorithms: LeftRight, Snowflake, Compact
+    src/dbml.rs             # DBML export (3 scopes: FocalTable, Subgraph, FullSchema)
+    src/sql.rs              # SQL DDL export: CREATE TABLE + ALTER TABLE ADD CONSTRAINT (same 3 scopes)
   dbflux_test_support/       # Docker containers and fixtures for integration tests
     src/containers.rs       # Docker container lifecycle (Postgres, MySQL, MongoDB, Redis, DynamoDB Local)
     src/fixtures.rs         # Test fixture helpers
@@ -879,8 +879,8 @@ conexión sin acceder al código del driver.
   SortedSet, Stream), paginación, mutations y menú contextual. Se integra con el
   workspace vía un `PaneHandle` construido en `key_value/pane.rs`.
 - **Schema visualization**: `crates/dbflux_schema_viz/` provee `SchemaGraph`
-  (nodos de tabla, aristas de clave foránea, nodos de referencia de columna),
-  algoritmos de layout (ForceBased, Tree, Radial, Grid), exportación a DBML y
+  (nodos de tabla y aristas de clave foránea), algoritmos de layout (LeftRight,
+  Snowflake, Compact), exportación a DBML y
   exportación de DDL SQL. Se accede desde `SchemaVizDocument` en
   `crates/dbflux_ui_document/src/schema_viz/mod.rs`, con menús desplegables en
   la barra (Layout, Export), avisos toast, eventos de auditoría y carga

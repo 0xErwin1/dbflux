@@ -6,6 +6,65 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Added
 
+* **Safe automatic Deep capture on connect and async snapshot picker** — a
+  relational connection with a known database captures a Deep snapshot only
+  when every table has loaded columns or sample fields. Creation metadata is
+  collected where available; capture errors leave the connection open and do
+  not persist a partial Deep snapshot. Cache hydration uses the exact row
+  selected by the capture only while that connection remains current; older
+  captures cannot prune newer ones at retention one.
+  Historic snapshots are loaded in the background, filtered to existing
+  profiles, and labeled by timestamp. Unknown databases (including Turso)
+  fail closed rather than promising a snapshot on every connect.
+
+* **Faithful MSSQL `CREATE TABLE` generation via schema diff** — the SQL
+  Server driver now introspects full column type dimensions (Unicode lengths
+  in characters with `MAX` support, byte lengths for character/binary types,
+  decimal precision/scale, temporal scale, `float` precision; identity kept
+  out of the type name) and reports identity seed/increment as exact
+  server-converted text — `numeric(38,0)` identity values beyond any 64-bit
+  integer survive verbatim — plus primary-key columns in declared key order,
+  a completeness report, and named blockers for creation semantics it cannot
+  reproduce (computed columns, user-defined/CLR types, sparse, `FILESTREAM`,
+  `ROWGUIDCOL`, memory-optimized, system-versioned temporal, nonclustered
+  primary keys, descending primary-key columns, identity `NOT FOR REPLICATION`,
+  row/page compression, non-default filegroups, typed `xml` bound to an XML
+  schema collection, and legacy-bound or permission-hidden default expressions
+  that surface as named incompleteness). Notably, **every character-typed
+  column currently refuses**: `sys.columns.collation_name` is non-null for
+  all of them — even when the collation was only inherited from the source
+  database default — and the target database's default collation is unknown
+  at generation time, so only tables whose columns all have non-collated
+  types can currently be generated. The schema-diff document forwards the
+  reference side's metadata — live through the generic
+  `table_creation_metadata` seam, or from a deep snapshot captured
+  programmatically — to the target connection, which generates a faithful
+  `CREATE TABLE` for both preview and apply and refuses when the metadata is
+  missing, incomplete, or blocked, so old snapshots can never regenerate an
+  identity-less table. At the generator stage, on-connect capture was shallow;
+  the separate Deep capture described above can also persist creation
+  metadata. A live reference needs nothing stored. No UI crate branches on
+  driver identifiers. MSSQL connections also resolve the actual session
+  database (`DB_NAME()`) at
+  connect time for URI and direct/SSH default logins, so the driver reports
+  the login's real default database instead of an unknown selection.
+
+* **Structured table-creation metadata for faithful schema captures** — deep
+  schema snapshots can now carry, per table, the creation details the legacy
+  table shape cannot express: identity seed and increment as exact decimal
+  strings (SQL Server allows `numeric(38,0)` magnitudes), explicit primary-key
+  column order, a completeness report naming what the driver could not
+  observe, and actionable blockers that rule out faithful `CREATE TABLE`
+  generation. The metadata is a standalone type: the legacy RPC payloads and
+  the on-the-wire table shape are untouched. Drivers expose it through new
+  defaulted `Connection` seams (`table_creation_metadata` and
+  `generate_code_with_creation_metadata`) that preserve existing behavior for
+  every driver that has not opted in. Deep snapshot capture collects the
+  metadata through those seams, persists it in a new nullable column on
+  snapshot table rows (old databases upgrade in place and stay readable), and
+  snapshot deduplication no longer discards a fresh capture just because the
+  structural fingerprint is unchanged.
+
 * **Interactive schema visualization** — a table or a whole database can now be
   opened as a diagram of the schema instead of a list of objects. Tables render
   as nodes carrying their columns, primary keys and flags, and foreign keys as
@@ -84,6 +143,24 @@ All notable changes to DBFlux will be documented in this file.
   `%{placeholder}` — a failure that is otherwise silent in the UI.
 
 ### Fixed
+
+* **The schema diagram follows the selected language** — its toolbar, context
+  menu, layout and export menus, inspector, loading and error messages, toasts,
+  tab title, and the sidebar entries that open it ("View Schema Diagram", "View
+  Relationships") were always shown in English. They now use the Spanish,
+  Korean, and Simplified Chinese catalogs. Audit log summaries stay in English,
+  like every other audit event.
+
+* **Ayu colors on buttons and checkboxes** — primary buttons such as Save and
+  checked checkboxes now use the selected theme's amber accent instead of the
+  component library's default white fill. Component colors, including hover and
+  pressed states, stay aligned when switching between Dark, Mirage, and Light.
+
+* **The command palette accepts every letter while typing a search** — the palette
+  layer bound bare `s`, `j` and `k` to commands, so the workspace keydown handler
+  consumed those keystrokes before the search input saw them. All unmodified
+  letters now reach the input; list navigation stays on the arrow keys, with
+  Enter to run and Escape to close unchanged.
 
 * **Composite foreign keys keep the constraint's own column order** — the referenced
   columns came from a join between two catalog views that matched the constraint as a

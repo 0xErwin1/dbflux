@@ -6,7 +6,7 @@
 //! the selected changes through `DdlApplyExecutor` behind a hard-confirm gate.
 //! Changes the driver cannot express are surfaced explicitly, never dropped.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use dbflux_app::keymap::{Command, ContextId};
@@ -19,8 +19,12 @@ use dbflux_components::primitives::{Badge, BadgeVariant, Icon, Text};
 use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_core::{
     ConnectedProfile, Connection, EventSink, ExecutionClassification, MutationPolicy,
-    QueryLanguage, ReadOnlyReason, RefreshPolicy, RiskedChange, SchemaChange, TableInfo, TableRef,
-    diff_schema,
+    QueryLanguage, ReadOnlyReason, RefreshPolicy, RiskedChange, SchemaChange,
+    TableCreationMetadata, TableInfo, TableRef, diff_schema,
+};
+use dbflux_storage::error::StorageError;
+use dbflux_storage::repositories::sch_schema_snapshots::{
+    SchemaSnapshotRepo, SchemaSnapshotSummary,
 };
 use dbflux_ui_base::sql_preview_modal::SqlPreviewModal;
 use dbflux_ui_base::toast::{PendingToast, flush_pending_toast};
@@ -43,6 +47,60 @@ use super::diff_source::{
 };
 use crate::handle::DocumentEvent;
 use crate::types::{DocumentIcon, DocumentId, DocumentKind, DocumentMetaSnapshot, DocumentState};
+
+fn load_existing_profile_snapshots(
+    repo: &SchemaSnapshotRepo,
+    profile_id: &str,
+    database: Option<&str>,
+) -> Result<Vec<SchemaSnapshotSummary>, StorageError> {
+    if !repo.profile_exists(profile_id)? {
+        return Ok(Vec::new());
+    }
+    repo.list(profile_id, database)
+}
+
+#[allow(clippy::too_many_arguments)] // Keep every completion identity explicit at the foreground boundary.
+fn apply_snapshot_load_result(
+    snapshots: &mut Vec<SchemaSnapshotSummary>,
+    requested_ticket: u64,
+    current_ticket: u64,
+    mode: DiffMode,
+    requested_profile: Uuid,
+    current_profile: Uuid,
+    requested_database: Option<&str>,
+    current_database: Option<&str>,
+    profile_exists: bool,
+    result: &Result<Vec<SchemaSnapshotSummary>, StorageError>,
+) -> bool {
+    if requested_ticket != current_ticket
+        || mode != DiffMode::SnapshotVsLive
+        || requested_profile != current_profile
+        || requested_database != current_database
+        || !profile_exists
+    {
+        return false;
+    }
+    if let Ok(loaded) = result {
+        *snapshots = loaded.clone();
+    }
+    true
+}
+
+fn invalidate_snapshot_profile_if_missing(
+    snapshots: &mut Vec<SchemaSnapshotSummary>,
+    selected: &mut Option<Uuid>,
+    ticket: &mut u64,
+    profile: Uuid,
+    profiles: &[Uuid],
+) -> bool {
+    if profiles.contains(&profile) {
+        return false;
+    }
+    *ticket = ticket.wrapping_add(1);
+    snapshots.clear();
+    *selected = None;
+    true
+}
 
 /// One table's slice of the diff, grouped for rendering.
 struct TableDiffGroup {
@@ -366,7 +424,12 @@ pub struct SchemaDiffDocument {
     selected_table_actions: HashSet<usize>,
     /// Snapshot summaries for the target profile/database, loaded when the
     /// snapshot-to-live mode is selected.
-    snapshots: Vec<dbflux_storage::repositories::sch_schema_snapshots::SchemaSnapshotSummary>,
+    snapshots: Vec<SchemaSnapshotSummary>,
+    snapshot_load_ticket: u64,
+    #[cfg(test)]
+    snapshot_load_pause: Option<std::sync::mpsc::Sender<()>>,
+    #[cfg(test)]
+    snapshot_load_done: Option<std::sync::mpsc::Sender<()>>,
 
     compute_state: ComputeState,
     active_compute: Option<ComputeBinding>,
@@ -412,6 +475,23 @@ impl SchemaDiffDocument {
             cx.subscribe(&app_state, |this: &mut Self, _, _: &AppStateChanged, cx| {
                 this.invalidate_preparation_if_context_changed(cx);
                 this.invalidate_compute_if_context_changed(cx);
+                let profiles: Vec<Uuid> = this
+                    .app_state
+                    .read(cx)
+                    .profiles()
+                    .iter()
+                    .map(|p| p.id)
+                    .collect();
+                if invalidate_snapshot_profile_if_missing(
+                    &mut this.snapshots,
+                    &mut this.picker.selected_snapshot,
+                    &mut this.snapshot_load_ticket,
+                    this.profile_id,
+                    &profiles,
+                ) {
+                    this.reset_after_reference_change();
+                    cx.notify();
+                }
             });
 
         let title = match &database {
@@ -432,6 +512,11 @@ impl SchemaDiffDocument {
             selected: HashSet::new(),
             selected_table_actions: HashSet::new(),
             snapshots: Vec::new(),
+            snapshot_load_ticket: 0,
+            #[cfg(test)]
+            snapshot_load_pause: None,
+            #[cfg(test)]
+            snapshot_load_done: None,
             compute_state: ComputeState::Idle,
             active_compute: None,
             compute_ticket: 0,
@@ -586,6 +671,9 @@ impl SchemaDiffDocument {
         match mode {
             DiffMode::SnapshotVsLive => self.load_snapshots(cx),
             DiffMode::LiveVsLive => {
+                self.snapshot_load_ticket = self.snapshot_load_ticket.wrapping_add(1);
+                self.snapshots.clear();
+                self.picker.selected_snapshot = None;
                 if self.connection_databases.is_empty() {
                     self.load_connection_databases(cx);
                 }
@@ -595,17 +683,92 @@ impl SchemaDiffDocument {
     }
 
     fn load_snapshots(&mut self, cx: &mut Context<Self>) {
-        let profile_id = self.profile_id.to_string();
+        self.snapshot_load_ticket = self.snapshot_load_ticket.wrapping_add(1);
+        let ticket = self.snapshot_load_ticket;
+        self.snapshots.clear();
+        self.picker.selected_snapshot = None;
+        cx.notify();
+
+        let profile = self.profile_id;
+        let profile_id = profile.to_string();
         let database = self.database.clone();
-        let snapshots = self.app_state.update(cx, |state, _| {
-            state
-                .schema_snapshots
-                .list(&profile_id, database.as_deref())
+        let repo = Arc::clone(&self.app_state.read(cx).inner.schema_snapshot_repo);
+        let task = cx.background_executor().spawn(async move {
+            load_existing_profile_snapshots(&repo, &profile_id, database.as_deref())
         });
-        self.snapshots = snapshots;
+        let requested_database = self.database.clone();
+        #[cfg(test)]
+        let pause = self.snapshot_load_pause.take();
+        #[cfg(test)]
+        let done = self.snapshot_load_done.take();
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            #[cfg(test)]
+            if let Some(entered) = pause {
+                entered.send(()).expect("snapshot load pause receiver");
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(60))
+                    .await;
+            }
+            let update_result = cx.update(|cx| {
+                this.update(cx, |doc, cx| {
+                    let profile_exists = doc
+                        .app_state
+                        .read(cx)
+                        .profiles()
+                        .iter()
+                        .any(|p| p.id == profile);
+                    if !apply_snapshot_load_result(
+                        &mut doc.snapshots,
+                        ticket,
+                        doc.snapshot_load_ticket,
+                        doc.picker.mode,
+                        profile,
+                        doc.profile_id,
+                        requested_database.as_deref(),
+                        doc.database.as_deref(),
+                        profile_exists,
+                        &result,
+                    ) {
+                        return;
+                    }
+                    if let Err(error) = result {
+                        report_error(
+                            UserFacingError::new(
+                                ErrorKind::Storage,
+                                format!(
+                                    "{}: {error}",
+                                    dbflux_i18n::t!(
+                                        "document.schema_diff.toast.snapshot_load_failed"
+                                    )
+                                ),
+                            ),
+                            cx,
+                        );
+                    }
+                    cx.notify();
+                })
+            });
+            #[cfg(test)]
+            if let Some(done) = done {
+                update_result.as_ref().expect("snapshot foreground update");
+                done.send(()).expect("snapshot load completion receiver");
+            }
+            update_result.ok();
+        })
+        .detach();
     }
 
     fn select_snapshot(&mut self, snapshot_id: Uuid, cx: &mut Context<Self>) {
+        if !self
+            .app_state
+            .read(cx)
+            .profiles()
+            .iter()
+            .any(|p| p.id == self.profile_id)
+        {
+            return;
+        }
         self.invalidate_active_compute();
         self.invalidate_preparation();
         self.picker.selected_snapshot = Some(snapshot_id);
@@ -773,7 +936,10 @@ impl SchemaDiffDocument {
                     return;
                 };
                 match state.schema_snapshots.get(&snapshot_id.to_string()) {
-                    Ok(Some(record)) => SidePlan::Resolved(record.tables),
+                    Ok(Some(record)) => SidePlan::Resolved {
+                        tables: record.tables,
+                        creation_metadata: record.creation_metadata,
+                    },
                     Ok(None) => {
                         self.compute_state = ComputeState::Error(dbflux_i18n::t!(
                             "document.schema_diff.toast.snapshot_missing"
@@ -826,22 +992,30 @@ impl SchemaDiffDocument {
             // A failed `table_details` on EITHER side aborts the comparison
             // with a clear error instead of silently degrading to a
             // column-less entry, which would produce a wrong/destructive diff.
-            let before = deep_resolve(
+            let (before, _) = deep_resolve(
                 &*target_connection,
                 target_db_for_task.as_deref(),
                 &target_shallow,
+                false,
             )?;
-            let after = match reference_plan {
+            let (after, reference_metadata) = match reference_plan {
                 SidePlan::Live {
                     connection,
                     database,
                     shallow,
-                } => deep_resolve(&*connection, database.as_deref(), &shallow)?,
-                SidePlan::Resolved(tables) => tables,
+                } => deep_resolve(&*connection, database.as_deref(), &shallow, true)?,
+                SidePlan::Resolved {
+                    tables,
+                    creation_metadata,
+                } => (tables, reference_metadata_from_snapshot(creation_metadata)),
             };
 
             let table_changes = diff_schema(&before, &after);
-            Ok::<Vec<TableDiffGroup>, String>(build_groups(&*target_connection, table_changes))
+            Ok::<Vec<TableDiffGroup>, String>(build_groups(
+                &*target_connection,
+                table_changes,
+                &reference_metadata,
+            ))
         });
 
         cx.spawn(async move |this, cx| {
@@ -1596,6 +1770,9 @@ impl SchemaDiffDocument {
     }
 }
 
+/// Qualified-name key `(schema, table)` for reference-side creation metadata.
+type ReferenceMetadataMap = HashMap<(Option<String>, String), TableCreationMetadata>;
+
 /// Send-friendly resolution plan for one side of the diff.
 enum SidePlan {
     Live {
@@ -1603,7 +1780,10 @@ enum SidePlan {
         database: Option<String>,
         shallow: Vec<TableInfo>,
     },
-    Resolved(Vec<TableInfo>),
+    Resolved {
+        tables: Vec<TableInfo>,
+        creation_metadata: Vec<TableCreationMetadata>,
+    },
 }
 
 /// Back-fills full column/index detail for every shallow table via
@@ -1616,9 +1796,11 @@ fn deep_resolve(
     connection: &dyn Connection,
     database: Option<&str>,
     shallow: &[TableInfo],
-) -> Result<Vec<TableInfo>, String> {
+    collect_metadata: bool,
+) -> Result<(Vec<TableInfo>, ReferenceMetadataMap), String> {
     let db = database.unwrap_or_default();
     let mut resolved = Vec::with_capacity(shallow.len());
+    let mut creation_metadata: ReferenceMetadataMap = HashMap::new();
 
     for table in shallow {
         let details = connection
@@ -1632,18 +1814,48 @@ fn deep_resolve(
                     })
                 )
             })?;
+
+        // Reference-side creation metadata (identity, PK order, blockers)
+        // travels beside the table detail. Only collected for the reference
+        // side: the diff target never supplies generation metadata. A driver
+        // without introspection returns `Ok(None)`, which metadata-aware
+        // target drivers refuse at generation time; an introspection error is
+        // treated the same way so a metadata gap can never abort an otherwise
+        // correct column diff, and still fails closed at generation.
+        if collect_metadata
+            && let Ok(Some(metadata)) =
+                connection.table_creation_metadata(db, table.schema.as_deref(), &table.name)
+        {
+            creation_metadata.insert((details.schema.clone(), details.name.clone()), metadata);
+        }
+
         resolved.push(details);
     }
 
-    Ok(resolved)
+    Ok((resolved, creation_metadata))
+}
+
+/// Indexes a snapshot's stored creation metadata by qualified table name.
+/// Snapshot metadata is a standalone list (only tables the driver could
+/// describe carry entries), so the map — not list position — is the binding.
+fn reference_metadata_from_snapshot(
+    creation_metadata: Vec<TableCreationMetadata>,
+) -> ReferenceMetadataMap {
+    creation_metadata
+        .into_iter()
+        .map(|metadata| ((metadata.schema.clone(), metadata.table.clone()), metadata))
+        .collect()
 }
 
 /// Turns raw `TableChange`s into render groups, partitioning modified tables via
 /// the target driver's code generator and probing whole-table add/remove
-/// through the driver's `generate_code` seam.
+/// through the driver's table-level generation seams
+/// (`generate_code_with_creation_metadata` for creates, legacy `generate_code`
+/// for drops).
 fn build_groups(
     connection: &dyn Connection,
     table_changes: Vec<dbflux_core::TableChange>,
+    reference_metadata: &ReferenceMetadataMap,
 ) -> Vec<TableDiffGroup> {
     use dbflux_core::TableChange;
 
@@ -1657,7 +1869,14 @@ fn build_groups(
                     schema: info.schema.clone(),
                     name: info.name.clone(),
                 };
-                let action = TableLevelAction::Create(info);
+                // The reference side's creation metadata rides with the added
+                // table so the TARGET connection can generate faithfully; a
+                // metadata gap arrives as `None` and metadata-aware drivers
+                // refuse rather than flattening identity or key order.
+                let metadata = reference_metadata
+                    .get(&(info.schema.clone(), info.name.clone()))
+                    .cloned();
+                let action = TableLevelAction::Create(Box::new(info), metadata);
                 let probe = build_statements_for_table_action(connection, &action);
                 let outcome = classify_table_action(action, probe);
                 groups.push(TableDiffGroup {
@@ -2058,7 +2277,14 @@ impl SchemaDiffDocument {
             (theme.primary, theme.muted)
         };
 
-        if self.snapshots.is_empty() {
+        if self.snapshots.is_empty()
+            || !self
+                .app_state
+                .read(cx)
+                .profiles()
+                .iter()
+                .any(|p| p.id == self.profile_id)
+        {
             return div()
                 .child(
                     Text::caption(dbflux_i18n::t!(
@@ -2447,21 +2673,282 @@ mod tests {
     // Import only what the tests need — deliberately NOT `use super::*`, which
     // would re-glob `gpui::*` into this module and trigger pathological
     // `#[test]` macro-expansion recursion in this GPUI-heavy crate.
+    use super::SchemaDiffDocument;
     use super::{
         ComputeBinding, ComputeState, PreparationBinding, PreparationContext, PreparationState,
-        apply_completion_disposition, binding_is_current, deep_resolve, document_state_for,
+        ReferenceMetadataMap, apply_completion_disposition, apply_snapshot_load_result,
+        binding_is_current, build_groups, deep_resolve, document_state_for,
+        invalidate_snapshot_profile_if_missing, load_existing_profile_snapshots,
         read_only_toast_message, release_stale_apply_loading, schema_diff_is_busy,
     };
-    use crate::schema_diff::diff_source::{DiffMode, ReferenceTarget};
+    use std::collections::HashMap;
+
+    use crate::schema_diff::apply::TableLevelAction;
+    use crate::schema_diff::diff_source::{DiffMode, ReferenceTarget, TableActionOutcome};
     use crate::types::DocumentState;
     use dbflux_core::{
         CodeGenerator, ColumnInfo, Connection, ConstraintInfo, ConstraintKind, DatabaseCategory,
         DbError, DbKind, DefaultSqlDialect, DriverCapabilities, DriverMetadata,
         DriverMetadataBuilder, ForeignKeyInfo, IndexData, IndexInfo, MutationPolicy,
         NoOpCodeGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult, ReadOnlyReason,
-        SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, TableInfo,
+        SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, TableCreationMetadata, TableInfo,
     };
+    use dbflux_core::{ConnectionProfile, DbConfig, SchemaSnapshotRecord, SnapshotDepth};
+    use dbflux_storage::bootstrap::StorageRuntime;
+    use dbflux_storage::repositories::sch_schema_snapshots::SchemaSnapshotRepo;
+    use dbflux_ui_base::AppStateEntity;
+    use gpui::{AppContext, TestAppContext, WindowOptions};
+    use std::sync::{Arc, Mutex, mpsc};
+    use std::time::Duration;
     use uuid::Uuid;
+
+    #[gpui::test]
+    fn schema_diff_scheduled_mode_switch_discards_completion(cx: &mut TestAppContext) {
+        scheduled_snapshot_completion(cx, false);
+    }
+
+    #[gpui::test]
+    fn schema_diff_scheduled_profile_deletion_discards_completion(cx: &mut TestAppContext) {
+        scheduled_snapshot_completion(cx, true);
+    }
+
+    fn scheduled_snapshot_completion(cx: &mut TestAppContext, delete_profile: bool) {
+        cx.update(gpui_component::init);
+        cx.update(dbflux_components::theme::init);
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                AppStateEntity::new_with_storage_runtime(
+                    StorageRuntime::in_memory().expect("storage"),
+                )
+                .expect("app state")
+            })
+        });
+        let profile = ConnectionProfile::new("test", DbConfig::default_sqlite());
+        let profile_id = profile.id;
+        app_state.update(cx, |state, _| state.add_profile_in_folder(profile, None));
+        let repo = cx.update(|cx| Arc::clone(&app_state.read(cx).inner.schema_snapshot_repo));
+        repo.insert(&SchemaSnapshotRecord {
+            id: Uuid::now_v7(),
+            profile_id,
+            database: Some("db".into()),
+            captured_at: 1,
+            fingerprint: "fingerprint".into(),
+            depth: SnapshotDepth::Shallow,
+            tables: Vec::new(),
+            creation_metadata: Vec::new(),
+        })
+        .expect("snapshot");
+        let window = cx
+            .update(|cx| {
+                cx.open_window(WindowOptions::default(), |window, cx| {
+                    cx.new(|cx| {
+                        SchemaDiffDocument::new(
+                            profile_id,
+                            Some("db".into()),
+                            app_state.clone(),
+                            window,
+                            cx,
+                        )
+                    })
+                })
+            })
+            .expect("window");
+        let (entered, received) = mpsc::channel();
+        let (completed, completion) = mpsc::channel();
+        window
+            .update(cx, |doc, _, cx| {
+                doc.snapshot_load_pause = Some(entered);
+                doc.snapshot_load_done = Some(completed);
+                doc.set_mode(DiffMode::SnapshotVsLive, cx);
+            })
+            .expect("start load");
+        cx.run_until_parked();
+        received
+            .recv_timeout(Duration::from_secs(5))
+            .expect("background read completed");
+        if delete_profile {
+            app_state.update(cx, |state, cx| {
+                state.remove_profile(0).expect("remove profile");
+                cx.emit(dbflux_ui_base::AppStateChanged);
+            });
+            assert!(
+                !repo
+                    .profile_exists(&profile_id.to_string())
+                    .expect("profile lookup")
+            );
+        } else {
+            window
+                .update(cx, |doc, _, cx| doc.set_mode(DiffMode::LiveVsLive, cx))
+                .expect("switch mode");
+        }
+        cx.executor().advance_clock(Duration::from_secs(60));
+        cx.run_until_parked();
+        completion
+            .recv_timeout(Duration::from_secs(5))
+            .expect("foreground snapshot completion finished");
+        window
+            .read_with(cx, |doc, _| assert!(doc.snapshots.is_empty()))
+            .expect("stale completion discarded");
+        if delete_profile {
+            assert_eq!(
+                app_state.read_with(cx, |state, _| state.unread_error_count),
+                0
+            );
+        } else {
+            window
+                .update(cx, |doc, _, cx| doc.set_mode(DiffMode::SnapshotVsLive, cx))
+                .expect("reload");
+            cx.run_until_parked();
+            window
+                .read_with(cx, |doc, _| assert_eq!(doc.snapshots.len(), 1))
+                .expect("current completion applied");
+        }
+    }
+
+    #[test]
+    fn schema_diff_deleted_profile_invalidates_loaded_snapshots() {
+        let profile = Uuid::now_v7();
+        let mut snapshots = vec![
+            dbflux_storage::repositories::sch_schema_snapshots::SchemaSnapshotSummary {
+                id: Uuid::now_v7().to_string(),
+                profile_id: profile.to_string(),
+                database: None,
+                captured_at: 1,
+                fingerprint: "fp".into(),
+                depth: dbflux_core::SnapshotDepth::Shallow,
+            },
+        ];
+        let mut selected = Uuid::parse_str(&snapshots[0].id).ok();
+        let mut ticket = 1;
+        let profiles = vec![profile];
+        assert!(!invalidate_snapshot_profile_if_missing(
+            &mut snapshots,
+            &mut selected,
+            &mut ticket,
+            profile,
+            &profiles,
+        ));
+        assert_eq!(snapshots.len(), 1);
+        assert!(invalidate_snapshot_profile_if_missing(
+            &mut snapshots,
+            &mut selected,
+            &mut ticket,
+            profile,
+            &[],
+        ));
+        assert!(snapshots.is_empty());
+        assert_eq!(selected, None);
+        assert_eq!(ticket, 2);
+    }
+
+    #[test]
+    fn schema_diff_snapshot_completion_requires_current_context() {
+        let profile = Uuid::now_v7();
+        let other_profile = Uuid::now_v7();
+        let summary = dbflux_storage::repositories::sch_schema_snapshots::SchemaSnapshotSummary {
+            id: Uuid::now_v7().to_string(),
+            profile_id: profile.to_string(),
+            database: Some("db".into()),
+            captured_at: 1,
+            fingerprint: "fp".into(),
+            depth: dbflux_core::SnapshotDepth::Shallow,
+        };
+        let mut snapshots = Vec::new();
+        for (ticket, mode, current_profile, database, exists) in [
+            (2, DiffMode::SnapshotVsLive, profile, Some("db"), true),
+            (1, DiffMode::LiveVsLive, profile, Some("db"), true),
+            (1, DiffMode::SnapshotVsLive, profile, Some("db"), false),
+            (1, DiffMode::SnapshotVsLive, other_profile, Some("db"), true),
+            (1, DiffMode::SnapshotVsLive, profile, Some("other"), true),
+        ] {
+            assert!(!apply_snapshot_load_result(
+                &mut snapshots,
+                1,
+                ticket,
+                mode,
+                profile,
+                current_profile,
+                Some("db"),
+                database,
+                exists,
+                &Ok(vec![summary.clone()]),
+            ));
+            assert!(snapshots.is_empty());
+        }
+        assert!(apply_snapshot_load_result(
+            &mut snapshots,
+            1,
+            1,
+            DiffMode::SnapshotVsLive,
+            profile,
+            profile,
+            Some("db"),
+            Some("db"),
+            true,
+            &Ok(vec![summary.clone()]),
+        ));
+        assert_eq!(snapshots, vec![summary]);
+    }
+
+    #[test]
+    fn schema_diff_snapshot_picker_excludes_deleted_profile_and_propagates_lookup_error() {
+        let runtime = StorageRuntime::in_memory().expect("storage");
+        let connection = Arc::new(Mutex::new(runtime.open_dbflux_db().expect("connection")));
+        let repo = SchemaSnapshotRepo::new(Arc::clone(&connection));
+        let profile = Uuid::now_v7();
+        let profile_id = profile.to_string();
+        {
+            let conn = connection.lock().expect("lock");
+            conn.execute(
+                "INSERT INTO cfg_connection_profiles (id, name) VALUES (?1, 'test')",
+                [&profile_id],
+            )
+            .expect("insert profile");
+        }
+        let record = dbflux_core::SchemaSnapshotRecord {
+            id: Uuid::now_v7(),
+            profile_id: profile,
+            database: None,
+            captured_at: 1,
+            fingerprint: "fingerprint".into(),
+            depth: dbflux_core::SnapshotDepth::Shallow,
+            tables: Vec::new(),
+            creation_metadata: Vec::new(),
+        };
+        repo.insert(&record).expect("insert snapshot");
+        assert_eq!(repo.list(&profile_id, None).expect("direct list").len(), 1);
+        assert_eq!(
+            load_existing_profile_snapshots(&repo, &profile_id, None)
+                .expect("picker list")
+                .len(),
+            1
+        );
+        connection
+            .lock()
+            .expect("lock")
+            .execute(
+                "DELETE FROM cfg_connection_profiles WHERE id = ?1",
+                [&profile_id],
+            )
+            .expect("delete profile");
+        assert_eq!(
+            repo.list(&profile_id, None)
+                .expect("orphan directly listable")
+                .len(),
+            1
+        );
+        assert!(
+            load_existing_profile_snapshots(&repo, &profile_id, None)
+                .expect("picker must exclude orphan")
+                .is_empty()
+        );
+        connection
+            .lock()
+            .expect("lock")
+            .execute("DROP TABLE cfg_connection_profiles", [])
+            .expect("drop profiles");
+        assert!(load_existing_profile_snapshots(&repo, &profile_id, None).is_err());
+    }
 
     // ── FIX-2: identical-schema comparison is Empty (Clean), not Error ──────
 
@@ -2501,6 +2988,7 @@ mod tests {
         dialect: DefaultSqlDialect,
         codegen: NoOpCodeGenerator,
         fail_table_details: bool,
+        creation_metadata: Option<TableCreationMetadata>,
     }
 
     impl DeepResolveFake {
@@ -2518,6 +3006,17 @@ mod tests {
                 dialect: DefaultSqlDialect,
                 codegen: NoOpCodeGenerator,
                 fail_table_details,
+                creation_metadata: None,
+            }
+        }
+
+        fn with_creation_metadata(
+            fail_table_details: bool,
+            creation_metadata: Option<TableCreationMetadata>,
+        ) -> Self {
+            Self {
+                creation_metadata,
+                ..Self::new(fail_table_details)
             }
         }
     }
@@ -2553,6 +3052,24 @@ mod tests {
         fn code_generator(&self) -> &dyn CodeGenerator {
             &self.codegen
         }
+        fn table_creation_metadata(
+            &self,
+            _database: &str,
+            _schema: Option<&str>,
+            _table: &str,
+        ) -> Result<Option<TableCreationMetadata>, DbError> {
+            Ok(self.creation_metadata.clone())
+        }
+
+        fn generate_code_with_creation_metadata(
+            &self,
+            _generator_id: &str,
+            table: &TableInfo,
+            _creation_metadata: Option<&TableCreationMetadata>,
+        ) -> Result<String, DbError> {
+            Ok(format!("CREATE TABLE {} (id INT)", table.name))
+        }
+
         fn table_details(
             &self,
             _database: &str,
@@ -2864,7 +3381,7 @@ mod tests {
         let connection = DeepResolveFake::new(true);
         let shallow = vec![shallow_table("users")];
 
-        let result = deep_resolve(&connection, Some("app"), &shallow);
+        let result = deep_resolve(&connection, Some("app"), &shallow, false);
 
         assert!(
             result.is_err(),
@@ -2878,7 +3395,7 @@ mod tests {
         let connection = DeepResolveFake::new(false);
         let shallow = vec![shallow_table("users")];
 
-        let resolved = deep_resolve(&connection, Some("app"), &shallow)
+        let (resolved, _) = deep_resolve(&connection, Some("app"), &shallow, false)
             .expect("resolution should succeed when table_details succeeds");
 
         assert_eq!(resolved.len(), 1);
@@ -2886,6 +3403,152 @@ mod tests {
             resolved[0].columns.is_some(),
             "the resolved table must carry the fetched columns, not the column-less shallow entry"
         );
+    }
+
+    // ── DBF-161: reference creation metadata forwarding ─────────────────
+
+    fn users_creation_metadata() -> TableCreationMetadata {
+        TableCreationMetadata {
+            schema: Some("public".to_string()),
+            table: "users".to_string(),
+            completeness: dbflux_core::MetadataCompleteness::Complete,
+            identity: Some(dbflux_core::IdentitySpec {
+                column: "id".to_string(),
+                seed: "1".to_string(),
+                increment: "1".to_string(),
+            }),
+            primary_key: Some(dbflux_core::PrimaryKeySpec {
+                columns: vec!["id".to_string()],
+            }),
+            blockers: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn deep_resolve_collects_reference_creation_metadata_by_qualified_name() {
+        let connection =
+            DeepResolveFake::with_creation_metadata(false, Some(users_creation_metadata()));
+        let shallow = vec![shallow_table("users")];
+
+        let (_, metadata) = deep_resolve(&connection, Some("app"), &shallow, true)
+            .expect("resolution should succeed");
+
+        assert_eq!(
+            metadata.get(&(Some("public".to_string()), "users".to_string())),
+            Some(&users_creation_metadata()),
+            "the reference side's creation metadata must be collected for generation"
+        );
+    }
+
+    #[test]
+    fn deep_resolve_skips_metadata_collection_when_not_requested() {
+        let connection =
+            DeepResolveFake::with_creation_metadata(false, Some(users_creation_metadata()));
+        let shallow = vec![shallow_table("users")];
+
+        let (_, metadata) = deep_resolve(&connection, Some("app"), &shallow, false)
+            .expect("resolution should succeed");
+
+        assert!(
+            metadata.is_empty(),
+            "the diff target side must not pay for reference-side metadata"
+        );
+    }
+
+    #[test]
+    fn build_groups_attaches_reference_metadata_to_table_added_actions() {
+        let connection = DeepResolveFake::new(false);
+        let mut metadata_map = HashMap::new();
+        metadata_map.insert(
+            (Some("public".to_string()), "orders".to_string()),
+            users_creation_metadata(),
+        );
+
+        let info = TableInfo {
+            name: "orders".to_string(),
+            schema: Some("public".to_string()),
+            columns: Some(Vec::new()),
+            indexes: None,
+            foreign_keys: None,
+            constraints: None,
+            sample_fields: None,
+            presentation: Default::default(),
+            child_items: None,
+            storage_hints: None,
+        };
+        let changes = vec![dbflux_core::TableChange::TableAdded(info)];
+
+        let groups = build_groups(&connection, changes, &metadata_map);
+
+        match &groups[0].table_action {
+            Some(TableActionOutcome::Applicable { action, .. }) => match action {
+                TableLevelAction::Create(_, attached) => assert_eq!(
+                    attached.as_ref(),
+                    Some(&users_creation_metadata()),
+                    "the Create action must carry the reference side's creation metadata"
+                ),
+                TableLevelAction::Drop(_) => panic!("expected a Create action"),
+            },
+            other => panic!("expected an applicable table action, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn snapshot_metadata_binds_by_qualified_name_not_list_position() {
+        // Snapshot metadata is a standalone list covering only the tables the
+        // driver could describe; binding must be by (schema, table), and a
+        // table without an entry must resolve to no metadata.
+        let other = TableCreationMetadata {
+            table: "other".to_string(),
+            ..users_creation_metadata()
+        };
+        let map = super::reference_metadata_from_snapshot(vec![other]);
+
+        assert_eq!(
+            map.get(&(Some("public".to_string()), "users".to_string())),
+            None,
+            "metadata must not be bound by list position"
+        );
+        assert_eq!(
+            map.get(&(Some("public".to_string()), "other".to_string())),
+            Some(&TableCreationMetadata {
+                table: "other".to_string(),
+                ..users_creation_metadata()
+            })
+        );
+    }
+
+    #[test]
+    fn build_groups_leaves_table_added_without_metadata_unattached() {
+        let connection = DeepResolveFake::new(false);
+        let metadata_map = HashMap::new();
+
+        let info = TableInfo {
+            name: "orders".to_string(),
+            schema: Some("public".to_string()),
+            columns: Some(Vec::new()),
+            indexes: None,
+            foreign_keys: None,
+            constraints: None,
+            sample_fields: None,
+            presentation: Default::default(),
+            child_items: None,
+            storage_hints: None,
+        };
+        let changes = vec![dbflux_core::TableChange::TableAdded(info)];
+
+        let groups = build_groups(&connection, changes, &metadata_map);
+
+        match &groups[0].table_action {
+            Some(TableActionOutcome::Applicable { action, .. }) => match action {
+                TableLevelAction::Create(_, attached) => assert!(
+                    attached.is_none(),
+                    "no reference metadata must arrive as None so metadata-aware drivers refuse"
+                ),
+                TableLevelAction::Drop(_) => panic!("expected a Create action"),
+            },
+            other => panic!("expected an applicable table action, got {other:?}"),
+        }
     }
 
     // ── i18n: schema-diff view chrome keys ──────────────────────────────────

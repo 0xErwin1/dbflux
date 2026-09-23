@@ -116,6 +116,48 @@ un documento de código de solo lectura que muestra su definición. El documento
 no es editable, pero puedes seleccionar y copiar su texto; los controles de
 ejecución y mutación están ocultos.
 
+### Diagrama de esquema
+
+Las conexiones relacionales cuyo driver declara soporte de claves foráneas (por
+ejemplo PostgreSQL, MySQL/MariaDB, SQLite y SQL Server) pueden dibujar las
+tablas y sus claves foráneas como un diagrama. Ábrelo desde el menú contextual
+del sidebar:
+
+- **Ver diagrama de esquema** sobre una base de datos cargada dibuja todas sus
+  tablas, hasta 100. Si la base de datos tiene más, se muestra el aviso "Se
+  muestran las primeras 100 tablas — el esquema tiene más."
+- **Ver relaciones** sobre una tabla dibuja esa tabla, las tablas a las que
+  referencia y las tablas que la referencian.
+
+El diagrama se abre en su propia pestaña, y abrir el mismo diagrama otra vez
+cambia a esa pestaña. La carga se ejecuta como una tarea en segundo plano
+("Diagrama de esquema: _base de datos_") que puedes cancelar desde el panel
+Tasks. Cada tabla lista sus columnas con las insignias `PK`, `FK` y `NN` (not
+null), y unas líneas conectan cada clave foránea con la tabla que referencia.
+
+| Control de la toolbar | Qué hace |
+|---|---|
+| `+` / `-` | Acerca / aleja, entre 25% y 400%. El zoom actual aparece a su lado. |
+| **Restablecer** | Vuelve al 100% de zoom y a la posición inicial. |
+| **Organizar** | Descarta las posiciones de las tablas que moviste y recalcula el diseño. |
+| **Ajustar** | Aplica zoom y desplaza la vista para que todas las tablas sean visibles. |
+| Desplegable de diseño | **Izquierda-Derecha** (predeterminado) coloca a la izquierda las tablas que tienen claves foráneas y a la derecha las tablas que referencian. **Copo de nieve** pone una tabla en el centro y sus vecinas directas en un círculo alrededor: la tabla elegida en **Ver relaciones**, la tabla con más relaciones en un diagrama de base de datos. **Compacto** agrupa las tablas en una cuadrícula ajustada, ordenada por nombre. Cambiar el diseño también restablece el zoom, la posición y las tablas movidas. |
+| **Exportar** | **Copiar como DBML** o **Copiar como SQL** copia al portapapeles las tablas que muestra el diagrama. El SQL son sentencias `CREATE TABLE` más `ALTER TABLE ... ADD CONSTRAINT` para las claves foráneas. |
+| _N_ tablas · _M_ relaciones | Cuántas tablas y claves foráneas muestra el diagrama. |
+| **Tipos** / **Índices** | Muestra los tipos de columna (activado por defecto) / una lista de índices bajo cada tabla (desactivado por defecto). |
+
+Arrastra un espacio vacío para desplazar la vista, arrastra una tabla para
+moverla (se ajusta a la cuadrícula) y usa la rueda del ratón para hacer zoom
+alrededor del puntero. Haz clic en una tabla para seleccionarla. El clic derecho
+abre un menú contextual con **Acercar**, **Alejar**, **Diseño** y **Copiar
+como**. El clic derecho sobre una tabla también la selecciona, y mientras haya
+una tabla seleccionada el menú agrega **Inspeccionar esquema**. **Inspeccionar
+esquema**, o un doble clic sobre una tabla, abre la tabla en el panel inspector
+de la derecha, con las secciones TABLA, COLUMNAS, ÍNDICES y CLAVES FORÁNEAS. Las
+dos últimas aparecen solo cuando la tabla tiene índices o declara claves
+foráneas. Los atajos de teclado están en la
+[Referencia de teclado](#7-referencia-de-teclado).
+
 ---
 
 ## 3. Ejecutar queries
@@ -583,6 +625,18 @@ así la escritura funciona con normalidad.)
 | `Ctrl+c` / `Cmd+c`                            | Copiar celda(s)                            |
 | `z`                                           | Alternar colapso del panel                 |
 | `m` (o `Shift+F10`)                           | Abrir menú contextual                      |
+
+### Diagrama de esquema
+
+| Teclas                                      | Acción                                                      |
+| ------------------------------------------- | ----------------------------------------------------------- |
+| `+` (o `=`) / `-`                           | Acercar / alejar                                            |
+| `h` / `j` / `k` / `l` (o flechas)           | Desplazar la vista                                          |
+| `Shift` + `h` / `j` / `k` / `l` (o flechas) | Seleccionar la siguiente tabla en esa dirección y centrarla |
+| `Alt` + `h` / `j` / `k` / `l` (o flechas)   | Mover la tabla seleccionada                                 |
+| `r` / `s` / `c`                             | Diseño Izquierda-Derecha / Copo de nieve / Compacto         |
+| `m`                                         | Abrir menú contextual                                       |
+| `Escape`                                    | Quitar la selección                                         |
 
 ### Tareas en segundo plano
 

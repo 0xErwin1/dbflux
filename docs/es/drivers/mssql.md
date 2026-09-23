@@ -140,6 +140,41 @@ Requiere el permiso `VIEW SERVER STATE`.
   y CLR aggregates (`AF`) se listan por schema vía `sys.objects`. Las
   definiciones fuente se obtienen con `OBJECT_DEFINITION(object_id)`.
 
+### CREATE TABLE fiel (schema diff)
+
+- La introspección de columnas reporta **dimensiones de tipo exactas**:
+  longitudes de `nvarchar`/`nchar` en caracteres (bytes UTF-16 divididos por
+  dos, `-1` se renderiza como `MAX`), longitudes en bytes de
+  `varchar`/`char`/`binary`/`varbinary`, precisión y escala de
+  `decimal`/`numeric`, escala de `datetime2`/`datetimeoffset`/`time` y
+  precisión de `float(n)`. La identidad deliberadamente **no** forma parte de
+  `type_name`: viaja en los metadatos estructurados de creación.
+- `table_creation_metadata()` reporta la semilla y el incremento de identidad
+  como **texto exacto convertido por el servidor** (un valor de identidad
+  `numeric(38,0)` puede exceder cualquier entero de 64 bits), las columnas de
+  la primary key en su orden declarado, un reporte de completitud que nombra
+  lo no observable, y blockers para las semánticas de creación que el
+  generador no puede expresar.
+- `generate_code_with_creation_metadata("create_table", …)` renderiza un
+  `CREATE TABLE` fiel a partir de los metadatos del **lado de referencia**:
+  identificadores entre corchetes escapados, texto exacto de identidad,
+  nulabilidad y defaults por columna, y una primary key en su orden declarado.
+  Se niega (`NotSupported` con nombre) cuando no hay metadatos —los snapshots
+  viejos deben recapturarse como snapshots profundos— o cuando los metadatos
+  están incompletos o tienen blockers. El seam legado
+  `generate_code("create_table")` se niega por diseño: no puede llevar
+  metadatos de referencia. Para la **regeneración de tablas enteras del
+  schema diff**, el soporte depende enteramente del camino consciente de
+  metadatos `generate_code_with_creation_metadata`, y ese es el camino que
+  describe `DdlCapabilities::supports_create_table` para esta operación; el
+  soporte de DDL estructurado existe como siempre fuera de esa
+  regeneración, mientras que el seam legado
+  `generate_code("create_table")` se niega siempre que falten los metadatos
+  de referencia.
+- Lo usa el documento de schema diff cuando una tabla existe en la referencia
+  y se crea en el target; la conexión target genera, la conexión de referencia
+  solo provee metadatos.
+
 ### CRUD con OUTPUT
 
 - INSERT/UPDATE/DELETE sobre una fila usan la cláusula `OUTPUT INSERTED.*` /
@@ -221,6 +256,47 @@ Requiere el permiso `VIEW SERVER STATE`.
   VALID` + `VALIDATE CONSTRAINT` en Postgres.
 
 ## Limitaciones
+
+- La generación fiel de `CREATE TABLE` (schema diff) se niega, en vez de
+  aplanar, las tablas cuya semántica de creación no puede reproducir: columnas
+  calculadas, tipos de columna definidos por el usuario/CLR (y alias), columnas
+  sparse, `FILESTREAM`, `ROWGUIDCOL`, tablas memory-optimized, tablas
+  temporales system-versioned, primary keys nonclustered, compresión
+  row/page y tablas en un filegroup que no es el default. Los índices (distintos
+  de la primary key), las foreign keys y los constraints CHECK/UNIQUE no viajan
+  con `CREATE TABLE`; aplícalos por separado.
+- La constraint de primary key generada recibe nombre del servidor: el nombre
+  original no se captura, así que el `PK_…` difiere del origen.
+- El schema diff detecta la creación de tablas enteras desde la lista shallow
+  de tablas. Los metadatos de creación de referencia se **recolectan para toda
+  tabla viva de referencia** (y se leen de cada fila de snapshot que los
+  lleve), pero solo se **consumen** para altas de tablas enteras
+  (`TableAdded`), donde se genera una tabla nueva en el target. Un cambio de
+  identidad o de primary key sobre una tabla ya existente no se recolecta ni
+  aplica como diff y debe gestionarse a mano.
+- Los snapshots profundos capturados antes del soporte de metadatos de creación
+  (DBF-161 PR1) no llevan metadatos; usarlos como referencia del diff niega la
+  creación y el snapshot debe recapturarse. Si se conoce la base de datos de
+  la sesión, la UI captura un snapshot profundo al conectar solo cuando todas
+  las tablas tienen columnas o campos de muestra cargados; incluye metadatos
+  de creación donde estén disponibles. Los errores de captura dejan la
+  conexión abierta sin guardar un snapshot profundo parcial. Reconecta para
+  obtener uno nuevo y válido. Una **conexión viva** aún puede proporcionar
+  metadatos mediante el mecanismo genérico `table_creation_metadata` sin
+  snapshot guardado. Los metadatos ausentes, incompletos o bloqueados siguen
+  impidiendo generar `CREATE TABLE`.
+- Las tablas con cualquier columna de tipo carácter (`char`, `varchar`,
+  `nchar`, `nvarchar`, `text`, `ntext`) siempre se niegan:
+  `sys.columns.collation_name` no es nulo para toda columna de carácter
+  —incluso cuando la collation solo se heredó del default de la base de datos
+  fuente— y la collation default de la base de datos target se desconoce al
+  momento de generar, así que una columna recreada podría ordenar y comparar
+  en silencio de forma distinta. Solo las tablas cuyas columnas tienen todas
+  tipos sin collation (enteros, decimales, fechas, binarios, `xml` sin tipo,
+  …) pueden generarse fielmente.
+- Las columnas `xml` tipadas —`xml` ligado a una XML schema collection— se
+  niegan: generar una columna `xml` simple descartaría silenciosamente el
+  binding a la collection. Las columnas `xml` sin tipo se generan fielmente.
 
 - Las funcionalidades de Instance Metrics e Instance Inspector requieren el
   permiso de servidor `VIEW SERVER STATE`. Sin él, tanto `list_metrics()` como

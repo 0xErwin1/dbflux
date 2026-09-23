@@ -4,7 +4,7 @@ use dbflux_core::{AppStyle, ThemeSetting};
 use gpui::{App, Hsla, SharedString, Window, hsla, px};
 use gpui_component::{
     highlighter::HighlightTheme,
-    theme::{Theme, ThemeMode},
+    theme::{Theme, ThemeMode, ThemeTokens},
 };
 use std::{rc::Rc, sync::Arc};
 
@@ -52,6 +52,71 @@ pub fn apply_theme(
             apply_ayu_light(style, cx);
         }
     }
+
+    // The palettes above mutate legacy color fields directly, which bypasses
+    // the resolution `Theme::change` performed; refresh every resolved token
+    // surface before handing the theme to the widgets.
+    let theme = Theme::global_mut(cx);
+    sync_component_tokens(theme);
+    Theme::sync_base(cx);
+}
+
+/// Re-derive the component-level tokens from the semantic colors the Ayu
+/// palettes assign.
+///
+/// `Theme::change` resolves `Theme.tokens` and the legacy `button_*` fields
+/// from gpui-component's built-in default theme. Mutating the legacy color
+/// fields afterwards (as `apply_ayu_*` does) bypasses that resolution, so
+/// widgets reading `tokens.button_primary` (primary buttons) or
+/// `tokens.primary` (checked checkboxes) would keep the default palette's
+/// background — white in dark mode — instead of the Ayu accent.
+///
+/// Preserve the gpui-component 0.5 button appearance: default buttons use
+/// secondary colors, and semantic variants use solid fills and their matching
+/// foregrounds. These intentionally differ from 0.6's neutral and tinted-button
+/// fallbacks. Rebuild the token snapshot after resolving the Ayu colors.
+fn sync_component_tokens(theme: &mut Theme) {
+    theme.button = theme.secondary;
+    theme.button_hover = theme.secondary_hover;
+    theme.button_active = theme.secondary_active;
+    theme.button_foreground = theme.foreground;
+
+    theme.button_primary = theme.primary;
+    theme.button_primary_hover = theme.primary_hover;
+    theme.button_primary_active = theme.primary_active;
+    theme.button_primary_foreground = theme.primary_foreground;
+
+    theme.button_secondary = theme.secondary;
+    theme.button_secondary_hover = theme.secondary_hover;
+    theme.button_secondary_active = theme.secondary_active;
+    theme.button_secondary_foreground = theme.secondary_foreground;
+
+    theme.button_danger = theme.danger;
+    theme.button_danger_hover = theme.danger_hover;
+    theme.button_danger_active = theme.danger_active;
+    theme.button_danger_foreground = theme.danger_foreground;
+
+    theme.button_success = theme.success;
+    theme.button_success_hover = theme.success_hover;
+    theme.button_success_active = theme.success_active;
+    theme.button_success_foreground = theme.success_foreground;
+
+    theme.button_warning = theme.warning;
+    theme.button_warning_hover = theme.warning_hover;
+    theme.button_warning_active = theme.warning_active;
+    theme.button_warning_foreground = theme.warning_foreground;
+
+    theme.button_info = theme.info;
+    theme.button_info_hover = theme.info_hover;
+    theme.button_info_active = theme.info_active;
+    theme.button_info_foreground = theme.info_foreground;
+
+    theme.table_foot = theme.list_head;
+    theme.table_foot_foreground = theme.muted_foreground;
+    theme.status_bar = theme.title_bar;
+    theme.status_bar_border = theme.title_bar_border;
+
+    theme.tokens = ThemeTokens::from(&theme.colors);
 }
 
 fn rgb_to_hsla(hex: u32) -> Hsla {
@@ -684,4 +749,136 @@ fn apply_ayu_light(style: AppStyle, cx: &mut App) {
     theme.magenta_light = rgb_to_hsla(0xC4A6E0);
     theme.cyan = rgb_to_hsla(0x4CBF99);
     theme.cyan_light = rgb_to_hsla(0x86D9BF);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::TestAppContext;
+
+    /// The Ayu accent each palette assigns as primary.
+    fn expected_primary(setting: ThemeSetting) -> Hsla {
+        match setting {
+            ThemeSetting::Dark => rgb_to_hsla(0xFFB454),
+            ThemeSetting::Mirage => rgb_to_hsla(0xFFCC66),
+            ThemeSetting::Light => rgb_to_hsla(0xFF9940),
+        }
+    }
+
+    /// Primary buttons fill from `tokens.button_primary` and checked
+    /// checkboxes from `tokens.primary`; both must carry the Ayu accent of
+    /// the applied setting, not the dependency's default (white in dark
+    /// mode). Exercises the production `apply_theme` path.
+    #[gpui::test]
+    fn component_tokens_follow_ayu_primary_across_all_settings(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+
+        for setting in [
+            ThemeSetting::Dark,
+            ThemeSetting::Mirage,
+            ThemeSetting::Light,
+        ] {
+            cx.update(|cx| apply_theme(setting, AppStyle::Default, None, cx));
+            cx.update(|cx| {
+                let theme = Theme::global(cx);
+                let expected = expected_primary(setting);
+
+                assert_eq!(
+                    theme.tokens.primary.color, expected,
+                    "{setting:?}: checkbox fill"
+                );
+                assert_eq!(
+                    theme.tokens.button_primary.color, expected,
+                    "{setting:?}: primary button fill"
+                );
+                assert_eq!(
+                    theme.tokens.button_primary_hover.color, theme.colors.primary_hover,
+                    "{setting:?}: primary button hover"
+                );
+                assert_eq!(
+                    theme.tokens.button_primary_active.color, theme.colors.primary_active,
+                    "{setting:?}: primary button active"
+                );
+                assert_eq!(
+                    theme.tokens.button_primary_foreground.color, theme.colors.primary_foreground,
+                    "{setting:?}: primary button foreground"
+                );
+                assert_eq!(
+                    theme.colors.button_primary, expected,
+                    "{setting:?}: legacy button field"
+                );
+            });
+        }
+    }
+
+    /// Every button family and the surfaces whose dependency fallbacks derive
+    /// from overridden colors must resolve to the applied Ayu palette.
+    #[gpui::test]
+    fn button_families_and_surfaces_follow_semantic_colors(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+
+        cx.update(|cx| apply_theme(ThemeSetting::Dark, AppStyle::Default, None, cx));
+        cx.update(|cx| {
+            let theme = Theme::global(cx);
+
+            assert_eq!(theme.colors.button, theme.colors.secondary);
+            assert_eq!(theme.colors.button_hover, theme.colors.secondary_hover);
+            assert_eq!(theme.colors.button_active, theme.colors.secondary_active);
+            assert_eq!(theme.colors.button_foreground, theme.colors.foreground);
+            assert_eq!(theme.colors.button_secondary, theme.colors.secondary);
+            assert_eq!(
+                theme.colors.button_secondary_hover,
+                theme.colors.secondary_hover
+            );
+            assert_eq!(theme.colors.button_danger, theme.colors.danger);
+            assert_eq!(
+                theme.colors.button_danger_foreground,
+                theme.colors.danger_foreground
+            );
+            assert_eq!(theme.colors.button_success, theme.colors.success);
+            assert_eq!(theme.colors.button_warning, theme.colors.warning);
+            assert_eq!(theme.colors.button_info, theme.colors.info);
+            assert_eq!(theme.tokens.button_secondary.color, theme.colors.secondary);
+            assert_eq!(theme.tokens.button_danger.color, theme.colors.danger);
+            assert_eq!(theme.tokens.button_success.color, theme.colors.success);
+            assert_eq!(theme.tokens.button_warning.color, theme.colors.warning);
+            assert_eq!(theme.tokens.button_info.color, theme.colors.info);
+            assert_eq!(theme.colors.status_bar, theme.colors.title_bar);
+            assert_eq!(theme.colors.table_foot, theme.colors.list_head);
+        });
+    }
+
+    /// Switching settings re-resolves the tokens every time; no palette may
+    /// leak into another.
+    #[gpui::test]
+    fn theme_switches_keep_component_tokens_in_sync(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+
+        cx.update(|cx| apply_theme(ThemeSetting::Dark, AppStyle::Default, None, cx));
+        cx.update(|cx| apply_theme(ThemeSetting::Light, AppStyle::Default, None, cx));
+        cx.update(|cx| {
+            let theme = Theme::global(cx);
+            assert_eq!(
+                theme.tokens.button_primary.color,
+                expected_primary(ThemeSetting::Light)
+            );
+            assert_eq!(
+                theme.tokens.primary.color,
+                expected_primary(ThemeSetting::Light)
+            );
+        });
+
+        cx.update(|cx| apply_theme(ThemeSetting::Dark, AppStyle::Default, None, cx));
+        cx.update(|cx| {
+            let theme = Theme::global(cx);
+            assert_eq!(
+                theme.tokens.button_primary.color,
+                expected_primary(ThemeSetting::Dark)
+            );
+            assert_eq!(
+                theme.tokens.primary.color,
+                expected_primary(ThemeSetting::Dark)
+            );
+        });
+    }
 }

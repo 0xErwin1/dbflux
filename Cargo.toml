@@ -236,3 +236,13 @@ debug = false
 [profile.release]
 lto = "thin"
 strip = "symbols"
+
+# `rust_i18n::i18n!` (rust-i18n 3.x) expands every key of every locale into one
+# `add_translations` call inside a single lazy initializer, about 14,700 calls in
+# one function. LLVM's full optimization pipeline scales worse than linearly on a
+# function that size: the crate took 834 s at opt-level 3 against 56 s at
+# opt-level 1, and 35 minutes on the macOS runners, where it alone set the build
+# time. The initializer runs once at startup, so the lower level costs nothing
+# measurable at runtime. Each new locale grows the function again.
+[profile.release.package.dbflux_i18n]
+opt-level = 1

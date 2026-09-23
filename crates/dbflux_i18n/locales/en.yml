@@ -2123,6 +2123,59 @@ document:
       unsupported_action:
         create: Create table
         drop: Drop table
+  schema_viz:
+    error:
+      connection_unavailable: Connection not found or not active
+      fetch_table_details_failed: "Failed to fetch table details: %{error}"
+      foreign_keys_unsupported: Foreign keys not supported by this driver
+      list_tables_failed: "Failed to list tables: %{error}"
+      no_database: No database specified
+      no_layout: No layout computed
+    inspector:
+      columns: COLUMNS
+      foreign_keys: FOREIGN KEYS
+      indexes: INDEXES
+      summary: "%{columns} columns · %{indexes} indexes"
+      table: TABLE
+    layout:
+      compact: Compact
+      left_right: Left-Right
+      snowflake: Snowflake
+    menu:
+      copy_as: Copy as
+      copy_as_dbml: Copy as DBML
+      copy_as_sql: Copy as SQL
+      focus_table: Focus on this table
+      inspect_schema: Inspect schema
+      layout: Layout
+      zoom_in: Zoom In
+      zoom_out: Zoom Out
+    node:
+      column_count: "%{count} cols"
+      indexes: Indexes
+    status:
+      loading: "Loading schema…"
+      table_cap: "Showing first 100 tables — the schema has more."
+      unsupported: Schema diagram is not available for this database type
+    task:
+      global_scope: global
+      load: "Schema diagram: %{database}"
+    toast:
+      dbml_copied: Schema exported to DBML (copied to clipboard)
+      dbml_failed: "DBML export failed: %{error}"
+      sql_copied: Schema exported as SQL (copied to clipboard)
+      sql_failed: "SQL export failed: %{error}"
+    toolbar:
+      arrange: Arrange
+      counter: "%{tables} tables · %{relations} relations"
+      export: Export
+      fit: Fit
+      indexes: Indexes
+      reset: Reset
+      types: Types
+    view:
+      title: "Schema: %{name}"
+      title_default_database: database
   shared:
     add: Add
     error_prefix: "Error: %{message}"
@@ -3361,6 +3414,8 @@ sidebar:
     open: Open
     browse_event_streams: Browse Event Streams
     view_schema: View Schema
+    view_schema_diagram: View Schema Diagram
+    view_relationships: View Relationships
     refresh: Refresh
     generate_sql: Generate SQL
     export_table: Export Table…

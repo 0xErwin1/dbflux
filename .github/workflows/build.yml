@@ -460,13 +460,57 @@ jobs:
         # peak is what kills rustc there with SIGBUS. Splitting the work across codegen
         # units trades some speed and size in the Intel binary for a build that fits.
         # Every other target keeps the profile from Cargo.toml untouched.
+        #
+        # The macOS runners have 3 cores and 7 GB of memory, and these builds are
+        # the slowest in the matrix. A sampler records swap usage and the largest
+        # rustc processes every 30 seconds, and `--timings` records how long each
+        # crate took, so a regression can be traced to a crate and to memory
+        # pressure instead of guessed at. The samples are written outside the
+        # build step so they survive a timeout.
         run: |
           if [ "${{ matrix.arch }}" = "amd64" ]; then
             export CARGO_PROFILE_RELEASE_LTO=false
             export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
           fi
 
-          cargo build --release --features "$FEATURES,vendored-openssl" --target ${{ matrix.target }}
+          SAMPLES="$RUNNER_TEMP/memory-samples.log"
+          (
+            while true; do
+              {
+                echo "== $(date -u '+%H:%M:%S') swap: $(sysctl -n vm.swapusage)"
+                ps -Ao rss=,command= | sort -nr | head -3 | awk '{ printf "  %6d MB %s\n", $1 / 1024, substr($0, index($0, $2), 160) }'
+              } >> "$SAMPLES"
+              sleep 30
+            done
+          ) &
+          SAMPLER_PID=$!
+
+          cargo build --release --features "$FEATURES,vendored-openssl" --target ${{ matrix.target }} --timings
+
+          kill "$SAMPLER_PID"
+
+      - name: Report build memory samples
+        if: always()
+        run: |
+          SAMPLES="$RUNNER_TEMP/memory-samples.log"
+          if [ ! -f "$SAMPLES" ]; then
+            echo "No memory samples were recorded."
+            exit 0
+          fi
+
+          echo "Final swap usage: $(sysctl -n vm.swapusage)"
+          cat "$SAMPLES"
+          mkdir -p target/cargo-timings
+          cp "$SAMPLES" target/cargo-timings/
+
+      - name: Upload build timings
+        if: always() && env.ACT != 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: cargo-timings-macos-${{ matrix.arch }}
+          path: target/cargo-timings/
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Create app bundle
         run: |

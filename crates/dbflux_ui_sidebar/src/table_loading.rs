@@ -5273,35 +5273,85 @@ mod object_tree_adapter_tests {
         let (connect_calls, _) = register_per_database_driver(&state, cx);
         let profile_id = Uuid::new_v4();
         let primary = AdapterFakeConnection::connection_per_database();
-        connect_profile(&state, cx, profile_id, primary, Some(snapshot_naming(vec![
-            dbflux_core::DatabaseInfo { name: "main".into(), is_current: true },
-            dbflux_core::DatabaseInfo { name: "analytics".into(), is_current: false },
-            dbflux_core::DatabaseInfo { name: "reporting".into(), is_current: false },
-        ])));
+        connect_profile(
+            &state,
+            cx,
+            profile_id,
+            primary,
+            Some(snapshot_naming(vec![
+                dbflux_core::DatabaseInfo {
+                    name: "main".into(),
+                    is_current: true,
+                },
+                dbflux_core::DatabaseInfo {
+                    name: "analytics".into(),
+                    is_current: false,
+                },
+                dbflux_core::DatabaseInfo {
+                    name: "reporting".into(),
+                    is_current: false,
+                },
+            ])),
+        );
         let held = AdapterFakeConnection::connection_per_database();
         state.update(cx, |state, _| {
-            state.add_database_connection(profile_id, "analytics".into(), held, Some(secondary_snapshot("held")));
+            state.add_database_connection(
+                profile_id,
+                "analytics".into(),
+                held,
+                Some(secondary_snapshot("held")),
+            );
             state.set_active_database(profile_id, Some("reporting".into()));
             assert!(state.start_pending_operation(profile_id, Some("reporting")));
         });
         let window = cx.add_window(|window, cx| crate::Sidebar::new(state.clone(), window, cx));
-        let item_id = SchemaNodeId::Database { profile_id, name: "analytics".into() }.to_string();
-        window.update(cx, |sidebar, _, cx| sidebar.refresh_schema_database(&item_id, cx)).expect("sidebar alive");
+        let item_id = SchemaNodeId::Database {
+            profile_id,
+            name: "analytics".into(),
+        }
+        .to_string();
+        window
+            .update(cx, |sidebar, _, cx| {
+                sidebar.refresh_schema_database(&item_id, cx)
+            })
+            .expect("sidebar alive");
         let replacement = AdapterFakeConnection::connection_per_database();
         let replacement_address = Arc::as_ptr(&replacement) as usize;
-        state.update(cx, |state, _| state.add_database_connection(profile_id, "analytics".into(), replacement, Some(secondary_snapshot("replacement"))));
+        state.update(cx, |state, _| {
+            state.add_database_connection(
+                profile_id,
+                "analytics".into(),
+                replacement,
+                Some(secondary_snapshot("replacement")),
+            )
+        });
         cx.run_until_parked();
         state.read_with(cx, |state, _| {
             let connected = state.connections().get(&profile_id).expect("connected");
-            assert!(!state.is_operation_pending(profile_id, Some("analytics")), "stale refresh must release its own pending marker");
+            assert!(
+                !state.is_operation_pending(profile_id, Some("analytics")),
+                "stale refresh must release its own pending marker"
+            );
             assert!(state.is_operation_pending(profile_id, Some("reporting")));
             assert_eq!(connected.active_database.as_deref(), Some("reporting"));
-            let slot = connected.database_connections.get("analytics").expect("replacement");
-            assert_eq!(Arc::as_ptr(&slot.connection) as *const () as usize, replacement_address);
+            let slot = connected
+                .database_connections
+                .get("analytics")
+                .expect("replacement");
+            assert_eq!(
+                Arc::as_ptr(&slot.connection) as *const () as usize,
+                replacement_address
+            );
             assert!(slot.schema.is_some());
         });
-        window.update(cx, |sidebar, _, cx| sidebar.refresh_schema_database(&item_id, cx)).expect("sidebar alive");
-        assert!(state.read_with(cx, |state, _| state.is_operation_pending(profile_id, Some("analytics"))));
+        window
+            .update(cx, |sidebar, _, cx| {
+                sidebar.refresh_schema_database(&item_id, cx)
+            })
+            .expect("sidebar alive");
+        assert!(state.read_with(cx, |state, _| {
+            state.is_operation_pending(profile_id, Some("analytics"))
+        }));
         cx.run_until_parked();
         assert_eq!(connect_calls.load(Ordering::SeqCst), 2);
     }
@@ -5312,23 +5362,67 @@ mod object_tree_adapter_tests {
         let (connect_calls, _) = register_per_database_driver(&state, cx);
         let profile_id = Uuid::new_v4();
         let primary = AdapterFakeConnection::connection_per_database();
-        connect_profile(&state, cx, profile_id, primary, Some(snapshot_naming(vec![dbflux_core::DatabaseInfo { name: "main".into(), is_current: true }])));
-        state.update(cx, |state, _| state.set_active_database(profile_id, Some("main".into())));
+        connect_profile(
+            &state,
+            cx,
+            profile_id,
+            primary,
+            Some(snapshot_naming(vec![dbflux_core::DatabaseInfo {
+                name: "main".into(),
+                is_current: true,
+            }])),
+        );
+        state.update(cx, |state, _| {
+            state.set_active_database(profile_id, Some("main".into()))
+        });
         let window = cx.add_window(|window, cx| crate::Sidebar::new(state.clone(), window, cx));
-        let item_id = SchemaNodeId::Database { profile_id, name: "analytics".into() }.to_string();
-        window.update(cx, |sidebar, _, cx| sidebar.handle_database_click(&item_id, cx)).expect("sidebar alive");
+        let item_id = SchemaNodeId::Database {
+            profile_id,
+            name: "analytics".into(),
+        }
+        .to_string();
+        window
+            .update(cx, |sidebar, _, cx| {
+                sidebar.handle_database_click(&item_id, cx)
+            })
+            .expect("sidebar alive");
         let replacement = AdapterFakeConnection::connection_per_database();
         let replacement_address = Arc::as_ptr(&replacement) as usize;
-        state.update(cx, |state, _| state.add_database_connection(profile_id, "analytics".into(), replacement, Some(secondary_snapshot("replacement"))));
+        state.update(cx, |state, _| {
+            state.add_database_connection(
+                profile_id,
+                "analytics".into(),
+                replacement,
+                Some(secondary_snapshot("replacement")),
+            )
+        });
         cx.run_until_parked();
         state.read_with(cx, |state, _| {
             let connected = state.connections().get(&profile_id).expect("connected");
-            assert!(!state.is_operation_pending(profile_id, Some("analytics")), "stale click must release pending");
+            assert!(
+                !state.is_operation_pending(profile_id, Some("analytics")),
+                "stale click must release pending"
+            );
             assert_eq!(connected.active_database.as_deref(), Some("main"));
-            assert_eq!(Arc::as_ptr(&connected.database_connections.get("analytics").expect("replacement").connection) as *const () as usize, replacement_address);
+            assert_eq!(
+                Arc::as_ptr(
+                    &connected
+                        .database_connections
+                        .get("analytics")
+                        .expect("replacement")
+                        .connection
+                ) as *const () as usize,
+                replacement_address
+            );
         });
-        window.update(cx, |sidebar, _, cx| sidebar.refresh_schema_database(&item_id, cx)).expect("sidebar alive");
-        assert!(state.read_with(cx, |state, _| state.is_operation_pending(profile_id, Some("analytics"))));
+        window
+            .update(cx, |sidebar, _, cx| {
+                sidebar.refresh_schema_database(&item_id, cx)
+            })
+            .expect("sidebar alive");
+        assert!(state.read_with(cx, |state, _| {
+            state.is_operation_pending(profile_id, Some("analytics"))
+        }));
         cx.run_until_parked();
         assert_eq!(connect_calls.load(Ordering::SeqCst), 2);
     }

@@ -71,6 +71,13 @@ DBFlux용 Microsoft SQL Server 드라이버로, [`tiberius`](https://crates.io/c
 - `view_details()`는 요청된 데이터베이스에 뷰가 존재하는지 검증합니다.
 - **루틴:** 저장 프로시저(`P`), 스칼라 함수(`FN`), 인라인 테이블 반환 함수(`IF`), 다중 문 테이블 반환 함수(`TF`), CLR 집계(`AF`)가 `sys.objects`를 통해 스키마별로 나열됩니다. 소스 정의는 `OBJECT_DEFINITION(object_id)`로 가져옵니다.
 
+### 충실한 CREATE TABLE (스키마 diff)
+
+- 열 인트로스펙션은 **정확한 타입 차원**을 보고합니다: `nvarchar`/`nchar` 길이는 문자 단위(UTF-16 바이트를 2로 나눔, `-1`은 `MAX`로 렌더링), `varchar`/`char`/`binary`/`varbinary`는 바이트 길이, `decimal`/`numeric`는 정밀도와 스케일, `datetime2`/`datetimeoffset`/`time`는 스케일, `float(n)`는 정밀도를 그대로 유지합니다. identity는 의도적으로 `type_name`에 포함되지 않으며 구조화된 생성 메타데이터로 전달됩니다.
+- `table_creation_metadata()`는 identity seed와 increment를 **서버가 변환한 정확한 텍스트**로 보고합니다(`numeric(38,0)` identity 값은 64비트 정수 범위를 넘을 수 있음), 기본 키 열을 선언된 키 순서대로 보고하며, 관측하지 못한 항목을 이름으로 알려주는 완전성 리포트와 생성기가 표현할 수 없는 생성 의미론에 대한 blocker를 제공합니다.
+- `generate_code_with_creation_metadata("create_table", …)`는 **참조 측** 메타데이터로부터 충실한 `CREATE TABLE`을 렌더링합니다: 이스케이프된 대괄호 식별자, 정확한 identity 텍스트, 열별 nullability와 기본값, 선언된 순서의 기본 키. 메타데이터가 없으면 —이전 스냅샷은 딥 스냅샷으로 다시 캡처해야 합니다— 거부하고(이름 있는 `NotSupported`), 메타데이터가 불완전하거나 blocker가 있으면 역시 거부합니다. 레거시 `generate_code("create_table")` 시임은 설계상 거부합니다: 참조 메타데이터를 전달할 수 없습니다. **스키마 diff 전체 테이블 재생성**의 경우 지원은 전적으로 메타데이터 인식 `generate_code_with_creation_metadata` 코드 경로에 의존하며, 이 연산에 대해 `DdlCapabilities::supports_create_table`이 기술하는 바로 그 경로입니다; 그 재생성 외부에는 구조화된 DDL 지원이 평소처럼 존재하고, 레거시 `generate_code("create_table")` 시임은 참조 메타데이터가 없으면 항상 거부합니다.
+- 스키마 diff 문서가 참조 측에 존재하는 테이블을 대상 측에 생성할 때 사용됩니다; 대상 연결이 생성하고 참조 연결은 메타데이터만 제공합니다.
+
 ### OUTPUT을 사용하는 CRUD
 
 - 행에 대한 INSERT/UPDATE/DELETE는 SQL Server의 `OUTPUT INSERTED.*` / `OUTPUT DELETED.*` 절을 사용하여 변경 후 행 데이터를 호출자에게 반환합니다(`CrudResult::success(row)`). Postgres 드라이버가 `RETURNING *`를 사용하는 방식과 동일합니다.
@@ -119,6 +126,13 @@ DBFlux용 Microsoft SQL Server 드라이버로, [`tiberius`](https://crates.io/c
 - **DROP TABLE / DROP VIEW.** 트랜잭션적입니다. `IF EXISTS`는 2016+에서 지원됩니다.
 - **제약 조건.** `CHECK` / `UNIQUE` / `FOREIGN KEY` 제약 조건 추가는 기본적으로 기존의 모든 행을 검증합니다(짧게 Sch-M을 겁니다). 스캔 없이 제약 조건을 추가하려면 `WITH NOCHECK`를 사용하고, 나중에 여유가 될 때 `WITH CHECK CHECK CONSTRAINT`로 검증하세요 — Postgres의 `NOT VALID` + `VALIDATE CONSTRAINT`와 같은 패턴입니다.
 ## 제한 사항
+
+- 충실한 `CREATE TABLE` 생성(스키마 diff)은 재현할 수 없는 생성 의미론을 가진 테이블을 평탄화하는 대신 거부합니다: 계산 열, 사용자 정의/CLR(및 별칭) 열 타입, sparse 열, `FILESTREAM`, `ROWGUIDCOL`, 메모리 최적화 테이블, system-versioned temporal 테이블, nonclustered 기본 키, row/page 압축, 기본 파일 그룹이 아닌 테이블. 인덱스(기본 키 제외), 외래 키, CHECK/UNIQUE 제약 조건은 `CREATE TABLE`로 전달되지 않으므로 별도로 적용해야 합니다.
+- 생성된 기본 키 제약 조건 이름은 서버가 정합니다: 원래 제약 조건 이름은 캡처되지 않아 `PK_…`가 소스와 다릅니다.
+- 스키마 diff는 shallow 테이블 목록에서 테이블 전체 생성을 감지합니다. 참조 생성 메타데이터는 **모든 라이브 참조 테이블에 대해 수집**되고(그것을 가진 모든 스냅샷 행에서 읽힘), 전체 테이블 추가(`TableAdded`)—대상에 새 테이블이 생성되는 경우—에만 **소비**됩니다. 기존 테이블의 identity나 기본 키 변경은 diff로 수집·적용되지 않으며 수동으로 처리해야 합니다.
+- 생성 메타데이터 지원 이전(DBF-161 PR1)에 캡처된 딥 스냅샷은 메타데이터가 없습니다. diff 참조로 사용하면 생성이 거부되므로 다시 캡처해야 합니다. 세션 데이터베이스가 확인되면 UI는 모든 테이블의 열 또는 샘플 필드가 로드된 경우에만 연결 시 딥 스냅샷을 캡처하며, 사용 가능한 생성 메타데이터를 포함합니다. 캡처 오류가 나도 연결은 유지되고 불완전한 딥 스냅샷은 저장되지 않습니다. 새 유효 스냅샷을 얻으려면 다시 연결하세요. **라이브 연결**은 저장된 스냅샷 없이도 범용 `table_creation_metadata` 경로로 메타데이터를 제공할 수 있습니다. 메타데이터가 없거나 불완전하거나 차단된 경우 `CREATE TABLE` 생성은 계속 거부됩니다.
+- 문자 타입 열(`char`, `varchar`, `nchar`, `nvarchar`, `text`, `ntext`)을 하나라도 가진 테이블은 항상 거부됩니다: `sys.columns.collation_name`은 모든 문자 열에 대해 non-null이며(소스 데이터베이스 기본값에서 암시적으로 상속된 경우에도 마찬가지) 생성 시점에는 target 데이터베이스의 기본 collation을 알 수 없어, 재생성된 열이 조용히 다르게 정렬·비교될 수 있습니다. collation이 없는 타입(정수, 소수, 날짜, 바이너리, 타입 없는 `xml`, …)만으로 구성된 테이블만 충실하게 생성할 수 있습니다.
+- XML 스키마 컬렉션에 바인딩된 타입이 지정된 `xml` 열은 거부됩니다: 일반 `xml` 열을 생성하면 컬렉션 바인딩이 조용히 사라집니다. 타입이 없는 `xml` 열은 충실하게 생성됩니다.
 
 - 인스턴스 메트릭과 검사기 기능은 `VIEW SERVER STATE` 서버 권한이 필요합니다. 권한이 없으면 `list_metrics()`와 `list_inspectors()` 모두 오류 대신 빈 목록을 반환합니다.
 

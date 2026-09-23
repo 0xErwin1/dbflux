@@ -69,6 +69,13 @@ Microsoft SQL Server 关系型数据库。
 - `view_details()` 会校验该视图确实存在于所请求的数据库中。
 - **例程：**存储过程（`P`）、标量函数（`FN`）、内联表值函数（`IF`）、多语句表值函数（`TF`）以及 CLR 聚合函数（`AF`）按 schema 通过 `sys.objects` 列出。源码定义通过 `OBJECT_DEFINITION(object_id)` 获取。
 
+### 忠实的 CREATE TABLE（schema diff）
+
+- 列内省报告**精确的类型维度**：`nvarchar`/`nchar` 长度以字符计（UTF-16 字节数除以二，`-1` 渲染为 `MAX`），`varchar`/`char`/`binary`/`varbinary` 为字节长度，`decimal`/`numeric` 保留精度与标度，`datetime2`/`datetimeoffset`/`time` 保留标度，`float(n)` 保留精度。identity 有意**不**出现在 `type_name` 中——它通过结构化的创建元数据传递。
+- `table_creation_metadata()` 将 identity 的种子与增量报告为**服务器转换后的精确文本**（`numeric(38,0)` 的 identity 值可能超出任何 64 位整数），按声明顺序报告主键列，提供指明未观测项的完整性报告，并为生成器无法表达的创建语义提供 blocker。
+- `generate_code_with_creation_metadata("create_table", …)` 根据来自**引用侧**的元数据渲染忠实的 `CREATE TABLE`：转义后的方括号标识符、精确的 identity 文本、逐列的可空性与默认值，以及按声明顺序排列的主键。当没有元数据时——旧快照必须重新采集为深度快照——它会具名拒绝（`NotSupported`）；元数据不完整或带有 blocker 时同样拒绝。旧版 `generate_code("create_table")` 接缝在设计上会拒绝：它无法携带引用元数据。对于 **schema diff 整表重新生成**，支持完全依赖于元数据感知的 `generate_code_with_creation_metadata` 代码路径，这正是 `DdlCapabilities::supports_create_table` 针对此操作所描述的路径；在此重新生成之外，结构化 DDL 支持照常存在，而旧版 `generate_code("create_table")` 接缝在缺少引用元数据时总是会拒绝。
+- schema diff 文档在表存在于引用侧、需要创建到目标侧时使用它；由目标连接生成，引用连接只提供元数据。
+
 ### 带 OUTPUT 的 CRUD
 
 - 对某一行的 INSERT/UPDATE/DELETE 会使用 SQL Server 的 `OUTPUT INSERTED.*` / `OUTPUT DELETED.*` 子句，从而把变更后的行数据返回给调用方（`CrudResult::success(row)`），这与 Postgres 驱动程序使用 `RETURNING *` 的方式相同。
@@ -118,6 +125,13 @@ Microsoft SQL Server 关系型数据库。
 - **约束。** 添加 `CHECK` / `UNIQUE` / `FOREIGN KEY` 约束默认会校验所有已存在的行（会短暂获取 Sch-M）。可用 `WITH NOCHECK` 在不扫描的情况下加上约束，之后再用 `WITH CHECK CHECK CONSTRAINT` 在合适的时候做校验 —— 这与 Postgres 的 `NOT VALID` + `VALIDATE CONSTRAINT` 是同一个模式。
 
 ## 限制
+
+- 忠实的 `CREATE TABLE` 生成（schema diff）对于无法重现其创建语义的表会选择拒绝而不是扁平化：计算列、用户自定义/CLR（及别名）列类型、稀疏列、`FILESTREAM`、`ROWGUIDCOL`、内存优化表、系统版本 temporal 表、非聚集主键、行/页压缩，以及位于非默认文件组上的表。索引（主键除外）、外键和 CHECK/UNIQUE 约束不会随 `CREATE TABLE` 一起传递；需要单独应用。
+- 生成的主键约束名由服务器命名：不会捕获原始约束名，因此 `PK_…` 与源不同。
+- schema diff 从浅表列表中检测整表创建。引用创建元数据会**为每个活动引用表收集**（并从每个携带它的快照行读取），但仅在整表新增（`TableAdded`，即需要在目标侧生成新表）时被**消费**。已存在表的 identity 或主键变更既不会被收集进 diff，也不会被应用，需要手动处理。
+- 在创建元数据支持（DBF-161 PR1）之前采集的深度快照不携带元数据；将其用作 diff 引用会拒绝创建，必须重新采集。会话数据库已知时，UI 仅在每张表的列或示例字段均已加载后，才在连接时采集深度快照，并纳入可用的创建元数据。采集出错不会断开连接，也不会保存不完整的深度快照；重新连接可获取新的有效快照。**活动连接**仍可通过通用 `table_creation_metadata` 接口提供元数据，无需已保存的快照。元数据缺失、不完整或被阻止时，仍拒绝生成 `CREATE TABLE`。
+- 含有任何字符类型列（`char`、`varchar`、`nchar`、`nvarchar`、`text`、`ntext`）的表总是被拒绝：`sys.columns.collation_name` 对所有字符列都非空——即使该 collation 只是从源数据库默认值隐式继承——而生成时无法得知 target 数据库的默认 collation，重建的列可能会静默地以不同方式排序和比较。只有所有列均为无 collation 类型（整数、小数、日期、二进制、非类型化 `xml` 等）的表才能被忠实生成。
+- 绑定到 XML 架构集合的类型化 `xml` 列会被拒绝：生成普通 `xml` 列会静默丢失集合绑定。非类型化 `xml` 列可以被忠实生成。
 
 - 实例指标与检查器功能需要 `VIEW SERVER STATE` 服务器权限。缺少该权限时，`list_metrics()` 与 `list_inspectors()` 都返回空列表，而不是报错。
 

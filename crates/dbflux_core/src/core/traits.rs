@@ -13,7 +13,8 @@ use crate::{
     QueryRequest, QueryResult, RelationRef, RoutineInfo, RowDelete, RowInsert, RowPatch,
     SchemaColumnInfo, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaSnapshot, SemanticPlan,
     SemanticPlanner, SemanticRequest, SqlDialect, SqlGenerationRequest, SqlLanguageService,
-    TableAlterPlanner, TableBrowseRequest, TableCountRequest, TableInfo, Value, ViewInfo,
+    TableAlterPlanner, TableBrowseRequest, TableCountRequest, TableCreationMetadata, TableInfo,
+    Value, ViewInfo,
     config::DriverKey,
     data::key_value::{
         HashDeleteRequest, HashSetRequest, KeyBulkGetRequest, KeyDeleteRequest, KeyExistsRequest,
@@ -1095,6 +1096,25 @@ pub trait Connection: Send + Sync {
         ))
     }
 
+    /// Fetch structured metadata needed for faithful `CREATE TABLE`
+    /// generation for one reference table (identity seed/increment as exact
+    /// decimal strings, primary-key order, creation blockers).
+    ///
+    /// Returns `Ok(None)` when the driver does not implement this
+    /// introspection; callers must treat missing metadata as unavailable,
+    /// never as evidence that the table has no identity or key. Implementors
+    /// report what they could not observe through
+    /// [`TableCreationMetadata::completeness`] and `blockers` instead of
+    /// failing the whole call.
+    fn table_creation_metadata(
+        &self,
+        _database: &str,
+        _schema: Option<&str>,
+        _table: &str,
+    ) -> Result<Option<TableCreationMetadata>, DbError> {
+        Ok(None)
+    }
+
     /// Fetch view metadata.
     fn view_details(
         &self,
@@ -1492,6 +1512,21 @@ pub trait Connection: Send + Sync {
             "Code generator '{}' not supported",
             generator_id
         )))
+    }
+
+    /// Generate code for a table with optional structured creation metadata.
+    ///
+    /// The default implementation ignores the metadata and delegates to
+    /// [`Connection::generate_code`], preserving existing generation behavior
+    /// for every driver that has not opted into metadata-aware generation.
+    fn generate_code_with_creation_metadata(
+        &self,
+        generator_id: &str,
+        table: &TableInfo,
+        creation_metadata: Option<&TableCreationMetadata>,
+    ) -> Result<String, DbError> {
+        let _ = creation_metadata;
+        self.generate_code(generator_id, table)
     }
 
     /// Update a single row and return the updated row data.
@@ -1970,6 +2005,75 @@ mod tests {
         fn dialect(&self) -> &dyn crate::sql::dialect::SqlDialect {
             unimplemented!("StubConnection::dialect not needed for this test")
         }
+    }
+
+    #[test]
+    fn table_creation_metadata_default_returns_ok_none() {
+        let conn = StubConnection;
+        let result = conn.table_creation_metadata("db", Some("public"), "users");
+
+        assert!(
+            matches!(result, Ok(None)),
+            "default impl must return Ok(None), got: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn generate_code_with_creation_metadata_default_delegates_to_generate_code() {
+        let conn = StubConnection;
+        let table = crate::TableInfo {
+            name: "users".to_string(),
+            schema: None,
+            columns: None,
+            indexes: None,
+            foreign_keys: None,
+            constraints: None,
+            sample_fields: None,
+            presentation: Default::default(),
+            child_items: None,
+            storage_hints: None,
+        };
+        let metadata = crate::TableCreationMetadata {
+            schema: None,
+            table: "users".to_string(),
+            completeness: crate::MetadataCompleteness::Complete,
+            identity: None,
+            primary_key: None,
+            blockers: Vec::new(),
+        };
+
+        let plain = conn.generate_code("create_table", &table);
+        let with_metadata =
+            conn.generate_code_with_creation_metadata("create_table", &table, Some(&metadata));
+        let without_metadata =
+            conn.generate_code_with_creation_metadata("create_table", &table, None);
+
+        let plain_message = match plain {
+            Err(error) => error.to_string(),
+            Ok(text) => text,
+        };
+        let with_metadata_message = match with_metadata {
+            Err(error) => error.to_string(),
+            Ok(text) => text,
+        };
+        let without_metadata_message = match without_metadata {
+            Err(error) => error.to_string(),
+            Ok(text) => text,
+        };
+
+        assert!(
+            plain_message.contains("not supported"),
+            "stub has no generators; delegation must surface the same error"
+        );
+        assert_eq!(
+            plain_message, with_metadata_message,
+            "with-metadata delegation must produce the same error as generate_code"
+        );
+        assert_eq!(
+            with_metadata_message, without_metadata_message,
+            "metadata must not change the default delegation outcome"
+        );
     }
 
     #[test]

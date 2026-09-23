@@ -494,6 +494,8 @@ cargo clippy --workspace -- -D warnings
 cargo test --workspace
 ```
 
+Estas suites rápidas no cubren las pruebas de integración en vivo de los drivers: suites específicas por driver, respaldadas por contenedores, archivos locales o un clúster de Redshift con credenciales, documentadas en [tests/driver-live/README.md](../../tests/driver-live/README.md). Ejecútalas antes de etiquetar un rc o stable. CI condiciona la publicación a esas mismas suites — `release.yml` invoca `tests.yml`, y el job `Create Release` espera por él — pero las suites ejercitan código fuente, no los artefactos compilados, y los builds nightly no están condicionados por pruebas (`nightly.yml` llama a `build.yml` directamente).
+
 ## Relacionado
 
 - `.github/workflows/release.yml` — lógica de clasificación y publicación de

@@ -348,6 +348,8 @@ cargo clippy --workspace -- -D warnings
 cargo test --workspace
 ```
 
+这些快速套件不涵盖驱动实时集成测试：各驱动专属的套件分别基于容器、本地文件或需要凭据的 Redshift 集群，记录在 [tests/driver-live/README.md](../../tests/driver-live/README.md)。在为 rc 或 stable 打标签之前请先运行它们。CI 以相同的套件作为发布门槛 —— `release.yml` 调用 `tests.yml`，且 `Create Release` 作业会等待它完成 —— 但这些套件验证的是源代码，而非构建出的制品，nightly 构建不以测试为门槛（`nightly.yml` 直接调用 `build.yml`）。
+
 ## 相关文件
 
 - `.github/workflows/release.yml` — 分类逻辑与制品发布

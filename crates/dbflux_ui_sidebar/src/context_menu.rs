@@ -304,7 +304,7 @@ impl Sidebar {
                     && self.is_relational_with_fk_support(item_id, cx)
                 {
                     items.push(ContextMenuItem::item(
-                        "View Relationships",
+                        dbflux_i18n::t!("sidebar.menu.view_relationships"),
                         ContextMenuAction::ViewRelationships,
                     ));
                 }
@@ -614,7 +614,7 @@ impl Sidebar {
                         Self::append_menu_section(
                             &mut items,
                             [ContextMenuItem::item(
-                                "View Schema Diagram",
+                                dbflux_i18n::t!("sidebar.menu.view_schema_diagram"),
                                 ContextMenuAction::ViewSchemaDiagram,
                             )],
                         );
