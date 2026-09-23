@@ -20,9 +20,9 @@ use dbflux_core::{
     RelationalConnection, RelationalSchema, Row, RowDelete, RowInsert, RowPatch,
     SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan,
     SemanticPlanKind, SemanticRequest, SortDirection, SqlDialect, SqlMutationGenerator,
-    SqlQueryBuilder, SyntaxInfo, TableInfo, TransactionCapabilities, TransferFamily, Value,
-    ViewInfo, WhereOperator, field_file_path, generate_delete_template, generate_drop_table,
-    generate_insert_template, generate_select_star, generate_update_template,
+    SqlQueryBuilder, SyntaxInfo, TableInfo, TransactionCapabilities, TransactionStateNote,
+    TransferFamily, Value, ViewInfo, WhereOperator, field_file_path, generate_delete_template,
+    generate_drop_table, generate_insert_template, generate_select_star, generate_update_template,
     render_semantic_filter_sql, validate_ddl_fragment,
 };
 use rusqlite::{Connection as RusqliteConnection, InterruptHandle};
@@ -792,31 +792,10 @@ impl Connection for SqliteConnection {
         let start = Instant::now();
         let conn = self.lock_connection()?;
 
-        // `rusqlite::prepare` only parses the first statement of a
-        // multi-statement string and silently ignores the rest. To run a
-        // script we split it and execute each statement on its own, keeping
-        // the typed single-statement path for the common case.
-        let statements = QueryLanguage::Sql.split_statements(&req.sql);
-        if statements.len() > 1 {
-            let mut result_sets: Vec<QueryResult> = Vec::with_capacity(statements.len());
-            for statement in &statements {
-                result_sets.push(execute_one_statement(
-                    &conn,
-                    statement,
-                    req.limit,
-                    start,
-                    &self.cancelled,
-                )?);
-            }
+        let autocommit_before = conn.is_autocommit();
 
-            let mut primary = result_sets.remove(0);
-            for extra in result_sets {
-                primary.push_additional_result(extra);
-            }
-            return Ok(primary);
-        }
-
-        execute_one_statement(&conn, &req.sql, req.limit, start, &self.cancelled)
+        execute_sql(&conn, &req.sql, req.limit, start, &self.cancelled)
+            .map_err(|error| settle_failed_transaction(&conn, autocommit_before, error))
     }
 
     fn cancel(&self, _handle: &QueryHandle) -> Result<(), DbError> {
@@ -1862,6 +1841,71 @@ impl SqliteConnection {
         }
 
         Ok(all_fks)
+    }
+}
+
+/// Runs a lone statement or a multi-statement script on the shared connection.
+///
+/// `rusqlite::prepare` only parses the first statement of a multi-statement
+/// string and silently ignores the rest, so a script is split and each
+/// statement runs on its own, stopping at the first failure. The typed
+/// single-statement path stays the common case.
+fn execute_sql(
+    conn: &RusqliteConnection,
+    sql: &str,
+    limit: Option<u32>,
+    start: Instant,
+    cancelled: &AtomicBool,
+) -> Result<QueryResult, DbError> {
+    let statements = QueryLanguage::Sql.split_statements(sql);
+    if statements.len() <= 1 {
+        return execute_one_statement(conn, sql, limit, start, cancelled);
+    }
+
+    let mut result_sets: Vec<QueryResult> = Vec::with_capacity(statements.len());
+    for statement in &statements {
+        result_sets.push(execute_one_statement(
+            conn, statement, limit, start, cancelled,
+        )?);
+    }
+
+    let mut primary = result_sets.remove(0);
+    for extra in result_sets {
+        primary.push_additional_result(extra);
+    }
+
+    Ok(primary)
+}
+
+/// Settles the transaction a failed execution left open on the shared connection.
+///
+/// `autocommit_before` is `Connection::is_autocommit()` sampled before the
+/// execution ran. A transaction the failed execution opened itself is rolled
+/// back; a transaction that was already open before it is left in place. The
+/// returned error tells the user which of the two happened. Cancellations and
+/// failures that leave the connection in autocommit mode (including those
+/// SQLite already rolled back on its own) are returned unchanged.
+fn settle_failed_transaction(
+    conn: &RusqliteConnection,
+    autocommit_before: bool,
+    error: DbError,
+) -> DbError {
+    if matches!(error, DbError::Cancelled) || conn.is_autocommit() {
+        return error;
+    }
+
+    if !autocommit_before {
+        return error.with_transaction_note(TransactionStateNote::StillOpen);
+    }
+
+    match conn.execute_batch("ROLLBACK") {
+        Ok(()) => error.with_transaction_note(TransactionStateNote::RolledBack),
+        Err(rollback_error) => {
+            log::warn!(
+                "SQLite could not roll back the transaction opened by a failed execution: {rollback_error}"
+            );
+            error.with_transaction_note(TransactionStateNote::StillOpen)
+        }
     }
 }
 

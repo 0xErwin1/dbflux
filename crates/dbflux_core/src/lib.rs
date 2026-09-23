@@ -100,7 +100,7 @@ pub use core::{
     QueryCancelHandle, QueryErrorFormatter, RelationalConnection, SchemaDropTarget, SchemaFeatures,
     SchemaLoadingStrategy, SchemaObjectKind, ShutdownCoordinator, ShutdownPhase, SourceContextSpec,
     SourceQueryMode, TaskId, TaskKind, TaskManager, TaskSlot, TaskSnapshot, TaskStatus, TaskTarget,
-    Value, VersioningStatus, sanitize_uri,
+    TransactionStateNote, Value, VersioningStatus, sanitize_uri,
 };
 
 pub use data::{

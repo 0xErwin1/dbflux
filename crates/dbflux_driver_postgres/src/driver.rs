@@ -26,11 +26,12 @@ use dbflux_core::{
     SchemaForeignKeyBuilder, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy,
     SchemaSnapshot, SemanticPlan, SemanticPlanKind, SemanticRequest, SortDirection, SqlDialect,
     SqlMutationGenerator, SqlQueryBuilder, SshTunnelConfig, SyntaxInfo, TableInfo,
-    TransactionCapabilities, TransferFamily, TypeDefinition, Value, ViewInfo, WhereOperator,
-    field_password, field_required, field_use_uri, generate_create_table, generate_delete_template,
-    generate_drop_table, generate_insert_template, generate_select_star, generate_truncate,
-    generate_update_template, render_semantic_filter_sql, sanitize_uri, ssh_tab,
-    validate_ddl_fragment, when_checked, when_unchecked, with_default, with_help,
+    TransactionCapabilities, TransactionStateNote, TransferFamily, TypeDefinition, Value, ViewInfo,
+    WhereOperator, field_password, field_required, field_use_uri, generate_create_table,
+    generate_delete_template, generate_drop_table, generate_insert_template, generate_select_star,
+    generate_truncate, generate_update_template, render_semantic_filter_sql, sanitize_uri, ssh_tab,
+    strip_leading_comments, validate_ddl_fragment, when_checked, when_unchecked, with_default,
+    with_help,
 };
 use dbflux_ssh::SshTunnel;
 use half::f16;
@@ -1717,7 +1718,7 @@ impl Connection for PostgresConnection {
                     log::info!("[QUERY] Query {} was cancelled during prepare", query_id);
                     DbError::Cancelled
                 } else {
-                    format_pg_query_error(&e)
+                    format_pg_statement_error(&e)
                 }
             })?;
 
@@ -1740,7 +1741,7 @@ impl Connection for PostgresConnection {
                     log::info!("[QUERY] Query {} was cancelled", query_id);
                     DbError::Cancelled
                 } else {
-                    format_pg_query_error(&e)
+                    format_pg_statement_error(&e)
                 }
             })?;
 
@@ -4705,6 +4706,118 @@ fn format_pg_query_error(e: &postgres::Error) -> DbError {
     formatted.into_query_error()
 }
 
+/// Maps a failed single-statement execution to a [`DbError`].
+///
+/// A statement rejected with SQLSTATE 25P02 ran inside a transaction an
+/// earlier execution opened and the server already aborted, so the error tells
+/// the user the session needs a ROLLBACK. The driver does not roll it back: the
+/// user may still want `ROLLBACK TO SAVEPOINT`.
+fn format_pg_statement_error(e: &postgres::Error) -> DbError {
+    let error = format_pg_query_error(e);
+
+    if is_in_failed_transaction(e) {
+        error.with_transaction_note(TransactionStateNote::Aborted)
+    } else {
+        error
+    }
+}
+
+fn is_in_failed_transaction(e: &postgres::Error) -> bool {
+    e.code() == Some(&postgres::error::SqlState::IN_FAILED_SQL_TRANSACTION)
+}
+
+/// Builds the error for a failed multi-statement batch and repairs the session
+/// when the batch itself left it inside an aborted transaction.
+///
+/// PostgreSQL skips every statement after the failing one, COMMIT included, so
+/// a script that opened a transaction leaves the shared session aborted and
+/// every later query fails with SQLSTATE 25P02. The `postgres` crate does not
+/// expose the ReadyForQuery transaction status, so the session is probed with a
+/// trivial query instead.
+///
+/// Only a transaction the script opened is rolled back. A batch whose own
+/// error is 25P02 ran inside a transaction that was already aborted, so that
+/// transaction predates the script and is left for the user to end.
+fn recover_from_failed_batch(client: &mut Client, sql: &str, e: &postgres::Error) -> DbError {
+    let error = format_pg_query_error(e);
+
+    if !session_in_aborted_transaction(client) {
+        return error;
+    }
+
+    if is_in_failed_transaction(e) || !script_opens_transaction(sql) {
+        return error.with_transaction_note(TransactionStateNote::Aborted);
+    }
+
+    match client.simple_query("ROLLBACK") {
+        Ok(_) => error.with_transaction_note(TransactionStateNote::RolledBack),
+        Err(rollback_error) => {
+            log::warn!(
+                "[QUERY] ROLLBACK after failed batch failed: {}",
+                rollback_error
+            );
+            error.with_transaction_note(TransactionStateNote::Aborted)
+        }
+    }
+}
+
+/// Whether the session is inside a transaction the server has aborted.
+///
+/// A probe failure other than SQLSTATE 25P02 says nothing about the
+/// transaction, so it is logged and treated as a healthy session.
+fn session_in_aborted_transaction(client: &mut Client) -> bool {
+    match client.simple_query("SELECT 1") {
+        Ok(_) => false,
+        Err(probe_error) if is_in_failed_transaction(&probe_error) => true,
+        Err(probe_error) => {
+            log::warn!(
+                "[QUERY] Transaction probe after failed batch failed: {}",
+                probe_error
+            );
+            false
+        }
+    }
+}
+
+/// Whether any top-level statement of `sql` opens a transaction (`BEGIN` or
+/// `START TRANSACTION`).
+///
+/// Statements are split with [`QueryLanguage::split_statements`], so a
+/// `BEGIN` inside a dollar-quoted PL/pgSQL body or a string literal is not a
+/// top-level statement and does not count.
+fn script_opens_transaction(sql: &str) -> bool {
+    QueryLanguage::Sql
+        .split_statements(sql)
+        .iter()
+        .any(|statement| statement_opens_transaction(statement))
+}
+
+fn statement_opens_transaction(statement: &str) -> bool {
+    let (first_keyword, rest) = split_leading_keyword(statement);
+
+    if first_keyword.eq_ignore_ascii_case("BEGIN") {
+        return true;
+    }
+
+    if !first_keyword.eq_ignore_ascii_case("START") {
+        return false;
+    }
+
+    let (second_keyword, _) = split_leading_keyword(rest);
+    second_keyword.eq_ignore_ascii_case("TRANSACTION")
+}
+
+/// Splits the leading keyword, after any comments, from the rest of `sql`.
+fn split_leading_keyword(sql: &str) -> (&str, &str) {
+    let stripped = strip_leading_comments(sql);
+
+    let keyword_end = stripped
+        .find(|character: char| !character.is_ascii_alphabetic())
+        .unwrap_or(stripped.len());
+
+    stripped.split_at(keyword_end)
+}
+
 /// Executes a multi-statement batch via the simple query protocol.
 ///
 /// The extended (prepared) protocol used by [`PostgresConnection::execute`]
@@ -4721,14 +4834,14 @@ fn execute_statement_batch(
     start: Instant,
     limit: Option<u32>,
 ) -> Result<QueryResult, DbError> {
-    let messages = client.simple_query(sql).map_err(|e| {
-        if e.code() == Some(&postgres::error::SqlState::QUERY_CANCELED) {
+    let messages = match client.simple_query(sql) {
+        Ok(messages) => messages,
+        Err(e) if e.code() == Some(&postgres::error::SqlState::QUERY_CANCELED) => {
             log::info!("[QUERY] Batch query {} was cancelled", query_id);
-            DbError::Cancelled
-        } else {
-            format_pg_query_error(&e)
+            return Err(DbError::Cancelled);
         }
-    })?;
+        Err(e) => return Err(recover_from_failed_batch(client, sql, &e)),
+    };
 
     let total_time = start.elapsed();
     let mut result_sets = simple_query_messages_to_results(messages, total_time, limit);
@@ -6862,5 +6975,49 @@ mod tests {
             ),
             "non-URI mode must return None"
         );
+    }
+
+    // ===== Failed-batch transaction detection =====
+
+    use super::script_opens_transaction;
+
+    #[test]
+    fn script_with_begin_opens_transaction() {
+        assert!(script_opens_transaction(
+            "BEGIN; INSERT INTO t VALUES (1); COMMIT;"
+        ));
+    }
+
+    #[test]
+    fn lowercase_begin_transaction_opens_transaction() {
+        assert!(script_opens_transaction(
+            "begin transaction; insert into t values (1);"
+        ));
+    }
+
+    #[test]
+    fn start_transaction_with_isolation_level_opens_transaction() {
+        assert!(script_opens_transaction(
+            "START TRANSACTION ISOLATION LEVEL SERIALIZABLE; SELECT 1;"
+        ));
+    }
+
+    #[test]
+    fn begin_after_leading_comment_opens_transaction() {
+        assert!(script_opens_transaction(
+            "-- load fixtures\nBEGIN;\nINSERT INTO t VALUES (1);"
+        ));
+    }
+
+    #[test]
+    fn begin_inside_do_block_does_not_open_transaction() {
+        assert!(!script_opens_transaction(
+            "DO $$ BEGIN PERFORM 1; END $$; SELECT 1;"
+        ));
+    }
+
+    #[test]
+    fn begin_inside_string_literal_does_not_open_transaction() {
+        assert!(!script_opens_transaction("SELECT 'BEGIN'; SELECT 1;"));
     }
 }

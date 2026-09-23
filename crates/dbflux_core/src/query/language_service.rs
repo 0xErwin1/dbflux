@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::sync::OnceLock;
 
@@ -831,7 +832,9 @@ fn sql_editor_diagnostics(query: &str) -> Vec<EditorDiagnostic> {
         return vec![];
     }
 
-    let Some(tree) = parser.parse(query, None) else {
+    let parse_source = mask_on_commit_clauses(query);
+
+    let Some(tree) = parser.parse(parse_source.as_ref(), None) else {
         return vec![];
     };
 
@@ -896,6 +899,150 @@ fn should_skip_sql_parse_diagnostics(query: &str) -> bool {
         .map(strip_leading_comments)
         .filter(|statement| !statement.is_empty())
         .all(is_postgres_grant_or_revoke_statement)
+}
+
+const ON_COMMIT_ACTIONS: [&[&str]; 3] = [&["DROP"], &["DELETE", "ROWS"], &["PRESERVE", "ROWS"]];
+
+/// Blank out PostgreSQL `ON COMMIT { DROP | DELETE ROWS | PRESERVE ROWS }`
+/// clauses before the query reaches the tree-sitter grammar.
+///
+/// The bundled grammar has no rule for the clause and reports it as an ERROR
+/// node, even though the rest of the `CREATE TEMP TABLE` statement parses.
+/// Only the clause is replaced, byte for byte, with spaces (newlines are
+/// kept), so every other error keeps its row and column and the rest of the
+/// script is still validated. Text inside quoted strings, quoted identifiers,
+/// and comments is never touched.
+fn mask_on_commit_clauses(query: &str) -> Cow<'_, str> {
+    let bytes = query.as_bytes();
+    let mut masked: Option<Vec<u8>> = None;
+    let mut index = 0;
+
+    while index < bytes.len() {
+        match (bytes[index], bytes.get(index + 1)) {
+            (quote @ (b'\'' | b'"'), _) => {
+                index = skip_quoted(bytes, index, quote);
+                continue;
+            }
+            (b'-', Some(b'-')) => {
+                index = find_from(bytes, index, b"\n").map_or(bytes.len(), |end| end + 1);
+                continue;
+            }
+            (b'/', Some(b'*')) => {
+                index = find_from(bytes, index + 2, b"*/").map_or(bytes.len(), |end| end + 2);
+                continue;
+            }
+            _ => {}
+        }
+
+        let starts_word = index == 0 || !is_identifier_byte(bytes[index - 1]);
+
+        if let Some(end) = starts_word
+            .then(|| on_commit_clause_end(bytes, index))
+            .flatten()
+        {
+            let buffer = masked.get_or_insert_with(|| bytes.to_vec());
+
+            for byte in &mut buffer[index..end] {
+                if *byte != b'\n' && *byte != b'\r' {
+                    *byte = b' ';
+                }
+            }
+
+            index = end;
+            continue;
+        }
+
+        index += 1;
+    }
+
+    // Only ASCII keyword and whitespace bytes were replaced with ASCII spaces,
+    // so the buffer is still valid UTF-8.
+    match masked.map(String::from_utf8) {
+        Some(Ok(text)) => Cow::Owned(text),
+        _ => Cow::Borrowed(query),
+    }
+}
+
+/// Returns the end of an `ON COMMIT <action>` clause starting at `start`.
+fn on_commit_clause_end(bytes: &[u8], start: usize) -> Option<usize> {
+    let after_on_commit = match_words(bytes, start, &["ON", "COMMIT"])?;
+    let action_start = skip_separator(bytes, after_on_commit)?;
+
+    ON_COMMIT_ACTIONS
+        .iter()
+        .find_map(|action| match_words(bytes, action_start, action))
+}
+
+/// Matches `words` case-insensitively, separated by whitespace, and returns
+/// the position after the last one.
+fn match_words(bytes: &[u8], start: usize, words: &[&str]) -> Option<usize> {
+    let mut position = start;
+
+    for (word_index, word) in words.iter().enumerate() {
+        if word_index > 0 {
+            position = skip_separator(bytes, position)?;
+        }
+
+        let end = position + word.len();
+        let candidate = bytes.get(position..end)?;
+
+        if !candidate.eq_ignore_ascii_case(word.as_bytes()) {
+            return None;
+        }
+
+        if bytes.get(end).is_some_and(|byte| is_identifier_byte(*byte)) {
+            return None;
+        }
+
+        position = end;
+    }
+
+    Some(position)
+}
+
+/// Skips at least one whitespace byte; returns `None` when there is none.
+fn skip_separator(bytes: &[u8], start: usize) -> Option<usize> {
+    let whitespace = bytes
+        .get(start..)?
+        .iter()
+        .take_while(|byte| byte.is_ascii_whitespace())
+        .count();
+
+    (whitespace > 0).then_some(start + whitespace)
+}
+
+/// Returns the position after the quoted run opened at `start`. A doubled
+/// quote is an escaped quote; an unterminated run extends to the end.
+fn skip_quoted(bytes: &[u8], start: usize, quote: u8) -> usize {
+    let mut index = start + 1;
+
+    while let Some(offset) = bytes
+        .get(index..)
+        .and_then(|rest| rest.iter().position(|b| *b == quote))
+    {
+        let closing = index + offset;
+
+        if bytes.get(closing + 1) == Some(&quote) {
+            index = closing + 2;
+            continue;
+        }
+
+        return closing + 1;
+    }
+
+    bytes.len()
+}
+
+fn find_from(bytes: &[u8], start: usize, needle: &[u8]) -> Option<usize> {
+    bytes
+        .get(start..)?
+        .windows(needle.len())
+        .position(|window| window == needle)
+        .map(|offset| start + offset)
+}
+
+fn is_identifier_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'$'
 }
 
 fn is_postgres_grant_or_revoke_statement(statement: &str) -> bool {
@@ -1621,6 +1768,67 @@ mod tests {
     fn multiple_valid_statements_no_diagnostics() {
         let diags = sql_editor_diagnostics("SELECT 1; SELECT 2;");
         assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn postgres_on_commit_clauses_have_no_diagnostics() {
+        let queries = [
+            "CREATE TEMP TABLE t ON COMMIT DROP AS SELECT * FROM users WHERE id = 1;",
+            "CREATE TEMPORARY TABLE t ON COMMIT DROP AS\nSELECT * FROM users;",
+            "CREATE TEMP TABLE t (id int) ON COMMIT DELETE ROWS;",
+            "CREATE TEMP TABLE t (id int) ON COMMIT PRESERVE ROWS;",
+            "create temp table t on\n  commit\tdrop as select 1;",
+        ];
+
+        for query in queries {
+            let diags = sql_editor_diagnostics(query);
+            assert!(diags.is_empty(), "{query:?} produced {diags:?}");
+        }
+    }
+
+    #[test]
+    fn errors_around_on_commit_clause_keep_their_position() {
+        let diags = sql_editor_diagnostics(
+            "CREATE TEMP TABLE t ON COMMIT DROP AS SELECT 1;\nSELEC * FROM users;",
+        );
+
+        assert!(!diags.is_empty());
+        assert_eq!(diags[0].range.start.line, 1);
+        assert!(!diags[0].message.contains("ON COMMIT"));
+    }
+
+    #[test]
+    fn unknown_on_commit_action_is_still_reported() {
+        let diags = sql_editor_diagnostics("CREATE TEMP TABLE t ON COMMIT KEEP AS SELECT 1;");
+        assert!(!diags.is_empty());
+    }
+
+    #[test]
+    fn mask_on_commit_clauses_preserves_length_and_newlines() {
+        let query = "CREATE TEMP TABLE t ON\nCOMMIT DROP AS SELECT 1";
+        let masked = mask_on_commit_clauses(query);
+
+        assert_eq!(masked.len(), query.len());
+        assert_eq!(masked, "CREATE TEMP TABLE t   \n            AS SELECT 1");
+    }
+
+    #[test]
+    fn mask_on_commit_clauses_ignores_strings_identifiers_and_comments() {
+        let queries = [
+            "SELECT 'on commit drop' FROM users",
+            "SELECT 'it''s on commit drop' FROM users",
+            "SELECT \"on commit drop\" FROM users",
+            "SELECT 1 -- on commit drop",
+            "SELECT 1 /* on commit drop */",
+            "SELECT session_on commit_drop FROM users",
+        ];
+
+        for query in queries {
+            assert!(
+                matches!(mask_on_commit_clauses(query), Cow::Borrowed(_)),
+                "{query:?} was masked"
+            );
+        }
     }
 
     #[test]

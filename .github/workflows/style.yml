@@ -192,6 +192,11 @@ jobs:
           shared-key: ci-check-${{ matrix.os }}
           cache-targets: true
           cache-on-failure: true
+          # A cache saved from a pull request or a tag is scoped to that ref:
+          # nothing else can read it, yet it counts toward the repository's
+          # cache limit and evicts the caches main and the nightly rely on.
+          # Pull requests and releases still restore from main.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Run clippy
         run: cargo clippy --workspace --locked --features "sqlite,postgres,mysql,mssql,mongodb,redis,dynamodb,cloudwatch,influxdb,clickhouse,turso,aws,ui-automation${{ matrix.extra_features }}" -- -D warnings
