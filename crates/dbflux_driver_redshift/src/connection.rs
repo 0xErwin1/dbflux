@@ -613,6 +613,13 @@ impl Connection for RedshiftConnection {
     }
 
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
+        if req.limit.is_some() || req.statement_timeout.is_some() {
+            return Err(DbError::NotSupported(
+                "Redshift cannot enforce a requested row limit or statement timeout before execution"
+                    .to_string(),
+            ));
+        }
+
         ensure_read_only(&req.sql)?;
 
         self.cancelled.store(false, Ordering::SeqCst);

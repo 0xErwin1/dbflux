@@ -236,6 +236,13 @@ impl Connection for ClickHouseConnection {
     }
 
     fn execute(&self, request: &QueryRequest) -> Result<QueryResult, DbError> {
+        if request.limit.is_some() || request.statement_timeout.is_some() {
+            return Err(DbError::NotSupported(
+                "ClickHouse HTTP queries do not support explicit row limits or statement timeouts"
+                    .to_string(),
+            ));
+        }
+
         if let Some(source) = request
             .execution_context
             .as_ref()

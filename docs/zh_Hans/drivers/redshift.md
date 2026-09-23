@@ -25,6 +25,8 @@ AWS 托管的数据仓库，与 PostgreSQL 线协议兼容。只读。
 
 ## 限制
 
+- 请求的行数上限（包括零）和语句超时会在只读校验或查询准备之前被拒绝：此驱动无法在执行前保证这些限制。未设置这两项时，查询保持原有行为，仍可能缓冲完整结果；这并不限制服务器工作量或内存。提前拒绝的回归测试使用一次性 PostgreSQL 16 验证线协议兼容路径，并不验证 Redshift 集群行为。
+
 - 只读：`DriverMetadata.capabilities` 不含 `INSERT`、`UPDATE`、`DELETE`、`RETURNING`、`BULK_INSERT`、`TRUNCATE_TABLE`，以及所有 DDL/事务性 DDL 标志。该驱动程序没有内联的网格编辑，也没有变更/可视化查询构建器。`Connection::execute` 还会在���协议层拒绝任何非读取语句并给出明确错误，因此写入尝试永远不会变成静默的空操作。
 - 仅支持单语句：`Connection::execute` 一次只运行一条只读语句。多语句输入（例如 `SELECT 1; SELECT 2`）在到达线协议之前就会被明确拒绝；允许单个可选的结尾 `;`，而字符串字面量、带引号标识符或注释中的 `;` 不被当作分隔符。
 - 没有 `INDEXES` 能力：Redshift 没有真正的索引结构，因此 `TableDetails.indexes` 始终为 `None`，而不是由（非强制的）主键合成。

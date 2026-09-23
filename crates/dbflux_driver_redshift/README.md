@@ -25,6 +25,8 @@ Amazon Redshift driver for DBFlux (read-only v1), built directly on the [`postgr
 
 ## Limitations
 
+- Requested row limits (including zero) and statement timeouts are rejected before read-only validation or query preparation: this driver cannot enforce them before execution. Without either option, queries retain their existing behavior and may buffer the full result; this is not a server-work or memory bound. The early-refusal regression runs against disposable PostgreSQL 16 for wire-protocol compatibility, not against a Redshift cluster.
+
 - Read-only: `DriverMetadata.capabilities` omits `INSERT`, `UPDATE`, `DELETE`, `RETURNING`, `BULK_INSERT`, `TRUNCATE_TABLE`, and all DDL/transactional-DDL flags. There is no inline grid edit and no mutation/visual-query builder for this driver. `Connection::execute` additionally rejects any non-read statement at the wire layer with an explicit error, so a write attempt never becomes a silent no-op.
 - Single-statement only: `Connection::execute` runs one read-only statement at a time. Multi-statement input (e.g. `SELECT 1; SELECT 2`) is rejected with an explicit error before reaching the wire; a single optional trailing `;` is allowed, and `;` inside string literals, quoted identifiers, or comments is not treated as a separator.
 - No `INDEXES` capability: Redshift has no true index structures, so `TableDetails.indexes` is always `None` rather than being synthesized from the (non-enforced) primary key.
