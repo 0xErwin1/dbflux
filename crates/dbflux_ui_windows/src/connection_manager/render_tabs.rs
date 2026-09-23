@@ -28,6 +28,8 @@ impl ConnectionManagerWindow {
         let show_access_tab = !self.uses_file_form();
 
         div()
+            .id("cm-tab-list")
+            .role(Role::TabList)
             .flex()
             .items_center()
             .border_b_1()
@@ -86,6 +88,8 @@ impl ConnectionManagerWindow {
 
         div()
             .id(id)
+            .role(Role::Tab)
+            .aria_selected(is_active)
             .px_4()
             .py_2()
             .cursor_pointer()
