@@ -18,6 +18,10 @@ All notable changes to DBFlux will be documented in this file.
   
 * Reject MongoDB execution requests with row limits or statement timeouts before any operation dispatches.
 
+* The empty-workspace hint for a new connection now works: `Ctrl+Shift+N`
+  (`Cmd+Shift+N` on macOS) opens the Connection Manager, and every hint reads
+  its chord from the keymap, so macOS shows `Cmd` instead of `Ctrl`.
+
 
 ### Added
 
