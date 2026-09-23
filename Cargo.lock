@@ -3329,6 +3329,7 @@ dependencies = [
  "dbflux_mcp",
  "dbflux_storage",
  "gpui-component",
+ "gpui-mcp",
  "gpui-pre",
  "log",
  "rusqlite",

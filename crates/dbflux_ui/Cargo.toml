@@ -44,6 +44,9 @@ default = ["lua", "aws", "mcp"]
 lua = ["dbflux_app/lua", "dbflux_ui_base/lua", "dbflux_ui_document/lua", "dbflux_ui_windows/lua", "dbflux_ui_sidebar/lua"]
 aws = ["dbflux_app/aws", "dbflux_ui_base/aws", "dbflux_ui_document/aws", "dbflux_ui_windows/aws", "dbflux_ui_sidebar/aws"]
 mcp = ["dbflux_app/mcp", "dbflux_ui_base/mcp", "dbflux_ui_document/mcp", "dbflux_ui_windows/mcp", "dbflux_ui_sidebar/mcp"]
+# Off by default. Only dbflux_ui_base holds the gated bridge code; every other
+# crate calls its always-present install function.
+ui-automation = ["dbflux_ui_base/ui-automation"]
 vendored-openssl = ["dbflux_ssh/vendored-openssl"]
 
 [dev-dependencies]

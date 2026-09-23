@@ -59,6 +59,8 @@ pub fn open_or_focus_settings<S>(
     let app_state_for_new = app_state.clone();
 
     let open_result = cx.open_window(options, move |window, cx| {
+        dbflux_ui_base::ui_automation::install(window, cx);
+
         let settings = cx.new(|cx| match section {
             Some(section) => {
                 SettingsCoordinator::new_with_section(app_state_for_new, section, window, cx)

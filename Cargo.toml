@@ -115,6 +115,7 @@ petgraph = "0.7"
 gpui = { package = "gpui-pre", version = "=0.3.5" }
 gpui-component = { version = "=0.6.1", features = ["tree-sitter"] }
 gpui-pre-platform = { version = "=0.3.5", default-features = false, features = ["wayland", "x11"] }
+gpui-mcp = { path = "vendor/gpui-mcp/crates/gpui-mcp" }
 # Grammars for the code-editor highlighter (gpui-component's highlighter::LanguageRegistry).
 # gpui-component's own `tree-sitter-languages` feature pulls in ~30 grammars; DBFlux only
 # ever asks the editor for the modes `QueryLanguage::editor_mode()` can return (sql,
