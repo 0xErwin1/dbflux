@@ -912,6 +912,7 @@ pub struct Sidebar {
     /// Actions to execute after table/type details finish loading, keyed by item_id
     pending_actions: HashMap<String, PendingAction>,
     table_details_requests: HashMap<String, SessionRequest>,
+    table_refresh_tasks: HashMap<String, (TaskId, dbflux_core::CancelToken)>,
     superseded_details_cancellations: HashSet<SessionRequest>,
     table_details_actions: HashMap<String, PendingAction>,
     table_details_retry: std::cell::RefCell<HashMap<String, TableDetailsRetry>>,
@@ -1198,6 +1199,7 @@ impl Sidebar {
             context_menu: None,
             pending_actions: HashMap::new(),
             table_details_requests: HashMap::new(),
+            table_refresh_tasks: HashMap::new(),
             superseded_details_cancellations: HashSet::new(),
             table_details_actions: HashMap::new(),
             table_details_retry: std::cell::RefCell::new(HashMap::new()),

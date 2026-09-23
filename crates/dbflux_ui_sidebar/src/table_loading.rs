@@ -1,5 +1,5 @@
 use super::*;
-use dbflux_core::TaskKind;
+use dbflux_core::{TaskKind, TaskTarget};
 use dbflux_ui_base::object_tree::{
     ObjectTreeEvent, ObjectTreeOutcome, ObjectTreeRequestKey, ObjectTreeRequestStatus,
 };
@@ -80,6 +80,118 @@ impl Sidebar {
         schema.views().iter().find(|v| v.name == parts.object_name)
     }
 
+    fn retire_stale_table_refresh(
+        &mut self,
+        item_id: &str,
+        current_generation: Option<u64>,
+        cx: &mut Context<Self>,
+    ) {
+        let stale = self
+            .table_details_requests
+            .get(item_id)
+            .is_some_and(|(_, captured)| Some(*captured) != current_generation);
+        if !stale {
+            return;
+        }
+        self.table_details_requests.remove(item_id);
+        self.loading_items.remove(item_id);
+        let original_action = self.table_details_actions.remove(item_id);
+        if self.pending_actions.get(item_id) == original_action.as_ref() {
+            self.pending_actions.remove(item_id);
+        }
+        if let Some((task_id, _)) = self.table_refresh_tasks.remove(item_id) {
+            self.app_state.update(cx, |state, cx| {
+                state.tasks_mut().cancel(task_id);
+                cx.emit(AppStateChanged);
+            });
+        }
+    }
+
+    pub(super) fn refresh_table_details_via_coordinator(
+        &mut self,
+        item_id: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(parts) = parse_node_id(item_id)
+            .as_ref()
+            .and_then(ItemIdParts::from_node_id)
+        else {
+            return;
+        };
+        let generation = self
+            .app_state
+            .read(cx)
+            .profile_session_generation(parts.profile_id);
+        self.retire_stale_table_refresh(item_id, generation, cx);
+        if self.loading_items.contains(item_id) {
+            return;
+        }
+        if self.app_state.read(cx).is_background_task_limit_reached() {
+            self.pending_toast = Some(PendingToast {
+                message: crate::labels::background_task_limit_toast_label(),
+                is_error: true,
+            });
+            self.refresh_tree(cx);
+            return;
+        }
+
+        let database = parts.cache_database().to_string();
+        let key = ObjectTreeRequestKey::TableDetails {
+            profile_id: parts.profile_id,
+            database: database.clone(),
+            schema: Some(parts.schema_name.clone()),
+            table: parts.object_name.clone(),
+        };
+        let Some(generation) = generation else {
+            return;
+        };
+        let previous_attempt_pending = self.app_state.read(cx).object_tree_is_pending(&key);
+        if previous_attempt_pending {
+            self.superseded_details_cancellations
+                .insert((key.clone(), generation));
+        }
+        let status = self.app_state.update(cx, |state, cx| {
+            if !state.invalidate_table_details(
+                parts.profile_id,
+                &database,
+                Some(&parts.schema_name),
+                &parts.object_name,
+            ) {
+                return None;
+            }
+            Some(state.object_tree_retry(key.clone(), cx))
+        });
+        if !previous_attempt_pending {
+            self.superseded_details_cancellations
+                .remove(&(key.clone(), generation));
+        }
+        match status {
+            Some(ObjectTreeRequestStatus::Dispatched)
+            | Some(ObjectTreeRequestStatus::Pending)
+            | Some(ObjectTreeRequestStatus::WaitingForSlotInstall) => {
+                let target = TaskTarget {
+                    profile_id: parts.profile_id,
+                    database: parts.database.clone().or(Some(database)),
+                };
+                let task = self.app_state.update(cx, |state, cx| {
+                    let task = state.start_task_for_target(
+                        TaskKind::SchemaRefresh,
+                        crate::labels::refreshing_schema_object_task_label(&parts.object_name),
+                        Some(target),
+                    );
+                    cx.emit(AppStateChanged);
+                    task
+                });
+                self.table_refresh_tasks.insert(item_id.to_string(), task);
+                self.table_details_requests
+                    .insert(item_id.to_string(), (key, generation));
+                self.loading_items.insert(item_id.to_string());
+            }
+            Some(ObjectTreeRequestStatus::Cached | ObjectTreeRequestStatus::Failed(_)) | None => {}
+        }
+        self.refresh_tree(cx);
+    }
+
     /// Check if a table has detailed schema (columns/indexes) loaded.
     /// If not, spawns a background task to fetch them and returns `Loading`.
     pub(super) fn ensure_table_details(
@@ -108,6 +220,7 @@ impl Sidebar {
         else {
             return TableDetailsStatus::NotFound;
         };
+        self.retire_stale_table_refresh(item_id, Some(generation), cx);
         if self
             .table_details_requests
             .get(item_id)
@@ -554,6 +667,18 @@ impl Sidebar {
                 .borrow_mut()
                 .retain(|_, (key, _, _)| key != &event.key);
         }
+        let stale_items: Vec<String> = self
+            .table_details_requests
+            .iter()
+            .filter(|(_, (key, captured))| key == &event.key && Some(*captured) != generation)
+            .map(|(item, _)| item.clone())
+            .collect();
+        for item in stale_items {
+            self.retire_stale_table_refresh(&item, generation, cx);
+        }
+        if self.app_state.read(cx).object_tree_is_pending(&event.key) {
+            return;
+        }
         let items: Vec<String> = self
             .table_details_requests
             .iter()
@@ -562,6 +687,25 @@ impl Sidebar {
             .collect();
         for item in items {
             self.table_details_requests.remove(&item);
+            self.loading_items.remove(&item);
+            if let Some((task_id, token)) = self.table_refresh_tasks.remove(&item) {
+                self.app_state.update(cx, |state, cx| {
+                    match &event.outcome {
+                        ObjectTreeOutcome::Applied | ObjectTreeOutcome::Cached
+                            if !token.is_cancelled() =>
+                        {
+                            state.complete_task(task_id);
+                        }
+                        ObjectTreeOutcome::Failed(error) if !token.is_cancelled() => {
+                            state.fail_task(task_id, error.clone());
+                        }
+                        _ => {
+                            state.tasks_mut().cancel(task_id);
+                        }
+                    }
+                    cx.emit(AppStateChanged);
+                });
+            }
             let original_action = self.table_details_actions.remove(&item);
             if self.pending_actions.get(&item) != original_action.as_ref() {
                 continue;
@@ -918,6 +1062,7 @@ mod object_tree_adapter_tests {
         list_failures: AtomicUsize,
         schema_calls: Mutex<Vec<String>>,
         details_calls: AtomicUsize,
+        details_failures: AtomicUsize,
         primary_schema_calls: AtomicUsize,
         primary_snapshot: Mutex<Option<dbflux_core::SchemaSnapshot>>,
         authoritative_primary: AtomicBool,
@@ -935,6 +1080,7 @@ mod object_tree_adapter_tests {
                 list_failures: AtomicUsize::new(0),
                 schema_calls: Mutex::new(Vec::new()),
                 details_calls: AtomicUsize::new(0),
+                details_failures: AtomicUsize::new(0),
                 primary_schema_calls: AtomicUsize::new(0),
                 primary_snapshot: Mutex::new(None),
                 authoritative_primary: AtomicBool::new(false),
@@ -973,6 +1119,10 @@ mod object_tree_adapter_tests {
 
         fn schema_calls(&self) -> Vec<String> {
             self.schema_calls.lock().expect("fake schema calls").clone()
+        }
+
+        fn fail_details_once(&self) {
+            self.details_failures.store(1, Ordering::SeqCst);
         }
 
         fn list_calls(&self) -> usize {
@@ -1249,6 +1399,17 @@ mod object_tree_adapter_tests {
             table: &str,
         ) -> Result<TableInfo, dbflux_core::DbError> {
             self.details_calls.fetch_add(1, Ordering::SeqCst);
+            if self
+                .details_failures
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                    remaining.checked_sub(1)
+                })
+                .is_ok()
+            {
+                return Err(dbflux_core::DbError::NotSupported(
+                    "fake table details failure".into(),
+                ));
+            }
             Ok(loaded_details(database, schema, table))
         }
     }
@@ -5736,6 +5897,407 @@ mod object_tree_adapter_tests {
             rows.iter().any(|(id, _, _)| *id == app_table)
                 && rows.iter().any(|(id, _, _)| *id == other_table),
             "identical table names in distinct databases must both render with distinct stable IDs; rows: {rows:?}"
+        );
+    }
+
+    #[gpui::test]
+    async fn table_refresh_uses_shared_coordinator_after_cached_details(cx: &mut TestAppContext) {
+        let state = test_app_state(cx);
+        let profile_id = Uuid::new_v4();
+        let fake = AdapterFakeConnection::single_database();
+        connect_profile(
+            &state,
+            cx,
+            profile_id,
+            fake.clone(),
+            Some(snapshot_naming(vec![dbflux_core::DatabaseInfo {
+                name: "app".into(),
+                is_current: true,
+            }])),
+        );
+        state.update(cx, |state, _| {
+            state.set_table_details(
+                profile_id,
+                "app".into(),
+                Some("public".into()),
+                "users".into(),
+                loaded_details("app", Some("public"), "users"),
+            );
+            state.set_dependents(
+                profile_id,
+                "app".into(),
+                Some("public".into()),
+                "users".into(),
+                vec![dbflux_core::RelationRef {
+                    kind: dbflux_core::RelationKind::View,
+                    qualified_name: "public.old_view".into(),
+                }],
+            );
+            state.set_table_details(
+                profile_id,
+                "app".into(),
+                Some("public".into()),
+                "orders".into(),
+                loaded_details("app", Some("public"), "orders"),
+            );
+        });
+        let key = ObjectTreeRequestKey::TableDetails {
+            profile_id,
+            database: "app".into(),
+            schema: Some("public".into()),
+            table: "users".into(),
+        };
+        let table_id = SchemaNodeId::Table {
+            profile_id,
+            database: Some("app".into()),
+            schema: "public".into(),
+            name: "users".into(),
+        }
+        .to_string();
+        let window = cx.add_window(|window, cx| crate::Sidebar::new(state.clone(), window, cx));
+        window
+            .update(cx, |sidebar, _, cx| {
+                sidebar.refresh_schema_object(&table_id, cx);
+            })
+            .expect("sidebar alive");
+        let task_id = state.read_with(cx, |state, _| {
+            state
+                .tasks()
+                .running_tasks()
+                .into_iter()
+                .find(|task| task.kind == dbflux_core::TaskKind::SchemaRefresh)
+                .expect("table refresh must appear in the Tasks panel")
+                .id
+        });
+        cx.run_until_parked();
+
+        assert_eq!(fake.details_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            state.read_with(cx, |state, _| state.object_tree_outcome(&key).cloned()),
+            Some(ObjectTreeOutcome::Applied),
+            "table refresh must settle through the shared coordinator"
+        );
+        assert_eq!(
+            state.read_with(cx, |state, _| state
+                .tasks()
+                .get(task_id)
+                .map(|task| task.status)),
+            Some(dbflux_core::TaskStatus::Completed)
+        );
+        state.read_with(cx, |state, _| {
+            let connected = state.connections().get(&profile_id).expect("connected");
+            let refreshed = (
+                "app".to_string(),
+                Some("public".to_string()),
+                "users".to_string(),
+            );
+            let sibling = (
+                "app".to_string(),
+                Some("public".to_string()),
+                "orders".to_string(),
+            );
+            assert!(
+                connected
+                    .table_details
+                    .get(&refreshed)
+                    .is_some_and(|details| details.columns.is_some())
+            );
+            assert!(connected.table_details.contains_key(&sibling));
+            assert!(
+                connected
+                    .dependents_cache
+                    .get(&refreshed)
+                    .is_none_or(Vec::is_empty)
+            );
+        });
+        window
+            .update(cx, |sidebar, _, _| {
+                assert!(!sidebar.loading_items.contains(&table_id));
+            })
+            .expect("sidebar alive");
+    }
+
+    #[gpui::test]
+    async fn table_refresh_does_not_cancel_sibling_details_request(cx: &mut TestAppContext) {
+        let state = test_app_state(cx);
+        let profile_id = Uuid::new_v4();
+        let fake = AdapterFakeConnection::single_database();
+        connect_profile(
+            &state,
+            cx,
+            profile_id,
+            fake.clone(),
+            Some(snapshot_naming(vec![dbflux_core::DatabaseInfo {
+                name: "app".into(),
+                is_current: true,
+            }])),
+        );
+        let sibling_key = ObjectTreeRequestKey::TableDetails {
+            profile_id,
+            database: "app".into(),
+            schema: Some("public".into()),
+            table: "orders".into(),
+        };
+        state.update(cx, |state, cx| {
+            assert_eq!(
+                state.object_tree_request(sibling_key.clone(), cx),
+                ObjectTreeRequestStatus::Dispatched
+            );
+        });
+        let table_id = SchemaNodeId::Table {
+            profile_id,
+            database: Some("app".into()),
+            schema: "public".into(),
+            name: "users".into(),
+        }
+        .to_string();
+        let window = cx.add_window(|window, cx| crate::Sidebar::new(state.clone(), window, cx));
+        window
+            .update(cx, |sidebar, _, cx| {
+                sidebar.refresh_schema_object(&table_id, cx)
+            })
+            .expect("sidebar alive");
+        cx.run_until_parked();
+        assert_eq!(fake.details_calls.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            state.read_with(cx, |state, _| state
+                .object_tree_outcome(&sibling_key)
+                .cloned()),
+            Some(ObjectTreeOutcome::Applied)
+        );
+    }
+
+    #[gpui::test]
+    async fn failed_table_refresh_retries_without_stuck_loading(cx: &mut TestAppContext) {
+        let state = test_app_state(cx);
+        let profile_id = Uuid::new_v4();
+        let fake = AdapterFakeConnection::single_database();
+        fake.fail_details_once();
+        connect_profile(
+            &state,
+            cx,
+            profile_id,
+            fake.clone(),
+            Some(snapshot_naming(vec![dbflux_core::DatabaseInfo {
+                name: "app".into(),
+                is_current: true,
+            }])),
+        );
+        let key = ObjectTreeRequestKey::TableDetails {
+            profile_id,
+            database: "app".into(),
+            schema: Some("public".into()),
+            table: "users".into(),
+        };
+        let table_id = SchemaNodeId::Table {
+            profile_id,
+            database: Some("app".into()),
+            schema: "public".into(),
+            name: "users".into(),
+        }
+        .to_string();
+        let window = cx.add_window(|window, cx| crate::Sidebar::new(state.clone(), window, cx));
+        window
+            .update(cx, |sidebar, _, cx| {
+                sidebar.refresh_schema_object(&table_id, cx)
+            })
+            .expect("sidebar alive");
+        let task_id = state.read_with(cx, |state, _| {
+            state
+                .tasks()
+                .running_tasks()
+                .into_iter()
+                .find(|task| task.kind == dbflux_core::TaskKind::SchemaRefresh)
+                .expect("table refresh task")
+                .id
+        });
+        cx.run_until_parked();
+        assert!(matches!(
+            state.read_with(cx, |state, _| state.object_tree_outcome(&key).cloned()),
+            Some(ObjectTreeOutcome::Failed(_))
+        ));
+        assert!(matches!(
+            state.read_with(cx, |state, _| state
+                .tasks()
+                .get(task_id)
+                .map(|task| task.status)),
+            Some(dbflux_core::TaskStatus::Failed(_))
+        ));
+        window
+            .update(cx, |sidebar, _, cx| {
+                assert!(!sidebar.loading_items.contains(&table_id));
+                sidebar.refresh_schema_object(&table_id, cx);
+            })
+            .expect("sidebar alive");
+        cx.run_until_parked();
+        assert_eq!(fake.details_calls.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            state.read_with(cx, |state, _| state.object_tree_outcome(&key).cloned()),
+            Some(ObjectTreeOutcome::Applied)
+        );
+    }
+
+    #[gpui::test]
+    async fn table_refresh_reconnect_releases_old_loading_and_starts_new_request(
+        cx: &mut TestAppContext,
+    ) {
+        let state = test_app_state(cx);
+        let profile_id = Uuid::new_v4();
+        let fake = AdapterFakeConnection::single_database();
+        connect_profile(
+            &state,
+            cx,
+            profile_id,
+            fake.clone(),
+            Some(snapshot_naming(vec![dbflux_core::DatabaseInfo {
+                name: "app".into(),
+                is_current: true,
+            }])),
+        );
+        let table_id = SchemaNodeId::Table {
+            profile_id,
+            database: Some("app".into()),
+            schema: "public".into(),
+            name: "users".into(),
+        }
+        .to_string();
+        let key = ObjectTreeRequestKey::TableDetails {
+            profile_id,
+            database: "app".into(),
+            schema: Some("public".into()),
+            table: "users".into(),
+        };
+        let window = cx.add_window(|window, cx| crate::Sidebar::new(state.clone(), window, cx));
+        window
+            .update(cx, |sidebar, _, cx| {
+                sidebar.refresh_schema_object(&table_id, cx)
+            })
+            .expect("sidebar alive");
+        assert!(state.read_with(cx, |state, _| state.object_tree_is_pending(&key)));
+        state.update(cx, |state, _| {
+            let mut profile = dbflux_core::ConnectionProfile::new(
+                "replacement",
+                dbflux_core::DbConfig::default_postgres(),
+            );
+            profile.id = profile_id;
+            state.apply_connect_profile(
+                profile,
+                fake.clone(),
+                Some(snapshot_naming(vec![dbflux_core::DatabaseInfo {
+                    name: "app".into(),
+                    is_current: true,
+                }])),
+                None,
+                false,
+                dbflux_core::WritePrivilege::Unknown,
+            );
+        });
+        cx.run_until_parked();
+        window
+            .update(cx, |sidebar, _, cx| {
+                assert!(!sidebar.loading_items.contains(&table_id));
+                sidebar.refresh_schema_object(&table_id, cx);
+            })
+            .expect("sidebar alive");
+        assert!(state.read_with(cx, |state, _| state.object_tree_is_pending(&key)));
+        cx.run_until_parked();
+        assert!(fake.details_calls.load(Ordering::SeqCst) >= 1);
+        assert_eq!(
+            state.read_with(cx, |state, _| state.object_tree_outcome(&key).cloned()),
+            Some(ObjectTreeOutcome::Applied)
+        );
+        window
+            .update(cx, |sidebar, _, _| {
+                assert!(!sidebar.loading_items.contains(&table_id))
+            })
+            .expect("sidebar alive");
+    }
+
+    #[gpui::test]
+    async fn cached_details_after_reconnect_retire_old_refresh_task(cx: &mut TestAppContext) {
+        let state = test_app_state(cx);
+        let profile_id = Uuid::new_v4();
+        let fake = AdapterFakeConnection::single_database();
+        connect_profile(
+            &state,
+            cx,
+            profile_id,
+            fake.clone(),
+            Some(snapshot_naming(vec![dbflux_core::DatabaseInfo {
+                name: "app".into(),
+                is_current: true,
+            }])),
+        );
+        let table_id = SchemaNodeId::Table {
+            profile_id,
+            database: Some("app".into()),
+            schema: "public".into(),
+            name: "users".into(),
+        }
+        .to_string();
+        let window = cx.add_window(|window, cx| crate::Sidebar::new(state.clone(), window, cx));
+        window
+            .update(cx, |sidebar, _, cx| {
+                sidebar.refresh_schema_object(&table_id, cx)
+            })
+            .expect("sidebar alive");
+        let old_task = state.read_with(cx, |state, _| {
+            state
+                .tasks()
+                .running_tasks()
+                .into_iter()
+                .find(|task| task.kind == dbflux_core::TaskKind::SchemaRefresh)
+                .expect("old refresh task")
+                .id
+        });
+        state.update(cx, |state, _| {
+            let mut profile = dbflux_core::ConnectionProfile::new(
+                "replacement",
+                dbflux_core::DbConfig::default_postgres(),
+            );
+            profile.id = profile_id;
+            state.apply_connect_profile(
+                profile,
+                fake,
+                Some(snapshot_naming(vec![dbflux_core::DatabaseInfo {
+                    name: "app".into(),
+                    is_current: true,
+                }])),
+                None,
+                false,
+                dbflux_core::WritePrivilege::Unknown,
+            );
+            state.set_table_details(
+                profile_id,
+                "app".into(),
+                Some("public".into()),
+                "users".into(),
+                loaded_details("app", Some("public"), "users"),
+            );
+        });
+        window
+            .update(cx, |sidebar, _, cx| {
+                assert!(matches!(
+                    sidebar.ensure_table_details(
+                        &table_id,
+                        PendingAction::ViewSchema {
+                            item_id: table_id.clone(),
+                        },
+                        cx,
+                    ),
+                    TableDetailsStatus::Ready
+                ));
+                assert!(!sidebar.loading_items.contains(&table_id));
+                assert!(!sidebar.table_refresh_tasks.contains_key(&table_id));
+            })
+            .expect("sidebar alive");
+        cx.run_until_parked();
+        assert_eq!(
+            state.read_with(cx, |state, _| state
+                .tasks()
+                .get(old_task)
+                .map(|task| task.status)),
+            Some(dbflux_core::TaskStatus::Cancelled)
         );
     }
 }

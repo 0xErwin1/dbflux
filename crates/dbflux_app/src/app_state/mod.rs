@@ -810,6 +810,19 @@ impl AppState {
             .prepare_fetch_table_details(profile_id, database, schema, table)
     }
 
+    /// Invalidates one table's cached details and dependents and fences its older requests.
+    pub fn invalidate_table_details(
+        &mut self,
+        profile_id: Uuid,
+        database: &str,
+        schema: Option<&str>,
+        table: &str,
+    ) -> bool {
+        self.facade
+            .connections
+            .invalidate_table_details(profile_id, database, schema, table)
+    }
+
     /// Prepares a session-fenced table-details fetch for the shared object
     /// tree. The consumer must validate and write details and dependents in
     /// ONE synchronous update via [`AppState::apply_fetched_table_details`].

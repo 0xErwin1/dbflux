@@ -758,6 +758,7 @@ pub struct ConnectionManager {
     /// switch, disconnect); within one session, revision zero means "no slot
     /// mutation since the boundary".
     slot_revisions: HashMap<(Uuid, String), u64>,
+    table_details_revisions: HashMap<(Uuid, String, Option<String>, String), u64>,
     policy_resolver: Box<dyn ProfilePolicyResolver>,
 }
 
@@ -774,6 +775,7 @@ impl ConnectionManager {
             session_generations: HashMap::new(),
             invalidation_revisions: HashMap::new(),
             slot_revisions: HashMap::new(),
+            table_details_revisions: HashMap::new(),
             policy_resolver: Box::new(DefaultMutationPolicyResolver),
         }
     }
@@ -877,6 +879,8 @@ impl ConnectionManager {
         );
         self.database_lists.remove(&id);
         self.clear_profile_slot_revisions(id);
+        self.table_details_revisions
+            .retain(|(profile, ..), _| *profile != id);
         self.pending_operations
             .retain(|operation| operation.profile_id != id);
 
@@ -928,6 +932,8 @@ impl ConnectionManager {
         self.session_generations.remove(&profile_id);
         self.invalidation_revisions.remove(&profile_id);
         self.clear_profile_slot_revisions(profile_id);
+        self.table_details_revisions
+            .retain(|(profile, ..), _| *profile != profile_id);
         self.pending_operations
             .retain(|operation| operation.profile_id != profile_id);
         teardown
@@ -1630,6 +1636,8 @@ impl ConnectionManager {
         );
         self.bump_invalidation_revision(profile_id);
         self.clear_profile_slot_revisions(profile_id);
+        self.table_details_revisions
+            .retain(|(profile, ..), _| *profile != profile_id);
         // Operations belong to the previous profile session; their late
         // completions must not block a replacement session's requests.
         self.pending_operations
@@ -2032,6 +2040,7 @@ impl ConnectionManager {
                 generation: self.current_session_generation(profile_id),
                 invalidation_revision: self.current_invalidation_revision(profile_id),
                 slot_revision: 0,
+                table_details_revision: None,
             },
         })
     }
@@ -2099,6 +2108,7 @@ impl ConnectionManager {
                 generation: self.current_session_generation(profile_id),
                 invalidation_revision: self.current_invalidation_revision(profile_id),
                 slot_revision: self.current_slot_revision(profile_id, database),
+                table_details_revision: None,
             },
         })
     }
@@ -2135,6 +2145,33 @@ impl ConnectionManager {
         }
         self.set_database_schema(profile_id, fetched.database, fetched.schema);
         ApplyFetchOutcome::Applied
+    }
+
+    /// Invalidates exactly one table's details and dependents, fencing older fetches
+    /// without cancelling requests for other tables in the same database.
+    pub fn invalidate_table_details(
+        &mut self,
+        profile_id: Uuid,
+        database: &str,
+        schema: Option<&str>,
+        table: &str,
+    ) -> bool {
+        let Some(connected) = self.connections.get_mut(&profile_id) else {
+            return false;
+        };
+        let key = (
+            database.to_string(),
+            schema.map(str::to_string),
+            table.to_string(),
+        );
+        connected.table_details.remove(&key);
+        connected.dependents_cache.remove(&key);
+        let revision = self
+            .table_details_revisions
+            .entry((profile_id, key.0, key.1, key.2))
+            .or_default();
+        *revision += 1;
+        true
     }
 
     /// Prepares a fenced table-details fetch for the shared object tree.
@@ -2188,6 +2225,17 @@ impl ConnectionManager {
                 generation: self.current_session_generation(profile_id),
                 invalidation_revision: self.current_invalidation_revision(profile_id),
                 slot_revision: self.current_slot_revision(profile_id, database),
+                table_details_revision: Some(
+                    *self
+                        .table_details_revisions
+                        .get(&(
+                            profile_id,
+                            database.to_string(),
+                            schema.map(str::to_string),
+                            table.to_string(),
+                        ))
+                        .unwrap_or(&0),
+                ),
             },
             database: database.to_string(),
             schema: schema.map(String::from),
@@ -2239,6 +2287,21 @@ impl ConnectionManager {
             return ApplyFetchOutcome::Rejected(StaleFetchReason::RequestInvalidated);
         }
 
+        if self
+            .table_details_revisions
+            .get(&(
+                profile_id,
+                fetched.database.clone(),
+                fetched.schema.clone(),
+                fetched.table.clone(),
+            ))
+            .copied()
+            .unwrap_or(0)
+            != fetched.session.table_details_revision.unwrap_or(0)
+        {
+            return ApplyFetchOutcome::Rejected(StaleFetchReason::RequestInvalidated);
+        }
+
         let FetchedTableDetails {
             session: _,
             database,
@@ -2278,6 +2341,7 @@ impl ConnectionManager {
             generation: self.current_session_generation(profile_id),
             invalidation_revision: self.current_invalidation_revision(profile_id),
             slot_revision: self.current_slot_revision(profile_id, database),
+            table_details_revision: None,
         };
         let install = self.prepare_database_connection(profile_id, database, secret_store)?;
 
@@ -2366,6 +2430,7 @@ impl ConnectionManager {
         self.session_generations.clear();
         self.invalidation_revisions.clear();
         self.slot_revisions.clear();
+        self.table_details_revisions.clear();
         info!(
             "Scheduling teardown for {} connections during shutdown",
             count
@@ -2897,6 +2962,7 @@ pub struct FetchSession {
     /// (per-database ABA) rejects the result. Slot-unbound requests (the
     /// primary-connection database list) capture zero and skip this check.
     slot_revision: u64,
+    table_details_revision: Option<u64>,
 }
 
 /// Parameters for fetching the server's database list through the primary
@@ -5842,6 +5908,75 @@ mod tests {
                 Err(error) => error,
             };
         assert_eq!(error, TableDetailsPrepareError::AlreadyCached);
+    }
+
+    #[test]
+    fn table_details_invalidation_fences_only_the_exact_key() {
+        let primary =
+            TableDetailsBoundConnection::new(SchemaLoadingStrategy::SingleDatabase, "main");
+        let (mut manager, profile) = new_manager_with_connection(primary);
+        let old = manager
+            .prepare_fetch_table_details_fenced(profile.id, "main", Some("public"), "users")
+            .expect("old request");
+        let sibling = manager
+            .prepare_fetch_table_details_fenced(profile.id, "main", Some("sales"), "users")
+            .expect("sibling request");
+        let other_database = manager
+            .prepare_fetch_table_details_fenced(profile.id, "other", Some("public"), "users")
+            .expect("other database request");
+        let late = manager
+            .prepare_fetch_table_details_fenced(profile.id, "main", Some("public"), "users")
+            .expect("late request")
+            .execute()
+            .expect("late fetch");
+        let initial = old.execute().expect("fetch initial");
+        assert_eq!(
+            manager.apply_fetched_table_details(initial),
+            ApplyFetchOutcome::Applied
+        );
+        assert!(manager.invalidate_table_details(profile.id, "main", Some("public"), "users"));
+        assert!(
+            manager
+                .get_table_details(profile.id, "main", Some("public"), "users")
+                .is_none()
+        );
+        assert!(
+            manager
+                .connections
+                .get(&profile.id)
+                .expect("connected")
+                .dependents("main", Some("public"), "users")
+                .is_empty()
+        );
+        let fresh = manager
+            .prepare_fetch_table_details_fenced(profile.id, "main", Some("public"), "users")
+            .expect("refresh should bypass old cache");
+        assert_eq!(
+            manager.apply_fetched_table_details(sibling.execute().expect("sibling fetch")),
+            ApplyFetchOutcome::Applied
+        );
+        assert_eq!(
+            manager.apply_fetched_table_details(other_database.execute().expect("other fetch")),
+            ApplyFetchOutcome::Applied
+        );
+        assert_eq!(
+            manager.apply_fetched_table_details(fresh.execute().expect("fresh fetch")),
+            ApplyFetchOutcome::Applied
+        );
+        assert_eq!(
+            manager.apply_fetched_table_details(late),
+            ApplyFetchOutcome::Rejected(StaleFetchReason::RequestInvalidated)
+        );
+        assert!(
+            manager
+                .get_table_details(profile.id, "main", Some("sales"), "users")
+                .is_some()
+        );
+        assert!(
+            manager
+                .get_table_details(profile.id, "other", Some("public"), "users")
+                .is_some()
+        );
     }
 
     #[test]

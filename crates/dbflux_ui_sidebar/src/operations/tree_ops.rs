@@ -2,10 +2,7 @@ use super::{
     HeldDatabaseConnection, retain_database_cache_entries, try_close_held_database_connection,
 };
 use crate::*;
-use dbflux_core::{
-    CancelToken, Connection, DbSchemaInfo, FetchTableDetailsParams, FetchTableDetailsResult,
-    TaskKind, TaskTarget,
-};
+use dbflux_core::{CancelToken, Connection, DbSchemaInfo, TaskKind, TaskTarget};
 use std::sync::Arc;
 
 struct HeldSidebarDatabaseRefreshState {
@@ -44,24 +41,6 @@ enum DatabaseRefreshExecutionOutcome {
     Cancelled {
         held_state: HeldSidebarDatabaseRefreshState,
     },
-}
-
-enum SchemaObjectRefreshResult {
-    TableDetails(Box<FetchTableDetailsResult>),
-    Views {
-        profile_id: Uuid,
-        database: String,
-        schema_name: String,
-        views: Vec<ViewInfo>,
-    },
-}
-
-struct HeldSidebarObjectRefreshState {
-    profile_id: Uuid,
-    cache_database: String,
-    schema_name: String,
-    object_name: String,
-    previous_details: Option<TableInfo>,
 }
 
 impl Sidebar {
@@ -1108,17 +1087,21 @@ impl Sidebar {
     }
 
     pub(crate) fn refresh_schema_object(&mut self, item_id: &str, cx: &mut Context<Self>) {
+        if matches!(parse_node_id(item_id), Some(SchemaNodeId::Table { .. })) {
+            self.refresh_table_details_via_coordinator(item_id, cx);
+            return;
+        }
         let Some(parts) = parse_node_id(item_id)
             .as_ref()
             .and_then(ItemIdParts::from_node_id)
         else {
             return;
         };
-
-        if self.loading_items.contains(item_id) {
+        if !matches!(parse_node_id(item_id), Some(SchemaNodeId::View { .. }))
+            || self.loading_items.contains(item_id)
+        {
             return;
         }
-
         if self.app_state.read(cx).is_background_task_limit_reached() {
             self.pending_toast = Some(PendingToast {
                 message: crate::labels::background_task_limit_toast_label(),
@@ -1130,75 +1113,13 @@ impl Sidebar {
         }
 
         let cache_db = parts.cache_database().to_string();
-        let node_id = parse_node_id(item_id);
-        let previous_details = self.app_state.update(cx, |state, _cx| {
-            state
-                .connections_mut()
-                .get_mut(&parts.profile_id)
-                .and_then(|connected| {
-                    connected.table_details.remove(&(
-                        cache_db.clone(),
-                        Some(parts.schema_name.clone()),
-                        parts.object_name.clone(),
-                    ))
-                })
-        });
-
-        let held_state = HeldSidebarObjectRefreshState {
-            profile_id: parts.profile_id,
-            cache_database: cache_db.clone(),
-            schema_name: parts.schema_name.clone(),
-            object_name: parts.object_name.clone(),
-            previous_details,
-        };
-
-        let refresh_target = TaskTarget {
-            profile_id: parts.profile_id,
-            database: parts.database.clone().or_else(|| Some(cache_db.clone())),
-        };
-
-        enum RefreshObjectJob {
-            Table(FetchTableDetailsParams),
-            View(Arc<dyn Connection>),
-        }
-
-        let job = match node_id {
-            Some(SchemaNodeId::View { .. }) => self
-                .app_state
-                .read(cx)
-                .connections()
-                .get(&parts.profile_id)
-                .map(|connected| {
-                    RefreshObjectJob::View(connected.connection_for_database(&cache_db))
-                }),
-            _ => self
-                .app_state
-                .update(cx, |state, _cx| {
-                    state
-                        .prepare_fetch_table_details(
-                            parts.profile_id,
-                            &cache_db,
-                            Some(&parts.schema_name),
-                            &parts.object_name,
-                        )
-                        .map(RefreshObjectJob::Table)
-                })
-                .ok(),
-        };
-
-        let Some(job) = job else {
-            if let Some(previous_details) = held_state.previous_details.clone() {
-                self.app_state.update(cx, |state, _cx| {
-                    state.set_table_details(
-                        held_state.profile_id,
-                        held_state.cache_database.clone(),
-                        Some(held_state.schema_name.clone()),
-                        held_state.object_name.clone(),
-                        previous_details,
-                    );
-                });
-            }
-
+        let Some(connection) = self
+            .app_state
+            .read(cx)
+            .connections()
+            .get(&parts.profile_id)
+            .map(|connected| connected.connection_for_database(&cache_db))
+        else {
             self.pending_toast = Some(PendingToast {
                 message: crate::labels::prepare_schema_object_refresh_failed_label(),
                 is_error: true,
@@ -1206,17 +1127,19 @@ impl Sidebar {
             self.refresh_tree(cx);
             return;
         };
-
+        let target = TaskTarget {
+            profile_id: parts.profile_id,
+            database: parts.database.clone().or_else(|| Some(cache_db.clone())),
+        };
         let (task_id, cancel_token) = self.app_state.update(cx, |state, cx| {
             let task = state.start_task_for_target(
                 TaskKind::SchemaRefresh,
                 crate::labels::refreshing_schema_object_task_label(&parts.object_name),
-                Some(refresh_target),
+                Some(target),
             );
             cx.emit(AppStateChanged);
             task
         });
-
         self.loading_items.insert(item_id.to_string());
         self.refresh_tree(cx);
 
@@ -1225,109 +1148,49 @@ impl Sidebar {
         let item_id = item_id.to_string();
         let schema_name = parts.schema_name.clone();
         let profile_id = parts.profile_id;
-
         let operation_task = cx.spawn(async move |_this, cx| {
-            let result = match job {
-                RefreshObjectJob::Table(params) => {
-                    cx.background_executor()
-                        .spawn(async move {
-                            params
-                                .execute()
-                                .map(|r| SchemaObjectRefreshResult::TableDetails(Box::new(r)))
-                                .map_err(|e| e.to_string())
+            let fetch_schema_name = schema_name.clone();
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    connection
+                        .schema()
+                        .map(|snapshot| {
+                            snapshot
+                                .schemas()
+                                .iter()
+                                .find(|db_schema| db_schema.name == fetch_schema_name)
+                                .map(|db_schema| db_schema.views.clone())
+                                .unwrap_or_else(|| snapshot.views().to_vec())
                         })
-                        .await
-                }
-                RefreshObjectJob::View(connection) => {
-                    let cache_db = cache_db.clone();
-                    let schema_name = schema_name.clone();
-                    cx.background_executor()
-                        .spawn(async move {
-                            connection
-                                .schema()
-                                .map(|schema| {
-                                    let views = schema
-                                        .schemas()
-                                        .iter()
-                                        .find(|db_schema| db_schema.name == schema_name)
-                                        .map(|db_schema| db_schema.views.clone())
-                                        .unwrap_or_else(|| schema.views().to_vec());
-
-                                    SchemaObjectRefreshResult::Views {
-                                        profile_id,
-                                        database: cache_db,
-                                        schema_name,
-                                        views,
-                                    }
-                                })
-                                .map_err(|error| error.to_string())
-                        })
-                        .await
-                }
-            };
-
+                        .map_err(|error| error.to_string())
+                })
+                .await;
             cx.update(|cx| {
                 sidebar.update(cx, |sidebar, cx| {
                     sidebar.clear_tracked_operation_task(task_id);
                     sidebar.loading_items.remove(&item_id);
-
                     if cancel_token.is_cancelled() {
                         app_state.update(cx, |state, cx| {
                             state.tasks_mut().cancel(task_id);
-                            if let Some(previous_details) = held_state.previous_details.clone() {
-                                state.set_table_details(
-                                    held_state.profile_id,
-                                    held_state.cache_database.clone(),
-                                    Some(held_state.schema_name.clone()),
-                                    held_state.object_name.clone(),
-                                    previous_details,
-                                );
-                            }
                             cx.emit(AppStateChanged);
                         });
                         sidebar.refresh_tree(cx);
                         return;
                     }
-
                     match result {
-                        Ok(SchemaObjectRefreshResult::TableDetails(result)) => {
+                        Ok(views) => {
                             app_state.update(cx, |state, cx| {
                                 state.complete_task(task_id);
-                                state.set_table_details(
-                                    result.profile_id,
-                                    result.database.clone(),
-                                    result.schema.clone(),
-                                    result.table.clone(),
-                                    result.details,
-                                );
-                                state.set_dependents(
-                                    result.profile_id,
-                                    result.database,
-                                    result.schema,
-                                    result.table,
-                                    result.dependents,
-                                );
-                                cx.emit(AppStateChanged);
-                            });
-                        }
-                        Ok(SchemaObjectRefreshResult::Views {
-                            profile_id,
-                            database,
-                            schema_name,
-                            views,
-                        }) => {
-                            app_state.update(cx, |state, cx| {
-                                state.complete_task(task_id);
-
                                 if let Some(connected) =
                                     state.connections_mut().get_mut(&profile_id)
                                 {
                                     if let Some(db_schema) =
-                                        connected.database_schemas.get_mut(&database)
+                                        connected.database_schemas.get_mut(&cache_db)
                                     {
                                         db_schema.views = views.clone();
                                     } else if let Some(db_connection) =
-                                        connected.database_connections.get_mut(&database)
+                                        connected.database_connections.get_mut(&cache_db)
                                     {
                                         if let Some(schema) = db_connection.schema.as_mut()
                                             && let dbflux_core::DataStructure::Relational(
@@ -1359,38 +1222,24 @@ impl Sidebar {
                                         }
                                     }
                                 }
-
                                 cx.emit(AppStateChanged);
                             });
                         }
                         Err(error) => {
                             app_state.update(cx, |state, cx| {
                                 state.fail_task(task_id, error.clone());
-                                if let Some(previous_details) = held_state.previous_details.clone()
-                                {
-                                    state.set_table_details(
-                                        held_state.profile_id,
-                                        held_state.cache_database.clone(),
-                                        Some(held_state.schema_name.clone()),
-                                        held_state.object_name.clone(),
-                                        previous_details,
-                                    );
-                                }
                                 cx.emit(AppStateChanged);
                             });
-
                             sidebar.pending_toast = Some(PendingToast {
                                 message: crate::labels::refresh_schema_object_failed_label(&error),
                                 is_error: true,
                             });
                         }
                     }
-
                     sidebar.refresh_tree(cx);
                 });
             });
         });
-
         self.track_operation_task(task_id, operation_task);
     }
 }
