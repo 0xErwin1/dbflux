@@ -207,9 +207,10 @@ indexing_slicing = "warn"
 
 # The schema visualizer pans and zooms by handing one transform to a subtree
 # (`crates/dbflux_ui_document/src/schema_viz/mod.rs`), which needs the
-# `ElementTransform` API that upstream gpui does not carry yet. The vendored
-# crate is the published gpui-pre 0.3.5 source with
-# `vendor/gpui-pre/element-transform.patch` applied; see `vendor/gpui-pre/VENDOR.md`
+# `ElementTransform` API that upstream gpui does not carry yet, and UI automation
+# needs the frame-observer hooks. The vendored crate is the published gpui-pre 0.3.5
+# source with `vendor/gpui-pre/element-transform.patch` and
+# `vendor/gpui-pre/frame-observer.patch` applied; see `vendor/gpui-pre/VENDOR.md`
 # for the provenance and `vendor/gpui-pre/refresh.sh` for the update procedure.
 [patch.crates-io]
 gpui-pre = { path = "vendor/gpui-pre" }

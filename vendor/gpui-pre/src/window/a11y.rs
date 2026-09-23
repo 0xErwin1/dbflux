@@ -209,8 +209,13 @@ impl A11y {
     ///
     /// See the docs for [`Self::active_flag`] and [`Self::active_this_frame`]
     /// for more commentary.
-    pub(crate) fn sync_active_flag(&mut self) {
-        self.active_this_frame = !self.force_disabled && self.active_flag.load(Ordering::SeqCst);
+    pub(crate) fn sync_active_flag(&mut self, observed: bool) {
+        self.active_this_frame =
+            !self.force_disabled && (observed || self.active_flag.load(Ordering::SeqCst));
+    }
+
+    pub(crate) fn platform_is_active(&self) -> bool {
+        !self.force_disabled && self.active_flag.load(Ordering::SeqCst)
     }
 
     pub(crate) fn is_active(&self) -> bool {
