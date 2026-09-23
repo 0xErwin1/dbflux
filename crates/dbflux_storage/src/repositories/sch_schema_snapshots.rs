@@ -117,6 +117,17 @@ impl SchemaSnapshotRepo {
         Ok(())
     }
 
+    /// Checks whether the profile still exists in the shared configuration database.
+    pub fn profile_exists(&self, profile_id: &str) -> Result<bool, StorageError> {
+        let conn = self.conn.lock().map_err(lock_err)?;
+        conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM cfg_connection_profiles WHERE id = ?1)",
+            [profile_id],
+            |row| row.get(0),
+        )
+        .map_err(sqlite_err)
+    }
+
     /// Lists snapshot summaries for `(profile_id, database)`, ordered by
     /// `captured_at DESC` (most recent first).
     pub fn list(
@@ -380,6 +391,32 @@ mod tests {
             tables: vec![sample_table("users"), sample_table("orders")],
             creation_metadata: Vec::new(),
         }
+    }
+
+    #[test]
+    fn profile_exists_tracks_deletion_and_propagates_lookup_failure() {
+        let (conn, repo, profile_id) = setup("profile_exists");
+        assert!(
+            repo.profile_exists(&profile_id.to_string())
+                .expect("lookup")
+        );
+        conn.lock()
+            .expect("lock")
+            .execute(
+                "DELETE FROM cfg_connection_profiles WHERE id = ?1",
+                [&profile_id.to_string()],
+            )
+            .expect("delete profile");
+        assert!(
+            !repo
+                .profile_exists(&profile_id.to_string())
+                .expect("lookup after deletion")
+        );
+        conn.lock()
+            .expect("lock")
+            .execute("DROP TABLE cfg_connection_profiles", [])
+            .expect("drop fixture table");
+        assert!(repo.profile_exists(&profile_id.to_string()).is_err());
     }
 
     // --- insert + get round-trip ---

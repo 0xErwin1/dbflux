@@ -251,6 +251,18 @@ impl SchemaSnapshotManager {
         )
     }
 
+    /// Loads details for the exact row created or deduplicated by this capture.
+    pub fn deep_details_by_id(
+        &self,
+        id: &str,
+        live_tables: &[TableInfo],
+    ) -> Result<Vec<TableInfo>, StorageError> {
+        let Some(record) = self.get(id)? else {
+            return Ok(Vec::new());
+        };
+        Ok(filter_live_deep_details(record, live_tables))
+    }
+
     /// Table details from the most recent `Deep` snapshot for `(profile_id,
     /// database)`, restricted to tables that still exist in `live_tables`.
     ///
@@ -284,20 +296,30 @@ impl SchemaSnapshotManager {
             }
         };
 
-        let live: std::collections::HashSet<(Option<&str>, &str)> = live_tables
-            .iter()
-            .map(|table| (table.schema.as_deref(), table.name.as_str()))
-            .collect();
-
-        record
-            .tables
-            .into_iter()
-            .filter(|table| {
-                (table.columns.is_some() || table.sample_fields.is_some())
-                    && live.contains(&(table.schema.as_deref(), table.name.as_str()))
-            })
-            .collect()
+        filter_live_deep_details(record, live_tables)
     }
+}
+
+fn filter_live_deep_details(
+    record: SchemaSnapshotRecord,
+    live_tables: &[TableInfo],
+) -> Vec<TableInfo> {
+    if record.depth != SnapshotDepth::Deep {
+        return Vec::new();
+    }
+    let live: std::collections::HashSet<(Option<&str>, &str)> = live_tables
+        .iter()
+        .map(|table| (table.schema.as_deref(), table.name.as_str()))
+        .collect();
+
+    record
+        .tables
+        .into_iter()
+        .filter(|table| {
+            (table.columns.is_some() || table.sample_fields.is_some())
+                && live.contains(&(table.schema.as_deref(), table.name.as_str()))
+        })
+        .collect()
 }
 
 fn cache_key(profile_id: &str, database: Option<&str>) -> CacheKey {
@@ -370,6 +392,42 @@ mod tests {
             columns: None,
             ..table(name)
         }
+    }
+
+    #[test]
+    fn deep_details_by_id_uses_requested_row_not_latest_profile_capture() {
+        let (mut manager, profile_id) = make_manager();
+        let first = manager
+            .capture(
+                &profile_id,
+                Some("db1"),
+                &[table("original")],
+                SnapshotDepth::Deep,
+                10,
+            )
+            .expect("capture original");
+        let first_id = match first {
+            CaptureOutcome::Inserted { id } => id.to_string(),
+            CaptureOutcome::Deduped { .. } => panic!("first capture must insert"),
+        };
+        manager
+            .capture(
+                &profile_id,
+                Some("db1"),
+                &[table("newer")],
+                SnapshotDepth::Deep,
+                10,
+            )
+            .expect("capture newer");
+        let details = manager
+            .deep_details_by_id(
+                &first_id,
+                &[shallow_table("original"), shallow_table("newer")],
+            )
+            .expect("load exact snapshot");
+        assert_eq!(details.len(), 1);
+        assert_eq!(details[0].name, "original");
+        assert!(details[0].columns.is_some());
     }
 
     // --- latest_deep_details ---
