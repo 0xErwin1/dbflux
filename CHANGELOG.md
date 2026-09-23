@@ -24,6 +24,11 @@ All notable changes to DBFlux will be documented in this file.
   once per page, and the page's key types are fetched in one pipeline instead
   of one `TYPE` round trip per key.
 
+* The key browser filter now passes input containing `*`, `?` or `[` through
+  as a glob, so a prefix search such as `leaderboard*` works; plain text still
+  matches anywhere in the key. The header count now reads as the number of
+  keys on the current page instead of implying a total.
+
 
 ### Added
 
