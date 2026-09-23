@@ -710,3 +710,796 @@ fn mssql_ddl_error_missing_object_classified_as_not_found() -> Result<(), DbErro
         Ok(())
     })
 }
+
+// ---------------------------------------------------------------------------
+// DBF-161: faithful CREATE TABLE generation from reference creation metadata
+// ---------------------------------------------------------------------------
+
+/// Source fixture exercising every dimension the faithful generator must
+/// preserve, restricted to collation-free types (numeric(38,0) identity
+/// values beyond i64, decimal precision/scale, temporal scale, binary
+/// length, column defaults, composite primary-key order ([Amount] before
+/// [ID])). String columns carry a collation the structured contract cannot
+/// express and are covered by the named-refusal tests below.
+const GENERATION_SOURCE_SQL: &str = "CREATE TABLE dbo.generation_source (
+    [ID] NUMERIC(38,0) IDENTITY(99999999999999999999999999999999999990, 3) NOT NULL,
+    [Amount] DECIMAL(12,4) NOT NULL DEFAULT ((0)),
+    [Blob] VARBINARY(16) NULL,
+    [Stamp] DATETIME2(3) NULL,
+    CONSTRAINT PK_generation_source PRIMARY KEY ([Amount], [ID])
+)";
+
+/// String-typed fixture for introspection-only dimension assertions and the
+/// collation named-refusal behavior.
+const GENERATION_STRINGS_SQL: &str = "CREATE TABLE dbo.generation_strings (
+    [A] INT NOT NULL PRIMARY KEY,
+    [Name] NVARCHAR(50) NOT NULL,
+    [Bio] NVARCHAR(MAX) NULL,
+    [Code] VARCHAR(40) NULL
+)";
+
+const GENERATION_TARGET_DB: &str = "dbflux_generation_target";
+
+fn type_of<'a>(columns: &'a [dbflux_core::ColumnInfo], name: &str) -> &'a str {
+    columns
+        .iter()
+        .find(|column| column.name == name)
+        .unwrap_or_else(|| panic!("column {name} must be introspected"))
+        .type_name
+        .as_str()
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mssql_ddl_create_table_generation_roundtrip_preserves_metadata_fidelity() -> Result<(), DbError>
+{
+    containers::with_mssql_url(|uri| {
+        let (source, _) = connect_mssql(uri.clone())?;
+
+        source.execute(&QueryRequest::new(format!(
+            "DROP TABLE IF EXISTS dbo.[generation_source]"
+        )))?;
+        source.execute(&QueryRequest::new(GENERATION_SOURCE_SQL))?;
+
+        // Introspect the reference source: table detail with exact type
+        // dimensions plus the structured creation metadata.
+        let source_table = source.table_details(TEST_DATABASE, Some("dbo"), "generation_source")?;
+        let source_columns = source_table
+            .columns
+            .as_ref()
+            .expect("source columns must be loaded");
+
+        // Type dimensions, normalized only for case: sys.types spells
+        // decimal/numeric canonically and lowercases everything.
+        assert!(
+            type_of(source_columns, "ID")
+                .to_ascii_lowercase()
+                .ends_with("(38,0)"),
+            "identity column type must carry full precision, got: {}",
+            type_of(source_columns, "ID")
+        );
+        assert_eq!(
+            type_of(source_columns, "Blob").to_ascii_lowercase(),
+            "varbinary(16)"
+        );
+        assert!(
+            type_of(source_columns, "Amount")
+                .to_ascii_lowercase()
+                .ends_with("(12,4)"),
+            "decimal scale must be preserved, got: {}",
+            type_of(source_columns, "Amount")
+        );
+        assert_eq!(
+            type_of(source_columns, "Stamp").to_ascii_lowercase(),
+            "datetime2(3)",
+            "temporal scale must be preserved"
+        );
+        // Identity must never leak into the type name.
+        assert!(
+            !type_of(source_columns, "ID")
+                .to_ascii_lowercase()
+                .contains("identity"),
+            "identity must travel in creation metadata, not type_name"
+        );
+
+        let source_metadata = source
+            .table_creation_metadata(TEST_DATABASE, Some("dbo"), "generation_source")?
+            .expect("MSSQL must report creation metadata for its own tables");
+
+        assert_eq!(
+            source_metadata.completeness,
+            dbflux_core::MetadataCompleteness::Complete,
+            "a collation-free fixture table with readable defaults must be fully observable"
+        );
+        assert!(
+            source_metadata.blockers.is_empty(),
+            "a collation-free fixture table must carry no blockers, got: {:?}",
+            source_metadata.blockers
+        );
+        let identity = source_metadata.identity.as_ref().expect("identity spec");
+        assert_eq!(identity.column, "ID");
+        assert_eq!(
+            identity.seed, "99999999999999999999999999999999999990",
+            "seed must be read as exact server-converted text, not narrowed"
+        );
+        assert_eq!(identity.increment, "3");
+        let primary_key = source_metadata.primary_key.as_ref().expect("pk spec");
+        assert_eq!(
+            primary_key.columns,
+            vec!["Amount".to_string(), "ID".to_string()],
+            "composite PK order must be the declared key order"
+        );
+
+        // Distinct target database on its own connection: generation must run
+        // on the TARGET driver with REFERENCE-side metadata.
+        source.execute(&QueryRequest::new(format!(
+            "IF NOT EXISTS (SELECT 1 FROM sys.databases WHERE name = '{GENERATION_TARGET_DB}') \
+             CREATE DATABASE [{GENERATION_TARGET_DB}]"
+        )))?;
+        source.execute(&QueryRequest::new(format!(
+            "DROP TABLE IF EXISTS [{GENERATION_TARGET_DB}].dbo.[generation_source]"
+        )))?;
+        let (target, _) = connect_mssql(uri.clone())?;
+        target.set_active_database(Some(GENERATION_TARGET_DB))?;
+
+        let ddl = target.generate_code_with_creation_metadata(
+            "create_table",
+            &source_table,
+            Some(&source_metadata),
+        )?;
+        target.execute(&QueryRequest::new(&ddl))?;
+
+        // Re-introspect the target and compare.
+        let target_table =
+            target.table_details(GENERATION_TARGET_DB, Some("dbo"), "generation_source")?;
+        let target_columns = target_table
+            .columns
+            .as_ref()
+            .expect("target columns must be loaded");
+
+        for column in ["ID", "Blob", "Amount", "Stamp"] {
+            assert_eq!(
+                type_of(target_columns, column).to_ascii_lowercase(),
+                type_of(source_columns, column).to_ascii_lowercase(),
+                "column {column} type dimensions must survive the roundtrip"
+            );
+        }
+        for column in ["ID", "Amount"] {
+            let before = source_columns
+                .iter()
+                .find(|c| c.name == column)
+                .expect("source column");
+            let after = target_columns
+                .iter()
+                .find(|c| c.name == column)
+                .expect("target column");
+            assert_eq!(before.nullable, after.nullable, "nullability of {column}");
+        }
+        assert_eq!(
+            target_columns
+                .iter()
+                .find(|c| c.name == "Amount")
+                .expect("Amount column")
+                .default_value,
+            Some("((0))".to_string()),
+            "column default must survive the roundtrip"
+        );
+
+        let target_metadata = target
+            .table_creation_metadata(GENERATION_TARGET_DB, Some("dbo"), "generation_source")?
+            .expect("target metadata");
+        assert_eq!(target_metadata.identity, source_metadata.identity);
+        assert_eq!(target_metadata.primary_key, source_metadata.primary_key);
+
+        target.execute(&QueryRequest::new(format!(
+            "DROP TABLE IF EXISTS [{GENERATION_TARGET_DB}].dbo.[generation_source]"
+        )))?;
+        source.execute(&QueryRequest::new(
+            "DROP TABLE IF EXISTS dbo.[generation_source]",
+        ))?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mssql_ddl_create_table_generation_refuses_without_reference_metadata() -> Result<(), DbError> {
+    containers::with_mssql_url(|uri| {
+        let (source, _) = connect_mssql(uri)?;
+        source.execute(&QueryRequest::new(
+            "DROP TABLE IF EXISTS dbo.[generation_source]",
+        ))?;
+        source.execute(&QueryRequest::new(GENERATION_SOURCE_SQL))?;
+        let source_table = source.table_details(TEST_DATABASE, Some("dbo"), "generation_source")?;
+
+        // Old snapshots (and any reference without creation metadata) must
+        // fail closed: no identity-less regeneration of an identity table.
+        let error = source
+            .generate_code_with_creation_metadata("create_table", &source_table, None)
+            .expect_err("generation without reference metadata must refuse");
+        let message = error.to_string().to_lowercase();
+        assert!(
+            message.contains("recapture") || message.contains("creation metadata"),
+            "refusal must name the missing reference metadata, got: {message}"
+        );
+
+        source.execute(&QueryRequest::new(
+            "DROP TABLE IF EXISTS dbo.[generation_source]",
+        ))?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mssql_ddl_create_table_generation_refuses_nonclustered_pk_and_compression() -> Result<(), DbError>
+{
+    containers::with_mssql_url(|uri| {
+        let (source, _) = connect_mssql(uri.clone())?;
+
+        source.execute(&QueryRequest::new(
+            "DROP TABLE IF EXISTS dbo.[gen_nc]; DROP TABLE IF EXISTS dbo.[gen_comp]",
+        ))?;
+        source.execute(&QueryRequest::new(
+            "CREATE TABLE dbo.gen_nc ( \
+                 [A] INT NOT NULL, \
+                 [B] INT NOT NULL, \
+                 [V] NVARCHAR(30) NULL, \
+                 CONSTRAINT PK_gen_nc PRIMARY KEY NONCLUSTERED ([A], [B]) \
+             )",
+        ))?;
+        source.execute(&QueryRequest::new(
+            "CREATE TABLE dbo.gen_comp ( \
+                 [A] INT NOT NULL IDENTITY(1, 1) PRIMARY KEY, \
+                 [V] NVARCHAR(30) NULL \
+             ) WITH (DATA_COMPRESSION = ROW)",
+        ))?;
+
+        for table in ["gen_nc", "gen_comp"] {
+            let details = source.table_details(TEST_DATABASE, Some("dbo"), table)?;
+            let metadata = source
+                .table_creation_metadata(TEST_DATABASE, Some("dbo"), table)?
+                .expect("metadata");
+
+            let codes: Vec<&str> = metadata.blockers.iter().map(|b| b.code.as_str()).collect();
+            match table {
+                "gen_nc" => assert!(
+                    codes.contains(&"nonclustered_primary_key"),
+                    "a nonclustered PK must block faithful generation, got: {codes:?}"
+                ),
+                "gen_comp" => assert!(
+                    codes.contains(&"data_compression"),
+                    "row compression must block faithful generation, got: {codes:?}"
+                ),
+                _ => unreachable!(),
+            }
+
+            let error = source
+                .generate_code_with_creation_metadata("create_table", &details, Some(&metadata))
+                .expect_err("blocked semantics must refuse generation");
+            assert!(error.to_string().contains("cannot express"), "got: {error}");
+        }
+
+        source.execute(&QueryRequest::new(
+            "DROP TABLE IF EXISTS dbo.[gen_nc]; DROP TABLE IF EXISTS dbo.[gen_comp]",
+        ))?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mssql_ddl_introspection_reports_string_dimensions_but_generation_refuses_collation()
+-> Result<(), DbError> {
+    containers::with_mssql_url(|uri| {
+        let (source, _) = connect_mssql(uri.clone())?;
+
+        source.execute(&QueryRequest::new(
+            "DROP TABLE IF EXISTS dbo.[generation_strings]",
+        ))?;
+        source.execute(&QueryRequest::new(GENERATION_STRINGS_SQL))?;
+
+        // String dimensions are still introspected exactly.
+        let details = source.table_details(TEST_DATABASE, Some("dbo"), "generation_strings")?;
+        let columns = details.columns.as_ref().expect("columns");
+        assert_eq!(
+            type_of(columns, "Name").to_ascii_lowercase(),
+            "nvarchar(50)",
+            "Unicode length must be rendered in characters, not UTF-16 bytes"
+        );
+        assert_eq!(
+            type_of(columns, "Bio").to_ascii_lowercase(),
+            "nvarchar(max)"
+        );
+        assert_eq!(type_of(columns, "Code").to_ascii_lowercase(), "varchar(40)");
+
+        // Collation-bearing columns must be detected as unrepresentable by
+        // the structured contract and must refuse generation by name.
+        let metadata = source
+            .table_creation_metadata(TEST_DATABASE, Some("dbo"), "generation_strings")?
+            .expect("metadata");
+        let collation_blockers: Vec<&str> = metadata
+            .blockers
+            .iter()
+            .filter(|b| b.code == "column_collation")
+            .map(|b| b.column.as_deref().expect("column-scoped blocker"))
+            .collect();
+        assert!(
+            collation_blockers.contains(&"Name")
+                && collation_blockers.contains(&"Bio")
+                && collation_blockers.contains(&"Code"),
+            "every string column must be blocked by code 'column_collation', got: {:?}",
+            metadata.blockers
+        );
+
+        let error = source
+            .generate_code_with_creation_metadata("create_table", &details, Some(&metadata))
+            .expect_err("collation semantics must refuse generation");
+        assert!(
+            error.to_string().contains("column_collation"),
+            "refusal must name the blocker code, got: {error}"
+        );
+
+        source.execute(&QueryRequest::new(
+            "DROP TABLE IF EXISTS dbo.[generation_strings]",
+        ))?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mssql_ddl_create_table_refuses_collation_even_when_matching_source_db_default()
+-> Result<(), DbError> {
+    // Cross-database fidelity: a column whose collation equals the SOURCE
+    // database default still gets the TARGET database default when created
+    // without an explicit COLLATE clause, and the target default is unknown
+    // at reference-introspection time. Matching the source default is
+    // therefore NOT sufficient — the named refusal must fire in this case
+    // too, not just for explicitly-declared collations.
+    containers::with_mssql_url(|uri| {
+        let (source, _) = connect_mssql(uri.clone())?;
+
+        source.execute(&QueryRequest::new("DROP TABLE IF EXISTS dbo.[gen_coll_db]"))?;
+        source.execute(&QueryRequest::new(
+            "CREATE TABLE dbo.gen_coll_db ( \
+                 [A] INT NOT NULL PRIMARY KEY, \
+                 [V] NVARCHAR(30) NULL \
+             )",
+        ))?;
+
+        // Prove the fixture really is the matched-default case.
+        let probe = source.execute(&QueryRequest::new(
+            "SELECT CASE WHEN c.collation_name = \
+                  CONVERT(NVARCHAR(256), DATABASEPROPERTYEX(DB_NAME(), 'Collation')) \
+                  THEN 1 ELSE 0 END AS matches_default \
+             FROM sys.columns c \
+             JOIN sys.tables t ON t.object_id = c.object_id \
+             WHERE t.name = 'gen_coll_db' AND c.name = 'V'",
+        ))?;
+        match &probe.rows[0][0] {
+            Value::Int(1) => {}
+            other => panic!(
+                "fixture precondition: column collation should equal the source DB default, got {other:?}"
+            ),
+        }
+
+        let details = source.table_details(TEST_DATABASE, Some("dbo"), "gen_coll_db")?;
+        let metadata = source
+            .table_creation_metadata(TEST_DATABASE, Some("dbo"), "gen_coll_db")?
+            .expect("metadata");
+        assert!(
+            metadata
+                .blockers
+                .iter()
+                .any(|b| b.code == "column_collation"),
+            "a collation matching the source DB default must still block (target default unknown), got: {:?}",
+            metadata.blockers
+        );
+        let error = source
+            .generate_code_with_creation_metadata("create_table", &details, Some(&metadata))
+            .expect_err("must refuse");
+        assert!(
+            error.to_string().contains("column_collation"),
+            "got: {error}"
+        );
+
+        source.execute(&QueryRequest::new("DROP TABLE IF EXISTS dbo.[gen_coll_db]"))?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mssql_ddl_create_table_refuses_unrepresented_identity_and_key_semantics() -> Result<(), DbError>
+{
+    containers::with_mssql_url(|uri| {
+        let (source, _) = connect_mssql(uri.clone())?;
+
+        source.execute(&QueryRequest::new("DROP TABLE IF EXISTS dbo.[gen_nfr]"))?;
+        source.execute(&QueryRequest::new("DROP TABLE IF EXISTS dbo.[gen_desc]"))?;
+        source.execute(&QueryRequest::new(
+            "CREATE TABLE dbo.gen_nfr ( \
+                 [ID] INT IDENTITY(1, 1) NOT FOR REPLICATION NOT NULL PRIMARY KEY, \
+                 [V] INT NULL \
+             )",
+        ))?;
+        source.execute(&QueryRequest::new(
+            "CREATE TABLE dbo.gen_desc ( \
+                 [A] INT NOT NULL, \
+                 [B] INT NOT NULL, \
+                 CONSTRAINT PK_gen_desc PRIMARY KEY ([A] DESC, [B]) \
+             )",
+        ))?;
+
+        let nfr = source.table_details(TEST_DATABASE, Some("dbo"), "gen_nfr")?;
+        let nfr_metadata = source
+            .table_creation_metadata(TEST_DATABASE, Some("dbo"), "gen_nfr")?
+            .expect("metadata");
+        assert!(
+            nfr_metadata
+                .blockers
+                .iter()
+                .any(|b| b.code == "identity_not_for_replication"),
+            "NOT FOR REPLICATION identity must block faithful generation, got: {:?}",
+            nfr_metadata.blockers
+        );
+        assert!(
+            source
+                .generate_code_with_creation_metadata("create_table", &nfr, Some(&nfr_metadata))
+                .is_err(),
+            "NOT FOR REPLICATION identity must refuse generation"
+        );
+
+        let desc = source.table_details(TEST_DATABASE, Some("dbo"), "gen_desc")?;
+        let desc_metadata = source
+            .table_creation_metadata(TEST_DATABASE, Some("dbo"), "gen_desc")?
+            .expect("metadata");
+        assert!(
+            desc_metadata
+                .blockers
+                .iter()
+                .any(|b| b.code == "descending_primary_key"),
+            "a descending PK key column must block faithful generation, got: {:?}",
+            desc_metadata.blockers
+        );
+        assert!(
+            source
+                .generate_code_with_creation_metadata("create_table", &desc, Some(&desc_metadata))
+                .is_err(),
+            "a descending PK must refuse generation"
+        );
+
+        source.execute(&QueryRequest::new("DROP TABLE IF EXISTS dbo.[gen_nfr]"))?;
+        source.execute(&QueryRequest::new("DROP TABLE IF EXISTS dbo.[gen_desc]"))?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mssql_ddl_capture_reports_unavailable_default_expression_for_bound_defaults()
+-> Result<(), DbError> {
+    containers::with_mssql_url(|uri| {
+        let (source, _) = connect_mssql(uri.clone())?;
+
+        source.execute(&QueryRequest::new("DROP TABLE IF EXISTS dbo.[gen_bound]"))?;
+        source.execute(&QueryRequest::new(
+            "DROP DEFAULT IF EXISTS dbo.[gen_bound_default]",
+        ))?;
+        source.execute(&QueryRequest::new(
+            "CREATE DEFAULT dbo.gen_bound_default AS 7",
+        ))?;
+        source.execute(&QueryRequest::new(
+            "CREATE TABLE dbo.gen_bound ( \
+                 [A] INT NOT NULL PRIMARY KEY, \
+                 [V] INT NULL \
+             )",
+        ))?;
+        source.execute(&QueryRequest::new(
+            "EXEC sp_bindefault 'dbo.gen_bound_default', 'dbo.gen_bound.[V]'",
+        ))?;
+
+        let details = source.table_details(TEST_DATABASE, Some("dbo"), "gen_bound")?;
+        let metadata = source
+            .table_creation_metadata(TEST_DATABASE, Some("dbo"), "gen_bound")?
+            .expect("metadata");
+
+        // The bound default IS a known default (default_object_id <> 0) whose
+        // definition is not available through sys.default_constraints; it
+        // must surface as a named incompleteness, never as "no default".
+        match &metadata.completeness {
+            dbflux_core::MetadataCompleteness::Partial { missing } => assert!(
+                missing.contains(&dbflux_core::MissingCreationMetadata::ColumnDefaultExpressions),
+                "bound default must report ColumnDefaultExpressions missing, got {missing:?}"
+            ),
+            other => panic!("expected Partial completeness, got {other:?}"),
+        }
+        let v_column = details
+            .columns
+            .as_ref()
+            .expect("columns")
+            .iter()
+            .find(|c| c.name == "V")
+            .expect("V column");
+        assert!(
+            v_column.default_value.is_none(),
+            "an unavailable default expression must not masquerade as a readable one"
+        );
+        let error = source
+            .generate_code_with_creation_metadata("create_table", &details, Some(&metadata))
+            .expect_err("generation must refuse");
+        assert!(
+            error.to_string().to_lowercase().contains("default"),
+            "refusal must name the missing default expressions, got: {error}"
+        );
+        assert!(
+            !error.to_string().contains('7'),
+            "refusal must not leak source expression values, got: {error}"
+        );
+
+        source.execute(&QueryRequest::new("DROP TABLE IF EXISTS dbo.[gen_bound]"))?;
+        source.execute(&QueryRequest::new(
+            "DROP DEFAULT IF EXISTS dbo.[gen_bound_default]",
+        ))?;
+        Ok(())
+    })
+}
+
+// ---------------------------------------------------------------------------
+// DBF-161 generator PR2: typed XML blockers and session database resolution
+// ---------------------------------------------------------------------------
+
+const TYPED_XML_COLLECTION: &str = "TypedXmlCollection";
+const TYPED_XML_TABLE: &str = "typed_xml_source";
+
+/// Fixture teardown: dropping the table first releases the collection so
+/// the collection drop cannot fail on a dependent column. `IF EXISTS` /
+/// existence-guarded SQL tolerates absent objects; genuine failures
+/// propagate instead of being discarded.
+fn drop_typed_xml_fixture(conn: &dyn Connection) -> Result<(), DbError> {
+    conn.execute(&QueryRequest::new(format!(
+        "DROP TABLE IF EXISTS dbo.[{TYPED_XML_TABLE}]"
+    )))?;
+    conn.execute(&QueryRequest::new(format!(
+        "IF EXISTS (SELECT 1 FROM sys.xml_schema_collections x \n\
+                     JOIN sys.schemas s ON s.schema_id = x.schema_id \n\
+                     WHERE s.name = 'dbo' AND x.name = '{TYPED_XML_COLLECTION}') \n\
+         DROP XML SCHEMA COLLECTION dbo.[{TYPED_XML_COLLECTION}]"
+    )))?;
+    Ok(())
+}
+
+/// Scalar helper: read the session's actual database straight from the
+/// server so assertions never hardcode a database name.
+fn query_session_database(conn: &dyn Connection) -> Option<String> {
+    let result = conn
+        .execute(&QueryRequest::new("SELECT DB_NAME()"))
+        .expect("SELECT DB_NAME() must succeed");
+    result.rows.into_iter().next().and_then(|row| {
+        row.into_iter().next().and_then(|value| match value {
+            Value::Text(name) => Some(name),
+            _ => None,
+        })
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mssql_ddl_create_table_generation_refuses_typed_xml() -> Result<(), DbError> {
+    containers::with_mssql_url(|uri| {
+        let (source, _) = connect_mssql(uri)?;
+        drop_typed_xml_fixture(&*source)?;
+
+        source.execute(&QueryRequest::new(format!(
+            "CREATE XML SCHEMA COLLECTION dbo.[{TYPED_XML_COLLECTION}] AS \n\
+             N'<?xml version=\"1.0\" encoding=\"utf-16\"?> \n\
+             <xsd:schema xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\" \n\
+                         elementFormDefault=\"qualified\"> \n\
+               <xsd:element name=\"item\"> \n\
+                 <xsd:complexType> \n\
+                   <xsd:sequence> \n\
+                     <xsd:element name=\"value\" type=\"xsd:string\" nillable=\"true\"/> \n\
+                   </xsd:sequence> \n\
+                 </xsd:complexType> \n\
+               </xsd:element> \n\
+             </xsd:schema>'"
+        )))?;
+        source.execute(&QueryRequest::new(format!(
+            "CREATE TABLE dbo.[{TYPED_XML_TABLE}] ( \n\
+                 [Id] INT NOT NULL PRIMARY KEY CLUSTERED, \n\
+                 [Payload] xml(DOCUMENT dbo.[{TYPED_XML_COLLECTION}]) NOT NULL \n\
+             )"
+        )))?;
+
+        let details = source.table_details(TEST_DATABASE, Some("dbo"), TYPED_XML_TABLE)?;
+        let metadata = source
+            .table_creation_metadata(TEST_DATABASE, Some("dbo"), TYPED_XML_TABLE)?
+            .expect("MSSQL must report creation metadata for its own tables");
+
+        let blocker = metadata
+            .blockers
+            .iter()
+            .find(|blocker| blocker.code == "typed_xml")
+            .expect("typed XML must be reported as a named creation blocker");
+        assert_eq!(
+            blocker.column.as_deref(),
+            Some("Payload"),
+            "the blocker must name the typed XML column"
+        );
+
+        let error = source
+            .generate_code_with_creation_metadata("create_table", &details, Some(&metadata))
+            .expect_err("generation must refuse typed XML instead of emitting plain xml");
+        let lowered = error.to_string().to_lowercase();
+        assert!(
+            lowered.contains("typed_xml"),
+            "refusal must name the typed_xml blocker, got: {error}"
+        );
+
+        drop_typed_xml_fixture(&*source)?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mssql_uri_default_login_resolves_actual_session_database() -> Result<(), DbError> {
+    containers::with_mssql_url(|uri| {
+        // A default-login URI names no database: strip the /master suffix so
+        // the login itself decides which database the session starts in.
+        let base = uri
+            .rsplit_once('/')
+            .map(|(base, _)| base.to_string())
+            .expect("fixture URI must contain a /<database> suffix");
+
+        let driver = MssqlDriver::new();
+        let profile = ConnectionProfile::new(
+            "ddl-mssql-default-login",
+            DbConfig::SqlServer {
+                use_uri: true,
+                uri: Some(base),
+                host: String::new(),
+                port: 1433,
+                user: String::new(),
+                database: None,
+                instance: None,
+                ssl_mode: Some("on".to_string()),
+                trust_server_certificate: true,
+                ssl_root_cert_path: None,
+                ssh_tunnel: None,
+                ssh_tunnel_profile_id: None,
+            },
+        );
+        let connection =
+            containers::retry_db_operation(Duration::from_secs(60), || -> Result<_, DbError> {
+                let connection = driver.connect(&profile)?;
+                connection.ping()?;
+                Ok(connection)
+            })?;
+
+        let actual = query_session_database(&*connection)
+            .expect("SELECT DB_NAME() must return the session database");
+        assert_eq!(
+            connection.active_database(),
+            Some(actual.clone()),
+            "a URI/default-login connect must report the actual session database, not None"
+        );
+
+        let snapshot = connection.schema()?;
+        let dbflux_core::DataStructure::Relational(relational) = snapshot.structure else {
+            panic!("MSSQL schema snapshot must be relational");
+        };
+        assert_eq!(
+            relational.current_database,
+            Some(actual),
+            "the schema snapshot must carry the resolved session database"
+        );
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mssql_direct_default_login_resolves_actual_session_database() -> Result<(), DbError> {
+    use dbflux_core::secrecy::SecretString;
+
+    containers::with_mssql_url(|uri| {
+        // Direct host/port profile with database: None — the login default
+        // applies, and the driver must resolve the actual session database.
+        let base = uri
+            .rsplit_once('/')
+            .map(|(base, _)| base.to_string())
+            .expect("fixture URI must contain a /<database> suffix");
+        let port: u16 = base
+            .rsplit_once(':')
+            .and_then(|(_, port)| port.parse().ok())
+            .expect("fixture URI must carry a numeric port");
+
+        let driver = MssqlDriver::new();
+        let profile = ConnectionProfile::new(
+            "ddl-mssql-direct-default-login",
+            DbConfig::SqlServer {
+                use_uri: false,
+                uri: None,
+                host: "127.0.0.1".to_string(),
+                port,
+                user: "sa".to_string(),
+                database: None,
+                instance: None,
+                ssl_mode: Some("on".to_string()),
+                trust_server_certificate: true,
+                ssl_root_cert_path: None,
+                ssh_tunnel: None,
+                ssh_tunnel_profile_id: None,
+            },
+        );
+        let password = SecretString::from(dbflux_test_support::containers::MSSQL_TEST_PASSWORD);
+        let connection =
+            containers::retry_db_operation(Duration::from_secs(60), || -> Result<_, DbError> {
+                let connection = driver.connect_with_password(&profile, Some(&password))?;
+                connection.ping()?;
+                Ok(connection)
+            })?;
+
+        let actual = query_session_database(&*connection)
+            .expect("SELECT DB_NAME() must return the session database");
+        assert_eq!(
+            connection.active_database(),
+            Some(actual),
+            "a direct/default-login connect must report the actual session database, not None"
+        );
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mssql_generate_code_create_table_requires_reference_creation_metadata() -> Result<(), DbError> {
+    containers::with_mssql_url(|uri| {
+        let (source, _) = connect_mssql(uri)?;
+        source.execute(&QueryRequest::new("DROP TABLE IF EXISTS dbo.[gen_plain]"))?;
+        source.execute(&QueryRequest::new(
+            "CREATE TABLE dbo.[gen_plain] ( \
+                 [Id] INT NOT NULL PRIMARY KEY CLUSTERED, \
+                 [Balance] DECIMAL(12,4) NOT NULL DEFAULT 0 \
+             )",
+        ))?;
+
+        let details = source.table_details(TEST_DATABASE, Some("dbo"), "gen_plain")?;
+
+        // The legacy `generate_code` seam cannot carry reference creation
+        // metadata (identity seed/increment, primary-key order, blockers);
+        // it must refuse with an actionable message instead of generating
+        // lossy DDL or introspecting the target.
+        let error = source
+            .generate_code("create_table", &details)
+            .expect_err("plain generate_code must refuse CREATE TABLE");
+        let lowered = error.to_string().to_lowercase();
+        assert!(
+            lowered.contains("creation metadata"),
+            "refusal must name the missing reference creation metadata, got: {error}"
+        );
+        assert!(
+            lowered.contains("generate_code_with_creation_metadata"),
+            "refusal must point at the metadata-aware seam, got: {error}"
+        );
+
+        // The metadata-aware seam generates faithfully for the same table.
+        let metadata = source
+            .table_creation_metadata(TEST_DATABASE, Some("dbo"), "gen_plain")?
+            .expect("MSSQL must report creation metadata for its own tables");
+        let ddl = source.generate_code_with_creation_metadata(
+            "create_table",
+            &details,
+            Some(&metadata),
+        )?;
+        assert!(
+            ddl.to_uppercase().contains("CREATE TABLE"),
+            "metadata-aware generation must produce CREATE TABLE, got: {ddl}"
+        );
+
+        source.execute(&QueryRequest::new("DROP TABLE IF EXISTS dbo.[gen_plain]"))?;
+        Ok(())
+    })
+}

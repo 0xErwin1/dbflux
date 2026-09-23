@@ -6,7 +6,7 @@
 //! the selected changes through `DdlApplyExecutor` behind a hard-confirm gate.
 //! Changes the driver cannot express are surfaced explicitly, never dropped.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use dbflux_app::keymap::{Command, ContextId};
@@ -19,8 +19,8 @@ use dbflux_components::primitives::{Badge, BadgeVariant, Icon, Text};
 use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_core::{
     ConnectedProfile, Connection, EventSink, ExecutionClassification, MutationPolicy,
-    QueryLanguage, ReadOnlyReason, RefreshPolicy, RiskedChange, SchemaChange, TableInfo, TableRef,
-    diff_schema,
+    QueryLanguage, ReadOnlyReason, RefreshPolicy, RiskedChange, SchemaChange,
+    TableCreationMetadata, TableInfo, TableRef, diff_schema,
 };
 use dbflux_storage::error::StorageError;
 use dbflux_storage::repositories::sch_schema_snapshots::{
@@ -936,7 +936,10 @@ impl SchemaDiffDocument {
                     return;
                 };
                 match state.schema_snapshots.get(&snapshot_id.to_string()) {
-                    Ok(Some(record)) => SidePlan::Resolved(record.tables),
+                    Ok(Some(record)) => SidePlan::Resolved {
+                        tables: record.tables,
+                        creation_metadata: record.creation_metadata,
+                    },
                     Ok(None) => {
                         self.compute_state = ComputeState::Error(dbflux_i18n::t!(
                             "document.schema_diff.toast.snapshot_missing"
@@ -989,22 +992,30 @@ impl SchemaDiffDocument {
             // A failed `table_details` on EITHER side aborts the comparison
             // with a clear error instead of silently degrading to a
             // column-less entry, which would produce a wrong/destructive diff.
-            let before = deep_resolve(
+            let (before, _) = deep_resolve(
                 &*target_connection,
                 target_db_for_task.as_deref(),
                 &target_shallow,
+                false,
             )?;
-            let after = match reference_plan {
+            let (after, reference_metadata) = match reference_plan {
                 SidePlan::Live {
                     connection,
                     database,
                     shallow,
-                } => deep_resolve(&*connection, database.as_deref(), &shallow)?,
-                SidePlan::Resolved(tables) => tables,
+                } => deep_resolve(&*connection, database.as_deref(), &shallow, true)?,
+                SidePlan::Resolved {
+                    tables,
+                    creation_metadata,
+                } => (tables, reference_metadata_from_snapshot(creation_metadata)),
             };
 
             let table_changes = diff_schema(&before, &after);
-            Ok::<Vec<TableDiffGroup>, String>(build_groups(&*target_connection, table_changes))
+            Ok::<Vec<TableDiffGroup>, String>(build_groups(
+                &*target_connection,
+                table_changes,
+                &reference_metadata,
+            ))
         });
 
         cx.spawn(async move |this, cx| {
@@ -1759,6 +1770,9 @@ impl SchemaDiffDocument {
     }
 }
 
+/// Qualified-name key `(schema, table)` for reference-side creation metadata.
+type ReferenceMetadataMap = HashMap<(Option<String>, String), TableCreationMetadata>;
+
 /// Send-friendly resolution plan for one side of the diff.
 enum SidePlan {
     Live {
@@ -1766,7 +1780,10 @@ enum SidePlan {
         database: Option<String>,
         shallow: Vec<TableInfo>,
     },
-    Resolved(Vec<TableInfo>),
+    Resolved {
+        tables: Vec<TableInfo>,
+        creation_metadata: Vec<TableCreationMetadata>,
+    },
 }
 
 /// Back-fills full column/index detail for every shallow table via
@@ -1779,9 +1796,11 @@ fn deep_resolve(
     connection: &dyn Connection,
     database: Option<&str>,
     shallow: &[TableInfo],
-) -> Result<Vec<TableInfo>, String> {
+    collect_metadata: bool,
+) -> Result<(Vec<TableInfo>, ReferenceMetadataMap), String> {
     let db = database.unwrap_or_default();
     let mut resolved = Vec::with_capacity(shallow.len());
+    let mut creation_metadata: ReferenceMetadataMap = HashMap::new();
 
     for table in shallow {
         let details = connection
@@ -1795,18 +1814,48 @@ fn deep_resolve(
                     })
                 )
             })?;
+
+        // Reference-side creation metadata (identity, PK order, blockers)
+        // travels beside the table detail. Only collected for the reference
+        // side: the diff target never supplies generation metadata. A driver
+        // without introspection returns `Ok(None)`, which metadata-aware
+        // target drivers refuse at generation time; an introspection error is
+        // treated the same way so a metadata gap can never abort an otherwise
+        // correct column diff, and still fails closed at generation.
+        if collect_metadata
+            && let Ok(Some(metadata)) =
+                connection.table_creation_metadata(db, table.schema.as_deref(), &table.name)
+        {
+            creation_metadata.insert((details.schema.clone(), details.name.clone()), metadata);
+        }
+
         resolved.push(details);
     }
 
-    Ok(resolved)
+    Ok((resolved, creation_metadata))
+}
+
+/// Indexes a snapshot's stored creation metadata by qualified table name.
+/// Snapshot metadata is a standalone list (only tables the driver could
+/// describe carry entries), so the map — not list position — is the binding.
+fn reference_metadata_from_snapshot(
+    creation_metadata: Vec<TableCreationMetadata>,
+) -> ReferenceMetadataMap {
+    creation_metadata
+        .into_iter()
+        .map(|metadata| ((metadata.schema.clone(), metadata.table.clone()), metadata))
+        .collect()
 }
 
 /// Turns raw `TableChange`s into render groups, partitioning modified tables via
 /// the target driver's code generator and probing whole-table add/remove
-/// through the driver's `generate_code` seam.
+/// through the driver's table-level generation seams
+/// (`generate_code_with_creation_metadata` for creates, legacy `generate_code`
+/// for drops).
 fn build_groups(
     connection: &dyn Connection,
     table_changes: Vec<dbflux_core::TableChange>,
+    reference_metadata: &ReferenceMetadataMap,
 ) -> Vec<TableDiffGroup> {
     use dbflux_core::TableChange;
 
@@ -1820,7 +1869,14 @@ fn build_groups(
                     schema: info.schema.clone(),
                     name: info.name.clone(),
                 };
-                let action = TableLevelAction::Create(info);
+                // The reference side's creation metadata rides with the added
+                // table so the TARGET connection can generate faithfully; a
+                // metadata gap arrives as `None` and metadata-aware drivers
+                // refuse rather than flattening identity or key order.
+                let metadata = reference_metadata
+                    .get(&(info.schema.clone(), info.name.clone()))
+                    .cloned();
+                let action = TableLevelAction::Create(Box::new(info), metadata);
                 let probe = build_statements_for_table_action(connection, &action);
                 let outcome = classify_table_action(action, probe);
                 groups.push(TableDiffGroup {
@@ -2620,19 +2676,22 @@ mod tests {
     use super::SchemaDiffDocument;
     use super::{
         ComputeBinding, ComputeState, PreparationBinding, PreparationContext, PreparationState,
-        apply_completion_disposition, apply_snapshot_load_result, binding_is_current, deep_resolve,
-        document_state_for, invalidate_snapshot_profile_if_missing,
-        load_existing_profile_snapshots, read_only_toast_message, release_stale_apply_loading,
-        schema_diff_is_busy,
+        ReferenceMetadataMap, apply_completion_disposition, apply_snapshot_load_result,
+        binding_is_current, build_groups, deep_resolve, document_state_for,
+        invalidate_snapshot_profile_if_missing, load_existing_profile_snapshots,
+        read_only_toast_message, release_stale_apply_loading, schema_diff_is_busy,
     };
-    use crate::schema_diff::diff_source::{DiffMode, ReferenceTarget};
+    use std::collections::HashMap;
+
+    use crate::schema_diff::apply::TableLevelAction;
+    use crate::schema_diff::diff_source::{DiffMode, ReferenceTarget, TableActionOutcome};
     use crate::types::DocumentState;
     use dbflux_core::{
         CodeGenerator, ColumnInfo, Connection, ConstraintInfo, ConstraintKind, DatabaseCategory,
         DbError, DbKind, DefaultSqlDialect, DriverCapabilities, DriverMetadata,
         DriverMetadataBuilder, ForeignKeyInfo, IndexData, IndexInfo, MutationPolicy,
         NoOpCodeGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult, ReadOnlyReason,
-        SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, TableInfo,
+        SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, TableCreationMetadata, TableInfo,
     };
     use dbflux_core::{ConnectionProfile, DbConfig, SchemaSnapshotRecord, SnapshotDepth};
     use dbflux_storage::bootstrap::StorageRuntime;
@@ -2929,6 +2988,7 @@ mod tests {
         dialect: DefaultSqlDialect,
         codegen: NoOpCodeGenerator,
         fail_table_details: bool,
+        creation_metadata: Option<TableCreationMetadata>,
     }
 
     impl DeepResolveFake {
@@ -2946,6 +3006,17 @@ mod tests {
                 dialect: DefaultSqlDialect,
                 codegen: NoOpCodeGenerator,
                 fail_table_details,
+                creation_metadata: None,
+            }
+        }
+
+        fn with_creation_metadata(
+            fail_table_details: bool,
+            creation_metadata: Option<TableCreationMetadata>,
+        ) -> Self {
+            Self {
+                creation_metadata,
+                ..Self::new(fail_table_details)
             }
         }
     }
@@ -2981,6 +3052,24 @@ mod tests {
         fn code_generator(&self) -> &dyn CodeGenerator {
             &self.codegen
         }
+        fn table_creation_metadata(
+            &self,
+            _database: &str,
+            _schema: Option<&str>,
+            _table: &str,
+        ) -> Result<Option<TableCreationMetadata>, DbError> {
+            Ok(self.creation_metadata.clone())
+        }
+
+        fn generate_code_with_creation_metadata(
+            &self,
+            _generator_id: &str,
+            table: &TableInfo,
+            _creation_metadata: Option<&TableCreationMetadata>,
+        ) -> Result<String, DbError> {
+            Ok(format!("CREATE TABLE {} (id INT)", table.name))
+        }
+
         fn table_details(
             &self,
             _database: &str,
@@ -3292,7 +3381,7 @@ mod tests {
         let connection = DeepResolveFake::new(true);
         let shallow = vec![shallow_table("users")];
 
-        let result = deep_resolve(&connection, Some("app"), &shallow);
+        let result = deep_resolve(&connection, Some("app"), &shallow, false);
 
         assert!(
             result.is_err(),
@@ -3306,7 +3395,7 @@ mod tests {
         let connection = DeepResolveFake::new(false);
         let shallow = vec![shallow_table("users")];
 
-        let resolved = deep_resolve(&connection, Some("app"), &shallow)
+        let (resolved, _) = deep_resolve(&connection, Some("app"), &shallow, false)
             .expect("resolution should succeed when table_details succeeds");
 
         assert_eq!(resolved.len(), 1);
@@ -3314,6 +3403,152 @@ mod tests {
             resolved[0].columns.is_some(),
             "the resolved table must carry the fetched columns, not the column-less shallow entry"
         );
+    }
+
+    // ── DBF-161: reference creation metadata forwarding ─────────────────
+
+    fn users_creation_metadata() -> TableCreationMetadata {
+        TableCreationMetadata {
+            schema: Some("public".to_string()),
+            table: "users".to_string(),
+            completeness: dbflux_core::MetadataCompleteness::Complete,
+            identity: Some(dbflux_core::IdentitySpec {
+                column: "id".to_string(),
+                seed: "1".to_string(),
+                increment: "1".to_string(),
+            }),
+            primary_key: Some(dbflux_core::PrimaryKeySpec {
+                columns: vec!["id".to_string()],
+            }),
+            blockers: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn deep_resolve_collects_reference_creation_metadata_by_qualified_name() {
+        let connection =
+            DeepResolveFake::with_creation_metadata(false, Some(users_creation_metadata()));
+        let shallow = vec![shallow_table("users")];
+
+        let (_, metadata) = deep_resolve(&connection, Some("app"), &shallow, true)
+            .expect("resolution should succeed");
+
+        assert_eq!(
+            metadata.get(&(Some("public".to_string()), "users".to_string())),
+            Some(&users_creation_metadata()),
+            "the reference side's creation metadata must be collected for generation"
+        );
+    }
+
+    #[test]
+    fn deep_resolve_skips_metadata_collection_when_not_requested() {
+        let connection =
+            DeepResolveFake::with_creation_metadata(false, Some(users_creation_metadata()));
+        let shallow = vec![shallow_table("users")];
+
+        let (_, metadata) = deep_resolve(&connection, Some("app"), &shallow, false)
+            .expect("resolution should succeed");
+
+        assert!(
+            metadata.is_empty(),
+            "the diff target side must not pay for reference-side metadata"
+        );
+    }
+
+    #[test]
+    fn build_groups_attaches_reference_metadata_to_table_added_actions() {
+        let connection = DeepResolveFake::new(false);
+        let mut metadata_map = HashMap::new();
+        metadata_map.insert(
+            (Some("public".to_string()), "orders".to_string()),
+            users_creation_metadata(),
+        );
+
+        let info = TableInfo {
+            name: "orders".to_string(),
+            schema: Some("public".to_string()),
+            columns: Some(Vec::new()),
+            indexes: None,
+            foreign_keys: None,
+            constraints: None,
+            sample_fields: None,
+            presentation: Default::default(),
+            child_items: None,
+            storage_hints: None,
+        };
+        let changes = vec![dbflux_core::TableChange::TableAdded(info)];
+
+        let groups = build_groups(&connection, changes, &metadata_map);
+
+        match &groups[0].table_action {
+            Some(TableActionOutcome::Applicable { action, .. }) => match action {
+                TableLevelAction::Create(_, attached) => assert_eq!(
+                    attached.as_ref(),
+                    Some(&users_creation_metadata()),
+                    "the Create action must carry the reference side's creation metadata"
+                ),
+                TableLevelAction::Drop(_) => panic!("expected a Create action"),
+            },
+            other => panic!("expected an applicable table action, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn snapshot_metadata_binds_by_qualified_name_not_list_position() {
+        // Snapshot metadata is a standalone list covering only the tables the
+        // driver could describe; binding must be by (schema, table), and a
+        // table without an entry must resolve to no metadata.
+        let other = TableCreationMetadata {
+            table: "other".to_string(),
+            ..users_creation_metadata()
+        };
+        let map = super::reference_metadata_from_snapshot(vec![other]);
+
+        assert_eq!(
+            map.get(&(Some("public".to_string()), "users".to_string())),
+            None,
+            "metadata must not be bound by list position"
+        );
+        assert_eq!(
+            map.get(&(Some("public".to_string()), "other".to_string())),
+            Some(&TableCreationMetadata {
+                table: "other".to_string(),
+                ..users_creation_metadata()
+            })
+        );
+    }
+
+    #[test]
+    fn build_groups_leaves_table_added_without_metadata_unattached() {
+        let connection = DeepResolveFake::new(false);
+        let metadata_map = HashMap::new();
+
+        let info = TableInfo {
+            name: "orders".to_string(),
+            schema: Some("public".to_string()),
+            columns: Some(Vec::new()),
+            indexes: None,
+            foreign_keys: None,
+            constraints: None,
+            sample_fields: None,
+            presentation: Default::default(),
+            child_items: None,
+            storage_hints: None,
+        };
+        let changes = vec![dbflux_core::TableChange::TableAdded(info)];
+
+        let groups = build_groups(&connection, changes, &metadata_map);
+
+        match &groups[0].table_action {
+            Some(TableActionOutcome::Applicable { action, .. }) => match action {
+                TableLevelAction::Create(_, attached) => assert!(
+                    attached.is_none(),
+                    "no reference metadata must arrive as None so metadata-aware drivers refuse"
+                ),
+                TableLevelAction::Drop(_) => panic!("expected a Create action"),
+            },
+            other => panic!("expected an applicable table action, got {other:?}"),
+        }
     }
 
     // ── i18n: schema-diff view chrome keys ──────────────────────────────────
