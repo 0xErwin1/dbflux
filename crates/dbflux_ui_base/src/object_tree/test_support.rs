@@ -18,6 +18,8 @@ use uuid::Uuid;
 
 use crate::app_state_entity::AppStateEntity;
 
+// The architecture scan reads this file directly; the parent module's test gate is not visible there.
+#[cfg(test)]
 pub static TEST_FORM: std::sync::LazyLock<DriverFormDef> =
     std::sync::LazyLock::new(|| DriverFormDef { tabs: vec![] });
 
