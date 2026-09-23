@@ -1,0 +1,20 @@
+[package]
+name = "gpui-mcp-protocol"
+description = "Authenticated local wire protocol shared by gpui-mcp components"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "Apache-2.0"
+repository = "https://github.com/themixednuts/gpui-mcp"
+homepage = "https://github.com/themixednuts/gpui-mcp"
+publish = false
+
+[dependencies]
+directories = "6.0.0"
+schemars = "1.2.1"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+thiserror = "2.0.18"
+
+[lints]
+workspace = true

@@ -3550,6 +3550,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "directories"
+version = "6.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "16f5094c54661b38d03bd7e50df373292118db60b585c08a411c6d840017fe7d"
+dependencies = [
+ "dirs-sys 0.5.0",
+]
+
+[[package]]
 name = "dirs"
 version = "5.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4725,6 +4734,38 @@ dependencies = [
  "rust-embed",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+]
+
+[[package]]
+name = "gpui-mcp"
+version = "0.1.0"
+dependencies = [
+ "async-channel",
+ "gpui-mcp-protocol",
+ "gpui-pre",
+ "interprocess",
+ "objc2-app-kit 0.3.2",
+ "rand 0.9.4",
+ "raw-window-handle",
+ "serde_json",
+ "subtle",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "widestring",
+]
+
+[[package]]
+name = "gpui-mcp-protocol"
+version = "0.1.0"
+dependencies = [
+ "directories",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
 ]
 
 [[package]]
@@ -6154,8 +6195,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "798de1433ba514cc6c04c4144c2469af81396e4906195218737c776d47769572"
 dependencies = [
  "doctest-file",
+ "futures-core",
  "libc",
  "recvmsg",
+ "tokio",
  "widestring",
  "windows-sys 0.61.2",
 ]

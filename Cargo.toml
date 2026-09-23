@@ -44,6 +44,9 @@ members = [
     "crates/dbflux_portability",
     "crates/dbflux_driver_s3",
     "crates/dbflux_i18n",
+    # Upstream themixednuts/gpui-mcp crates for UI automation; see vendor/gpui-mcp/VENDOR.md.
+    "vendor/gpui-mcp/crates/gpui-mcp",
+    "vendor/gpui-mcp/crates/gpui-mcp-protocol",
 ]
 default-members = ["crates/dbflux"]
 # The website is not a crate. Excluding it keeps cargo from descending into it
