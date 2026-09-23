@@ -4,6 +4,10 @@ All notable changes to DBFlux will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+* **CloudWatch query safety** — reject requested row limits and statement timeouts before Logs or Metrics dispatch; unprotected Logs queries retain the fixed SDK `StartQuery` limit of 1000, without a default timeout or server-work guarantee.
+
 ### Added
 
 * **Opt-in UI automation for agents and tests** — a development build compiled

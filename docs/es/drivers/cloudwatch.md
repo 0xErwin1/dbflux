@@ -22,7 +22,8 @@ Driver de AWS CloudWatch Logs para DBFlux, construido sobre el SDK
 - Ejecución de queries a través de `StartQuery` + polling de `GetQueryResults`
   (intervalo de polling de 500 ms, hasta 120 intentos), con un source context
   gestionado por el editor que provee los log groups objetivo y el rango de
-  tiempo.
+  tiempo. Las queries de Logs sin restricciones solicitadas usan el límite fijo
+  de 1000 resultados de `StartQuery` del SDK.
 - Tres sintaxis de query seleccionables desde el desplegable "Syntax" del source
   context:
   - CloudWatch Logs Insights QL (`cwli`, la opción por defecto) —
@@ -75,6 +76,7 @@ Driver de AWS CloudWatch Logs para DBFlux, construido sobre el SDK
 
 ## Limitaciones
 
+- `execute` rechaza cualquier límite de filas solicitado (incluso cero) o timeout de sentencia con `NotSupported` antes de enviar requests de Logs o Metrics. El límite fijo del SDK para Logs no es un límite específico del request; no hay timeout por defecto ni garantía sobre el trabajo del servidor.
 - `tests/live_integration.rs` ejecuta el data plane de Logs (descubrimiento de
   log groups/streams, navegación de eventos) contra un contenedor de LocalStack
   Community en CI. `DashboardImporter` es parseo puro de JSON y se verifica de
