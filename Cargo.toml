@@ -47,6 +47,8 @@ members = [
     # Upstream themixednuts/gpui-mcp crates for UI automation; see vendor/gpui-mcp/VENDOR.md.
     "vendor/gpui-mcp/crates/gpui-mcp",
     "vendor/gpui-mcp/crates/gpui-mcp-protocol",
+    "vendor/gpui-mcp/crates/gpui-mcp-server",
+    "vendor/gpui-mcp/crates/gpui-mcp-capture",
 ]
 default-members = ["crates/dbflux"]
 # The website is not a crate. Excluding it keeps cargo from descending into it

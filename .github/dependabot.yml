@@ -28,6 +28,14 @@ updates:
       #   rustls-webpki pulled by the rustls/TLS stack (tracked by DEP-5); fix needs >= 0.103.13
       - dependency-name: "grid"
       - dependency-name: "rustls-webpki"
+      # The vendored UI-automation MCP server (vendor/gpui-mcp) is written against
+      # rmcp 3.2; rmcp-macros 3.4 rejects its `#[tool_router]` blocks. Keep rmcp 3
+      # at the upstream lock until the vendored crates are refreshed (VENDOR.md).
+      # The bounds leave DBFlux's own rmcp 2 updates alone.
+      - dependency-name: "rmcp"
+        versions: [">=3.3.0, <4.0.0"]
+      - dependency-name: "rmcp-macros"
+        versions: [">=3.3.0, <4.0.0"]
   - package-ecosystem: github-actions
     directory: "/"
     schedule:

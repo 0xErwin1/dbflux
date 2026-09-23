@@ -1,0 +1,22 @@
+[package]
+name = "gpui-mcp-capture"
+description = "Native window capture backend shared by GPUI MCP bridges and servers"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "Apache-2.0"
+repository = "https://github.com/themixednuts/gpui-mcp"
+homepage = "https://github.com/themixednuts/gpui-mcp"
+publish = false
+
+[dependencies]
+base64 = "0.22.1"
+gpui-mcp-protocol = { path = "../gpui-mcp-protocol" }
+image = { version = "0.25.10", default-features = false, features = ["png", "gif"] }
+xcap = { version = "0.9.8", features = ["wgc"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-capture = "2.0.0"
+
+[lints]
+workspace = true

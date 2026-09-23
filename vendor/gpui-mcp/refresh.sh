@@ -5,10 +5,10 @@
 # Usage:
 #   vendor/gpui-mcp/refresh.sh <full 40-character commit SHA>
 #
-# Downloads that commit of themixednuts/gpui-mcp, keeps the gpui-mcp and
-# gpui-mcp-protocol crates and the license, re-applies dbflux-port.patch and
-# leaves .rej files for hunks that no longer apply. See VENDOR.md for what to
-# check afterwards.
+# Downloads that commit of themixednuts/gpui-mcp, keeps the gpui-mcp,
+# gpui-mcp-protocol, gpui-mcp-server and gpui-mcp-capture crates and the
+# license, re-applies dbflux-port.patch and leaves .rej files for hunks that no
+# longer apply. See VENDOR.md for what to check afterwards.
 
 set -euo pipefail
 
@@ -20,7 +20,7 @@ fi
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$here/../.." && pwd)"
-crates=(gpui-mcp gpui-mcp-protocol)
+crates=(gpui-mcp gpui-mcp-protocol gpui-mcp-server gpui-mcp-capture)
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT

@@ -115,3 +115,129 @@ index 9e3e7e3..05d6c40 100644
 +dbg_macro = "warn"
 +todo = "warn"
 +unimplemented = "warn"
+diff --git a/crates/gpui-mcp-capture/Cargo.toml b/crates/gpui-mcp-capture/Cargo.toml
+index ddce79e..5c79f3b 100644
+--- a/crates/gpui-mcp-capture/Cargo.toml
++++ b/crates/gpui-mcp-capture/Cargo.toml
+@@ -1,18 +1,19 @@
+ [package]
+ name = "gpui-mcp-capture"
+ description = "Native window capture backend shared by GPUI MCP bridges and servers"
+-version.workspace = true
+-edition.workspace = true
+-rust-version.workspace = true
+-license.workspace = true
+-repository.workspace = true
+-homepage.workspace = true
++version = "0.1.0"
++edition = "2024"
++rust-version = "1.95"
++license = "Apache-2.0"
++repository = "https://github.com/themixednuts/gpui-mcp"
++homepage = "https://github.com/themixednuts/gpui-mcp"
++publish = false
+ 
+ [dependencies]
+-base64.workspace = true
++base64 = "0.22.1"
+ gpui-mcp-protocol = { path = "../gpui-mcp-protocol" }
+-image.workspace = true
+-xcap.workspace = true
++image = { version = "0.25.10", default-features = false, features = ["png", "gif"] }
++xcap = { version = "0.9.8", features = ["wgc"] }
+ 
+ [target.'cfg(target_os = "windows")'.dependencies]
+ windows-capture = "2.0.0"
+diff --git a/crates/gpui-mcp-server/Cargo.toml b/crates/gpui-mcp-server/Cargo.toml
+index 407e4af..faf879f 100644
+--- a/crates/gpui-mcp-server/Cargo.toml
++++ b/crates/gpui-mcp-server/Cargo.toml
+@@ -1,39 +1,62 @@
+ [package]
+ name = "gpui-mcp-server"
+ description = "MCP stdio server for GPUI application automation"
+-version.workspace = true
+-edition.workspace = true
+-rust-version.workspace = true
+-license.workspace = true
+-repository.workspace = true
+-homepage.workspace = true
++version = "0.1.0"
++edition = "2024"
++rust-version = "1.95"
++license = "Apache-2.0"
++repository = "https://github.com/themixednuts/gpui-mcp"
++homepage = "https://github.com/themixednuts/gpui-mcp"
++publish = false
++# `tests/disabled_state.rs` and `tests/region_capture.rs` drive upstream's
++# `examples/demo` application, which is not vendored, so only the self-contained
++# test target is built. See vendor/gpui-mcp/VENDOR.md.
++autotests = false
+ 
+ [[bin]]
+ name = "gpui-mcp"
+ path = "src/main.rs"
+ doc = false
+ 
++[[test]]
++name = "cache_hints"
++path = "tests/cache_hints.rs"
++
+ [dependencies]
+-anyhow.workspace = true
+-base64.workspace = true
+-bytes.workspace = true
+-clap.workspace = true
++anyhow = "1.0.100"
++base64 = "0.22.1"
++bytes = "1.11.1"
++clap = { version = "4.6.1", features = ["derive"] }
+ gpui-mcp-capture = { path = "../gpui-mcp-capture" }
+ gpui-mcp-protocol = { path = "../gpui-mcp-protocol" }
+-image.workspace = true
+-interprocess.workspace = true
+-mp4.workspace = true
+-openh264.workspace = true
+-rmcp.workspace = true
+-schemars.workspace = true
+-serde.workspace = true
+-serde_json.workspace = true
+-sysinfo.workspace = true
+-tempfile.workspace = true
+-tokio.workspace = true
+-tokio-util.workspace = true
+-tracing.workspace = true
+-tracing-subscriber.workspace = true
++image = { version = "0.25.10", default-features = false, features = ["png", "gif"] }
++interprocess = { version = "2.4.2", features = ["tokio"] }
++mp4 = "0.14.0"
++openh264 = "0.9.7"
++rmcp = { version = "3.2.0", features = ["server", "transport-io"] }
++schemars = "1.2.1"
++serde = { version = "1.0.228", features = ["derive"] }
++serde_json = "1.0.149"
++sysinfo = { version = "0.37", default-features = false, features = ["system"] }
++tempfile = "3.23.0"
++tokio = { version = "1.52.3", features = ["io-std", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
++tokio-util = { version = "0.7.18", features = ["rt"] }
++tracing = "0.1.44"
++tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
++
++# DBFlux's workspace lint set without `clippy::indexing_slicing`: Cargo cannot
++# relax a single inherited lint, so the rest of the root `[workspace.lints]` is
++# restated here and must follow it. See vendor/gpui-mcp/VENDOR.md.
++[lints.rust]
++unsafe_code = "warn"
++unused_must_use = "warn"
++unreachable_pub = "warn"
+ 
+-[lints]
+-workspace = true
++[lints.clippy]
++unwrap_used = "warn"
++expect_used = "warn"
++panic = "warn"
++unwrap_in_result = "warn"
++dbg_macro = "warn"
++todo = "warn"
++unimplemented = "warn"

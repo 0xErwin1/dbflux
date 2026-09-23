@@ -122,13 +122,21 @@ jobs:
             fi
           done
           sudo apt-get update
+          # The last five packages serve the vendored UI-automation MCP server
+          # (vendor/gpui-mcp): its screen capture backend, xcap, links PipeWire,
+          # libgbm, EGL and xcb-randr, and generates PipeWire bindings with bindgen.
           sudo apt-get install -y \
             mold \
             pkg-config \
             libssl-dev \
             libdbus-1-dev \
             libxkbcommon-dev \
-            libxkbcommon-x11-dev
+            libxkbcommon-x11-dev \
+            libpipewire-0.3-dev \
+            libgbm-dev \
+            libegl-dev \
+            libxcb-randr0-dev \
+            libclang-dev
 
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16  # v2
