@@ -1097,9 +1097,26 @@ impl Sidebar {
         else {
             return;
         };
-        if !matches!(parse_node_id(item_id), Some(SchemaNodeId::View { .. }))
-            || self.loading_items.contains(item_id)
-        {
+        if !matches!(parse_node_id(item_id), Some(SchemaNodeId::View { .. })) {
+            return;
+        }
+        if let Some((old_task, old_request, old_token)) = self.view_refresh_tasks.get(item_id) {
+            if !old_token.is_cancelled()
+                && self
+                    .app_state
+                    .read(cx)
+                    .refresh_views_request_is_current(old_request)
+            {
+                return;
+            }
+            let old_task = *old_task;
+            self.view_refresh_tasks.remove(item_id);
+            self.loading_items.remove(item_id);
+            self.app_state.update(cx, |state, cx| {
+                state.tasks_mut().cancel(old_task);
+                cx.emit(AppStateChanged);
+            });
+        } else if self.loading_items.contains(item_id) {
             return;
         }
         if self.app_state.read(cx).is_background_task_limit_reached() {
@@ -1113,13 +1130,9 @@ impl Sidebar {
         }
 
         let cache_db = parts.cache_database().to_string();
-        let Some(connection) = self
-            .app_state
-            .read(cx)
-            .connections()
-            .get(&parts.profile_id)
-            .map(|connected| connected.connection_for_database(&cache_db))
-        else {
+        let Ok(request) = self.app_state.update(cx, |state, _| {
+            state.prepare_refresh_views(parts.profile_id, &cache_db, &parts.schema_name)
+        }) else {
             self.pending_toast = Some(PendingToast {
                 message: crate::labels::prepare_schema_object_refresh_failed_label(),
                 is_error: true,
@@ -1141,36 +1154,42 @@ impl Sidebar {
             task
         });
         self.loading_items.insert(item_id.to_string());
+        self.view_refresh_tasks.insert(
+            item_id.to_string(),
+            (task_id, request.clone(), cancel_token.clone()),
+        );
         self.refresh_tree(cx);
 
         let app_state = self.app_state.clone();
         let sidebar = cx.entity().clone();
         let item_id = item_id.to_string();
-        let schema_name = parts.schema_name.clone();
-        let profile_id = parts.profile_id;
         let operation_task = cx.spawn(async move |_this, cx| {
-            let fetch_schema_name = schema_name.clone();
+            let execution_request = request.clone();
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    connection
-                        .schema()
-                        .map(|snapshot| {
-                            snapshot
-                                .schemas()
-                                .iter()
-                                .find(|db_schema| db_schema.name == fetch_schema_name)
-                                .map(|db_schema| db_schema.views.clone())
-                                .unwrap_or_else(|| snapshot.views().to_vec())
-                        })
+                    execution_request
+                        .execute()
                         .map_err(|error| error.to_string())
                 })
                 .await;
             cx.update(|cx| {
                 sidebar.update(cx, |sidebar, cx| {
                     sidebar.clear_tracked_operation_task(task_id);
-                    sidebar.loading_items.remove(&item_id);
-                    if cancel_token.is_cancelled() {
+                    let is_current_task = sidebar
+                        .view_refresh_tasks
+                        .get(&item_id)
+                        .is_some_and(|(current, _, _)| *current == task_id);
+                    if is_current_task {
+                        sidebar.view_refresh_tasks.remove(&item_id);
+                        sidebar.loading_items.remove(&item_id);
+                    }
+                    if cancel_token.is_cancelled()
+                        || !is_current_task
+                        || !app_state
+                            .read(cx)
+                            .refresh_views_request_is_current(&request)
+                    {
                         app_state.update(cx, |state, cx| {
                             state.tasks_mut().cancel(task_id);
                             cx.emit(AppStateChanged);
@@ -1181,45 +1200,12 @@ impl Sidebar {
                     match result {
                         Ok(views) => {
                             app_state.update(cx, |state, cx| {
-                                state.complete_task(task_id);
-                                if let Some(connected) =
-                                    state.connections_mut().get_mut(&profile_id)
-                                {
-                                    if let Some(db_schema) =
-                                        connected.database_schemas.get_mut(&cache_db)
-                                    {
-                                        db_schema.views = views.clone();
-                                    } else if let Some(db_connection) =
-                                        connected.database_connections.get_mut(&cache_db)
-                                    {
-                                        if let Some(schema) = db_connection.schema.as_mut()
-                                            && let dbflux_core::DataStructure::Relational(
-                                                relational,
-                                            ) = &mut schema.structure
-                                        {
-                                            if let Some(target_schema) = relational
-                                                .schemas
-                                                .iter_mut()
-                                                .find(|db_schema| db_schema.name == schema_name)
-                                            {
-                                                target_schema.views = views.clone();
-                                            } else {
-                                                relational.views = views.clone();
-                                            }
-                                        }
-                                    } else if let Some(schema) = connected.schema.as_mut()
-                                        && let dbflux_core::DataStructure::Relational(relational) =
-                                            &mut schema.structure
-                                    {
-                                        if let Some(target_schema) = relational
-                                            .schemas
-                                            .iter_mut()
-                                            .find(|db_schema| db_schema.name == schema_name)
-                                        {
-                                            target_schema.views = views.clone();
-                                        } else {
-                                            relational.views = views.clone();
-                                        }
+                                match state.apply_refreshed_views(views) {
+                                    dbflux_core::ApplyFetchOutcome::Applied => {
+                                        state.complete_task(task_id)
+                                    }
+                                    dbflux_core::ApplyFetchOutcome::Rejected(_) => {
+                                        state.tasks_mut().cancel(task_id);
                                     }
                                 }
                                 cx.emit(AppStateChanged);

@@ -1,11 +1,11 @@
 use crate::LogErr;
 use crate::{
     CollectionChildrenCache, CollectionChildrenPage, CollectionChildrenRequest, CollectionRef,
-    Connection, ConnectionHooks, ConnectionProfile, CustomTypeInfo, DatabaseInfo, DbDriver,
-    DbError, DbKind, DbSchemaInfo, HookContext, ProxyProfile, RelationRef, RoutineInfo,
+    Connection, ConnectionHooks, ConnectionProfile, CustomTypeInfo, DataStructure, DatabaseInfo,
+    DbDriver, DbError, DbKind, DbSchemaInfo, HookContext, ProxyProfile, RelationRef, RoutineInfo,
     SchemaColumnInfo, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot,
     SchemaSnapshotAuthority, SecretStore, ShutdownCoordinator, ShutdownPhase, SshTunnelProfile,
-    TableInfo, TaskTarget,
+    TableInfo, TaskTarget, ViewInfo,
 };
 use log::{error, info};
 use secrecy::SecretString;
@@ -759,6 +759,7 @@ pub struct ConnectionManager {
     /// mutation since the boundary".
     slot_revisions: HashMap<(Uuid, String), u64>,
     table_details_revisions: HashMap<(Uuid, String, Option<String>, String), u64>,
+    view_refresh_revisions: HashMap<(Uuid, String, String), u64>,
     policy_resolver: Box<dyn ProfilePolicyResolver>,
 }
 
@@ -776,6 +777,7 @@ impl ConnectionManager {
             invalidation_revisions: HashMap::new(),
             slot_revisions: HashMap::new(),
             table_details_revisions: HashMap::new(),
+            view_refresh_revisions: HashMap::new(),
             policy_resolver: Box::new(DefaultMutationPolicyResolver),
         }
     }
@@ -1931,6 +1933,8 @@ impl ConnectionManager {
     /// capture from the previous session.
     fn clear_profile_slot_revisions(&mut self, profile_id: Uuid) {
         self.slot_revisions.retain(|(id, _), _| id != &profile_id);
+        self.view_refresh_revisions
+            .retain(|(id, _, _), _| id != &profile_id);
     }
 
     /// Removes a database's cached schema and bumps the profile's invalidation
@@ -2320,6 +2324,113 @@ impl ConnectionManager {
         ApplyFetchOutcome::Applied
     }
 
+    /// Captures the exact database slot and session for a view refresh.
+    pub fn prepare_refresh_views(
+        &mut self,
+        profile_id: Uuid,
+        database: &str,
+        schema: &str,
+    ) -> Result<RefreshViewsParams, String> {
+        let connected = self
+            .connections
+            .get(&profile_id)
+            .ok_or("Profile not connected")?;
+        let connection = connected
+            .resolve_connection_for_execution(Some(database))
+            .map_err(|error| format!("{error:?}"))?;
+        let revision = self
+            .view_refresh_revisions
+            .entry((profile_id, database.to_string(), schema.to_string()))
+            .and_modify(|revision| *revision = revision.wrapping_add(1))
+            .or_insert(1);
+        Ok(RefreshViewsParams {
+            revision: *revision,
+            session: FetchSession {
+                profile_id,
+                connection,
+                generation: self.current_session_generation(profile_id),
+                invalidation_revision: self.current_invalidation_revision(profile_id),
+                slot_revision: self.current_slot_revision(profile_id, database),
+                table_details_revision: None,
+            },
+            database: database.to_string(),
+            schema: schema.to_string(),
+        })
+    }
+
+    fn refresh_views_stale_reason(&self, request: &RefreshViewsParams) -> Option<StaleFetchReason> {
+        let profile_id = request.session.profile_id;
+        let connected = self.connections.get(&profile_id)?;
+        let target_matches = connected
+            .resolve_connection_for_execution(Some(&request.database))
+            .is_ok_and(|current| Arc::ptr_eq(&current, &request.session.connection));
+        if self.session_generations.get(&profile_id).copied() != Some(request.session.generation)
+            || !target_matches
+            || self.current_slot_revision(profile_id, &request.database)
+                != request.session.slot_revision
+        {
+            return Some(StaleFetchReason::ConnectionReplaced);
+        }
+        if self.current_invalidation_revision(profile_id) != request.session.invalidation_revision
+            || self
+                .view_refresh_revisions
+                .get(&(profile_id, request.database.clone(), request.schema.clone()))
+                .copied()
+                != Some(request.revision)
+        {
+            return Some(StaleFetchReason::RequestInvalidated);
+        }
+        None
+    }
+
+    pub fn refresh_views_request_is_current(&self, request: &RefreshViewsParams) -> bool {
+        self.connections.contains_key(&request.session.profile_id)
+            && self.refresh_views_stale_reason(request).is_none()
+    }
+
+    pub fn apply_refreshed_views(&mut self, fetched: RefreshedViews) -> ApplyFetchOutcome {
+        let request = RefreshViewsParams {
+            session: fetched.session.clone(),
+            revision: fetched.revision,
+            database: fetched.database.clone(),
+            schema: fetched.schema.clone(),
+        };
+        if !self.connections.contains_key(&request.session.profile_id) {
+            return ApplyFetchOutcome::Rejected(StaleFetchReason::ProfileDisconnected);
+        }
+        if let Some(reason) = self.refresh_views_stale_reason(&request) {
+            return ApplyFetchOutcome::Rejected(reason);
+        }
+        let connected = self
+            .connections
+            .get_mut(&request.session.profile_id)
+            .expect("checked connected profile");
+        if let Some(db_schema) = connected.database_schemas.get_mut(&fetched.database) {
+            db_schema.views = fetched.views;
+        } else {
+            let snapshot =
+                if let Some(slot) = connected.database_connections.get_mut(&fetched.database) {
+                    slot.schema.as_mut()
+                } else {
+                    connected.schema.as_mut()
+                };
+            if let Some(snapshot) = snapshot
+                && let DataStructure::Relational(relational) = &mut snapshot.structure
+            {
+                if let Some(schema) = relational
+                    .schemas
+                    .iter_mut()
+                    .find(|schema| schema.name == fetched.schema)
+                {
+                    schema.views = fetched.views;
+                } else {
+                    relational.views = fetched.views;
+                }
+            }
+        }
+        ApplyFetchOutcome::Applied
+    }
+
     /// Prepares a per-database connection for a missing target database
     /// without any switch semantics, guarded so the asynchronously opened
     /// connection can be installed only into the session it was prepared
@@ -2430,6 +2541,7 @@ impl ConnectionManager {
         self.session_generations.clear();
         self.invalidation_revisions.clear();
         self.slot_revisions.clear();
+        self.view_refresh_revisions.clear();
         self.table_details_revisions.clear();
         info!(
             "Scheduling teardown for {} connections during shutdown",
@@ -2949,6 +3061,42 @@ pub struct DatabaseRefreshGuard {
     slot_revision: u64,
 }
 
+#[derive(Clone)]
+pub struct RefreshViewsParams {
+    session: FetchSession,
+    revision: u64,
+    database: String,
+    schema: String,
+}
+
+pub struct RefreshedViews {
+    session: FetchSession,
+    revision: u64,
+    database: String,
+    schema: String,
+    views: Vec<ViewInfo>,
+}
+
+impl RefreshViewsParams {
+    pub fn execute(self) -> Result<RefreshedViews, DbError> {
+        let snapshot = self.session.connection.schema()?;
+        let views = snapshot
+            .schemas()
+            .iter()
+            .find(|schema| schema.name == self.schema)
+            .map(|schema| schema.views.clone())
+            .unwrap_or_else(|| snapshot.views().to_vec());
+        Ok(RefreshedViews {
+            session: self.session,
+            revision: self.revision,
+            database: self.database,
+            schema: self.schema,
+            views,
+        })
+    }
+}
+
+#[derive(Clone)]
 pub struct FetchSession {
     profile_id: Uuid,
     connection: Arc<dyn Connection>,
@@ -6519,6 +6667,56 @@ mod tests {
         );
         assert_eq!(
             manager.apply_fetch_database_list(list.execute().expect("list fetch")),
+            ApplyFetchOutcome::Applied
+        );
+    }
+
+    #[test]
+    fn refreshed_views_reject_replaced_target_without_invalidating_sibling() {
+        let (mut manager, profile) =
+            new_per_database_manager_with_driver(BoundPerDatabaseConnection::new("app"));
+        let target = TableDetailsBoundConnection::new(
+            SchemaLoadingStrategy::ConnectionPerDatabase,
+            "analytics",
+        );
+        manager.add_database_connection(profile.id, "analytics".into(), target.clone(), None);
+        manager.add_database_connection(
+            profile.id,
+            "reporting".into(),
+            TableDetailsBoundConnection::new(
+                SchemaLoadingStrategy::ConnectionPerDatabase,
+                "reporting",
+            ),
+            None,
+        );
+        let old = manager
+            .prepare_refresh_views(profile.id, "analytics", "public")
+            .expect("target refresh");
+        let sibling = manager
+            .prepare_refresh_views(profile.id, "reporting", "public")
+            .expect("sibling refresh");
+        let newer = manager
+            .prepare_refresh_views(profile.id, "analytics", "public")
+            .expect("newer refresh");
+        assert_eq!(
+            manager.apply_refreshed_views(newer.execute().expect("newer result")),
+            ApplyFetchOutcome::Applied
+        );
+        assert_eq!(
+            manager.apply_refreshed_views(old.execute().expect("older result")),
+            ApplyFetchOutcome::Rejected(StaleFetchReason::RequestInvalidated)
+        );
+        let old = manager
+            .prepare_refresh_views(profile.id, "analytics", "public")
+            .expect("refresh before slot replacement");
+        manager.remove_database_connection(profile.id, "analytics");
+        manager.add_database_connection(profile.id, "analytics".into(), target, None);
+        assert_eq!(
+            manager.apply_refreshed_views(old.execute().expect("old result")),
+            ApplyFetchOutcome::Rejected(StaleFetchReason::ConnectionReplaced)
+        );
+        assert_eq!(
+            manager.apply_refreshed_views(sibling.execute().expect("sibling result")),
             ApplyFetchOutcome::Applied
         );
     }

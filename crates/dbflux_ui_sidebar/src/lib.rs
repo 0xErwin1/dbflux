@@ -922,6 +922,14 @@ pub struct Sidebar {
         std::cell::RefCell<HashMap<(Uuid, String), KnownInvalidatedDatabase>>,
     /// Item IDs currently being fetched (tables, type/index/FK folders)
     loading_items: HashSet<String>,
+    view_refresh_tasks: HashMap<
+        String,
+        (
+            TaskId,
+            dbflux_core::RefreshViewsParams,
+            dbflux_core::CancelToken,
+        ),
+    >,
     /// Maps profile_id -> active database name (for styling in render)
     active_databases: HashMap<Uuid, String>,
     syncing_expansion: bool,
@@ -1207,6 +1215,7 @@ impl Sidebar {
             recovered_table_databases: HashMap::new(),
             known_invalidated_databases: std::cell::RefCell::new(HashMap::new()),
             loading_items: HashSet::new(),
+            view_refresh_tasks: HashMap::new(),
             active_databases: HashMap::new(),
             syncing_expansion: false,
             tracked_operation_tasks: HashMap::new(),

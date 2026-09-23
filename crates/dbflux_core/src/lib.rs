@@ -64,13 +64,13 @@ pub use connection::{
     OutputSender, OutputStreamKind, OwnedCacheEntry, PendingOperation, PrepareConnectError,
     ProcessContainment, ProcessExecutionError, ProcessExecutor, ProfileManager,
     ProfilePolicyResolver, ProxyAuth, ProxyKind, ProxyManager, ProxyProfile, ReadOnlyReason,
-    RedisKeyCache, RedisKeyCacheEntry, ResolvedProxy, SchemaCacheKey, ScriptLanguage, ScriptSource,
-    SshAuthMethod, SshTunnelConfig, SshTunnelManager, SshTunnelProfile, SslInfo, SslMode,
-    StaleFetchReason, StaleInstallReason, SwitchDatabaseParams, SwitchDatabaseResult,
-    TableDetailsPrepareError, TestConnectionResult, TreeLoadResult, TreeStore, WritePrivilege,
-    compose_mutation_policy, detached_process_channel, execute_streaming_process,
-    host_matches_no_proxy, output_channel, ssl_mode_from_id, ssl_mode_id_is_cert_active,
-    ssl_mode_id_requires_root_cert, ssl_mode_requires_root_cert,
+    RedisKeyCache, RedisKeyCacheEntry, RefreshViewsParams, RefreshedViews, ResolvedProxy,
+    SchemaCacheKey, ScriptLanguage, ScriptSource, SshAuthMethod, SshTunnelConfig, SshTunnelManager,
+    SshTunnelProfile, SslInfo, SslMode, StaleFetchReason, StaleInstallReason, SwitchDatabaseParams,
+    SwitchDatabaseResult, TableDetailsPrepareError, TestConnectionResult, TreeLoadResult,
+    TreeStore, WritePrivilege, compose_mutation_policy, detached_process_channel,
+    execute_streaming_process, host_matches_no_proxy, output_channel, ssl_mode_from_id,
+    ssl_mode_id_is_cert_active, ssl_mode_id_requires_root_cert, ssl_mode_requires_root_cert,
 };
 
 pub use connection::{

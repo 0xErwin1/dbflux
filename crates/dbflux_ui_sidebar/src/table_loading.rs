@@ -1064,6 +1064,7 @@ mod object_tree_adapter_tests {
         details_calls: AtomicUsize,
         details_failures: AtomicUsize,
         primary_schema_calls: AtomicUsize,
+        primary_schema_failures: AtomicUsize,
         primary_snapshot: Mutex<Option<dbflux_core::SchemaSnapshot>>,
         authoritative_primary: AtomicBool,
     }
@@ -1082,6 +1083,7 @@ mod object_tree_adapter_tests {
                 details_calls: AtomicUsize::new(0),
                 details_failures: AtomicUsize::new(0),
                 primary_schema_calls: AtomicUsize::new(0),
+                primary_schema_failures: AtomicUsize::new(0),
                 primary_snapshot: Mutex::new(None),
                 authoritative_primary: AtomicBool::new(false),
             })
@@ -1322,6 +1324,17 @@ mod object_tree_adapter_tests {
 
         fn schema(&self) -> Result<dbflux_core::SchemaSnapshot, dbflux_core::DbError> {
             self.primary_schema_calls.fetch_add(1, Ordering::SeqCst);
+            if self
+                .primary_schema_failures
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                    remaining.checked_sub(1)
+                })
+                .is_ok()
+            {
+                return Err(dbflux_core::DbError::NotSupported(
+                    "fake view refresh failure".into(),
+                ));
+            }
             Ok(self
                 .primary_snapshot
                 .lock()
@@ -5898,6 +5911,384 @@ mod object_tree_adapter_tests {
                 && rows.iter().any(|(id, _, _)| *id == other_table),
             "identical table names in distinct databases must both render with distinct stable IDs; rows: {rows:?}"
         );
+    }
+
+    #[gpui::test]
+    async fn view_refresh_reconnect_preserves_replacement_views(cx: &mut TestAppContext) {
+        let state = test_app_state(cx);
+        let profile_id = Uuid::new_v4();
+        let old = AdapterFakeConnection::single_database();
+        let replacement = AdapterFakeConnection::single_database();
+        let view = |name: &str| dbflux_core::ViewInfo {
+            name: name.into(),
+            schema: Some("public".into()),
+        };
+        let snapshot = |name: &str| {
+            let mut snapshot = snapshot_naming(vec![dbflux_core::DatabaseInfo {
+                name: "app".into(),
+                is_current: true,
+            }]);
+            if let dbflux_core::DataStructure::Relational(relational) = &mut snapshot.structure {
+                let mut schema = fake_db_schema("public", Vec::new());
+                schema.views.push(view(name));
+                relational.schemas.push(schema);
+            }
+            snapshot
+        };
+        *old.primary_snapshot.lock().expect("old snapshot") = Some(snapshot("old_view"));
+        connect_profile(&state, cx, profile_id, old, Some(snapshot("old_view")));
+        let view_id = SchemaNodeId::View {
+            profile_id,
+            database: Some("app".into()),
+            schema: "public".into(),
+            name: "old_view".into(),
+        }
+        .to_string();
+        let window = cx.add_window(|window, cx| crate::Sidebar::new(state.clone(), window, cx));
+        window
+            .update(cx, |sidebar, _, cx| {
+                sidebar.refresh_schema_object(&view_id, cx)
+            })
+            .expect("sidebar alive");
+        let task_id = state.read_with(cx, |state, _| {
+            state
+                .tasks()
+                .running_tasks()
+                .into_iter()
+                .find(|task| task.kind == dbflux_core::TaskKind::SchemaRefresh)
+                .expect("view task")
+                .id
+        });
+        state.update(cx, |state, _| {
+            let mut profile = dbflux_core::ConnectionProfile::new(
+                "replacement",
+                dbflux_core::DbConfig::default_postgres(),
+            );
+            profile.id = profile_id;
+            state.apply_connect_profile(
+                profile,
+                replacement,
+                Some(snapshot("new_view")),
+                None,
+                false,
+                dbflux_core::WritePrivilege::Unknown,
+            );
+        });
+        cx.run_until_parked();
+        state.read_with(cx, |state, _| {
+            let connected = state
+                .connections()
+                .get(&profile_id)
+                .expect("replacement session");
+            let schema = connected.schema.as_ref().expect("replacement schema");
+            assert_eq!(schema.schemas()[0].views.len(), 1);
+            assert_eq!(schema.schemas()[0].views[0].name, "new_view");
+            assert_eq!(
+                state.tasks().get(task_id).map(|task| task.status),
+                Some(dbflux_core::TaskStatus::Cancelled)
+            );
+        });
+        window
+            .update(cx, |sidebar, _, _| {
+                assert!(!sidebar.loading_items.contains(&view_id));
+                assert!(!sidebar.view_refresh_tasks.contains_key(&view_id));
+            })
+            .expect("sidebar alive");
+    }
+
+    #[gpui::test]
+    async fn view_refresh_slot_churn_preserves_replacement_views(cx: &mut TestAppContext) {
+        let state = test_app_state(cx);
+        let profile_id = Uuid::new_v4();
+        let primary = AdapterFakeConnection::connection_per_database();
+        connect_profile(
+            &state,
+            cx,
+            profile_id,
+            primary,
+            Some(snapshot_naming(vec![
+                dbflux_core::DatabaseInfo {
+                    name: "main".into(),
+                    is_current: true,
+                },
+                dbflux_core::DatabaseInfo {
+                    name: "analytics".into(),
+                    is_current: false,
+                },
+            ])),
+        );
+        let old = AdapterFakeConnection::connection_per_database();
+        old.primary_schema_failures.store(1, Ordering::SeqCst);
+        let mut old_snapshot = secondary_snapshot("old");
+        if let dbflux_core::DataStructure::Relational(relational) = &mut old_snapshot.structure {
+            relational
+                .schemas
+                .push(fake_db_schema("public", Vec::new()));
+            relational.schemas[0].views.push(dbflux_core::ViewInfo {
+                name: "old_view".into(),
+                schema: Some("public".into()),
+            });
+        }
+        state.update(cx, |state, _| {
+            state.add_database_connection(profile_id, "analytics".into(), old, Some(old_snapshot))
+        });
+        let view_id = SchemaNodeId::View {
+            profile_id,
+            database: Some("analytics".into()),
+            schema: "public".into(),
+            name: "old_view".into(),
+        }
+        .to_string();
+        let window = cx.add_window(|window, cx| crate::Sidebar::new(state.clone(), window, cx));
+        window
+            .update(cx, |sidebar, _, cx| {
+                sidebar.refresh_schema_object(&view_id, cx)
+            })
+            .expect("sidebar alive");
+        let task_id = state.read_with(cx, |state, _| {
+            state
+                .tasks()
+                .running_tasks()
+                .into_iter()
+                .find(|task| task.kind == dbflux_core::TaskKind::SchemaRefresh)
+                .expect("view task")
+                .id
+        });
+        let replacement = AdapterFakeConnection::connection_per_database();
+        let mut replacement_snapshot = secondary_snapshot("replacement");
+        if let dbflux_core::DataStructure::Relational(relational) =
+            &mut replacement_snapshot.structure
+        {
+            relational
+                .schemas
+                .push(fake_db_schema("public", Vec::new()));
+            relational.schemas[0].views.push(dbflux_core::ViewInfo {
+                name: "new_view".into(),
+                schema: Some("public".into()),
+            });
+        }
+        *replacement
+            .primary_snapshot
+            .lock()
+            .expect("replacement snapshot") = Some(replacement_snapshot.clone());
+        state.update(cx, |state, _| {
+            state.add_database_connection(
+                profile_id,
+                "analytics".into(),
+                replacement,
+                Some(replacement_snapshot),
+            )
+        });
+        window
+            .update(cx, |sidebar, _, cx| {
+                sidebar.refresh_schema_object(&view_id, cx)
+            })
+            .expect("sidebar alive");
+        let retry_task = state.read_with(cx, |state, _| {
+            state
+                .tasks()
+                .running_tasks()
+                .into_iter()
+                .find(|task| {
+                    task.kind == dbflux_core::TaskKind::SchemaRefresh && task.id != task_id
+                })
+                .expect("replacement refresh must start without waiting for the stale driver")
+                .id
+        });
+        cx.run_until_parked();
+        state.read_with(cx, |state, _| {
+            let slot = state
+                .connections()
+                .get(&profile_id)
+                .expect("connected")
+                .database_connections
+                .get("analytics")
+                .expect("replacement slot");
+            assert_eq!(
+                slot.schema.as_ref().expect("schema").schemas()[0].views[0].name,
+                "new_view"
+            );
+            assert_eq!(
+                state.tasks().get(task_id).map(|task| task.status),
+                Some(dbflux_core::TaskStatus::Cancelled)
+            );
+            assert_eq!(
+                state.tasks().get(retry_task).map(|task| task.status),
+                Some(dbflux_core::TaskStatus::Completed)
+            );
+        });
+        window
+            .update(cx, |sidebar, _, _| {
+                assert!(!sidebar.loading_items.contains(&view_id));
+                assert!(!sidebar.view_refresh_tasks.contains_key(&view_id));
+                assert!(sidebar.pending_toast.is_none());
+            })
+            .expect("sidebar alive");
+    }
+
+    #[gpui::test]
+    async fn view_refresh_cancelled_task_retries_immediately(cx: &mut TestAppContext) {
+        let state = test_app_state(cx);
+        let profile_id = Uuid::new_v4();
+        let fake = AdapterFakeConnection::single_database();
+        let mut snapshot = snapshot_naming(vec![dbflux_core::DatabaseInfo {
+            name: "app".into(),
+            is_current: true,
+        }]);
+        if let dbflux_core::DataStructure::Relational(relational) = &mut snapshot.structure {
+            let mut schema = fake_db_schema("public", Vec::new());
+            schema.views.push(dbflux_core::ViewInfo {
+                name: "report".into(),
+                schema: Some("public".into()),
+            });
+            relational.schemas.push(schema);
+        }
+        *fake.primary_snapshot.lock().expect("snapshot") = Some(snapshot.clone());
+        connect_profile(&state, cx, profile_id, fake, Some(snapshot));
+        let view_id = SchemaNodeId::View {
+            profile_id,
+            database: Some("app".into()),
+            schema: "public".into(),
+            name: "report".into(),
+        }
+        .to_string();
+        let window = cx.add_window(|window, cx| crate::Sidebar::new(state.clone(), window, cx));
+        window
+            .update(cx, |sidebar, _, cx| {
+                sidebar.refresh_schema_object(&view_id, cx)
+            })
+            .expect("sidebar alive");
+        let old_task = state.read_with(cx, |state, _| {
+            state
+                .tasks()
+                .running_tasks()
+                .into_iter()
+                .find(|task| task.kind == dbflux_core::TaskKind::SchemaRefresh)
+                .expect("old view task")
+                .id
+        });
+        state.update(cx, |state, _| {
+            assert!(state.tasks_mut().cancel(old_task));
+        });
+        window
+            .update(cx, |sidebar, _, cx| {
+                sidebar.refresh_schema_object(&view_id, cx)
+            })
+            .expect("sidebar alive");
+        let retry_task = state.read_with(cx, |state, _| {
+            state
+                .tasks()
+                .running_tasks()
+                .into_iter()
+                .find(|task| {
+                    task.kind == dbflux_core::TaskKind::SchemaRefresh && task.id != old_task
+                })
+                .expect("cancelled view request must not block retry")
+                .id
+        });
+        cx.run_until_parked();
+        state.read_with(cx, |state, _| {
+            assert_eq!(
+                state.tasks().get(old_task).map(|task| task.status),
+                Some(dbflux_core::TaskStatus::Cancelled)
+            );
+            assert_eq!(
+                state.tasks().get(retry_task).map(|task| task.status),
+                Some(dbflux_core::TaskStatus::Completed)
+            );
+        });
+        window
+            .update(cx, |sidebar, _, _| {
+                assert!(!sidebar.loading_items.contains(&view_id));
+                assert!(!sidebar.view_refresh_tasks.contains_key(&view_id));
+            })
+            .expect("sidebar alive");
+    }
+
+    #[gpui::test]
+    async fn view_refresh_failure_retry_tracks_task(cx: &mut TestAppContext) {
+        let state = test_app_state(cx);
+        let profile_id = Uuid::new_v4();
+        let fake = AdapterFakeConnection::single_database();
+        let mut snapshot = snapshot_naming(vec![dbflux_core::DatabaseInfo {
+            name: "app".into(),
+            is_current: true,
+        }]);
+        if let dbflux_core::DataStructure::Relational(relational) = &mut snapshot.structure {
+            let mut schema = fake_db_schema("public", Vec::new());
+            schema.views.push(dbflux_core::ViewInfo {
+                name: "old_view".into(),
+                schema: Some("public".into()),
+            });
+            relational.schemas.push(schema);
+        }
+        *fake.primary_snapshot.lock().expect("snapshot") = Some(snapshot.clone());
+        connect_profile(&state, cx, profile_id, fake.clone(), Some(snapshot));
+        let view_id = SchemaNodeId::View {
+            profile_id,
+            database: Some("app".into()),
+            schema: "public".into(),
+            name: "old_view".into(),
+        }
+        .to_string();
+        let window = cx.add_window(|window, cx| crate::Sidebar::new(state.clone(), window, cx));
+        fake.primary_schema_failures.store(1, Ordering::SeqCst);
+        window
+            .update(cx, |sidebar, _, cx| {
+                sidebar.refresh_schema_object(&view_id, cx)
+            })
+            .expect("sidebar alive");
+        let failed_task = state.read_with(cx, |state, _| {
+            state
+                .tasks()
+                .running_tasks()
+                .into_iter()
+                .find(|task| task.kind == dbflux_core::TaskKind::SchemaRefresh)
+                .expect("view task")
+                .id
+        });
+        cx.run_until_parked();
+        assert!(matches!(
+            state.read_with(cx, |state, _| state
+                .tasks()
+                .get(failed_task)
+                .map(|task| task.status)),
+            Some(dbflux_core::TaskStatus::Failed(_))
+        ));
+        window
+            .update(cx, |sidebar, _, _| {
+                assert!(!sidebar.loading_items.contains(&view_id));
+                assert!(!sidebar.view_refresh_tasks.contains_key(&view_id));
+            })
+            .expect("sidebar alive");
+        window
+            .update(cx, |sidebar, _, cx| {
+                sidebar.refresh_schema_object(&view_id, cx)
+            })
+            .expect("sidebar alive");
+        let retry_task = state.read_with(cx, |state, _| {
+            state
+                .tasks()
+                .running_tasks()
+                .into_iter()
+                .find(|task| task.kind == dbflux_core::TaskKind::SchemaRefresh)
+                .expect("retry task")
+                .id
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            state.read_with(cx, |state, _| state
+                .tasks()
+                .get(retry_task)
+                .map(|task| task.status)),
+            Some(dbflux_core::TaskStatus::Completed)
+        );
+        window
+            .update(cx, |sidebar, _, _| {
+                assert!(!sidebar.loading_items.contains(&view_id));
+                assert!(!sidebar.view_refresh_tasks.contains_key(&view_id));
+            })
+            .expect("sidebar alive");
     }
 
     #[gpui::test]

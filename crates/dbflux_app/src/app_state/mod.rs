@@ -740,6 +740,33 @@ impl AppState {
             .prepare_fetch_explicit_database_schema(profile_id, database)
     }
 
+    pub fn prepare_refresh_views(
+        &mut self,
+        profile_id: Uuid,
+        database: &str,
+        schema: &str,
+    ) -> Result<dbflux_core::RefreshViewsParams, String> {
+        self.facade
+            .connections
+            .prepare_refresh_views(profile_id, database, schema)
+    }
+
+    pub fn refresh_views_request_is_current(
+        &self,
+        request: &dbflux_core::RefreshViewsParams,
+    ) -> bool {
+        self.facade
+            .connections
+            .refresh_views_request_is_current(request)
+    }
+
+    pub fn apply_refreshed_views(
+        &mut self,
+        fetched: dbflux_core::RefreshedViews,
+    ) -> ApplyFetchOutcome {
+        self.facade.connections.apply_refreshed_views(fetched)
+    }
+
     pub fn apply_fetch_explicit_database_schema(
         &mut self,
         fetched: FetchedExplicitDatabaseSchema,
