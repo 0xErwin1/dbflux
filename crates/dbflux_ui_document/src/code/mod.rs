@@ -1087,8 +1087,26 @@ impl CodeDocument {
         });
     }
 
-    pub fn set_active_tab(&mut self, active: bool) {
+    /// Records whether this tab is the active one and, on activation, lets the
+    /// visible result grid re-mount whatever it owns in the shared inspector
+    /// rail. The workspace hides the rail before every activation, so only
+    /// activation is forwarded. A result grid's own active flag gates nothing
+    /// but its refresh timer, which result grids have always run as active.
+    pub fn set_active_tab(&mut self, active: bool, cx: &mut Context<Self>) {
         self.is_active_tab = active;
+
+        if active && let Some(grid) = self.active_result_grid() {
+            grid.update(cx, |grid, cx| grid.set_active_tab(true, cx));
+        }
+    }
+
+    /// Drops every result grid's inspector state after the user dismissed the
+    /// workspace rail, so no grid re-opens it on the next activation.
+    pub fn mark_inspector_closed(&mut self, cx: &mut Context<Self>) {
+        for tab in &self.result_tabs.result_tabs {
+            tab.grid
+                .update(cx, |grid, cx| grid.clear_inspector_state(cx));
+        }
     }
 
     pub fn set_refresh_policy(&mut self, policy: RefreshPolicy, cx: &mut Context<Self>) {

@@ -353,6 +353,13 @@ impl Connection for InfluxConnection {
     }
 
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
+        if req.limit.is_some() || req.statement_timeout.is_some() {
+            return Err(DbError::NotSupported(
+                "InfluxDB execute cannot enforce a requested row limit or statement timeout"
+                    .to_string(),
+            ));
+        }
+
         if let Some(source) = req
             .execution_context
             .as_ref()
@@ -1126,6 +1133,97 @@ fn escape_influxql_ident(s: &str) -> String {
 mod tests {
     use super::*;
     use dbflux_core::WritePrivilege;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    #[test]
+    fn influx_query_safety_refuses_protected_requests_before_dispatch() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("local listener");
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking listener");
+        let address = listener.local_addr().expect("listener address");
+        let received = Arc::new(AtomicUsize::new(0));
+        let server_received = Arc::clone(&received);
+        let server = std::thread::spawn(move || {
+            let until = Instant::now() + Duration::from_secs(3);
+            while Instant::now() < until {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        server_received.fetch_add(1, Ordering::SeqCst);
+                        stream
+                            .set_read_timeout(Some(Duration::from_secs(1)))
+                            .expect("read timeout");
+                        let mut buffer = [0; 4096];
+                        stream.read(&mut buffer).expect("request bytes");
+                        let body = r#"{"results":[{"statement_id":0,"series":[{"name":"cpu","columns":["time","value"],"values":[[1,2]]}]}]}"#;
+                        write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).expect("response");
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("accept: {error}"),
+                }
+            }
+        });
+        let http = HttpClient::new(
+            format!("http://{address}"),
+            crate::http::AuthCreds::None,
+            InfluxVersion::V2,
+        )
+        .expect("client");
+        let conn = InfluxConnection::new(
+            http,
+            InfluxVersion::V2,
+            QueryLanguage::InfluxQuery,
+            Some("db".into()),
+            Some("org".into()),
+        );
+        let contexts = [
+            None,
+            Some(ExecutionSourceContext::InstanceMetricQuery {
+                metric_id: "influx.go_goroutines".into(),
+                start_ms: 0,
+                end_ms: 1,
+            }),
+            Some(ExecutionSourceContext::InstanceInspectorQuery {
+                metric_id: "influx.metrics".into(),
+            }),
+        ];
+        for context in contexts {
+            for (limit, timeout) in [
+                (Some(0), None),
+                (Some(12), None),
+                (None, Some(Duration::from_secs(1))),
+            ] {
+                let mut req = QueryRequest::new("SELECT * FROM cpu");
+                req.limit = limit;
+                req.statement_timeout = timeout;
+                req.execution_context = context.clone().map(|source| ExecutionContext {
+                    source: Some(source),
+                    ..Default::default()
+                });
+                let error = conn
+                    .execute(&req)
+                    .expect_err("protected request must be refused");
+                assert!(matches!(error, DbError::NotSupported(_)), "{error}");
+                assert_eq!(
+                    received.load(Ordering::SeqCst),
+                    0,
+                    "no protected request reaches HTTP"
+                );
+            }
+        }
+        let result = conn
+            .execute(&QueryRequest::new("SELECT * FROM cpu"))
+            .expect("unprotected dispatch");
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(received.load(Ordering::SeqCst), 1);
+        server.join().expect("server thread");
+    }
 
     #[test]
     fn escape_flux_string_escapes_quotes_and_backslashes() {

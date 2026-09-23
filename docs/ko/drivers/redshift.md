@@ -24,6 +24,8 @@ Amazon Redshift 드라이버(읽기 전용 v1)로, `dbflux_driver_postgres` 위�
 
 ## 제한 사항
 
+- 요청한 행 제한(0 포함)과 문 실행 시간 제한은 읽기 전용 검증 및 쿼리 준비 전에 거부됩니다. 이 드라이버는 실행 전에 이를 보장할 수 없습니다. 두 옵션이 없으면 기존 쿼리 동작이 유지되고 전체 결과가 버퍼링될 수 있습니다. 서버 작업량이나 메모리 사용량을 제한하지 않습니다. 조기 거부 회귀 테스트는 Redshift 클러스터가 아닌 일회용 PostgreSQL 16으로 와이어 프로토콜 호환 경로만 검증합니다.
+
 - 읽기 전용: `DriverMetadata.capabilities`는 `INSERT`, `UPDATE`, `DELETE`, `RETURNING`, `BULK_INSERT`, `TRUNCATE_TABLE`, 모든 DDL/트랜잭션 DDL 플래그를 생략합니다. 이 드라이버에는 인라인 그리드 편집과 변경/시각적 쿼리 빌더가 없습니다. `Connection::execute`는 추가로 와이어 계층에서 읽기가 아닌 모든 문을 명시적인 오류로 거부하므로, 쓰기 시도가 조용한 no-op이 되는 일은 없습니다.
 - 단일 문 전용: `Connection::execute`는 한 번에 하나의 읽기 전용 문을 실행합니다. 다중 문 입력(예: `SELECT 1; SELECT 2`)은 와이어에 도달하기 전에 명시적인 오류로 거부됩니다. 선택적인 단일 후행 `;`은 허용되며, 문자열 리터럴, 인용된 식별자, 주석 내부의 `;`는 구분자로 취급되지 않습니다.
 - `INDEXES` 기능 없음: Redshift에는 진짜 인덱스 구조가 없으므로 `TableDetails.indexes`는 (강제되지 않는) 기본 키에서 합성되는 대신 항상 `None`입니다.

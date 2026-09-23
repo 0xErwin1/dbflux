@@ -1896,6 +1896,112 @@ mod tests {
         );
     }
 
+    /// Window root that renders an input's focus handle next to a second
+    /// focusable element, and counts the input's `Blur` events it receives
+    /// through a window-bound `subscribe_in` subscription.
+    struct BlurProbe {
+        input: gpui::Entity<crate::controls::InputState>,
+        other: gpui::FocusHandle,
+        blur_count: usize,
+        _subscription: gpui::Subscription,
+    }
+
+    impl gpui::Render for BlurProbe {
+        fn render(
+            &mut self,
+            _window: &mut gpui::Window,
+            cx: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            use gpui::{Focusable as _, InteractiveElement as _, ParentElement as _};
+
+            gpui::div()
+                .child(gpui::div().track_focus(&self.input.focus_handle(cx)))
+                .child(gpui::div().track_focus(&self.other))
+        }
+    }
+
+    /// `Blur` from a real focus change reaches a `subscribe_in` subscriber.
+    ///
+    /// gpui emits `Blur` from the focus listeners that run inside
+    /// `Window::draw`, while that window is taken out of the app. The event
+    /// is only queued there, and it is delivered after the draw has put the
+    /// window back, so the subscriber's window is available by then.
+    #[gpui::test]
+    fn blur_from_a_real_focus_change_reaches_a_subscribe_in_subscriber(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use crate::controls::{InputEvent, InputState};
+        use gpui::Focusable as _;
+
+        let (probe, window) = cx.add_window_view(|window, cx| {
+            let input = cx.new(|cx| InputState::new(window, cx));
+
+            let subscription = cx.subscribe_in(
+                &input,
+                window,
+                |probe: &mut BlurProbe, _input, event: &InputEvent, _window, _cx| {
+                    if matches!(event, InputEvent::Blur) {
+                        probe.blur_count += 1;
+                    }
+                },
+            );
+
+            BlurProbe {
+                input,
+                other: cx.focus_handle(),
+                blur_count: 0,
+                _subscription: subscription,
+            }
+        });
+
+        // Test windows open inactive, and gpui hides focus paths of an
+        // inactive window from its focus listeners.
+        window.update(|window, _app| window.activate_window());
+        window.run_until_parked();
+
+        window.update(|window, app| {
+            let input = probe.read(app).input.clone();
+            input.update(app, |input, cx| input.focus(window, cx));
+        });
+        window.run_until_parked();
+
+        let (active, input_focused, blurs_before) = window.update(|window, app| {
+            let probe = probe.read(app);
+            (
+                window.is_window_active(),
+                probe.input.focus_handle(app).is_focused(window),
+                probe.blur_count,
+            )
+        });
+
+        assert!(
+            active,
+            "focus events are only dispatched to an active window"
+        );
+        assert!(
+            input_focused,
+            "the input must hold focus before it can blur"
+        );
+        assert_eq!(blurs_before, 0, "focusing the input must not blur it");
+
+        window.update(|window, app| {
+            let other = probe.read(app).other.clone();
+            window.focus(&other, app);
+        });
+        window.run_until_parked();
+
+        let (other_focused, blurs_after) = window.update(|window, app| {
+            let probe = probe.read(app);
+            (probe.other.is_focused(window), probe.blur_count)
+        });
+
+        assert!(other_focused, "focus must have moved to the other element");
+        assert_eq!(
+            blurs_after, 1,
+            "the input's Blur must reach the subscribe_in subscriber exactly once"
+        );
+    }
+
     // =========================================================================
     // Record mode
     // =========================================================================

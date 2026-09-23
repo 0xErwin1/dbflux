@@ -34,8 +34,8 @@ the endpoint is a URL and not a host/port pair.
   size, and compression.
 - Schema loading is lazy per database, so a server with many databases does not pay
   for all of them at connect time.
-- Pagination, sorting and filtering are applied by the driver as `LIMIT`/`OFFSET`
-  around the statement, which is what makes result browsing work without a cursor.
+- SQL is sent unchanged over HTTP. The existing `offset` request value is sent
+  as an HTTP query parameter; its server-side behavior is not certified here.
 - Read-only visual SELECT generation, using ClickHouse identifier and literal
   quoting rules.
 - Chart authoring from query results, and CSV and JSON export.
@@ -58,9 +58,12 @@ arrives fully structured rather than as raw text:
 ## Limitations
 
 - No SSH tunnels.
-- No transactions, prepared statements, or query cancellation. A running statement
-  is bounded by the request timeout and nothing else, and the driver reports no
-  lock-timeout support.
+- No transactions, prepared statements, or query cancellation. Explicit
+  `QueryRequest` row limits (including zero) and statement timeouts are refused
+  before dispatch. The configured default HTTP transport timeout remains in
+  effect, but does not guarantee that server work or mutations stop. Unbounded
+  queries can allocate a whole result (within the HTTP response-body cap). The
+  driver reports no lock-timeout support.
 - No structured `INSERT`, `UPDATE`, `DELETE`, DDL, or data-transfer support. Write
   SQL runs only when typed explicitly into the editor, so the grid is read-only and
   the driver is not a transfer target.

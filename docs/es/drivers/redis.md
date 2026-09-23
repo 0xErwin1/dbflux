@@ -143,6 +143,8 @@ evitar exponer direcciones IP y hostnames de clientes.
 
 ## Limitaciones
 
+- `execute()` rechaza cualquier límite de filas solicitado (incluso cero) o tiempo máximo de ejecución con `NotSupported` antes de enviar el comando. Los comandos sin estas protecciones siguen disponibles; el editor predeterminado no puede garantizarlas.
+
 - SQL no está soportado; las queries deben escribirse como comandos Redis.
 
 - Las métricas de instancia devuelven un único punto de datos por llamada

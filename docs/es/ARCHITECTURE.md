@@ -974,8 +974,14 @@ metrics e inspectors) y `docs/CHARTS.md` para el chart engine.
   como una carpeta "Routines" por schema cuando el driver activa la capability
   `ROUTINES` y puebla el seam `schema_routines`. La UI renderiza la carpeta de
   forma genérica; no hace casos especiales para ningún driver.
-- Sidebar dock: `crates/dbflux_ui/src/ui/dock/sidebar_dock.rs` provee un sidebar
-  colapsable y redimensionable con el comando ToggleSidebar (Ctrl+B).
+- Sidebar dock: `crates/dbflux_ui/src/ui/dock/sidebar_dock.rs` sigue siendo
+  contraíble y redimensionable mediante ToggleSidebar (Ctrl+B), y gestiona la
+  vista temporal por separado de la elección explícita de contraer.
+- `dbflux_ui_base::object_tree` proporciona una jerarquía genérica de carga
+  diferida con un coordinador por `AppStateEntity`. Los límites de core/app
+  delimitan la aplicación por sesión y slot de conexión de destino; los adaptadores del
+  sidebar y el asistente conservan IDs compatibles y mantienen la interacción
+  local a cada consumidor. No abarca todas las familias especiales del sidebar.
 - Connection tree: `crates/dbflux_core/src/connection/tree.rs` modela carpetas y
   conexiones como una estructura de árbol; `tree_manager.rs` maneja la gestión
   en memoria.

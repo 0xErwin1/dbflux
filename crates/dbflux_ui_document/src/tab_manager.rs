@@ -412,13 +412,29 @@ impl TabManager {
         true
     }
 
+    /// Removes the tab at `idx` and, when the active tab changes as a result,
+    /// runs the same handover `activate` does, so the tab that takes over is
+    /// authoritative over the shared inspector rail.
     fn remove_document(&mut self, idx: usize, id: DocumentId, cx: &mut Context<Self>) {
+        let previous_active_id = self.active_id();
+        let rail = self.capture_rail_state(cx);
+
         self.documents.remove(idx);
         self.subscriptions.remove(&id);
         self.mru_order.retain(|&i| i != id);
         self.active_index = self.compute_new_active_after_close(idx);
 
+        let new_active_id = self
+            .active_id()
+            .filter(|&new_id| Some(new_id) != previous_active_id);
+        if let (Some(_), Some(new_index)) = (new_active_id, self.active_index) {
+            self.hand_over_rail_state(new_index, rail, cx);
+        }
+
         cx.emit(TabManagerEvent::Closed(id));
+        if let Some(new_id) = new_active_id {
+            cx.emit(TabManagerEvent::Activated(new_id));
+        }
         cx.notify();
     }
 
@@ -860,5 +876,160 @@ mod tests {
             2,
             "structural: close-right from first keeps 2 tabs"
         );
+    }
+}
+
+#[cfg(test)]
+mod close_activation_tests {
+    use super::{DocumentId, Tab, TabManager, TabManagerEvent};
+    use crate::code::CodeDocument;
+    use dbflux_components::theme;
+    use dbflux_core::QueryLanguage;
+    use dbflux_storage::bootstrap::StorageRuntime;
+    use dbflux_ui_base::AppStateEntity;
+    use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
+    use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    struct Harness<'a> {
+        window: &'a mut VisualTestContext,
+        app_state: Entity<AppStateEntity>,
+        manager: Entity<TabManager>,
+        events: Rc<RefCell<Vec<TabManagerEvent>>>,
+    }
+
+    fn harness(cx: &mut TestAppContext) -> Harness<'_> {
+        cx.update(gpui_component::init);
+        cx.update(theme::init);
+        cx.update(|cx| {
+            let host = cx.new(|_| ToastHost::new());
+            cx.set_global(ToastGlobal { host });
+        });
+
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                let storage_runtime =
+                    StorageRuntime::in_memory().expect("isolated storage runtime");
+                AppStateEntity::new_with_storage_runtime(storage_runtime)
+                    .expect("test storage setup")
+            })
+        });
+
+        let window = cx.add_empty_window();
+        let manager = window.update(|_, cx| cx.new(|_| TabManager::new()));
+
+        let events: Rc<RefCell<Vec<TabManagerEvent>>> = Rc::new(RefCell::new(Vec::new()));
+        let sink = events.clone();
+        window.update(|_, cx| {
+            cx.subscribe(&manager, move |_, event: &TabManagerEvent, _| {
+                sink.borrow_mut().push(event.clone());
+            })
+            .detach();
+        });
+
+        Harness {
+            window,
+            app_state,
+            manager,
+            events,
+        }
+    }
+
+    fn open_code_tab(harness: &mut Harness<'_>) -> DocumentId {
+        let app_state = harness.app_state.clone();
+        let manager = harness.manager.clone();
+
+        harness.window.update(|window, cx| {
+            let document = cx.new(|cx| {
+                CodeDocument::new_with_language(app_state, None, QueryLanguage::Sql, window, cx)
+            });
+            let document_id = document.read(cx).id();
+
+            let pane = CodeDocument::into_pane(document, cx);
+            manager.update(cx, |manager, cx| {
+                manager.open(Tab::Pane(Box::new(pane)), cx);
+            });
+
+            document_id
+        })
+    }
+
+    fn close_and_record(harness: &mut Harness<'_>, id: DocumentId) -> Vec<TabManagerEvent> {
+        let manager = harness.manager.clone();
+
+        harness.window.run_until_parked();
+        harness.events.borrow_mut().clear();
+
+        harness.window.update(|_, cx| {
+            manager.update(cx, |manager, cx| {
+                assert!(manager.close(id, cx), "the tab must be open");
+            });
+        });
+        harness.window.run_until_parked();
+
+        harness.events.borrow().clone()
+    }
+
+    /// Closing the active tab hands activation to the tab that takes over,
+    /// after the close, so the workspace runs its activation pass for it.
+    #[gpui::test]
+    fn closing_the_active_tab_activates_the_next_one_after_the_close(cx: &mut TestAppContext) {
+        let mut harness = harness(cx);
+        let remaining = open_code_tab(&mut harness);
+        let closed = open_code_tab(&mut harness);
+
+        let recorded = close_and_record(&mut harness, closed);
+
+        assert!(
+            matches!(
+                recorded.as_slice(),
+                [TabManagerEvent::Closed(first), TabManagerEvent::Activated(second)]
+                    if *first == closed && *second == remaining
+            ),
+            "closing the active tab must emit Closed, then Activated for the new active tab, got {recorded:?}"
+        );
+        let active_id = harness
+            .window
+            .update(|_, cx| harness.manager.read(cx).active_id());
+        assert_eq!(active_id, Some(remaining));
+    }
+
+    /// Closing a background tab leaves the active tab in place, so there is no
+    /// activation to announce.
+    #[gpui::test]
+    fn closing_a_background_tab_does_not_reactivate(cx: &mut TestAppContext) {
+        let mut harness = harness(cx);
+        let background = open_code_tab(&mut harness);
+        let active = open_code_tab(&mut harness);
+
+        let recorded = close_and_record(&mut harness, background);
+
+        assert!(
+            matches!(recorded.as_slice(), [TabManagerEvent::Closed(first)] if *first == background),
+            "closing a background tab must only emit Closed, got {recorded:?}"
+        );
+        let active_id = harness
+            .window
+            .update(|_, cx| harness.manager.read(cx).active_id());
+        assert_eq!(active_id, Some(active));
+    }
+
+    /// Closing the last tab leaves nothing active and announces no activation.
+    #[gpui::test]
+    fn closing_the_last_tab_activates_nothing(cx: &mut TestAppContext) {
+        let mut harness = harness(cx);
+        let only = open_code_tab(&mut harness);
+
+        let recorded = close_and_record(&mut harness, only);
+
+        assert!(
+            matches!(recorded.as_slice(), [TabManagerEvent::Closed(first)] if *first == only),
+            "closing the last tab must only emit Closed, got {recorded:?}"
+        );
+        let active_id = harness
+            .window
+            .update(|_, cx| harness.manager.read(cx).active_id());
+        assert_eq!(active_id, None);
     }
 }

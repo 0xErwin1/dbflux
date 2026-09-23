@@ -629,12 +629,6 @@ pub(crate) fn loading_event_streams_toast_label() -> String {
     dbflux_i18n::t!("sidebar.toast.loading_event_streams")
 }
 
-/// Translated task-panel label for a database schema fetch, e.g. `"Loading
-/// schema: orders"`.
-pub(crate) fn loading_database_schema_task_label(name: &str) -> String {
-    dbflux_i18n::t!("sidebar.task.loading_database_schema", name = name)
-}
-
 /// Translated toast reported when loading a database's schema fails.
 pub(crate) fn load_schema_failed_label(error: &str) -> String {
     dbflux_i18n::t!("sidebar.toast.load_schema_failed", error = error)

@@ -1078,23 +1078,26 @@ impl ImportConnectionsPanel {
                 entity.update(cx, |this, cx| this.browse_input_path(cx));
             });
 
+        let bundle_file_label = dbflux_i18n::t!("connection_manager.import.field.bundle_file");
+
         let file_row = div()
             .flex()
             .items_center()
             .gap(Spacing::XS)
-            .child(div().flex_1().child(Input::new(&self.file_input)))
+            .child(
+                div().flex_1().child(
+                    Input::new(&self.file_input)
+                        .id("import-field-bundle_file")
+                        .aria_label(bundle_file_label.clone()),
+                ),
+            )
             .child(browse);
 
         let mut file_block = div()
             .flex()
             .flex_col()
             .gap(Spacing::XS)
-            .child(
-                Text::body(dbflux_i18n::t!(
-                    "connection_manager.import.field.bundle_file"
-                ))
-                .color(theme.muted_foreground),
-            )
+            .child(Text::body(bundle_file_label).color(theme.muted_foreground))
             .child(file_row);
 
         if self.native_picker_unavailable {
@@ -1140,26 +1143,26 @@ impl ImportConnectionsPanel {
                 }
             });
 
+            let passphrase_label = dbflux_i18n::t!("connection_manager.import.field.passphrase");
+
             col = col.child(
                 div()
                     .flex()
                     .flex_col()
                     .gap(Spacing::XS)
-                    .child(
-                        Text::body(dbflux_i18n::t!(
-                            "connection_manager.import.field.passphrase"
-                        ))
-                        .color(theme.muted_foreground),
-                    )
+                    .child(Text::body(passphrase_label.clone()).color(theme.muted_foreground))
                     .child(
                         div()
                             .flex()
                             .items_center()
                             .gap(Spacing::XS)
                             .child(
-                                div()
-                                    .flex_1()
-                                    .child(Input::new(&self.passphrase_input).secret(true)),
+                                div().flex_1().child(
+                                    Input::new(&self.passphrase_input)
+                                        .id("import-field-passphrase")
+                                        .aria_label(passphrase_label)
+                                        .secret(true),
+                                ),
                             )
                             .child(toggle),
                     ),
@@ -1586,15 +1589,17 @@ impl ImportConnectionsPanel {
 
         match &resolution.kind {
             RequiredResolutionKind::Secret => {
+                let secret_label = crate::labels::import_required_secret_label(
+                    &resolution.owner_name,
+                    &resolution.field,
+                );
+
                 row = row
                     .child(
                         div()
                             .text_size(FontSizes::SM)
                             .text_color(theme.foreground)
-                            .child(crate::labels::import_required_secret_label(
-                                &resolution.owner_name,
-                                &resolution.field,
-                            )),
+                            .child(secret_label.clone()),
                     )
                     .child(
                         Text::muted(dbflux_i18n::t!(
@@ -1604,7 +1609,15 @@ impl ImportConnectionsPanel {
                     );
 
                 if let Some(input) = self.secret_inputs.get(&key) {
-                    row = row.child(Input::new(input).secret(true));
+                    row = row.child(
+                        Input::new(input)
+                            .id(SharedString::from(format!(
+                                "import-field-secret-{}-{}",
+                                resolution.owner_local_id, resolution.field
+                            )))
+                            .aria_label(secret_label)
+                            .secret(true),
+                    );
                 }
             }
 

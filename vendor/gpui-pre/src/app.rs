@@ -1916,6 +1916,26 @@ impl App {
             .or_insert(window);
     }
 
+    /// Warn that a window-bound callback was dropped because its window is
+    /// already on the update stack.
+    ///
+    /// A window update also fails when the window has been closed, and
+    /// [`App::with_window`] when the entity no longer has a window. Both are
+    /// normal teardown, so only the update-stack case is logged: the window
+    /// is still alive and the callback silently missed it.
+    pub(crate) fn warn_if_window_on_update_stack(
+        &self,
+        window_id: WindowId,
+        dropped: impl FnOnce() -> String,
+    ) {
+        if self.window_update_stack.contains(&window_id) {
+            log::warn!(
+                "gpui: dropped {}: window {window_id:?} is already being updated",
+                dropped()
+            );
+        }
+    }
+
     pub(crate) fn update_window_id<T, F>(&mut self, id: WindowId, update: F) -> Result<T>
     where
         F: FnOnce(AnyView, &mut Window, &mut App) -> T,

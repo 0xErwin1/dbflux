@@ -73,6 +73,8 @@ Sensitive fields (`addr`, `laddr`, `name`) are redacted to `[redacted]` to avoid
 
 ## Limitations
 
+- `execute()` rejects any requested row limit (including zero) or statement timeout with `NotSupported` before dispatching a command. Unprotected commands remain available; the default editor cannot promise these protections.
+
 - SQL is not supported; queries must be written as Redis commands.
 
 - Instance metrics return a single data point per call (current snapshot from `INFO`), not a historical time series. Cumulative counters (e.g. `redis.total_commands_processed`) grow monotonically — interpret them as deltas between samples rather than absolute rates.

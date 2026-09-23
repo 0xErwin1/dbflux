@@ -79,6 +79,8 @@ DBFlux용 InfluxDB 드라이버입니다.
 
 ## 제한 사항
 
+- `execute()`는 요청한 행 제한(0 포함) 또는 명령문 시간 제한이 있으면 HTTP 요청이나 인스턴스 컨텍스트 디스패치 전에 `NotSupported`를 반환합니다. 보호 옵션이 없는 쿼리는 계속 실행할 수 있지만 기본 편집기는 이 보호를 보장하지 않습니다.
+
 - **쿼리 취소 없음** — `cancel()`은 `NotSupported`를 반환하며, 진행 중인 쿼리는 UI에서 중단할 수 없습니다(`QUERY_CANCELLATION`이 선언되지 않음).
 - **변경 생성 없음** — `QueryGenerator::generate_mutation`은 항상 `None`을 반환합니다. 읽기 전용 쿼리 API와 일치하도록 읽기 템플릿만 생성됩니다.
 - **v1에서 Flux 미지원** — v1 연결에 대해 Flux 쿼리를 실행하려고 하면 HTTP 호출 없이 즉시 오류를 반환합니다.

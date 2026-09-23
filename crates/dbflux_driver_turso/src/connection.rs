@@ -583,6 +583,13 @@ impl Connection for TursoConnection {
     }
 
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
+        if req.limit.is_some() || req.statement_timeout.is_some() {
+            return Err(DbError::NotSupported(
+                "Turso cannot enforce requested row limits or statement timeouts before execution"
+                    .into(),
+            ));
+        }
+
         let start = Instant::now();
         let params = req
             .params

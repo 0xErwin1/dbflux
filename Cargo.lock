@@ -3492,6 +3492,7 @@ dependencies = [
  "log",
  "rfd",
  "rusqlite",
+ "secrecy",
  "uuid",
 ]
 

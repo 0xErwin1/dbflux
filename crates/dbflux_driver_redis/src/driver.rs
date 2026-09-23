@@ -1379,6 +1379,13 @@ impl Connection for RedisConnection {
     }
 
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
+        if req.limit.is_some() || req.statement_timeout.is_some() {
+            return Err(DbError::NotSupported(
+                "Redis command execution does not support a requested row limit or statement timeout"
+                    .to_string(),
+            ));
+        }
+
         if let Some(source) = req
             .execution_context
             .as_ref()

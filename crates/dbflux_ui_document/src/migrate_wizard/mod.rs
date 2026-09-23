@@ -562,6 +562,19 @@ impl MigrateWizard {
 
     pub fn close(&mut self, cx: &mut Context<Self>) {
         self.visible = false;
+        // Suspend the Source & Target picker through the production close
+        // path: drop the phase entity together with its `ObjectTreeEvent`
+        // subscription, so a hidden wizard can never react to shared settles
+        // or leak subscriptions across reopenings. Reopening builds a fresh
+        // phase (fresh projection, fresh subscription). The shared
+        // coordinator is never told to cancel — its requests may belong to
+        // other consumers. A live run keeps everything as before: the run's
+        // owner must stay alive, and back-navigation to `Source & Target`
+        // after the run needs the phase.
+        if !self.is_running(cx) {
+            self.source_target = None;
+            self._source_target_sub = None;
+        }
         cx.notify();
     }
 
@@ -1621,5 +1634,188 @@ mod tests {
 
         assert_eq!(options.manual_order, None);
         assert!(options.disable_referential_integrity);
+    }
+}
+
+/// Blocker 4 lifecycle regression: drives the REAL `MigrateWizard::open` /
+/// `close` paths through a test window. Closing must suspend the picker by
+/// dropping its phase entity and `ObjectTreeEvent` subscription (without
+/// cancelling shared coordinator work), and reopening must build a fresh
+/// picker with a live subscription and a projection that already resolves
+/// against the shared caches.
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::{MigrateWizard, WizardPhase};
+    use crate::migrate_wizard::source_target::shared_coordinator_tests::{
+        PickerFakeConnection, connect_profile, db_schema, test_app_state, test_table,
+    };
+    use dbflux_core::{DatabaseInfo, SchemaLoadingStrategy};
+    use gpui::{AppContext, TestAppContext};
+    use uuid::Uuid;
+
+    #[gpui::test]
+    fn close_suspends_the_picker_without_cancelling_shared_work_and_reopen_restores_it(
+        cx: &mut TestAppContext,
+    ) {
+        // The wizard renders inside a window, so the theme global must exist.
+        cx.update(gpui_component::theme::init);
+        let state = test_app_state(cx);
+        let source_id = Uuid::new_v4();
+        let target_id = Uuid::new_v4();
+
+        let source_fake = PickerFakeConnection::new(SchemaLoadingStrategy::LazyPerDatabase);
+        source_fake
+            .databases
+            .lock()
+            .expect("databases")
+            .push(DatabaseInfo {
+                name: "app".into(),
+                is_current: true,
+            });
+        source_fake.set_schema(
+            "app",
+            db_schema("app", vec![test_table(Some("public"), "users")]),
+        );
+        source_fake.set_schema("other", db_schema("other", vec![test_table(None, "loose")]));
+        connect_profile(&state, cx, source_id, source_fake.clone(), None);
+
+        let target_fake = PickerFakeConnection::new(SchemaLoadingStrategy::LazyPerDatabase);
+        target_fake
+            .databases
+            .lock()
+            .expect("databases")
+            .push(DatabaseInfo {
+                name: "w".into(),
+                is_current: true,
+            });
+        connect_profile(&state, cx, target_id, target_fake.clone(), None);
+
+        // Open through the production path, inside a real test window.
+        let window = cx.add_window(|window, cx| {
+            let mut wizard = MigrateWizard::new(state.clone(), cx);
+            wizard.open(source_id, Some("app".to_string()), Vec::new(), window, cx);
+            wizard
+        });
+
+        let (opened_phase_id, opened_weak) = window
+            .update(cx, |wizard, _window, _cx| {
+                let phase = wizard.source_target.clone();
+                (
+                    phase.as_ref().map(|entity| entity.entity_id()),
+                    phase.map(|entity| entity.downgrade()),
+                )
+            })
+            .expect("window update");
+        let opened_weak = opened_weak.expect("open mounts a picker phase");
+        assert!(opened_phase_id.is_some(), "open mounts a picker phase");
+        let subscription_held = window
+            .update(cx, |wizard, _window, _cx| {
+                wizard._source_target_sub.is_some()
+            })
+            .unwrap();
+        assert!(subscription_held, "open holds the picker subscription");
+        cx.run_until_parked();
+
+        // Production close path.
+        window
+            .update(cx, |wizard, _window, cx| {
+                wizard.close(cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+
+        let (picker_dropped, subscription_dropped) = window
+            .update(cx, |wizard, _window, _cx| {
+                (
+                    wizard.source_target.is_none(),
+                    wizard._source_target_sub.is_none(),
+                )
+            })
+            .unwrap();
+        assert!(
+            picker_dropped,
+            "closing the wizard must drop the picker phase, not just hide it"
+        );
+        assert!(
+            subscription_dropped,
+            "closing the wizard must drop the picker's ObjectTreeEvent subscription"
+        );
+        assert!(
+            opened_weak.upgrade().is_none(),
+            "the retained owner must no longer exist after close"
+        );
+
+        // A shared request started while the wizard is closed still completes
+        // — closing must never cancel coordinator work other consumers need.
+        let other_key = dbflux_ui_base::object_tree::ObjectTreeRequestKey::DatabaseSchema {
+            profile_id: source_id,
+            database: "other".to_string(),
+        };
+        state.update(cx, |state, cx| {
+            assert_eq!(
+                state.object_tree_request(other_key.clone(), cx),
+                dbflux_ui_base::object_tree::ObjectTreeRequestStatus::Dispatched,
+            );
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            state.read_with(cx, |state, _| state
+                .object_tree_outcome(&other_key)
+                .cloned()),
+            Some(dbflux_ui_base::object_tree::ObjectTreeOutcome::Applied),
+            "shared work must complete while the wizard is closed"
+        );
+
+        // Production reopen path: a fresh picker owner with a live
+        // subscription, seeded with a source table that resolves immediately
+        // against the shared caches.
+        let seeded = vec![dbflux_core::TableRef {
+            schema: Some("public".to_string()),
+            name: "users".to_string(),
+        }];
+        window
+            .update(cx, |wizard, window, cx| {
+                wizard.open(
+                    source_id,
+                    Some("app".to_string()),
+                    seeded.clone(),
+                    window,
+                    cx,
+                );
+            })
+            .unwrap();
+        cx.run_until_parked();
+
+        let (reopened_phase_id, resubscribed, preseed_resolves) = window
+            .update(cx, |wizard, _window, cx| {
+                let phase = wizard
+                    .source_target
+                    .as_ref()
+                    .map(|entity| entity.entity_id());
+                let checked = wizard
+                    .source_target
+                    .as_ref()
+                    .map(|entity| entity.read(cx).checked_source_tables());
+                (phase, wizard._source_target_sub.is_some(), checked)
+            })
+            .unwrap();
+        assert!(resubscribed, "reopen holds a fresh picker subscription");
+        assert_ne!(
+            reopened_phase_id, opened_phase_id,
+            "reopen must build a fresh picker owner, not resurrect the old one"
+        );
+        let checked = preseed_resolves.expect("phase mounted on reopen");
+        assert_eq!(
+            checked.len(),
+            1,
+            "the reopened picker's projection must resolve the pre-seeded check"
+        );
+        assert_eq!(checked[0].name, "users");
+        assert_eq!(
+            window
+                .update(cx, |wizard, _window, _cx| wizard.phase)
+                .unwrap(),
+            WizardPhase::SourceTarget,
+        );
     }
 }
