@@ -84,6 +84,8 @@ Expone snapshots tabulares del estado del servidor en ejecución:
 
 ## Limitaciones
 
+- Las solicitudes de ejecución con límite de filas (incluso cero) o tiempo de espera de sentencia se rechazan antes de ejecutarse porque MongoDB no puede garantizar esas protecciones. Las solicitudes sin protección conservan su comportamiento.
+
 - SQL no está soportado; las queries deben usar sintaxis estilo shell de MongoDB
   (o el fallback JSON).
 

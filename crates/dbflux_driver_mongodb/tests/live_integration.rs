@@ -82,6 +82,50 @@ fn mongodb_live_connect_ping_query_and_schema() -> Result<(), DbError> {
     })
 }
 
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mongodb_query_safety_refuses_protected_mutations_before_effects() -> Result<(), DbError> {
+    containers::with_mongodb_url(|uri| {
+        let connection = connect_mongodb(uri)?;
+        for (index, protection) in ["zero", "positive", "timeout"].iter().enumerate() {
+            let query = format!(
+                "db.query_safety.insertOne({{\"marker\": \"{}\"}})",
+                protection
+            );
+            let mut request = QueryRequest::new(query);
+            match index {
+                0 => request.limit = Some(0),
+                1 => request.limit = Some(3),
+                _ => request.statement_timeout = Some(Duration::from_secs(1)),
+            }
+            let execution = connection.execute(&request);
+            let result = connection.execute(&QueryRequest::new(format!(
+                "db.query_safety.find({{\"marker\": \"{}\"}})",
+                protection
+            )))?;
+            assert_eq!(
+                result.rows.len(),
+                0,
+                "protected {protection} insert persisted {} rows before refusal check",
+                result.rows.len()
+            );
+            assert!(
+                matches!(execution, Err(DbError::NotSupported(_))),
+                "protected {protection} insert must be refused"
+            );
+        }
+
+        connection.execute(&QueryRequest::new(
+            "db.query_safety.insertOne({\"marker\": \"control\"})",
+        ))?;
+        let result = connection.execute(&QueryRequest::new(
+            "db.query_safety.find({\"marker\": \"control\"})",
+        ))?;
+        assert_eq!(result.rows.len(), 1);
+        Ok(())
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Schema introspection
 // ---------------------------------------------------------------------------

@@ -4,6 +4,8 @@ All notable changes to DBFlux will be documented in this file.
 
 ## [Unreleased]
 
+* Reject MongoDB execution requests with row limits or statement timeouts before any operation dispatches.
+
 ### Added
 
 * **Opt-in UI automation for agents and tests** — a development build compiled
