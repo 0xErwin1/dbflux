@@ -18,6 +18,13 @@ All notable changes to DBFlux will be documented in this file.
   
 * Reject MongoDB execution requests with row limits or statement timeouts before any operation dispatches.
 
+* **Driver picker arrow keys land on the card you see** — Up and Down in the
+  Connection Manager driver picker moved four cards at a time while the window
+  showed two per row, so the cursor landed on an unrelated driver. Each
+  category section now uses a fixed two-column grid that fits the window, and
+  Up/Down move to the card above or below, crossing into the neighboring
+  section's matching column.
+
 
 ### Added
 

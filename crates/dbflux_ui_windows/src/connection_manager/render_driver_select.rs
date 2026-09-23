@@ -22,12 +22,22 @@ const CATEGORY_ORDER: &[DatabaseCategory] = &[
     DatabaseCategory::ObjectStorage,
 ];
 
-/// Target column count for the card grid. Cards visually wrap, but the
-/// keyboard navigator treats the visible list as a flat index whose vertical
-/// step equals `GRID_COLUMNS`.
-pub(super) const GRID_COLUMNS: usize = 4;
+/// Column count of every category section's card grid. The layout
+/// (`driver_section_grid`) and the keyboard navigator (`move_grid_focus`) both
+/// read it, so the rendered rows and the vertical step cannot disagree.
+///
+/// Two columns fit the Connection Manager's 600 px minimum window width:
+/// `2 * CARD_WIDTH + CARD_GAP + 2 * PICKER_PADDING_X = 540 px`. A third
+/// column needs 800 px, wider than the 700 px the window opens at.
+pub(super) const GRID_COLUMNS: usize = 2;
 
 const CARD_WIDTH: f32 = 248.0;
+
+/// Horizontal and vertical gap between cards in a section grid.
+const CARD_GAP: Pixels = Spacing::MD;
+
+/// Horizontal padding of the scrollable picker body.
+const PICKER_PADDING_X: Pixels = Spacing::LG;
 
 impl ConnectionManagerWindow {
     pub(super) fn render_driver_select(
@@ -131,29 +141,23 @@ impl ConnectionManagerWindow {
             .flex()
             .flex_col()
             .gap_4()
-            .px_4()
+            .px(PICKER_PADDING_X)
             .py_3()
             .overflow_scroll();
 
         let mut cursor_index: usize = 0;
-        let mut rendered_any = false;
-        for category in CATEGORY_ORDER {
-            let section_drivers: Vec<&DriverInfo> =
-                visible.iter().filter(|d| d.category == *category).collect();
-
-            if section_drivers.is_empty() {
+        for section in visible_sections(visible) {
+            let Some(first_driver) = section.first() else {
                 continue;
-            }
-            rendered_any = true;
-
+            };
             body = body.child(render_section_header(
-                *category,
-                section_drivers.len(),
+                first_driver.category,
+                section.len(),
                 muted,
             ));
 
-            let mut grid = div().flex().flex_wrap().gap_3();
-            for driver in section_drivers {
+            let mut grid = driver_section_grid();
+            for driver in section {
                 let is_focused = cursor_index == focused_idx;
                 grid = grid.child(self.render_driver_card(driver, is_focused, cx));
                 cursor_index += 1;
@@ -162,7 +166,7 @@ impl ConnectionManagerWindow {
             body = body.child(grid);
         }
 
-        if !rendered_any {
+        if visible.is_empty() {
             body = body.child(div().flex().items_center().justify_center().py_8().child(
                 Text::muted(dbflux_i18n::t!(
                     "connection_manager.driver_select.empty_state"
@@ -379,6 +383,28 @@ pub(super) fn visible_drivers(drivers: &[DriverInfo], query: &str) -> Vec<Driver
     out
 }
 
+/// Split the ordered visible-driver list into its category sections, in
+/// display order. `visible_drivers` already groups drivers by category, so
+/// every section is a non-empty run of equal categories and categories with
+/// no visible driver produce no section.
+pub(super) fn visible_sections(visible: &[DriverInfo]) -> impl Iterator<Item = &[DriverInfo]> {
+    visible.chunk_by(|left, right| left.category == right.category)
+}
+
+/// Card counts of the visible category sections, in display order.
+pub(super) fn visible_section_sizes(visible: &[DriverInfo]) -> Vec<usize> {
+    visible_sections(visible).map(<[DriverInfo]>::len).collect()
+}
+
+/// Container that lays out one category section's cards in exactly
+/// `GRID_COLUMNS` columns, each as wide as its card.
+fn driver_section_grid() -> Div {
+    div()
+        .grid()
+        .grid_cols_max_content(GRID_COLUMNS as u16)
+        .gap(CARD_GAP)
+}
+
 /// Direction of a single 2D grid move.
 #[derive(Clone, Copy)]
 pub(super) enum GridDirection {
@@ -388,53 +414,106 @@ pub(super) enum GridDirection {
     Down,
 }
 
-/// Compute the next focus index after a 2D move across the flattened
-/// visible-driver list. Sections share a single flat index, so vertical moves
-/// can cross section boundaries when the column lines up.
-pub(super) fn move_grid_focus(visible_count: usize, current: usize, dir: GridDirection) -> usize {
-    if visible_count == 0 {
+/// Compute the next focus index after a 2D move across the visible cards.
+///
+/// `section_sizes` holds the card count of each rendered category section in
+/// display order; each section is laid out as its own grid of `columns`
+/// columns, and the returned index is into the flattened visible list.
+///
+/// - Left and Right step through the flattened list, wrapping at both ends.
+/// - Down moves to the same column in the next row of the section. From the
+///   section's last row it moves to the first row of the next section (the
+///   first section after the last one), clamped to that section's last card.
+/// - Up mirrors Down: from a section's first row it moves to the last row of
+///   the previous section (the last section before the first one), clamped
+///   to that section's last card.
+///
+/// Empty sections are skipped. With no cards the result is 0.
+pub(super) fn move_grid_focus(
+    section_sizes: &[usize],
+    columns: usize,
+    current: usize,
+    direction: GridDirection,
+) -> usize {
+    let sections: Vec<usize> = section_sizes
+        .iter()
+        .copied()
+        .filter(|size| *size > 0)
+        .collect();
+    let total: usize = sections.iter().sum();
+    if total == 0 {
         return 0;
     }
-    let last = visible_count - 1;
-    let cur = current.min(last);
 
-    match dir {
+    let columns = columns.max(1);
+    let last = total - 1;
+    let current = current.min(last);
+
+    match direction {
         GridDirection::Left => {
-            if cur == 0 {
+            if current == 0 {
                 last
             } else {
-                cur - 1
+                current - 1
             }
         }
         GridDirection::Right => {
-            if cur == last {
+            if current == last {
                 0
             } else {
-                cur + 1
-            }
-        }
-        GridDirection::Up => {
-            if cur >= GRID_COLUMNS {
-                cur - GRID_COLUMNS
-            } else {
-                let column = cur % GRID_COLUMNS;
-                let rows = visible_count.div_ceil(GRID_COLUMNS);
-                let mut candidate = (rows - 1) * GRID_COLUMNS + column;
-                if candidate > last {
-                    candidate = last;
-                }
-                candidate
+                current + 1
             }
         }
         GridDirection::Down => {
-            let candidate = cur + GRID_COLUMNS;
-            if candidate <= last {
-                candidate
+            let (section, offset) = locate_card(&sections, current);
+            let (row, column) = (offset / columns, offset % columns);
+
+            let (target_section, target_row) = if (row + 1) * columns < sections[section] {
+                (section, row + 1)
             } else {
-                cur % GRID_COLUMNS
-            }
+                ((section + 1) % sections.len(), 0)
+            };
+
+            card_at(&sections, columns, target_section, target_row, column)
+        }
+        GridDirection::Up => {
+            let (section, offset) = locate_card(&sections, current);
+            let (row, column) = (offset / columns, offset % columns);
+
+            let (target_section, target_row) = if row > 0 {
+                (section, row - 1)
+            } else {
+                let previous = (section + sections.len() - 1) % sections.len();
+                (previous, (sections[previous] - 1) / columns)
+            };
+
+            card_at(&sections, columns, target_section, target_row, column)
         }
     }
+}
+
+/// Flat index of the card at `row`/`column` of `section`, clamped to the
+/// section's last card when that row is shorter than `column`.
+fn card_at(sections: &[usize], columns: usize, section: usize, row: usize, column: usize) -> usize {
+    let section_start: usize = sections[..section].iter().sum();
+    let offset = (row * columns + column).min(sections[section] - 1);
+    section_start + offset
+}
+
+/// Section index and offset within that section of flat card `index`.
+/// `sections` must be non-empty, hold only non-zero sizes, and sum past
+/// `index`.
+fn locate_card(sections: &[usize], index: usize) -> (usize, usize) {
+    let mut start = 0;
+    for (section, size) in sections.iter().enumerate() {
+        if index < start + size {
+            return (section, index - start);
+        }
+        start += size;
+    }
+
+    let last_section = sections.len() - 1;
+    (last_section, sections[last_section] - 1)
 }
 
 #[cfg(test)]
@@ -478,6 +557,225 @@ mod category_order_tests {
             visible_drivers(&drivers, "").len(),
             drivers.len(),
             "a DatabaseCategory variant is missing from CATEGORY_ORDER"
+        );
+    }
+}
+
+#[cfg(test)]
+mod grid_navigation_tests {
+    use dbflux_core::{DatabaseCategory, Icon};
+    use gpui::{
+        Context, InteractiveElement, IntoElement, ParentElement, Render, Styled, TestAppContext,
+        Window, div, px,
+    };
+
+    use super::{
+        CARD_GAP, CARD_WIDTH, DriverInfo, GRID_COLUMNS, GridDirection, PICKER_PADDING_X,
+        driver_section_grid, move_grid_focus, visible_drivers, visible_section_sizes,
+    };
+
+    use GridDirection::{Down, Left, Right, Up};
+
+    /// Minimum width `open_connection_manager` gives the Connection Manager
+    /// window; the picker grid must fit it without clipping a column.
+    const MIN_WINDOW_WIDTH: f32 = 600.0;
+
+    fn driver(id: &str, category: DatabaseCategory) -> DriverInfo {
+        DriverInfo {
+            id: id.to_string(),
+            icon: Icon::Database,
+            name: id.to_string(),
+            description: String::new(),
+            category,
+            default_port: None,
+            uri_scheme: id.to_string(),
+        }
+    }
+
+    // Two columns, sections of 3 and 2 cards:
+    //   section 0:  0 1
+    //               2
+    //   section 1:  3 4
+    const TWO_SECTIONS: &[usize] = &[3, 2];
+
+    #[test]
+    fn down_moves_within_a_section_and_clamps_to_a_short_last_row() {
+        assert_eq!(move_grid_focus(TWO_SECTIONS, 2, 0, Down), 2);
+        assert_eq!(move_grid_focus(TWO_SECTIONS, 2, 1, Down), 2);
+    }
+
+    #[test]
+    fn down_from_a_sections_last_row_enters_the_next_section_in_the_same_column() {
+        assert_eq!(move_grid_focus(TWO_SECTIONS, 2, 2, Down), 3);
+    }
+
+    #[test]
+    fn down_from_the_last_section_wraps_to_the_first_section() {
+        assert_eq!(move_grid_focus(TWO_SECTIONS, 2, 3, Down), 0);
+        assert_eq!(move_grid_focus(TWO_SECTIONS, 2, 4, Down), 1);
+    }
+
+    #[test]
+    fn up_from_a_sections_first_row_enters_the_previous_sections_last_row() {
+        assert_eq!(move_grid_focus(TWO_SECTIONS, 2, 3, Up), 2);
+        assert_eq!(move_grid_focus(TWO_SECTIONS, 2, 4, Up), 2);
+        assert_eq!(move_grid_focus(TWO_SECTIONS, 2, 2, Up), 0);
+    }
+
+    #[test]
+    fn up_from_the_first_section_wraps_to_the_last_section() {
+        assert_eq!(move_grid_focus(TWO_SECTIONS, 2, 0, Up), 3);
+        assert_eq!(move_grid_focus(TWO_SECTIONS, 2, 1, Up), 4);
+    }
+
+    #[test]
+    fn left_and_right_follow_the_flattened_order_and_wrap_at_the_ends() {
+        assert_eq!(move_grid_focus(TWO_SECTIONS, 2, 0, Left), 4);
+        assert_eq!(move_grid_focus(TWO_SECTIONS, 2, 4, Right), 0);
+        assert_eq!(move_grid_focus(TWO_SECTIONS, 2, 1, Right), 2);
+        assert_eq!(move_grid_focus(TWO_SECTIONS, 2, 2, Right), 3);
+        assert_eq!(move_grid_focus(TWO_SECTIONS, 2, 3, Left), 2);
+    }
+
+    // Three columns, odd section sizes 4, 7 and 1:
+    //   section 0:  0 1 2      section 1:  4  5  6      section 2:  11
+    //               3                      7  8  9
+    //                                      10
+    const ODD_SECTIONS: &[usize] = &[4, 7, 1];
+
+    #[test]
+    fn odd_section_sizes_clamp_every_vertical_move_to_an_existing_card() {
+        assert_eq!(move_grid_focus(ODD_SECTIONS, 3, 2, Down), 3);
+        assert_eq!(move_grid_focus(ODD_SECTIONS, 3, 3, Down), 4);
+        assert_eq!(move_grid_focus(ODD_SECTIONS, 3, 9, Down), 10);
+        assert_eq!(move_grid_focus(ODD_SECTIONS, 3, 10, Down), 11);
+        assert_eq!(move_grid_focus(ODD_SECTIONS, 3, 11, Down), 0);
+
+        assert_eq!(move_grid_focus(ODD_SECTIONS, 3, 11, Up), 10);
+        assert_eq!(move_grid_focus(ODD_SECTIONS, 3, 4, Up), 3);
+        assert_eq!(move_grid_focus(ODD_SECTIONS, 3, 6, Up), 3);
+        assert_eq!(move_grid_focus(ODD_SECTIONS, 3, 0, Up), 11);
+    }
+
+    #[test]
+    fn a_single_section_wraps_vertically_within_itself() {
+        assert_eq!(move_grid_focus(&[5], 2, 4, Down), 0);
+        assert_eq!(move_grid_focus(&[5], 2, 3, Down), 4);
+        assert_eq!(move_grid_focus(&[5], 2, 1, Up), 4);
+    }
+
+    #[test]
+    fn empty_sections_are_skipped() {
+        let with_empty = [2, 0, 0, 3];
+
+        assert_eq!(move_grid_focus(&with_empty, 2, 0, Down), 2);
+        assert_eq!(move_grid_focus(&with_empty, 2, 1, Down), 3);
+        assert_eq!(move_grid_focus(&with_empty, 2, 2, Up), 0);
+        assert_eq!(move_grid_focus(&with_empty, 2, 4, Down), 0);
+    }
+
+    #[test]
+    fn no_visible_cards_keeps_focus_at_zero() {
+        for direction in [Left, Right, Up, Down] {
+            assert_eq!(move_grid_focus(&[], 2, 3, direction), 0);
+            assert_eq!(move_grid_focus(&[0, 0], 2, 3, direction), 0);
+        }
+    }
+
+    #[test]
+    fn a_stale_focus_past_the_filtered_list_is_clamped_to_its_last_card() {
+        assert_eq!(move_grid_focus(TWO_SECTIONS, 2, 99, Down), 1);
+        assert_eq!(move_grid_focus(TWO_SECTIONS, 2, 99, Right), 0);
+    }
+
+    #[test]
+    fn section_sizes_follow_the_filter_and_drop_emptied_categories() {
+        let drivers = vec![
+            driver("postgres", DatabaseCategory::Relational),
+            driver("mysql", DatabaseCategory::Relational),
+            driver("sqlite", DatabaseCategory::Relational),
+            driver("mongodb", DatabaseCategory::Document),
+            driver("redis", DatabaseCategory::KeyValue),
+            driver("valkey", DatabaseCategory::KeyValue),
+        ];
+
+        assert_eq!(
+            visible_section_sizes(&visible_drivers(&drivers, "")),
+            vec![3, 1, 2]
+        );
+        assert_eq!(
+            visible_section_sizes(&visible_drivers(&drivers, "s")),
+            vec![3, 1]
+        );
+        assert_eq!(
+            visible_section_sizes(&visible_drivers(&drivers, "re")),
+            vec![1, 1]
+        );
+        assert!(visible_section_sizes(&visible_drivers(&drivers, "zzz")).is_empty());
+    }
+
+    #[test]
+    fn grid_columns_fit_the_minimum_window_width() {
+        let columns = GRID_COLUMNS as f32;
+        let required = columns * CARD_WIDTH
+            + (columns - 1.0) * f32::from(CARD_GAP)
+            + 2.0 * f32::from(PICKER_PADDING_X);
+
+        assert!(
+            required <= MIN_WINDOW_WIDTH,
+            "{GRID_COLUMNS} columns need {required} px, wider than the {MIN_WINDOW_WIDTH} px minimum window"
+        );
+    }
+
+    struct SectionGridHarness;
+
+    impl Render for SectionGridHarness {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            let cards = (0..=GRID_COLUMNS).map(|index| {
+                div()
+                    .debug_selector(move || format!("grid-card-{index}"))
+                    .w(px(CARD_WIDTH))
+                    .h(px(40.0))
+            });
+
+            div()
+                .w(px(1600.0))
+                .child(driver_section_grid().children(cards))
+        }
+    }
+
+    /// Even with room for many more cards per row, a section grid renders
+    /// exactly `GRID_COLUMNS` columns, which is what `move_grid_focus` steps by.
+    #[gpui::test]
+    fn section_grid_renders_grid_columns_cards_per_row(cx: &mut TestAppContext) {
+        let (_, window) = cx.add_window_view(|_, _| SectionGridHarness);
+
+        let mut card_bounds = |index: usize| {
+            let selector: &'static str = format!("grid-card-{index}").leak();
+            window
+                .debug_bounds(selector)
+                .unwrap_or_else(|| panic!("{selector} was not rendered"))
+        };
+
+        let first = card_bounds(0);
+        for index in 1..GRID_COLUMNS {
+            let card = card_bounds(index);
+            assert_eq!(
+                card.origin.y, first.origin.y,
+                "card {index} left the first row"
+            );
+            assert_eq!(
+                card.origin.x,
+                first.origin.x + (px(CARD_WIDTH) + CARD_GAP) * index as f32,
+                "card {index} is not in column {index}"
+            );
+        }
+
+        let wrapped = card_bounds(GRID_COLUMNS);
+        assert_eq!(wrapped.origin.x, first.origin.x);
+        assert!(
+            wrapped.origin.y > first.origin.y,
+            "card {GRID_COLUMNS} should start the second row"
         );
     }
 }
