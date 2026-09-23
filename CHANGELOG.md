@@ -160,6 +160,15 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **Connection Manager inputs and tabs are named for assistive technology** —
+  text inputs in the Connection Manager were announced by their placeholder
+  (the Host input read as "localhost") and carried ids generated from runtime
+  entity ids, so UI automation could not address them across runs. Each input
+  now reports the label shown next to it and a stable id derived from its form
+  field (`cm-field-host`, `cm-field-ssh_user`, `cm-setting-refresh_interval`).
+  Document tabs and Connection Manager tabs are exposed as tabs inside a tab
+  list, with the active tab reported as selected, instead of as buttons.
+
 * **The MCP approvals overlay can be closed** — once opened, the approvals
   overlay stayed on screen until the audit viewer was opened. It now closes
   from the close button in its header, with Escape, or with a click on the
