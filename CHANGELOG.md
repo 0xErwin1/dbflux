@@ -6,6 +6,12 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Added
 
+* **DynamoDB execution safety** — requested timeouts and row-limited writes
+  now fail before execution; scan/query use the smaller request/envelope cap
+  including zero. PartiQL SELECT rejects zero limits and retains existing
+  positive-limit first-page behavior. Limits do not bound bytes or server work;
+  hosted AWS behavior was not validated.
+
 * **Opt-in UI automation for agents and tests** — a development build compiled
   with the `ui-automation` feature exposes each window to a local MCP server
   (vendored `gpui-mcp`) that can read the rendered element tree, click, type,
