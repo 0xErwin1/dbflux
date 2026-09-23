@@ -2123,6 +2123,59 @@ document:
       unsupported_action:
         create: 创建表
         drop: 删除表
+  schema_viz:
+    error:
+      connection_unavailable: 连接不存在或未激活
+      fetch_table_details_failed: "获取表详情失败：%{error}"
+      foreign_keys_unsupported: 此驱动不支持外键
+      list_tables_failed: "列出表失败：%{error}"
+      no_database: 未指定数据库
+      no_layout: 未计算布局
+    inspector:
+      columns: 列
+      foreign_keys: 外键
+      indexes: 索引
+      summary: "%{columns} 列 · %{indexes} 个索引"
+      table: 表
+    layout:
+      compact: 紧凑
+      left_right: 左右
+      snowflake: 雪花
+    menu:
+      copy_as: 复制为
+      copy_as_dbml: 复制为 DBML
+      copy_as_sql: 复制为 SQL
+      focus_table: 聚焦此表
+      inspect_schema: 检查 Schema
+      layout: 布局
+      zoom_in: 放大
+      zoom_out: 缩小
+    node:
+      column_count: "%{count} 列"
+      indexes: 索引
+    status:
+      loading: "正在加载 Schema…"
+      table_cap: "仅显示前 100 个表 — 该 Schema 还有更多表。"
+      unsupported: 此数据库类型不支持 Schema 关系图
+    task:
+      global_scope: 全局
+      load: "Schema 关系图：%{database}"
+    toast:
+      dbml_copied: Schema 已导出为 DBML（已复制到剪贴板）
+      dbml_failed: "DBML 导出失败：%{error}"
+      sql_copied: Schema 已导出为 SQL（已复制到剪贴板）
+      sql_failed: "SQL 导出失败：%{error}"
+    toolbar:
+      arrange: 排列
+      counter: "%{tables} 个表 · %{relations} 个关系"
+      export: 导出
+      fit: 适应窗口
+      indexes: 索引
+      reset: 重置
+      types: 类型
+    view:
+      title: "Schema：%{name}"
+      title_default_database: 数据库
   shared:
     add: 添加
     error_prefix: "错误：%{message}"
@@ -3359,6 +3412,8 @@ sidebar:
     open: 打开
     browse_event_streams: 浏览事件流
     view_schema: 查看 Schema
+    view_schema_diagram: 查看 Schema 关系图
+    view_relationships: 查看关系
     refresh: 刷新
     generate_sql: 生成 SQL
     export_table: 导出表…

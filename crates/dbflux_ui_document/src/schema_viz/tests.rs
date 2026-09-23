@@ -269,9 +269,11 @@ fn test_counter_matches_layout_nodes_and_edges() {
     assert_eq!(n_tables, 2, "2 tables should be in layout");
     assert_eq!(n_relations, 1, "1 FK relation should be in layout");
 
-    // This mirrors the toolbar counter formula exactly:
-    //   format!("{} tables · {} relations", n_tables, n_relations)
-    let counter = format!("{} tables · {} relations", n_tables, n_relations);
+    let counter = dbflux_i18n::t!(
+        "document.schema_viz.toolbar.counter",
+        tables = n_tables,
+        relations = n_relations
+    );
     assert_eq!(counter, "2 tables · 1 relations");
 }
 

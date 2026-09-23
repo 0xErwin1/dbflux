@@ -2123,6 +2123,59 @@ document:
       unsupported_action:
         create: 테이블 만들기
         drop: 테이블 삭제
+  schema_viz:
+    error:
+      connection_unavailable: 연결을 찾을 수 없거나 활성 상태가 아닙니다
+      fetch_table_details_failed: "테이블 세부 정보를 가져오지 못했습니다: %{error}"
+      foreign_keys_unsupported: 이 드라이버는 외래 키를 지원하지 않습니다
+      list_tables_failed: "테이블 목록을 가져오지 못했습니다: %{error}"
+      no_database: 데이터베이스가 지정되지 않았습니다
+      no_layout: 계산된 레이아웃이 없습니다
+    inspector:
+      columns: 열
+      foreign_keys: 외래 키
+      indexes: 인덱스
+      summary: "열 %{columns}개 · 인덱스 %{indexes}개"
+      table: 테이블
+    layout:
+      compact: 컴팩트
+      left_right: 왼쪽-오른쪽
+      snowflake: 스노우플레이크
+    menu:
+      copy_as: 다른 형식으로 복사
+      copy_as_dbml: DBML로 복사
+      copy_as_sql: SQL로 복사
+      focus_table: 이 테이블에 포커스
+      inspect_schema: 스키마 검사
+      layout: 레이아웃
+      zoom_in: 확대
+      zoom_out: 축소
+    node:
+      column_count: "열 %{count}개"
+      indexes: 인덱스
+    status:
+      loading: "스키마를 불러오는 중…"
+      table_cap: "처음 100개 테이블만 표시합니다 — 스키마에 테이블이 더 있습니다."
+      unsupported: 이 데이터베이스 유형에서는 스키마 다이어그램을 사용할 수 없습니다
+    task:
+      global_scope: 전체
+      load: "스키마 다이어그램: %{database}"
+    toast:
+      dbml_copied: 스키마를 DBML로 내보냈습니다 (클립보드에 복사됨)
+      dbml_failed: "DBML 내보내기 실패: %{error}"
+      sql_copied: 스키마를 SQL로 내보냈습니다 (클립보드에 복사됨)
+      sql_failed: "SQL 내보내기 실패: %{error}"
+    toolbar:
+      arrange: 정렬
+      counter: "테이블 %{tables}개 · 관계 %{relations}개"
+      export: 내보내기
+      fit: 화면에 맞추기
+      indexes: 인덱스
+      reset: 재설정
+      types: 타입
+    view:
+      title: "스키마: %{name}"
+      title_default_database: 데이터베이스
   shared:
     add: 추가
     error_prefix: "오류: %{message}"
@@ -3360,6 +3413,8 @@ sidebar:
     open: 열기
     browse_event_streams: 이벤트 스트림 탐색
     view_schema: 스키마 보기
+    view_schema_diagram: 스키마 다이어그램 보기
+    view_relationships: 관계 보기
     refresh: 새로고침
     generate_sql: SQL 생성
     export_table: 테이블 내보내기…
