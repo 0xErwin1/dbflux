@@ -18,6 +18,12 @@ All notable changes to DBFlux will be documented in this file.
   
 * Reject MongoDB execution requests with row limits or statement timeouts before any operation dispatches.
 
+* The Redis key browser now fills each page across `SCAN` batches (and across
+  masters on Cluster), bounded to 1000 round trips and 500 ms per page, so a
+  sparse filter no longer returns empty pages. Keys repeated by `SCAN` appear
+  once per page, and the page's key types are fetched in one pipeline instead
+  of one `TYPE` round trip per key.
+
 
 ### Added
 
