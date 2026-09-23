@@ -198,6 +198,17 @@ impl Element for Text {
         node.set_value(self.text.to_string());
     }
 
+    fn frame_node(&self) -> Option<crate::FrameNodeData> {
+        Some(crate::FrameNodeData {
+            fallback_role: accesskit::Role::Label,
+            ..Default::default()
+        })
+    }
+
+    fn frame_text(&self) -> Option<&str> {
+        Some(self.text.as_ref())
+    }
+
     fn request_layout(
         &mut self,
         id: Option<&GlobalElementId>,
@@ -261,6 +272,10 @@ impl Element for &'static str {
 
     fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
         None
+    }
+
+    fn frame_text(&self) -> Option<&str> {
+        Some(self)
     }
 
     fn request_layout(
@@ -335,6 +350,10 @@ impl Element for SharedString {
 
     fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
         None
+    }
+
+    fn frame_text(&self) -> Option<&str> {
+        Some(self.as_ref())
     }
 
     fn request_layout(
@@ -549,6 +568,10 @@ impl Element for StyledText {
 
     fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
         None
+    }
+
+    fn frame_text(&self) -> Option<&str> {
+        Some(self.text.as_ref())
     }
 
     fn request_layout(
@@ -1075,6 +1098,17 @@ impl Element for InteractiveText {
 
     fn write_a11y_info(&self, node: &mut accesskit::Node) {
         node.set_value(self.text.text.to_string());
+    }
+
+    fn frame_node(&self) -> Option<crate::FrameNodeData> {
+        Some(crate::FrameNodeData {
+            fallback_role: accesskit::Role::Label,
+            ..Default::default()
+        })
+    }
+
+    fn frame_text(&self) -> Option<&str> {
+        Some(self.text.text.as_ref())
     }
 
     fn request_layout(

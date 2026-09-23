@@ -22,6 +22,7 @@ pub mod schema_snapshot_manager;
 pub mod sql_preview_modal;
 pub mod sso_wizard;
 pub mod toast;
+pub mod ui_automation;
 pub mod user_error;
 
 mod style_guardrails;

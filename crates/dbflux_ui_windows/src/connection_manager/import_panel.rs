@@ -1156,7 +1156,11 @@ impl ImportConnectionsPanel {
                             .flex()
                             .items_center()
                             .gap(Spacing::XS)
-                            .child(div().flex_1().child(Input::new(&self.passphrase_input)))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .child(Input::new(&self.passphrase_input).secret(true)),
+                            )
                             .child(toggle),
                     ),
             );
@@ -1600,7 +1604,7 @@ impl ImportConnectionsPanel {
                     );
 
                 if let Some(input) = self.secret_inputs.get(&key) {
-                    row = row.child(Input::new(input));
+                    row = row.child(Input::new(input).secret(true));
                 }
             }
 

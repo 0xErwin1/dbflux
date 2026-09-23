@@ -1,7 +1,8 @@
 use crate::ssh_shared::SshAuthSelection;
 use dbflux_app::keymap::ContextId;
+use dbflux_components::components::form_renderer;
 use dbflux_components::controls::Button;
-use dbflux_components::controls::{GpuiInput as Input, InputState};
+use dbflux_components::controls::{GpuiInput as Input, InputContentType, InputState};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{
     BannerBlock, BannerVariant, Icon as AppIconElement, Label, Text, focus_frame,
@@ -152,7 +153,10 @@ impl ConnectionManagerWindow {
                                     this.enter_edit_mode_for_field(FormFocus::Password, window, cx);
                                 }),
                             )
-                            .child(Input::new(&self.form.input_password)),
+                            .child(
+                                Input::new(&self.form.input_password)
+                                    .content_type(InputContentType::Password),
+                            ),
                     )
                     .when(password_source_is_literal, |d| {
                         d.child(
@@ -669,7 +673,13 @@ impl ConnectionManagerWindow {
                             }),
                         )
                     })
-                    .child(Input::new(input_state).disabled(!field_enabled));
+                    .child(
+                        Input::new(input_state)
+                            .disabled(!field_enabled)
+                            .when(form_renderer::is_secret_field(&field_def.kind), |input| {
+                                input.content_type(InputContentType::Password)
+                            }),
+                    );
 
                 Self::field_row_cm(
                     field_def.label.clone(),

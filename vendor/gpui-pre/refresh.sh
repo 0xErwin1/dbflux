@@ -5,9 +5,9 @@
 # Usage:
 #   vendor/gpui-pre/refresh.sh 0.3.6
 #
-# Downloads the crate, keeps the parts the patch needs, re-applies
-# element-transform.patch and leaves .rej files for hunks that no longer apply.
-# See VENDOR.md for what to check afterwards.
+# Downloads the crate, keeps the parts the patches need, re-applies
+# element-transform.patch and frame-observer.patch in that order and leaves .rej
+# files for hunks that no longer apply. See VENDOR.md for what to check afterwards.
 
 set -euo pipefail
 
@@ -63,9 +63,23 @@ cat >> "$here/Cargo.toml" <<'MANIFEST'
 ignored = ["tracing"]
 MANIFEST
 
-echo "Applying element-transform.patch"
+# Each patch is written against the tree the previous ones produce, so the order matters.
+patches=(element-transform.patch frame-observer.patch)
+
 cd "$repo_root"
-git apply -p3 --directory=vendor/gpui-pre --reject vendor/gpui-pre/element-transform.patch || true
+tagged_rejects=()
+for patch in "${patches[@]}"; do
+    echo "Applying $patch"
+    git apply -p3 --directory=vendor/gpui-pre --reject "vendor/gpui-pre/$patch" || true
+
+    # git apply names every reject <file>.rej, so a later patch rejecting a hunk in the
+    # same file would overwrite this one. Tag each new reject with the patch it came from.
+    stem="${patch%.patch}"
+    tagged_rejects+=(! -name "*.$stem.rej")
+    while IFS= read -r -d '' reject; do
+        mv "$reject" "${reject%.rej}.$stem.rej"
+    done < <(find "$here" -name '*.rej' "${tagged_rejects[@]}" -print0)
+done
 
 rejects="$(find "$here" -name '*.rej' || true)"
 if [[ -n "$rejects" ]]; then

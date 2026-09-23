@@ -52,6 +52,22 @@ let
     mold
   ];
 
+  # Native libraries for the vendored UI-automation MCP server
+  # (vendor/gpui-mcp/crates/gpui-mcp-server and gpui-mcp-capture). Its screen
+  # capture backend, xcap, links PipeWire, libgbm, EGL and xcb-randr, and
+  # pipewire-sys/libspa-sys generate their bindings with bindgen. Only the
+  # development shells need them: the packages build `-p dbflux`, which never
+  # compiles those crates.
+  automationBuildInputs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux (
+    with pkgs;
+    [
+      pipewire
+      libgbm
+      libGL
+    ]
+  );
+  automationNativeBuildInputs = [ pkgs.rustPlatform.bindgenHook ];
+
   # Library path for runtime
   runtimeLibraryPath = pkgs.lib.makeLibraryPath [
     pkgs.wayland
@@ -205,6 +221,8 @@ in
   inherit
     buildInputs
     nativeBuildInputs
+    automationBuildInputs
+    automationNativeBuildInputs
     runtimeLibraryPath
     fullSrc
     ;
@@ -235,6 +253,7 @@ in
     pkgs.mkShell {
       nativeBuildInputs =
         nativeBuildInputs
+        ++ automationNativeBuildInputs
         ++ rustToolchainInputs
         ++ [
           pkgs.rust-analyzer
@@ -244,7 +263,7 @@ in
           pkgs.cargo-nextest
         ];
 
-      inherit buildInputs;
+      buildInputs = buildInputs ++ automationBuildInputs;
 
     # Include system GPU driver paths for non-NixOS systems
     LD_LIBRARY_PATH = pkgs.lib.concatStringsSep ":" [

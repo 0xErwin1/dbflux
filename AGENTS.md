@@ -69,6 +69,64 @@ which uses the system library when a `freetype2.pc` of at least the required
 version is present and otherwise compiles its vendored sources, so a missing
 development package costs build time rather than breaking the build.
 
+## Verifying UI Changes with UI Automation
+
+A build with the `ui-automation` feature exposes every DBFlux window to a local
+MCP server, so an agent can check a UI change in the running app: read the
+element tree, click, type and take screenshots. Use it after a change to
+rendering, focus, keyboard handling or a user flow, in addition to the GPUI
+tests, not instead of them. Setup, the full tool list and the trust model are in
+`docs/UI_AUTOMATION.md`.
+
+**Setup (once per machine).** Build the server and register it with your MCP
+client. Claude Code only loads a newly registered server in a new session, so if
+the `dbflux-ui` tools are not available, ask the user to register it and restart
+rather than working around it:
+
+```bash
+cargo build -p gpui-mcp-server
+claude mcp add dbflux-ui -- "$PWD/target/debug/gpui-mcp" --app-id dbflux
+```
+
+**Launching DBFlux for a session.** Always isolate the data directories, so the
+session never reads or writes the user's real configuration, connections or
+`dbflux.db`. On a Wayland session, clear `WAYLAND_DISPLAY` so DBFlux runs under
+XWayland, which screenshots need. Run it in the background and record its PID:
+
+```bash
+scratch="$(mktemp -d)"
+WAYLAND_DISPLAY= GPUI_X11_SCALE_FACTOR=1 \
+XDG_DATA_HOME="$scratch/data" XDG_CONFIG_HOME="$scratch/config" \
+XDG_STATE_HOME="$scratch/state" XDG_CACHE_HOME="$scratch/cache" \
+cargo run -p dbflux --features ui-automation
+```
+
+**Working loop.**
+
+1. Find the target with `get_ui_tree` or `find_elements`. Elements are addressed
+   by their GPUI element id (`.id("tab-scripts")` becomes `tab-scripts`).
+2. Act with `click_element`, `type_text`, `set_text` or `keyboard` (GPUI
+   keystroke syntax, for example `ctrl-shift-p`).
+3. Wait for the result with `wait_for_element` or `wait_for_state` instead of
+   sleeping.
+4. Check the outcome in the element tree, and with `screenshot` when the change
+   is visual. Look at the image before reporting that the change works.
+
+**Rules.**
+
+- Give new interactive elements (buttons, tabs, inputs, list rows) a stable,
+  descriptive `.id(...)`, so they can be targeted by name rather than by
+  coordinates.
+- Mark new secret inputs with `controls::Input::secret(true)`, or derive the
+  flag from `form_renderer::is_secret_field`, so their value stays out of the
+  element tree.
+- Connect only to local test databases (SQLite files in the scratch directory,
+  or the Docker services used by the live integration tests). A query run
+  through the UI bypasses MCP policies and approvals.
+- Stop the DBFlux process when the session ends, and never commit screenshots
+  or recordings.
+- Never add `ui-automation` to a `default` feature list.
+
 ## Rust Guidelines
 
 ### General Principles

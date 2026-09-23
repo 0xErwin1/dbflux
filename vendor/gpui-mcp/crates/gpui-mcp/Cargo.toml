@@ -1,0 +1,56 @@
+[package]
+name = "gpui-mcp"
+description = "A hardened, cross-platform MCP automation bridge for GPUI applications"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "Apache-2.0"
+repository = "https://github.com/themixednuts/gpui-mcp"
+homepage = "https://github.com/themixednuts/gpui-mcp"
+publish = false
+
+[features]
+default = []
+test-support = []
+
+[dependencies]
+async-channel = "2.5.0"
+gpui.workspace = true
+gpui-mcp-protocol = { path = "../gpui-mcp-protocol" }
+interprocess = { version = "2.4.2", features = ["tokio"] }
+rand = "0.9.2"
+raw-window-handle = "0.6.2"
+serde_json = "1.0.149"
+subtle = "2.6.1"
+thiserror = "2.0.18"
+tokio = { version = "1.52.3", features = ["io-std", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-util = { version = "0.7.18", features = ["rt"] }
+tracing = "0.1.44"
+
+[target.'cfg(windows)'.dependencies]
+widestring = "1.2.1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSResponder", "NSView", "NSWindow"] }
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
+tempfile = "3.23.0"
+tokio = { version = "1.52.3", features = ["io-std", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
+
+# DBFlux's workspace lint set without `clippy::indexing_slicing`: Cargo cannot
+# relax a single inherited lint, so the rest of the root `[workspace.lints]` is
+# restated here and must follow it. See vendor/gpui-mcp/VENDOR.md.
+[lints.rust]
+unsafe_code = "warn"
+unused_must_use = "warn"
+unreachable_pub = "warn"
+
+[lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+unwrap_in_result = "warn"
+dbg_macro = "warn"
+todo = "warn"
+unimplemented = "warn"

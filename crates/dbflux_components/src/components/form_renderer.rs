@@ -20,6 +20,12 @@ impl FormRendererState {
     }
 }
 
+/// Whether a field of this kind holds a secret: its input is masked and its
+/// value is kept out of the accessibility tree and UI automation.
+pub fn is_secret_field(kind: &FormFieldKind) -> bool {
+    matches!(kind, FormFieldKind::Password | FormFieldKind::WriteOnly)
+}
+
 pub fn create_inputs<T>(
     schema: &DriverFormDef,
     values: &FormValues,
@@ -77,8 +83,7 @@ pub fn create_inputs<T>(
                     _ => {
                         let placeholder = field.placeholder.clone();
                         let value = initial_value;
-                        let masked = field.kind == FormFieldKind::Password
-                            || field.kind == FormFieldKind::WriteOnly;
+                        let masked = is_secret_field(&field.kind);
 
                         let input = cx.new(|cx| {
                             let mut input = InputState::new(window, cx).placeholder(placeholder);
