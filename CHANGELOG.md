@@ -168,6 +168,13 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **Missing PostgreSQL relations no longer open as empty tables** — asking a
+  PostgreSQL connection for the details of a table or view that does not exist
+  returned an empty structure instead of an error, so the grid showed a blank
+  table. `table_details` now reports `ObjectNotFound` for absent relations;
+  real zero-column tables and supported views, partitioned tables and
+  partitions keep loading normally (#675).
+
 * **Connection Manager inputs and tabs are named for assistive technology** —
   text inputs in the Connection Manager were announced by their placeholder
   (the Host input read as "localhost") and carried ids generated from runtime
