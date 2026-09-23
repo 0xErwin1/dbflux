@@ -154,6 +154,12 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **`ON COMMIT` no longer shows as a syntax error** — the editor flagged
+  PostgreSQL's `ON COMMIT { DROP | DELETE ROWS | PRESERVE ROWS }` clause on
+  `CREATE TEMP TABLE` as `Unexpected`, because the bundled SQL grammar has no
+  rule for it. The clause is now skipped before the editor checks the syntax,
+  and errors elsewhere in the script are still reported at their position.
+
 * **The schema diagram follows the selected language** — its toolbar, context
   menu, layout and export menus, inspector, loading and error messages, toasts,
   tab title, and the sidebar entries that open it ("View Schema Diagram", "View
