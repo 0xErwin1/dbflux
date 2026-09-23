@@ -154,6 +154,14 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **PostgreSQL `NUMERIC` columns show their values** — `NUMERIC` and `DECIMAL`
+  values read back as `NULL` in query results, table browsing, MCP
+  `select_data`, exports, and the rows returned after an insert, update, or
+  delete. They now show the exact decimal PostgreSQL stores, including the
+  declared scale (`1123.40`), very large or very precise values, and `NaN`,
+  `Infinity`, and `-Infinity`. A value that still cannot be decoded is reported
+  as an unsupported type instead of passing for `NULL`.
+
 * **The inspector rail follows the active tab** — switching to a tab, or
   closing the active one, could leave the right-side rail showing the row
   inspector, value panel, or schema inspector of a tab that was no longer
