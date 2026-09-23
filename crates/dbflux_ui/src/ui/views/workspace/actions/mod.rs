@@ -1106,6 +1106,22 @@ mod tests {
 
     // --- Performance: fuzzy filtering on large dataset ---
 
+    fn fastest_of_five(mut pass: impl FnMut()) -> std::time::Duration {
+        let mut fastest = std::time::Duration::MAX;
+        for _ in 0..5 {
+            let start = std::time::Instant::now();
+            pass();
+            fastest = fastest.min(start.elapsed());
+        }
+        fastest
+    }
+
+    #[test]
+    fn fastest_of_five_rejects_consistently_slow_work() {
+        let elapsed = fastest_of_five(|| std::thread::sleep(std::time::Duration::from_millis(60)));
+        assert!(elapsed >= std::time::Duration::from_millis(50));
+    }
+
     #[test]
     fn palette_filtering_large_dataset_completes_within_budget() {
         let matcher = SkimMatcherV2::default();
@@ -1150,35 +1166,33 @@ mod tests {
 
         assert_eq!(items.len(), 1400);
 
-        // Measure item build time (simulated: just the search_text generation)
-        let build_start = std::time::Instant::now();
-        let search_texts: Vec<String> = items.iter().map(|i| i.search_text()).collect();
-        let build_elapsed = build_start.elapsed();
+        // Best-case throughput across complete passes excludes scheduler preemption;
+        // this does not measure tail latency under contention.
+        let mut search_texts = Vec::new();
+        let build_elapsed = fastest_of_five(|| {
+            search_texts = items.iter().map(|item| item.search_text()).collect();
+        });
         assert!(
-            build_elapsed.as_millis() < 50,
-            "Item search_text build took {}ms, exceeds 50ms budget",
+            build_elapsed < std::time::Duration::from_millis(50),
+            "Item search_text build minimum took {}ms, exceeds 50ms budget",
             build_elapsed.as_millis()
         );
 
-        // Measure per-keystroke filter time
-        let filter_start = std::time::Instant::now();
-        let matched: Vec<_> = items
-            .iter()
-            .enumerate()
-            .filter_map(|(i, _item)| {
-                matcher
-                    .fuzzy_match(&search_texts[i], "table_5")
-                    .map(|score| (i, score))
-            })
-            .collect();
-        let filter_elapsed = filter_start.elapsed();
-
-        // 50 ms is loose enough to absorb CI runner variance on shared-compute
-        // hosts while still catching real algorithmic regressions in the
-        // fuzzy-match path (>10x slowdown will trip it).
+        let mut matched = Vec::new();
+        let filter_elapsed = fastest_of_five(|| {
+            matched = items
+                .iter()
+                .enumerate()
+                .filter_map(|(index, _item)| {
+                    matcher
+                        .fuzzy_match(&search_texts[index], "table_5")
+                        .map(|score| (index, score))
+                })
+                .collect();
+        });
         assert!(
-            filter_elapsed.as_millis() < 50,
-            "Per-keystroke filter took {}ms, exceeds 50ms budget",
+            filter_elapsed < std::time::Duration::from_millis(50),
+            "Per-keystroke filter minimum took {}ms, exceeds 50ms budget",
             filter_elapsed.as_millis()
         );
         assert!(!matched.is_empty(), "Should match some items");
