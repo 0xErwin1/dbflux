@@ -15,6 +15,9 @@ All notable changes to DBFlux will be documented in this file.
   dispatching commands, SQL, HTTP, or instance-context queries without those
   protections. Unprotected execution remains available; the default editor
   cannot promise these protections on these backends.
+  
+* Reject MongoDB execution requests with row limits or statement timeouts before any operation dispatches.
+
 
 ### Added
 
