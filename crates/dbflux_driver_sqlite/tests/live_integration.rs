@@ -10,7 +10,8 @@
 use dbflux_core::{
     ConnectionProfile, DbConfig, DbDriver, DbError, DescribeRequest, ExplainRequest, OrderByColumn,
     Pagination, QueryRequest, RecordIdentity, RowDelete, RowInsert, RowPatch,
-    SchemaLoadingStrategy, TableBrowseRequest, TableCountRequest, TableRef, Value,
+    SchemaLoadingStrategy, TableBrowseRequest, TableCountRequest, TableRef, TransactionStateNote,
+    Value,
 };
 use dbflux_driver_sqlite::SqliteDriver;
 
@@ -389,6 +390,112 @@ fn sqlite_set_referential_integrity_disables_and_restores_fk_checks() -> Result<
         still_violates.is_err(),
         "FK violation must fail again after RI is restored"
     );
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Transaction state after a failed execution
+// ---------------------------------------------------------------------------
+
+fn connect_sqlite_at(path: &std::path::Path) -> Result<Box<dyn dbflux_core::Connection>, DbError> {
+    let profile = ConnectionProfile::new(
+        "live-sqlite",
+        DbConfig::SQLite {
+            path: path.to_path_buf(),
+            connection_id: None,
+        },
+    );
+
+    SqliteDriver::new().connect(&profile)
+}
+
+fn error_hint(error: &DbError) -> Option<&str> {
+    error
+        .formatted()
+        .and_then(|formatted| formatted.hint.as_deref())
+}
+
+fn row_count(connection: &dyn dbflux_core::Connection, table: &str) -> Result<usize, DbError> {
+    let result = connection.execute(&QueryRequest::new(format!("SELECT * FROM {table}")))?;
+    Ok(result.rows.len())
+}
+
+#[test]
+fn sqlite_failed_script_rolls_back_the_transaction_it_opened() -> Result<(), DbError> {
+    let connection = connect_sqlite()?;
+    connection.execute(&QueryRequest::new(
+        "CREATE TABLE tx_script (id INTEGER PRIMARY KEY)",
+    ))?;
+
+    let error = connection
+        .execute(&QueryRequest::new(
+            "BEGIN; INSERT INTO tx_script VALUES (1); INSERT INTO tx_script VALUES (1); COMMIT;",
+        ))
+        .expect_err("duplicate primary key must fail the script");
+
+    assert!(
+        error_hint(&error)
+            .is_some_and(|hint| hint.contains(TransactionStateNote::RolledBack.message())),
+        "hint must report the rollback, got {error:?}"
+    );
+    assert_eq!(row_count(connection.as_ref(), "tx_script")?, 0);
+
+    connection.execute(&QueryRequest::new(
+        "BEGIN; INSERT INTO tx_script VALUES (2); COMMIT;",
+    ))?;
+    assert_eq!(row_count(connection.as_ref(), "tx_script")?, 1);
+
+    Ok(())
+}
+
+#[test]
+fn sqlite_failed_statement_leaves_an_earlier_transaction_open() -> Result<(), DbError> {
+    let temp_dir = tempfile::tempdir()?;
+    let db_path = temp_dir.path().join("still-open.sqlite");
+
+    let connection = connect_sqlite_at(&db_path)?;
+    connection.execute(&QueryRequest::new(
+        "CREATE TABLE tx_open (id INTEGER PRIMARY KEY)",
+    ))?;
+
+    connection.execute(&QueryRequest::new("BEGIN"))?;
+    connection.execute(&QueryRequest::new("INSERT INTO tx_open VALUES (1)"))?;
+
+    let error = connection
+        .execute(&QueryRequest::new("INSERT INTO tx_open VALUES (1)"))
+        .expect_err("duplicate primary key must fail");
+
+    assert!(
+        error_hint(&error)
+            .is_some_and(|hint| hint.contains(TransactionStateNote::StillOpen.message())),
+        "hint must report the open transaction, got {error:?}"
+    );
+
+    let observer = connect_sqlite_at(&db_path)?;
+    assert_eq!(row_count(observer.as_ref(), "tx_open")?, 0);
+
+    connection.execute(&QueryRequest::new("COMMIT"))?;
+    assert_eq!(row_count(observer.as_ref(), "tx_open")?, 1);
+
+    Ok(())
+}
+
+#[test]
+fn sqlite_failed_statement_outside_a_transaction_adds_no_note() -> Result<(), DbError> {
+    let connection = connect_sqlite()?;
+    connection.execute(&QueryRequest::new(
+        "CREATE TABLE tx_none (id INTEGER PRIMARY KEY)",
+    ))?;
+    connection.execute(&QueryRequest::new("INSERT INTO tx_none VALUES (1)"))?;
+
+    let error = connection
+        .execute(&QueryRequest::new("INSERT INTO tx_none VALUES (1)"))
+        .expect_err("duplicate primary key must fail");
+
+    let hint = error_hint(&error).unwrap_or_default();
+    assert!(!hint.contains(TransactionStateNote::RolledBack.message()));
+    assert!(!hint.contains(TransactionStateNote::StillOpen.message()));
 
     Ok(())
 }
