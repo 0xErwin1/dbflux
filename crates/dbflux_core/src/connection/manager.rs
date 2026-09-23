@@ -1974,6 +1974,18 @@ impl ConnectionManager {
         })
     }
 
+    /// Whether the guard still belongs to this exact profile session, even
+    /// when target-slot churn has invalidated its application authority.
+    /// Callers may release their own pending work only in that session.
+    pub fn database_refresh_guard_is_same_session(&self, guard: &DatabaseRefreshGuard) -> bool {
+        self.connections
+            .get(&guard.profile_id)
+            .is_some_and(|connected| {
+                self.current_session_generation(guard.profile_id) == guard.generation
+                    && Arc::ptr_eq(&connected.connection, &guard.primary_connection)
+            })
+    }
+
     pub fn database_refresh_guard_is_current(&self, guard: &DatabaseRefreshGuard) -> bool {
         self.connections
             .get(&guard.profile_id)

@@ -439,6 +439,13 @@ impl Sidebar {
         {
             app_state.update(cx, |state, cx| {
                 state.tasks_mut().cancel(task_id);
+                // The pending marker is unique per profile/target in one
+                // session: until this operation releases it, a second
+                // same-session refresh cannot acquire it. A replacement
+                // session may own the same key and must remain untouched.
+                if state.database_refresh_guard_is_same_session(refresh_guard) {
+                    state.finish_pending_operation(profile_id, Some(database));
+                }
                 cx.emit(AppStateChanged);
             });
             sidebar.refresh_tree(cx);
@@ -977,6 +984,9 @@ impl Sidebar {
                 if !app_state.read(cx).database_refresh_guard_is_current(&guard) {
                     app_state.update(cx, |state, cx| {
                         state.tasks_mut().cancel(task_id);
+                        if state.database_refresh_guard_is_same_session(&guard) {
+                            state.finish_pending_operation(profile_id, Some(&db_name_owned));
+                        }
                         cx.emit(AppStateChanged);
                     });
                     sidebar.update(cx, |sidebar, cx| sidebar.refresh_tree(cx));

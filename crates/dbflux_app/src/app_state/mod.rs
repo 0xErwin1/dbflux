@@ -769,6 +769,15 @@ impl AppState {
             .capture_database_refresh_guard(profile_id, database)
     }
 
+    pub fn database_refresh_guard_is_same_session(
+        &self,
+        guard: &dbflux_core::DatabaseRefreshGuard,
+    ) -> bool {
+        self.facade
+            .connections
+            .database_refresh_guard_is_same_session(guard)
+    }
+
     pub fn database_refresh_guard_is_current(
         &self,
         guard: &dbflux_core::DatabaseRefreshGuard,
