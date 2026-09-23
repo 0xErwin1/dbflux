@@ -189,14 +189,25 @@ impl Sidebar {
         profile_id: Uuid,
         database: &str,
     ) -> Result<DatabaseDropReleasePlan, String> {
-        let Some(connected) = state.connections_mut().get_mut(&profile_id) else {
+        if state.connections().get(&profile_id).is_none() {
             return Err(format!(
                 "No active DBFlux connection found for database '{}'",
                 database
             ));
-        };
+        }
 
-        if let Some(connection) = connected.database_connections.remove(database) {
+        // Slot take goes through the manager seam so the per-target slot
+        // revision advances; the entry's ownership transfers into the plan.
+        if let Some(connection) = state.take_database_connection(profile_id, database) {
+            let Some(connected) = state.connections_mut().get_mut(&profile_id) else {
+                // Unreachable: the profile existed a moment ago and the take
+                // cannot remove a profile.
+                return Err(format!(
+                    "No active DBFlux connection found for database '{}'",
+                    database
+                ));
+            };
+
             let cached_schema = connected.database_schemas.remove(database);
             let previous_active_database = connected.active_database.clone();
 
@@ -216,6 +227,13 @@ impl Sidebar {
                 },
             )));
         }
+
+        let Some(connected) = state.connections_mut().get_mut(&profile_id) else {
+            return Err(format!(
+                "No active DBFlux connection found for database '{}'",
+                database
+            ));
+        };
 
         if connected.connection.schema_loading_strategy()
             == SchemaLoadingStrategy::ConnectionPerDatabase
@@ -248,18 +266,30 @@ impl Sidebar {
         profile_id: Uuid,
         held_connection: HeldDatabaseConnection,
     ) {
+        let database = held_connection.database.clone();
+
+        // Slot restoration goes through the manager seam so the per-target
+        // slot revision advances; a missing profile drops the entry.
+        if !state.restore_database_connection(
+            profile_id,
+            database.clone(),
+            held_connection.connection,
+        ) {
+            log::warn!(
+                "Failed to restore released database connection for profile {}: profile missing",
+                profile_id
+            );
+            return;
+        }
+
         let Some(connected) = state.connections_mut().get_mut(&profile_id) else {
+            // Unreachable: restore reported success, so the profile exists.
             log::warn!(
                 "Failed to restore released database connection for profile {}: profile missing",
                 profile_id
             );
             return;
         };
-
-        let database = held_connection.database.clone();
-        connected
-            .database_connections
-            .insert(database.clone(), held_connection.connection);
 
         if let Some(cached_schema) = held_connection.cached_schema {
             connected.database_schemas.insert(database, cached_schema);
@@ -553,5 +583,177 @@ impl Sidebar {
         });
 
         self.track_operation_task(task_id, operation_task);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use dbflux_core::{
+        Connection, DatabaseCategory, DbConfig, DbError, DbKind, DriverCapabilities,
+        DriverMetadata, Icon, QueryHandle, QueryRequest, QueryResult, RelationalSchema,
+        SchemaLoadingStrategy, SchemaSnapshot, SqlDialect, TransferFamily, WritePrivilege,
+    };
+
+    use std::sync::Arc;
+
+    use dbflux_ui_base::AppStateEntity;
+
+    use super::{DatabaseDropReleasePlan, Sidebar};
+    use dbflux_core::ConnectionProfile;
+
+    /// Minimal per-database connection so the release/restore roundtrip can
+    /// run against a real `AppStateEntity` without a live database.
+    struct ReleaseTestConnection {
+        metadata: DriverMetadata,
+    }
+
+    impl ReleaseTestConnection {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                metadata: DriverMetadata {
+                    id: "sidebar-release-test".to_string(),
+                    display_name: "ReleaseTest".to_string(),
+                    description: "test".to_string(),
+                    category: DatabaseCategory::Relational,
+                    transfer_family: TransferFamily::Sql,
+                    deployment_class: None,
+                    query_language: dbflux_core::QueryLanguage::Sql,
+                    capabilities: DriverCapabilities::empty(),
+                    default_port: None,
+                    uri_scheme: "test".to_string(),
+                    icon: Icon::Database,
+                    syntax: None,
+                    query: None,
+                    mutation: None,
+                    ddl: None,
+                    transactions: None,
+                    limits: None,
+                    ssl_modes: None,
+                    ssl_cert_fields: None,
+                    classification_override: None,
+                    default_chunk_size: None,
+                    supports_lock_timeout: false,
+                    editor_profile: None,
+                },
+            })
+        }
+    }
+
+    impl Connection for ReleaseTestConnection {
+        fn metadata(&self) -> &DriverMetadata {
+            &self.metadata
+        }
+
+        fn ping(&self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn close(&mut self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn execute(&self, _req: &QueryRequest) -> Result<QueryResult, DbError> {
+            Err(DbError::NotSupported("test connection".to_string()))
+        }
+
+        fn cancel(&self, _handle: &QueryHandle) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn schema(&self) -> Result<SchemaSnapshot, DbError> {
+            Ok(SchemaSnapshot::default())
+        }
+
+        fn kind(&self) -> DbKind {
+            DbKind::Postgres
+        }
+
+        fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
+            SchemaLoadingStrategy::ConnectionPerDatabase
+        }
+
+        fn dialect(&self) -> &dyn SqlDialect {
+            &dbflux_core::DefaultSqlDialect
+        }
+    }
+
+    fn schema_with_current_database(database: &str) -> SchemaSnapshot {
+        SchemaSnapshot::relational(RelationalSchema {
+            current_database: Some(database.to_string()),
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    fn database_drop_release_roundtrip_keeps_slot_entry_and_active_state() {
+        use dbflux_storage::bootstrap::StorageRuntime;
+
+        let rt = StorageRuntime::in_memory().expect("in-memory storage runtime");
+        let mut state = AppStateEntity::new_with_storage_runtime(rt).expect("test app state");
+
+        let profile = ConnectionProfile::new("pg", DbConfig::default_postgres());
+        state.apply_connect_profile(
+            profile.clone(),
+            ReleaseTestConnection::new(),
+            Some(schema_with_current_database("app")),
+            None,
+            false,
+            WritePrivilege::Unknown,
+        );
+
+        let analytics: Arc<dyn Connection> = ReleaseTestConnection::new();
+        state.add_database_connection(
+            profile.id,
+            "analytics".to_string(),
+            analytics.clone(),
+            Some(schema_with_current_database("analytics")),
+        );
+        state.set_active_database(profile.id, Some("analytics".to_string()));
+
+        // Release transfers the slot entry out and applies the active
+        // fallback to the primary schema's current database.
+        let plan = Sidebar::prepare_database_drop_release(&mut state, profile.id, "analytics")
+            .expect("release should find the per-database slot");
+        let DatabaseDropReleasePlan::ConnectionPerDatabase(held) = plan else {
+            panic!("expected a per-database release plan for a live slot");
+        };
+        assert_eq!(held.database, "analytics");
+        assert!(
+            Arc::ptr_eq(&held.connection.connection, &analytics),
+            "release must transfer the slot entry itself"
+        );
+        assert!(
+            held.connection.schema.is_some(),
+            "release keeps the slot's own schema"
+        );
+        assert_eq!(held.previous_active_database, Some("analytics".to_string()));
+        assert_eq!(
+            state.get_active_database(profile.id),
+            Some("app".to_string()),
+            "release falls back to the primary database for browsing"
+        );
+        let connected = state.connections().get(&profile.id).expect("connected");
+        assert!(
+            connected.database_connection("analytics").is_none(),
+            "the slot must be gone while the release is held"
+        );
+
+        // Restore puts the very same entry back and reinstates the prior
+        // active database.
+        Sidebar::restore_database_drop_release(&mut state, profile.id, *held);
+        let connected = state.connections().get(&profile.id).expect("connected");
+        let restored_slot = connected
+            .database_connection("analytics")
+            .expect("slot restored after release");
+        assert!(Arc::ptr_eq(&restored_slot.connection, &analytics));
+        assert!(
+            restored_slot.schema.is_some(),
+            "restore reinstates the slot schema"
+        );
+        assert_eq!(
+            state.get_active_database(profile.id),
+            Some("analytics".to_string()),
+            "restore reinstates the previous active database"
+        );
     }
 }

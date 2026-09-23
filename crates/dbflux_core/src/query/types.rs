@@ -6,6 +6,13 @@ use uuid::Uuid;
 
 pub const UNSUPPORTED_TYPES_METADATA_KEY: &str = "unsupported_types";
 
+/// `metadata_extra` key marking that a driver omitted result rows because an
+/// execution cap (e.g. a configured row limit) was reached. `true` must be
+/// written only when rows were actually dropped — it is not a guarantee that
+/// the driver enforced any cap, and its absence is not a promise of
+/// completeness.
+pub const ROWS_TRUNCATED_METADATA_KEY: &str = "rows_truncated";
+
 pub(crate) fn encode_unsupported_types(
     metadata: &mut Option<HashMap<String, serde_json::Value>>,
     type_names: impl IntoIterator<Item = String>,
@@ -377,6 +384,43 @@ impl QueryResult {
         take_unsupported_types(&mut self.metadata_extra)
     }
 
+    /// Returns whether the driver omitted result rows in this result set
+    /// because an execution cap was reached.
+    ///
+    /// Reads the [`ROWS_TRUNCATED_METADATA_KEY`] entry in `metadata_extra`
+    /// without consuming it, so callers (e.g. the audit forwarder) can inspect
+    /// the flag without destroying it for later consumers. Any value other
+    /// than JSON `true` — including a missing entry or a malformed value —
+    /// reads as `false`; `false` is the default and does not guarantee that
+    /// the driver enforced a cap.
+    pub fn rows_truncated(&self) -> bool {
+        self.metadata_extra
+            .as_ref()
+            .and_then(|metadata| metadata.get(ROWS_TRUNCATED_METADATA_KEY))
+            == Some(&serde_json::Value::Bool(true))
+    }
+
+    /// Marks whether this result set omitted rows because an execution cap
+    /// was reached. Only `true` is recorded; passing `false` removes any
+    /// previous flag so untouched results keep `metadata_extra` empty.
+    /// Unrelated `metadata_extra` entries are preserved.
+    pub fn set_rows_truncated(&mut self, truncated: bool) {
+        if !truncated {
+            if let Some(metadata) = self.metadata_extra.as_mut() {
+                metadata.remove(ROWS_TRUNCATED_METADATA_KEY);
+                if metadata.is_empty() {
+                    self.metadata_extra = None;
+                }
+            }
+            return;
+        }
+
+        self.metadata_extra.get_or_insert_with(HashMap::new).insert(
+            ROWS_TRUNCATED_METADATA_KEY.to_string(),
+            serde_json::Value::Bool(true),
+        );
+    }
+
     pub fn row_count(&self) -> usize {
         self.rows.len()
     }
@@ -591,5 +635,72 @@ mod tests {
 
         assert_eq!(result.take_unsupported_types(), vec!["vector"]);
         assert!(result.take_unsupported_types().is_empty());
+    }
+
+    #[test]
+    fn query_result_safety_rows_truncated_defaults_to_false() {
+        let result = QueryResult::empty();
+        assert!(!result.rows_truncated());
+    }
+
+    #[test]
+    fn query_result_safety_set_rows_truncated_survives_unrelated_metadata() {
+        let mut result = QueryResult::empty();
+        result.set_unsupported_types(["vector".to_string()]);
+
+        result.set_rows_truncated(true);
+
+        assert!(result.rows_truncated());
+        assert_eq!(
+            result
+                .metadata_extra
+                .as_ref()
+                .and_then(|metadata| metadata.get(UNSUPPORTED_TYPES_METADATA_KEY)),
+            Some(&serde_json::json!(["vector"]))
+        );
+    }
+
+    #[test]
+    fn query_result_safety_clearing_rows_truncated_drops_empty_metadata() {
+        let mut result = QueryResult::empty();
+        result.set_rows_truncated(true);
+
+        result.set_rows_truncated(false);
+
+        assert!(!result.rows_truncated());
+        assert!(result.metadata_extra.is_none());
+    }
+
+    #[test]
+    fn query_result_safety_getter_reads_legacy_metadata_without_consuming_it() {
+        let mut result = QueryResult::empty();
+        result.metadata_extra = Some(HashMap::from([(
+            ROWS_TRUNCATED_METADATA_KEY.to_string(),
+            serde_json::json!(true),
+        )]));
+
+        assert!(result.rows_truncated());
+        assert!(result.metadata_extra.is_some());
+    }
+
+    #[test]
+    fn query_result_safety_getter_treats_malformed_value_as_false() {
+        let mut result = QueryResult::empty();
+        result.metadata_extra = Some(HashMap::from([(
+            ROWS_TRUNCATED_METADATA_KEY.to_string(),
+            serde_json::json!({ "truncated": true }),
+        )]));
+
+        assert!(!result.rows_truncated());
+    }
+
+    #[test]
+    fn query_result_safety_setter_rejects_reversed_value() {
+        let mut result = QueryResult::empty();
+        result.set_rows_truncated(true);
+
+        result.set_rows_truncated(false);
+
+        assert!(!result.rows_truncated());
     }
 }

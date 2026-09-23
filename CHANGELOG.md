@@ -8,7 +8,20 @@ All notable changes to DBFlux will be documented in this file.
 
 * ClickHouse and Redshift now refuse explicit query row limits (including zero) and statement timeouts before dispatch or preparation; unprotected queries retain existing behavior, including possible full-result buffering. ClickHouse HTTP timeout does not guarantee server cancellation, and the Redshift early-refusal regression uses PostgreSQL 16 protocol compatibility rather than a hosted Redshift cluster.
 
+### Fixed
+
+* Redis, Turso, and InfluxDB now refuse requested row limits (including zero)
+  or statement timeouts before execution with `NotSupported`, rather than
+  dispatching commands, SQL, HTTP, or instance-context queries without those
+  protections. Unprotected execution remains available; the default editor
+  cannot promise these protections on these backends.
+
 ### Added
+
+* **Shared lazy object hierarchy and collapsed sidebar preview** — the sidebar
+  and migration wizard share coordinated loading while keeping independent
+  selection; collapsed sidebar entry reveals a temporary preview without
+  changing the explicit collapse choice.
 
 * **Opt-in UI automation for agents and tests** — a development build compiled
   with the `ui-automation` feature exposes each window to a local MCP server
@@ -20,6 +33,7 @@ All notable changes to DBFlux will be documented in this file.
   role to accessibility clients, so their value is never readable through the
   element tree, even while a show-password toggle displays it. See
   `docs/UI_AUTOMATION.md`.
+
 * **Safe automatic Deep capture on connect and async snapshot picker** — a
   relational connection with a known database captures a Deep snapshot only
   when every table has loaded columns or sample fields. Creation metadata is
@@ -157,6 +171,42 @@ All notable changes to DBFlux will be documented in this file.
   `%{placeholder}` — a failure that is otherwise silent in the UI.
 
 ### Fixed
+
+* **Missing PostgreSQL relations no longer open as empty tables** — asking a
+  PostgreSQL connection for the details of a table or view that does not exist
+  returned an empty structure instead of an error, so the grid showed a blank
+  table. `table_details` now reports `ObjectNotFound` for absent relations;
+  real zero-column tables and supported views, partitioned tables and
+  partitions keep loading normally (#675).
+
+* **Connection Manager inputs and tabs are named for assistive technology** —
+  text inputs in the Connection Manager were announced by their placeholder
+  (the Host input read as "localhost") and carried ids generated from runtime
+  entity ids, so UI automation could not address them across runs. Each input
+  now reports the label shown next to it and a stable id derived from its form
+  field (`cm-field-host`, `cm-field-ssh_user`, `cm-setting-refresh_interval`).
+  Document tabs and Connection Manager tabs are exposed as tabs inside a tab
+  list, with the active tab reported as selected, instead of as buttons.
+
+* **The MCP approvals overlay can be closed** — once opened, the approvals
+  overlay stayed on screen until the audit viewer was opened. It now closes
+  from the close button in its header, with Escape, or with a click on the
+  dimmed area around it, and keyboard focus returns to where it was before.
+
+* **PostgreSQL `NUMERIC` columns show their values** — `NUMERIC` and `DECIMAL`
+  values read back as `NULL` in query results, table browsing, MCP
+  `select_data`, exports, and the rows returned after an insert, update, or
+  delete. They now show the exact decimal PostgreSQL stores, including the
+  declared scale (`1123.40`), very large or very precise values, and `NaN`,
+  `Infinity`, and `-Infinity`. A value that still cannot be decoded is reported
+  as an unsupported type instead of passing for `NULL`.
+
+* **The inspector rail follows the active tab** — switching to a tab, or
+  closing the active one, could leave the right-side rail showing the row
+  inspector, value panel, or schema inspector of a tab that was no longer
+  active. The tab that becomes active now decides what the rail shows, and the
+  rail hides when that tab has nothing to show or when the last tab closes.
+  Code and schema diagram tabs restore their inspector when you return to them.
 
 * **A failed script no longer leaves the connection stuck in a transaction** —
   a script that opened a transaction and failed partway never reached its

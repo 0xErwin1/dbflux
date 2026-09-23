@@ -79,6 +79,8 @@ InfluxDB driver for DBFlux.
 
 ## Limitations
 
+- `execute()` rejects any requested row limit (including zero) or statement timeout with `NotSupported` before HTTP or instance-context dispatch. Unprotected queries remain available; the default editor cannot promise these protections.
+
 - **No query cancellation** — `cancel()` returns `NotSupported`; in-flight queries cannot be aborted from the UI (`QUERY_CANCELLATION` is not declared).
 - **No mutation generation** — `QueryGenerator::generate_mutation` always returns `None`; only read templates are generated, consistent with the read-only query API.
 - **Flux not supported on v1** — attempting to run a Flux query against a v1 connection returns an error immediately, without making an HTTP call.

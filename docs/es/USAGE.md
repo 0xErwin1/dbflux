@@ -107,6 +107,19 @@ superficiales (nombres). Los metadatos detallados — columnas, índices y
 similares — se obtienen bajo demanda al expandir un nodo. Esto mantiene rápida
 la conexión inicial en bases de datos grandes.
 
+### Vista temporal del panel lateral contraído
+
+Al pasar el puntero sobre el panel lateral contraído, este aparece tras 250 ms;
+entrar mediante el teclado (FocusSidebar, ciclo de foco, navegación direccional
+o paleta de comandos) lo muestra de inmediato. La vista temporal se cierra
+cuando tanto el puntero como el foco salen, salvo que haya un menú, selector de
+hijos, destino de arrastre detectado o ajuste de tamaño activo. Fuera de la
+vista temporal, ToggleSidebar (Ctrl+B) cambia la elección explícita entre
+contraído y expandido. Durante la vista temporal, Ctrl+B o la flecha visible
+solo la cierran. Los selectores de origen y destino del asistente de migración
+comparten la jerarquía de carga diferida, pero mantienen selecciones
+independientes.
+
 ### Rutinas / procedimientos almacenados
 
 Para los drivers que declaran soporte de rutinas (PostgreSQL es la primera

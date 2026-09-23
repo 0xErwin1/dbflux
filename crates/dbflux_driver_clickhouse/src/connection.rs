@@ -291,6 +291,10 @@ impl Connection for ClickHouseConnection {
         Arc::new(dbflux_core::NoopCancelHandle)
     }
 
+    fn schema_snapshot_authority(&self) -> dbflux_core::SchemaSnapshotAuthority {
+        dbflux_core::SchemaSnapshotAuthority::EnumerationOnly
+    }
+
     fn schema(&self) -> Result<SchemaSnapshot, DbError> {
         let databases = introspection::list_databases(self)?;
         Ok(SchemaSnapshot::relational(RelationalSchema {

@@ -162,10 +162,69 @@ fn turso_bound_parameters_and_limit() -> Result<(), DbError> {
         assert_eq!(result.rows[0][1], Value::Bytes(vec![1, 2, 3]));
         assert_eq!(result.rows[0][2], Value::Int(1));
 
-        let limited = connection
-            .execute(&QueryRequest::new(format!("SELECT id FROM \"{table}\"")).with_limit(3))?;
-        assert_eq!(limited.rows.len(), 3);
+        let bounded = connection
+            .execute(&QueryRequest::new(format!("SELECT id FROM \"{table}\"")).with_limit(3));
+        assert!(matches!(bounded, Err(DbError::NotSupported(_))));
+        let unbounded =
+            connection.execute(&QueryRequest::new(format!("SELECT id FROM \"{table}\"")))?;
+        assert_eq!(unbounded.rows.len(), 6);
 
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon or TURSO_TEST_URL"]
+fn turso_query_safety_refuses_bounded_writes_before_batch() -> Result<(), DbError> {
+    containers::with_libsql_server(|url| {
+        let connection = connect(&url)?;
+        let table = unique_table("safety");
+        let _cleanup = TableCleanup {
+            connection: connection.as_ref(),
+            tables: vec![table.clone()],
+        };
+        connection.execute(&QueryRequest::new(format!(
+            "CREATE TABLE \"{table}\" (id INTEGER PRIMARY KEY)"
+        )))?;
+        connection.execute(&QueryRequest::new(format!(
+            "INSERT INTO \"{table}\" (id) VALUES (1)"
+        )))?;
+        let count = || -> Result<Value, DbError> {
+            Ok(connection
+                .execute(&QueryRequest::new(format!(
+                    "SELECT COUNT(*) FROM \"{table}\""
+                )))?
+                .rows[0][0]
+                .clone())
+        };
+        for limit in [0, 2] {
+            let request = QueryRequest::new(format!(
+                "INSERT INTO \"{table}\" (id) VALUES ({})",
+                limit + 2
+            ))
+            .with_limit(limit);
+            let outcome = connection.execute(&request);
+            assert_eq!(count()?, Value::Int(1));
+            assert!(matches!(outcome, Err(DbError::NotSupported(_))));
+        }
+        let mut timed = QueryRequest::new(format!("INSERT INTO \"{table}\" (id) VALUES (5)"));
+        timed.statement_timeout = Some(Duration::from_secs(1));
+        let outcome = connection.execute(&timed);
+        assert_eq!(count()?, Value::Int(1));
+        assert!(matches!(outcome, Err(DbError::NotSupported(_))));
+        let script = QueryRequest::new(format!(
+            "INSERT INTO \"{table}\" (id) VALUES (6); SELECT COUNT(*) FROM \"{table}\""
+        ))
+        .with_limit(1);
+        let outcome = connection.execute(&script);
+        assert_eq!(count()?, Value::Int(1));
+        assert!(matches!(outcome, Err(DbError::NotSupported(_))));
+        let unbounded = connection.execute(&QueryRequest::new(format!(
+            "INSERT INTO \"{table}\" (id) VALUES (7); SELECT COUNT(*) FROM \"{table}\""
+        )))?;
+        assert_eq!(unbounded.additional_results.len(), 1);
+        assert_eq!(unbounded.additional_results[0].rows[0][0], Value::Int(2));
+        assert_eq!(count()?, Value::Int(2));
         Ok(())
     })
 }

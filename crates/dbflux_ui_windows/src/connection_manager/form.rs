@@ -2067,4 +2067,163 @@ mod tests {
             window.update(&mut cx, |_, window, _| window.remove_window());
         }
     }
+
+    /// Keeps the latest rendered accessibility frame of the window it observes.
+    #[derive(Default)]
+    struct FrameCapture(Mutex<Option<gpui::AccessibilityFrame>>);
+
+    impl gpui::FrameObserver for FrameCapture {
+        fn accessibility_updated(&self, frame: &gpui::AccessibilityFrame) {
+            *self.0.lock().expect("frame capture lock") = Some(frame.clone());
+        }
+    }
+
+    /// Opens a connection manager window on the Postgres form with `password`
+    /// typed into the password input, and returns the window with its latest
+    /// rendered accessibility frame.
+    fn render_postgres_form(
+        password: &str,
+        cx: &mut TestAppContext,
+    ) -> (
+        WindowHandle<ConnectionManagerWindow>,
+        gpui::AccessibilityFrame,
+    ) {
+        init_form_test_runtime(cx);
+        let app_state = test_app_state(cx, SecretStoreFixture::new(PasswordSaveOutcome::Success));
+
+        let capture = Arc::new(FrameCapture::default());
+        let window = cx
+            .update(|cx| {
+                cx.open_window(WindowOptions::default(), |window, cx| {
+                    cx.new(|cx| ConnectionManagerWindow::new(app_state, window, cx))
+                })
+            })
+            .expect("connection manager window opens");
+        window
+            .update(cx, |manager, window, cx| {
+                manager.select_driver("postgres", window, cx);
+                manager
+                    .form
+                    .input_password
+                    .update(cx, |input, cx| input.set_value(password, window, cx));
+                window.observe_frames(&capture);
+                window.refresh();
+            })
+            .expect("postgres form initializes");
+        cx.run_until_parked();
+
+        let frame = capture
+            .0
+            .lock()
+            .expect("frame capture lock")
+            .clone()
+            .expect("the window rendered a frame");
+
+        (window, frame)
+    }
+
+    #[::core::prelude::v1::test]
+    fn form_inputs_expose_stable_ids_and_their_field_labels() {
+        const PASSWORD: &str = "cm-automation-secret";
+
+        let mut cx = TestAppContext::single();
+        let (window, frame) = render_postgres_form(PASSWORD, &mut cx);
+
+        let text_inputs: HashMap<String, Option<String>> = frame
+            .nodes()
+            .filter_map(|(_, node)| {
+                let accessible = frame.accessibility_node(node)?;
+                matches!(
+                    accessible.role(),
+                    gpui::Role::TextInput | gpui::Role::PasswordInput
+                )
+                .then(|| {
+                    (
+                        node.id().to_owned(),
+                        accessible.label().map(ToOwned::to_owned),
+                    )
+                })
+            })
+            .collect();
+
+        let expected = [
+            (
+                "cm-field-name",
+                dbflux_i18n::t!("connection_manager.field.name"),
+            ),
+            ("cm-field-host", "Host".to_string()),
+            ("cm-field-port", "Port".to_string()),
+            ("cm-field-user", "User".to_string()),
+        ];
+        for (id, label) in expected {
+            assert_eq!(
+                text_inputs.get(id),
+                Some(&Some(label)),
+                "input {id} in {text_inputs:?}"
+            );
+        }
+
+        let password_label = text_inputs
+            .get("cm-field-password")
+            .unwrap_or_else(|| panic!("password input in {text_inputs:?}"));
+        assert!(
+            password_label
+                .as_deref()
+                .is_some_and(|label| !label.is_empty()),
+            "password input has no name: {text_inputs:?}"
+        );
+        assert!(
+            text_inputs.keys().all(|id| id.starts_with("cm-")),
+            "an input kept its per-run default id: {text_inputs:?}"
+        );
+
+        let password_exposed = frame.nodes().any(|(_, node)| {
+            node.content_text().contains(PASSWORD)
+                || frame.accessibility_node(node).is_some_and(|accessible| {
+                    [accessible.value(), accessible.label()]
+                        .into_iter()
+                        .flatten()
+                        .any(|text| text.contains(PASSWORD))
+                })
+        });
+        assert!(!password_exposed, "the password value reached the frame");
+
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .expect("connection manager window closes");
+    }
+
+    /// The form tabs are exposed as tabs inside one tab list, and only the
+    /// active tab reports itself selected.
+    #[::core::prelude::v1::test]
+    fn form_tabs_are_exposed_as_selectable_tabs_in_a_tab_list() {
+        let mut cx = TestAppContext::single();
+        let (window, frame) = render_postgres_form("", &mut cx);
+
+        let node = |id: &str| {
+            frame
+                .nodes()
+                .find(|(_, node)| node.id() == id)
+                .and_then(|(_, node)| frame.accessibility_node(node))
+                .unwrap_or_else(|| panic!("no accessible node {id}"))
+        };
+
+        assert_eq!(node("cm-tab-list").role(), gpui::Role::TabList);
+
+        let tabs = [
+            ("tab-main", true),
+            ("tab-access", false),
+            ("tab-settings", false),
+            ("tab-mcp", false),
+        ];
+        for (id, selected) in tabs {
+            let tab = node(id);
+            assert_eq!(tab.role(), gpui::Role::Tab, "tab {id}");
+            assert_eq!(tab.is_selected(), Some(selected), "tab {id}");
+        }
+
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .expect("connection manager window closes");
+    }
 }

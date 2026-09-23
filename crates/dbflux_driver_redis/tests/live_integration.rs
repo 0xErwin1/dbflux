@@ -7,12 +7,13 @@
 )]
 
 use dbflux_core::{
-    ConnectionProfile, DbConfig, DbDriver, DbError, HashDeleteRequest, HashSetRequest,
-    KeyBulkGetRequest, KeyDeleteRequest, KeyExistsRequest, KeyExpireRequest, KeyGetRequest,
-    KeyPersistRequest, KeyRenameRequest, KeyScanRequest, KeySetRequest, KeyTtlRequest, KeyType,
-    KeyTypeRequest, ListEnd, ListPushRequest, ListRemoveRequest, ListSetRequest, QueryRequest,
-    SchemaLoadingStrategy, SetAddRequest, SetRemoveRequest, StreamAddRequest, StreamDeleteRequest,
-    StreamEntryId, ValueRepr, ZSetAddRequest, ZSetRemoveRequest,
+    ConnectionProfile, DbConfig, DbDriver, DbError, ExecutionContext, ExecutionSourceContext,
+    HashDeleteRequest, HashSetRequest, KeyBulkGetRequest, KeyDeleteRequest, KeyExistsRequest,
+    KeyExpireRequest, KeyGetRequest, KeyPersistRequest, KeyRenameRequest, KeyScanRequest,
+    KeySetRequest, KeyTtlRequest, KeyType, KeyTypeRequest, ListEnd, ListPushRequest,
+    ListRemoveRequest, ListSetRequest, QueryRequest, SchemaLoadingStrategy, SetAddRequest,
+    SetRemoveRequest, StreamAddRequest, StreamDeleteRequest, StreamEntryId, ValueRepr,
+    ZSetAddRequest, ZSetRemoveRequest,
 };
 use dbflux_driver_redis::RedisDriver;
 use dbflux_test_support::containers;
@@ -77,6 +78,64 @@ fn redis_live_connect_ping_query_and_schema() -> Result<(), DbError> {
         assert!(schema.is_key_value());
         let _ = schema.databases();
 
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn redis_query_safety_refuses_protected_commands_before_effects() -> Result<(), DbError> {
+    containers::with_redis_url(|uri| {
+        let connection = connect_redis(uri)?;
+        let key = "redis:query-safety";
+        connection.execute(&QueryRequest::new(format!("SET {key} original")))?;
+        let mut protected = vec![
+            QueryRequest::new(format!("SET {key} zero")).with_limit(0),
+            QueryRequest::new(format!("SET {key} ten")).with_limit(10),
+        ];
+        let mut timed = QueryRequest::new(format!("SET {key} timed"));
+        timed.statement_timeout = Some(Duration::from_secs(1));
+        protected.push(timed);
+        for request in protected {
+            let outcome = connection.execute(&request);
+            let current = connection.execute(&QueryRequest::new(format!("GET {key}")))?;
+            assert_eq!(current.text_body.as_deref(), Some("original"));
+            assert!(
+                matches!(outcome, Err(DbError::NotSupported(_))),
+                "protected Redis command must be refused as NotSupported"
+            );
+        }
+        for source in [
+            ExecutionSourceContext::InstanceMetricQuery {
+                metric_id: "redis.connected_clients".to_string(),
+                start_ms: 0,
+                end_ms: 1,
+            },
+            ExecutionSourceContext::InstanceInspectorQuery {
+                metric_id: "redis.client_list".to_string(),
+            },
+        ] {
+            let context = Some(ExecutionContext {
+                source: Some(source),
+                ..Default::default()
+            });
+            let unbounded =
+                QueryRequest::new("not a redis command").with_execution_context(context.clone());
+            assert!(connection.execute(&unbounded).is_ok());
+            assert!(matches!(
+                connection.execute(&unbounded.clone().with_limit(0)),
+                Err(DbError::NotSupported(_))
+            ));
+            let mut timed = unbounded;
+            timed.statement_timeout = Some(Duration::from_secs(1));
+            assert!(matches!(
+                connection.execute(&timed),
+                Err(DbError::NotSupported(_))
+            ));
+        }
+        connection.execute(&QueryRequest::new(format!("SET {key} unbounded")))?;
+        let current = connection.execute(&QueryRequest::new(format!("GET {key}")))?;
+        assert_eq!(current.text_body.as_deref(), Some("unbounded"));
         Ok(())
     })
 }

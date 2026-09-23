@@ -2009,6 +2009,10 @@ impl Connection for MssqlConnection {
         Ok(())
     }
 
+    fn schema_snapshot_authority(&self) -> dbflux_core::SchemaSnapshotAuthority {
+        dbflux_core::SchemaSnapshotAuthority::EnumerationOnly
+    }
+
     fn schema(&self) -> Result<SchemaSnapshot, DbError> {
         let total_start = Instant::now();
         log::debug!("[SCHEMA] Starting schema fetch");
