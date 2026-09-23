@@ -2067,4 +2067,117 @@ mod tests {
             window.update(&mut cx, |_, window, _| window.remove_window());
         }
     }
+
+    /// Keeps the latest rendered accessibility frame of the window it observes.
+    #[derive(Default)]
+    struct FrameCapture(Mutex<Option<gpui::AccessibilityFrame>>);
+
+    impl gpui::FrameObserver for FrameCapture {
+        fn accessibility_updated(&self, frame: &gpui::AccessibilityFrame) {
+            *self.0.lock().expect("frame capture lock") = Some(frame.clone());
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn form_inputs_expose_stable_ids_and_their_field_labels() {
+        const PASSWORD: &str = "cm-automation-secret";
+
+        let mut cx = TestAppContext::single();
+        init_form_test_runtime(&mut cx);
+        let app_state = test_app_state(
+            &mut cx,
+            SecretStoreFixture::new(PasswordSaveOutcome::Success),
+        );
+
+        let capture = Arc::new(FrameCapture::default());
+        let window = cx
+            .update(|cx| {
+                cx.open_window(WindowOptions::default(), |window, cx| {
+                    cx.new(|cx| ConnectionManagerWindow::new(app_state, window, cx))
+                })
+            })
+            .expect("connection manager window opens");
+        window
+            .update(&mut cx, |manager, window, cx| {
+                manager.select_driver("postgres", window, cx);
+                manager
+                    .form
+                    .input_password
+                    .update(cx, |input, cx| input.set_value(PASSWORD, window, cx));
+                window.observe_frames(&capture);
+                window.refresh();
+            })
+            .expect("postgres form initializes");
+        cx.run_until_parked();
+
+        let frame = capture
+            .0
+            .lock()
+            .expect("frame capture lock")
+            .clone()
+            .expect("the window rendered a frame");
+
+        let text_inputs: HashMap<String, Option<String>> = frame
+            .nodes()
+            .filter_map(|(_, node)| {
+                let accessible = frame.accessibility_node(node)?;
+                matches!(
+                    accessible.role(),
+                    gpui::Role::TextInput | gpui::Role::PasswordInput
+                )
+                .then(|| {
+                    (
+                        node.id().to_owned(),
+                        accessible.label().map(ToOwned::to_owned),
+                    )
+                })
+            })
+            .collect();
+
+        let expected = [
+            (
+                "cm-field-name",
+                dbflux_i18n::t!("connection_manager.field.name"),
+            ),
+            ("cm-field-host", "Host".to_string()),
+            ("cm-field-port", "Port".to_string()),
+            ("cm-field-user", "User".to_string()),
+        ];
+        for (id, label) in expected {
+            assert_eq!(
+                text_inputs.get(id),
+                Some(&Some(label)),
+                "input {id} in {text_inputs:?}"
+            );
+        }
+
+        let password_label = text_inputs
+            .get("cm-field-password")
+            .unwrap_or_else(|| panic!("password input in {text_inputs:?}"));
+        assert!(
+            password_label
+                .as_deref()
+                .is_some_and(|label| !label.is_empty()),
+            "password input has no name: {text_inputs:?}"
+        );
+        assert!(
+            text_inputs.keys().all(|id| id.starts_with("cm-")),
+            "an input kept its per-run default id: {text_inputs:?}"
+        );
+
+        let password_exposed = frame.nodes().any(|(_, node)| {
+            node.content_text().contains(PASSWORD)
+                || frame.accessibility_node(node).is_some_and(|accessible| {
+                    [accessible.value(), accessible.label()]
+                        .into_iter()
+                        .flatten()
+                        .any(|text| text.contains(PASSWORD))
+                })
+        });
+        assert!(!password_exposed, "the password value reached the frame");
+
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .expect("connection manager window closes");
+    }
 }

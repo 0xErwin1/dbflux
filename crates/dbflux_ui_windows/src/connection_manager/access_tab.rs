@@ -10,7 +10,10 @@ use gpui_component::ActiveTheme;
 use gpui_component::Icon;
 use gpui_component::checkbox::Checkbox;
 
-use super::{AccessTabMode, ActiveTab, ConnectionManagerWindow, EditState, FormFocus, TestStatus};
+use super::{
+    AccessTabMode, ActiveTab, ConnectionManagerWindow, EditState, FormFocus, TestStatus,
+    cm_field_id,
+};
 
 impl ConnectionManagerWindow {
     pub(super) fn render_access_tab(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
@@ -232,6 +235,7 @@ impl ConnectionManagerWindow {
                 .gap_3()
                 .child(self.render_ssm_value_field(
                     &ssm_instance_id_label,
+                    "ssm_instance_id",
                     &self.access.input_ssm_instance_id,
                     self.access.ssm_instance_id_value_source_selector.clone(),
                     true,
@@ -244,6 +248,7 @@ impl ConnectionManagerWindow {
                 ))
                 .child(self.render_ssm_value_field(
                     &ssm_region_label,
+                    "ssm_region",
                     &self.access.input_ssm_region,
                     self.access.ssm_region_value_source_selector.clone(),
                     true,
@@ -256,6 +261,7 @@ impl ConnectionManagerWindow {
                 ))
                 .child(self.render_ssm_value_field(
                     &ssm_remote_port_label,
+                    "ssm_remote_port",
                     &self.access.input_ssm_remote_port,
                     self.access.ssm_remote_port_value_source_selector.clone(),
                     false,
@@ -402,6 +408,7 @@ impl ConnectionManagerWindow {
     fn render_ssm_value_field(
         &self,
         label: &str,
+        field_id: &str,
         input: &Entity<dbflux_components::controls::InputState>,
         selector: Entity<dbflux_components::components::value_source_selector::ValueSourceSelector>,
         required: bool,
@@ -433,14 +440,21 @@ impl ConnectionManagerWindow {
                             ),
                     )
                     .child(
-                        self.render_control_focus_shell(focused, ring_color, Input::new(input), cx)
-                            .flex_1()
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(move |this, _, window, cx| {
-                                    this.enter_edit_mode_for_field(field, window, cx);
-                                }),
-                            ),
+                        self.render_control_focus_shell(
+                            focused,
+                            ring_color,
+                            Input::new(input)
+                                .id(cm_field_id(field_id))
+                                .aria_label(label.to_string()),
+                            cx,
+                        )
+                        .flex_1()
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _, window, cx| {
+                                this.enter_edit_mode_for_field(field, window, cx);
+                            }),
+                        ),
                     ),
             )
             .into_any_element()
@@ -844,6 +858,7 @@ impl ConnectionManagerWindow {
                                 .gap_3()
                                 .child(div().flex_1().child(self.form_field_input(
                                     &ssh_host_label,
+                                    "ssh_host",
                                     &self.access.input_ssh_host,
                                     true,
                                     show_focus && focus == FormFocus::SshHost,
@@ -853,6 +868,7 @@ impl ConnectionManagerWindow {
                                 )))
                                 .child(div().w(px(80.0)).child(self.form_field_input(
                                     &ssh_port_label,
+                                    "ssh_port",
                                     &self.access.input_ssh_port,
                                     false,
                                     show_focus && focus == FormFocus::SshPort,
@@ -863,6 +879,7 @@ impl ConnectionManagerWindow {
                         )
                         .child(div().id(3usize).child(self.form_field_input(
                             &ssh_username_label,
+                            "ssh_user",
                             &self.access.input_ssh_user,
                             true,
                             show_focus && focus == FormFocus::SshUser,
@@ -1129,6 +1146,10 @@ impl ConnectionManagerWindow {
         let save_secret_focused = show_focus && focus == FormFocus::SshSaveSecret;
         let password_focused = show_focus && focus == FormFocus::SshPassword;
 
+        let key_path_label = dbflux_i18n::t!("ssh.private_key_path");
+        let passphrase_label = dbflux_i18n::t!("ssh.key_passphrase");
+        let password_label = dbflux_i18n::t!("ssh.ssh_password");
+
         match auth_method {
             SshAuthSelection::PrivateKey => div()
                 .flex()
@@ -1140,7 +1161,7 @@ impl ConnectionManagerWindow {
                         .flex()
                         .flex_col()
                         .gap_1()
-                        .child(Label::new(dbflux_i18n::t!("ssh.private_key_path")))
+                        .child(Label::new(key_path_label.clone()))
                         .child(
                             div()
                                 .flex()
@@ -1165,7 +1186,12 @@ impl ConnectionManagerWindow {
                                                 );
                                             }),
                                         )
-                                        .child(Input::new(&self.access.input_ssh_key_path).small()),
+                                        .child(
+                                            Input::new(&self.access.input_ssh_key_path)
+                                                .id(cm_field_id("ssh_key_path"))
+                                                .aria_label(key_path_label)
+                                                .small(),
+                                        ),
                                 )
                                 .child(
                                     div()
@@ -1198,7 +1224,7 @@ impl ConnectionManagerWindow {
                         .flex()
                         .flex_col()
                         .gap_1()
-                        .child(Label::new(dbflux_i18n::t!("ssh.key_passphrase")))
+                        .child(Label::new(passphrase_label.clone()))
                         .child(
                             div()
                                 .flex()
@@ -1226,6 +1252,8 @@ impl ConnectionManagerWindow {
                                         )
                                         .child(
                                             Input::new(&self.access.input_ssh_key_passphrase)
+                                                .id(cm_field_id("ssh_passphrase"))
+                                                .aria_label(passphrase_label)
                                                 .secret(true),
                                         ),
                                 )
@@ -1282,7 +1310,7 @@ impl ConnectionManagerWindow {
                         .flex()
                         .flex_col()
                         .gap_1()
-                        .child(Label::new(dbflux_i18n::t!("ssh.ssh_password")).required(true))
+                        .child(Label::new(password_label.clone()).required(true))
                         .child(
                             div()
                                 .flex()
@@ -1310,6 +1338,8 @@ impl ConnectionManagerWindow {
                                         )
                                         .child(
                                             Input::new(&self.access.input_ssh_password)
+                                                .id(cm_field_id("ssh_password"))
+                                                .aria_label(password_label)
                                                 .secret(true),
                                         ),
                                 )

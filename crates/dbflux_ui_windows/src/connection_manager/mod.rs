@@ -38,6 +38,22 @@ use uuid::Uuid;
 
 const AUTH_PROFILE_NONE_INDEX: usize = 0;
 
+/// Element id of a connection form input: `cm-field-<field id>`.
+///
+/// `field_id` is the `FormFieldDef.id` of the field, or, for a fixed input
+/// without a form definition, the snake_case id the connection manager already
+/// uses for it (`name`, `ssh_host`, `ssm_region`, ...). The id stays the same
+/// across runs, so UI automation can address the input by it.
+fn cm_field_id(field_id: &str) -> SharedString {
+    format!("cm-field-{field_id}").into()
+}
+
+/// Element id of a Settings tab input: `cm-setting-<field id>`, with the same
+/// `field_id` rule as [`cm_field_id`].
+fn cm_setting_id(field_id: &str) -> SharedString {
+    format!("cm-setting-{field_id}").into()
+}
+
 fn auth_profile_needs_login(
     provider_supports_login: bool,
     session_state: Option<&AuthSessionState>,
