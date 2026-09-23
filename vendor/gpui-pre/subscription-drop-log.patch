@@ -1,0 +1,166 @@
+diff --git a/crates/gpui/src/app.rs b/crates/gpui/src/app.rs
+index 1d7e2f38..14942abc 100644
+--- a/crates/gpui/src/app.rs
++++ b/crates/gpui/src/app.rs
+@@ -1916,6 +1916,26 @@ impl App {
+             .or_insert(window);
+     }
+ 
++    /// Warn that a window-bound callback was dropped because its window is
++    /// already on the update stack.
++    ///
++    /// A window update also fails when the window has been closed, and
++    /// [`App::with_window`] when the entity no longer has a window. Both are
++    /// normal teardown, so only the update-stack case is logged: the window
++    /// is still alive and the callback silently missed it.
++    pub(crate) fn warn_if_window_on_update_stack(
++        &self,
++        window_id: WindowId,
++        dropped: impl FnOnce() -> String,
++    ) {
++        if self.window_update_stack.contains(&window_id) {
++            log::warn!(
++                "gpui: dropped {}: window {window_id:?} is already being updated",
++                dropped()
++            );
++        }
++    }
++
+     pub(crate) fn update_window_id<T, F>(&mut self, id: WindowId, update: F) -> Result<T>
+     where
+         F: FnOnce(AnyView, &mut Window, &mut App) -> T,
+diff --git a/crates/gpui/src/app/context.rs b/crates/gpui/src/app/context.rs
+index bc77a923..1ced494b 100644
+--- a/crates/gpui/src/app/context.rs
++++ b/crates/gpui/src/app/context.rs
+@@ -8,7 +8,7 @@ use anyhow::Result;
+ use futures::FutureExt;
+ use gpui_util::Deferred;
+ use std::{
+-    any::{Any, TypeId},
++    any::{Any, TypeId, type_name},
+     borrow::{Borrow, BorrowMut},
+     future::Future,
+     ops,
+@@ -312,9 +312,15 @@ impl<'a, T: 'static> Context<'a, T> {
+         let entity_id = self.entity_id();
+         self.ensure_window(entity_id, window.handle.id);
+         self.app.defer(move |cx| {
+-            cx.with_window(entity_id, |window, cx| {
++            let ran = cx.with_window(entity_id, |window, cx| {
+                 view.update(cx, |view, cx| f(view, window, cx)).ok();
+             });
++
++            if ran.is_none() {
++                warn_if_entity_window_on_update_stack(cx, entity_id, || {
++                    format!("defer_in callback of {}", type_name::<T>())
++                });
++            }
+         });
+     }
+ 
+@@ -340,11 +346,21 @@ impl<'a, T: 'static> Context<'a, T> {
+                 let Some((observer, observed)) = observer.upgrade().zip(observed.upgrade()) else {
+                     return false;
+                 };
+-                cx.with_window(observer_id, |window, cx| {
++                let delivered = cx.with_window(observer_id, |window, cx| {
+                     observer.update(cx, |observer, cx| {
+                         on_notify(observer, observed, window, cx);
+                     });
+                 });
++
++                if delivered.is_none() {
++                    warn_if_entity_window_on_update_stack(cx, observer_id, || {
++                        format!(
++                            "notification from {} to observe_in observer {}",
++                            type_name::<V2>(),
++                            type_name::<T>()
++                        )
++                    });
++                }
+                 true
+             }),
+         )
+@@ -377,11 +393,22 @@ impl<'a, T: 'static> Context<'a, T> {
+                         return false;
+                     };
+                     let event = event.downcast_ref().expect("invalid event type");
+-                    cx.with_window(subscriber_id, |window, cx| {
++                    let delivered = cx.with_window(subscriber_id, |window, cx| {
+                         subscriber.update(cx, |subscriber, cx| {
+                             on_event(subscriber, &emitter, event, window, cx);
+                         });
+                     });
++
++                    if delivered.is_none() {
++                        warn_if_entity_window_on_update_stack(cx, subscriber_id, || {
++                            format!(
++                                "{} event from {} to subscribe_in subscriber {}",
++                                type_name::<Evt>(),
++                                type_name::<Emitter>(),
++                                type_name::<T>()
++                            )
++                        });
++                    }
+                     true
+                 }),
+             ),
+@@ -901,3 +928,16 @@ impl<T> BorrowMut<App> for Context<'_, T> {
+         self.app
+     }
+ }
++
++/// Warn that a callback bound to `entity_id`'s window was dropped, when that
++/// window is still open but already on the update stack. An entity without a
++/// window is a normal teardown and stays silent.
++fn warn_if_entity_window_on_update_stack(
++    cx: &App,
++    entity_id: EntityId,
++    dropped: impl FnOnce() -> String,
++) {
++    if let Some(window_id) = cx.current_window_by_entity.get(&entity_id).copied() {
++        cx.warn_if_window_on_update_stack(window_id, dropped);
++    }
++}
+diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
+index 15dddcf6..c686556c 100644
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -2804,7 +2804,16 @@ impl Window {
+                             false
+                         }
+                     })
+-                    .unwrap_or(false)
++                    .unwrap_or_else(|_error| {
++                        cx.warn_if_window_on_update_stack(window_handle.window_id(), || {
++                            format!(
++                                "notification from {} to a Window::observe observer, \
++                                 and removed its subscription",
++                                std::any::type_name::<T>()
++                            )
++                        });
++                        false
++                    })
+             }),
+         )
+     }
+@@ -2840,7 +2849,17 @@ impl Window {
+                                 false
+                             }
+                         })
+-                        .unwrap_or(false)
++                        .unwrap_or_else(|_error| {
++                            cx.warn_if_window_on_update_stack(window_handle.window_id(), || {
++                                format!(
++                                    "{} event from {} to a Window::subscribe subscriber, \
++                                     and removed its subscription",
++                                    std::any::type_name::<Evt>(),
++                                    std::any::type_name::<Emitter>()
++                                )
++                            });
++                            false
++                        })
+                 }),
+             ),
+         )

@@ -2804,7 +2804,16 @@ impl Window {
                             false
                         }
                     })
-                    .unwrap_or(false)
+                    .unwrap_or_else(|_error| {
+                        cx.warn_if_window_on_update_stack(window_handle.window_id(), || {
+                            format!(
+                                "notification from {} to a Window::observe observer, \
+                                 and removed its subscription",
+                                std::any::type_name::<T>()
+                            )
+                        });
+                        false
+                    })
             }),
         )
     }
@@ -2840,7 +2849,17 @@ impl Window {
                                 false
                             }
                         })
-                        .unwrap_or(false)
+                        .unwrap_or_else(|_error| {
+                            cx.warn_if_window_on_update_stack(window_handle.window_id(), || {
+                                format!(
+                                    "{} event from {} to a Window::subscribe subscriber, \
+                                     and removed its subscription",
+                                    std::any::type_name::<Evt>(),
+                                    std::any::type_name::<Emitter>()
+                                )
+                            });
+                            false
+                        })
                 }),
             ),
         )
