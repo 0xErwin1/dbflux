@@ -5,6 +5,7 @@ use dbflux_ui_sidebar::Sidebar;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::ActiveTheme;
+use std::time::{Duration, Instant};
 
 pub enum SidebarDockEvent {
     OpenSettings,
@@ -33,7 +34,13 @@ pub enum SidebarState {
 
 pub struct SidebarDock {
     sidebar: Entity<Sidebar>,
+    _sidebar_subscription: Subscription,
     state: SidebarState,
+    transient_reveal: bool,
+    pointer_inside: bool,
+    sidebar_focused: bool,
+    hover_deadline: Option<Instant>,
+    hover_generation: u64,
     width: Pixels,
     last_expanded_width: Pixels,
 
@@ -43,10 +50,17 @@ pub struct SidebarDock {
 }
 
 impl SidebarDock {
-    pub fn new(sidebar: Entity<Sidebar>, _cx: &mut Context<Self>) -> Self {
+    pub fn new(sidebar: Entity<Sidebar>, cx: &mut Context<Self>) -> Self {
+        let subscription = cx.observe(&sidebar, |dock, _, cx| dock.dismiss_if_idle(cx));
         Self {
             sidebar,
+            _sidebar_subscription: subscription,
             state: SidebarState::Expanded,
+            transient_reveal: false,
+            pointer_inside: false,
+            sidebar_focused: false,
+            hover_deadline: None,
+            hover_generation: 0,
             width: DEFAULT_EXPANDED_WIDTH,
             last_expanded_width: DEFAULT_EXPANDED_WIDTH,
             is_resizing: false,
@@ -56,16 +70,26 @@ impl SidebarDock {
     }
 
     pub fn toggle(&mut self, cx: &mut Context<Self>) {
+        let closing_transient = self.state == SidebarState::Collapsed && self.transient_reveal;
         self.finish_resize(cx);
+        self.cancel_hover();
+        if closing_transient {
+            self.transient_reveal = false;
+            cx.emit(SidebarDockEvent::Collapsed);
+            cx.notify();
+            return;
+        }
 
         match self.state {
             SidebarState::Expanded => {
                 self.last_expanded_width = self.width;
                 self.state = SidebarState::Collapsed;
+                self.transient_reveal = false;
                 cx.emit(SidebarDockEvent::Collapsed);
             }
             SidebarState::Collapsed => {
                 self.state = SidebarState::Expanded;
+                self.transient_reveal = false;
                 self.width = self.last_expanded_width;
                 cx.emit(SidebarDockEvent::Expanded);
             }
@@ -82,12 +106,96 @@ impl SidebarDock {
         }
     }
 
+    fn cancel_hover(&mut self) {
+        self.hover_deadline = None;
+        self.hover_generation = self.hover_generation.wrapping_add(1);
+    }
+
+    pub fn pointer_enter(&mut self, now: Instant, cx: &mut Context<Self>) {
+        if self.pointer_inside {
+            return;
+        }
+        self.pointer_inside = true;
+        if self.state == SidebarState::Collapsed && !self.transient_reveal {
+            self.hover_deadline = Some(now + Duration::from_millis(250));
+            self.hover_generation = self.hover_generation.wrapping_add(1);
+            let generation = self.hover_generation;
+            let entity = cx.entity().clone();
+            cx.spawn(async move |_, cx| {
+                cx.background_executor()
+                    .timer(Duration::from_millis(250))
+                    .await;
+                entity.update(cx, |dock, cx| {
+                    if dock.hover_generation == generation {
+                        dock.process_hover_deadline(Instant::now(), cx);
+                    }
+                })
+            })
+            .detach();
+        }
+    }
+
+    pub fn pointer_leave(&mut self, cx: &mut Context<Self>) {
+        self.pointer_inside = false;
+        self.cancel_hover();
+        self.dismiss_if_idle(cx);
+    }
+
+    pub fn set_sidebar_focused(&mut self, focused: bool, cx: &mut Context<Self>) {
+        self.sidebar_focused = focused;
+        if focused {
+            self.cancel_hover();
+            self.reveal_transiently(cx);
+        } else {
+            self.dismiss_if_idle(cx);
+        }
+    }
+
+    pub fn process_hover_deadline(&mut self, now: Instant, cx: &mut Context<Self>) {
+        if self.pointer_inside && self.hover_deadline.is_some_and(|deadline| now >= deadline) {
+            self.cancel_hover();
+            self.reveal_transiently(cx);
+        }
+    }
+
+    pub fn dismiss_if_idle(&mut self, cx: &mut Context<Self>) {
+        if !self.pointer_inside
+            && !self.sidebar_focused
+            && !self.is_resizing
+            && !self.sidebar.read(cx).has_transient_interaction()
+        {
+            self.dismiss_transient(cx);
+        }
+    }
+
+    pub fn reveal_transiently(&mut self, cx: &mut Context<Self>) {
+        if self.state == SidebarState::Collapsed && !self.transient_reveal {
+            self.transient_reveal = true;
+            self.width = self.last_expanded_width;
+            cx.notify();
+        }
+    }
+
+    pub fn dismiss_transient(&mut self, cx: &mut Context<Self>) {
+        if self.transient_reveal {
+            self.transient_reveal = false;
+            cx.notify();
+        }
+    }
+
     pub fn is_collapsed(&self) -> bool {
-        self.state == SidebarState::Collapsed
+        self.state == SidebarState::Collapsed && !self.transient_reveal
     }
 
     pub fn is_resizing(&self) -> bool {
         self.is_resizing
+    }
+
+    pub(crate) fn begin_resize(&mut self, position_x: Pixels, cx: &mut Context<Self>) {
+        self.is_resizing = true;
+        self.resize_start_x = Some(position_x);
+        self.resize_start_width = Some(self.width);
+        cx.notify();
     }
 
     pub fn finish_resize(&mut self, cx: &mut Context<Self>) {
@@ -95,6 +203,8 @@ impl SidebarDock {
             self.is_resizing = false;
             self.resize_start_x = None;
             self.resize_start_width = None;
+            self.last_expanded_width = self.width;
+            self.dismiss_if_idle(cx);
             cx.notify();
         }
     }
@@ -117,7 +227,7 @@ impl SidebarDock {
         cx.notify();
     }
 
-    fn current_width(&self) -> Pixels {
+    pub(crate) fn current_width(&self) -> Pixels {
         if self.is_collapsed() {
             COLLAPSED_WIDTH
         } else {
@@ -134,6 +244,37 @@ impl Render for SidebarDock {
         } else {
             self.width - GRIP_WIDTH
         };
+
+        let pointer_entity = cx.entity().clone();
+        let pointer_listeners = canvas(
+            |_, _, _| {},
+            move |bounds, _, window, _| {
+                window.on_mouse_event({
+                    let entity = pointer_entity.clone();
+                    move |event: &MouseMoveEvent, phase, _, cx| {
+                        if phase.bubble() {
+                            entity.update(cx, |dock, cx| {
+                                if bounds.contains(&event.position) {
+                                    dock.pointer_enter(Instant::now(), cx);
+                                } else if dock.pointer_inside {
+                                    dock.pointer_leave(cx);
+                                }
+                            });
+                        }
+                    }
+                });
+                window.on_mouse_event({
+                    let entity = pointer_entity.clone();
+                    move |_: &MouseExitEvent, phase, _, cx| {
+                        if phase.bubble() {
+                            entity.update(cx, |dock, cx| dock.pointer_leave(cx));
+                        }
+                    }
+                });
+            },
+        )
+        .absolute()
+        .size_full();
 
         let resize_listeners = self.is_resizing.then(|| {
             let entity = cx.entity().clone();
@@ -179,6 +320,7 @@ impl Render for SidebarDock {
             .bg(cx.theme().tab_bar)
             .border_r_1()
             .border_color(cx.theme().border)
+            .child(pointer_listeners)
             .when_some(resize_listeners, |el, listeners| el.child(listeners))
             .child(
                 div()
@@ -295,10 +437,7 @@ impl SidebarDock {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, event: &MouseDownEvent, _, cx| {
-                    this.is_resizing = true;
-                    this.resize_start_x = Some(event.position.x);
-                    this.resize_start_width = Some(this.width);
-                    cx.notify();
+                    this.begin_resize(event.position.x, cx);
                 }),
             )
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
@@ -320,12 +459,7 @@ impl SidebarDock {
             }))
             .on_mouse_up(
                 MouseButton::Left,
-                cx.listener(|this, _, _, cx| {
-                    this.is_resizing = false;
-                    this.resize_start_x = None;
-                    this.resize_start_width = None;
-                    cx.notify();
-                }),
+                cx.listener(|this, _, _, cx| this.finish_resize(cx)),
             )
     }
 

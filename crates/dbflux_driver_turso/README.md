@@ -45,6 +45,8 @@ Remote Turso / libSQL database over HTTP.
 
 ## Limitations
 
+- `execute()` rejects any requested row limit (including zero) or statement timeout with `NotSupported` before running SQL. Unprotected queries remain available; the default editor cannot promise these protections.
+
 - No query cancellation. A request runs until the server answers or the SDK's
   transport gives up.
 - No SSH tunnels, embedded replicas, local files, or sync; local `sqld`

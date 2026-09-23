@@ -763,7 +763,8 @@ impl Render for Workspace {
                 #[cfg(feature = "mcp")]
                 {
                     root.when_some(self.active_governance_panel, |root, panel| {
-                        let _close_entity = cx.entity().clone();
+                        let workspace_for_backdrop = cx.entity().clone();
+                        let workspace_for_button = cx.entity().clone();
                         let title = match panel {
                             super::GovernancePanel::Approvals => {
                                 dbflux_i18n::t!("workspace.mcp_approvals")
@@ -785,8 +786,11 @@ impl Render for Workspace {
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                                     cx.stop_propagation();
+                                    workspace_for_backdrop.update(cx, |workspace, cx| {
+                                        workspace.close_governance_panel(window, cx);
+                                    });
                                 })
                                 .child(
                                     div()
@@ -799,6 +803,9 @@ impl Render for Workspace {
                                         .overflow_hidden()
                                         .flex()
                                         .flex_col()
+                                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                            cx.stop_propagation();
+                                        })
                                         .child(
                                             div()
                                                 .h(px(40.0))
@@ -808,7 +815,26 @@ impl Render for Workspace {
                                                 .justify_between()
                                                 .border_b_1()
                                                 .border_color(theme.border)
-                                                .child(Text::heading(title)),
+                                                .child(Text::heading(title))
+                                                .child(
+                                                    dbflux_components::primitives::IconButton::new(
+                                                        "governance-overlay-close",
+                                                        dbflux_components::icon::IconSource::Svg(
+                                                            AppIcon::X.path().into(),
+                                                        ),
+                                                    )
+                                                    .icon_size(Heights::ICON_SM)
+                                                    .on_click(move |_, window, cx| {
+                                                        workspace_for_button.update(
+                                                            cx,
+                                                            |workspace, cx| {
+                                                                workspace.close_governance_panel(
+                                                                    window, cx,
+                                                                );
+                                                            },
+                                                        );
+                                                    }),
+                                                ),
                                         )
                                         .child(div().flex_1().min_h_0().child(content)),
                                 ),

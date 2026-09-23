@@ -96,6 +96,17 @@ Schema is loaded lazily. On connect, DBFlux fetches shallow metadata (names).
 Detailed metadata — columns, indexes, and similar — is fetched on demand when you
 expand a node. This keeps the initial connection fast on large databases.
 
+### Collapsed sidebar preview
+
+When the sidebar is collapsed, hovering over it reveals it after 250 ms; entering
+with the keyboard (FocusSidebar, focus cycling, directional navigation, or the
+command palette) reveals it immediately. The preview closes once both pointer
+and focus have left, unless a menu, child picker, tracked drag-and-drop target,
+or resize is active. Outside a preview, ToggleSidebar (Ctrl+B) changes the
+explicit collapsed/expanded choice. During a preview, Ctrl+B or the visible
+left-chevron only closes the preview. The migration wizard's source and target
+pickers share the lazy hierarchy but keep their own selections.
+
 ### Routines / stored procedures
 
 For drivers that advertise routine support (PostgreSQL is the first

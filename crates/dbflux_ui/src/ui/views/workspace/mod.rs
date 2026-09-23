@@ -667,9 +667,6 @@ impl Workspace {
                         state.set_active_connection(*profile_id);
                         cx.emit(AppStateChanged);
                     });
-                    if this.is_sidebar_collapsed(cx) {
-                        this.toggle_sidebar(cx);
-                    }
                     this.pending_focus = Some(FocusTarget::Sidebar);
                     cx.notify();
                 }
@@ -1351,6 +1348,16 @@ impl Workspace {
                             .map(|d| (d.id(), d.id() == *new_id))
                             .collect();
 
+                        // The newly active tab is authoritative over the rail.
+                        // Hide it first: an `OpenInspector` the tab emits from
+                        // `set_active_tab` is queued behind this and re-opens
+                        // it, while a tab that owns nothing leaves it hidden.
+                        // `hide`, not `close`: `close` emits `Closed`, which
+                        // would wipe the new tab's saved rail state.
+                        this.workspace_inspector.update(cx, |insp, cx| {
+                            insp.hide(cx);
+                        });
+
                         // Hide inactive documents first, then mount the newly
                         // active inspector last. Otherwise document ordering
                         // could let an old tab's CloseInspector event win and
@@ -1414,9 +1421,18 @@ impl Workspace {
                         this.tab_manager
                             .update(cx, |mgr, cx| mgr.focus_active(window, cx));
                     }
-                    TabManagerEvent::Opened(_)
-                    | TabManagerEvent::Closed(_)
-                    | TabManagerEvent::Reordered => {
+                    TabManagerEvent::Closed(_) => {
+                        // With a tab left, the `Activated` that follows hands
+                        // the rail over. With none, nothing owns it any more.
+                        if this.tab_manager.read(cx).active_id().is_none() {
+                            this.workspace_inspector.update(cx, |insp, cx| {
+                                insp.hide(cx);
+                            });
+                        }
+
+                        this.write_session_manifest(cx);
+                    }
+                    TabManagerEvent::Opened(_) | TabManagerEvent::Reordered => {
                         this.write_session_manifest(cx);
                     }
                 }
@@ -1933,11 +1949,9 @@ impl Workspace {
     }
 
     pub fn set_focus(&mut self, target: FocusTarget, window: &mut Window, cx: &mut Context<Self>) {
-        let target = if target == FocusTarget::Sidebar && self.is_sidebar_collapsed(cx) {
-            FocusTarget::Document
-        } else {
-            target
-        };
+        self.sidebar_dock.update(cx, |dock, cx| {
+            dock.set_sidebar_focused(target == FocusTarget::Sidebar, cx);
+        });
 
         log::debug!("Focus changed to: {:?}", target);
         self.focus_target = target;
@@ -2200,22 +2214,12 @@ impl Workspace {
         });
     }
 
-    /// Get next focus target, skipping sidebar if collapsed
-    fn next_focus_target(&self, cx: &Context<Self>) -> FocusTarget {
-        let mut target = self.focus_target.next();
-        if target == FocusTarget::Sidebar && self.is_sidebar_collapsed(cx) {
-            target = target.next();
-        }
-        target
+    fn next_focus_target(&self, _cx: &Context<Self>) -> FocusTarget {
+        self.focus_target.next()
     }
 
-    /// Get previous focus target, skipping sidebar if collapsed
-    fn prev_focus_target(&self, cx: &Context<Self>) -> FocusTarget {
-        let mut target = self.focus_target.prev();
-        if target == FocusTarget::Sidebar && self.is_sidebar_collapsed(cx) {
-            target = target.prev();
-        }
-        target
+    fn prev_focus_target(&self, _cx: &Context<Self>) -> FocusTarget {
+        self.focus_target.prev()
     }
 }
 
@@ -2226,10 +2230,13 @@ mod tab_close_request_tests {
     use crate::keymap::{Command, CommandDispatcher};
     use crate::ui::document::pane::CloseDisposition;
     use crate::ui::document::{CodeDocument, InspectorPanel, Tab, TabBarEvent, TabManagerEvent};
+    use crate::ui::overlays::command_palette::PaletteSelection;
     use crate::ui::overlays::modals::{
         CloseAction, DirtySummaryEntry, UnsavedChangesOutcome, UnsavedChangesRequest,
     };
-    use crate::ui::views::workspace::{DocumentFlushOutcome, Workspace, await_document_flush};
+    use crate::ui::views::workspace::{
+        DocumentFlushOutcome, FocusTarget, Workspace, WorkspaceInspectorEvent, await_document_flush,
+    };
     use dbflux_core::QueryLanguage;
     use dbflux_core::document_id::DocumentId;
     use dbflux_ui_base::AppStateEntity;
@@ -2317,6 +2324,248 @@ mod tab_close_request_tests {
         });
 
         document_id
+    }
+
+    #[gpui::test]
+    fn sidebar_dock_hover_waits_cancels_and_preserves_focus(cx: &mut TestAppContext) {
+        let (workspace, _, window) = new_workspace(cx);
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.set_focus(FocusTarget::Document, window, cx);
+                workspace
+                    .sidebar_dock
+                    .update(cx, |dock, cx| dock.toggle(cx));
+                let start = std::time::Instant::now();
+                workspace.sidebar_dock.update(cx, |dock, cx| {
+                    dock.pointer_enter(start, cx);
+                    dock.process_hover_deadline(start + std::time::Duration::from_millis(249), cx);
+                    assert!(dock.is_collapsed());
+                    dock.pointer_leave(cx);
+                    dock.process_hover_deadline(start + std::time::Duration::from_secs(1), cx);
+                    assert!(dock.is_collapsed());
+                    dock.pointer_enter(start, cx);
+                    dock.process_hover_deadline(start + std::time::Duration::from_millis(250), cx);
+                    assert!(!dock.is_collapsed());
+                });
+                assert_eq!(workspace.focus_target, FocusTarget::Document);
+                workspace.set_focus(FocusTarget::Sidebar, window, cx);
+                workspace
+                    .sidebar_dock
+                    .update(cx, |dock, cx| dock.pointer_leave(cx));
+                assert!(!workspace.sidebar_dock.read(cx).is_collapsed());
+                workspace.set_focus(FocusTarget::Document, window, cx);
+                assert!(workspace.sidebar_dock.read(cx).is_collapsed());
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn sidebar_dock_menu_closure_dismisses_after_pointer_and_focus_leave(cx: &mut TestAppContext) {
+        let (workspace, _, window) = new_workspace(cx);
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.set_focus(FocusTarget::Document, window, cx);
+                workspace.sidebar_dock.update(cx, |dock, cx| {
+                    dock.toggle(cx);
+                    let start = std::time::Instant::now();
+                    dock.pointer_enter(start, cx);
+                    dock.process_hover_deadline(start + std::time::Duration::from_millis(250), cx);
+                });
+                let id = dbflux_core::SchemaNodeId::Profile {
+                    profile_id: uuid::Uuid::new_v4(),
+                }
+                .to_string();
+                workspace.sidebar.update(cx, |sidebar, cx| {
+                    sidebar.open_menu_for_item(&id, gpui::point(gpui::px(5.0), gpui::px(5.0)), cx);
+                    assert!(sidebar.has_transient_interaction());
+                });
+                workspace
+                    .sidebar_dock
+                    .update(cx, |dock, cx| dock.pointer_leave(cx));
+                assert!(!workspace.sidebar_dock.read(cx).is_collapsed());
+                workspace
+                    .sidebar
+                    .update(cx, |sidebar, cx| sidebar.close_context_menu(cx));
+            });
+        });
+        window.run_until_parked();
+        window.update(|_, cx| {
+            assert!(workspace.read(cx).sidebar_dock.read(cx).is_collapsed());
+        });
+    }
+
+    #[gpui::test]
+    fn sidebar_dock_toggle_on_transient_reveal_collapses_instead_of_expanding(
+        cx: &mut TestAppContext,
+    ) {
+        let (workspace, _, window) = new_workspace(cx);
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.set_focus(FocusTarget::Document, window, cx);
+                workspace.sidebar_dock.update(cx, |dock, cx| {
+                    dock.toggle(cx);
+                    dock.reveal_transiently(cx);
+                    assert!(!dock.is_collapsed());
+                    dock.toggle(cx);
+                    assert!(
+                        dock.is_collapsed(),
+                        "visible left-chevron must close the transient reveal"
+                    );
+                });
+                workspace.set_focus(FocusTarget::Document, window, cx);
+                assert!(workspace.sidebar_dock.read(cx).is_collapsed());
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn sidebar_dock_dispatched_focus_preserves_collapsed_preference(cx: &mut TestAppContext) {
+        let (workspace, _, window) = new_workspace(cx);
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.set_focus(FocusTarget::Document, window, cx);
+                workspace
+                    .sidebar_dock
+                    .update(cx, |dock, cx| dock.toggle(cx));
+                assert!(workspace.sidebar_dock.read(cx).is_collapsed());
+                assert!(workspace.dispatch(Command::FocusSidebar, window, cx));
+                assert_eq!(workspace.focus_target, FocusTarget::Sidebar);
+                assert!(!workspace.sidebar_dock.read(cx).is_collapsed());
+                workspace.set_focus(FocusTarget::Document, window, cx);
+                assert!(workspace.sidebar_dock.read(cx).is_collapsed());
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn sidebar_dock_palette_focus_preserves_collapsed_preference(cx: &mut TestAppContext) {
+        let (workspace, _, window) = new_workspace(cx);
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.set_focus(FocusTarget::Document, window, cx);
+                workspace
+                    .sidebar_dock
+                    .update(cx, |dock, cx| dock.toggle(cx));
+                assert!(workspace.sidebar_dock.read(cx).is_collapsed());
+                workspace.command_palette.update(cx, |_, cx| {
+                    cx.emit(PaletteSelection::FocusConnection {
+                        profile_id: uuid::Uuid::new_v4(),
+                    });
+                });
+            });
+        });
+        window.run_until_parked();
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                assert_eq!(workspace.focus_target, FocusTarget::Sidebar);
+                assert!(!workspace.sidebar_dock.read(cx).is_collapsed());
+                workspace.set_focus(FocusTarget::Document, window, cx);
+                assert!(workspace.sidebar_dock.read(cx).is_collapsed());
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn sidebar_dock_focus_left_enters_explicitly_collapsed_sidebar(cx: &mut TestAppContext) {
+        let (workspace, _, window) = new_workspace(cx);
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.set_focus(FocusTarget::Document, window, cx);
+                workspace
+                    .sidebar_dock
+                    .update(cx, |dock, cx| dock.toggle(cx));
+                assert!(workspace.dispatch(Command::FocusLeft, window, cx));
+                assert_eq!(workspace.focus_target, FocusTarget::Sidebar);
+                assert!(!workspace.sidebar_dock.read(cx).is_collapsed());
+                workspace.set_focus(FocusTarget::Document, window, cx);
+                assert!(workspace.sidebar_dock.read(cx).is_collapsed());
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn sidebar_dock_focus_cycle_enters_explicitly_collapsed_sidebar(cx: &mut TestAppContext) {
+        let (workspace, _, window) = new_workspace(cx);
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.set_focus(FocusTarget::Document, window, cx);
+                workspace
+                    .sidebar_dock
+                    .update(cx, |dock, cx| dock.toggle(cx));
+                assert!(workspace.dispatch(Command::CycleFocusForward, window, cx));
+                assert_eq!(workspace.focus_target, FocusTarget::Sidebar);
+                assert!(!workspace.sidebar_dock.read(cx).is_collapsed());
+                workspace.set_focus(FocusTarget::BackgroundTasks, window, cx);
+                assert!(workspace.sidebar_dock.read(cx).is_collapsed());
+                assert!(workspace.dispatch(Command::CycleFocusBackward, window, cx));
+                assert_eq!(workspace.focus_target, FocusTarget::Sidebar);
+                assert!(!workspace.sidebar_dock.read(cx).is_collapsed());
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn sidebar_dock_transient_resize_survives_dismiss_and_reveal(cx: &mut TestAppContext) {
+        let (workspace, _, window) = new_workspace(cx);
+        window.update(|_, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.sidebar_dock.update(cx, |dock, cx| {
+                    dock.toggle(cx);
+                    dock.reveal_transiently(cx);
+                    dock.begin_resize(gpui::px(270.0), cx);
+                    dock.handle_resize_move(gpui::px(340.0), cx);
+                    assert_eq!(dock.current_width(), gpui::px(350.0));
+                    dock.finish_resize(cx);
+                    dock.dismiss_transient(cx);
+                    assert!(dock.is_collapsed());
+                    dock.reveal_transiently(cx);
+                    assert_eq!(dock.current_width(), gpui::px(350.0));
+                });
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn sidebar_dock_window_exit_clears_transient_reveal(cx: &mut TestAppContext) {
+        let (workspace, _, window) = new_workspace(cx);
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.set_focus(FocusTarget::Document, window, cx);
+                workspace.sidebar_dock.update(cx, |dock, cx| {
+                    dock.toggle(cx);
+                    let start = std::time::Instant::now();
+                    dock.pointer_enter(start, cx);
+                    dock.process_hover_deadline(start + std::time::Duration::from_millis(250), cx);
+                    assert!(!dock.is_collapsed());
+                });
+            });
+        });
+        window.run_until_parked();
+        window.update(|window, cx| {
+            window.dispatch_event(
+                gpui::PlatformInput::MouseExited(gpui::MouseExitEvent::default()),
+                cx,
+            );
+            assert!(workspace.read(cx).sidebar_dock.read(cx).is_collapsed());
+        });
+    }
+
+    #[gpui::test]
+    fn sidebar_dock_keyboard_reveal_preserves_explicit_collapse(cx: &mut TestAppContext) {
+        let (workspace, _, window) = new_workspace(cx);
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace
+                    .sidebar_dock
+                    .update(cx, |dock, cx| dock.toggle(cx));
+                assert!(workspace.sidebar_dock.read(cx).is_collapsed());
+                workspace.set_focus(FocusTarget::Sidebar, window, cx);
+                assert_eq!(workspace.focus_target, FocusTarget::Sidebar);
+                assert!(!workspace.sidebar_dock.read(cx).is_collapsed());
+                workspace.set_focus(FocusTarget::Document, window, cx);
+                assert!(workspace.sidebar_dock.read(cx).is_collapsed());
+            });
+        });
     }
 
     /// Regression: the document's close request only ends the tab because the
@@ -3352,5 +3601,280 @@ mod tab_close_request_tests {
         );
 
         drop(task);
+    }
+
+    // === Inspector rail follows the active tab ===
+
+    /// Mounts content into the workspace rail exactly as a document does: an
+    /// `OpenInspector` relayed by the tab manager.
+    fn open_rail(window: &mut VisualTestContext, workspace: &Entity<Workspace>) {
+        window.update(|_, cx| {
+            let content: gpui::AnyView = cx.new(|_| gpui::EmptyView).into();
+            workspace.update(cx, |workspace, cx| {
+                workspace.tab_manager.update(cx, |_manager, cx| {
+                    cx.emit(TabManagerEvent::OpenInspector {
+                        title: "Row".into(),
+                        content,
+                    });
+                });
+            });
+        });
+        window.run_until_parked();
+
+        assert!(
+            rail_is_open(window, workspace),
+            "the rail starts open with content"
+        );
+    }
+
+    fn rail_is_open(window: &mut VisualTestContext, workspace: &Entity<Workspace>) -> bool {
+        window.update(|_, cx| workspace.read(cx).workspace_inspector.read(cx).is_open())
+    }
+
+    fn activate_tab(window: &mut VisualTestContext, workspace: &Entity<Workspace>, id: DocumentId) {
+        window.update(|_, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace
+                    .tab_manager
+                    .update(cx, |manager, cx| manager.activate(id, cx));
+            });
+        });
+        window.run_until_parked();
+    }
+
+    fn close_tab(window: &mut VisualTestContext, workspace: &Entity<Workspace>, id: DocumentId) {
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                assert!(
+                    workspace.close_tab(id, window, cx),
+                    "a clean tab closes immediately"
+                );
+            });
+        });
+        window.run_until_parked();
+    }
+
+    fn record_tab_events(
+        window: &mut VisualTestContext,
+        workspace: &Entity<Workspace>,
+    ) -> Rc<RefCell<Vec<TabManagerEvent>>> {
+        let events: Rc<RefCell<Vec<TabManagerEvent>>> = Rc::new(RefCell::new(Vec::new()));
+        let sink = events.clone();
+
+        window.update(|_, cx| {
+            let manager = workspace.read(cx).tab_manager.clone();
+            cx.subscribe(&manager, move |_, event: &TabManagerEvent, _| {
+                sink.borrow_mut().push(event.clone());
+            })
+            .detach();
+        });
+
+        events
+    }
+
+    /// Switching to a tab that owns nothing in the rail hides it, instead of
+    /// leaving the previous tab's content on screen. The rail is hidden, not
+    /// closed: a `Closed` would make the tab forget its saved rail state.
+    #[gpui::test]
+    fn switching_to_a_tab_that_owns_nothing_hides_the_rail(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let owns_nothing = open_code_tab(window, &workspace, &app_state);
+        let _owner = open_code_tab(window, &workspace, &app_state);
+        open_rail(window, &workspace);
+
+        let closed_events = Rc::new(Cell::new(0));
+        let closed_sink = closed_events.clone();
+        window.update(|_, cx| {
+            let inspector = workspace.read(cx).workspace_inspector.clone();
+            cx.subscribe(&inspector, move |_, event: &WorkspaceInspectorEvent, _| {
+                if matches!(event, WorkspaceInspectorEvent::Closed) {
+                    closed_sink.set(closed_sink.get() + 1);
+                }
+            })
+            .detach();
+        });
+
+        activate_tab(window, &workspace, owns_nothing);
+
+        assert!(
+            !rail_is_open(window, &workspace),
+            "a tab that owns nothing must not show the previous tab's rail"
+        );
+        assert_eq!(
+            closed_events.get(),
+            0,
+            "a tab switch hides the rail and must never close it"
+        );
+    }
+
+    /// A tab that mounts its content again when it becomes active keeps the
+    /// rail open: the hide runs first, so the tab's own `OpenInspector` wins.
+    #[gpui::test]
+    fn a_tab_that_remounts_its_content_keeps_the_rail_open(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let owner = open_code_tab(window, &workspace, &app_state);
+        let _other = open_code_tab(window, &workspace, &app_state);
+
+        window.update(|_, cx| {
+            let manager = workspace.read(cx).tab_manager.clone();
+            cx.subscribe(&manager, move |manager, event: &TabManagerEvent, cx| {
+                if matches!(event, TabManagerEvent::Activated(id) if *id == owner) {
+                    let content: gpui::AnyView = cx.new(|_| gpui::EmptyView).into();
+                    manager.update(cx, |_manager, cx| {
+                        cx.emit(TabManagerEvent::OpenInspector {
+                            title: "Row".into(),
+                            content,
+                        });
+                    });
+                }
+            })
+            .detach();
+        });
+
+        activate_tab(window, &workspace, owner);
+
+        assert!(
+            rail_is_open(window, &workspace),
+            "the active tab's own content must re-open the rail after the hide"
+        );
+    }
+
+    /// Closing the active tab runs the activation pass for the tab that takes
+    /// over, so a successor that owns nothing hides the rail.
+    #[gpui::test]
+    fn closing_the_active_tab_activates_the_tab_that_takes_over(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let successor = open_code_tab(window, &workspace, &app_state);
+        let closed = open_code_tab(window, &workspace, &app_state);
+        open_rail(window, &workspace);
+
+        let events = record_tab_events(window, &workspace);
+        close_tab(window, &workspace, closed);
+
+        let recorded = events.borrow().clone();
+        assert!(
+            matches!(
+                recorded.as_slice(),
+                [TabManagerEvent::Closed(first), TabManagerEvent::Activated(second)]
+                    if *first == closed && *second == successor
+            ),
+            "closing the active tab must activate its successor, got {recorded:?}"
+        );
+        assert!(
+            !rail_is_open(window, &workspace),
+            "a successor that owns nothing must not show the closed tab's rail"
+        );
+    }
+
+    /// With no tab left, nothing owns the rail any more.
+    #[gpui::test]
+    fn closing_the_last_tab_hides_the_rail(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let only = open_code_tab(window, &workspace, &app_state);
+        open_rail(window, &workspace);
+
+        close_tab(window, &workspace, only);
+
+        let active_id = window.update(|_, cx| workspace.read(cx).tab_manager.read(cx).active_id());
+        assert_eq!(active_id, None, "no tab is left");
+        assert!(
+            !rail_is_open(window, &workspace),
+            "closing the last tab must hide the rail"
+        );
+    }
+
+    #[cfg(feature = "mcp")]
+    fn open_approvals_overlay(window: &mut VisualTestContext, workspace: &Entity<Workspace>) {
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.dispatch(Command::OpenMcpApprovals, window, cx);
+            });
+        });
+        window.run_until_parked();
+
+        assert!(
+            approvals_overlay_is_open(window, workspace),
+            "opening the approvals must show the overlay"
+        );
+    }
+
+    #[cfg(feature = "mcp")]
+    fn approvals_overlay_is_open(
+        window: &mut VisualTestContext,
+        workspace: &Entity<Workspace>,
+    ) -> bool {
+        window.update(|_, cx| workspace.read(cx).active_governance_panel.is_some())
+    }
+
+    /// Regression: Cancel had no handler for the approvals overlay, so the
+    /// only way out was opening the audit viewer.
+    #[cfg(feature = "mcp")]
+    #[gpui::test]
+    fn cancel_closes_the_approvals_overlay(cx: &mut TestAppContext) {
+        let (workspace, _app_state, window) = new_workspace(cx);
+        open_approvals_overlay(window, &workspace);
+
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.dispatch(Command::Cancel, window, cx);
+            });
+        });
+        window.run_until_parked();
+
+        assert!(
+            !approvals_overlay_is_open(window, &workspace),
+            "Cancel must close the approvals overlay"
+        );
+    }
+
+    /// Escape travels the real key path: the workspace keymap resolves it to
+    /// Cancel only if the overlay left keyboard focus inside the workspace.
+    #[cfg(feature = "mcp")]
+    #[gpui::test]
+    fn escape_closes_the_approvals_overlay(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        open_code_tab(window, &workspace, &app_state);
+        open_approvals_overlay(window, &workspace);
+
+        window.simulate_keystrokes("escape");
+
+        assert!(
+            !approvals_overlay_is_open(window, &workspace),
+            "Escape must close the approvals overlay"
+        );
+    }
+
+    /// A click on the dimmed backdrop closes the overlay, while a click inside
+    /// the panel must leave it open.
+    #[cfg(feature = "mcp")]
+    #[gpui::test]
+    fn backdrop_click_closes_the_approvals_overlay(cx: &mut TestAppContext) {
+        use gpui::{Modifiers, point, px};
+
+        let (workspace, _app_state, window) = new_workspace(cx);
+        open_approvals_overlay(window, &workspace);
+
+        let viewport = window.update(|window, _| window.viewport_size());
+        assert!(
+            viewport.width > px(1080.0) && viewport.height > px(680.0),
+            "the test window must leave backdrop visible around the panel, got {viewport:?}"
+        );
+
+        let panel_center = point(viewport.width / 2.0, viewport.height / 2.0);
+        window.simulate_click(panel_center, Modifiers::none());
+        window.run_until_parked();
+
+        assert!(
+            approvals_overlay_is_open(window, &workspace),
+            "a click inside the panel must not close the overlay"
+        );
+
+        window.simulate_click(point(px(4.0), px(4.0)), Modifiers::none());
+        window.run_until_parked();
+
+        assert!(
+            !approvals_overlay_is_open(window, &workspace),
+            "a click on the backdrop must close the overlay"
+        );
     }
 }

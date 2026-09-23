@@ -55,6 +55,7 @@ Exposes tabular snapshots of running server state:
 
 ## Limitations
 
+- Execution requests with a row limit (including zero) or statement timeout are rejected before dispatch because MongoDB cannot enforce those request protections. Unprotected requests retain their existing behavior.
 - SQL is not supported; queries must use MongoDB shell-style syntax (or the JSON fallback).
 
 - Instance metrics return a single data point per call (current snapshot from `serverStatus`), not a historical time series. Operations counters (e.g. `mongo.opcounters_insert`) grow monotonically — interpret them as deltas between samples rather than absolute rates.

@@ -25,7 +25,9 @@ Driver de AWS DynamoDB para DBFlux, construido sobre el SDK
 - Ejecución nativa de envelope de comandos para `scan`, `query`, `put`, `update`
   y `delete`. El generador de queries emite envelopes de vista previa con forma
   de scan y anota que la ejecución puede optimizarse a `Query` cuando el filtro
-  coincide con el key schema de la table.
+  coincide con el key schema de la table. Los límites de lectura conservan el
+  resultado vacío para cero filas y usan el menor entre el límite del envelope
+  y el límite explícito del request.
 - Opciones de lectura para el direccionamiento de índices, control de lectura
   consistente y una política de fallback de traducción de filtros (filtro del
   lado del servidor vs. fallback del lado del cliente; el filtrado del lado del
@@ -58,8 +60,16 @@ Driver de AWS DynamoDB para DBFlux, construido sobre el SDK
   exportado y los destinatarios deben suministrar o crear un auth profile
   coincidente al momento de importar. No se requiere ningún override específico
   del driver.
-- La cancelación de query no está soportada; el driver devuelve `NotSupported`
-  para las solicitudes de cancelación.
+- Los tiempos máximos explícitos de ejecución se rechazan antes de ejecutar,
+  incluso si son cero. La cancelación de query no está soportada; el driver
+  devuelve `NotSupported` para las solicitudes de cancelación.
+- Los límites explícitos de filas del request en escrituras por envelope o
+  PartiQL se rechazan antes de la mutación. PartiQL `SELECT` acepta límites
+  positivos mediante el SDK; un límite de cero se rechaza antes del request.
+  PartiQL devuelve solo la primera página y expone un token para la siguiente,
+  pero `QueryRequest` no admite un token de entrada.
+- Los límites de filas acotan las filas devueltas, no los bytes ni el trabajo
+  del servidor DynamoDB. No se afirma truncamiento sin evidencia de filas omitidas.
 - La API de envelope de comandos no expone PartiQL ni operaciones de transacción
   de DynamoDB; las transacciones están deshabilitadas (`supports_transactions:
   false`).

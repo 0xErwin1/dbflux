@@ -2118,6 +2118,13 @@ impl Connection for MongoConnection {
     }
 
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
+        if req.limit.is_some() || req.statement_timeout.is_some() {
+            return Err(DbError::NotSupported(
+                "MongoDB execute cannot enforce a requested row limit or statement timeout"
+                    .to_string(),
+            ));
+        }
+
         self.cancelled.store(false, Ordering::SeqCst);
 
         if let Some(source) = req
@@ -2261,6 +2268,10 @@ impl Connection for MongoConnection {
         log::info!("[CLEANUP] MongoDB connection cleanup after cancel");
         self.cancelled.store(false, Ordering::SeqCst);
         Ok(())
+    }
+
+    fn schema_snapshot_authority(&self) -> dbflux_core::SchemaSnapshotAuthority {
+        dbflux_core::SchemaSnapshotAuthority::EnumerationOnly
     }
 
     fn schema(&self) -> Result<SchemaSnapshot, DbError> {
