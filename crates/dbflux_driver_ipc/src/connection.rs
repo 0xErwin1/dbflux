@@ -151,6 +151,11 @@ impl Connection for IpcConnection {
             .map_err(DbError::from)
     }
 
+    fn schema_snapshot_authority(&self) -> dbflux_core::SchemaSnapshotAuthority {
+        // The current RPC protocol does not declare primary snapshot authority.
+        dbflux_core::SchemaSnapshotAuthority::Unknown
+    }
+
     fn schema(&self) -> Result<SchemaSnapshot, DbError> {
         self.client.schema(self.session_id).map_err(DbError::from)
     }

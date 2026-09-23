@@ -1,8 +1,9 @@
 # Vendored `gpui-pre`
 
-This directory is the published `gpui-pre` crate source plus two patches. It exists so the
+This directory is the published `gpui-pre` crate source plus three patches. It exists so the
 schema visualizer can pan and zoom, and so agents can drive a running DBFlux window, without
-DBFlux depending on a fork of Zed.
+DBFlux depending on a fork of Zed. The third patch makes a dropped window-bound subscription
+delivery visible in the log.
 
 ## Why
 
@@ -54,6 +55,24 @@ These come from [themixednuts/gpui-mcp](https://github.com/themixednuts/gpui-mcp
 carries them as a patched copy of Zed's `crates/gpui` and lists them for removal as soon as
 upstream gains an equivalent API.
 
+### Subscription drop log
+
+`Context::subscribe_in`, `Context::observe_in` and `Context::defer_in` run their callback
+through `App::with_window`, and `Window::subscribe` and `Window::observe` through a window
+update. Upstream discards the failure of either: the `_in` variants still report the
+subscription as alive, and the `Window` variants silently remove it. Nothing is logged, so a
+callback that never ran leaves no trace.
+
+The patch logs a `log::warn!` naming the event, emitter and subscriber types when such a
+delivery fails while its window is still open, that is, while the window is on
+`App::window_update_stack`. The other failures are normal teardown and stay silent: the
+window has been closed, or the entity no longer has a window. Return values and delivery
+order are unchanged.
+
+Effects are flushed only after a window update has put its window back, so this case is not
+expected in normal operation. The warning exists so that, if it does happen, the dropped
+callback shows up instead of being guessed at.
+
 ### Why vendor
 
 Depending on either fork would put `main` back on a personal git source for the whole
@@ -75,11 +94,14 @@ delta to this directory.
   Apache-2.0 like the rest of this crate) against the Zed commit it snapshots,
   `zed@16c9aa7ea6d897a8044d9501cde1b295256722f2`, rebased onto this directory with patch 1
   already applied — eight files, 1585 diff lines.
+- Patch 3: `subscription-drop-log.patch`, written for DBFlux against this directory with
+  patches 1 and 2 applied — three files, 166 diff lines. It has no upstream counterpart.
 - `[workspace]` is appended to `Cargo.toml` so Cargo does not expect this crate in the
   parent workspace's member list.
 
-The patches are applied in that order, and patch 2 is written against the tree patch 1
-produces. Both use the same path layout (`a/crates/gpui/src/...`, applied with `-p3`).
+The patches are applied in that order, and each one is written against the tree the
+previous ones produce. All use the same path layout (`a/crates/gpui/src/...`, applied with
+`-p3`).
 
 ### Manual merges
 
@@ -126,7 +148,8 @@ vendor/gpui-pre/refresh.sh 0.3.6   # new upstream version
 ```
 
 The script downloads the published crate, rebuilds this directory from it and re-applies
-`element-transform.patch` and then `frame-observer.patch`. It leaves a
+`element-transform.patch`, `frame-observer.patch` and then `subscription-drop-log.patch`.
+It leaves a
 `<file>.<patch>.rej` file behind for any hunk that no longer applies, for example
 `src/window.rs.frame-observer.rej`; resolve them by reading the rejected hunk and porting
 it (see [Manual merges](#manual-merges)), then delete the `.rej`.

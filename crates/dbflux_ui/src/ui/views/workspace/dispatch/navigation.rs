@@ -22,9 +22,6 @@ impl Workspace {
                 Some(true)
             }
             Command::FocusSidebar => {
-                if self.is_sidebar_collapsed(cx) {
-                    self.toggle_sidebar(cx);
-                }
                 self.set_focus(FocusTarget::Sidebar, window, cx);
                 Some(true)
             }
@@ -384,10 +381,6 @@ impl Workspace {
             })
         {
             return true;
-        }
-
-        if self.is_sidebar_collapsed(cx) {
-            return false;
         }
 
         // If a document is active (its context is visible), treat

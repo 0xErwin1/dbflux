@@ -6,8 +6,9 @@
 #   vendor/gpui-pre/refresh.sh 0.3.6
 #
 # Downloads the crate, keeps the parts the patches need, re-applies
-# element-transform.patch and frame-observer.patch in that order and leaves .rej
-# files for hunks that no longer apply. See VENDOR.md for what to check afterwards.
+# element-transform.patch, frame-observer.patch and subscription-drop-log.patch in
+# that order and leaves .rej files for hunks that no longer apply. See VENDOR.md for
+# what to check afterwards.
 
 set -euo pipefail
 
@@ -64,7 +65,7 @@ ignored = ["tracing"]
 MANIFEST
 
 # Each patch is written against the tree the previous ones produce, so the order matters.
-patches=(element-transform.patch frame-observer.patch)
+patches=(element-transform.patch frame-observer.patch subscription-drop-log.patch)
 
 cd "$repo_root"
 tagged_rejects=()

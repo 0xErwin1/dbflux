@@ -12,6 +12,11 @@ All notable changes to DBFlux will be documented in this file.
   positive-limit first-page behavior. Limits do not bound bytes or server work;
   hosted AWS behavior was not validated.
 
+* **Shared lazy object hierarchy and collapsed sidebar preview** — the sidebar
+  and migration wizard share coordinated loading while keeping independent
+  selection; collapsed sidebar entry reveals a temporary preview without
+  changing the explicit collapse choice.
+
 * **Opt-in UI automation for agents and tests** — a development build compiled
   with the `ui-automation` feature exposes each window to a local MCP server
   (vendored `gpui-mcp`) that can read the rendered element tree, click, type,
@@ -22,6 +27,7 @@ All notable changes to DBFlux will be documented in this file.
   role to accessibility clients, so their value is never readable through the
   element tree, even while a show-password toggle displays it. See
   `docs/UI_AUTOMATION.md`.
+
 * **Safe automatic Deep capture on connect and async snapshot picker** — a
   relational connection with a known database captures a Deep snapshot only
   when every table has loaded columns or sample fields. Creation metadata is
@@ -159,6 +165,26 @@ All notable changes to DBFlux will be documented in this file.
   `%{placeholder}` — a failure that is otherwise silent in the UI.
 
 ### Fixed
+
+* **The MCP approvals overlay can be closed** — once opened, the approvals
+  overlay stayed on screen until the audit viewer was opened. It now closes
+  from the close button in its header, with Escape, or with a click on the
+  dimmed area around it, and keyboard focus returns to where it was before.
+
+* **PostgreSQL `NUMERIC` columns show their values** — `NUMERIC` and `DECIMAL`
+  values read back as `NULL` in query results, table browsing, MCP
+  `select_data`, exports, and the rows returned after an insert, update, or
+  delete. They now show the exact decimal PostgreSQL stores, including the
+  declared scale (`1123.40`), very large or very precise values, and `NaN`,
+  `Infinity`, and `-Infinity`. A value that still cannot be decoded is reported
+  as an unsupported type instead of passing for `NULL`.
+
+* **The inspector rail follows the active tab** — switching to a tab, or
+  closing the active one, could leave the right-side rail showing the row
+  inspector, value panel, or schema inspector of a tab that was no longer
+  active. The tab that becomes active now decides what the rail shows, and the
+  rail hides when that tab has nothing to show or when the last tab closes.
+  Code and schema diagram tabs restore their inspector when you return to them.
 
 * **A failed script no longer leaves the connection stuck in a transaction** —
   a script that opened a transaction and failed partway never reached its

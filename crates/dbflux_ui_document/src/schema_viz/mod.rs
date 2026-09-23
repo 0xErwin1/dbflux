@@ -372,6 +372,10 @@ pub struct SchemaVizDocument {
     viewport_size: Size<Pixels>,
     // Schema inspector content reused across opens.
     schema_inspector_content: Option<Entity<inspector::SchemaInspector>>,
+    // Title of the schema inspector this tab has mounted in the workspace
+    // rail. `None` once the user dismisses the rail, so activation does not
+    // bring back a rail they closed.
+    schema_inspector_title: Option<SharedString>,
 }
 
 fn pixel_aligned_diagram_pan(
@@ -482,6 +486,7 @@ impl SchemaVizDocument {
             viewport_origin: Point::default(),
             viewport_size: Size::default(),
             schema_inspector_content: None,
+            schema_inspector_title: None,
         };
 
         // Spawn async loading task with the correct per-database connection
@@ -2193,10 +2198,40 @@ impl SchemaVizDocument {
             }
         };
 
+        let title = SharedString::from(title);
+        self.schema_inspector_title = Some(title.clone());
+
         cx.emit(DocumentEvent::OpenInspector {
-            title: SharedString::from(title),
+            title,
             content: content.into(),
         });
+    }
+
+    /// Re-mounts this tab's schema inspector when the tab becomes active, so
+    /// the shared rail shows it again after the user returns. Nothing is sent
+    /// when the tab has no inspector open: the workspace already hid the rail.
+    pub fn set_active_tab(&mut self, active: bool, cx: &mut Context<Self>) {
+        if !active {
+            return;
+        }
+
+        let (Some(title), Some(content)) = (
+            self.schema_inspector_title.clone(),
+            self.schema_inspector_content.clone(),
+        ) else {
+            return;
+        };
+
+        cx.emit(DocumentEvent::OpenInspector {
+            title,
+            content: content.into(),
+        });
+    }
+
+    /// Forgets the mounted schema inspector after the user dismissed the
+    /// workspace rail, so the next activation leaves the rail closed.
+    pub fn mark_inspector_closed(&mut self) {
+        self.schema_inspector_title = None;
     }
 
     fn context_menu_execute_at(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -3867,6 +3902,9 @@ impl MetadataSource for Arc<dyn Connection> {
 /// this large module (see crates/dbflux_ui/src/ui/document/schema_viz/tests.rs).
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod rail_tests;
 
 impl EventEmitter<DocumentEvent> for SchemaVizDocument {}
 
