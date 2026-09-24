@@ -178,6 +178,17 @@ window), call `list_apps` and then `select_app`.
   that DBFlux does not provide, and DBFlux publishes no application logs to the
   bridge, so `get_logs` returns nothing.
 
+Text inputs are addressed by the id of the input element (for example
+`cm-field-host`). `set_text` and `set_value` replace the whole value through the
+input's accessibility action, so the input does not need to be focused first.
+To type into an input instead, call `click_element` on it, which clicks its
+center and focuses the editor, and then `type_text`. `focus_element` on an input
+does not give `type_text` a target.
+
+`set_text` and `set_value` do not honor an input's read-only state: they also
+replace the value of a read-only input, which a user could not edit. A
+successful `set_text` does not prove that the field is editable.
+
 Coordinates are logical window pixels, the same units as the bounds in the
 element tree. Screenshots are in physical pixels, so they are larger by the UI
 scale.

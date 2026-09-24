@@ -19,6 +19,7 @@ DBFlux는 시작할 때 이전 세션(열려 있던 탭)을 복원합니다. 새
 
 연결을 만들거나 편집하려면 연결 관리자를 엽니다:
 
+- `Ctrl+Shift+N`(macOS에서는 `Cmd+Shift+N`)을 누릅니다.
 - 사이드바에서 `c`를 누릅니다.
 - 또는 명령 팔레트(macOS에서는 `Ctrl+Shift+P` / `Cmd+Shift+P`)를 열고
   **연결 관리자 열기**를 실행합니다.
@@ -385,6 +386,7 @@ DBFlux는 계층화되고 컨텍스트를 인식하는 키맵을 사용합니다
 | Keys | Action |
 |------|--------|
 | `Ctrl+Shift+P` / `Cmd+Shift+P` | 명령 팔레트 전환 |
+| `Ctrl+Shift+N` / `Cmd+Shift+N` | 연결 관리자 열기 |
 | `Ctrl+n` / `Cmd+n` | 새 쿼리 탭 |
 | `Ctrl+w` / `Cmd+w` | 현재 탭 닫기 |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | 다음 / 이전 탭 |
