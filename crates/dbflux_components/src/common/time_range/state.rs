@@ -176,13 +176,20 @@ mod tests {
             "common.time_range.error.start_after_end",
             "common.time_range.error.no_date_range",
             "common.time_range.error.incomplete_time_selection",
+            "common.time_range.preset.custom",
+            "common.time_range.picker.date_range_placeholder",
+            "common.time_range.picker.from",
+            "common.time_range.picker.to",
         ];
 
         for key in keys {
-            let en = dbflux_i18n::t!(key, locale = "en");
-            let es = dbflux_i18n::t!(key, locale = "es");
-            assert!(!en.is_empty() && en != key, "en missing for {key}");
-            assert!(!es.is_empty() && es != key, "es missing for {key}");
+            for locale in ["en", "es", "ko", "zh_Hans"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+                assert!(
+                    !value.is_empty() && value != key && value != format!("{locale}.{key}"),
+                    "{locale} missing for {key}"
+                );
+            }
         }
     }
 

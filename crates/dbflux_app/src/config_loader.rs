@@ -91,6 +91,7 @@ pub fn save_general_settings(
         object_preview_size_limit_mib: settings.object_preview_size_limit_mib as i64,
         language: settings.language.clone(),
         key_value_size_limit_mib: settings.key_value_size_limit_mib as i64,
+        vim_mode: if settings.vim_mode { 1 } else { 0 },
         updated_at: String::new(),
     };
     repo.upsert(&dto)?;
@@ -1070,6 +1071,7 @@ fn load_general_settings(
         object_preview_size_limit_mib: dto.object_preview_size_limit_mib as u64,
         language: language_setting_from_storage(&dto.language),
         key_value_size_limit_mib: dto.key_value_size_limit_mib as u64,
+        vim_mode: dto.vim_mode != 0,
     }
 }
 
@@ -2411,6 +2413,7 @@ mod tests {
             object_preview_size_limit_mib: 10,
             language: String::new(),
             key_value_size_limit_mib: 10,
+            vim_mode: 0,
             updated_at: String::new(),
         };
 
@@ -2496,6 +2499,7 @@ mod tests {
             object_preview_size_limit_mib: 10,
             language: "de".to_string(),
             key_value_size_limit_mib: 10,
+            vim_mode: 0,
             updated_at: String::new(),
         };
         runtime
@@ -2602,6 +2606,30 @@ mod tests {
     }
 
     #[test]
+    fn vim_mode_is_off_by_default_and_round_trips_through_save_and_load() {
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+
+        let loaded = load_config(&runtime).expect("load configuration");
+        assert!(
+            !loaded.general_settings.vim_mode,
+            "a fresh install must not enable Vim mode"
+        );
+
+        let mut settings = GeneralSettings {
+            vim_mode: true,
+            ..Default::default()
+        };
+        super::save_general_settings(&runtime, &settings).expect("save with vim mode on");
+        let loaded = load_config(&runtime).expect("load configuration");
+        assert!(loaded.general_settings.vim_mode);
+
+        settings.vim_mode = false;
+        super::save_general_settings(&runtime, &settings).expect("save with vim mode off");
+        let loaded = load_config(&runtime).expect("load configuration");
+        assert!(!loaded.general_settings.vim_mode);
+    }
+
+    #[test]
     fn unknown_style_string_in_db_falls_back_to_default() {
         use dbflux_core::AppStyle;
 
@@ -2629,6 +2657,7 @@ mod tests {
             object_preview_size_limit_mib: 10,
             language: String::new(),
             key_value_size_limit_mib: 10,
+            vim_mode: 0,
             updated_at: String::new(),
         };
         runtime

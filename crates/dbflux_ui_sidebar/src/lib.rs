@@ -498,7 +498,6 @@ pub enum ContextMenuAction {
     /// Re-fetch the upstream dashboard listing for a `RemoteDashboardsFolder`.
     RefreshRemoteDashboards,
     // Saved chart actions
-    NewSavedChart,
     RenameSavedChart,
     DeleteSavedChart,
     DuplicateSavedChart,
@@ -607,7 +606,6 @@ impl ContextMenuAction {
             Self::DuplicateDashboard => Some(AppIcon::Copy),
             Self::RefreshRemoteDashboards => Some(AppIcon::RefreshCcw),
             // Saved chart actions
-            Self::NewSavedChart => Some(AppIcon::ChartBar),
             Self::RenameSavedChart => Some(AppIcon::Pencil),
             Self::DeleteSavedChart => Some(AppIcon::Delete),
             Self::DuplicateSavedChart => Some(AppIcon::Copy),
@@ -2533,10 +2531,6 @@ mod tests {
         SchemaNodeId::DashboardsFolder { profile_id }.to_string()
     }
 
-    fn saved_charts_folder_id(profile_id: Uuid) -> String {
-        SchemaNodeId::SavedChartsFolder { profile_id }.to_string()
-    }
-
     fn dashboard_item_id(profile_id: Uuid, dashboard_id: Uuid) -> String {
         SchemaNodeId::DashboardItem {
             profile_id,
@@ -2571,9 +2565,6 @@ mod tests {
         match kind {
             SchemaNodeKind::DashboardsFolder => {
                 vec![dbflux_i18n::t!("sidebar.menu.new_dashboard")]
-            }
-            SchemaNodeKind::SavedChartsFolder => {
-                vec![dbflux_i18n::t!("sidebar.menu.new_saved_chart")]
             }
             SchemaNodeKind::DashboardItem | SchemaNodeKind::SavedChartItem => vec![
                 dbflux_i18n::t!("sidebar.menu.open"),

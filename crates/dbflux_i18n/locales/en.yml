@@ -67,11 +67,14 @@ chart:
     source_doc: SOURCE DOC
     quick_actions: QUICK ACTIONS
     show_in_tree: Show in tree
-    annotate: Annotate
-    copy_as_query: Copy as query
-    coming_soon: Coming soon
 common:
   time_range:
+    preset:
+      custom: "Custom…"
+    picker:
+      date_range_placeholder: "Select date range"
+      from: "from"
+      to: "to"
     error:
       invalid_selection: Time selection is invalid
       ambiguous_local: Local time is ambiguous or invalid
@@ -511,6 +514,8 @@ diagnostics:
   shutdown_flush_timed_out: "Some edits may not have reached their files: DBFlux ran out of time saving them while quitting. They are kept in the session store for recovery."
 document:
   audit:
+    pager:
+      range: "%{start}-%{end} of %{total} %{unit}"
     actor:
       app: App
       external_auth_provider: External Auth Provider
@@ -558,11 +563,18 @@ document:
       summary: Summary
       time: Time
     filter:
+      timezone:
+        local: "Local"
+        utc: "UTC"
       apply: Apply
       clear: Clear
       group_label: "Group:"
       loading: "Loading…"
       placeholder:
+        search_events: "Search events..."
+        filter_events: "Filter events..."
+        all_time: "All time"
+        last_12_hours: "Last 12 h"
         local: Local
       retry: Retry
       view_mode:
@@ -644,7 +656,7 @@ document:
       error_detail: "Failed to list buckets: %{error}"
       no_match: "No buckets match \"%{query}\""
       no_buckets: This connection has no buckets
-      hint_refresh: r refresh
+      hint_refresh: "%{key} refresh"
     delete_confirm:
       title: Delete bucket?
       body: "\"%{bucket}\" is empty and will be removed. This cannot be undone."
@@ -719,7 +731,6 @@ document:
     toast:
       chart_saved: Chart saved
       save_failed: "Failed to save chart: %{error}"
-      png_export_coming: "PNG export coming in v0.7"
     error:
       source: "Chart source error: %{error}"
       no_connection_selected: No connection selected
@@ -767,6 +778,9 @@ document:
       query_history: Query history
       explain_query: Explain query
       open_in_chart: Open current query in a chart document
+    vim:
+      normal: "NORMAL"
+      insert: "INSERT"
     output:
       running: "Running..."
       stopped: Stopped
@@ -915,7 +929,6 @@ document:
         last_hour: Last 1 hour
     configure:
       action:
-        export_png: Export PNG
         stats: Stats
       apply: Apply
       bindings_hint: Run the chart at least once to configure bindings.
@@ -1108,6 +1121,7 @@ document:
           many: "%{count} unsaved changes"
         save: Save
         revert: Revert
+        refresh_blocked: Save or revert your unsaved changes before refreshing
       toolbar:
         refresh: Refresh
         builder: Builder
@@ -1143,7 +1157,6 @@ document:
         trigger: Export
         save_as_file: Save as file
         copy_to_clipboard: Copy to clipboard
-        png_coming_soon: "PNG export coming in v0.7 — %{detail}"
         format:
           csv: CSV
           json_pretty: "JSON (pretty)"
@@ -1375,6 +1388,8 @@ document:
       continue: Continue
       close: Close
   governance:
+    semantics_preview: "requester: %{requester} | connection: %{connection} | classification: %{classification}"
+    pending_actor: "actor: %{actor}"
     refresh: Refresh Pending
     no_pending: No pending executions
     pending_title: "Pending %{id}"
@@ -1427,7 +1442,9 @@ document:
       progress:
         of_total: "%{done} / %{total} rows"
         only: "%{done} rows"
+      cancel: Cancel
     done:
+      cancelled_rows: "%{rows} row(s) were imported before the import stopped."
       close: Close
     error:
       no_connection: No active connection for this import
@@ -1552,6 +1569,10 @@ document:
       error:
         background_task_limit: Too many background tasks running, please wait
     parsing:
+      preview:
+        binary:
+          one: "%{count} byte (binary)"
+          many: "%{count} bytes (binary)"
       type:
         string: String
         bytes: Bytes
@@ -1563,6 +1584,7 @@ document:
         stream: Stream
         unknown: "?"
     render:
+      size_bytes: "%{size} B"
       delete_key:
         title: Delete key?
         message: 'Delete "%{key}"? This action cannot be undone.'
@@ -1598,6 +1620,13 @@ document:
         truncated: "Partial value — showing %{returned} of %{total}"
         truncated_unknown_total: "Partial value — showing %{returned}"
       decode:
+        choice:
+          auto: "Auto"
+          raw: "Raw"
+        preview:
+          image:
+            one: "%{count} byte (image: %{format})"
+            many: "%{count} bytes (image: %{format})"
         failed: failed to decode
         too_large: decoded output too large
         edit_locked: Switch to Raw to edit
@@ -1849,6 +1878,9 @@ document:
         open: Open
         presign: Presign
       body:
+        text_kind:
+          json: "JSON"
+          text: "Text"
         decode_failed: "Detected as %{encoding} but could not be decoded: %{reason}"
         decode_too_large: "Detected as %{encoding}, but decoding it exceeds the %{limit} preview limit."
         decoded_not_utf8: "The decoded bytes are not valid UTF-8 text."
@@ -2001,6 +2033,7 @@ document:
         and: AND
         or: OR
     group_by:
+      managed_select_notice: "Grouped query — SELECT is managed automatically"
       heading: Group by columns
       add_column: "+ Group-by column"
       aggregates_heading: Aggregates
@@ -2025,6 +2058,11 @@ document:
     mutation:
       preview_placeholder: "-- %{kind}: configure assignments / filter to preview SQL"
     section:
+      joins: "JOINS"
+      group_by_aggregates: "GROUP BY / AGGREGATES"
+      having: "HAVING"
+      limit_offset: "LIMIT & OFFSET"
+      set: "SET"
       columns: COLUMNS
       execution: EXECUTION
       filters: FILTERS
@@ -2319,7 +2357,7 @@ language:
 login:
   window_title: Connection Flow
   field:
-    start_url: Start URL
+    verification_url: Verification URL
   action:
     open_browser: Open Browser
     copy_url: Copy URL
@@ -2333,6 +2371,7 @@ login:
   body:
     sign_in_prompt: 'Sign in with %{provider} to continue connecting "%{profile}".'
     instructions: Open the login URL in your browser and finish authentication. DBFlux will continue automatically once the login completes.
+    waiting: Waiting for you to authorize in the browser…
     elapsed: "Login can take up to 5 minutes. Elapsed: %{seconds}s"
     browser_open_failed: "Could not open browser automatically. Open the URL manually. (%{error}; fallback failed: %{fallback_error})"
   error:
@@ -2511,6 +2550,9 @@ modals:
     dont_save: Don't save
     cancel: Cancel
 palette:
+  footer:
+    navigate: "navigate"
+    run: "run"
   search:
     placeholder: Search commands, connections, tables, scripts...
   empty: No matching items
@@ -2529,6 +2571,7 @@ palette:
     keyspace: Keyspace
     script: Script
   chart:
+    no_saved_charts: "No saved charts for the current profile"
     browse_suffix: "[browse]"
   import_dashboard:
     name: Import Dashboard from JSON...
@@ -2649,6 +2692,10 @@ settings:
     storage:
       group: Storage
     theme:
+      option:
+        ayu_dark: "Ayu Dark"
+        ayu_mirage: "Ayu Mirage"
+        ayu_light: "Ayu Light"
       label: Theme
     style:
       label: Style
@@ -2657,6 +2704,11 @@ settings:
       option:
         system: System
       notice: Language changes apply after restarting DBFlux.
+    editor:
+      group: "Editor"
+    vim_mode:
+      label: "Vim mode in code editors"
+      hint: "Normal and Insert modes: h, j, k, l and Enter move, i inserts, Esc returns to Normal, x deletes a character, u undoes. Applies to open editors when saved."
     restore_session:
       label: Restore session on startup
     reopen_connections:
@@ -2826,6 +2878,27 @@ settings:
       open_saved_chart: "Open Chart..."
       import_dashboard: "Import Dashboard from JSON..."
       new_dashboard: "New Dashboard..."
+      preview_document: Preview Document
+      toggle_raw_view: Toggle Raw JSON View
+      next_match: Next Match
+      prev_match: Previous Match
+      zoom_in: Zoom In
+      zoom_out: Zoom Out
+      pan_left: Pan Left
+      pan_right: Pan Right
+      pan_up: Pan Up
+      pan_down: Pan Down
+      select_table_left: Select Table Left
+      select_table_right: Select Table Right
+      select_table_up: Select Table Up
+      select_table_down: Select Table Down
+      move_table_left: Move Table Left
+      move_table_right: Move Table Right
+      move_table_up: Move Table Up
+      move_table_down: Move Table Down
+      layout_left_right: Left-Right Layout
+      layout_snowflake: Snowflake Layout
+      layout_compact: Compact Layout
     context:
       global: Global
       sidebar: Sidebar
@@ -2845,6 +2918,7 @@ settings:
       audit: Audit Viewer
       event_streams_picker: Event Streams Picker
       schema_viz: Schema Viz
+      document_tree: Document Tree
     category:
       global: Global
       focus: Focus
@@ -2991,6 +3065,9 @@ settings:
       secret_store_failed: "The profile's secret could not be stored (the OS keyring may be locked or unavailable) and will not persist after restart."
       write_config_failed: "Failed to write profile to config: %{error}"
   mcp:
+    badge:
+      active: "active"
+      inactive: "inactive"
     tool:
       list_connections:
         name: List Connections
@@ -3321,6 +3398,12 @@ settings:
     discard_dialog:
       body: You have unsaved proxy changes. Discard them?
   audit:
+    log_level:
+      trace: "Trace"
+      debug: "Debug"
+      info: "Info"
+      warn: "Warning"
+      error: "Error"
     placeholder_level: Level
     section_title: Audit
     section_description: Configure global audit event capture and retention
@@ -3348,7 +3431,7 @@ settings:
     action:
       save: Save
     status:
-      degraded: Audit is degraded (restart required)
+      degraded: Audit is paused because its database could not be opened. Restart DBFlux.
       enabled: Audit is enabled
       disabled: Audit is disabled
     error:
@@ -3357,7 +3440,7 @@ settings:
       purge_interval_invalid: Background purge interval must be a number
       cannot_enable: Audit cannot be enabled
       cannot_enable_body: "Audit cannot be enabled: the audit database could not be opened. Please restart the application. If the problem persists, check disk space and file permissions for the dbflux data directory."
-      cannot_enable_copy: "Audit cannot be enabled: Audit cannot be enabled: the audit database could not be opened. Please restart the application. If the problem persists, check disk space and file permissions for the dbflux data directory."
+      cannot_enable_copy: "Audit cannot be enabled: the audit database could not be opened. Please restart the application. If the problem persists, check disk space and file permissions for the dbflux data directory."
       save_failed: Failed to save
       save_failed_copy: "Failed to save: %{error}"
     toast:
@@ -3430,6 +3513,7 @@ sidebar:
     generate_query: Generate Query
     drop_collection: Drop Collection
     connect: Connect
+    retry_connect: Retry
     disconnect: Disconnect
     edit: Edit
     duplicate: Duplicate
@@ -3453,7 +3537,6 @@ sidebar:
     schema_diff_unsupported: Schema diff is only available for relational connections.
     new_dashboard: New Dashboard...
     import_dashboard: Import Dashboard from JSON...
-    new_saved_chart: New Saved Chart...
     rename_ellipsis: Rename...
     delete_ellipsis: Delete...
     copy_metric_id: Copy Metric ID
@@ -3598,6 +3681,7 @@ sidebar:
       profile_connecting: "Connecting to %{name}…"
       database_loading: "%{name} (loading…)"
       error_retry: "Error: %{error} — click to retry"
+      connect_failed: "Connection failed: %{error}"
       remote_listing_count: "%{label} (%{count})"
       remote_dashboards_error_retry: "Error: %{error} — collapse and expand to retry"
       used_by_objects:
@@ -3653,10 +3737,14 @@ ssh:
 sso_wizard:
   title: AWS SSO Wizard
   step:
-    start: "Step 1: Start URL"
-    account: "Step 2: Account"
-    role: "Step 3: Role"
-    confirm: "Step 4: Confirm"
+    start: Start URL
+    account: Account
+    role: Role
+    confirm: Confirm
+  field:
+    profile_name: Profile name
+    start_url: SSO start URL
+    region: Region
   account:
     hint: Use account ID from AWS SSO account discovery
     discovering: Discovering accounts...

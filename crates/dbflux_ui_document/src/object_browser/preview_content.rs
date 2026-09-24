@@ -127,12 +127,12 @@ pub const OVERRIDABLE_ENCODINGS: [Encoding; 5] = [
 /// Coarse label for decoded text: `JSON` when it looks like a JSON document,
 /// `Text` otherwise. A heuristic, not a parse — good enough for the "gzip →
 /// JSON" header label, not load-bearing for anything else.
-fn text_kind_label(text: &str) -> &'static str {
+fn text_kind_label(text: &str) -> String {
     let trimmed = text.trim_start();
     if trimmed.starts_with('{') || trimmed.starts_with('[') {
-        "JSON"
+        dbflux_i18n::t!("document.object_browser.preview.body.text_kind.json")
     } else {
-        "Text"
+        dbflux_i18n::t!("document.object_browser.preview.body.text_kind.text")
     }
 }
 

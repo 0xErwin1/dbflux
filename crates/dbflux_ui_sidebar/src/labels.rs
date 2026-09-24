@@ -105,6 +105,33 @@ pub(crate) fn profile_connecting_label(name: &str) -> String {
     dbflux_i18n::t!("sidebar.tree.status.profile_connecting", name = name)
 }
 
+/// Longest error excerpt shown in a failed profile row's tooltip; the full
+/// message stays in the toast, the Tasks panel and the audit log.
+const CONNECT_FAILURE_TOOLTIP_MAX_CHARS: usize = 160;
+
+/// Translated tooltip for a profile row whose last connect attempt failed,
+/// e.g. `"Connection failed: connection refused"`. Only the first non-empty
+/// line of the error is kept, cut to a length that fits a tooltip.
+pub(crate) fn connect_failed_tooltip_label(error: &str) -> String {
+    let first_line = error
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or_default();
+
+    let short_error = if first_line.chars().count() > CONNECT_FAILURE_TOOLTIP_MAX_CHARS {
+        let cut: String = first_line
+            .chars()
+            .take(CONNECT_FAILURE_TOOLTIP_MAX_CHARS)
+            .collect();
+        format!("{}…", cut.trim_end())
+    } else {
+        first_line.to_string()
+    };
+
+    dbflux_i18n::t!("sidebar.tree.status.connect_failed", error = short_error)
+}
+
 /// Translated label for a database node still loading its schema, e.g.
 /// `"orders (loading…)"`.
 pub(crate) fn node_loading_label(name: &str) -> String {
@@ -966,6 +993,30 @@ mod tests {
         );
         assert!(plural.contains('3'));
         assert_ne!(singular, plural);
+    }
+
+    #[test]
+    fn connect_failed_tooltip_keeps_only_a_short_first_line() {
+        let label =
+            super::connect_failed_tooltip_label("\n  connection refused  \n\ndetails: stack");
+        assert_eq!(
+            label,
+            dbflux_i18n::t!(
+                "sidebar.tree.status.connect_failed",
+                error = "connection refused"
+            )
+        );
+
+        let long_error = "x".repeat(super::CONNECT_FAILURE_TOOLTIP_MAX_CHARS + 40);
+        let label = super::connect_failed_tooltip_label(&long_error);
+        let expected_excerpt = format!("{}…", "x".repeat(super::CONNECT_FAILURE_TOOLTIP_MAX_CHARS));
+        assert_eq!(
+            label,
+            dbflux_i18n::t!(
+                "sidebar.tree.status.connect_failed",
+                error = expected_excerpt
+            )
+        );
     }
 
     #[test]

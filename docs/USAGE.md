@@ -67,6 +67,12 @@ by the driver connect and an initial schema fetch. Connection hooks (if
 configured) run at the PreConnect, PostConnect, PreDisconnect, and PostDisconnect
 phases. See the Settings overview for where hooks are defined.
 
+If a connection attempt fails, the error appears in a toast and the connection
+row keeps a red error icon. Hover the icon to read the error. Choose **Retry**
+from the row's context menu, or press `Enter` on the row, to connect again. The mark
+clears when a new attempt starts, when the connection succeeds, or when you edit
+the connection.
+
 Disconnecting a connection that still has a query running asks first: **Cancel
 query** stops the query and keeps the connection open, **Keep waiting** leaves
 both alone, and **Disconnect anyway** cancels the query and disconnects. `Enter`
@@ -576,6 +582,67 @@ stay `Ctrl` on all platforms (to avoid clashing with macOS system shortcuts).
 
 (Unmodified letters are intentionally left to the text input so typing works.)
 
+### Vim mode (opt-in)
+
+Code editors can use modal editing with a small set of Vim commands. It is off
+by default. Turn it on in **Settings → General → Editor → Vim mode in code
+editors** and save: open editors switch over at once. It applies to every code
+editor (SQL and the other query languages, Lua, Python, Bash) and to nothing
+else, so search boxes, forms, and the command palette keep typing as usual.
+
+An editor starts in Normal mode when it opens and when you turn Vim mode on. A
+strip under the editor shows the mode, `NORMAL` or `INSERT`. Each tab keeps its
+own mode when you switch tabs or move focus away and back.
+
+| Mode | Keys | Action |
+|------|------|--------|
+| Normal | `h` / `l` | Move one character left / right within the line |
+| Normal | `j` / `k` | Move one line down / up, keeping the column across shorter lines |
+| Normal | `Enter` | Move one line down |
+| Normal | `i` | Insert before the cursor |
+| Normal | `x` | Delete the character under the cursor |
+| Normal | `u` | Undo |
+| Insert | `Escape` | Close an open completion menu, otherwise return to Normal mode |
+
+Everything else in Normal mode:
+
+| Input | Behavior in Normal mode |
+|-------|-------------------------|
+| Other letters, digits, punctuation, `Space` | Nothing |
+| `Tab` / `Shift+Tab` | Nothing: no indent, and focus stays in the editor |
+| Paste (`Ctrl+v` / `Cmd+v` or the context menu) | Nothing |
+| Input method (IME) composition and commit | Dropped |
+| `Backspace` / `Delete` | Nothing |
+| `Escape` | Its usual meaning: cancel a running query, or leave the editor |
+| Shortcuts with `Ctrl`, `Alt`, or `Cmd`; arrow keys; the mouse | Work as usual, including undo and redo |
+
+In Normal mode the cursor sits on a character, never past the end of a line.
+Leaving Insert mode moves it back one character, as Vim does. On an empty line
+`x` does nothing, so it never joins lines.
+
+In Insert mode the editor behaves as it does with Vim mode off, except for
+`Escape`. With a completion or code-action menu open, `Escape` closes the menu
+and stays in Insert mode; otherwise it returns to Normal mode. Focus stays in
+the editor either way. With several cursors or an inline suggestion showing,
+the first `Escape` clears them and the next one returns to Normal mode.
+
+**Undo.** Each `x` is one undo step. Everything typed in one Insert session is
+one undo step, and each new Insert session starts another. `u` undoes the same
+steps as `Ctrl+z` / `Cmd+z`.
+
+**Read-only editors** (routine definitions) accept the motions; `x` and `u`
+do nothing there.
+
+**Limitations.**
+
+- Only the commands in the first table exist. There are no counts, operators
+  (`d`, `c`, `y`), visual mode, text objects, registers, macros, `.` repeat,
+  `:` commands, or a redo key.
+- Motions step one Unicode code point at a time, like the arrow keys, so a
+  letter written with a separate combining accent takes two presses.
+- Normal mode blocks your typing and pasting only. Edits DBFlux makes itself,
+  such as loading a file or a query from history, still apply.
+
 ### Results
 
 | Keys | Action |
@@ -587,6 +654,7 @@ stay `Ctrl` on all platforms (to avoid clashing with macOS system shortcuts).
 | `g` / `Shift+g` (or `Home` / `End`) | First / last row |
 | `Ctrl+d` / `Ctrl+u` (or `PageDown` / `PageUp`) | Page down / up |
 | `]` / `[` | Next / previous results page |
+| `F5` | Refresh the focused document (table rows, bucket list, object listing, keys) |
 | `Ctrl+e` / `Cmd+e` | Export results |
 | `f` | Focus toolbar |
 | `/` | Focus search/filter |

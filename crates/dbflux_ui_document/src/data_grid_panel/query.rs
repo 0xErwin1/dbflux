@@ -16,6 +16,40 @@ use log::info;
 use uuid::Uuid;
 
 impl DataGridPanel {
+    /// Whether the table holds edits, inserts or deletes that are not saved.
+    /// A reload replaces the rows those edits are keyed by, so it drops them.
+    pub(super) fn has_pending_edits(&self, cx: &App) -> bool {
+        self.grid_table
+            .table_state
+            .as_ref()
+            .is_some_and(|table_state| table_state.read(cx).has_pending_changes())
+    }
+
+    /// Refuses a user-requested refresh while there are unsaved edits,
+    /// telling the user to save or revert them first. Returns `true` when the
+    /// refresh must not run.
+    pub(super) fn refresh_blocked_by_pending_edits(&self, cx: &mut Context<Self>) -> bool {
+        if !self.has_pending_edits(cx) {
+            return false;
+        }
+
+        Toast::warning(crate::labels::grid_refresh_blocked_by_pending_edits())
+            .meta_right(now_hms())
+            .push(cx);
+        true
+    }
+
+    /// Refresh requested by the user (refresh key, toolbar button, command
+    /// palette). Unsaved edits are never dropped: the refresh is refused with
+    /// a warning instead.
+    pub fn request_refresh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.refresh_blocked_by_pending_edits(cx) {
+            return;
+        }
+
+        self.refresh(window, cx);
+    }
+
     /// Refresh data from source.
     ///
     /// When a `visual_select` is present (i.e., the builder panel has produced

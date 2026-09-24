@@ -1113,8 +1113,10 @@ impl Render for CommandPalette {
                                                 SharedString::from("\u{2193}"),
                                             ]))
                                             .child(
-                                                MonoCaption::new("navigate")
-                                                    .color(theme.muted_foreground),
+                                                MonoCaption::new(dbflux_i18n::t!(
+                                                    "palette.footer.navigate"
+                                                ))
+                                                .color(theme.muted_foreground),
                                             ),
                                     )
                                     .child(
@@ -1124,28 +1126,10 @@ impl Render for CommandPalette {
                                             .gap(Spacing::XS)
                                             .child(Chord::new(vec![SharedString::from("\u{21B5}")]))
                                             .child(
-                                                MonoCaption::new("run")
-                                                    .color(theme.muted_foreground),
-                                            ),
-                                    )
-                                    // Aspirational: "open in new tab" has no
-                                    // wired Tab+Enter handler in the palette
-                                    // yet. Rendered at half opacity to flag
-                                    // it as a forthcoming affordance rather
-                                    // than a live shortcut.
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .items_center()
-                                            .gap(Spacing::XS)
-                                            .opacity(0.5)
-                                            .child(Chord::new(vec![
-                                                SharedString::from("\u{21E5}"),
-                                                SharedString::from("\u{21B5}"),
-                                            ]))
-                                            .child(
-                                                MonoCaption::new("open in new tab")
-                                                    .color(theme.muted_foreground),
+                                                MonoCaption::new(dbflux_i18n::t!(
+                                                    "palette.footer.run"
+                                                ))
+                                                .color(theme.muted_foreground),
                                             ),
                                     ),
                             ),
@@ -1384,11 +1368,14 @@ mod tests {
         "palette.kind.script",
         "palette.chart.browse_suffix",
         "palette.import_dashboard.name",
+        "palette.footer.navigate",
+        "palette.footer.run",
+        "palette.chart.no_saved_charts",
     ];
 
     #[test]
     fn palette_keys_resolve_in_both_locales() {
-        for locale in ["en", "es"] {
+        for locale in ["en", "es", "ko", "zh_Hans"] {
             for key in PALETTE_CATALOG_KEYS {
                 let value = dbflux_i18n::t!(key, locale = locale);
 

@@ -356,7 +356,7 @@ fn run_gui() {
     application.run(|cx: &mut App| {
         dbflux_ui::theme::init(cx);
         dbflux_ui::ui::components::data_table::init(cx);
-        dbflux_ui::ui::components::document_tree::init(cx);
+        dbflux_ui_base::keymap::init_document_tree_keybindings(cx);
 
         let app_state_inner = match AppStateEntity::new() {
             Ok(state) => state,
