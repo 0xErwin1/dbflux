@@ -3746,6 +3746,8 @@ sso_wizard:
     profile_name: Profile name
     start_url: SSO start URL
     region: Region
+    account_id: Account ID
+    role_name: Role name
   account:
     hint: Use account ID from AWS SSO account discovery
     discovering: Discovering accounts...

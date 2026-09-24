@@ -3745,6 +3745,8 @@ sso_wizard:
     profile_name: 프로필 이름
     start_url: SSO 시작 URL
     region: 리전
+    account_id: 계정 ID
+    role_name: 역할 이름
   account:
     hint: AWS SSO 계정 검색에서 가져온 계정 ID를 사용하세요.
     discovering: 계정을 검색하는 중...

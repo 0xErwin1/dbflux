@@ -20,6 +20,13 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **SSO wizard account and role labels** — the account-ID and role inputs on
+  the AWS SSO wizard's second and third steps had only placeholders. They now
+  have visible labels, which are also their accessible names, and stable
+  `sso-field-account-id` and `sso-field-role-name` ids, like the first step.
+  The login modal's waiting indicator now animates while it waits for the
+  browser; the elapsed caption still counts whole wall-clock seconds.
+
 * `F5` now refreshes the focused document (table data, bucket list, object
   listing, key browser), and the audit viewer's `r` refreshes the audit list
   instead of the connection schema. The buckets empty state showed `r refresh`,

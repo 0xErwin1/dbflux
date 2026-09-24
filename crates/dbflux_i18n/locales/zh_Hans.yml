@@ -3744,6 +3744,8 @@ sso_wizard:
     profile_name: 配置文件名称
     start_url: SSO 起始 URL
     region: 区域
+    account_id: 账户 ID
+    role_name: 角色名称
   account:
     hint: 使用 AWS SSO 账户发现中的账户 ID
     discovering: 正在发现账户…
