@@ -6,9 +6,9 @@
 #   vendor/gpui-pre/refresh.sh 0.3.6
 #
 # Downloads the crate, keeps the parts the patches need, re-applies
-# element-transform.patch, frame-observer.patch, subscription-drop-log.patch and
-# text-input-automation.patch in that order and leaves .rej files for hunks that no
-# longer apply. See VENDOR.md for what to check afterwards.
+# element-transform.patch, frame-observer.patch, subscription-drop-log.patch,
+# text-input-automation.patch and read-only-accessibility.patch in that order and leaves
+# .rej files for hunks that no longer apply. See VENDOR.md for what to check afterwards.
 
 set -euo pipefail
 
@@ -70,6 +70,7 @@ patches=(
     frame-observer.patch
     subscription-drop-log.patch
     text-input-automation.patch
+    read-only-accessibility.patch
 )
 
 cd "$repo_root"

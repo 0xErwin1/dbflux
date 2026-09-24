@@ -1,4 +1,4 @@
-use dbflux_components::controls::{Button, ButtonVariant, Input, ReadonlyTextView};
+use dbflux_components::controls::{Button, ButtonVariant, Input, ReadOnlyEditor, ReadonlyTextView};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Text};
 use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
@@ -571,8 +571,7 @@ fn render_preview_body(panel: &mut QueryBuilderPanel, theme: &Theme) -> impl Int
                     .border_1()
                     .border_color(theme.border)
                     .child(
-                        gpui_component::input::Editor::new(state)
-                            .readonly(true)
+                        ReadOnlyEditor::new(state)
                             .appearance(false)
                             .w_full()
                             .h(px(140.0)),

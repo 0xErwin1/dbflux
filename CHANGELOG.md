@@ -402,6 +402,17 @@ All notable changes to DBFlux will be documented in this file.
   the element tree stops changing and the window draws at most one frame per
   500 ms.
 
+* UI automation: `focus_element` on a text input now focuses its editor, so a
+  following `type_text` types into it instead of failing with "no active text
+  input handler". `focus_element`, `click_element` and `double_click_element`
+  click a text input inside its text area, near the left edge, instead of at
+  its center, which in a narrow input could land on the clear or show-password
+  button. Read-only inputs (the audit viewer's event details, the object
+  browser's decoded preview, the query builder's SQL preview) now report
+  `read_only` in the element tree, and `set_text` and `set_value` refuse them
+  with an error instead of replacing text a user could not edit. DBFlux itself
+  also ignores a value sent to a read-only input, whichever client sends it.
+
 * **The MCP approvals overlay can be closed** — once opened, the approvals
   overlay stayed on screen until the audit viewer was opened. It now closes
   from the close button in its header, with Escape, or with a click on the
