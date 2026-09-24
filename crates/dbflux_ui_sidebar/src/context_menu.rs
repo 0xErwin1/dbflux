@@ -1683,7 +1683,7 @@ impl Sidebar {
             }
             ContextMenuAction::Disconnect => {
                 if let Some(SchemaNodeId::Profile { profile_id }) = parse_node_id(&item_id) {
-                    self.disconnect_profile(profile_id, cx);
+                    self.request_disconnect(profile_id, cx);
                 }
             }
             ContextMenuAction::Refresh => {

@@ -279,6 +279,8 @@ DbConfig::External {
 
 该协议还支持浏览、CRUD、键值与代码生成类操作。完整的枚举集合参见 `crates/dbflux_ipc/src/driver_protocol.rs`。
 
+**受保护的执行：**目前没有任何协商能力可以让外部驱动证明它会执行行数限制或语句超时，因此受保护的查询会被拒绝。当 `QueryRequest.limit` 为 `Some(n)`（包括 `Some(0)`）或 `statement_timeout` 为 `Some(...)` 时，`IpcConnection` 会在发送 RPC 之前以 `NotSupported` 拒绝 `Execute` 和 `ExecuteWithHandle`。宿主会话分发也会在调用插件连接之前，以 `UnsupportedMethod` 独立拒绝同样的请求。两个选项均为 `None` 的请求仍可运行，浏览和 CRUD 操作不受影响。
+
 ## 驱动的审计事件上报（v1.2+）
 
 协商协议版本为 v1.2 或更高的驱动，可将审计事件作为中间响应帧（`done=false`）回传给宿主应用。宿主应用对其进行净化、限流后写入 `aud_audit_events`。

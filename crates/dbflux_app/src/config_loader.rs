@@ -31,6 +31,15 @@ pub fn save_general_settings(
     runtime: &StorageRuntime,
     settings: &GeneralSettings,
 ) -> Result<(), dbflux_storage::error::StorageError> {
+    let editor_row_limit = i64::try_from(settings.editor_row_limit)
+        .ok()
+        .filter(|limit| *limit > 0)
+        .ok_or_else(|| {
+            dbflux_storage::error::StorageError::Data(
+                "editor_row_limit must be positive and fit in i64".to_string(),
+            )
+        })?;
+
     // Save to normalized general_settings table
     let repo = runtime.general_settings();
     let dto = GeneralSettingsDto {
@@ -92,6 +101,7 @@ pub fn save_general_settings(
         language: settings.language.clone(),
         key_value_size_limit_mib: settings.key_value_size_limit_mib as i64,
         vim_mode: if settings.vim_mode { 1 } else { 0 },
+        editor_row_limit,
         updated_at: String::new(),
     };
     repo.upsert(&dto)?;
@@ -1072,6 +1082,10 @@ fn load_general_settings(
         language: language_setting_from_storage(&dto.language),
         key_value_size_limit_mib: dto.key_value_size_limit_mib as u64,
         vim_mode: dto.vim_mode != 0,
+        editor_row_limit: usize::try_from(dto.editor_row_limit)
+            .ok()
+            .filter(|value| *value > 0)
+            .unwrap_or(10_000),
     }
 }
 
@@ -2414,6 +2428,7 @@ mod tests {
             language: String::new(),
             key_value_size_limit_mib: 10,
             vim_mode: 0,
+            editor_row_limit: 10_000,
             updated_at: String::new(),
         };
 
@@ -2500,6 +2515,7 @@ mod tests {
             language: "de".to_string(),
             key_value_size_limit_mib: 10,
             vim_mode: 0,
+            editor_row_limit: 10_000,
             updated_at: String::new(),
         };
         runtime
@@ -2547,6 +2563,54 @@ mod tests {
             let loaded = load_config(&runtime).expect("load configuration");
             assert_eq!(loaded.general_settings.language, locale_id);
         }
+    }
+
+    #[test]
+    fn editor_row_limit_survives_general_settings_storage_round_trip() {
+        let mut value = serde_json::to_value(GeneralSettings::default())
+            .expect("serialize default general settings");
+        value["editor_row_limit"] = serde_json::json!(321);
+        let settings: GeneralSettings =
+            serde_json::from_value(value).expect("deserialize general settings");
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+
+        super::save_general_settings(&runtime, &settings).expect("save general settings");
+        let loaded = super::load_general_settings(&runtime.general_settings());
+        let loaded_value = serde_json::to_value(loaded).expect("serialize loaded settings");
+        assert_eq!(loaded_value["editor_row_limit"], serde_json::json!(321));
+    }
+
+    #[test]
+    fn editor_row_limit_overflow_rejects_save_before_upsert() {
+        if usize::BITS <= 63 {
+            return;
+        }
+
+        let mut settings = GeneralSettings::default();
+        settings.editor_row_limit = usize::MAX;
+        let runtime = StorageRuntime::in_memory().expect("in-memory storage runtime");
+
+        assert!(
+            super::save_general_settings(&runtime, &settings).is_err(),
+            "a row limit above SQLite's i64 maximum must fail instead of being clamped"
+        );
+        assert_eq!(
+            super::load_general_settings(&runtime.general_settings()).editor_row_limit,
+            10_000,
+            "an invalid save must not upsert settings"
+        );
+    }
+
+    #[test]
+    fn editor_row_limit_rejects_zero() {
+        let mut value = serde_json::to_value(GeneralSettings::default())
+            .expect("serialize default general settings");
+        value["editor_row_limit"] = serde_json::json!(0);
+
+        assert!(
+            serde_json::from_value::<GeneralSettings>(value).is_err(),
+            "zero must not be accepted as an editor row limit"
+        );
     }
 
     #[test]
@@ -2658,6 +2722,7 @@ mod tests {
             language: String::new(),
             key_value_size_limit_mib: 10,
             vim_mode: 0,
+            editor_row_limit: 10_000,
             updated_at: String::new(),
         };
         runtime
