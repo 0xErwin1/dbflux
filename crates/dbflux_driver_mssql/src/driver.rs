@@ -1422,6 +1422,16 @@ impl MssqlConnection {
     }
 
     fn execute_simple(&self, sql: &str) -> Result<QueryResult, DbError> {
+        self.execute_simple_bounded(sql, None)
+    }
+
+    /// Run a batch, retaining at most `limit` rows across all of its result
+    /// sets. `None` keeps the uncapped behavior.
+    fn execute_simple_bounded(
+        &self,
+        sql: &str,
+        limit: Option<u32>,
+    ) -> Result<QueryResult, DbError> {
         let start = Instant::now();
         let sql_owned = sql.to_string();
 
@@ -1436,6 +1446,9 @@ impl MssqlConnection {
         // carries its column headers. Pure preparation batches
         // (`SET LOCK_TIMEOUT 5000`) emit no metadata, produce no result set,
         // and surface as an empty primary, which is what callers expect.
+        // Under a row limit the stream is still drained to completion, so
+        // every mutation and later statement finishes and late server errors
+        // still surface.
         let collected = self.with_client(|runtime, client| {
             runtime.block_on(async move {
                 let mut stream = client
@@ -1443,9 +1456,8 @@ impl MssqlConnection {
                     .await
                     .map_err(|e| format_mssql_query_error(&e))?;
 
-                let result_sets = collect_result_sets(&mut stream).await?;
-
-                Ok::<_, DbError>(result_sets)
+                let mut remaining = limit.map(|limit| limit as usize);
+                collect_result_sets(&mut stream, &mut remaining).await
             })
         })?;
 
@@ -1566,23 +1578,39 @@ impl MssqlConnection {
     }
 }
 
+/// One collected result set. `truncated` is set only when the shared row
+/// budget ran out while this set was streaming and at least one of its rows
+/// was discarded.
+struct CollectedSet {
+    columns: Vec<ColumnMeta>,
+    rows: Vec<Row>,
+    truncated: bool,
+}
+
 /// Drive a tiberius `QueryStream` item by item, capturing column metadata from
 /// the result-set METADATA tokens rather than from rows.
 ///
-/// Each `Metadata` item starts a new `(columns, rows)` pair built from the
-/// declared columns, so a result set that produced zero rows still carries its
-/// columns. Each `Row` item is appended to the most recently started pair.
-/// Statements that emit no metadata (e.g. `SET LOCK_TIMEOUT 5000`) create no
-/// pair at all.
+/// Each `Metadata` item starts a new set built from the declared columns, so a
+/// result set that produced zero rows still carries its columns. Each `Row`
+/// item is appended to the most recently started set. Statements that emit no
+/// metadata (e.g. `SET LOCK_TIMEOUT 5000`) create no set at all.
 ///
-/// The returned pairs are passed through [`finalize_result_sets`] so empty,
+/// `remaining` is one row budget shared by every set of the batch, consumed in
+/// stream order: `None` is uncapped and `Some(0)` retains nothing. The stream
+/// is pull-based, so a row past the budget is read off the wire and dropped
+/// without being converted. The loop always drains the stream to its end,
+/// because stopping early would leave later statements unexecuted and let the
+/// stream's drop swallow a server error raised after the budget ran out.
+///
+/// The returned sets are passed through [`finalize_result_sets`] so empty,
 /// metadata-less batches are dropped while empty-but-columned sets are kept.
 async fn collect_result_sets(
     stream: &mut tiberius::QueryStream<'_>,
-) -> Result<Vec<(Vec<ColumnMeta>, Vec<Row>)>, DbError> {
+    remaining: &mut Option<usize>,
+) -> Result<Vec<CollectedSet>, DbError> {
     use futures_util::TryStreamExt;
 
-    let mut sets: Vec<(Vec<ColumnMeta>, Vec<Row>)> = Vec::new();
+    let mut sets: Vec<CollectedSet> = Vec::new();
 
     while let Some(item) = stream
         .try_next()
@@ -1595,18 +1623,49 @@ async fn collect_result_sets(
                 .iter()
                 .map(tiberius_column_to_meta)
                 .collect();
-            sets.push((columns, Vec::new()));
+            sets.push(CollectedSet {
+                columns,
+                rows: Vec::new(),
+                truncated: false,
+            });
             continue;
         }
 
         if let Some(row) = item.into_row() {
+            let retain = match remaining {
+                Some(0) => false,
+                Some(left) => {
+                    *left -= 1;
+                    true
+                }
+                None => true,
+            };
+
+            if !retain {
+                match sets.last_mut() {
+                    Some(set) => set.truncated = true,
+                    // TDS always sends METADATA before rows; should a row ever
+                    // arrive first, keep the omission visible.
+                    None => sets.push(CollectedSet {
+                        columns: Vec::new(),
+                        rows: Vec::new(),
+                        truncated: true,
+                    }),
+                }
+                continue;
+            }
+
             let converted: Row = (0..row.columns().len())
                 .map(|idx| tiberius_value_to_value(&row, idx))
                 .collect();
 
             match sets.last_mut() {
-                Some((_, rows)) => rows.push(converted),
-                None => sets.push((Vec::new(), vec![converted])),
+                Some(set) => set.rows.push(converted),
+                None => sets.push(CollectedSet {
+                    columns: Vec::new(),
+                    rows: vec![converted],
+                    truncated: false,
+                }),
             }
         }
     }
@@ -1614,15 +1673,14 @@ async fn collect_result_sets(
     Ok(finalize_result_sets(sets))
 }
 
-/// Drop result sets that carry neither columns nor rows, while preserving
-/// empty-but-columned sets (a `SELECT` that returned zero rows still has its
-/// column headers). Factored out so it can be unit-tested without a live
+/// Drop result sets that carry neither columns, rows nor a discarded row,
+/// while preserving empty-but-columned sets (a `SELECT` that returned zero
+/// rows still has its column headers) and sets whose rows were all discarded
+/// under the row budget. Factored out so it can be unit-tested without a live
 /// SQL Server.
-fn finalize_result_sets(
-    sets: Vec<(Vec<ColumnMeta>, Vec<Row>)>,
-) -> Vec<(Vec<ColumnMeta>, Vec<Row>)> {
+fn finalize_result_sets(sets: Vec<CollectedSet>) -> Vec<CollectedSet> {
     sets.into_iter()
-        .filter(|(columns, rows)| !columns.is_empty() || !rows.is_empty())
+        .filter(|set| !set.columns.is_empty() || !set.rows.is_empty() || set.truncated)
         .collect()
 }
 
@@ -1648,18 +1706,21 @@ fn tiberius_column_to_meta(column: &tiberius::Column) -> ColumnMeta {
 /// Factored out of `execute_simple` so it can be unit-tested without a live
 /// SQL Server.
 fn build_multi_result(
-    mut collected: Vec<(Vec<ColumnMeta>, Vec<Row>)>,
+    mut collected: Vec<CollectedSet>,
     total_time: std::time::Duration,
 ) -> QueryResult {
-    let Some((primary_columns, primary_rows)) = collected.pop() else {
+    let Some(primary) = collected.pop() else {
         return QueryResult::table(Vec::new(), Vec::new(), None, total_time);
     };
 
-    let mut result = QueryResult::table(primary_columns, primary_rows, None, total_time);
-    for (cols, rows) in collected {
+    let mut result = QueryResult::table(primary.columns, primary.rows, None, total_time);
+    result.set_rows_truncated(primary.truncated);
+    for set in collected {
         // Each additional set shares the same total batch duration;
         // tiberius doesn't expose per-statement timing.
-        result.push_additional_result(QueryResult::table(cols, rows, None, total_time));
+        let mut additional = QueryResult::table(set.columns, set.rows, None, total_time);
+        additional.set_rows_truncated(set.truncated);
+        result.push_additional_result(additional);
     }
     result
 }
@@ -1841,6 +1902,39 @@ impl Connection for MssqlConnection {
     }
 
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
+        // Refuse what this driver cannot honor before anything else runs, so a
+        // refusal has no side effects. That includes the post-cancel recovery
+        // below, which clears a pending cancellation signal. There is no
+        // statement deadline mechanism (no watchdog, no KILL-based deadline,
+        // no session-level SET), and the instance-catalog dispatch paths run
+        // whole catalog queries with no place to apply a row cap.
+        if req.statement_timeout.is_some() {
+            return Err(DbError::NotSupported(
+                "SQL Server: the requested statement timeout cannot be honored safely by this driver; the request was rejected before execution".to_string(),
+            ));
+        }
+
+        if req.limit.is_some()
+            && let Some(source) = req
+                .execution_context
+                .as_ref()
+                .and_then(|ctx| ctx.source.as_ref())
+        {
+            match source {
+                ExecutionSourceContext::InstanceMetricQuery { .. } => {
+                    return Err(DbError::NotSupported(
+                        "SQL Server: a row limit cannot be applied to an instance metric query; the request was rejected before execution".to_string(),
+                    ));
+                }
+                ExecutionSourceContext::InstanceInspectorQuery { .. } => {
+                    return Err(DbError::NotSupported(
+                        "SQL Server: a row limit cannot be applied to an instance inspector query; the request was rejected before execution".to_string(),
+                    ));
+                }
+                _ => {}
+            }
+        }
+
         // Do not blanket-reset `cancelled` here — that would race with a
         // `cancel()` that fires between two executions and silently drop the
         // signal. Instead, recover the connection if a previous cancel left
@@ -1890,7 +1984,7 @@ impl Connection for MssqlConnection {
 
         let transaction_count_before = self.transaction_count_before_batch(&req.sql);
 
-        match self.execute_simple(&req.sql) {
+        match self.execute_simple_bounded(&req.sql, req.limit) {
             Ok(result) => {
                 if self.cancelled.load(Ordering::SeqCst) {
                     Err(DbError::Cancelled)
@@ -5596,8 +5690,12 @@ mod tests {
         }
     }
 
-    fn one_row_set(label: &str) -> (Vec<ColumnMeta>, Vec<Row>) {
-        (vec![col(label)], vec![vec![Value::Text(label.to_string())]])
+    fn one_row_set(label: &str) -> CollectedSet {
+        CollectedSet {
+            columns: vec![col(label)],
+            rows: vec![vec![Value::Text(label.to_string())]],
+            truncated: false,
+        }
     }
 
     #[test]
@@ -5648,25 +5746,71 @@ mod tests {
     }
 
     #[test]
+    fn build_multi_result_carries_per_set_truncation_flags() {
+        let mut truncated_first = one_row_set("a");
+        truncated_first.truncated = true;
+        let complete_middle = one_row_set("b");
+        let mut truncated_last = one_row_set("c");
+        truncated_last.truncated = true;
+
+        let result = build_multi_result(
+            vec![truncated_first, complete_middle, truncated_last],
+            std::time::Duration::ZERO,
+        );
+
+        // The last set is primary and carries its own flag; earlier sets keep
+        // theirs as additional results in batch order.
+        assert!(result.rows_truncated());
+        assert_eq!(result.additional_results.len(), 2);
+        assert!(result.additional_results[0].rows_truncated());
+        assert!(!result.additional_results[1].rows_truncated());
+    }
+
+    #[test]
     fn finalize_drops_only_sets_without_columns_and_rows() {
-        let empty_columned: (Vec<ColumnMeta>, Vec<Row>) =
-            (vec![col("id"), col("name")], Vec::new());
-        let metadata_less: (Vec<ColumnMeta>, Vec<Row>) = (Vec::new(), Vec::new());
+        let empty_columned = CollectedSet {
+            columns: vec![col("id"), col("name")],
+            rows: Vec::new(),
+            truncated: false,
+        };
+        let metadata_less = CollectedSet {
+            columns: Vec::new(),
+            rows: Vec::new(),
+            truncated: false,
+        };
 
         let kept = finalize_result_sets(vec![metadata_less, empty_columned, one_row_set("data")]);
 
         // The metadata-less set (no columns, no rows) is dropped; the
         // empty-but-columned set and the populated set are retained.
         assert_eq!(kept.len(), 2);
-        assert_eq!(kept[0].0.len(), 2);
-        assert!(kept[0].1.is_empty());
-        assert_eq!(kept[1].0[0].name, "data");
+        assert_eq!(kept[0].columns.len(), 2);
+        assert!(kept[0].rows.is_empty());
+        assert_eq!(kept[1].columns[0].name, "data");
+    }
+
+    #[test]
+    fn finalize_keeps_a_set_that_observed_discarded_rows() {
+        // A zero-budget set whose rows were all observed and discarded keeps
+        // its columns (from METADATA) and its truncated flag.
+        let drained = CollectedSet {
+            columns: vec![col("id")],
+            rows: Vec::new(),
+            truncated: true,
+        };
+
+        let kept = finalize_result_sets(vec![drained]);
+        assert_eq!(kept.len(), 1);
+        assert!(kept[0].truncated);
     }
 
     #[test]
     fn empty_but_columned_set_becomes_primary_with_columns() {
-        let empty_columned: (Vec<ColumnMeta>, Vec<Row>) =
-            (vec![col("user_id"), col("email")], Vec::new());
+        let empty_columned = CollectedSet {
+            columns: vec![col("user_id"), col("email")],
+            rows: Vec::new(),
+            truncated: false,
+        };
 
         let collected = finalize_result_sets(vec![empty_columned]);
         let result = build_multi_result(collected, std::time::Duration::ZERO);
@@ -6503,5 +6647,290 @@ mod tests {
             mssql_create_table_ddl(&creation_table(), Some(&metadata)).is_ok(),
             "38-digit negative seed is representable"
         );
+    }
+}
+
+#[cfg(test)]
+mod query_safety_tests {
+    use super::{
+        MssqlConnection, MssqlConnectionInner, TiberiusClient, build_runtime, collect_result_sets,
+        establish_tiberius, parse_mssql_url,
+    };
+    use dbflux_core::{
+        Connection as _, DbError, ExecutionContext, ExecutionSourceContext, QueryRequest,
+    };
+    use std::sync::atomic::{AtomicBool, AtomicI32};
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+    use tokio::runtime::Runtime;
+
+    // Execution-safety order proofs (#671/#672).
+    //
+    // 1. A requested statement timeout must be rejected before the connection
+    //    lock is touched: the main thread holds the unpoisoned inner mutex and
+    //    the worker's `NotSupported` verdict must arrive while the lock is
+    //    still held. (With no client configured and the lock held, any path
+    //    that reaches the lock blocks the worker instead of answering.)
+    // 2. Bounded requests aimed at the internal metric/inspector dispatch
+    //    paths must be rejected before the lock or anything dispatches: the
+    //    poisoned mutex makes reaching it observable as the existing
+    //    poisoned-lock error instead of the expected `NotSupported` rejection.
+    //
+    // The connection is built with no client: only the preflight paths can
+    // succeed against it, which is exactly the observable seam this proof
+    // needs — no container required.
+    fn lockless_connection() -> MssqlConnection {
+        MssqlConnection {
+            inner: Arc::new(Mutex::new(MssqlConnectionInner {
+                client: None,
+                runtime: build_runtime().expect("test runtime must build"),
+            })),
+            current_database: Mutex::new(None),
+            ssh_tunnel: None,
+            cancelled: Arc::new(AtomicBool::new(false)),
+            spid: Arc::new(AtomicI32::new(0)),
+            reconnect_config: Arc::new(tiberius::Config::new()),
+            poisoned: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    #[test]
+    fn mssql_query_safety_bounded_context_rejection_precedes_client_lock() {
+        let connection = lockless_connection();
+
+        // Timeout order proof: hold the unpoisoned inner lock while a scoped
+        // worker executes the timeout request. The worker's `NotSupported`
+        // verdict must arrive while the lock is still held; if the preflight
+        // ever moved behind the lock, the worker would block on the held
+        // mutex and the bounded wait would expire — a clean failure, never a
+        // hang, because the guard is released on every path before the
+        // scoped worker is joined.
+        let mut request = QueryRequest::new("SELECT 1");
+        request.statement_timeout = Some(Duration::from_secs(5));
+        let (result_tx, result_rx) = std::sync::mpsc::channel();
+        let mut timeout_outcome: Option<Result<dbflux_core::QueryResult, DbError>> = None;
+        std::thread::scope(|scope| {
+            // The guard is acquired AND owned inside this closure: RAII (plus
+            // the explicit release below) drops it when the closure's frame
+            // unwinds — on the normal, timeout and panic paths alike —
+            // BEFORE the scope's automatic join of the worker, so the worker
+            // is never joined while the proof's own lock is still held.
+            let held_guard = connection
+                .inner
+                .lock()
+                .expect("main thread must hold the unpoisoned inner lock");
+            scope.spawn(|| {
+                result_tx
+                    .send(connection.execute(&request))
+                    .expect("worker must deliver the execution result");
+            });
+            if let Ok(result) = result_rx.recv_timeout(Duration::from_secs(30)) {
+                timeout_outcome = Some(result);
+            }
+            // Explicit release on the normal path; RAII covers the rest.
+            drop(held_guard);
+        });
+        match timeout_outcome {
+            Some(Err(DbError::NotSupported(reason))) => {
+                let lowered = reason.to_lowercase();
+                assert!(
+                    lowered.contains("timeout"),
+                    "expected the timeout preflight rejection while the lock was held, got: {reason}"
+                );
+            }
+            Some(other) => panic!(
+                "a requested statement timeout must be rejected without touching the held connection lock, got {other:?}"
+            ),
+            None => panic!(
+                "the timeout request blocked on the held connection lock: the preflight did not precede the lock"
+            ),
+        }
+
+        // Poison the inner mutex only now, for the metric/inspector order
+        // proofs: those dispatch arms report their existing poisoned-lock
+        // error, so reaching the lock is observable for them (unlike the
+        // ordinary SQL path, which the preflight guards before any lock).
+        let poison_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = connection
+                .inner
+                .lock()
+                .expect("poison step must acquire the inner lock");
+            panic!("deliberate mutex poison for the order proof");
+        }));
+        assert!(
+            poison_result.is_err(),
+            "the poison step must panic while holding the guard to poison the mutex"
+        );
+
+        // Bounded metric context: Some(0) and Some(1) on a valid supported
+        // metric id must be rejected before the lock is even attempted.
+        for limit in [0u32, 1] {
+            let mut request = QueryRequest::new("SELECT 1");
+            request.limit = Some(limit);
+            request.execution_context = Some(ExecutionContext {
+                source: Some(ExecutionSourceContext::InstanceMetricQuery {
+                    metric_id: "mssql.batch_requests_per_sec".to_string(),
+                    start_ms: 0,
+                    end_ms: 1,
+                }),
+                ..Default::default()
+            });
+            match connection.execute(&request) {
+                Err(DbError::NotSupported(reason)) => {
+                    let lowered = reason.to_lowercase();
+                    assert!(
+                        lowered.contains("instance metric") && lowered.contains("row limit"),
+                        "expected the bounded-context rejection before the lock, got: {reason}"
+                    );
+                }
+                other => panic!(
+                    "bounded metric context must be rejected before the connection lock, got {other:?}"
+                ),
+            }
+        }
+
+        // Bounded inspector context: same preflight, valid inspector id.
+        for limit in [0u32, 1] {
+            let mut request = QueryRequest::new("SELECT 1");
+            request.limit = Some(limit);
+            request.execution_context = Some(ExecutionContext {
+                source: Some(ExecutionSourceContext::InstanceInspectorQuery {
+                    metric_id: "mssql.active_sessions".to_string(),
+                }),
+                ..Default::default()
+            });
+            match connection.execute(&request) {
+                Err(DbError::NotSupported(reason)) => {
+                    let lowered = reason.to_lowercase();
+                    assert!(
+                        lowered.contains("instance inspector") && lowered.contains("row limit"),
+                        "expected the bounded-context rejection before the lock, got: {reason}"
+                    );
+                }
+                other => panic!(
+                    "bounded inspector context must be rejected before the connection lock, got {other:?}"
+                ),
+            }
+        }
+
+        // Uncapped control: the original dispatch path is taken, which
+        // reaches the poisoned inner lock and reports its existing error.
+        let mut request = QueryRequest::new("SELECT 1");
+        request.execution_context = Some(ExecutionContext {
+            source: Some(ExecutionSourceContext::InstanceMetricQuery {
+                metric_id: "mssql.batch_requests_per_sec".to_string(),
+                start_ms: 0,
+                end_ms: 1,
+            }),
+            ..Default::default()
+        });
+        match connection.execute(&request) {
+            Err(DbError::QueryFailed(formatted)) => {
+                let message = formatted.to_display_string();
+                assert!(
+                    message.contains("poisoned"),
+                    "uncapped metric context must reach the connection lock and hit the poison, got: {message}"
+                );
+            }
+            other => panic!(
+                "uncapped metric context must reach the existing dispatch lock error, got {other:?}"
+            ),
+        }
+    }
+
+    // Late-drain proof through the collector seam: the collector must observe
+    // a server-ordered error that arrives AFTER the budget is exhausted, and
+    // the exposed `remaining` budget must already be 0 when the error
+    // surfaces. The batch's first statement streams 3 rows and the second 1
+    // row before the RAISERROR, so with a budget of 1 the first row consumes
+    // the whole budget, the later rows are all observed and discarded, and
+    // the error still propagates. If the implementation returned early or
+    // dropped the stream once the cap was reached, the error would be
+    // swallowed by the stream's Drop and the collector would return sets
+    // instead of `Err`.
+    #[test]
+    #[ignore = "requires Docker daemon"]
+    fn mssql_query_safety_collector_consumes_budget_before_late_error() -> Result<(), DbError> {
+        dbflux_test_support::containers::with_mssql_url(|uri| {
+            // The container reports readiness before its SA login works for
+            // client connections (same as the live suite's own connect
+            // helper), so the raw-client establish retries transient logins.
+            // Client and runtime are produced together: the client must be
+            // driven by the same runtime for every later block_on call.
+            let (mut client, runtime) = dbflux_test_support::containers::retry_db_operation(
+                Duration::from_secs(60),
+                || -> Result<(TiberiusClient, Runtime), DbError> {
+                    let config = parse_mssql_url(&uri).map_err(|e| {
+                        DbError::connection_failed(format!("test container uri invalid: {e}"))
+                    })?;
+                    let runtime = build_runtime()?;
+                    let client = runtime.block_on(establish_tiberius(config)).map_err(|e| {
+                        DbError::connection_failed(format!("container connect failed: {e}"))
+                    })?;
+                    Ok((client, runtime))
+                },
+            )?;
+
+            let sql = "SELECT 1 AS x UNION ALL SELECT 2 UNION ALL SELECT 3; \
+                       SELECT 4 AS x; \
+                       RAISERROR('dbflux late-drain deliberate failure', 16, 1)";
+            let mut remaining = Some(1usize);
+            {
+                let mut stream = runtime
+                    .block_on(client.simple_query(sql))
+                    .map_err(|e| DbError::query_failed(format!("batch dispatch failed: {e}")))?;
+                let outcome = runtime.block_on(collect_result_sets(&mut stream, &mut remaining));
+
+                match outcome {
+                    Err(err) => {
+                        let message = format!("{err}");
+                        assert!(
+                            message.contains("dbflux late-drain deliberate failure"),
+                            "the returned error must carry the batch's deliberate late failure, got: {message}"
+                        );
+                    }
+                    Ok(sets) => panic!(
+                        "the late error must surface after the budget is exhausted instead of returning {} sets",
+                        sets.len()
+                    ),
+                }
+            }
+
+            // The budget was fully consumed by the first row BEFORE the error
+            // event: four rows streamed, one retained, and the server-ordered
+            // RAISERROR was still observed afterwards.
+            assert_eq!(
+                remaining,
+                Some(0),
+                "the first row must have consumed the whole budget before the late error arrived"
+            );
+
+            // Unbounded control through the same collector: a fresh batch
+            // keeps every row and reports no omission.
+            {
+                let mut stream = runtime
+                    .block_on(client.simple_query("SELECT 1 AS x UNION ALL SELECT 2 AS x"))
+                    .map_err(|e| {
+                        DbError::query_failed(format!("control batch dispatch failed: {e}"))
+                    })?;
+                let mut unbounded = None;
+                let sets = runtime.block_on(collect_result_sets(&mut stream, &mut unbounded))?;
+                assert_eq!(sets.len(), 1);
+                assert_eq!(sets[0].rows.len(), 2);
+                assert!(!sets[0].truncated);
+            }
+
+            // The connection stays usable afterwards.
+            {
+                let mut stream = runtime
+                    .block_on(client.simple_query("SELECT 42 AS reuse"))
+                    .map_err(|e| DbError::query_failed(format!("connection reuse failed: {e}")))?;
+                let mut probe = None;
+                let sets = runtime.block_on(collect_result_sets(&mut stream, &mut probe))?;
+                assert_eq!(sets[0].rows.len(), 1);
+            }
+
+            Ok(())
+        })
     }
 }

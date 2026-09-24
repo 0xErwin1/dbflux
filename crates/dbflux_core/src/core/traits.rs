@@ -517,6 +517,16 @@ pub trait KeyValueApi: Send + Sync {
     /// Check whether a key exists.
     fn exists_key(&self, request: &KeyExistsRequest) -> Result<bool, DbError>;
 
+    /// Count every key in a keyspace, independent of any scan filter.
+    ///
+    /// `keyspace` follows `KeyScanRequest::keyspace`: `None` means the
+    /// connection's current keyspace.
+    fn key_count(&self, _keyspace: Option<u32>) -> Result<u64, DbError> {
+        Err(DbError::NotSupported(
+            "Key-value key count not supported by this driver".to_string(),
+        ))
+    }
+
     /// Get key type if supported by the driver.
     fn key_type(&self, _request: &KeyTypeRequest) -> Result<KeyType, DbError> {
         Err(DbError::NotSupported(
@@ -2135,6 +2145,41 @@ mod tests {
         assert!(
             conn.dashboard_source().is_none(),
             "default dashboard_source() must return None"
+        );
+    }
+
+    struct StubKeyValue;
+
+    impl KeyValueApi for StubKeyValue {
+        fn scan_keys(&self, _request: &KeyScanRequest) -> Result<KeyScanPage, DbError> {
+            Err(DbError::NotSupported("stub".to_string()))
+        }
+
+        fn get_key(&self, _request: &KeyGetRequest) -> Result<KeyGetResult, DbError> {
+            Err(DbError::NotSupported("stub".to_string()))
+        }
+
+        fn set_key(&self, _request: &KeySetRequest) -> Result<(), DbError> {
+            Err(DbError::NotSupported("stub".to_string()))
+        }
+
+        fn delete_key(&self, _request: &KeyDeleteRequest) -> Result<bool, DbError> {
+            Err(DbError::NotSupported("stub".to_string()))
+        }
+
+        fn exists_key(&self, _request: &KeyExistsRequest) -> Result<bool, DbError> {
+            Err(DbError::NotSupported("stub".to_string()))
+        }
+    }
+
+    #[test]
+    fn key_count_default_returns_not_supported() {
+        let result = StubKeyValue.key_count(Some(0));
+
+        assert!(
+            matches!(result, Err(DbError::NotSupported(_))),
+            "default key_count must return NotSupported, got: {:?}",
+            result
         );
     }
 

@@ -1272,7 +1272,8 @@ impl MigrateWizard {
             .tables
             .iter()
             .map(|t| match &t.status {
-                TableTransferStatus::Completed { rows } => *rows,
+                TableTransferStatus::Completed { rows }
+                | TableTransferStatus::Cancelled { rows } => *rows,
                 _ => 0,
             })
             .sum();
@@ -1281,16 +1282,19 @@ impl MigrateWizard {
     }
 
     /// Renders one status line per planned table when the run left any table
-    /// `Failed` or `NotStarted`, so the user sees exactly which tables
-    /// succeeded, which one failed with what error, and which were never
-    /// attempted — not just the last error swallowed into a single toast
-    /// (R4-002/B-007). On a fully successful/skipped run, only the engine's
-    /// own warnings are shown, unchanged.
+    /// `Failed`, `Cancelled` or `NotStarted`, so the user sees exactly which
+    /// tables succeeded, which one failed with what error, which one a cancel
+    /// stopped partway, and which were never attempted — not just the last
+    /// error swallowed into a single toast (R4-002/B-007). On a fully
+    /// successful/skipped run, only the engine's own warnings are shown,
+    /// unchanged.
     fn itemized_status_lines(tables: &[MigratedTable], engine_warnings: &[String]) -> Vec<String> {
         let has_issue = tables.iter().any(|t| {
             matches!(
                 t.status,
-                TableTransferStatus::Failed { .. } | TableTransferStatus::NotStarted
+                TableTransferStatus::Failed { .. }
+                    | TableTransferStatus::Cancelled { .. }
+                    | TableTransferStatus::NotStarted
             )
         });
 

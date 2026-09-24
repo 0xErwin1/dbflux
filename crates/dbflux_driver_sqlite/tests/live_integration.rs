@@ -499,3 +499,741 @@ fn sqlite_failed_statement_outside_a_transaction_adds_no_note() -> Result<(), Db
 
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// Query safety (bounded execution contracts)
+// ---------------------------------------------------------------------------
+
+fn assert_no_rows_truncated(result: &dbflux_core::QueryResult, expected_rows: usize) {
+    assert_eq!(result.rows.len(), expected_rows);
+    assert!(
+        !result.rows_truncated(),
+        "expected no truncation flag with {expected_rows} retained rows"
+    );
+}
+
+#[test]
+fn sqlite_query_safety_limit_below_exact_and_over_retains_and_flags() -> Result<(), DbError> {
+    let temp_dir = tempfile::tempdir()?;
+    let db_path = temp_dir.path().join("safety_limit.sqlite");
+    let connection = connect_sqlite_at(&db_path)?;
+
+    connection.execute(&QueryRequest::new(
+        "CREATE TABLE safety_limit (id INTEGER PRIMARY KEY)",
+    ))?;
+    connection.execute(&QueryRequest::new(
+        "INSERT INTO safety_limit VALUES (1), (2), (3), (4), (5)",
+    ))?;
+
+    // Below the row count: everything is retained, no truncation flag.
+    let below =
+        connection.execute(&QueryRequest::new("SELECT id FROM safety_limit").with_limit(8))?;
+    assert_no_rows_truncated(&below, 5);
+
+    // Exactly at the row count: the last row is retained and no extra row is
+    // observed afterwards, so there is still no truncation flag.
+    let exact =
+        connection.execute(&QueryRequest::new("SELECT id FROM safety_limit").with_limit(5))?;
+    assert_no_rows_truncated(&exact, 5);
+
+    // Over the row count: only the requested rows are retained, in order, and
+    // the truncation flag is set.
+    let over =
+        connection.execute(&QueryRequest::new("SELECT id FROM safety_limit").with_limit(3))?;
+    assert_eq!(over.rows.len(), 3);
+    assert_eq!(over.rows[0][0], Value::Int(1));
+    assert_eq!(over.rows[2][0], Value::Int(3));
+    assert!(over.rows_truncated());
+
+    Ok(())
+}
+
+#[test]
+fn sqlite_query_safety_zero_limit_retains_nothing_only_when_rows_exist() -> Result<(), DbError> {
+    let temp_dir = tempfile::tempdir()?;
+    let db_path = temp_dir.path().join("safety_zero.sqlite");
+    let connection = connect_sqlite_at(&db_path)?;
+
+    connection.execute(&QueryRequest::new(
+        "CREATE TABLE safety_zero (id INTEGER PRIMARY KEY)",
+    ))?;
+    connection.execute(&QueryRequest::new(
+        "INSERT INTO safety_zero VALUES (1), (2), (3), (4)",
+    ))?;
+
+    // Some(0) means retain zero rows — not unlimited — and the flag is set
+    // because rows were actually omitted.
+    let nonempty =
+        connection.execute(&QueryRequest::new("SELECT id FROM safety_zero").with_limit(0))?;
+    assert!(nonempty.rows.is_empty());
+    assert!(nonempty.rows_truncated());
+
+    // A result with no rows at all omits nothing, so the flag stays off.
+    let empty = connection
+        .execute(&QueryRequest::new("SELECT id FROM safety_zero WHERE id > 100").with_limit(0))?;
+    assert!(empty.rows.is_empty());
+    assert!(!empty.rows_truncated());
+
+    // A capped request never caps a mutation's effects or its affected count.
+    let insert = connection
+        .execute(&QueryRequest::new("INSERT INTO safety_zero VALUES (5)").with_limit(0))?;
+    assert_eq!(insert.affected_rows, Some(1));
+    let delete = connection.execute(&QueryRequest::new("DELETE FROM safety_zero").with_limit(0))?;
+    assert_eq!(delete.affected_rows, Some(5));
+
+    let count = connection
+        .execute(&QueryRequest::new("SELECT COUNT(*) FROM safety_zero"))?
+        .rows;
+    assert_eq!(
+        count[0][0],
+        Value::Int(0),
+        "the capped DML must fully apply"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn sqlite_query_safety_explicit_none_limit_keeps_uncapped_behavior() -> Result<(), DbError> {
+    let temp_dir = tempfile::tempdir()?;
+    let db_path = temp_dir.path().join("safety_uncapped.sqlite");
+    let connection = connect_sqlite_at(&db_path)?;
+
+    connection.execute(&QueryRequest::new(
+        "CREATE TABLE safety_uncapped (id INTEGER PRIMARY KEY)",
+    ))?;
+    connection.execute(&QueryRequest::new(
+        "INSERT INTO safety_uncapped VALUES (1), (2), (3)",
+    ))?;
+
+    let mut request = QueryRequest::new("SELECT id FROM safety_uncapped");
+    request.limit = None;
+    let result = connection.execute(&request)?;
+    assert_no_rows_truncated(&result, 3);
+
+    Ok(())
+}
+
+#[test]
+fn sqlite_query_safety_uncapped_batch_still_executes_later_statements() -> Result<(), DbError> {
+    let temp_dir = tempfile::tempdir()?;
+    let db_path = temp_dir.path().join("safety_legacy_batch.sqlite");
+    let connection = connect_sqlite_at(&db_path)?;
+
+    // Legacy behavior: without a limit, the whole batch runs statement by
+    // statement and later statements execute.
+    let result = connection.execute(&QueryRequest::new(
+        "CREATE TABLE safety_legacy_batch (id INTEGER PRIMARY KEY); \
+         INSERT INTO safety_legacy_batch VALUES (1), (2); \
+         SELECT id FROM safety_legacy_batch ORDER BY id",
+    ))?;
+    assert!(result.rows.is_empty());
+    assert_eq!(result.additional_results.len(), 2);
+    let select_set = &result.additional_results[1];
+    assert_eq!(select_set.rows.len(), 2);
+
+    let count = connection
+        .execute(&QueryRequest::new(
+            "SELECT COUNT(*) FROM safety_legacy_batch",
+        ))?
+        .rows;
+    assert_eq!(count[0][0], Value::Int(2));
+
+    Ok(())
+}
+
+fn execute_bounded_batch(
+    connection: &dyn dbflux_core::Connection,
+    sql: &str,
+    limit: u32,
+) -> dbflux_core::QueryResult {
+    connection
+        .execute(&QueryRequest::new(sql).with_limit(limit))
+        .unwrap_or_else(|error| panic!("bounded batch must run, got {error:?}"))
+}
+
+#[test]
+fn sqlite_query_safety_bounded_batch_runs_every_statement_and_stays_reusable() -> Result<(), DbError>
+{
+    let temp_dir = tempfile::tempdir()?;
+    let db_path = temp_dir.path().join("safety_bounded_batch.sqlite");
+    let connection = connect_sqlite_at(&db_path)?;
+
+    connection.execute(&QueryRequest::new(
+        "CREATE TABLE safety_bounded_batch (n INTEGER PRIMARY KEY)",
+    ))?;
+
+    // Deliberate behavior change: a bounded multi-statement batch used to be
+    // refused before execution. It now runs statement by statement under one
+    // shared row budget, so both INSERTs take effect and the RETURNING rows
+    // are capped by the same budget.
+    let result = execute_bounded_batch(
+        connection.as_ref(),
+        "INSERT INTO safety_bounded_batch (n) VALUES (1); \
+         INSERT INTO safety_bounded_batch (n) VALUES (2) RETURNING n;",
+        5,
+    );
+    assert_eq!(result.affected_rows, Some(1));
+    assert_eq!(result.additional_results.len(), 1);
+    let returning = &result.additional_results[0];
+    assert_no_rows_truncated(returning, 1);
+    assert_eq!(returning.rows[0][0], Value::Int(2));
+
+    let witness = connect_sqlite_at(&db_path)?;
+    let count = witness
+        .execute(&QueryRequest::new(
+            "SELECT COUNT(*) FROM safety_bounded_batch",
+        ))?
+        .rows;
+    assert_eq!(count[0][0], Value::Int(2));
+
+    // DDL-dependent batch with a trigger body: the trigger's inner semicolon
+    // does not split it, and every statement runs in order.
+    let result = execute_bounded_batch(
+        connection.as_ref(),
+        "CREATE TABLE safety_ddl_batch (id INTEGER PRIMARY KEY); \
+         CREATE TABLE safety_ddl_log (id INTEGER); \
+         CREATE TRIGGER safety_ddl_trigger AFTER INSERT ON safety_ddl_batch \
+         BEGIN INSERT INTO safety_ddl_log VALUES (new.id); END; \
+         INSERT INTO safety_ddl_batch VALUES (1);",
+        1,
+    );
+    assert_eq!(result.additional_results.len(), 3);
+    assert_eq!(result.additional_results[2].affected_rows, Some(1));
+    let logged = connection
+        .execute(&QueryRequest::new("SELECT id FROM safety_ddl_log"))?
+        .rows;
+    assert_eq!(logged, vec![vec![Value::Int(1)]]);
+
+    let reused = connection.execute(&QueryRequest::new("SELECT 1").with_limit(1))?;
+    assert_eq!(reused.rows.len(), 1);
+
+    Ok(())
+}
+
+fn seeded_budget_connection(
+    file_name: &str,
+) -> Result<
+    (
+        tempfile::TempDir,
+        std::path::PathBuf,
+        Box<dyn dbflux_core::Connection>,
+    ),
+    DbError,
+> {
+    let temp_dir = tempfile::tempdir()?;
+    let db_path = temp_dir.path().join(file_name);
+    let connection = connect_sqlite_at(&db_path)?;
+
+    connection.execute(&QueryRequest::new(
+        "CREATE TABLE budget (id INTEGER PRIMARY KEY)",
+    ))?;
+    connection.execute(&QueryRequest::new(
+        "INSERT INTO budget VALUES (1), (2), (3), (4), (5)",
+    ))?;
+
+    Ok((temp_dir, db_path, connection))
+}
+
+#[test]
+fn sqlite_query_safety_bounded_batch_shares_one_row_budget() -> Result<(), DbError> {
+    let (_temp_dir, _db_path, connection) = seeded_budget_connection("budget_shared.sqlite")?;
+
+    let result = execute_bounded_batch(
+        connection.as_ref(),
+        "SELECT id FROM budget ORDER BY id; \
+         SELECT id FROM budget ORDER BY id; \
+         SELECT id FROM budget WHERE id > 100; \
+         SELECT id FROM budget ORDER BY id",
+        7,
+    );
+
+    assert_no_rows_truncated(&result, 5);
+    assert_eq!(result.additional_results.len(), 3);
+
+    let second = &result.additional_results[0];
+    assert_eq!(second.rows, vec![vec![Value::Int(1)], vec![Value::Int(2)]]);
+    assert!(second.rows_truncated(), "the second set dropped rows");
+
+    assert_no_rows_truncated(&result.additional_results[1], 0);
+
+    let fourth = &result.additional_results[2];
+    assert!(fourth.rows.is_empty());
+    assert!(fourth.rows_truncated(), "the exhausted budget dropped rows");
+
+    Ok(())
+}
+
+#[test]
+fn sqlite_query_safety_bounded_batch_mutation_after_cap_persists() -> Result<(), DbError> {
+    let (_temp_dir, db_path, connection) = seeded_budget_connection("budget_mutation.sqlite")?;
+
+    let result = execute_bounded_batch(
+        connection.as_ref(),
+        "SELECT id FROM budget ORDER BY id; \
+         INSERT INTO budget VALUES (6); \
+         SELECT id FROM budget ORDER BY id",
+        2,
+    );
+
+    assert_eq!(result.rows.len(), 2);
+    assert!(result.rows_truncated());
+    assert_eq!(result.additional_results.len(), 2);
+    assert_eq!(result.additional_results[0].affected_rows, Some(1));
+    assert!(result.additional_results[1].rows.is_empty());
+    assert!(result.additional_results[1].rows_truncated());
+
+    let witness = connect_sqlite_at(&db_path)?;
+    assert_eq!(row_count(witness.as_ref(), "budget")?, 6);
+
+    Ok(())
+}
+
+#[test]
+fn sqlite_query_safety_bounded_batch_zero_limit_runs_everything() -> Result<(), DbError> {
+    let (_temp_dir, db_path, connection) = seeded_budget_connection("budget_zero.sqlite")?;
+
+    let result = execute_bounded_batch(
+        connection.as_ref(),
+        "SELECT id FROM budget; \
+         DELETE FROM budget WHERE id > 3; \
+         SELECT id FROM budget WHERE id > 100",
+        0,
+    );
+
+    assert!(result.rows.is_empty());
+    assert!(result.rows_truncated());
+    assert_eq!(result.additional_results.len(), 2);
+    assert_eq!(result.additional_results[0].affected_rows, Some(2));
+    assert_no_rows_truncated(&result.additional_results[1], 0);
+
+    let witness = connect_sqlite_at(&db_path)?;
+    assert_eq!(row_count(witness.as_ref(), "budget")?, 3);
+
+    Ok(())
+}
+
+#[test]
+fn sqlite_query_safety_bounded_batch_trailing_comments_add_no_result_set() -> Result<(), DbError> {
+    let connection = connect_sqlite()?;
+
+    let result = execute_bounded_batch(
+        connection.as_ref(),
+        "SELECT 1; SELECT 2;; -- trailing\n/* block ; */ ;\n  ;",
+        10,
+    );
+
+    assert_no_rows_truncated(&result, 1);
+    assert_eq!(result.additional_results.len(), 1);
+    assert_eq!(result.additional_results[0].rows, vec![vec![Value::Int(2)]]);
+
+    Ok(())
+}
+
+#[test]
+fn sqlite_query_safety_bounded_batch_failure_matches_unbounded_batch() -> Result<(), DbError> {
+    let script = "CREATE TABLE fail_batch (id INTEGER PRIMARY KEY); \
+                  BEGIN; \
+                  INSERT INTO fail_batch VALUES (1); \
+                  INSERT INTO fail_batch VALUES (1); \
+                  INSERT INTO fail_batch VALUES (2); \
+                  COMMIT;";
+
+    let mut outcomes = Vec::new();
+    for limit in [None, Some(1)] {
+        let temp_dir = tempfile::tempdir()?;
+        let db_path = temp_dir.path().join("fail_batch.sqlite");
+        let connection = connect_sqlite_at(&db_path)?;
+
+        let mut request = QueryRequest::new(script);
+        request.limit = limit;
+        let error = connection
+            .execute(&request)
+            .expect_err("the duplicate primary key must stop the batch");
+
+        let witness = connect_sqlite_at(&db_path)?;
+        outcomes.push((
+            error.to_string(),
+            error_hint(&error).map(str::to_string),
+            row_count(witness.as_ref(), "fail_batch").map_err(|error| error.to_string()),
+        ));
+    }
+
+    assert_eq!(
+        outcomes[0], outcomes[1],
+        "bounded batch failure must match the unbounded batch (unbounded, bounded)"
+    );
+    assert!(
+        outcomes[0]
+            .1
+            .as_deref()
+            .is_some_and(|hint| hint.contains(TransactionStateNote::RolledBack.message())),
+        "the opened transaction must be rolled back, got {:?}",
+        outcomes[0]
+    );
+    assert_eq!(outcomes[0].2, Ok(0));
+
+    Ok(())
+}
+
+#[test]
+fn sqlite_query_safety_bounded_commented_pragma_runs_as_requested() -> Result<(), DbError> {
+    let connection = connect_sqlite()?;
+
+    // A bounded PRAGMA behind a leading comment is the requested statement,
+    // not a refusal: it applies its setting and returns its row under the cap.
+    for (sql, expected) in [
+        ("-- c\nPRAGMA busy_timeout = 1234", 1234),
+        ("/* c */ PRAGMA busy_timeout = 2345", 2345),
+    ] {
+        let result = connection.execute(&QueryRequest::new(sql).with_limit(1))?;
+        assert_no_rows_truncated(&result, 1);
+        assert_eq!(result.rows[0][0], Value::Int(expected), "result of '{sql}'");
+
+        let current = connection
+            .execute(&QueryRequest::new("PRAGMA busy_timeout"))?
+            .rows[0][0]
+            .clone();
+        assert_eq!(current, Value::Int(expected), "setting after '{sql}'");
+    }
+
+    Ok(())
+}
+
+#[test]
+fn sqlite_query_safety_bounded_bom_prefixed_pragma_runs_as_requested() -> Result<(), DbError> {
+    let connection = connect_sqlite()?;
+
+    let result = connection
+        .execute(&QueryRequest::new("\u{feff}PRAGMA busy_timeout = 1234").with_limit(1))?;
+    assert_no_rows_truncated(&result, 1);
+    assert_eq!(result.rows[0][0], Value::Int(1234));
+
+    let current = connection
+        .execute(&QueryRequest::new("PRAGMA busy_timeout"))?
+        .rows[0][0]
+        .clone();
+    assert_eq!(current, Value::Int(1234));
+
+    Ok(())
+}
+
+#[test]
+fn sqlite_query_safety_backslash_literal_batch_splits_and_runs_both_inserts() -> Result<(), DbError>
+{
+    let temp_dir = tempfile::tempdir()?;
+    let db_path = temp_dir.path().join("backslash_batch.sqlite");
+    let connection = connect_sqlite_at(&db_path)?;
+    connection.execute(&QueryRequest::new("CREATE TABLE t (v TEXT)"))?;
+
+    // Deliberate behavior change: this bounded batch used to be refused. A
+    // backslash is not an escape in SQLite, so the batch splits after the
+    // first literal and both INSERTs run.
+    let result = execute_bounded_batch(
+        connection.as_ref(),
+        r"INSERT INTO t VALUES ('\'); INSERT INTO t VALUES ('x');",
+        1,
+    );
+    assert_eq!(result.affected_rows, Some(1));
+    assert_eq!(result.additional_results.len(), 1);
+    assert_eq!(result.additional_results[0].affected_rows, Some(1));
+
+    let witness = connect_sqlite_at(&db_path)?;
+    let persisted = witness
+        .execute(&QueryRequest::new("SELECT v FROM t ORDER BY rowid"))?
+        .rows;
+    assert_eq!(
+        persisted,
+        vec![
+            vec![Value::Text(r"\".to_string())],
+            vec![Value::Text("x".to_string())],
+        ]
+    );
+
+    Ok(())
+}
+
+#[test]
+fn sqlite_query_safety_bounded_returning_persists_all_rows_and_caps_output() -> Result<(), DbError>
+{
+    let temp_dir = tempfile::tempdir()?;
+    let db_path = temp_dir.path().join("safety_returning.sqlite");
+    let connection = connect_sqlite_at(&db_path)?;
+
+    connection.execute(&QueryRequest::new(
+        "CREATE TABLE safety_returning (id INTEGER PRIMARY KEY, v INTEGER NOT NULL DEFAULT 0)",
+    ))?;
+
+    // The cap limits the returned rows, never the mutation: every inserted row
+    // persists, only the first two RETURNING rows are retained, and the
+    // omission is flagged.
+    let result = connection.execute(
+        &QueryRequest::new(
+            "INSERT INTO safety_returning (id) VALUES (1), (2), (3), (4), (5) RETURNING id",
+        )
+        .with_limit(2),
+    )?;
+    assert_eq!(result.rows.len(), 2);
+    assert!(result.rows_truncated());
+
+    // Committed-state proof through an independent connection.
+    let witness = connect_sqlite_at(&db_path)?;
+    let count = witness
+        .execute(&QueryRequest::new("SELECT COUNT(*) FROM safety_returning"))?
+        .rows;
+    assert_eq!(
+        count[0][0],
+        Value::Int(5),
+        "the capped INSERT ... RETURNING must persist every row"
+    );
+
+    // Output at or under the cap is retained whole and not flagged.
+    let result = connection.execute(
+        &QueryRequest::new("UPDATE safety_returning SET v = 1 WHERE id = 1 RETURNING id, v")
+            .with_limit(1),
+    )?;
+    assert_no_rows_truncated(&result, 1);
+    assert_eq!(result.rows[0][1], Value::Int(1));
+
+    Ok(())
+}
+
+#[test]
+fn sqlite_query_safety_bounded_with_and_values_are_capped() -> Result<(), DbError> {
+    let temp_dir = tempfile::tempdir()?;
+    let db_path = temp_dir.path().join("safety_row_producing.sqlite");
+    let connection = connect_sqlite_at(&db_path)?;
+
+    for sql in [
+        "WITH generated(n) AS (VALUES (1), (2), (3)) SELECT n FROM generated",
+        "VALUES (1), (2), (3)",
+    ] {
+        let result = connection.execute(&QueryRequest::new(sql).with_limit(2))?;
+        assert_eq!(result.rows.len(), 2, "retained rows for '{sql}'");
+        assert_eq!(result.rows[0][0], Value::Int(1), "first row for '{sql}'");
+        assert!(result.rows_truncated(), "truncation flag for '{sql}'");
+
+        let whole = connection.execute(&QueryRequest::new(sql).with_limit(3))?;
+        assert_no_rows_truncated(&whole, 3);
+    }
+
+    Ok(())
+}
+
+#[test]
+fn sqlite_query_safety_late_row_error_propagates_after_budget_consumption() -> Result<(), DbError> {
+    let temp_dir = tempfile::tempdir()?;
+    let db_path = temp_dir.path().join("safety_late_error.sqlite");
+    let connection = connect_sqlite_at(&db_path)?;
+
+    connection.execute(&QueryRequest::new(
+        "CREATE TABLE safety_late (id INTEGER PRIMARY KEY)",
+    ))?;
+    connection.execute(&QueryRequest::new(
+        "INSERT INTO safety_late VALUES (1), (2), (3), (4), (5), (6), (7), (8), (9), (10)",
+    ))?;
+
+    // abs() raises 'integer overflow' only for the exact INT64 minimum, so
+    // rows 1..7 evaluate cleanly and row 8 fails during iteration. The scan
+    // follows the INTEGER PRIMARY KEY, so no sorter evaluates the expression
+    // ahead of the rows. Reaching the cap must not hide that late error.
+    let result = connection.execute(
+        &QueryRequest::new(
+            "SELECT id, abs(CASE WHEN id = 8 \
+             THEN CAST('-9223372036854775808' AS INTEGER) ELSE -id END) AS v \
+             FROM safety_late ORDER BY id",
+        )
+        .with_limit(5),
+    );
+    match result {
+        Err(DbError::QueryFailed(formatted)) => {
+            assert!(
+                formatted
+                    .to_display_string()
+                    .to_lowercase()
+                    .contains("overflow"),
+                "expected the engine's integer overflow error, got: {}",
+                formatted.to_display_string()
+            );
+        }
+        Err(other) => panic!("unexpected error kind: {other:?}"),
+        Ok(result) => panic!(
+            "cap must not hide the late row error, got {:?}",
+            result.rows
+        ),
+    }
+
+    // The connection stays usable afterwards.
+    let follow_up = connection.execute(&QueryRequest::new("SELECT 1").with_limit(1))?;
+    assert_eq!(follow_up.rows.len(), 1);
+
+    Ok(())
+}
+
+#[test]
+fn sqlite_query_safety_statement_timeout_rejected_before_execution() -> Result<(), DbError> {
+    let temp_dir = tempfile::tempdir()?;
+    let db_path = temp_dir.path().join("safety_timeout.sqlite");
+    let connection = connect_sqlite_at(&db_path)?;
+
+    connection.execute(&QueryRequest::new(
+        "CREATE TABLE safety_timeout (n INTEGER PRIMARY KEY)",
+    ))?;
+
+    // A requested statement deadline cannot be honored safely by this driver
+    // yet, so the request is rejected at entry — before the INSERT could take
+    // effect.
+    let mut request = QueryRequest::new("INSERT INTO safety_timeout (n) VALUES (1)");
+    request.statement_timeout = Some(std::time::Duration::from_secs(5));
+    match connection.execute(&request) {
+        Err(DbError::NotSupported(reason)) => {
+            assert!(
+                reason.to_lowercase().contains("timeout"),
+                "rejection should name the unsupported deadline, got: {reason}"
+            );
+        }
+        Err(other) => panic!("unexpected error kind: {other:?}"),
+        Ok(result) => panic!("requested deadline must be rejected, got {result:?}"),
+    }
+
+    let count = connection
+        .execute(&QueryRequest::new("SELECT COUNT(*) FROM safety_timeout"))?
+        .rows;
+    assert_eq!(
+        count[0][0],
+        Value::Int(0),
+        "no effect may precede the rejection"
+    );
+
+    // Uncapped execution is untouched.
+    let ping = connection.execute(&QueryRequest::new("SELECT 1"))?;
+    assert_eq!(ping.rows[0][0], Value::Int(1));
+
+    Ok(())
+}
+
+#[test]
+fn sqlite_query_safety_bounded_contexts_rejected_and_uncapped_control_runs() -> Result<(), DbError>
+{
+    let temp_dir = tempfile::tempdir()?;
+    let db_path = temp_dir.path().join("safety_context.sqlite");
+    let connection = connect_sqlite_at(&db_path)?;
+
+    // A bounded request must not bypass its cap through the instance-metric or
+    // instance-inspector dispatch contexts, which the public request type can
+    // carry even though this driver advertises no instance catalog.
+    for limit in [0u32, 1] {
+        let mut request = QueryRequest::new("SELECT 1");
+        request.limit = Some(limit);
+        request.execution_context = Some(dbflux_core::ExecutionContext {
+            source: Some(dbflux_core::ExecutionSourceContext::InstanceMetricQuery {
+                metric_id: "sqlite.safety".to_string(),
+                start_ms: 0,
+                end_ms: 1,
+            }),
+            ..Default::default()
+        });
+        match connection.execute(&request) {
+            Err(DbError::NotSupported(reason)) => {
+                let lowered = reason.to_lowercase();
+                assert!(
+                    lowered.contains("instance metric") && lowered.contains("row limit"),
+                    "expected the bounded metric-context rejection, got: {reason}"
+                );
+                assert!(
+                    !lowered.contains("batch"),
+                    "bounded-context rejection must not be the batch refusal: {reason}"
+                );
+            }
+            other => panic!(
+                "bounded metric context must be rejected before dispatch, got {:?}",
+                other.map(|r| r.rows.len())
+            ),
+        }
+
+        let mut request = QueryRequest::new("SELECT 1");
+        request.limit = Some(limit);
+        request.execution_context = Some(dbflux_core::ExecutionContext {
+            source: Some(
+                dbflux_core::ExecutionSourceContext::InstanceInspectorQuery {
+                    metric_id: "sqlite.safety".to_string(),
+                },
+            ),
+            ..Default::default()
+        });
+        match connection.execute(&request) {
+            Err(DbError::NotSupported(reason)) => {
+                let lowered = reason.to_lowercase();
+                assert!(
+                    lowered.contains("instance inspector") && lowered.contains("row limit"),
+                    "expected the bounded inspector-context rejection, got: {reason}"
+                );
+            }
+            other => panic!(
+                "bounded inspector context must be rejected before dispatch, got {:?}",
+                other.map(|r| r.rows.len())
+            ),
+        }
+    }
+
+    // Uncapped control: the same contexts without a limit keep the existing
+    // execution behavior.
+    let mut request = QueryRequest::new("SELECT 1");
+    request.execution_context = Some(dbflux_core::ExecutionContext {
+        source: Some(dbflux_core::ExecutionSourceContext::InstanceMetricQuery {
+            metric_id: "sqlite.safety".to_string(),
+            start_ms: 0,
+            end_ms: 1,
+        }),
+        ..Default::default()
+    });
+    let result = connection.execute(&request)?;
+    assert_eq!(result.rows.len(), 1);
+    assert!(!result.rows_truncated());
+
+    Ok(())
+}
+
+#[test]
+fn sqlite_query_safety_capped_single_statement_with_trailing_comments_executes()
+-> Result<(), DbError> {
+    let temp_dir = tempfile::tempdir()?;
+    let db_path = temp_dir.path().join("safety_comments.sqlite");
+    let connection = connect_sqlite_at(&db_path)?;
+
+    connection.execute(&QueryRequest::new(
+        "CREATE TABLE safety_comments (id INTEGER PRIMARY KEY)",
+    ))?;
+    connection.execute(&QueryRequest::new(
+        "INSERT INTO safety_comments VALUES (1), (2), (3)",
+    ))?;
+
+    // Trailing line comment: the splitter sees two non-empty segments, but
+    // this is one statement and a capped request must execute it.
+    let line = connection.execute(
+        &QueryRequest::new("SELECT id FROM safety_comments; -- trailing line comment")
+            .with_limit(2),
+    )?;
+    assert_eq!(line.rows.len(), 2);
+    assert!(line.rows_truncated());
+
+    // Trailing block comment.
+    let block = connection.execute(
+        &QueryRequest::new("SELECT id FROM safety_comments; /* trailing block comment */")
+            .with_limit(3),
+    )?;
+    assert_no_rows_truncated(&block, 3);
+
+    // Trailing semicolon alone: a single statement, not a batch.
+    let semicolon =
+        connection.execute(&QueryRequest::new("SELECT id FROM safety_comments;").with_limit(2))?;
+    assert_eq!(semicolon.rows.len(), 2);
+    assert!(semicolon.rows_truncated());
+
+    // Semicolons inside string literals are not statement separators.
+    let quoted = connection.execute(&QueryRequest::new("SELECT ';' AS semi").with_limit(1))?;
+    assert_no_rows_truncated(&quoted, 1);
+    assert_eq!(quoted.rows[0][0], Value::Text(";".to_string()));
+
+    Ok(())
+}

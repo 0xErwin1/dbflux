@@ -192,7 +192,7 @@ impl Workspace {
             ChartDocument, DashboardDocument, DocumentKey, dashboard::DashboardPanelSlot,
         };
         use dbflux_components::chart::InstanceMetricSource;
-        use dbflux_components::common::time_range::view::TimeRangePanel;
+        use dbflux_components::common::time_range::{TimeRange, TimeRangePanel};
         use dbflux_components::saved_chart::{SavedChartRefreshPolicy, TimeRangePreset};
         use dbflux_ui_document::dashboard::PanelGridPos;
 
@@ -292,7 +292,14 @@ impl Workspace {
             })
             .collect();
 
-        let shared_time_range = cx.new(|cx| TimeRangePanel::new("15m", Some(0), window, cx));
+        let shared_time_range = cx.new(|cx| {
+            TimeRangePanel::new(
+                TimeRangePanel::preset_label(TimeRange::Last15min),
+                Some(0),
+                window,
+                cx,
+            )
+        });
 
         let doc = cx.new(|cx| {
             let mut dashboard = DashboardDocument::new(

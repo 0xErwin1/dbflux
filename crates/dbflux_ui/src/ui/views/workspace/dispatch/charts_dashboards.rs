@@ -45,7 +45,7 @@ impl Workspace {
                         modal.open(window, cx);
                     });
                 } else {
-                    Toast::warning("The active connection does not support dashboard import.")
+                    Toast::warning(dbflux_i18n::t!("charts.error.import_unsupported"))
                         .meta_right(now_hms())
                         .push(cx);
                 }

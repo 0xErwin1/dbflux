@@ -1783,6 +1783,12 @@ impl AppState {
         )
     }
 
+    /// Records the full query text of a running query task; see
+    /// [`dbflux_core::TaskManager::set_query_text`].
+    pub fn set_task_query_text(&mut self, id: TaskId, query_text: impl Into<std::sync::Arc<str>>) {
+        self.facade.tasks.set_query_text(id, query_text);
+    }
+
     pub fn complete_task(&mut self, id: TaskId) {
         self.facade.tasks.complete(id);
     }
@@ -4097,6 +4103,20 @@ mod tests {
         let mut expected = vec![first_query, second_query];
         expected.sort();
         assert_eq!(every_connection, expected);
+    }
+
+    #[test]
+    fn running_query_tasks_carry_the_full_query_text() {
+        let mut state = state_for_task_tests();
+        let profile_id = Uuid::new_v4();
+        let full_query = "SELECT 'a long query whose task description was shortened' FROM dual;";
+
+        let task_id = start_query_on(&mut state, profile_id, "SELECT 'a long query...");
+        state.set_task_query_text(task_id, full_query);
+
+        let running = state.running_query_tasks(Some(profile_id));
+        assert_eq!(running.len(), 1);
+        assert_eq!(running[0].query_text.as_deref(), Some(full_query));
     }
 
     #[test]

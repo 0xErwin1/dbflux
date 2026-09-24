@@ -3259,22 +3259,49 @@ mod tests {
         assert_eq!(safe_prefix_by_bytes("aé漢", 6), "aé漢");
     }
 
+    /// The abort window starts when `execute_streaming_process` is called, so the
+    /// test only calls it once the child has proven it printed: the child creates a
+    /// marker file after its output is written, and the test waits for that file.
+    /// The output then already sits in the pipe when the forced stop runs, and the
+    /// reader drains it before the pipe closes, so a slow child start can no longer
+    /// turn the forced stop into a run with no output. The marker wait is a hang
+    /// guard, not the bound under test.
     #[test]
     fn execute_streaming_process_uses_abort_timeout_for_forced_stop() {
+        let working_directory = tempfile::tempdir().unwrap();
+        let ready_marker = working_directory.path().join("ready.marker");
+
         let mut command = if cfg!(target_os = "windows") {
             let mut command = Command::new("cmd");
-            command.args(["/C", "echo before-timeout && ping 127.0.0.1 -n 6 >nul"]);
+            command.args([
+                "/C",
+                "echo before-timeout && type nul > ready.marker && ping 127.0.0.1 -n 6 >nul",
+            ]);
             command
         } else {
             let mut command = Command::new("sh");
-            command.args(["-c", "printf 'before-timeout\n'; sleep 5"]);
+            command.args([
+                "-c",
+                "printf 'before-timeout\\n'; : > ready.marker; sleep 5",
+            ]);
             command
         };
 
+        command.current_dir(working_directory.path());
         command.stdout(Stdio::piped());
         command.stderr(Stdio::piped());
 
         let mut child = command.spawn().unwrap();
+
+        let marker_deadline = Instant::now() + Duration::from_secs(60);
+        while !ready_marker.exists() {
+            assert!(
+                Instant::now() < marker_deadline,
+                "the child never signalled that it printed its output"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+
         let result = execute_streaming_process(
             &mut child,
             None,
@@ -3294,8 +3321,17 @@ mod tests {
         }
     }
 
+    /// The child writes the partial line, then blocks on stdin and only writes the
+    /// rest of the line once the test has released it. The test releases it only
+    /// after it has received the partial chunk, so the chunk can only arrive through
+    /// streaming, never through a coalesced read at the newline or at exit, and no
+    /// wall-clock race decides the outcome. The executor timeout is a hang guard for
+    /// a broken executor, sized well above the ~11 s cold interpreter start observed
+    /// on the Windows runner.
     #[test]
     fn execute_streaming_process_emits_partial_line_output_before_newline() {
+        const PARTIAL: &str = "partial";
+
         let python = ScriptLanguage::Python
             .default_interpreter()
             .unwrap_or("python")
@@ -3303,12 +3339,14 @@ mod tests {
         let mut command = Command::new(python);
         command.args([
             "-c",
-            "import sys, time; sys.stdout.write('partial'); sys.stdout.flush(); time.sleep(1.0); sys.stdout.write(' line\\n'); sys.stdout.flush()",
+            "import sys; sys.stdout.write('partial'); sys.stdout.flush(); sys.stdin.readline(); sys.stdout.write(' line\\n'); sys.stdout.flush()",
         ]);
+        command.stdin(Stdio::piped());
         command.stdout(Stdio::piped());
         command.stderr(Stdio::piped());
 
         let mut child = command.spawn().unwrap();
+        let mut child_stdin = child.stdin.take().expect("stdin was requested as a pipe");
         let (sender, receiver) = output_channel();
 
         let handle = thread::spawn(move || {
@@ -3317,23 +3355,45 @@ mod tests {
                 None,
                 &CancelToken::new(),
                 None,
-                // Neither bound is the property under test: the assertions below are
-                // that the flushed chunk arrives as its own event and that the two
-                // writes do not coalesce into one. A cold interpreter start on
-                // Windows costs more than the 2 s this used to allow, and 200 ms for
-                // the first event was a race on any loaded machine.
-                Some(Duration::from_secs(30)),
+                Some(Duration::from_secs(60)),
                 None,
                 Some(&sender),
             )
             .unwrap()
         });
 
-        let first_event = receiver.recv_timeout(Duration::from_secs(10)).unwrap();
+        let mut streamed = String::new();
+
+        while streamed.len() < PARTIAL.len() {
+            let event = receiver
+                .recv()
+                .expect("the executor finished without streaming the partial line");
+
+            assert_eq!(event.stream, OutputStreamKind::Stdout);
+            streamed.push_str(&event.text);
+        }
+
+        assert_eq!(streamed, PARTIAL);
+
+        child_stdin
+            .write_all(b"\n")
+            .expect("the partial line was not streamed while the child was running");
+        drop(child_stdin);
+
         let result = handle.join().unwrap();
 
-        assert_eq!(first_event.stream, OutputStreamKind::Stdout);
-        assert_eq!(first_event.text, "partial");
+        assert!(
+            !result.timed_out,
+            "process timed out: stdout={:?}, stderr={:?}",
+            result.stdout, result.stderr
+        );
+        assert_eq!(
+            result.exit_code,
+            Some(0),
+            "unexpected exit: stdout={:?}, stderr={:?}",
+            result.stdout,
+            result.stderr
+        );
         assert!(result.stdout.contains("partial line"));
     }
 

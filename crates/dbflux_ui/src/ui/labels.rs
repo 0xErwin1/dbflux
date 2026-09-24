@@ -737,6 +737,38 @@ mod tests {
     }
 
     #[test]
+    fn workspace_dispatch_toast_keys_resolve_in_every_locale() {
+        let keys = [
+            "connections.toast.export_from_menu",
+            "connections.toast.export_from_menu_body",
+            "charts.error.import_unsupported",
+        ];
+
+        for key in keys {
+            for locale in ["en", "es", "ko", "zh_Hans"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, key, "{key} did not resolve in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+
+        assert_eq!(
+            dbflux_i18n::t!("connections.toast.export_from_menu", locale = "en"),
+            "Export a connection from its menu"
+        );
+        assert_ne!(
+            dbflux_i18n::t!("connections.toast.export_from_menu", locale = "en"),
+            dbflux_i18n::t!("connections.toast.export_from_menu", locale = "es")
+        );
+    }
+
+    #[test]
     fn connections_refresh_schema_failed_message_embeds_error() {
         let message = connections_refresh_schema_failed_message("driver timeout");
         assert!(message.contains("driver timeout"));

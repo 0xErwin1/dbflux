@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::ffi::{CStr, CString};
 use std::path::PathBuf;
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -13,17 +14,18 @@ use dbflux_core::{
     DatabaseCategory, DbConfig, DbDriver, DbError, DbKind, DbSchemaInfo, DdlCapabilities,
     DdlRejection, DeploymentClass, DescribeRequest, DocumentConnection, DriverCapabilities,
     DriverFormDef, DriverLimits, DriverMetadata, DropColumnRequest, DropIndexRequest,
-    ExplainRequest, ForeignKeyInfo, FormSection, FormTab, FormValues, FormattedError, Icon,
-    IndexData, IndexInfo, IsolationLevel, KeyValueConnection, MutationCapabilities, OrderByColumn,
-    PaginationStyle, PlaceholderStyle, QueryCancelHandle, QueryCapabilities, QueryErrorFormatter,
-    QueryGenerator, QueryHandle, QueryLanguage, QueryRequest, QueryResult, ReindexRequest,
-    RelationalConnection, RelationalSchema, Row, RowDelete, RowInsert, RowPatch,
-    SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy, SchemaSnapshot, SemanticPlan,
-    SemanticPlanKind, SemanticRequest, SortDirection, SqlDialect, SqlMutationGenerator,
-    SqlQueryBuilder, SyntaxInfo, TableInfo, TransactionCapabilities, TransactionStateNote,
-    TransferFamily, Value, ViewInfo, WhereOperator, field_file_path, generate_delete_template,
-    generate_drop_table, generate_insert_template, generate_select_star, generate_update_template,
-    render_semantic_filter_sql, validate_ddl_fragment,
+    ExecutionSourceContext, ExplainRequest, ForeignKeyInfo, FormSection, FormTab, FormValues,
+    FormattedError, Icon, IndexData, IndexInfo, IsolationLevel, KeyValueConnection,
+    MutationCapabilities, OrderByColumn, PaginationStyle, PlaceholderStyle, QueryCancelHandle,
+    QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage,
+    QueryRequest, QueryResult, ReindexRequest, RelationalConnection, RelationalSchema, Row,
+    RowDelete, RowInsert, RowPatch, SchemaForeignKeyInfo, SchemaIndexInfo, SchemaLoadingStrategy,
+    SchemaSnapshot, SemanticPlan, SemanticPlanKind, SemanticRequest, SortDirection, SqlDialect,
+    SqlMutationGenerator, SqlQueryBuilder, SyntaxInfo, TableInfo, TransactionCapabilities,
+    TransactionStateNote, TransferFamily, Value, ViewInfo, WhereOperator, field_file_path,
+    generate_delete_template, generate_drop_table, generate_insert_template, generate_select_star,
+    generate_update_template, render_semantic_filter_sql, strip_leading_comments,
+    validate_ddl_fragment,
 };
 use rusqlite::{Connection as RusqliteConnection, InterruptHandle};
 
@@ -789,6 +791,47 @@ impl Connection for SqliteConnection {
     }
 
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
+        // Execution-safety preflight: reject requests this driver cannot honor
+        // before the cancellation flag is reset, the connection lock is taken,
+        // or any statement is prepared, so a rejection never carries side
+        // effects and never clears a pending cancellation. A requested
+        // statement deadline cannot be honored safely (no watchdog, no progress
+        // hook), and a bounded request must not reach an instance dispatch
+        // context this engine has no cap seam for. A bounded request is split
+        // into statements here, with SQLite's own lexer and without preparing
+        // anything, so a request it cannot split is refused just as early.
+        if req.statement_timeout.is_some() {
+            return Err(DbError::NotSupported(
+                "SQLite: the requested statement timeout cannot be honored safely by this driver; the request was rejected before execution".to_string(),
+            ));
+        }
+
+        if req.limit.is_some()
+            && let Some(source) = req
+                .execution_context
+                .as_ref()
+                .and_then(|ctx| ctx.source.as_ref())
+        {
+            match source {
+                ExecutionSourceContext::InstanceMetricQuery { .. } => {
+                    return Err(DbError::NotSupported(
+                        "SQLite: a row limit cannot be applied to an instance metric query; the request was rejected before execution".to_string(),
+                    ));
+                }
+                ExecutionSourceContext::InstanceInspectorQuery { .. } => {
+                    return Err(DbError::NotSupported(
+                        "SQLite: a row limit cannot be applied to an instance inspector query; the request was rejected before execution".to_string(),
+                    ));
+                }
+                _ => {}
+            }
+        }
+
+        let bounded_statements = match req.limit {
+            Some(_) => split_bounded_sql(&req.sql)?,
+            None => Vec::new(),
+        };
+
         self.cancelled.store(false, Ordering::SeqCst);
 
         let start = Instant::now();
@@ -796,8 +839,14 @@ impl Connection for SqliteConnection {
 
         let autocommit_before = conn.is_autocommit();
 
-        execute_sql(&conn, &req.sql, req.limit, start, &self.cancelled)
-            .map_err(|error| settle_failed_transaction(&conn, autocommit_before, error))
+        let outcome = match req.limit {
+            Some(limit) if bounded_statements.len() > 1 => {
+                execute_bounded_batch(&conn, &bounded_statements, limit, start, &self.cancelled)
+            }
+            _ => execute_sql(&conn, &req.sql, req.limit, start, &self.cancelled),
+        };
+
+        outcome.map_err(|error| settle_failed_transaction(&conn, autocommit_before, error))
     }
 
     fn cancel(&self, _handle: &QueryHandle) -> Result<(), DbError> {
@@ -1844,6 +1893,11 @@ impl SqliteConnection {
 /// string and silently ignores the rest, so a script is split and each
 /// statement runs on its own, stopping at the first failure. The typed
 /// single-statement path stays the common case.
+///
+/// A bounded request skips the split: `execute` routes bounded batches, split
+/// with SQLite's own lexer, to `execute_bounded_batch`, so what reaches this
+/// function is one statement, possibly followed by comments or semicolons that
+/// the generic splitter would otherwise turn into extra, empty statements.
 fn execute_sql(
     conn: &RusqliteConnection,
     sql: &str,
@@ -1851,15 +1905,19 @@ fn execute_sql(
     start: Instant,
     cancelled: &AtomicBool,
 ) -> Result<QueryResult, DbError> {
+    if limit.is_some() {
+        return execute_one_statement(conn, sql, limit, start, cancelled);
+    }
+
     let statements = QueryLanguage::Sql.split_statements(sql);
     if statements.len() <= 1 {
-        return execute_one_statement(conn, sql, limit, start, cancelled);
+        return execute_one_statement(conn, sql, None, start, cancelled);
     }
 
     let mut result_sets: Vec<QueryResult> = Vec::with_capacity(statements.len());
     for statement in &statements {
         result_sets.push(execute_one_statement(
-            conn, statement, limit, start, cancelled,
+            conn, statement, None, start, cancelled,
         )?);
     }
 
@@ -1903,6 +1961,130 @@ fn settle_failed_transaction(
     }
 }
 
+/// Runs a bounded multi-statement batch in order under one shared row budget.
+///
+/// Each statement goes through the single-statement path with the rows the
+/// budget has left, so a row-producing statement still drains to completion
+/// and flags truncation only when it dropped a row, and statements after the
+/// budget is exhausted still run. Like the unbounded batch path, the batch
+/// stops at the first failure and the first result set is the primary one.
+fn execute_bounded_batch(
+    conn: &RusqliteConnection,
+    statements: &[&str],
+    limit: u32,
+    start: Instant,
+    cancelled: &AtomicBool,
+) -> Result<QueryResult, DbError> {
+    let mut remaining_rows = limit;
+    let mut primary: Option<QueryResult> = None;
+
+    for statement in statements {
+        let result =
+            execute_one_statement(conn, statement, Some(remaining_rows), start, cancelled)?;
+
+        let retained_rows = u32::try_from(result.rows.len()).unwrap_or(u32::MAX);
+        remaining_rows = remaining_rows.saturating_sub(retained_rows);
+
+        match primary.as_mut() {
+            Some(primary) => primary.push_additional_result(result),
+            None => primary = Some(result),
+        }
+    }
+
+    primary.ok_or_else(|| DbError::query_failed("SQLite: the bounded batch held no statements"))
+}
+
+/// Returns `sql` with leading whitespace, SQL comments and byte-order marks
+/// removed, so the splitter can tell whether a fragment holds a statement.
+fn sqlite_leading_sql(sql: &str) -> &str {
+    let mut remaining = sql.trim_start();
+    loop {
+        remaining = strip_leading_comments(remaining).trim_start();
+
+        match remaining.strip_prefix('\u{feff}') {
+            Some(after_bom) => remaining = after_bom.trim_start(),
+            None => return remaining,
+        }
+    }
+}
+
+/// Returns whether `fragment` holds anything besides whitespace, comments,
+/// byte-order marks and semicolons.
+fn sqlite_fragment_has_statement(fragment: &str) -> bool {
+    let mut rest = fragment;
+    loop {
+        rest = sqlite_leading_sql(rest);
+        match rest.strip_prefix(';') {
+            Some(after_semicolon) => rest = after_semicolon,
+            None => return !rest.is_empty(),
+        }
+    }
+}
+
+/// Asks SQLite's own lexer whether `sql` ends at a complete statement.
+///
+/// `sqlite3_complete` only tokenizes; it never prepares or runs anything. It
+/// follows SQLite's quoting rules (a backslash is not an escape) and trigger
+/// bodies, which the generic statement splitter does not.
+#[allow(unsafe_code)]
+fn sqlite_statement_is_complete(sql: &CStr) -> bool {
+    // SAFETY: `CStr` guarantees a valid NUL-terminated pointer, and the borrow
+    // keeps it alive for the duration of the call.
+    unsafe { rusqlite::ffi::sqlite3_complete(sql.as_ptr()) != 0 }
+}
+
+/// Splits a bounded request into its statements with SQLite's own lexer.
+///
+/// A statement ends at the first `;` where the text since the previous
+/// statement is complete according to `sqlite3_complete`, so semicolons inside
+/// literals, comments and trigger bodies never split it. Fragments that hold
+/// only comments or semicolons are dropped, so trailing comments and
+/// semicolons never produce an extra, empty statement. Nothing is prepared.
+/// Each `;` inside a statement probes the whole statement so far, which is
+/// quadratic in the statement's length.
+fn split_bounded_sql(sql: &str) -> Result<Vec<&str>, DbError> {
+    let sql = sql.trim_start_matches('\u{feff}');
+    if sql.contains('\0') {
+        return Err(DbError::NotSupported(
+            "SQLite: a row-limited request containing a NUL character is not supported; the request was rejected before execution".to_string(),
+        ));
+    }
+
+    let mut statements = Vec::new();
+    let mut statement_start = 0;
+
+    for (index, byte) in sql.bytes().enumerate() {
+        if byte != b';' {
+            continue;
+        }
+
+        let Some(candidate) = sql.get(statement_start..=index) else {
+            continue;
+        };
+        let probe = CString::new(candidate).map_err(|error| {
+            DbError::NotSupported(format!(
+                "SQLite: a row-limited request could not be split into statements: {error}"
+            ))
+        })?;
+        if !sqlite_statement_is_complete(&probe) {
+            continue;
+        }
+
+        if sqlite_fragment_has_statement(candidate) {
+            statements.push(candidate.trim());
+        }
+        statement_start = index + 1;
+    }
+
+    if let Some(remainder) = sql.get(statement_start..)
+        && sqlite_fragment_has_statement(remainder)
+    {
+        statements.push(remainder.trim());
+    }
+
+    Ok(statements)
+}
+
 /// Executes a single SQLite statement and returns its result set.
 ///
 /// SELECT/PRAGMA/EXPLAIN statements return rows; everything else reports the
@@ -1929,11 +2111,19 @@ fn execute_one_statement(
         }
     };
 
-    // Check if this is a SELECT, PRAGMA, or EXPLAIN statement (returns rows) or a DDL/DML statement
-    let sql_trimmed = sql.trim().to_uppercase();
-    let is_query = sql_trimmed.starts_with("SELECT")
-        || sql_trimmed.starts_with("PRAGMA")
-        || sql_trimmed.starts_with("EXPLAIN");
+    // A bounded request takes the capped row path for every statement that
+    // produces rows (including `WITH ...`, `VALUES` and DML with `RETURNING`),
+    // so the cap applies and the statement still drains to completion. The
+    // uncapped path keeps the keyword classification: SELECT, PRAGMA, or
+    // EXPLAIN return rows, everything else is DDL/DML.
+    let is_query = if limit.is_some() {
+        stmt.column_count() > 0
+    } else {
+        let sql_trimmed = sql.trim().to_uppercase();
+        sql_trimmed.starts_with("SELECT")
+            || sql_trimmed.starts_with("PRAGMA")
+            || sql_trimmed.starts_with("EXPLAIN")
+    };
 
     if is_query {
         // For SELECT statements, use query() to get rows.
@@ -1968,7 +2158,12 @@ fn execute_one_statement(
             })
             .collect();
 
+        // The cap limits retention, not iteration: every row past it is still
+        // stepped so the statement reaches SQLITE_DONE and a late per-row error
+        // surfaces instead of being hidden by an early break.
+        let max_rows = limit.map(|row_limit| row_limit as usize);
         let mut rows: Vec<Row> = Vec::new();
+        let mut truncated = false;
         let query_result = stmt.query([]);
 
         let mut result_rows = match query_result {
@@ -1987,18 +2182,17 @@ fn execute_one_statement(
 
             match next_result {
                 Ok(Some(row)) => {
+                    if max_rows.is_some_and(|cap| rows.len() >= cap) {
+                        truncated = true;
+                        continue;
+                    }
+
                     let mut values: Vec<Value> = Vec::with_capacity(column_count);
                     for i in 0..column_count {
                         let value = sqlite_value_to_value(row, i);
                         values.push(value);
                     }
                     rows.push(values);
-
-                    if let Some(row_limit) = limit
-                        && rows.len() >= row_limit as usize
-                    {
-                        break;
-                    }
                 }
                 Ok(None) => break,
                 Err(e) => {
@@ -2011,7 +2205,9 @@ fn execute_one_statement(
             }
         }
 
-        Ok(QueryResult::table(columns, rows, None, start.elapsed()))
+        let mut result = QueryResult::table(columns, rows, None, start.elapsed());
+        result.set_rows_truncated(truncated);
+        Ok(result)
     } else {
         // For DDL/DML statements (CREATE, DROP, INSERT, UPDATE, DELETE, etc.),
         // use execute() which properly handles non-row-returning statements
@@ -2884,6 +3080,64 @@ mod tests {
                 reason: "SQLite requires a table rebuild".to_string(),
                 followup: Some("DBF-158"),
             })
+        );
+    }
+
+    #[test]
+    fn sqlite_query_safety_refusal_preserves_existing_cancel_signal() {
+        use super::{SqliteConnection, SqliteConnectionState};
+        use dbflux_core::{
+            Connection, DbError, ExecutionContext, ExecutionSourceContext, QueryRequest,
+        };
+        use std::sync::atomic::Ordering;
+        use std::sync::{Arc, Mutex};
+        use std::time::Duration;
+
+        let state = Arc::new(Mutex::new(SqliteConnectionState::new(
+            RusqliteConnection::open_in_memory().expect("in-memory SQLite should open"),
+        )));
+        let connection = SqliteConnection::for_test(state);
+
+        connection.cancelled.store(true, Ordering::SeqCst);
+        let mut timeout_request = QueryRequest::new("SELECT 1");
+        timeout_request.statement_timeout = Some(Duration::from_secs(1));
+        let outcome = connection.execute(&timeout_request);
+        assert!(
+            matches!(outcome, Err(DbError::NotSupported(_))),
+            "statement timeout must be refused, got {outcome:?}"
+        );
+        assert!(
+            connection.cancelled.load(Ordering::SeqCst),
+            "timeout refusal erased an existing cancellation"
+        );
+
+        let mut metric_request = QueryRequest::new("SELECT 1").with_limit(0);
+        metric_request.execution_context = Some(ExecutionContext {
+            source: Some(ExecutionSourceContext::InstanceMetricQuery {
+                metric_id: "sqlite.safety".to_string(),
+                start_ms: 0,
+                end_ms: 1,
+            }),
+            ..Default::default()
+        });
+        let outcome = connection.execute(&metric_request);
+        assert!(
+            matches!(outcome, Err(DbError::NotSupported(_))),
+            "bounded metric request must be refused, got {outcome:?}"
+        );
+        assert!(
+            connection.cancelled.load(Ordering::SeqCst),
+            "bounded metric refusal erased an existing cancellation"
+        );
+
+        let outcome = connection.execute(&QueryRequest::new("SELECT 1;\0").with_limit(1));
+        assert!(
+            matches!(outcome, Err(DbError::NotSupported(_))),
+            "bounded request with a NUL character must be refused, got {outcome:?}"
+        );
+        assert!(
+            connection.cancelled.load(Ordering::SeqCst),
+            "NUL refusal erased an existing cancellation"
         );
     }
 }

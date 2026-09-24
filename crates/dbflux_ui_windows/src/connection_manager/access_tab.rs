@@ -657,6 +657,7 @@ impl ConnectionManagerWindow {
             .child(
                 Checkbox::new("ssh-enabled")
                     .checked(ssh_enabled)
+                    .aria_label(dbflux_i18n::t!("access.use_ssh_tunnel"))
                     .on_click(cx.listener(|this, checked: &bool, _, cx| {
                         this.access.ssh_enabled = *checked;
                         cx.notify();
@@ -1115,6 +1116,7 @@ impl ConnectionManagerWindow {
             Some(
                 Checkbox::new("save-ssh-passphrase")
                     .checked(save_ssh_secret)
+                    .aria_label(dbflux_i18n::t!("ssh.save"))
                     .on_click(cx.listener(|this, checked: &bool, _, cx| {
                         this.form.form_save_ssh_secret = *checked;
                         cx.notify();
@@ -1128,6 +1130,7 @@ impl ConnectionManagerWindow {
             Some(
                 Checkbox::new("save-ssh-password")
                     .checked(save_ssh_secret)
+                    .aria_label(dbflux_i18n::t!("ssh.save"))
                     .on_click(cx.listener(|this, checked: &bool, _, cx| {
                         this.form.form_save_ssh_secret = *checked;
                         cx.notify();

@@ -112,6 +112,7 @@ DriverRequestBody::Hello(DriverHelloRequest {
         ProtocolVersion::new(1, 2),
         ProtocolVersion::new(1, 3),
         ProtocolVersion::new(1, 4),
+        ProtocolVersion::new(1, 5),
     ],
     requested_capabilities: vec![
         DriverCapability::Cancellation,
@@ -243,6 +244,22 @@ nada cuando la versión negociada es anterior a la 1.4, de modo que un host
 antiguo jamás recibe la nueva variante. Los consumidores tratan ese error igual
 que el default `NotSupported` del propio trait y vuelven a la carga por tabla
 con `table_details`.
+
+### Conteo de claves (v1.5+)
+
+`KvKeyCount { keyspace }` pide la cantidad de claves de un keyspace (`None`
+significa el keyspace actual de la sesión) y responde
+`KvKeyCountResult { count }`. El host despacha la solicitud al seam
+`KeyValueApi::key_count` de la conexión; un driver que no lo implementa
+responde con el default `NotSupported` del trait, que llega al cliente como
+`UnsupportedMethod`.
+
+Ambas variantes se agregan después de la última variante de v1.4 de su enum,
+por la razón de índices en el wire descrita arriba. El cliente también la
+controla localmente de la misma forma: `IpcConnection::key_count` devuelve
+`DbError::NotSupported` sin enviar nada cuando la versión negociada es
+anterior a la 1.5. El explorador de claves trata ese error como "sin total" y
+muestra solo el conteo de la página.
 
 ## Contrato RPC de auth-provider
 

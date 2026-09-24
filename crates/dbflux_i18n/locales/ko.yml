@@ -70,6 +70,11 @@ chart:
 common:
   time_range:
     preset:
+      last_15_minutes: "15분"
+      last_hour: "1시간"
+      last_6_hours: "6시간"
+      last_24_hours: "24시간"
+      last_7_days: "7일"
       custom: "사용자 지정…"
     picker:
       date_range_placeholder: "날짜 범위 선택"
@@ -498,6 +503,8 @@ connections:
     manager_title: 연결 관리자
     edit_title: 연결 편집
   toast:
+    export_from_menu: "연결 메뉴에서 내보내세요"
+    export_from_menu_body: "사이드바에서 연결을 마우스 오른쪽 버튼으로 클릭하고 내보내기를 선택하세요."
     disconnecting: "%{name}에서 연결을 끊는 중..."
     no_active_connection: 활성 연결이 없습니다
     refreshing_schema: 스키마를 새로고치는 중...
@@ -514,6 +521,24 @@ diagnostics:
   shutdown_flush_timed_out: "일부 편집 내용이 파일에 반영되지 않았을 수 있습니다: 종료하는 동안 DBFlux가 저장하다가 시간이 초과되었습니다. 편집 내용은 복구할 수 있도록 세션 저장소에 보관되어 있습니다."
 document:
   audit:
+    title: "감사"
+    category_chip:
+      config: "설정"
+      connection: "연결"
+      query: "쿼리"
+      hook: "훅"
+      script: "스크립트"
+      system: "시스템"
+      mcp: "MCP"
+      governance: "거버넌스"
+      object_storage: "스토리지"
+    level_chip:
+      trace: "추적"
+      debug: "디버그"
+      info: "정보"
+      warn: "경고"
+      error: "오류"
+      fatal: "치명적"
     pager:
       range: "전체 %{total} %{unit} 중 %{start}-%{end}"
     actor:
@@ -563,6 +588,16 @@ document:
       summary: 요약
       time: 시간
     filter:
+      bar:
+        search: "검색:"
+        time: "기간:"
+        timezone: "시간대:"
+        range: "범위:"
+        start_hour: "시작 시:"
+        start_minute: "시작 분:"
+        end_hour: "종료 시:"
+        end_minute: "종료 분:"
+        auto_refresh: "자동 새로고침:"
       timezone:
         local: "로컬"
         utc: "UTC"
@@ -1384,6 +1419,7 @@ document:
       skipped: "%{table}: 건너뜀"
       failed: "%{table}: 실패 — %{error}"
       not_attempted: "%{table}: 시도하지 않음"
+      cancelled: "%{table}: %{rows}행 처리 후 취소됨"
     footer:
       back: 뒤로
       continue: 계속
@@ -1462,6 +1498,7 @@ document:
       skipped: "%{table}: 건너뜀"
       failed: "%{table}: 실패 — %{error}"
       not_attempted: "%{table}: 시도하지 않음"
+      cancelled: "%{table}: %{rows}행 처리 후 취소됨"
   instance_inspector:
     task_label: "검사기: %{metric_id}"
     connection_not_found: 연결을 찾을 수 없습니다
@@ -1608,6 +1645,7 @@ document:
       keys_count:
         one: "이 페이지의 키 %{count}개"
         many: "이 페이지의 키 %{count}개"
+      keys_total: "전체 %{count}개"
       filter:
         keys_placeholder: "키 필터링..."
         members_placeholder: "멤버 필터링..."
@@ -1703,6 +1741,7 @@ document:
       skipped: "%{table}: 건너뜀"
       failed: "%{table}: 실패 — %{error}"
       not_attempted: "%{table}: 시도하지 않음"
+      cancelled: "%{table}: %{rows}행 처리 후 취소됨"
     mapping:
       target_placeholder: 대상 테이블
       mode_placeholder: 모드
@@ -2392,6 +2431,9 @@ modals:
     quit_anyway: 그래도 종료
     keep_waiting: 계속 기다리기
     cancel_query: 쿼리 취소
+    more_queries:
+      one: "실행 중인 쿼리 %{count}개 더 있음"
+      many: "실행 중인 쿼리 %{count}개 더 있음"
   add_panel_picker:
     title: 패널 추가
     submit:
@@ -2703,6 +2745,9 @@ settings:
       label: 테마
     style:
       label: 스타일
+      option:
+        default: "기본"
+        compact: "컴팩트"
     language:
       label: 언어
       option:
@@ -3750,6 +3795,8 @@ sso_wizard:
     profile_name: 프로필 이름
     start_url: SSO 시작 URL
     region: 리전
+    account_id: 계정 ID
+    role_name: 역할 이름
   account:
     hint: AWS SSO 계정 검색에서 가져온 계정 ID를 사용하세요.
     discovering: 계정을 검색하는 중...
