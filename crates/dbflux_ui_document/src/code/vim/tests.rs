@@ -10,6 +10,7 @@ use super::VimMode;
 use crate::code::CodeDocument;
 use dbflux_app::keymap::Command;
 use dbflux_components::controls::register_input_overrides;
+use dbflux_components::controls::{GpuiInput, InputState};
 use dbflux_components::theme;
 use dbflux_core::QueryLanguage;
 use dbflux_storage::bootstrap::StorageRuntime;
@@ -30,6 +31,8 @@ actions!(vim_mode_test, [HarnessRunQuery]);
 
 struct Harness {
     document: Entity<CodeDocument>,
+    /// An ordinary input outside the editor, to prove Vim mode stays scoped.
+    other_input: Entity<InputState>,
     commands: Vec<Command>,
     run_query_actions: usize,
 }
@@ -50,6 +53,7 @@ impl Render for Harness {
                 }
             }))
             .child(self.document.clone())
+            .child(GpuiInput::new(&self.other_input))
     }
 }
 
@@ -173,6 +177,25 @@ impl Fixture<'_> {
 }
 
 fn open_editor<'a>(cx: &'a mut TestAppContext, content: &str, vim_enabled: bool) -> Fixture<'a> {
+    open_editor_with(
+        cx,
+        EditorSetup {
+            content,
+            vim_enabled,
+            language: QueryLanguage::Lua,
+            read_only: false,
+        },
+    )
+}
+
+struct EditorSetup<'a> {
+    content: &'a str,
+    vim_enabled: bool,
+    language: QueryLanguage,
+    read_only: bool,
+}
+
+fn open_editor_with<'a>(cx: &'a mut TestAppContext, setup: EditorSetup<'_>) -> Fixture<'a> {
     init_runtime(cx);
 
     let app_state = cx.update(|cx| {
@@ -184,23 +207,31 @@ fn open_editor<'a>(cx: &'a mut TestAppContext, content: &str, vim_enabled: bool)
 
     let slot: FixtureSlot = Rc::new(RefCell::new(None));
     let slot_writer = slot.clone();
-    let content = content.to_string();
+    let content = setup.content.to_string();
+    let language = setup.language.clone();
+    let read_only = setup.read_only;
 
     let (_, window) = cx.add_window_view(|window, cx| {
         let document = cx.new(|cx| {
             let mut document = CodeDocument::new_with_language(
                 app_state.clone(),
                 None,
-                QueryLanguage::Lua,
+                language.clone(),
                 window,
                 cx,
             );
+            if read_only {
+                document = document.with_read_only(cx);
+            }
             document.set_content(&content, window, cx);
             document
         });
 
+        let other_input = cx.new(|cx| InputState::new(window, cx));
+
         let harness = cx.new(|_cx| Harness {
             document: document.clone(),
+            other_input,
             commands: Vec::new(),
             run_query_actions: 0,
         });
@@ -213,7 +244,7 @@ fn open_editor<'a>(cx: &'a mut TestAppContext, content: &str, vim_enabled: bool)
 
     window.update(|window, cx| {
         document.update(cx, |document, cx| {
-            document.set_vim_enabled(vim_enabled, cx);
+            document.set_vim_enabled(setup.vim_enabled, cx);
             document.focus(window, cx);
         });
     });
@@ -580,4 +611,138 @@ fn disabled_vim_mode_leaves_typing_unchanged(cx: &mut TestAppContext) {
 
     assert_eq!(editor.text(), "hjklixu\n  é");
     assert_eq!(editor.commands(), vec![Command::Cancel]);
+}
+
+#[gpui::test]
+fn a_read_only_document_moves_but_never_edits(cx: &mut TestAppContext) {
+    let mut editor = open_editor_with(
+        cx,
+        EditorSetup {
+            content: "abc\ndef",
+            vim_enabled: true,
+            language: QueryLanguage::Sql,
+            read_only: true,
+        },
+    );
+
+    editor.keys("l j");
+    assert_eq!(editor.cursor(), 5, "motions work in a read-only document");
+
+    editor.keys("x u");
+    assert_eq!(editor.text(), "abc\ndef", "x and u do nothing");
+
+    editor.keys("i");
+    editor.type_text("zz");
+    assert_eq!(
+        editor.text(),
+        "abc\ndef",
+        "Insert mode cannot edit a read-only document"
+    );
+}
+
+#[gpui::test]
+fn every_code_language_gets_the_same_modal_editing(
+    sql_cx: &mut TestAppContext,
+    lua_cx: &mut TestAppContext,
+    python_cx: &mut TestAppContext,
+    bash_cx: &mut TestAppContext,
+    mongo_cx: &mut TestAppContext,
+) {
+    let languages = [
+        (sql_cx, QueryLanguage::Sql),
+        (lua_cx, QueryLanguage::Lua),
+        (python_cx, QueryLanguage::Python),
+        (bash_cx, QueryLanguage::Bash),
+        (mongo_cx, QueryLanguage::MongoQuery),
+    ];
+
+    for (cx, language) in languages {
+        let label = format!("{language:?}");
+        let mut editor = open_editor_with(
+            cx,
+            EditorSetup {
+                content: "ab\ncd",
+                vim_enabled: true,
+                language,
+                read_only: false,
+            },
+        );
+
+        editor.type_text("zz");
+        editor.keys("enter tab shift-tab");
+        assert!(
+            editor.editor_focused(),
+            "{label}: Tab keeps focus in the editor"
+        );
+        assert_eq!(
+            editor.text(),
+            "ab\ncd",
+            "{label}: Normal mode inserts nothing"
+        );
+        assert_eq!(editor.cursor(), 3, "{label}: Enter moved down");
+
+        editor.keys("x");
+        assert_eq!(editor.text(), "ab\nd", "{label}: x deletes");
+
+        editor.keys("i");
+        editor.type_text("q");
+        assert_eq!(editor.text(), "ab\nqd", "{label}: Insert mode types");
+
+        // Languages with completion open the menu while typing; the first Esc
+        // then closes it and the second leaves Insert mode.
+        editor.keys("escape");
+        if editor.mode() == Some(VimMode::Insert) {
+            editor.keys("escape");
+        }
+        assert_eq!(editor.mode(), Some(VimMode::Normal), "{label}");
+    }
+}
+
+#[gpui::test]
+fn other_inputs_are_untouched_while_the_editor_is_in_normal_mode(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "abc", true);
+    let harness = editor.harness.clone();
+
+    editor.window.update(|window, cx| {
+        let other_input = harness.read(cx).other_input.clone();
+        other_input.update(cx, |state, cx| state.focus(window, cx));
+    });
+    editor.window.run_until_parked();
+
+    editor.type_text("hjklxui");
+
+    let other_value = editor
+        .window
+        .update(|_, cx| harness.read(cx).other_input.read(cx).value().to_string());
+    assert_eq!(other_value, "hjklxui");
+    assert_eq!(editor.text(), "abc");
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+}
+
+#[gpui::test]
+fn programmatic_edits_still_apply_in_normal_mode(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "abc", true);
+    let document = editor.document.clone();
+
+    editor.window.update(|window, cx| {
+        let input = document.read(cx).editor.input_state.clone();
+        input.update(cx, |state, cx| state.insert("Z", window, cx));
+    });
+    assert_eq!(
+        editor.text(),
+        "Zabc",
+        "an inserted completion or snippet applies"
+    );
+
+    editor.window.update(|window, cx| {
+        document.update(cx, |document, cx| {
+            document.set_content("formatted", window, cx)
+        });
+    });
+    assert_eq!(
+        editor.text(),
+        "formatted",
+        "a whole-buffer replacement applies"
+    );
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
 }

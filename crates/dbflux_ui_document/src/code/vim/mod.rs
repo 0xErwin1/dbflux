@@ -1,5 +1,10 @@
 //! Opt-in modal editing (Vim Normal/Insert) for the code editor.
 //!
+//! `machine` decides what a key means and where the cursor goes; this module is
+//! the document-owned adapter that applies those decisions to gpui-component's
+//! `InputState` through its public API. Every `CodeDocument` language goes through
+//! the same adapter.
+//!
 //! Normal mode is enforced by two layers, both scoped to this document's editor:
 //!
 //! 1. The editor input is switched to read-only. gpui-component then rejects every
@@ -7,24 +12,22 @@
 //!    by an IME through the platform input handler, keyboard and context-menu paste,
 //!    cut, and the Enter, Tab and deletion actions, whose handlers are only registered
 //!    while the input is editable. Programmatic edits (`set_value`, `replace`) are not
-//!    limited by read-only, which is how `x` deletes.
+//!    limited by read-only, which is how `x` deletes and how completion, formatting
+//!    and script output keep working.
 //! 2. A capture-phase key listener on the editor container turns the command keys into
 //!    editor operations. It is only on the dispatch path while focus is inside this
 //!    editor, so other inputs never see it, and it runs before the bubble-phase
-//!    workspace keymap. Modified keys always pass through, so application shortcuts
-//!    keep working in both modes.
+//!    workspace keymap. Keys with Ctrl, Alt, Cmd or Fn always pass through, so
+//!    application shortcuts keep working in both modes.
+
+mod machine;
 
 use super::*;
 use dbflux_core::LogErr;
 use gpui_component::input::Undo;
+use machine::{VimCommand, VimKey};
 
-/// Editing mode of a code editor while Vim mode is enabled.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum VimMode {
-    #[default]
-    Normal,
-    Insert,
-}
+pub use machine::VimMode;
 
 /// Per-document Vim state. Inert while `enabled` is false.
 #[derive(Default)]
@@ -34,37 +37,10 @@ pub(super) struct VimState {
     /// Set while a Normal-mode `u` temporarily lifts the read-only lock so the
     /// component's own undo handler is registered for one dispatch.
     undo_unlocked: bool,
-}
-
-/// One line of the buffer, without its line terminator.
-struct LineView {
-    start: usize,
-    content: String,
-}
-
-impl LineView {
-    fn read(text: &Rope, row: usize) -> Self {
-        let line = text.slice_line(row).to_string();
-        let content = line.strip_suffix('\r').unwrap_or(&line).to_string();
-
-        Self {
-            start: text.line_start_offset(row),
-            content,
-        }
-    }
-
-    /// Byte column of the last character, which is the right-most Normal-mode position.
-    fn last_char_column(&self) -> usize {
-        self.content
-            .char_indices()
-            .last()
-            .map(|(column, _)| column)
-            .unwrap_or(0)
-    }
-
-    fn clamp_normal(&self, column: usize) -> usize {
-        column.min(self.last_char_column())
-    }
+    /// Where the last vertical move left the cursor and the character column it
+    /// aimed for. The goal is reused only while the cursor is still there, so
+    /// any other cursor change (a click, an arrow key, an edit) resets it.
+    vertical_goal: Option<(usize, usize)>,
 }
 
 impl CodeDocument {
@@ -74,9 +50,10 @@ impl CodeDocument {
             return;
         }
 
-        self.vim.enabled = enabled;
-        self.vim.mode = VimMode::Normal;
-        self.vim.undo_unlocked = false;
+        self.vim = VimState {
+            enabled,
+            ..VimState::default()
+        };
         self.sync_editor_lock(cx);
 
         if enabled {
@@ -120,48 +97,49 @@ impl CodeDocument {
             return false;
         }
 
-        let keystroke = &event.keystroke;
-        let modifiers = keystroke.modifiers;
-        if modifiers.control || modifiers.alt || modifiers.platform || modifiers.function {
+        let modifiers = event.keystroke.modifiers;
+        let key = VimKey {
+            key: event.keystroke.key.as_str(),
+            shift: modifiers.shift,
+            command_modifier: modifiers.control
+                || modifiers.alt
+                || modifiers.platform
+                || modifiers.function,
+        };
+
+        let Some(command) = machine::command_for(self.vim.mode, key) else {
             return false;
+        };
+
+        self.apply_vim_command(command, window, cx);
+        true
+    }
+
+    fn apply_vim_command(
+        &mut self,
+        command: VimCommand,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match command {
+            VimCommand::MoveLeft => self.move_cursor_with(machine::step_left, cx),
+            VimCommand::MoveRight => self.move_cursor_with(machine::step_right, cx),
+            VimCommand::MoveUp => self.move_cursor_vertically(-1, cx),
+            VimCommand::MoveDown => self.move_cursor_vertically(1, cx),
+            VimCommand::EnterInsert => self.set_vim_mode(VimMode::Insert, cx),
+            VimCommand::LeaveInsert => self.leave_insert(window, cx),
+            // A read-only document keeps its text: motions work, edits do nothing.
+            VimCommand::DeleteChar if !self.read_only => self.delete_char(window, cx),
+            VimCommand::Undo if !self.read_only => self.undo_in_normal_mode(window, cx),
+            VimCommand::DeleteChar | VimCommand::Undo | VimCommand::Swallow => {}
         }
+    }
 
-        let key = keystroke.key.as_str();
-
-        match self.vim.mode {
-            VimMode::Insert => {
-                if key != "escape" || modifiers.shift {
-                    return false;
-                }
-
-                self.vim_escape_from_insert(window, cx);
-                true
-            }
-            VimMode::Normal => {
-                // Tab and Shift+Tab do nothing in Normal mode. Without this they would
-                // reach the workspace keymap and move focus out of the editor.
-                if key == "tab" {
-                    return true;
-                }
-
-                if modifiers.shift {
-                    return false;
-                }
-
-                match key {
-                    "h" => self.vim_move_horizontal(false, cx),
-                    "l" => self.vim_move_horizontal(true, cx),
-                    "j" | "enter" => self.vim_move_vertical(1, cx),
-                    "k" => self.vim_move_vertical(-1, cx),
-                    "i" => self.vim_enter_insert(cx),
-                    "x" => self.vim_delete_char(window, cx),
-                    "u" => self.vim_undo(window, cx),
-                    _ => return false,
-                }
-
-                true
-            }
-        }
+    fn set_vim_mode(&mut self, mode: VimMode, cx: &mut Context<Self>) {
+        self.vim.mode = mode;
+        self.vim.vertical_goal = None;
+        self.sync_editor_lock(cx);
+        cx.notify();
     }
 
     /// Handles the editor's Escape action in its capture phase, before the
@@ -185,11 +163,23 @@ impl CodeDocument {
         true
     }
 
-    fn dismiss_editor_menus(&mut self, cx: &mut Context<Self>) {
-        self.editor.input_state.update(cx, |state, cx| {
-            state.dismiss_completion_overlay(cx);
-            state.dismiss_code_action_overlay(cx);
-        });
+    /// Whether the editor's Tab and Shift+Tab indent actions must be swallowed.
+    ///
+    /// In Normal mode the locked input does not register its indent handlers, so
+    /// the keys would fall through to the root's focus navigation and move focus
+    /// out of the editor. Checked in the actions' capture phase, because key
+    /// bindings are dispatched before any key listener runs.
+    pub(super) fn vim_swallows_indent_action(&self) -> bool {
+        self.vim.enabled
+            && self.focus_mode == SqlQueryFocus::Editor
+            && machine::command_for(
+                self.vim.mode,
+                VimKey {
+                    key: "tab",
+                    shift: false,
+                    command_modifier: false,
+                },
+            ) == Some(VimCommand::Swallow)
     }
 
     fn editor_menu_open(&self, cx: &App) -> bool {
@@ -197,37 +187,34 @@ impl CodeDocument {
         state.completion_menu_state().open || state.code_action_menu_state().open
     }
 
-    fn vim_enter_insert(&mut self, cx: &mut Context<Self>) {
-        self.vim.mode = VimMode::Insert;
-        self.sync_editor_lock(cx);
-        cx.notify();
+    fn dismiss_editor_menus(&mut self, cx: &mut Context<Self>) {
+        self.editor.input_state.update(cx, |state, cx| {
+            state.dismiss_completion_overlay(cx);
+            state.dismiss_code_action_overlay(cx);
+        });
     }
 
-    fn vim_escape_from_insert(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn leave_insert(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.editor_menu_open(cx) {
+            // Normally consumed by `handle_vim_escape_action` already; kept so a
+            // menu opened some other way still closes before the mode changes.
             self.dismiss_editor_menus(cx);
         } else {
-            self.vim.mode = VimMode::Normal;
-            self.sync_editor_lock(cx);
+            self.set_vim_mode(
+                machine::mode_after(self.vim.mode, VimCommand::LeaveInsert),
+                cx,
+            );
 
             // Leaving Insert mode steps the cursor back onto the character it
             // was after, as Vim does.
-            self.vim_move_horizontal(false, cx);
+            self.move_cursor_with(machine::step_left, cx);
         }
 
         self.schedule_editor_refocus(window, cx);
-        cx.notify();
     }
 
-    fn cursor_line(&self, cx: &App) -> (usize, LineView, usize) {
-        let state = self.editor.input_state.read(cx);
-        let text = state.text();
-        let cursor = state.cursor();
-        let row = text.offset_to_point(cursor).row;
-        let line = LineView::read(text, row);
-        let column = cursor.saturating_sub(line.start).min(line.content.len());
-
-        (row, line, column)
+    fn editor_cursor(&self, cx: &App) -> usize {
+        self.editor.input_state.read(cx).cursor()
     }
 
     fn set_editor_cursor(&mut self, offset: usize, cx: &mut Context<Self>) {
@@ -236,69 +223,52 @@ impl CodeDocument {
             .update(cx, |state, cx| state.set_selected_range(offset..offset, cx));
     }
 
-    fn clamp_cursor_for_normal(&mut self, cx: &mut Context<Self>) {
-        let (_, line, column) = self.cursor_line(cx);
-        let clamped = line.clamp_normal(column);
+    fn move_cursor_with(&mut self, step: fn(&Rope, usize) -> usize, cx: &mut Context<Self>) {
+        let target = step(
+            self.editor.input_state.read(cx).text(),
+            self.editor_cursor(cx),
+        );
 
-        if clamped != column {
-            self.set_editor_cursor(line.start + clamped, cx);
-        }
+        self.vim.vertical_goal = None;
+        self.set_editor_cursor(target, cx);
     }
 
-    fn vim_move_horizontal(&mut self, forward: bool, cx: &mut Context<Self>) {
-        let (_, line, column) = self.cursor_line(cx);
+    fn move_cursor_vertically(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let cursor = self.editor_cursor(cx);
+        let goal = self
+            .vim
+            .vertical_goal
+            .filter(|(offset, _)| *offset == cursor)
+            .map(|(_, column)| column);
 
-        let target = if forward {
-            let next = line.content[column..]
-                .chars()
-                .next()
-                .map(|character| column + character.len_utf8())
-                .unwrap_or(column);
-            line.clamp_normal(next)
-        } else {
-            line.content[..column]
-                .chars()
-                .next_back()
-                .map(|character| column - character.len_utf8())
-                .unwrap_or(column)
-        };
-
-        self.set_editor_cursor(line.start + target, cx);
-    }
-
-    fn vim_move_vertical(&mut self, delta: isize, cx: &mut Context<Self>) {
-        let (row, line, column) = self.cursor_line(cx);
-        let line_count = self.editor.input_state.read(cx).text().lines_len();
-
-        let Some(target_row) = row
-            .checked_add_signed(delta)
-            .filter(|target| *target < line_count)
+        let Some(step) =
+            machine::step_vertical(self.editor.input_state.read(cx).text(), cursor, delta, goal)
         else {
             return;
         };
 
-        let desired_chars = line.content[..column].chars().count();
-        let target = LineView::read(self.editor.input_state.read(cx).text(), target_row);
-        let target_column = target
-            .content
-            .char_indices()
-            .nth(desired_chars)
-            .map(|(byte, _)| byte)
-            .unwrap_or(target.content.len());
-
-        self.set_editor_cursor(target.start + target.clamp_normal(target_column), cx);
+        self.set_editor_cursor(step.offset, cx);
+        self.vim.vertical_goal = Some((step.offset, step.goal_column));
     }
 
-    fn vim_delete_char(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (_, line, column) = self.cursor_line(cx);
+    fn clamp_cursor_for_normal(&mut self, cx: &mut Context<Self>) {
+        let cursor = self.editor_cursor(cx);
+        let clamped = machine::clamp_to_character(self.editor.input_state.read(cx).text(), cursor);
 
-        let Some(character) = line.content[column..].chars().next() else {
+        if clamped != cursor {
+            self.set_editor_cursor(clamped, cx);
+        }
+    }
+
+    fn delete_char(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(range) = machine::character_range(
+            self.editor.input_state.read(cx).text(),
+            self.editor_cursor(cx),
+        ) else {
             return;
         };
 
-        let start = line.start + column;
-        let range = start..start + character.len_utf8();
-
+        self.vim.vertical_goal = None;
         self.editor.input_state.update(cx, |state, cx| {
             state.set_selected_range(range, cx);
             state.replace("", window, cx);
@@ -314,8 +284,9 @@ impl CodeDocument {
     /// action is dispatched to the editor, and the lock is restored. Everything
     /// happens in one deferred callback, before any further platform input can
     /// reach the unlocked editor.
-    fn vim_undo(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn undo_in_normal_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.vim.undo_unlocked = true;
+        self.vim.vertical_goal = None;
         self.sync_editor_lock(cx);
 
         let input = self.editor.input_state.clone();

@@ -280,6 +280,20 @@ impl CodeDocument {
                         }
                     },
                 ))
+                .capture_action(cx.listener(
+                    |this, _: &gpui_component::input::IndentInline, _window, cx| {
+                        if this.vim_swallows_indent_action() {
+                            cx.stop_propagation();
+                        }
+                    },
+                ))
+                .capture_action(cx.listener(
+                    |this, _: &gpui_component::input::OutdentInline, _window, cx| {
+                        if this.vim_swallows_indent_action() {
+                            cx.stop_propagation();
+                        }
+                    },
+                ))
                 .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
                     if this.handle_vim_key_down(event, window, cx) {
                         cx.stop_propagation();
