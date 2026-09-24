@@ -16,7 +16,9 @@ use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::Icon;
+use gpui_component::Sizable;
 use gpui_component::checkbox::Checkbox;
+use gpui_component::radio::Radio;
 
 /// Label column width for horizontal field rows (matches design spec).
 const FIELD_LABEL_WIDTH: Pixels = px(140.0);
@@ -818,49 +820,24 @@ impl ConnectionManagerWindow {
                         .flex()
                         .gap_2()
                         .children(options.iter().enumerate().map(|(idx, opt)| {
-                            let is_selected = idx == selected_index;
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_1()
-                                .cursor_pointer()
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(move |this, _, window, cx| {
-                                        this.access.ssh_auth_method = if idx == 0 {
-                                            SshAuthSelection::PrivateKey
-                                        } else {
-                                            SshAuthSelection::Password
-                                        };
-                                        window.focus(&this.focus_handle, cx);
-                                        cx.notify();
-                                    }),
-                                )
-                                .child(
-                                    div()
-                                        .w(Heights::ICON_SM)
-                                        .h(Heights::ICON_SM)
-                                        .rounded(px(3.0))
-                                        .border_2()
-                                        .border_color(cx.theme().muted_foreground)
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .when(is_selected, |d| {
-                                            d.bg(cx.theme().ring).border_color(cx.theme().ring)
-                                        })
-                                        .when(is_selected, |d| {
-                                            d.child(
-                                                div()
-                                                    .w(Spacing::SM)
-                                                    .h(Spacing::SM)
-                                                    .rounded(px(1.0))
-                                                    .bg(cx.theme().primary_foreground),
-                                            )
-                                        }),
-                                )
-                                .child(div().text_sm().child(opt.label.clone()))
-                                .into_any_element()
+                            Radio::new(SharedString::from(format!(
+                                "{}-{}",
+                                cm_field_id(&field_def.id),
+                                opt.value
+                            )))
+                            .small()
+                            .label(opt.label.clone())
+                            .checked(idx == selected_index)
+                            .on_click(cx.listener(move |this, _: &bool, window, cx| {
+                                this.access.ssh_auth_method = if idx == 0 {
+                                    SshAuthSelection::PrivateKey
+                                } else {
+                                    SshAuthSelection::Password
+                                };
+                                window.focus(&this.focus_handle, cx);
+                                cx.notify();
+                            }))
+                            .into_any_element()
                         }));
 
                     Self::field_row_cm(field_def.label.clone(), false, control, None::<&str>, cx)
@@ -875,58 +852,28 @@ impl ConnectionManagerWindow {
                         .cloned()
                         .unwrap_or_else(|| field_def.default_value.clone());
 
-                    let control = div()
-                        .flex()
-                        .gap_2()
-                        .when(!field_enabled, |d| d.opacity(0.5))
-                        .children(options.iter().map(|opt| {
-                            let is_selected = opt.value == selected_value;
-                            let field_id = field_id.clone();
-                            let opt_value = opt.value.clone();
+                    let control = div().flex().gap_2().children(options.iter().map(|opt| {
+                        let field_id = field_id.clone();
+                        let opt_value = opt.value.clone();
 
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_1()
-                                .when(field_enabled, |d| d.cursor_pointer())
-                                .when(field_enabled, |d| {
-                                    d.on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(move |this, _, window, cx| {
-                                            this.form
-                                                .select_values
-                                                .insert(field_id.clone(), opt_value.clone());
-                                            window.focus(&this.focus_handle, cx);
-                                            cx.notify();
-                                        }),
-                                    )
-                                })
-                                .child(
-                                    div()
-                                        .w(Heights::ICON_SM)
-                                        .h(Heights::ICON_SM)
-                                        .rounded(px(3.0))
-                                        .border_2()
-                                        .border_color(cx.theme().muted_foreground)
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .when(is_selected, |d| {
-                                            d.bg(cx.theme().ring).border_color(cx.theme().ring)
-                                        })
-                                        .when(is_selected, |d| {
-                                            d.child(
-                                                div()
-                                                    .w(Spacing::SM)
-                                                    .h(Spacing::SM)
-                                                    .rounded(px(1.0))
-                                                    .bg(cx.theme().primary_foreground),
-                                            )
-                                        }),
-                                )
-                                .child(div().text_sm().child(opt.label.clone()))
-                                .into_any_element()
-                        }));
+                        Radio::new(SharedString::from(format!(
+                            "{}-{}",
+                            cm_field_id(&field_id),
+                            opt.value
+                        )))
+                        .small()
+                        .label(opt.label.clone())
+                        .checked(opt.value == selected_value)
+                        .disabled(!field_enabled)
+                        .on_click(cx.listener(move |this, _: &bool, window, cx| {
+                            this.form
+                                .select_values
+                                .insert(field_id.clone(), opt_value.clone());
+                            window.focus(&this.focus_handle, cx);
+                            cx.notify();
+                        }))
+                        .into_any_element()
+                    }));
 
                     Self::field_row_cm(
                         field_def.label.clone(),
@@ -969,25 +916,25 @@ impl ConnectionManagerWindow {
         }
     }
 
+    /// Renders the sections of a driver form tab.
+    ///
+    /// The driver's `password` field is not rendered from its definition: the
+    /// host-owned secret input (`secret_field`) is placed at that position
+    /// instead and taken out of the option. When the form declares no
+    /// `password` field, `secret_field` is left for the caller to place.
     pub(super) fn render_form_tab(
         &mut self,
         tab: &FormTab,
         is_ssh_tab: bool,
         show_focus: bool,
         ring_color: Hsla,
+        secret_field: &mut Option<AnyElement>,
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
         let mut sections: Vec<AnyElement> = Vec::new();
 
         for section in &tab.sections {
-            let fields: Vec<&FormFieldDef> = section
-                .fields
-                .iter()
-                // "password" is rendered separately via render_password_field.
-                // "use_uri" is promoted to the tab bar right side.
-                // "password" is rendered separately via render_password_field (below the sections).
-                .filter(|field| field.id != "password" || is_ssh_tab)
-                .collect();
+            let fields: Vec<&FormFieldDef> = section.fields.iter().collect();
 
             if fields.is_empty() {
                 continue;
@@ -997,6 +944,15 @@ impl ConnectionManagerWindow {
             let mut i = 0;
             while i < fields.len() {
                 let field = fields[i];
+
+                if field.id == "password" && !is_ssh_tab {
+                    if let Some(secret_field) = secret_field.take() {
+                        field_elements.push(secret_field);
+                    }
+
+                    i += 1;
+                    continue;
+                }
 
                 if field.id == "uri"
                     && i + 2 < fields.len()
@@ -1378,9 +1334,15 @@ impl Render for ConnectionManagerWindow {
         let show_ssh_passphrase = self.form.show_ssh_passphrase;
         let show_ssh_password = self.form.show_ssh_password;
 
+        let secret_placeholder = self.secret_field_label(cx);
+
         self.form.input_password.update(cx, |state, cx| {
             let should_mask = password_source_is_literal && !show_password;
             state.set_masked(should_mask, window, cx);
+
+            if state.presentation().placeholder().as_ref() != secret_placeholder.as_str() {
+                state.set_placeholder(secret_placeholder, window, cx);
+            }
         });
         self.access
             .input_ssh_key_passphrase

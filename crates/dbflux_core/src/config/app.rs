@@ -371,6 +371,11 @@ pub struct GeneralSettings {
     /// user explicitly requests the full value.
     #[serde(default = "default_key_value_size_limit_mib")]
     pub key_value_size_limit_mib: u64,
+
+    // -- Editor --
+    /// Modal (Vim) editing in code editors. Off by default.
+    #[serde(default)]
+    pub vim_mode: bool,
 }
 
 impl Default for GeneralSettings {
@@ -398,6 +403,7 @@ impl Default for GeneralSettings {
             schema_snapshot_retention: default_schema_snapshot_retention(),
             object_preview_size_limit_mib: default_object_preview_size_limit_mib(),
             key_value_size_limit_mib: default_key_value_size_limit_mib(),
+            vim_mode: false,
         }
     }
 }

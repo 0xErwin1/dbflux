@@ -157,7 +157,7 @@ window), call `list_apps` and then `select_app`.
 - **Connection**: `list_apps`, `select_app`, `ping`, `check_connection`.
 - **Element tree**: `get_ui_tree`, `find_elements`, `get_element`,
   `get_element_bounds`, `get_element_state`, `get_text_info`, `get_value`,
-  `get_selection_count`, `wait_for_element`, `wait_for_state`.
+  `get_selection_count`, `wait_for_element`, `wait_for_state`, `wait_for_idle`.
 - **Tree snapshots**: `save_ui_snapshot`, `load_ui_snapshot`,
   `diff_ui_snapshots`, `diff_current_ui`.
 - **Element input**: `click_element`, `double_click_element`, `hover_element`,
@@ -178,9 +178,33 @@ window), call `list_apps` and then `select_app`.
   that DBFlux does not provide, and DBFlux publishes no application logs to the
   bridge, so `get_logs` returns nothing.
 
+Text inputs are addressed by the id of the input element (for example
+`cm-field-host`). `set_text` and `set_value` replace the whole value through the
+input's accessibility action, so the input does not need to be focused first.
+To type into an input instead, call `click_element` on it, which clicks its
+center and focuses the editor, and then `type_text`. `focus_element` on an input
+does not give `type_text` a target.
+
+`set_text` and `set_value` do not honor an input's read-only state: they also
+replace the value of a read-only input, which a user could not edit. A
+successful `set_text` does not prove that the field is editable.
+
 Coordinates are logical window pixels, the same units as the bounds in the
 element tree. Screenshots are in physical pixels, so they are larger by the UI
 scale.
+
+A screenshot is taken only after DBFlux has presented a new frame to the display
+server. On Linux the server then captures the window every 16 ms until two
+consecutive captures are identical, so a screenshot taken right after an action
+shows the result of that action rather than the previous frame. A window that
+keeps changing, for example because of a spinner, is captured as it is after
+about one second instead of failing.
+
+To wait until the interface has settled before a screenshot or an assertion,
+call `wait_for_idle`. It succeeds once the element tree has not changed and the
+window has drawn at most one frame over 500 ms, so the blinking caret of a
+focused input does not keep it waiting. `timeout_ms` defaults to 5000 and must
+be between 500 and 30000.
 
 ## Secrets
 

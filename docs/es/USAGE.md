@@ -22,6 +22,7 @@ en el sidebar.
 
 Abre el Connection Manager para crear o editar conexiones:
 
+- Pulsa `Ctrl+Shift+N` (`Cmd+Shift+N` en macOS).
 - Desde el sidebar, pulsa `c`.
 - O usa el command palette (`Ctrl+Shift+P` / `Cmd+Shift+P` en macOS) y ejecuta
   **Open Connection Manager**.
@@ -72,6 +73,12 @@ managed/direct, seguido del connect del driver y una carga inicial del schema.
 Los hooks de conexión (si están configurados) se ejecutan en las fases
 PreConnect, PostConnect, PreDisconnect y PostDisconnect. Ver el resumen de
 Settings para dónde se definen los hooks.
+
+Si un intento de conexión falla, el error aparece en un toast y la fila de la
+conexión conserva un ícono de error rojo. Pasa el puntero sobre el ícono para
+leer el error. Elige **Reintentar** en el menú contextual de la fila, o presiona `Enter`
+sobre la fila, para volver a conectar. La marca se borra cuando empieza un nuevo
+intento, cuando la conexión tiene éxito o cuando editas la conexión.
 
 ---
 
@@ -561,6 +568,7 @@ conflictos con los atajos del sistema en macOS).
 | Teclas                                    | Acción                                 |
 | ----------------------------------------- | -------------------------------------- |
 | `Ctrl+Shift+P` / `Cmd+Shift+P`            | Alternar command palette               |
+| `Ctrl+Shift+N` / `Cmd+Shift+N`            | Abrir el Connection Manager            |
 | `Ctrl+n` / `Cmd+n`                        | Nueva pestaña de query                 |
 | `Ctrl+w` / `Cmd+w`                        | Cerrar pestaña actual                  |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab`             | Pestaña siguiente / anterior           |
@@ -617,6 +625,69 @@ conflictos con los atajos del sistema en macOS).
 (Las letras sin modificador se dejan intencionadamente para el input de texto,
 así la escritura funciona con normalidad.)
 
+### Modo Vim (opcional)
+
+Los editores de código pueden usar edición modal con un conjunto reducido de
+comandos de Vim. Viene desactivado. Actívalo en **Settings → General → Editor →
+Modo Vim en los editores de código** y guarda: los editores abiertos cambian al
+instante. Se aplica a todos los editores de código (SQL y los demás lenguajes de
+query, Lua, Python, Bash) y a nada más, así que los cuadros de búsqueda, los
+formularios y la paleta de comandos siguen escribiendo como siempre.
+
+Un editor empieza en modo Normal al abrirse y al activar el modo Vim. Una franja
+debajo del editor muestra el modo, `NORMAL` o `INSERTAR`. Cada tab conserva su
+propio modo al cambiar de tab o al mover el focus y volver.
+
+| Modo | Teclas | Acción |
+|------|--------|--------|
+| Normal | `h` / `l` | Mover un carácter a la izquierda / derecha dentro de la línea |
+| Normal | `j` / `k` | Mover una línea abajo / arriba, conservando la columna a través de líneas más cortas |
+| Normal | `Enter` | Mover una línea abajo |
+| Normal | `i` | Insertar antes del cursor |
+| Normal | `x` | Borrar el carácter bajo el cursor |
+| Normal | `u` | Deshacer |
+| Insertar | `Escape` | Cerrar un menú de autocompletado abierto; si no hay ninguno, volver al modo Normal |
+
+Todo lo demás en modo Normal:
+
+| Entrada | Comportamiento en modo Normal |
+|---------|-------------------------------|
+| Otras letras, dígitos, puntuación, `Space` | Nada |
+| `Tab` / `Shift+Tab` | Nada: no indenta y el focus se queda en el editor |
+| Pegar (`Ctrl+v` / `Cmd+v` o el menú contextual) | Nada |
+| Composición y confirmación del método de entrada (IME) | Se descartan |
+| `Backspace` / `Delete` | Nada |
+| `Escape` | Su significado habitual: cancelar una query en curso o salir del editor |
+| Atajos con `Ctrl`, `Alt` o `Cmd`; flechas; el mouse | Funcionan como siempre, incluidos deshacer y rehacer |
+
+En modo Normal el cursor está sobre un carácter, nunca después del final de una
+línea. Al salir del modo Insertar retrocede un carácter, como en Vim. En una
+línea vacía `x` no hace nada, así que nunca une líneas.
+
+En modo Insertar el editor se comporta igual que con el modo Vim desactivado,
+salvo por `Escape`. Con un menú de autocompletado o de acciones de código
+abierto, `Escape` cierra el menú y se queda en modo Insertar; si no, vuelve al
+modo Normal. En ambos casos el focus se queda en el editor. Con varios cursores
+o una sugerencia en línea visible, el primer `Escape` los descarta y el
+siguiente vuelve al modo Normal.
+
+**Deshacer.** Cada `x` es un paso de deshacer. Todo lo escrito en una misma
+sesión de modo Insertar es un paso, y cada nueva sesión de modo Insertar empieza
+otro. `u` deshace los mismos pasos que `Ctrl+z` / `Cmd+z`.
+
+**Editores de solo lectura** (definiciones de rutinas): aceptan los movimientos;
+`x` y `u` no hacen nada.
+
+**Limitaciones.**
+
+- Solo existen los comandos de la primera tabla. No hay contadores, operadores
+  (`d`, `c`, `y`), modo visual, objetos de texto, registros, macros, repetición
+  con `.`, comandos `:` ni una tecla de rehacer.
+- Los movimientos avanzan un code point de Unicode por vez, como las flechas, así
+  que una letra escrita con un acento combinante separado requiere dos pulsaciones.
+- El modo Normal solo bloquea lo que escribes y pegas. Las ediciones que hace
+  DBFlux, como cargar un archivo o una query del historial, se siguen aplicando.
+
 ### Resultados
 
 | Teclas                                        | Acción                                     |
@@ -628,6 +699,7 @@ así la escritura funciona con normalidad.)
 | `g` / `Shift+g` (o `Home` / `End`)            | Primera / última fila                      |
 | `Ctrl+d` / `Ctrl+u` (o `PageDown` / `PageUp`) | Página abajo / arriba                      |
 | `]` / `[`                                     | Página siguiente / anterior de resultados  |
+| `F5`                                          | Recargar el documento enfocado (filas de la tabla, lista de buckets, listado de objetos, claves) |
 | `Ctrl+e` / `Cmd+e`                            | Exportar resultados                        |
 | `f`                                           | Enfocar la toolbar                         |
 | `/`                                           | Enfocar búsqueda/filtro                    |

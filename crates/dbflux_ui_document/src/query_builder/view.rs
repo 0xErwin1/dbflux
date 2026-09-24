@@ -286,11 +286,16 @@ fn render_body(
                     filters_body,
                 ))
                 .when_some(joins_body, |body, joins_body| {
-                    body.child(section_card("JOINS", AppIcon::Layers, theme, joins_body))
+                    body.child(section_card(
+                        dbflux_i18n::t!("document.query_builder.section.joins"),
+                        AppIcon::Layers,
+                        theme,
+                        joins_body,
+                    ))
                 })
                 .when_some(group_by_body, |body, group_by_body| {
                     body.child(section_card(
-                        "GROUP BY / AGGREGATES",
+                        dbflux_i18n::t!("document.query_builder.section.group_by_aggregates"),
                         AppIcon::Layers,
                         theme,
                         group_by_body,
@@ -300,7 +305,7 @@ fn render_body(
             if is_grouped && shows_having {
                 let having_body = group_by::render_having(panel, cx).into_any_element();
                 body = body.child(section_card(
-                    "HAVING",
+                    dbflux_i18n::t!("document.query_builder.section.having"),
                     AppIcon::ListFilter,
                     theme,
                     having_body,
@@ -316,7 +321,7 @@ fn render_body(
                 ))
             })
             .child(section_card(
-                "LIMIT & OFFSET",
+                dbflux_i18n::t!("document.query_builder.section.limit_offset"),
                 AppIcon::Hash,
                 theme,
                 limit_body,
@@ -333,7 +338,7 @@ fn render_body(
                 .min_h(px(0.0))
                 .overflow_y_scrollbar()
                 .child(section_card(
-                    "SET",
+                    dbflux_i18n::t!("document.query_builder.section.set"),
                     AppIcon::Pencil,
                     theme,
                     assignments_body,
@@ -492,8 +497,8 @@ fn render_effective_select_preview(
     use dbflux_core::AggFn;
 
     let mut container = div().flex().flex_col().gap(Spacing::XS).child(
-        Text::caption(SharedString::from(
-            "Grouped query — SELECT is managed automatically",
+        Text::caption(dbflux_i18n::t!(
+            "document.query_builder.group_by.managed_select_notice"
         ))
         .color(theme.muted_foreground),
     );
@@ -505,13 +510,16 @@ fn render_effective_select_preview(
 
     for agg in &panel.current_spec.aggregates {
         let fn_name = match agg.function {
-            AggFn::Count => "COUNT",
-            AggFn::CountStar => "COUNT",
-            AggFn::CountDistinct => "COUNT DISTINCT",
-            AggFn::Sum => "SUM",
-            AggFn::Avg => "AVG",
-            AggFn::Min => "MIN",
-            AggFn::Max => "MAX",
+            AggFn::Count | AggFn::CountStar => {
+                dbflux_i18n::t!("document.query_builder.aggregate.fn.count")
+            }
+            AggFn::CountDistinct => {
+                dbflux_i18n::t!("document.query_builder.aggregate.fn.count_distinct")
+            }
+            AggFn::Sum => dbflux_i18n::t!("document.query_builder.aggregate.fn.sum"),
+            AggFn::Avg => dbflux_i18n::t!("document.query_builder.aggregate.fn.avg"),
+            AggFn::Min => dbflux_i18n::t!("document.query_builder.aggregate.fn.min"),
+            AggFn::Max => dbflux_i18n::t!("document.query_builder.aggregate.fn.max"),
         };
         let col_part = if agg.function == AggFn::CountStar {
             "*".to_string()
@@ -934,10 +942,12 @@ mod tests {
             "document.query_builder.section.sort",
             "document.query_builder.section.execution",
             "document.query_builder.section.sql_preview",
+            "document.query_builder.section.group_by_aggregates",
+            "document.query_builder.group_by.managed_select_notice",
         ];
 
         for key in keys {
-            for locale in ["en", "es"] {
+            for locale in ["en", "es", "ko", "zh_Hans"] {
                 let value = dbflux_i18n::t!(key, locale = locale);
 
                 assert!(!value.is_empty(), "{key} resolved empty in {locale}");
@@ -962,27 +972,65 @@ mod tests {
     }
 
     #[test]
-    fn query_builder_sql_clause_headers_stay_literal_in_source() {
+    fn query_builder_sql_clause_headers_keep_the_keyword_in_every_locale() {
+        let headers = [
+            ("document.query_builder.section.joins", "JOINS"),
+            ("document.query_builder.section.having", "HAVING"),
+            (
+                "document.query_builder.section.limit_offset",
+                "LIMIT & OFFSET",
+            ),
+            ("document.query_builder.section.set", "SET"),
+        ];
+
+        for (key, keyword) in headers {
+            for locale in ["en", "es", "ko", "zh_Hans"] {
+                assert_eq!(
+                    dbflux_i18n::t!(key, locale = locale),
+                    keyword,
+                    "{key} must keep the SQL keyword in {locale}"
+                );
+            }
+        }
+
+        for locale in ["en", "es", "ko", "zh_Hans"] {
+            let group_by = dbflux_i18n::t!(
+                "document.query_builder.section.group_by_aggregates",
+                locale = locale
+            );
+
+            assert!(
+                group_by.starts_with("GROUP BY / "),
+                "GROUP BY must stay literal in {locale}, got {group_by:?}"
+            );
+        }
+
+        assert_ne!(
+            dbflux_i18n::t!(
+                "document.query_builder.section.group_by_aggregates",
+                locale = "en"
+            ),
+            dbflux_i18n::t!(
+                "document.query_builder.section.group_by_aggregates",
+                locale = "es"
+            )
+        );
+    }
+
+    #[test]
+    fn query_builder_section_headers_are_not_literal_in_source() {
         let full_source = include_str!("view.rs");
         let source = full_source
             .split("#[cfg(test)]")
             .next()
             .expect("view.rs must contain the render code above the test module");
 
-        for literal_header in [
+        for translated_header in [
             "\"JOINS\"",
             "\"GROUP BY / AGGREGATES\"",
             "\"HAVING\"",
             "\"LIMIT & OFFSET\"",
             "\"SET\"",
-        ] {
-            assert!(
-                source.contains(literal_header),
-                "expected SQL clause header literal {literal_header:?} in view.rs source"
-            );
-        }
-
-        for translated_header in [
             "\"COLUMNS\"",
             "\"FILTERS\",",
             "\"FILTERS (WHERE)\"",

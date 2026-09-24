@@ -1,8 +1,9 @@
 use super::{
-    DiffCurrentArgs, DiffSnapshotsArgs, Duration, ElementArgs, FindArgs, GpuiMcp, Instant, Json,
-    MAX_TREE_SNAPSHOTS, Parameters, SnapshotArgs, ToolRouter, Value, WaitElementArgs,
-    WaitStateArgs, encode_error, find_nodes, get_node, json, map_wait_error, object_output,
-    require_bounds, state_matches, tool, tool_router, tree_diff, validate_name, validate_timeout,
+    DiffCurrentArgs, DiffSnapshotsArgs, Duration, ElementArgs, FindArgs, GpuiMcp,
+    IDLE_CHECK_INTERVAL_MS, Instant, Json, MAX_TREE_SNAPSHOTS, MIN_IDLE_TIMEOUT_MS, Parameters,
+    SnapshotArgs, ToolRouter, Value, WaitElementArgs, WaitIdleArgs, WaitStateArgs, encode_error,
+    find_nodes, get_node, json, map_wait_error, object_output, require_bounds, state_matches, tool,
+    tool_router, tree_diff, validate_name, validate_timeout, wait_until_idle,
 };
 
 #[tool_router(router = tree_router)]
@@ -124,6 +125,29 @@ impl GpuiMcp {
                 .await
                 .map_err(|error| map_wait_error(error, "requested state"))?;
         }
+    }
+
+    #[tool(
+        description = "Wait until the window is idle: no semantic tree change and at most one drawn frame over 500 ms, so a blinking caret still counts as idle"
+    )]
+    async fn wait_for_idle(
+        &self,
+        Parameters(args): Parameters<WaitIdleArgs>,
+    ) -> Result<Json<Value>, String> {
+        validate_timeout(args.timeout_ms)?;
+        if args.timeout_ms < MIN_IDLE_TIMEOUT_MS {
+            return Err(format!(
+                "idle timeout must be at least {MIN_IDLE_TIMEOUT_MS} milliseconds"
+            ));
+        }
+        let started = Instant::now();
+        let checks = args.timeout_ms / IDLE_CHECK_INTERVAL_MS;
+        let sample = wait_until_idle(checks, |previous| self.idle_sample(previous)).await?;
+        Ok(object_output(json!({
+            "elapsed_ms": started.elapsed().as_millis(),
+            "frame_count": sample.frame_count,
+            "generation": sample.generation,
+        })))
     }
 
     #[tool(description = "Save the current semantic tree under a bounded in-memory name")]

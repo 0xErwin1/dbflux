@@ -258,7 +258,7 @@ impl Render for super::KeyValueDocument {
             let size_label = value
                 .entry
                 .size_bytes
-                .map(|s| format!("{} B", s))
+                .map(|size| dbflux_i18n::t!("document.key_value.render.size_bytes", size = size))
                 .unwrap_or_default();
 
             let mut panel = div().flex_1().flex().flex_col().overflow_hidden();

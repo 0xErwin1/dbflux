@@ -576,7 +576,7 @@ fn spawn_ui_pump(
 #[allow(clippy::too_many_lines)]
 fn handle_ui_operation(
     operation: Operation,
-    state: &SharedState,
+    state: &Arc<SharedState>,
     document_host: &DocumentHost,
     resource_host: &ResourceHost,
     command_host: &CommandHost,
@@ -606,11 +606,19 @@ fn handle_ui_operation(
             }
             Ok(BridgeResult::Ack)
         }
-        Operation::Refresh => {
-            let completed = state.frame_stats();
+        Operation::SetValue { node_id, value } => {
+            if !window.set_observed_element_value(&node_id, &value, cx) {
+                return Err(BridgeError::new(
+                    ErrorCode::Unsupported,
+                    "semantic node has no accessibility value handler in the current frame",
+                ));
+            }
             window.refresh();
-            Ok(BridgeResult::FrameStats(completed))
+            Ok(BridgeResult::Ack)
         }
+        Operation::Refresh => Ok(BridgeResult::FrameStats(refresh_and_track_presentation(
+            state, window,
+        ))),
         Operation::GetPointerLocation => Ok(BridgeResult::PointerLocation(
             input::pointer_location(window),
         )),
@@ -875,11 +883,19 @@ async fn process_request(request: WireRequest, context: ConnectionContext) -> Wi
         Operation::WaitForFrame {
             after_frame_count,
             timeout_ms,
-        } => context
-            .state
-            .wait_for_frame(after_frame_count, Duration::from_millis(timeout_ms))
-            .await
-            .map(BridgeResult::FrameStats),
+            presented,
+        } => {
+            let wait = Duration::from_millis(timeout_ms);
+            if presented {
+                context
+                    .state
+                    .wait_for_presented_frame(after_frame_count, wait)
+                    .await
+            } else {
+                context.state.wait_for_frame(after_frame_count, wait).await
+            }
+            .map(BridgeResult::FrameStats)
+        }
         Operation::GetWindowGeometry => context
             .state
             .window_geometry()
@@ -917,6 +933,7 @@ async fn process_request(request: WireRequest, context: ConnectionContext) -> Wi
         operation @ (Operation::Input { .. }
         | Operation::PointerInput { .. }
         | Operation::Focus { .. }
+        | Operation::SetValue { .. }
         | Operation::Refresh
         | Operation::GetLiveDocument
         | Operation::PreviewLiveDocument { .. }
@@ -931,6 +948,30 @@ async fn process_request(request: WireRequest, context: ConnectionContext) -> Wi
         Ok(result) => WireResponse::success(request.request_id, result),
         Err(error) => WireResponse::failure(request.request_id, error),
     }
+}
+
+/// Request a new frame and return the completed-frame token observed before the request,
+/// arranging for the presented-frame token to pass it once the refreshed frame is presented.
+///
+/// GPUI runs next-frame callbacks at the start of a frame request, before that request draws
+/// and presents. The outer callback therefore runs at the start of the request that draws the
+/// refreshed frame, and the inner one, registered from it, at the start of the following
+/// request, after the refreshed frame's `present` has returned.
+fn refresh_and_track_presentation(
+    state: &Arc<SharedState>,
+    window: &mut Window,
+) -> gpui_mcp_protocol::FrameStats {
+    let completed = state.frame_stats();
+    window.refresh();
+    let state = Arc::downgrade(state);
+    window.on_next_frame(move |window, _| {
+        window.on_next_frame(move |_, _| {
+            if let Some(state) = state.upgrade() {
+                state.mark_frames_presented();
+            }
+        });
+    });
+    completed
 }
 
 async fn request_ui_refresh(
@@ -968,18 +1009,21 @@ async fn dispatch_to_ui(
         .map_err(|_| BridgeError::new(ErrorCode::Internal, "UI command pump stopped"))?
 }
 
+fn validate_node_id(node_id: &str) -> Result<(), BridgeError> {
+    if node_id.is_empty() || node_id.len() > MAX_ID_BYTES || node_id.chars().any(char::is_control) {
+        return Err(invalid("semantic node identifier is invalid"));
+    }
+    Ok(())
+}
+
 fn validate_operation(operation: &Operation) -> Result<(), BridgeError> {
     match operation {
         Operation::Input { command } => input::validate(command),
         Operation::PointerInput { command } => input::validate_pointer(command),
-        Operation::Focus { node_id } => {
-            if node_id.is_empty()
-                || node_id.len() > MAX_ID_BYTES
-                || node_id.chars().any(char::is_control)
-            {
-                return Err(invalid("semantic node identifier is invalid"));
-            }
-            Ok(())
+        Operation::Focus { node_id } => validate_node_id(node_id),
+        Operation::SetValue { node_id, value } => {
+            validate_node_id(node_id)?;
+            input::validate_text(value)
         }
         Operation::WaitForTree { timeout_ms, .. }
             if *timeout_ms == 0 || *timeout_ms > MAX_WAIT_MS =>
@@ -1422,11 +1466,86 @@ fn invalid(message: &'static str) -> BridgeError {
 
 #[cfg(test)]
 mod tests {
-    use gpui_mcp_protocol::{AppId, ContextResource, ContextResourceDescriptor};
+    use gpui_mcp_protocol::{
+        AppId, ContextResource, ContextResourceDescriptor, MAX_TEXT_BYTES, Operation,
+    };
 
     use super::{
-        BridgeConfig, encode_hex, validate_context_resource, validate_context_resource_list,
+        BridgeConfig, encode_hex, refresh_and_track_presentation, validate_context_resource,
+        validate_context_resource_list, validate_operation,
     };
+    use crate::Automation;
+
+    struct EmptyView;
+
+    impl gpui::Render for EmptyView {
+        fn render(
+            &mut self,
+            _window: &mut gpui::Window,
+            _cx: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            gpui::div()
+        }
+    }
+
+    /// GPUI runs next-frame callbacks at the start of a frame request, then draws
+    /// and presents. The refreshed frame is drawn by the first request after the
+    /// refresh, so it is only known to be presented when the request after that
+    /// one starts. A token that advanced at the start of the first request would
+    /// report a frame that had not been drawn yet.
+    #[gpui::test]
+    fn refresh_marks_presentation_at_the_request_after_the_refreshed_frame(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let automation = Automation::isolated();
+        let attached = automation.clone();
+        let (_view, visual) = cx.add_window_view(move |window, _| {
+            attached.attach(window);
+            EmptyView
+        });
+        visual.run_until_parked();
+        let state = automation.state.clone();
+
+        let before = visual.update(|window, _| refresh_and_track_presentation(&state, window));
+        visual.run_until_parked();
+        assert!(state.frame_stats().frame_count > before.frame_count);
+        assert!(state.presented_frame_count() <= before.frame_count);
+
+        assert_eq!(
+            visual.update(|window, cx| window.simulate_next_frame(cx)),
+            1
+        );
+        assert!(
+            state.presented_frame_count() <= before.frame_count,
+            "the request that draws the refreshed frame has not presented it yet"
+        );
+
+        assert_eq!(
+            visual.update(|window, cx| window.simulate_next_frame(cx)),
+            1
+        );
+        assert!(state.presented_frame_count() > before.frame_count);
+        assert_eq!(
+            state.presented_frame_count(),
+            state.frame_stats().frame_count
+        );
+    }
+
+    #[test]
+    fn set_value_requires_a_valid_node_id_and_bounded_value() {
+        let set_value = |node_id: &str, value: String| Operation::SetValue {
+            node_id: node_id.to_owned(),
+            value,
+        };
+
+        assert!(validate_operation(&set_value("cm-field-host", "db.example".to_owned())).is_ok());
+        assert!(validate_operation(&set_value("", "db.example".to_owned())).is_err());
+        assert!(validate_operation(&set_value("cm\nfield", "db.example".to_owned())).is_err());
+        assert!(
+            validate_operation(&set_value("cm-field-host", "x".repeat(MAX_TEXT_BYTES + 1)))
+                .is_err()
+        );
+    }
 
     #[test]
     fn application_identifier_blocks_path_traversal() {

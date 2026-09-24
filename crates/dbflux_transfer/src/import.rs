@@ -950,4 +950,144 @@ mod tests {
 
         std::fs::remove_dir_all(&dir).ok();
     }
+
+    /// Writes a bundle of single-column CSV tables, one per `(name, rows)`
+    /// entry, each with `rows` sequential ids, in manifest order.
+    fn write_multi_table_bundle(dir: &Path, tables: &[(&str, u64)]) {
+        let mut manifest_tables = Vec::new();
+
+        for (index, (name, rows)) in tables.iter().enumerate() {
+            let mut csv = String::from("id\n");
+            for id in 1..=*rows {
+                csv.push_str(&format!("{id}\n"));
+            }
+            std::fs::write(dir.join(format!("{name}.csv")), csv).unwrap();
+
+            manifest_tables.push(ManifestTable {
+                schema: None,
+                name: name.to_string(),
+                file: format!("{name}.csv"),
+                format: "csv".to_string(),
+                columns: vec![pk_column()],
+                row_count: *rows,
+                fk_order_index: index,
+            });
+        }
+
+        let manifest = TransferManifest {
+            version: TransferManifest::CURRENT_VERSION,
+            source: ManifestSource {
+                driver: "sqlite".to_string(),
+                database: "main".to_string(),
+                schema: None,
+            },
+            created_at: "2026-07-07T10:00:00+00:00".to_string(),
+            tables: manifest_tables,
+        };
+        std::fs::write(
+            dir.join("manifest.json"),
+            serde_json::to_string_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+    }
+
+    fn existing_plan(table: &str) -> ImportTablePlan {
+        ImportTablePlan {
+            source_table: table.to_string(),
+            target_schema: None,
+            target_table: table.to_string(),
+            mapping_mode: TableMappingMode::Existing,
+            column_overrides: None,
+        }
+    }
+
+    /// A cancel requested while a chunk is being written lets that chunk
+    /// finish, then stops: no later chunk of the same table and no later
+    /// table is written, and the outcome reports the run as cancelled with
+    /// the rows already written.
+    #[test]
+    fn cancel_during_a_table_stops_after_the_current_chunk_and_reports_cancelled() {
+        let dir = temp_dir("cancel_mid_table");
+        write_multi_table_bundle(&dir, &[("t1", 3), ("t2", 2)]);
+        let fake = Arc::new(FakeConnection::new(vec![existing_column_info()]));
+        let connection: Arc<dyn Connection> = fake.clone();
+        let plans = vec![existing_plan("t1"), existing_plan("t2")];
+        let mut options = default_options("main");
+        options.segment_size = 1;
+        let cancel = CancelToken::new();
+
+        let outcome = run_import(&connection, &dir, &plans, &options, &cancel, {
+            let cancel = cancel.clone();
+            move |_index, _rows_done, _estimated_total| cancel.cancel()
+        })
+        .expect("a cancelled run still returns its itemized outcome");
+
+        assert!(outcome.cancelled);
+        assert_eq!(
+            outcome.tables[0].status,
+            TableTransferStatus::Completed { rows: 1 },
+            "only the chunk in flight when the cancel arrived may be written"
+        );
+        assert_eq!(
+            outcome.tables[1].status,
+            TableTransferStatus::NotStarted,
+            "no table after the cancel may be started"
+        );
+        assert_eq!(
+            fake.generator
+                .recorded_bulk_insert_columns
+                .lock()
+                .unwrap()
+                .len(),
+            1,
+            "exactly one chunk insert may reach the target"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A cancel that lands between tables leaves the finished table intact
+    /// and never starts the next one.
+    #[test]
+    fn cancel_after_a_table_finishes_never_starts_the_next_table() {
+        let dir = temp_dir("cancel_between_tables");
+        write_multi_table_bundle(&dir, &[("t1", 2), ("t2", 2)]);
+        let fake = Arc::new(FakeConnection::new(vec![existing_column_info()]));
+        let connection: Arc<dyn Connection> = fake.clone();
+        let plans = vec![existing_plan("t1"), existing_plan("t2")];
+        let cancel = CancelToken::new();
+
+        let outcome = run_import(
+            &connection,
+            &dir,
+            &plans,
+            &default_options("main"),
+            &cancel,
+            {
+                let cancel = cancel.clone();
+                move |index, rows_done, _estimated_total| {
+                    if index == 0 && rows_done == 2 {
+                        cancel.cancel();
+                    }
+                }
+            },
+        )
+        .expect("a cancelled run still returns its itemized outcome");
+
+        assert!(outcome.cancelled);
+        assert_eq!(
+            outcome.tables[0].status,
+            TableTransferStatus::Completed { rows: 2 }
+        );
+        assert_eq!(outcome.tables[1].status, TableTransferStatus::NotStarted);
+        assert!(
+            !fake
+                .table_details_calls
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|table| table == "t2"),
+            "the next table must not even be resolved after a cancel"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

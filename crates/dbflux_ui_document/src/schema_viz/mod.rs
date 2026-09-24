@@ -35,6 +35,7 @@ use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::Spinner;
 use dbflux_components::tokens::{FontSizes, Spacing};
 use dbflux_ui_base::AppStateEntity;
+use dbflux_ui_base::keymap::{default_keymap, key_chord_from_gpui};
 use dbflux_ui_base::toast::{PendingToast, flush_pending_toast};
 
 /// Spacing of the diagram's dot grid, in graph coordinates. Node drags and
@@ -2130,14 +2131,24 @@ impl SchemaVizDocument {
         }
     }
 
-    /// Dispatches a command from the workspace keymap system.
-    /// Returns true if the command was handled.
+    /// Dispatches a keymap command, from the diagram's own key handler or
+    /// from the workspace. Returns true if the command was handled.
     pub fn dispatch_command(
         &mut self,
         cmd: Command,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        if self.context_menu.is_some()
+            && matches!(
+                cmd,
+                Command::MenuUp | Command::MenuDown | Command::MenuSelect | Command::MenuBack
+            )
+        {
+            self.dispatch_menu_command(cmd, cx);
+            return true;
+        }
+
         match cmd {
             Command::Cancel => {
                 if self.context_menu.is_some() {
@@ -2161,8 +2172,200 @@ impl SchemaVizDocument {
                 self.open_context_menu(menu_pos, cx);
                 true
             }
+            Command::ZoomIn => {
+                self.zoom = (self.zoom * 1.25).min(4.0);
+                cx.notify();
+                true
+            }
+            Command::ZoomOut => {
+                self.zoom = (self.zoom / 1.25).max(0.25);
+                cx.notify();
+                true
+            }
+            Command::LayoutLeftRight => {
+                self.set_layout_format(LayoutFormat::LeftRight, cx);
+                true
+            }
+            Command::LayoutSnowflake => {
+                self.set_layout_format(LayoutFormat::Snowflake, cx);
+                true
+            }
+            Command::LayoutCompact => {
+                self.set_layout_format(LayoutFormat::Compact, cx);
+                true
+            }
+            Command::PanLeft => {
+                self.pan_by(50.0, 0.0, cx);
+                true
+            }
+            Command::PanRight => {
+                self.pan_by(-50.0, 0.0, cx);
+                true
+            }
+            Command::PanUp => {
+                self.pan_by(0.0, 50.0, cx);
+                true
+            }
+            Command::PanDown => {
+                self.pan_by(0.0, -50.0, cx);
+                true
+            }
+            Command::SelectTableLeft => {
+                self.select_table_towards(Direction::Left, cx);
+                true
+            }
+            Command::SelectTableRight => {
+                self.select_table_towards(Direction::Right, cx);
+                true
+            }
+            Command::SelectTableUp => {
+                self.select_table_towards(Direction::Up, cx);
+                true
+            }
+            Command::SelectTableDown => {
+                self.select_table_towards(Direction::Down, cx);
+                true
+            }
+            Command::MoveTableLeft => {
+                self.move_selected_table(-20.0, 0.0, cx);
+                true
+            }
+            Command::MoveTableRight => {
+                self.move_selected_table(20.0, 0.0, cx);
+                true
+            }
+            Command::MoveTableUp => {
+                self.move_selected_table(0.0, -20.0, cx);
+                true
+            }
+            Command::MoveTableDown => {
+                self.move_selected_table(0.0, 20.0, cx);
+                true
+            }
             _ => false,
         }
+    }
+
+    /// Navigates the open context menu: up/down move the highlight, select
+    /// enters a submenu or runs the highlighted action, and back leaves a
+    /// submenu or closes the menu.
+    fn dispatch_menu_command(&mut self, cmd: Command, cx: &mut Context<Self>) {
+        match cmd {
+            Command::MenuUp => {
+                if let Some(menu) = self.context_menu.as_mut() {
+                    menu.navigate_up();
+                }
+                cx.notify();
+            }
+            Command::MenuDown => {
+                if let Some(menu) = self.context_menu.as_mut() {
+                    menu.navigate_down();
+                }
+                cx.notify();
+            }
+            Command::MenuSelect => {
+                let action = self
+                    .context_menu
+                    .as_ref()
+                    .and_then(|m| m.actions.get(m.selected_index).cloned());
+                match action {
+                    Some(SchemaVizMenuAction::LayoutSubmenu)
+                    | Some(SchemaVizMenuAction::CopyAsSubmenu) => {
+                        if let Some(menu) = self.context_menu.as_mut() {
+                            menu.go_into_submenu();
+                        }
+                        cx.notify();
+                    }
+                    _ => {
+                        let selected_index = self
+                            .context_menu
+                            .as_ref()
+                            .map(|m| m.selected_index)
+                            .unwrap_or(0);
+                        self.context_menu_execute_at(selected_index, cx);
+                    }
+                }
+            }
+            Command::MenuBack => {
+                let went_back = self
+                    .context_menu
+                    .as_mut()
+                    .is_some_and(|menu| menu.go_back());
+                if went_back {
+                    cx.notify();
+                } else {
+                    self.close_context_menu(cx);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Moves the camera by the given screen-space offset.
+    fn pan_by(&mut self, dx: f32, dy: f32, cx: &mut Context<Self>) {
+        let pan_x: f32 = self.pan_offset.x.into();
+        let pan_y: f32 = self.pan_offset.y.into();
+        self.pan_offset = Point::new(px(pan_x + dx), px(pan_y + dy));
+        cx.notify();
+    }
+
+    /// Selects the nearest table in `direction` and centers on it.
+    ///
+    /// With nothing selected yet, it starts from the spatial edge the
+    /// direction points away from: the first table for Right and Down, the
+    /// last for Left and Up.
+    fn select_table_towards(&mut self, direction: Direction, cx: &mut Context<Self>) {
+        if let Some(next) = self.find_next_node(direction) {
+            self.selected_node = Some(next);
+            self.center_on_node(next);
+            cx.notify();
+            return;
+        }
+
+        if self.selected_node.is_some() {
+            return;
+        }
+
+        let sorted = self.spatial_sorted_nodes();
+        let start = match direction {
+            Direction::Right | Direction::Down => sorted.first().copied(),
+            Direction::Left | Direction::Up => sorted.last().copied(),
+        };
+
+        if let Some(node) = start {
+            self.selected_node = Some(node);
+            self.center_on_node(node);
+            cx.notify();
+        }
+    }
+
+    /// Nudges the selected table by the given graph-space offset, snapping
+    /// the result onto the diagram lattice.
+    fn move_selected_table(&mut self, dx: f32, dy: f32, cx: &mut Context<Self>) {
+        let Some(selected) = self.selected_node else {
+            return;
+        };
+
+        let current_pos = self
+            .node_position_overrides
+            .get(&selected)
+            .copied()
+            .or_else(|| {
+                self.layout
+                    .as_ref()
+                    .and_then(|l| l.nodes.get(&selected))
+                    .map(|n| Point::new(n.x, n.y))
+            })
+            .unwrap_or(Point::new(0.0, 0.0));
+
+        self.node_position_overrides.insert(
+            selected,
+            Point::new(
+                snap_to_lattice(current_pos.x + dx),
+                snap_to_lattice(current_pos.y + dy),
+            ),
+        );
+        cx.notify();
     }
 
     /// Executes the action at the given index in the current context menu.
@@ -2833,267 +3036,20 @@ impl SchemaVizDocument {
                     this.open_context_menu(local, cx);
                 }),
             )
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                use dbflux_app::keymap::Modifiers;
-                use dbflux_ui_base::key_chord_from_gpui;
-
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 // SchemaViz is a fully keyboard-driven context. Every key event is consumed
                 // here and must NOT propagate to the workspace, which would steal focus.
                 cx.stop_propagation();
 
                 let chord = key_chord_from_gpui(&event.keystroke);
-                let mods = &chord.modifiers;
+                let context = if this.context_menu.is_some() {
+                    ContextId::ContextMenu
+                } else {
+                    ContextId::SchemaViz
+                };
 
-                // Handle context menu navigation first
-                if this.context_menu.is_some() {
-                    match chord.key.as_str() {
-                        "up" | "k" => {
-                            if let Some(menu) = this.context_menu.as_mut() {
-                                menu.navigate_up();
-                            }
-                            cx.notify();
-                            return;
-                        }
-                        "down" | "j" => {
-                            if let Some(menu) = this.context_menu.as_mut() {
-                                menu.navigate_down();
-                            }
-                            cx.notify();
-                            return;
-                        }
-                        "right" | "enter" | "l" => {
-                            let action = this
-                                .context_menu
-                                .as_ref()
-                                .and_then(|m| m.actions.get(m.selected_index).cloned());
-                            match action {
-                                Some(SchemaVizMenuAction::LayoutSubmenu)
-                                | Some(SchemaVizMenuAction::CopyAsSubmenu) => {
-                                    if let Some(menu) = this.context_menu.as_mut() {
-                                        menu.go_into_submenu();
-                                    }
-                                    cx.notify();
-                                    return;
-                                }
-                                _ => {
-                                    this.context_menu_execute_at(
-                                        this.context_menu
-                                            .as_ref()
-                                            .map(|m| m.selected_index)
-                                            .unwrap_or(0),
-                                        cx,
-                                    );
-                                    return;
-                                }
-                            }
-                        }
-                        "escape" | "h" | "left" => {
-                            let went_back = if let Some(menu) = this.context_menu.as_mut() {
-                                menu.go_back()
-                            } else {
-                                false
-                            };
-                            if !went_back {
-                                this.close_context_menu(cx);
-                            } else {
-                                cx.notify();
-                            }
-                            return;
-                        }
-                        _ => {}
-                    }
-                    // Consume all key events while the context menu is open
-                    return;
-                }
-
-                // Zoom in: + (with or without shift, since keyboard produces = when shift not held)
-                if (chord.key == "+" || chord.key == "=") && !mods.ctrl && !mods.alt {
-                    this.zoom = (this.zoom * 1.25).min(4.0);
-                    cx.notify();
-                    return;
-                }
-                // Zoom out: - (without shift)
-                if chord.key == "-" && !mods.shift && !mods.ctrl && !mods.alt {
-                    this.zoom = (this.zoom / 1.25).max(0.25);
-                    cx.notify();
-                    return;
-                }
-
-                // Layout shortcuts
-                if !mods.shift && !mods.ctrl && !mods.alt {
-                    match chord.key.as_str() {
-                        "s" => {
-                            this.set_layout_format(LayoutFormat::Snowflake, cx);
-                            return;
-                        }
-                        "c" => {
-                            this.set_layout_format(LayoutFormat::Compact, cx);
-                            return;
-                        }
-                        "r" => {
-                            this.set_layout_format(LayoutFormat::LeftRight, cx);
-                            return;
-                        }
-                        "m" => {
-                            // Use last mouse position if available, otherwise center of viewport
-                            let menu_pos = if this.last_mouse_position != Point::default() {
-                                this.last_mouse_position
-                            } else {
-                                Point::new(px(400.0), px(300.0))
-                            };
-                            this.open_context_menu(menu_pos, cx);
-                            return;
-                        }
-                        "escape" => {
-                            this.selected_node = None;
-                            cx.notify();
-                            return;
-                        }
-                        _ => {}
-                    }
-                }
-
-                // Pan with arrow keys / h,j,k,l
-                if !mods.shift && !mods.ctrl && !mods.alt {
-                    match chord.key.as_str() {
-                        "h" | "left" => {
-                            let pan_x: f32 = this.pan_offset.x.into();
-                            this.pan_offset = Point::new(px(pan_x + 50.0), this.pan_offset.y);
-                            cx.notify();
-                            return;
-                        }
-                        "l" | "right" => {
-                            let pan_x: f32 = this.pan_offset.x.into();
-                            this.pan_offset = Point::new(px(pan_x - 50.0), this.pan_offset.y);
-                            cx.notify();
-                            return;
-                        }
-                        "k" | "up" => {
-                            let pan_y: f32 = this.pan_offset.y.into();
-                            this.pan_offset = Point::new(this.pan_offset.x, px(pan_y + 50.0));
-                            cx.notify();
-                            return;
-                        }
-                        "j" | "down" => {
-                            let pan_y: f32 = this.pan_offset.y.into();
-                            this.pan_offset = Point::new(this.pan_offset.x, px(pan_y - 50.0));
-                            cx.notify();
-                            return;
-                        }
-                        _ => {}
-                    }
-                }
-
-                // Selection navigation with Shift+arrows / Shift+hjkl
-                // If no node is selected, selects the first node in the given direction
-                if mods.shift && !mods.ctrl && !mods.alt {
-                    match chord.key.as_str() {
-                        "l" | "right" => {
-                            if let Some(next) = this.find_next_node(Direction::Right) {
-                                this.selected_node = Some(next);
-                                this.center_on_node(next);
-                                cx.notify();
-                            } else if this.selected_node.is_none() {
-                                // No selection yet - select leftmost node
-                                if let Some(first) = this.spatial_sorted_nodes().first().copied() {
-                                    this.selected_node = Some(first);
-                                    this.center_on_node(first);
-                                    cx.notify();
-                                }
-                            }
-                            return;
-                        }
-                        "h" | "left" => {
-                            if let Some(next) = this.find_next_node(Direction::Left) {
-                                this.selected_node = Some(next);
-                                this.center_on_node(next);
-                                cx.notify();
-                            } else if this.selected_node.is_none() {
-                                // No selection yet - select rightmost node
-                                if let Some(last) = this.spatial_sorted_nodes().last().copied() {
-                                    this.selected_node = Some(last);
-                                    this.center_on_node(last);
-                                    cx.notify();
-                                }
-                            }
-                            return;
-                        }
-                        "k" | "up" => {
-                            if let Some(next) = this.find_next_node(Direction::Up) {
-                                this.selected_node = Some(next);
-                                this.center_on_node(next);
-                                cx.notify();
-                            } else if this.selected_node.is_none() {
-                                // No selection yet - select bottommost node
-                                if let Some(last) = this.spatial_sorted_nodes().last().copied() {
-                                    this.selected_node = Some(last);
-                                    this.center_on_node(last);
-                                    cx.notify();
-                                }
-                            }
-                            return;
-                        }
-                        "j" | "down" => {
-                            if let Some(next) = this.find_next_node(Direction::Down) {
-                                this.selected_node = Some(next);
-                                this.center_on_node(next);
-                                cx.notify();
-                            } else if this.selected_node.is_none() {
-                                // No selection yet - select topmost node
-                                if let Some(first) = this.spatial_sorted_nodes().first().copied() {
-                                    this.selected_node = Some(first);
-                                    this.center_on_node(first);
-                                    cx.notify();
-                                }
-                            }
-                            return;
-                        }
-                        _ => {}
-                    }
-                }
-
-                // Move selected table with Alt+arrows / Alt+hjkl
-                if mods.alt && !mods.shift && !mods.ctrl {
-                    let Some(selected) = this.selected_node else {
-                        return;
-                    };
-
-                    // Get current position (from override or layout)
-                    let current_pos = this
-                        .node_position_overrides
-                        .get(&selected)
-                        .copied()
-                        .or_else(|| {
-                            this.layout
-                                .as_ref()
-                                .and_then(|l| l.nodes.get(&selected))
-                                .map(|n| Point::new(n.x, n.y))
-                        })
-                        .unwrap_or(Point::new(0.0, 0.0));
-
-                    let mut new_pos = current_pos;
-
-                    match chord.key.as_str() {
-                        "h" | "left" => {
-                            new_pos.x -= 20.0;
-                        }
-                        "l" | "right" => {
-                            new_pos.x += 20.0;
-                        }
-                        "k" | "up" => {
-                            new_pos.y -= 20.0;
-                        }
-                        "j" | "down" => {
-                            new_pos.y += 20.0;
-                        }
-                        _ => return,
-                    }
-
-                    this.node_position_overrides.insert(
-                        selected,
-                        Point::new(snap_to_lattice(new_pos.x), snap_to_lattice(new_pos.y)),
-                    );
-                    cx.notify();
+                if let Some(command) = default_keymap().resolve(context, &chord) {
+                    this.dispatch_command(command, window, cx);
                 }
             }))
             .child({
@@ -3905,6 +3861,9 @@ mod tests;
 
 #[cfg(test)]
 mod rail_tests;
+
+#[cfg(test)]
+mod keymap_tests;
 
 impl EventEmitter<DocumentEvent> for SchemaVizDocument {}
 

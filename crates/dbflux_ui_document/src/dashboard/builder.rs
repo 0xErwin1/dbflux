@@ -154,17 +154,15 @@ impl PanelContextMenu {
 // Time-range preset helpers
 // ---------------------------------------------------------------------------
 
-/// All five time-range preset variants in display order. The English label
-/// column is retained for structural coverage only — `preset_label` matches
-/// on the enum variant directly and resolves the translated string through
-/// the catalog instead of reading this table.
+/// All five time-range preset variants in display order. Display labels come
+/// from `preset_label`, which resolves them through the catalog.
 #[allow(dead_code)]
-pub(super) const TIME_RANGE_PRESETS: &[(TimeRangePreset, &str)] = &[
-    (TimeRangePreset::Last15min, "Last 15 min"),
-    (TimeRangePreset::LastHour, "Last 1 hour"),
-    (TimeRangePreset::Last6Hours, "Last 6 hours"),
-    (TimeRangePreset::Last24Hours, "Last 24 hours"),
-    (TimeRangePreset::Last7Days, "Last 7 days"),
+pub(super) const TIME_RANGE_PRESETS: &[TimeRangePreset] = &[
+    TimeRangePreset::Last15min,
+    TimeRangePreset::LastHour,
+    TimeRangePreset::Last6Hours,
+    TimeRangePreset::Last24Hours,
+    TimeRangePreset::Last7Days,
 ];
 
 /// Returns the translated display label for a `TimeRangePreset`.
@@ -794,6 +792,35 @@ mod tests {
         assert_eq!(TIME_RANGE_PRESETS.len(), 5);
     }
 
+    /// Every preset in the table is labeled through the translated catalog,
+    /// in display order, with one distinct label per preset.
+    #[test]
+    fn time_range_presets_table_labels_come_from_the_catalog() {
+        let expected_keys = [
+            "document.dashboard.builder.preset.last_15_min",
+            "document.dashboard.builder.preset.last_hour",
+            "document.dashboard.builder.preset.last_6_hours",
+            "document.dashboard.builder.preset.last_24_hours",
+            "document.dashboard.builder.preset.last_7_days",
+        ];
+
+        let labels: Vec<String> = TIME_RANGE_PRESETS
+            .iter()
+            .map(|preset| preset_label(*preset))
+            .collect();
+        let expected: Vec<String> = expected_keys
+            .iter()
+            .map(|key| dbflux_i18n::t!(key))
+            .collect();
+
+        assert_eq!(labels, expected);
+
+        let mut distinct = labels.clone();
+        distinct.sort();
+        distinct.dedup();
+        assert_eq!(distinct.len(), TIME_RANGE_PRESETS.len());
+    }
+
     /// `preset_label` routes every `TimeRangePreset` variant through the
     /// `document.dashboard.builder.preset.*` catalog instead of returning a
     /// hardcoded English string.
@@ -834,7 +861,7 @@ mod tests {
             "document.dashboard.builder.preset.last_7_days",
         ];
         for key in keys {
-            for locale in ["en", "es"] {
+            for locale in ["en", "es", "ko", "zh_Hans"] {
                 let value = dbflux_i18n::t!(key, locale = locale);
                 assert!(!value.is_empty(), "{key} resolved empty in {locale}");
                 assert_ne!(value, key, "{key} resolved to its own key in {locale}");
