@@ -80,6 +80,15 @@ leer el error. Elige **Reintentar** en el menú contextual de la fila, o presion
 sobre la fila, para volver a conectar. La marca se borra cuando empieza un nuevo
 intento, cuando la conexión tiene éxito o cuando editas la conexión.
 
+Desconectar una conexión que todavía tiene una consulta en ejecución pregunta
+primero: **Cancelar consulta** detiene la consulta y mantiene la conexión
+abierta, **Seguir esperando** no toca ninguna de las dos, y **Desconectar de
+todos modos** cancela la consulta y desconecta. `Enter` elige **Cancelar
+consulta** y `Escape` elige **Seguir esperando**. Cerrar la ventana de DBFlux
+mientras hay una consulta en ejecución en cualquier conexión hace la misma
+pregunta, nombrando las conexiones, con **Salir de todos modos** en lugar de
+**Desconectar de todos modos**.
+
 ---
 
 ## 2. Explorar el schema

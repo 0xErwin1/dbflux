@@ -73,6 +73,13 @@ from the row's context menu, or press `Enter` on the row, to connect again. The 
 clears when a new attempt starts, when the connection succeeds, or when you edit
 the connection.
 
+Disconnecting a connection that still has a query running asks first: **Cancel
+query** stops the query and keeps the connection open, **Keep waiting** leaves
+both alone, and **Disconnect anyway** cancels the query and disconnects. `Enter`
+picks **Cancel query** and `Escape` picks **Keep waiting**. Closing the DBFlux
+window while a query runs on any connection asks the same question, naming the
+connections, with **Quit anyway** in place of **Disconnect anyway**.
+
 ---
 
 ## 2. Browsing the Schema
