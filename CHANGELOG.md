@@ -433,7 +433,9 @@ All notable changes to DBFlux will be documented in this file.
   and buttons, a server-side sort, the query builder's Run and Reset, the
   relational filter's re-run once foreign keys load, and a chart re-run. A
   staged insert or delete on its own now counts as an unsaved edit for every
-  one of these checks, including refresh.
+  one of these checks, including refresh. Sorting a static result or a
+  collection in memory carries the edits over to the reordered rows by primary
+  key, and is refused with the same warning when the result has none.
 
 * **Filters and mutation confirmation samples run on PostgreSQL** — the data
   grid sent visual SELECTs, their row counts and the sample rows of the

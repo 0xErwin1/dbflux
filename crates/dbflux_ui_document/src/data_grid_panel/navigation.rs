@@ -32,17 +32,42 @@ impl DataGridPanel {
                 .map(|column_ix| TableSortState::new(column_ix, column.direction))
         });
 
-        if let Some(table_state) = self.grid_table.table_state.clone() {
-            table_state.update(cx, |state, cx| {
-                match loaded_sort {
-                    Some(sort) => state.set_sort_without_emit(sort),
-                    None => state.clear_sort_without_emit(),
-                }
-                cx.notify();
-            });
+        self.restore_sort_indicator(loaded_sort, cx);
+        true
+    }
+
+    /// Refuses an in-memory sort that would lose unsaved edits. The sort
+    /// carries edits over by primary key, so it is refused only when the
+    /// result has none and the edits are addressed by row position, which the
+    /// sort reorders. The header arrow goes back to the current order.
+    fn local_sort_blocked(&mut self, cx: &mut Context<Self>) -> bool {
+        if !self.pending_edits_lack_row_identity(cx) || !self.reload_blocked_by_pending_edits(cx) {
+            return false;
         }
 
+        let current_sort = self
+            .grid_table
+            .local_sort_state
+            .map(|sort| TableSortState::new(sort.column_ix, sort.direction));
+
+        self.restore_sort_indicator(current_sort, cx);
         true
+    }
+
+    /// Puts the table's header arrow back to `sort` after a refused sort
+    /// request: the table moves the arrow before it asks the panel to sort.
+    fn restore_sort_indicator(&mut self, sort: Option<TableSortState>, cx: &mut Context<Self>) {
+        let Some(table_state) = self.grid_table.table_state.clone() else {
+            return;
+        };
+
+        table_state.update(cx, |state, cx| {
+            match sort {
+                Some(sort) => state.set_sort_without_emit(sort),
+                None => state.clear_sort_without_emit(),
+            }
+            cx.notify();
+        });
     }
 
     pub(super) fn handle_sort_request(
@@ -115,7 +140,7 @@ impl DataGridPanel {
             });
 
             cx.notify();
-        } else {
+        } else if !self.local_sort_blocked(cx) {
             // Client-side sort: sort in memory
             self.apply_local_sort(col_ix, direction, cx);
         }
@@ -187,6 +212,10 @@ impl DataGridPanel {
 
             cx.notify();
         } else {
+            if self.local_sort_blocked(cx) {
+                return;
+            }
+
             // Restore original row order
             if let Some(original_order) = self.grid_table.original_row_order.take() {
                 let mut restore_indices: Vec<(usize, usize)> = original_order
@@ -205,6 +234,7 @@ impl DataGridPanel {
 
             self.grid_table.local_sort_state = None;
             self.pending.rebuild = true;
+            self.pending.rebuild_keeps_edits = true;
             cx.notify();
         }
     }
@@ -255,7 +285,9 @@ impl DataGridPanel {
             column_ix: col_ix,
             direction,
         });
+        // The rows only move, so the edits staged on them follow by primary key.
         self.pending.rebuild = true;
+        self.pending.rebuild_keeps_edits = true;
         cx.notify();
     }
 

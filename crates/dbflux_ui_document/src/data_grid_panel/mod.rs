@@ -434,6 +434,9 @@ struct PendingActions {
     /// Set with `refresh` by a landed mutation: the reload it issues carries
     /// the edits still staged on other rows over to its result.
     refresh_keeps_edits: bool,
+    /// Set with `rebuild` by an in-memory sort: the rebuild carries the staged
+    /// edits over to the reordered rows.
+    rebuild_keeps_edits: bool,
     toast: Option<PendingToast>,
     modal_open: Option<PendingModalOpen>,
     document_preview: Option<PendingDocumentPreview>,
@@ -518,7 +521,7 @@ struct GridTableState {
     /// issues takes the flag into its request and hands it back just before
     /// its own result is applied, where `rebuild_table` consumes it. A rebuild
     /// for anything else, or a request that fails or is cancelled, never
-    /// sees it.
+    /// sees it. An in-memory sort arms it for its own rebuild only.
     keep_edits_on_reload: bool,
 }
 
@@ -9493,6 +9496,125 @@ mod tests {
         window.update(|_, app| {
             assert!(panel.read(app).pending.requery.is_some());
         });
+    }
+
+    /// Panel over a static query result, which sorts in memory.
+    fn static_keyed_panel(
+        cx: &mut TestAppContext,
+        pk_columns: Vec<String>,
+    ) -> (gpui::Entity<DataGridPanel>, &mut gpui::VisualTestContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let window = cx.add_empty_window();
+
+        let panel = window.update(|window, app| {
+            let source = DataSource::QueryResult {
+                result: Arc::new(keyed_result(&["1", "2"])),
+                original_query: "SELECT * FROM users".to_string(),
+                profile_id: None,
+            };
+
+            let panel = app
+                .new(|cx| DataGridPanel::new_internal(source, app_state, pk_columns, window, cx));
+            panel.update(app, |panel, cx| {
+                panel.set_result(keyed_result(&["1", "2"]), cx);
+            });
+            panel
+        });
+
+        (panel, window)
+    }
+
+    /// Sorts the key column descending through the table header, then runs
+    /// the rebuild the next render would.
+    fn sort_ids_descending(
+        panel: &gpui::Entity<DataGridPanel>,
+        window: &mut gpui::VisualTestContext,
+        stage_edit: bool,
+    ) {
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                if stage_edit {
+                    stage_name(panel, 1, "bob", cx);
+                }
+
+                let table_state = panel.grid_table.table_state.clone().expect("table state");
+                table_state.update(cx, |state, cx| {
+                    state.set_sort(Some(TableSortState::descending(0)), cx);
+                });
+            });
+        });
+
+        window.update(|window, app| {
+            panel.update(app, |panel, cx| panel.process_pending_actions(window, cx));
+        });
+        window.run_until_parked();
+    }
+
+    fn first_id(
+        panel: &gpui::Entity<DataGridPanel>,
+        window: &mut gpui::VisualTestContext,
+    ) -> String {
+        window.update(|_, app| match &panel.read(app).result.rows[0][0] {
+            dbflux_core::Value::Text(id) => id.clone(),
+            other => panic!("unexpected key cell {other:?}"),
+        })
+    }
+
+    #[gpui::test]
+    fn local_sort_with_pending_edits_keeps_them_on_their_rows(cx: &mut TestAppContext) {
+        let (panel, window) = static_keyed_panel(cx, vec!["id".to_string()]);
+
+        sort_ids_descending(&panel, window, true);
+
+        assert_eq!(first_id(&panel, window), "2");
+        window.update(|_, app| {
+            assert_eq!(
+                staged_names(panel.read(app), app),
+                vec![(0, "bob".to_string())],
+                "the edit must move with the row with id 2"
+            );
+        });
+        assert_eq!(last_toast_title(window), None);
+    }
+
+    #[gpui::test]
+    fn local_sort_without_a_primary_key_and_with_edits_is_refused(cx: &mut TestAppContext) {
+        let (panel, window) = static_keyed_panel(cx, Vec::new());
+
+        sort_ids_descending(&panel, window, true);
+
+        assert_eq!(first_id(&panel, window), "1", "the rows must not move");
+        window.update(|_, app| {
+            let panel = panel.read(app);
+            assert_eq!(staged_names(panel, app), vec![(1, "bob".to_string())]);
+            assert_eq!(
+                panel
+                    .grid_table
+                    .table_state
+                    .as_ref()
+                    .expect("table state")
+                    .read(app)
+                    .sort(),
+                None,
+                "the header must show the order the rows are in"
+            );
+        });
+        assert_eq!(
+            last_toast_title(window),
+            Some(crate::labels::grid_reload_blocked_by_pending_edits())
+        );
+    }
+
+    #[gpui::test]
+    fn local_sort_without_pending_edits_sorts_as_before(cx: &mut TestAppContext) {
+        let (panel, window) = static_keyed_panel(cx, Vec::new());
+
+        sort_ids_descending(&panel, window, false);
+
+        assert_eq!(first_id(&panel, window), "2");
+        assert_eq!(last_toast_title(window), None);
     }
 
     #[gpui::test]

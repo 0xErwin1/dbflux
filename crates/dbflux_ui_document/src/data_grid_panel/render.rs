@@ -243,6 +243,10 @@ impl DataGridPanel {
         }
 
         if std::mem::take(&mut self.pending.rebuild) {
+            if std::mem::take(&mut self.pending.rebuild_keeps_edits) {
+                self.grid_table.keep_edits_on_reload = true;
+            }
+
             let sort = self
                 .grid_table
                 .local_sort_state
