@@ -23,6 +23,7 @@ access:
   proxy_type: 类型
   proxy_host: 地址
   proxy_auth: 认证
+  proxy_auth_basic_with_username: "基本认证（%{username}）"
   proxy_enabled: 已启用
   proxy_no_proxy: 不使用代理
   value_yes: 是
