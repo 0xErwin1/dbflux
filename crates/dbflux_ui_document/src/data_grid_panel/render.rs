@@ -2703,6 +2703,7 @@ impl DataGridPanel {
                                 let selection = ManualChartSelection {
                                     x_col: x_col_snapshot,
                                     y_cols: y_col_indices.clone(),
+                                    group_by: None,
                                 };
                                 shell.update(cx, |s, _| {
                                     s.chart_manual_selection = Some(selection);

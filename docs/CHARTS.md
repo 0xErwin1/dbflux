@@ -206,7 +206,10 @@ Opening a collection on a connection whose category is
 data grid the Data, Chart and JSON views that query results have. The first page
 opens as a chart when `detect_chart_columns` returns `Ok`, with the axes seeded
 by `default_bindings_for_time_series` (time on X, the first numeric column on Y,
-the first `Text` column as the group). Data shows the rows in the grid rather
+the first `Text` column as the group). A group draws one line per distinct
+value of its column, labelled by that value, so a tag such as `host` gives each
+host its own line. The same applies when the group is picked in the axis bar.
+Data shows the rows in the grid rather
 than the document tree other collections use. A refresh, whether manual,
 automatic or a page change, keeps the view the user picked, and falls back to
 Data only when the new page is no longer chartable.

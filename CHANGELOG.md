@@ -26,6 +26,13 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **Chart group splits the lines** — a chart's Group binding was dropped
+  before rendering and the chart engine never split series by it, so a
+  measurement with tags `host=a` and `host=b` drew one line zigzagging
+  between both hosts, and the axis bar showed `Group —`. The first text
+  column now becomes the default group for a time-series collection, and a
+  group, default or picked in the axis bar, draws one line per value.
+
 * **Time-series measurements open as a chart** — opening a measurement on an
   InfluxDB connection showed a document tree, the toolbar read
   `SELECT * FROM <bucket>.<measurement>` and the status bar `find ...`,

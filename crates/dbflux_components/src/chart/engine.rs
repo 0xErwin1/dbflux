@@ -157,6 +157,9 @@ impl ChartView {
             return Err(ChartBuildError::Empty);
         }
 
+        let spec = spec.with_group_series(result);
+        let group_column = spec.binding.group_by;
+
         let x_col = spec.x_axis.column_index;
         if x_col >= result.columns.len() {
             return Err(ChartBuildError::InvalidXColumn(x_col));
@@ -195,8 +198,20 @@ impl ChartView {
             let mut any_valid = false;
 
             for s in &spec.series {
+                // A grouped series only plots the rows of its own group value.
+                let in_group = match (&s.group_value, group_column) {
+                    (Some(value), Some(column)) => {
+                        row.get(column).map(crate::chart::spec::group_key).as_ref() == Some(value)
+                    }
+                    _ => true,
+                };
+
                 let col_kind = result.columns[s.column_index].kind;
-                let y_val = extract_f64(&row[s.column_index], col_kind == ColumnKind::Timestamp);
+                let y_val = if in_group {
+                    extract_f64(&row[s.column_index], col_kind == ColumnKind::Timestamp)
+                } else {
+                    None
+                };
                 match y_val {
                     Some(y) => {
                         y_vals.push(y);
@@ -282,16 +297,27 @@ impl ChartView {
         let mut source_indices_per_series: Vec<Vec<usize>> =
             Vec::with_capacity(raw_series_sorted.len());
 
-        for ys in &raw_series_sorted {
-            let pts: Vec<(f64, f64)> = raw_x_sorted
+        for (series_idx, ys) in raw_series_sorted.iter().enumerate() {
+            // A grouped series has no value on rows of other groups. Those rows
+            // are dropped rather than kept as NaN, so each group draws its own
+            // continuous line instead of dipping to the axis between points.
+            let grouped = spec
+                .series
+                .get(series_idx)
+                .is_some_and(|series| series.group_value.is_some());
+
+            let (pts, series_source_indices): (Vec<(f64, f64)>, Vec<usize>) = raw_x_sorted
                 .iter()
                 .zip(ys.iter())
-                .map(|(&x, &y)| (x, y))
-                .collect();
+                .zip(sorted_source_indices.iter())
+                .filter(|((_, y), _)| !grouped || y.is_finite())
+                .map(|((&x, &y), &source)| ((x, y), source))
+                .unzip();
+            let n = pts.len();
 
             if n > threshold {
                 if track_indices {
-                    let with_idx = lttb_with_indices(&pts, &sorted_source_indices, threshold);
+                    let with_idx = lttb_with_indices(&pts, &series_source_indices, threshold);
                     let (dec_pts, src_idx): (Vec<_>, Vec<_>) = with_idx.into_iter().unzip();
                     decimated.push(dec_pts);
                     source_indices_per_series.push(src_idx);
@@ -301,7 +327,7 @@ impl ChartView {
             } else {
                 decimated.push(pts);
                 if track_indices {
-                    source_indices_per_series.push(sorted_source_indices.clone());
+                    source_indices_per_series.push(series_source_indices);
                 }
             }
         }
@@ -3053,6 +3079,7 @@ mod tests {
                     column_index: col,
                     label: format!("series_{}", slot),
                     color_slot: slot as u8,
+                    group_value: None,
                 })
                 .collect(),
             legend_visible: false,
@@ -3067,6 +3094,70 @@ mod tests {
             track_source_indices: false,
             y_scale: crate::chart::spec::YScale::Linear,
         }
+    }
+
+    /// Rows alternate between tag values `a` and `b`, as an InfluxQL browse
+    /// of a measurement with two series returns them.
+    fn two_host_result() -> QueryResult {
+        let rows = (0..6)
+            .map(|i| {
+                let host = if i % 2 == 0 { "a" } else { "b" };
+                let load = if host == "a" { 10.0 } else { 90.0 };
+                vec![
+                    Value::Int(1_000 * i),
+                    Value::Float(load + i as f64),
+                    Value::Text(host.to_string()),
+                ]
+            })
+            .collect();
+
+        QueryResult::table(
+            vec![
+                make_col("time", ColumnKind::Timestamp),
+                make_col("load", ColumnKind::Float),
+                make_col("host", ColumnKind::Text),
+            ],
+            rows,
+            None,
+            Duration::ZERO,
+        )
+    }
+
+    #[test]
+    fn build_draws_one_series_per_group_value() {
+        let mut spec = simple_spec(0, &[1]);
+        spec.binding.group_by = Some(2);
+
+        let view = ChartView::build(&two_host_result(), spec).expect("build should succeed");
+
+        let labels: Vec<&str> = view
+            .spec_series()
+            .iter()
+            .map(|s| s.label.as_str())
+            .collect();
+        assert_eq!(labels, vec!["a", "b"], "one line per host");
+
+        let decimated = &view.render_model.decimated;
+        assert_eq!(decimated.len(), 2);
+        assert_eq!(
+            decimated[0].iter().map(|(_, y)| *y).collect::<Vec<_>>(),
+            vec![10.0, 12.0, 14.0],
+            "host a keeps only its own points"
+        );
+        assert_eq!(
+            decimated[1].iter().map(|(_, y)| *y).collect::<Vec<_>>(),
+            vec![91.0, 93.0, 95.0],
+            "host b keeps only its own points"
+        );
+    }
+
+    #[test]
+    fn build_without_group_keeps_one_series_across_groups() {
+        let view = ChartView::build(&two_host_result(), simple_spec(0, &[1]))
+            .expect("build should succeed");
+
+        assert_eq!(view.spec_series().len(), 1);
+        assert_eq!(view.render_model.decimated[0].len(), 6);
     }
 
     #[test]

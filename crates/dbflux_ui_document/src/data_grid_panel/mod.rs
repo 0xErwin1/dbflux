@@ -9443,8 +9443,9 @@ mod tests {
 
     const STUB_FLUX_BROWSE: &str = "from(bucket: \"metrics\")\n  |> range(start: -24h)\n  |> filter(fn: (r) => r._measurement == \"system\")\n  |> limit(n: 100)";
 
-    /// Time, one numeric field and one text tag: the shape chart detection
-    /// accepts, as an InfluxQL browse of a measurement returns it.
+    /// Time, one numeric field and one text tag with two values (`a`, `b`),
+    /// interleaved newest first, as an InfluxQL browse of a measurement with
+    /// two series returns them.
     fn time_series_rows() -> QueryResult {
         let column = |name: &str, kind: ColumnKind| ColumnMeta {
             name: name.to_string(),
@@ -9462,12 +9463,13 @@ mod tests {
                 column("load", ColumnKind::Float),
                 column("host", ColumnKind::Text),
             ],
-            (0..3)
+            (0..6)
                 .map(|offset| {
+                    let host = if offset % 2 == 0 { "a" } else { "b" };
                     vec![
                         dbflux_core::Value::DateTime(now - chrono::Duration::seconds(offset)),
                         dbflux_core::Value::Float(offset as f64),
-                        dbflux_core::Value::Text("server-a".to_string()),
+                        dbflux_core::Value::Text(host.to_string()),
                     ]
                 })
                 .collect(),
@@ -9559,7 +9561,7 @@ mod tests {
             &self,
             _request: &dbflux_core::CollectionCountRequest,
         ) -> Result<u64, dbflux_core::DbError> {
-            Ok(3)
+            Ok(6)
         }
 
         fn query_generator(&self) -> Option<&dyn dbflux_core::QueryGenerator> {
@@ -9749,6 +9751,48 @@ mod tests {
                     ("find", "metrics.system".to_string()),
                     "a driver without a browse query keeps the generic label"
                 );
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn time_series_collection_chart_draws_one_line_per_tag_value(cx: &mut TestAppContext) {
+        let (app_state, profile_id) = register_time_series_connection(cx);
+        let (panel, window) = open_collection_panel(cx, app_state, profile_id);
+
+        window.update(|window, app| {
+            panel.update(app, |panel, cx| panel.refresh(window, cx));
+        });
+        window.run_until_parked();
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                let shell = panel
+                    .chart
+                    .chart_shell
+                    .clone()
+                    .expect("a chartable result creates the chart shell");
+                let bindings = shell.read(cx).active_bindings();
+
+                assert_eq!(bindings.x, 0, "time on X");
+                assert_eq!(bindings.y, vec![1], "the first field on Y");
+                assert_eq!(
+                    bindings.group_by,
+                    Some(2),
+                    "the first text column (the tag) groups the chart"
+                );
+
+                let chart = panel
+                    .ensure_chart_view(cx)
+                    .expect("the chart view builds from the browse result");
+                let labels: Vec<String> = chart
+                    .read(cx)
+                    .spec_series()
+                    .iter()
+                    .map(|series| series.label.clone())
+                    .collect();
+
+                assert_eq!(labels, vec!["a".to_string(), "b".to_string()]);
             });
         });
     }

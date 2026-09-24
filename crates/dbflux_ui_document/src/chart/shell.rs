@@ -247,7 +247,7 @@ impl ChartShell {
             return self.chart_view.clone();
         }
 
-        let mut spec = if let Some(manual) = &self.chart_manual_selection {
+        let spec = if let Some(manual) = &self.chart_manual_selection {
             ChartSpec::from_manual_selection(manual, &result.columns, 10_000)
         } else {
             match &self.chart_detection {
@@ -264,6 +264,8 @@ impl ChartShell {
             }
         }?;
 
+        // Split grouped series first so the legend rule counts the lines drawn.
+        let mut spec = spec.with_group_series(result);
         spec.legend_visible = self.chart_legend_visible && spec.series.len() > 1;
         spec.y_scale = self.y_scale;
         spec.kind = self.chart_kind;
@@ -355,6 +357,7 @@ impl ChartShell {
         self.chart_manual_selection = Some(ManualChartSelection {
             x_col: bindings.x,
             y_cols: bindings.y,
+            group_by: bindings.group_by,
         });
 
         self.chart_view = None;
@@ -483,7 +486,7 @@ impl ChartShell {
             BindingSpec {
                 x: manual.x_col,
                 y: manual.y_cols.clone(),
-                group_by: None,
+                group_by: manual.group_by,
                 filter: None,
                 aggregation: dbflux_components::chart::AggKind::None,
             }
@@ -623,7 +626,16 @@ impl ChartShell {
             return;
         }
 
-        self.chart_manual_selection = Some(ManualChartSelection { x_col, y_cols });
+        let group_by = self
+            .chart_manual_selection
+            .as_ref()
+            .and_then(|manual| manual.group_by);
+
+        self.chart_manual_selection = Some(ManualChartSelection {
+            x_col,
+            y_cols,
+            group_by,
+        });
         self.chart_view = None;
         self.chart_view_observer = None;
         self.chart_hidden_series = HashSet::new();

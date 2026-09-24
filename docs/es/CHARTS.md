@@ -216,6 +216,9 @@ su data grid las vistas Data, Chart y JSON que tienen los resultados de query.
 La primera página se abre como chart cuando `detect_chart_columns` devuelve
 `Ok`, con los ejes sembrados por `default_bindings_for_time_series` (el tiempo en
 X, la primera columna numérica en Y y la primera columna `Text` como grupo).
+Un grupo dibuja una línea por cada valor distinto de su columna, etiquetada con
+ese valor, así que un tag como `host` le da a cada host su propia línea. Lo
+mismo aplica cuando el grupo se elige en la barra de ejes.
 Data muestra las filas en la grilla en lugar del árbol de documentos que usan
 las demás colecciones. Un refresco, sea manual, automático o un cambio de
 página, conserva la vista que eligió el usuario, y vuelve a Data solo cuando la
