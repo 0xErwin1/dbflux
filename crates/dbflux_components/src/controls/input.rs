@@ -180,12 +180,13 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use gpui::{
-        AccessibilityFrame, AppContext as _, Context, Focusable as _, FrameObserver, IntoElement,
-        Modifiers, ParentElement as _, Render, Role, Styled as _, TestAppContext,
-        VisualTestContext, Window, div,
+        AccessibilityFrame, AppContext as _, Bounds, Context, Focusable as _, FrameObserver,
+        IntoElement, Modifiers, ParentElement as _, Pixels, Point, Render, Role, Styled as _,
+        TestAppContext, VisualTestContext, Window, div, point, prelude::FluentBuilder as _, px,
     };
 
-    use super::{Input, InputState};
+    use super::{GpuiInput, Input, InputState};
+    use crate::tokens::Heights;
 
     /// Keeps the latest rendered accessibility frame of the window it observes.
     #[derive(Default)]
@@ -387,5 +388,121 @@ mod tests {
             visual.update(|_, cx| state.read(cx).value()).as_ref(),
             "db.example"
         );
+    }
+
+    /// Where the automation server clicks a text input to focus its editor: vertically
+    /// centered, a third of the width from the left edge and at most 40 px from it.
+    fn text_area_point(bounds: Bounds<Pixels>) -> Point<Pixels> {
+        point(
+            bounds.origin.x + (bounds.size.width / 3.0).min(px(40.0)),
+            bounds.center().y,
+        )
+    }
+
+    /// An input with a trailing clear button, and optionally a leading icon.
+    struct DecoratedField {
+        state: gpui::Entity<InputState>,
+        width: Pixels,
+        leading_icon: bool,
+    }
+
+    impl Render for DecoratedField {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            let input = GpuiInput::new(&self.state)
+                .id("decorated-field")
+                .cleanable(true)
+                .when(self.leading_icon, |input| {
+                    input.prefix(div().size(Heights::ICON_SM))
+                });
+
+            div().size_full().child(div().w(self.width).child(input))
+        }
+    }
+
+    /// Open a window holding one decorated input with text, so its clear button is drawn,
+    /// and return the point the automation server clicks.
+    fn open_decorated_field(
+        width: Pixels,
+        leading_icon: bool,
+        cx: &mut TestAppContext,
+    ) -> (
+        gpui::Entity<DecoratedField>,
+        Point<Pixels>,
+        &mut VisualTestContext,
+    ) {
+        cx.update(gpui_component::init);
+
+        let capture = Arc::new(FrameCapture::default());
+        let capture_for_window = capture.clone();
+        let (view, visual) = cx.add_window_view(move |window, cx| {
+            window.observe_frames(&capture_for_window);
+            window.refresh();
+            let state = cx.new(|cx| InputState::new(window, cx).default_value("abc"));
+            DecoratedField {
+                state,
+                width,
+                leading_icon,
+            }
+        });
+        visual.run_until_parked();
+
+        let bounds = capture
+            .0
+            .lock()
+            .expect("frame capture lock")
+            .as_ref()
+            .and_then(|frame| {
+                frame
+                    .nodes()
+                    .find(|(_, node)| node.id() == "decorated-field")
+                    .map(|(_, node)| node.bounds())
+            })
+            .expect("the input is found by the id it was given");
+
+        (view, text_area_point(bounds), visual)
+    }
+
+    /// Click `target` and type after it, as `focus_element` then `type_text` do.
+    fn click_and_type(
+        view: &gpui::Entity<DecoratedField>,
+        target: Point<Pixels>,
+        visual: &mut VisualTestContext,
+    ) -> (bool, String) {
+        visual.simulate_click(target, Modifiers::none());
+        settle_frame(visual);
+
+        let inserted = visual.update(|window, cx| window.insert_input_text("!", cx));
+        let state = visual.update(|_, cx| view.read(cx).state.clone());
+        let value = visual.update(|_, cx| state.read(cx).value().to_string());
+        (inserted, value)
+    }
+
+    #[gpui::test]
+    fn the_text_area_of_a_narrow_input_with_a_clear_button_focuses_its_editor(
+        cx: &mut TestAppContext,
+    ) {
+        // At this width the bounds center lands on the clear button.
+        let (view, target, visual) = open_decorated_field(px(56.0), false, cx);
+
+        let (inserted, value) = click_and_type(&view, target, visual);
+
+        assert!(
+            inserted,
+            "the click reached the editor, not the clear button"
+        );
+        assert_eq!(value.len(), 4, "one character was typed into {value:?}");
+    }
+
+    #[gpui::test]
+    fn the_text_area_of_an_input_with_a_leading_icon_focuses_its_editor(cx: &mut TestAppContext) {
+        let (view, target, visual) = open_decorated_field(px(320.0), true, cx);
+
+        let (inserted, value) = click_and_type(&view, target, visual);
+
+        assert!(
+            inserted,
+            "the click reached the editor, not the leading icon"
+        );
+        assert_eq!(value.len(), 4, "one character was typed into {value:?}");
     }
 }
