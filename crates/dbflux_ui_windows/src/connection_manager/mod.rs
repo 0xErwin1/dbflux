@@ -173,6 +173,10 @@ enum FormFocus {
     SettingsConfirmDangerous,
     SettingsRequiresWhere,
     SettingsRequiresPreview,
+    SettingsPreConnectHookExtra,
+    SettingsPostConnectHookExtra,
+    SettingsPreDisconnectHookExtra,
+    SettingsPostDisconnectHookExtra,
     SettingsDriverField(u8),
     // Actions (shared between tabs)
     TestConnection,
@@ -822,6 +826,10 @@ impl ConnectionManagerWindow {
             subscribe_input(cx, window, &input_ssm_instance_id),
             subscribe_input(cx, window, &input_ssm_region),
             subscribe_input(cx, window, &input_ssm_remote_port),
+            subscribe_input(cx, window, &conn_pre_hook_extra_input),
+            subscribe_input(cx, window, &conn_post_hook_extra_input),
+            subscribe_input(cx, window, &conn_pre_disconnect_hook_extra_input),
+            subscribe_input(cx, window, &conn_post_disconnect_hook_extra_input),
         ];
         #[cfg(feature = "mcp")]
         subscriptions.push(mcp_client_filter_sub);

@@ -1,4 +1,5 @@
 use super::*;
+use dbflux_components::controls::Input;
 use dbflux_components::primitives::Text;
 use dbflux_components::tokens::{Radii, Widths};
 use gpui::prelude::FluentBuilder;
@@ -105,6 +106,88 @@ impl ConnectionManagerWindow {
         })
     }
 
+    /// Maps a Settings tab focus target to its "extra hooks" field: the label
+    /// key, the snake_case field id and the input it edits.
+    fn hook_extra_field(
+        &self,
+        focus: FormFocus,
+    ) -> Option<(&'static str, &'static str, &Entity<InputState>)> {
+        let settings = &self.settings_tab;
+
+        match focus {
+            FormFocus::SettingsPreConnectHookExtra => Some((
+                "hooks.phase.extra_pre_connect",
+                "pre_connect_hook_extra",
+                &settings.conn_pre_hook_extra_input,
+            )),
+            FormFocus::SettingsPostConnectHookExtra => Some((
+                "hooks.phase.extra_post_connect",
+                "post_connect_hook_extra",
+                &settings.conn_post_hook_extra_input,
+            )),
+            FormFocus::SettingsPreDisconnectHookExtra => Some((
+                "hooks.phase.extra_pre_disconnect",
+                "pre_disconnect_hook_extra",
+                &settings.conn_pre_disconnect_hook_extra_input,
+            )),
+            FormFocus::SettingsPostDisconnectHookExtra => Some((
+                "hooks.phase.extra_post_disconnect",
+                "post_disconnect_hook_extra",
+                &settings.conn_post_disconnect_hook_extra_input,
+            )),
+            _ => None,
+        }
+    }
+
+    /// Returns the "extra hooks" input a Settings tab focus target edits.
+    pub(super) fn settings_hook_extra_input(
+        &self,
+        focus: FormFocus,
+    ) -> Option<&Entity<InputState>> {
+        self.hook_extra_field(focus).map(|(_, _, input)| input)
+    }
+
+    /// Renders one "Extra <phase>" row: the label and the input holding the
+    /// comma-separated hook IDs that run after the phase's dropdown hook.
+    fn render_hook_extra_row(&self, focus_target: FormFocus, cx: &Context<Self>) -> Option<Div> {
+        let (label_key, field_id, input) = self.hook_extra_field(focus_target)?;
+        let label = dbflux_i18n::t!(label_key);
+
+        let focused = self.edit_state == EditState::Navigating
+            && self.active_tab == ActiveTab::Settings
+            && self.form_focus == focus_target;
+        let ring_color = cx.theme().ring;
+
+        let row = div()
+            .flex()
+            .items_center()
+            .gap_3()
+            .child(div().w(px(160.0)).child(Text::caption(label.clone())))
+            .child(
+                div()
+                    .w(Widths::CM_FORM_DROPDOWN)
+                    .rounded(Radii::SM)
+                    .border_2()
+                    .when(focused, |d| d.border_color(ring_color))
+                    .when(!focused, |d| d.border_color(gpui::transparent_black()))
+                    .p(px(2.0))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, window, cx| {
+                            this.enter_edit_mode_for_field(focus_target, window, cx);
+                        }),
+                    )
+                    .child(
+                        Input::new(input)
+                            .id(cm_setting_id(field_id))
+                            .aria_label(label)
+                            .small(),
+                    ),
+            );
+
+        Some(row)
+    }
+
     pub(super) fn render_hooks_rows(&self, _muted: Hsla, cx: &Context<Self>) -> Div {
         let show_process_run_warning = self.has_process_run_hook_selected(cx);
 
@@ -130,15 +213,7 @@ impl ConnectionManagerWindow {
                             .child(self.settings_tab.conn_pre_hook_dropdown.clone()),
                     ),
             )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .child(div().w(px(160.0)).child(Text::caption(dbflux_i18n::t!(
-                        "hooks.phase.extra_pre_connect"
-                    )))),
-            )
+            .children(self.render_hook_extra_row(FormFocus::SettingsPreConnectHookExtra, cx))
             .child(
                 div()
                     .flex()
@@ -156,15 +231,7 @@ impl ConnectionManagerWindow {
                             .child(self.settings_tab.conn_post_hook_dropdown.clone()),
                     ),
             )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .child(div().w(px(160.0)).child(Text::caption(dbflux_i18n::t!(
-                        "hooks.phase.extra_post_connect"
-                    )))),
-            )
+            .children(self.render_hook_extra_row(FormFocus::SettingsPostConnectHookExtra, cx))
             .child(
                 div()
                     .flex()
@@ -182,15 +249,7 @@ impl ConnectionManagerWindow {
                             .child(self.settings_tab.conn_pre_disconnect_hook_dropdown.clone()),
                     ),
             )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .child(div().w(px(160.0)).child(Text::caption(dbflux_i18n::t!(
-                        "hooks.phase.extra_pre_disconnect"
-                    )))),
-            )
+            .children(self.render_hook_extra_row(FormFocus::SettingsPreDisconnectHookExtra, cx))
             .child(
                 div()
                     .flex()
@@ -208,15 +267,7 @@ impl ConnectionManagerWindow {
                             .child(self.settings_tab.conn_post_disconnect_hook_dropdown.clone()),
                     ),
             )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .child(div().w(px(160.0)).child(Text::caption(dbflux_i18n::t!(
-                        "hooks.phase.extra_post_disconnect"
-                    )))),
-            )
+            .children(self.render_hook_extra_row(FormFocus::SettingsPostDisconnectHookExtra, cx))
             .when(show_process_run_warning, |this| {
                 let theme = cx.theme();
                 this.child(
