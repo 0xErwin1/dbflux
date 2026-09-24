@@ -2318,7 +2318,7 @@ language:
 login:
   window_title: Connection Flow
   field:
-    start_url: Start URL
+    verification_url: Verification URL
   action:
     open_browser: Open Browser
     copy_url: Copy URL
@@ -2332,6 +2332,7 @@ login:
   body:
     sign_in_prompt: 'Sign in with %{provider} to continue connecting "%{profile}".'
     instructions: Open the login URL in your browser and finish authentication. DBFlux will continue automatically once the login completes.
+    waiting: Waiting for you to authorize in the browser…
     elapsed: "Login can take up to 5 minutes. Elapsed: %{seconds}s"
     browser_open_failed: "Could not open browser automatically. Open the URL manually. (%{error}; fallback failed: %{fallback_error})"
   error:
@@ -3651,10 +3652,14 @@ ssh:
 sso_wizard:
   title: AWS SSO Wizard
   step:
-    start: "Step 1: Start URL"
-    account: "Step 2: Account"
-    role: "Step 3: Role"
-    confirm: "Step 4: Confirm"
+    start: Start URL
+    account: Account
+    role: Role
+    confirm: Confirm
+  field:
+    profile_name: Profile name
+    start_url: SSO start URL
+    region: Region
   account:
     hint: Use account ID from AWS SSO account discovery
     discovering: Discovering accounts...

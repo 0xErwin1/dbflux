@@ -38,6 +38,14 @@ All notable changes to DBFlux will be documented in this file.
   Up/Down move to the card above or below, crossing into the neighboring
   section's matching column.
 
+* **AWS login and SSO wizard labels** — the login modal captioned the
+  verification URL as "Start URL"; it now reads "Verification URL" and shows a
+  loading indicator while it waits for the browser. The SSO wizard's first-step
+  inputs now have visible labels, which are also their accessible names, and
+  stable `sso-field-*` ids. Its steps appear in the shared wizard rail instead
+  of "Step N:" text, and long account and role lists scroll inside a
+  fixed-height box, so the Back and Next buttons stay in view.
+
 
 ### Added
 
