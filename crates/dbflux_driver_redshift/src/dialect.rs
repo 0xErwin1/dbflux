@@ -73,6 +73,10 @@ impl SqlDialect for RedshiftDialect {
     fn placeholder_style(&self) -> PlaceholderStyle {
         PlaceholderStyle::DollarNumber
     }
+
+    fn supports_drop_cascade(&self) -> bool {
+        true
+    }
 }
 
 pub static REDSHIFT_DIALECT: RedshiftDialect = RedshiftDialect;
@@ -126,6 +130,23 @@ mod tests {
             "LIMIT 25 OFFSET 50"
         );
         assert_eq!(REDSHIFT_DIALECT.limit_offset_clause(25, 0), "LIMIT 25");
+    }
+
+    #[test]
+    fn drop_table_statement_cascades_when_asked() {
+        assert!(REDSHIFT_DIALECT.supports_drop_cascade());
+        assert_eq!(
+            REDSHIFT_DIALECT
+                .drop_table_statement(Some("public"), "orders", true, true)
+                .expect("cascade is supported"),
+            "DROP TABLE IF EXISTS \"public\".\"orders\" CASCADE"
+        );
+        assert_eq!(
+            REDSHIFT_DIALECT
+                .drop_table_statement(Some("public"), "orders", false, false)
+                .expect("a plain drop builds"),
+            "DROP TABLE \"public\".\"orders\""
+        );
     }
 
     #[test]

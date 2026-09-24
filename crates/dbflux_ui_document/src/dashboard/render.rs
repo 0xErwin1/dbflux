@@ -384,7 +384,12 @@ impl Render for DashboardDocument {
         let configure_overlay: gpui::AnyElement =
             if let Some(panel_index) = self.pending_configure_panel_index {
                 match configure_popover::render_configure_popover(self, panel_index, cx) {
-                    Some(el) => deferred(el).into_any_element(),
+                    Some(el) => {
+                        // Only once the popover is drawn: focusing a handle
+                        // nothing renders would strand the keyboard.
+                        self.configure_focus.apply_pending(window, cx);
+                        deferred(el).into_any_element()
+                    }
                     None => div()
                         .id("dashboard-configure-placeholder")
                         .into_any_element(),

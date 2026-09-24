@@ -5416,4 +5416,20 @@ mod tests {
         let result = resolve_write_privilege(false, Some(false), &grants);
         assert_eq!(result, WritePrivilege::Unknown);
     }
+
+    #[test]
+    fn drop_table_statement_rejects_cascade() {
+        assert!(!MysqlDialect.supports_drop_cascade());
+        assert!(
+            MysqlDialect
+                .drop_table_statement(Some("shop"), "orders", true, true)
+                .is_err()
+        );
+        assert_eq!(
+            MysqlDialect
+                .drop_table_statement(Some("shop"), "orders", true, false)
+                .expect("a plain drop builds"),
+            "DROP TABLE IF EXISTS `shop`.`orders`"
+        );
+    }
 }

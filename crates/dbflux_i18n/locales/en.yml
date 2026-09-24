@@ -2510,7 +2510,9 @@ modals:
     confirm_placeholder: Type table name to confirm
     confirm_prompt: 'Type "%{table}" to confirm'
     cascade_warning: "Dependent objects will also be dropped (CASCADE):"
+    dependents_heading: "Objects that depend on this table:"
     delete_warning: This will permanently delete the table and any dependent objects.
+    delete_warning_table_only: This will permanently delete the table.
     relation_kind:
       view: View
       materialized_view: MatView

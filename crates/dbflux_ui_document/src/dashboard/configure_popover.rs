@@ -15,6 +15,7 @@ use dbflux_components::primitives::Text;
 use dbflux_components::semantic::ChartColors;
 use dbflux_components::tokens::Spacing;
 use dbflux_core::ColumnMeta;
+use dbflux_core::LogErr;
 use gpui::prelude::*;
 use gpui::{AnyElement, Context, Entity, IntoElement, div, px};
 
@@ -116,15 +117,29 @@ pub(super) fn render_configure_popover(
         )
         .into_any_element();
 
-    // Bridge ModalShell's App-scoped on_close into the DashboardDocument
-    // entity via a weak handle so the X button closes the popover.
-    let weak_self = cx.weak_entity();
+    // Bridge ModalShell's App-scoped handlers into the DashboardDocument
+    // entity via a weak handle: Escape, the X button and a backdrop click
+    // close the popover, and Enter applies like the Apply button.
     let modal_title = dbflux_i18n::t!("document.dashboard.configure.title", name = panel_title);
     let modal = ModalShell::new(modal_title, body, footer)
         .width(px(720.0))
-        .on_close(move |_window, cx| {
-            if let Some(this) = weak_self.upgrade() {
-                this.update(cx, |this, cx| this.close_configure_panel(cx));
+        .focus_handle(dashboard.configure_focus.handle())
+        .on_close({
+            let weak_self = cx.weak_entity();
+            move |_window, cx| {
+                weak_self
+                    .update(cx, |this, cx| this.close_configure_panel(cx))
+                    .log_err();
+            }
+        })
+        .on_confirm({
+            let weak_self = cx.weak_entity();
+            move |_window, cx| {
+                weak_self
+                    .update(cx, |this, cx| {
+                        this.configure_apply_and_persist(panel_index, cx)
+                    })
+                    .log_err();
             }
         });
 
@@ -374,5 +389,190 @@ mod tests {
         let en = dbflux_i18n::t!("document.dashboard.configure.cancel", locale = "en");
         let es = dbflux_i18n::t!("document.dashboard.configure.cancel", locale = "es");
         assert_ne!(en, es);
+    }
+}
+
+#[cfg(test)]
+mod keyboard_tests {
+    // Explicit imports rather than the parent glob: combining `use super::*`
+    // with `#[gpui::test]` sends the gpui_macros expansion into unbounded
+    // recursion.
+    use crate::chart_document::ChartDocument;
+    use crate::dashboard::{DashboardDocument, DashboardPanelSlot, PanelGridPos};
+    use dbflux_components::chart::{ChartKind, ChartSpec};
+    use dbflux_components::common::time_range::view::TimeRangePanel;
+    use dbflux_components::saved_chart::{SavedChart, SavedChartRefreshPolicy, SavedChartSource};
+    use dbflux_components::theme;
+    use dbflux_storage::bootstrap::StorageRuntime;
+    use dbflux_ui_base::AppStateEntity;
+    use dbflux_ui_base::modals::test_host::{click_backdrop, has_focus, host_modal};
+    use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
+    use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};
+    use uuid::Uuid;
+
+    struct Setup<'a> {
+        dashboard: Entity<DashboardDocument>,
+        app_state: Entity<AppStateEntity>,
+        chart_id: Uuid,
+        window: &'a mut VisualTestContext,
+    }
+
+    /// Opens the Configure popover for a dashboard holding one saved line
+    /// chart, from a focused dashboard, and switches the panel to a bar chart
+    /// without applying it yet.
+    fn open_popover(cx: &mut TestAppContext) -> Setup<'_> {
+        cx.update(theme::init);
+        cx.update(|cx| {
+            let host = cx.new(|_| ToastHost::new());
+            cx.set_global(ToastGlobal { host });
+        });
+        // Saved charts reference their connection profile, so the profile row
+        // has to exist before the chart can be stored.
+        let profile_id = Uuid::new_v4();
+        let storage = StorageRuntime::in_memory().expect("in-memory storage");
+        storage
+            .dbflux_db()
+            .execute(
+                "INSERT INTO cfg_connection_profiles (id, name) VALUES (?1, ?2)",
+                [profile_id.to_string(), "test-profile".to_string()],
+            )
+            .expect("profile stored");
+        let app_state =
+            cx.new(|_| AppStateEntity::new_with_storage_runtime(storage).expect("app state"));
+
+        let mut chart_spec: ChartSpec = serde_json::from_str(
+            r#"{"x_axis":{"column_index":0,"label":"t","kind":"Time","unit":null},"series":[]}"#,
+        )
+        .expect("valid chart spec");
+        chart_spec.kind = ChartKind::Line;
+        let saved = SavedChart {
+            id: Uuid::new_v4(),
+            name: "Latency".to_string(),
+            profile_id,
+            source: SavedChartSource::Query {
+                query: String::new(),
+            },
+            chart_spec,
+            bindings: Default::default(),
+            time_range_preset: None,
+            refresh_policy: SavedChartRefreshPolicy::Off,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+        let chart_id = saved.id;
+        cx.update(|cx| {
+            app_state.update(cx, |state, _| {
+                state
+                    .saved_charts
+                    .upsert(saved.clone())
+                    .expect("saved chart stored");
+            });
+        });
+
+        let (dashboard, _outside, window) = host_modal(cx, {
+            let app_state = app_state.clone();
+            move |window, cx| {
+                let panel = cx.new(|cx| {
+                    ChartDocument::from_saved(&saved, app_state.clone(), window, cx)
+                        .expect("query chart")
+                });
+                let shared_time_range = cx.new(|cx| TimeRangePanel::new("24h", None, window, cx));
+
+                DashboardDocument::new(
+                    Uuid::nil(),
+                    "Ops".to_string(),
+                    vec![DashboardPanelSlot::Loaded {
+                        panel,
+                        grid_pos: PanelGridPos {
+                            grid_row: 0,
+                            grid_column: 0,
+                            grid_width: 6,
+                            grid_height: 4,
+                        },
+                        title_override: None,
+                    }],
+                    shared_time_range,
+                    None,
+                    SavedChartRefreshPolicy::Off,
+                    false,
+                    app_state,
+                    cx,
+                )
+            }
+        });
+
+        window.update(|window, cx| {
+            dashboard.update(cx, |dashboard, cx| {
+                dashboard.focus(window, cx);
+                dashboard.start_configure_panel(0, cx);
+                dashboard.configure_apply_chart_kind(0, ChartKind::Bar, cx);
+            });
+        });
+        window.run_until_parked();
+
+        Setup {
+            dashboard,
+            app_state,
+            chart_id,
+            window,
+        }
+    }
+
+    impl Setup<'_> {
+        fn is_open(&mut self) -> bool {
+            let dashboard = self.dashboard.clone();
+            self.window
+                .update(|_, cx| dashboard.read(cx).pending_configure_panel_index().is_some())
+        }
+
+        fn stored_kind(&mut self) -> Option<ChartKind> {
+            let (app_state, chart_id) = (self.app_state.clone(), self.chart_id);
+            self.window.update(|_, cx| {
+                app_state
+                    .read(cx)
+                    .saved_charts
+                    .chart_by_id(chart_id)
+                    .map(|chart| chart.chart_spec.kind)
+            })
+        }
+
+        fn dashboard_has_focus(&mut self) -> bool {
+            let handle = self
+                .window
+                .update(|_, cx| self.dashboard.read(cx).focus_handle.clone());
+            has_focus(self.window, &handle)
+        }
+    }
+
+    #[gpui::test]
+    fn enter_applies_and_saves_the_configuration(cx: &mut TestAppContext) {
+        let mut setup = open_popover(cx);
+        assert!(setup.is_open());
+
+        setup.window.simulate_keystrokes("enter");
+
+        assert!(!setup.is_open());
+        assert_eq!(setup.stored_kind(), Some(ChartKind::Bar));
+    }
+
+    #[gpui::test]
+    fn escape_closes_without_saving_and_gives_focus_back(cx: &mut TestAppContext) {
+        let mut setup = open_popover(cx);
+
+        setup.window.simulate_keystrokes("escape");
+
+        assert!(!setup.is_open());
+        assert_eq!(setup.stored_kind(), Some(ChartKind::Line));
+        assert!(setup.dashboard_has_focus());
+    }
+
+    #[gpui::test]
+    fn a_backdrop_click_closes_without_saving(cx: &mut TestAppContext) {
+        let mut setup = open_popover(cx);
+
+        click_backdrop(setup.window);
+
+        assert!(!setup.is_open());
+        assert_eq!(setup.stored_kind(), Some(ChartKind::Line));
     }
 }

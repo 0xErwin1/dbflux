@@ -60,15 +60,29 @@ impl SelectQuery {
     /// Produces a human-readable SQL string with all parameter placeholders
     /// replaced by their dialect-quoted literal values.
     ///
-    /// The result is intended for display in a read-only editor tab ("Open in
-    /// editor"). It is NOT suitable for execution — the literal substitution
-    /// is for readability only. The substitution respects the dialect's
+    /// Used for the read-only editor tab ("Open in editor"). The text is the
+    /// same SQL that [`SelectQuery::to_query_request`] executes, because
+    /// drivers do not bind params. The substitution respects the dialect's
     /// placeholder style:
     /// - `?` placeholders (SQLite/MySQL): replaced left-to-right.
     /// - `$N` placeholders (PostgreSQL): each `$N` is replaced by `params[N-1]`.
     /// - `@pN` placeholders (SQL Server): each `@pN` is replaced by `params[N-1]`.
     pub fn materialize_for_editor(&self, dialect: &dyn crate::sql::dialect::SqlDialect) -> String {
         inline_params(&self.sql, &self.params, dialect)
+    }
+
+    /// Builds the `QueryRequest` that executes this SELECT on a driver.
+    ///
+    /// Drivers execute `QueryRequest.sql` verbatim and do not bind
+    /// `QueryRequest.params`, so the bound values are inlined as dialect
+    /// literals (see [`inline_params`]) and the request carries no params.
+    /// Sending the placeholder SQL with `params` set instead makes PostgreSQL
+    /// reject it with "expected N parameters but got 0".
+    pub fn to_query_request(
+        &self,
+        dialect: &dyn crate::sql::dialect::SqlDialect,
+    ) -> crate::query::types::QueryRequest {
+        crate::query::types::QueryRequest::new(inline_params(&self.sql, &self.params, dialect))
     }
 }
 
@@ -184,8 +198,15 @@ fn materialize_numbered_placeholders(
             // Out-of-range or parse error — emit raw.
             result.push_str(&sql[start..i]);
         } else {
-            result.push(bytes[i] as char);
-            i += 1;
+            // Copy the whole run up to the next prefix byte as a string slice.
+            // The prefix is ASCII, so the slice ends on a char boundary and
+            // multi-byte UTF-8 identifiers are preserved.
+            let run_end = bytes[i..]
+                .iter()
+                .position(|byte| *byte == prefix_byte)
+                .map_or(bytes.len(), |offset| i + offset);
+            result.push_str(&sql[i..run_end]);
+            i = run_end;
         }
     }
 
@@ -278,9 +299,9 @@ impl GeneratedMutation {
     /// Produces a human-readable SQL string with all parameter placeholders
     /// replaced by their dialect-quoted literal values.
     ///
-    /// Intended for display in the visual builder preview and the mutation
-    /// confirmation dialog. It is NOT suitable for execution — execution must
-    /// use `sql` + `params` so values stay bound. See
+    /// Used for the visual builder preview and the mutation confirmation
+    /// dialog. The mutation executor runs the same inlined text (see
+    /// [`inline_params`]), because drivers do not bind params. See
     /// [`SelectQuery::materialize_for_editor`] for the SELECT counterpart.
     pub fn materialize_for_editor(&self, dialect: &dyn crate::sql::dialect::SqlDialect) -> String {
         inline_params(&self.sql, &self.params, dialect)
@@ -2409,6 +2430,69 @@ mod tests {
             params: vec![],
         };
         assert_eq!(q.materialize_for_editor(&DIALECT), "SELECT * FROM t");
+    }
+
+    struct DollarLiteralDialect;
+
+    impl crate::sql::dialect::SqlDialect for DollarLiteralDialect {
+        fn quote_identifier(&self, name: &str) -> String {
+            format!("\"{}\"", name.replace('"', "\"\""))
+        }
+
+        fn qualified_table(&self, schema: Option<&str>, table: &str) -> String {
+            match schema {
+                Some(schema) => format!(
+                    "{}.{}",
+                    self.quote_identifier(schema),
+                    self.quote_identifier(table)
+                ),
+                None => self.quote_identifier(table),
+            }
+        }
+
+        fn value_to_literal(&self, value: &Value) -> String {
+            DIALECT.value_to_literal(value)
+        }
+
+        fn escape_string(&self, s: &str) -> String {
+            s.replace('\'', "''")
+        }
+
+        fn placeholder_style(&self) -> crate::sql::dialect::PlaceholderStyle {
+            crate::sql::dialect::PlaceholderStyle::DollarNumber
+        }
+    }
+
+    #[test]
+    fn to_query_request_inlines_params_and_sends_none() {
+        let select = SelectQuery {
+            sql: "SELECT * FROM \"posts\" WHERE \"title\" = $1 AND \"id\" > $2".to_string(),
+            params: vec![Value::Text("it's".to_string()), Value::Int(3)],
+        };
+
+        let request = select.to_query_request(&DollarLiteralDialect);
+
+        assert_eq!(
+            request.sql,
+            "SELECT * FROM \"posts\" WHERE \"title\" = 'it''s' AND \"id\" > 3"
+        );
+        assert!(
+            request.params.is_empty(),
+            "drivers do not bind params, so none may be sent"
+        );
+    }
+
+    #[test]
+    fn materialize_dollar_number_preserves_non_ascii_identifiers() {
+        let select = SelectQuery {
+            sql: "SELECT \"café\" FROM \"naïve_表\" WHERE \"ñame\" = $1".to_string(),
+            params: vec![Value::Text("José".to_string())],
+        };
+
+        assert_eq!(
+            select.to_query_request(&DollarLiteralDialect).sql,
+            "SELECT \"café\" FROM \"naïve_表\" WHERE \"ñame\" = 'José'"
+        );
     }
 
     #[test]

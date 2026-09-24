@@ -610,7 +610,8 @@ fn handle_ui_operation(
             if !window.set_observed_element_value(&node_id, &value, cx) {
                 return Err(BridgeError::new(
                     ErrorCode::Unsupported,
-                    "semantic node has no accessibility value handler in the current frame",
+                    "semantic node is read-only or has no accessibility value handler in the \
+                     current frame",
                 ));
             }
             window.refresh();

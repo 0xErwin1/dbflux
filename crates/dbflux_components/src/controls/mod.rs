@@ -13,8 +13,8 @@ pub use dropdown::{Dropdown, DropdownDismissed, DropdownItem, DropdownSelectionC
 pub use input::{
     CodeActionProvider, CompletionProvider, GpuiInput, Input, InputContentType, InputEnter,
     InputEscape, InputEvent, InputIndentInline, InputMoveDown, InputMoveUp, InputOutdentInline,
-    InputPosition, InputSearch, InputState, Rope, RopeExt, TriggerCompletion,
-    register_input_overrides,
+    InputPosition, InputSearch, InputState, ReadOnlyAccessibility, ReadOnlyEditor, Rope, RopeExt,
+    TriggerCompletion, register_input_overrides,
 };
 pub use readonly_text_view::ReadonlyTextView;
 pub use select::Select;

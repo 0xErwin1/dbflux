@@ -111,6 +111,75 @@ mod tests {
         );
     }
 
+    struct DollarDialect;
+
+    impl SqlDialect for DollarDialect {
+        fn quote_identifier(&self, name: &str) -> String {
+            format!("\"{}\"", name)
+        }
+
+        fn qualified_table(&self, schema: Option<&str>, table: &str) -> String {
+            match schema {
+                Some(schema) => format!("\"{}\".\"{}\"", schema, table),
+                None => format!("\"{}\"", table),
+            }
+        }
+
+        fn value_to_literal(&self, value: &crate::Value) -> String {
+            DefaultSqlDialect.value_to_literal(value)
+        }
+
+        fn escape_string(&self, s: &str) -> String {
+            s.replace('\'', "''")
+        }
+
+        fn placeholder_style(&self) -> PlaceholderStyle {
+            PlaceholderStyle::DollarNumber
+        }
+    }
+
+    #[test]
+    fn relational_filter_requests_carry_inlined_values_for_dollar_dialects() {
+        let fks = [
+            make_fk("rf_posts", "created_by_id", "rf_users", "id"),
+            make_fk("rf_users", "org_id", "rf_organizations", "id"),
+        ];
+
+        let lowering = parse_and_resolve(
+            "created_by.org.name = 'Acme'",
+            make_source("rf_posts"),
+            &fks,
+            &DollarDialect,
+        )
+        .expect("both hops resolve through the FK column names");
+
+        assert_eq!(lowering.spec.joins.len(), 2);
+
+        let select =
+            crate::select_query_from_spec(&lowering.spec, &DollarDialect).expect("build select");
+        let count = count::count_query_from_spec(&lowering.spec, &DollarDialect);
+
+        assert!(select.sql.contains("$1"), "generator emits a placeholder");
+        assert_eq!(select.params.len(), 1);
+
+        for request in [
+            select.to_query_request(&DollarDialect),
+            count.to_query_request(&DollarDialect),
+        ] {
+            assert!(
+                !request.sql.contains("$1"),
+                "placeholder must be inlined: {}",
+                request.sql
+            );
+            assert!(
+                request.sql.contains("'Acme'"),
+                "value must be inlined as a literal: {}",
+                request.sql
+            );
+            assert!(request.params.is_empty());
+        }
+    }
+
     #[test]
     fn module_exists() {
         // Smoke: the public function is callable from the module path.

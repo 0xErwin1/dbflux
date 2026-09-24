@@ -21,6 +21,7 @@ use dbflux_app::AppState;
 use dbflux_components::components::tree_nav::{self, GutterInfo};
 use dbflux_components::controls::{GpuiInput as Input, InputEvent, InputState};
 use dbflux_components::icons::AppIcon;
+use dbflux_components::modals::shell::ModalFocus;
 use dbflux_components::primitives::Text;
 use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_core::ConnectedProfile;
@@ -970,6 +971,8 @@ pub struct Sidebar {
     pending_delete_item: Option<String>,
     /// Delete confirmation modal state (for context menu delete)
     delete_confirm_modal: Option<DeleteConfirmState>,
+    /// Keyboard focus for the inline delete confirmation.
+    delete_modal_focus: ModalFocus,
     /// Whether the add menu dropdown is open
     add_menu_open: bool,
     child_picker: Option<ChildPickerState>,
@@ -1259,6 +1262,7 @@ impl Sidebar {
             scripts_selection_anchor: None,
             pending_delete_item: None,
             delete_confirm_modal: None,
+            delete_modal_focus: ModalFocus::new(cx),
             add_menu_open: false,
             child_picker: None,
             pending_child_picker_item: None,

@@ -46,16 +46,21 @@ Exposes tabular snapshots of running server state:
 - `pg.activity` — current sessions from `pg_stat_activity` (query text, state, wait event, duration)
 - `pg.locks` — active locks from `pg_locks` joined with `pg_class`
 
-- Single-statement row limits stream results, retain at most the requested count, and report whether rows were omitted; execution always drains to completion.
-- Unsupported bounded batches and requested statement timeouts are rejected before execution.
+- Row limits stream results, retain at most the requested count across the whole request, and report for each result set whether it omitted rows; execution always drains to completion.
+- A row-limited multi-statement batch runs statement by statement through the same typed streaming path, under one row budget shared by the whole request. Statements after the budget is exhausted still run, result sets keep the unbounded order (the first is the primary result), and the batch stops at the first failure.
+- A row-limited batch keeps the transaction boundaries the same script has when it runs unbounded as one simple query. Statements outside a user transaction run inside a transaction the driver opens and commits, or rolls back on failure, so a failure leaves none of them behind. A `BEGIN` in the script adopts the statements before it and a `COMMIT` or `ROLLBACK` ends it, as PostgreSQL's implicit transaction block does. Inside an open session transaction the statements join it, and a failure leaves it aborted.
+- Requested statement timeouts are rejected before execution.
 
 ## Limitations
 
 - Row limits cap retained rows, not server work, network traffic, or execution time; mutations still complete all effects.
 - Row limits on instance metrics and inspectors are rejected before dispatch. Unbounded batches retain their buffered behavior.
+- A row-limited batch refuses, before any statement runs, `PREPARE TRANSACTION`, and a `SAVEPOINT`, `RELEASE`, `ROLLBACK TO`, or chained `COMMIT`/`ROLLBACK` that follows statements outside an explicit transaction. PostgreSQL rejects those inside its implicit transaction block, while the transaction the driver opens would accept them.
+- Statements that cannot run inside a transaction block, such as `VACUUM` or `CREATE INDEX CONCURRENTLY`, fail inside a row-limited batch with PostgreSQL's own error, as they do in an unbounded batch.
+- A row-limited batch is split with the SQL editor's statement splitter, which does not recognise SQL-standard `BEGIN ATOMIC` function bodies. A batch that contains one fails with a syntax error and rolls back instead of running; the same function alone in a request runs normally.
 
 
-- Batched (multi-statement) result columns carry no type metadata; values are returned as text and chart auto-detection is disabled for them. Run a single statement to get fully typed columns.
+- Unbounded batched (multi-statement) result columns carry no type metadata; values are returned as text and chart auto-detection is disabled for them. Run a single statement to get fully typed columns.
 
 - `pg.stat_statements.mean_exec_ms` is only available when the `pg_stat_statements` extension is installed and loaded. The driver probes for its presence at catalog construction time; when absent the metric is omitted from `list_metrics()`.
 

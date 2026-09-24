@@ -1460,38 +1460,750 @@ fn postgres_query_safety_late_stream_error_propagates_after_cap_reached() -> Res
     })
 }
 
+/// Outcome of one script run against its own fresh table.
+struct ScriptRun {
+    outcome: Result<dbflux_core::QueryResult, DbError>,
+    persisted: Vec<Vec<Value>>,
+}
+
+/// Creates `table`, runs `template` with `{table}` replaced, and reads back
+/// what the script left committed or visible in the session.
+fn run_script(
+    connection: &dyn dbflux_core::Connection,
+    table: &str,
+    template: &str,
+    limit: Option<u32>,
+) -> Result<ScriptRun, DbError> {
+    connection.execute(&QueryRequest::new(format!(
+        "CREATE TABLE {table} (id INTEGER PRIMARY KEY)"
+    )))?;
+
+    let mut request = QueryRequest::new(template.replace("{table}", table));
+    if let Some(limit) = limit {
+        request = request.with_limit(limit);
+    }
+    let outcome = connection.execute(&request);
+
+    let persisted = connection
+        .execute(&QueryRequest::new(format!(
+            "SELECT id FROM {table} ORDER BY id"
+        )))?
+        .rows;
+
+    Ok(ScriptRun { outcome, persisted })
+}
+
+/// Runs `template` once unbounded and once with `limit`, each against its own
+/// table, and asserts both runs persist the same rows and end the same way:
+/// the same number of result sets on success, the same SQLSTATE and hint on
+/// failure. Returns the bounded run for shape-specific assertions.
+fn assert_bounded_matches_unbounded(
+    connection: &dyn dbflux_core::Connection,
+    name: &str,
+    template: &str,
+    limit: u32,
+) -> Result<ScriptRun, DbError> {
+    let unbounded = run_script(connection, &format!("{name}_unbounded"), template, None)?;
+    let bounded = run_script(
+        connection,
+        &format!("{name}_bounded"),
+        template,
+        Some(limit),
+    )?;
+
+    assert_eq!(
+        bounded.persisted, unbounded.persisted,
+        "bounded run of {name} must persist what the unbounded run persists"
+    );
+
+    match (&unbounded.outcome, &bounded.outcome) {
+        (Ok(unbounded_result), Ok(bounded_result)) => assert_eq!(
+            bounded_result.result_set_count(),
+            unbounded_result.result_set_count(),
+            "bounded run of {name} must return one result set per statement"
+        ),
+        (Err(unbounded_error), Err(bounded_error)) => {
+            assert!(
+                !matches!(bounded_error, DbError::NotSupported(_)),
+                "bounded run of {name} must execute, got {bounded_error:?}"
+            );
+            assert_eq!(
+                error_code(bounded_error),
+                error_code(unbounded_error),
+                "bounded run of {name} must fail with the unbounded SQLSTATE: {bounded_error:?}"
+            );
+            assert_eq!(
+                error_hint(bounded_error),
+                error_hint(unbounded_error),
+                "bounded run of {name} must report the unbounded transaction state"
+            );
+        }
+        (unbounded_outcome, bounded_outcome) => panic!(
+            "{name}: unbounded run returned {:?} but bounded run returned {:?}",
+            unbounded_outcome
+                .as_ref()
+                .map(|result| result.result_set_count()),
+            bounded_outcome
+                .as_ref()
+                .map(|result| result.result_set_count()),
+        ),
+    }
+
+    Ok(bounded)
+}
+
+fn assert_result_set(result: &dbflux_core::QueryResult, rows: usize, truncated: bool) {
+    assert_eq!(result.rows.len(), rows, "retained rows of {result:?}");
+    assert_eq!(
+        result.rows_truncated(),
+        truncated,
+        "truncation of {result:?}"
+    );
+}
+
+fn assert_session_outside_transaction(connection: &dyn dbflux_core::Connection) {
+    let probe = connection.execute(&QueryRequest::new("SAVEPOINT outside_probe"));
+    assert!(
+        matches!(probe, Err(ref error) if error_code(error) == Some("25P01")),
+        "the session must be left outside any transaction block, got {probe:?}"
+    );
+}
+
 #[test]
 #[ignore = "requires Docker daemon"]
-fn postgres_query_safety_bounded_batch_rejected_without_effects_and_reusable() -> Result<(), DbError>
+fn postgres_bounded_batch_shares_one_row_budget_across_result_sets() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+
+        let result = connection.execute(
+            &QueryRequest::new(
+                "SELECT g FROM generate_series(1, 3) g; \
+                 SELECT g FROM generate_series(1, 4) g; \
+                 SELECT 1 WHERE FALSE; \
+                 SELECT g FROM generate_series(1, 2) g",
+            )
+            .with_limit(5),
+        )?;
+
+        let sets: Vec<_> = result.iter_result_sets().collect();
+        assert_eq!(sets.len(), 4);
+        assert_result_set(sets[0], 3, false);
+        assert_eq!(sets[0].rows[0][0], Value::Int(1));
+        assert_result_set(sets[1], 2, true);
+        assert_result_set(sets[2], 0, false);
+        assert_result_set(sets[3], 0, true);
+
+        assert_session_outside_transaction(&*connection);
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_bounded_batch_mutation_after_exhausted_budget_persists() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+
+        let bounded = assert_bounded_matches_unbounded(
+            &*connection,
+            "batch_after_cap",
+            "INSERT INTO {table} SELECT g FROM generate_series(1, 5) g RETURNING id; \
+             INSERT INTO {table} VALUES (100); \
+             SELECT id FROM {table} ORDER BY id",
+            2,
+        )?;
+
+        assert_eq!(bounded.persisted.len(), 6);
+        let result = bounded.outcome?;
+        let sets: Vec<_> = result.iter_result_sets().collect();
+        assert_result_set(sets[0], 2, true);
+        assert_eq!(sets[1].affected_rows, Some(1));
+        assert_result_set(sets[2], 0, true);
+
+        assert_session_outside_transaction(&*connection);
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_bounded_batch_zero_limit_runs_every_statement() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+
+        let bounded = assert_bounded_matches_unbounded(
+            &*connection,
+            "batch_zero",
+            "SELECT 1; INSERT INTO {table} VALUES (1); SELECT 1 WHERE FALSE",
+            0,
+        )?;
+
+        assert_eq!(bounded.persisted, vec![vec![Value::Int(1)]]);
+        let result = bounded.outcome?;
+        let sets: Vec<_> = result.iter_result_sets().collect();
+        assert_result_set(sets[0], 0, true);
+        assert_result_set(sets[2], 0, false);
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_bounded_batch_failure_rolls_back_earlier_statements() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+
+        let bounded = assert_bounded_matches_unbounded(
+            &*connection,
+            "batch_failure",
+            "INSERT INTO {table} VALUES (1); \
+             INSERT INTO {table} VALUES (2); \
+             INSERT INTO {table} VALUES (1); \
+             INSERT INTO {table} VALUES (3)",
+            1,
+        )?;
+
+        assert!(bounded.persisted.is_empty());
+        assert_eq!(error_code(&bounded.outcome.unwrap_err()), Some("23505"));
+        assert_session_outside_transaction(&*connection);
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_bounded_batch_with_its_own_transaction_matches_unbounded() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+
+        let committed = assert_bounded_matches_unbounded(
+            &*connection,
+            "own_transaction_commit",
+            "BEGIN; INSERT INTO {table} VALUES (1); SELECT id FROM {table}; COMMIT",
+            0,
+        )?;
+        assert_eq!(committed.persisted, vec![vec![Value::Int(1)]]);
+        assert_session_outside_transaction(&*connection);
+
+        let failed = assert_bounded_matches_unbounded(
+            &*connection,
+            "own_transaction_failure",
+            "BEGIN; \
+             INSERT INTO {table} VALUES (1); \
+             INSERT INTO {table} VALUES (1); \
+             COMMIT",
+            0,
+        )?;
+        assert!(failed.persisted.is_empty());
+        let hint = error_hint(failed.outcome.as_ref().unwrap_err())
+            .expect("failed script error must carry a hint");
+        assert!(hint.contains(TransactionStateNote::RolledBack.message()));
+        assert_session_outside_transaction(&*connection);
+
+        let after_commit = assert_bounded_matches_unbounded(
+            &*connection,
+            "after_commit_failure",
+            "BEGIN; \
+             INSERT INTO {table} VALUES (1); \
+             COMMIT; \
+             INSERT INTO {table} VALUES (2); \
+             SELECT 1 / 0",
+            0,
+        )?;
+        assert_eq!(after_commit.persisted, vec![vec![Value::Int(1)]]);
+        assert_session_outside_transaction(&*connection);
+
+        let rolled_back = assert_bounded_matches_unbounded(
+            &*connection,
+            "own_transaction_rollback",
+            "BEGIN; INSERT INTO {table} VALUES (1); ROLLBACK; INSERT INTO {table} VALUES (2)",
+            0,
+        )?;
+        assert_eq!(rolled_back.persisted, vec![vec![Value::Int(2)]]);
+        assert_session_outside_transaction(&*connection);
+
+        let savepoint = assert_bounded_matches_unbounded(
+            &*connection,
+            "own_transaction_savepoint",
+            "BEGIN; \
+             INSERT INTO {table} VALUES (1); \
+             SAVEPOINT batch_savepoint; \
+             INSERT INTO {table} VALUES (2); \
+             ROLLBACK TO SAVEPOINT batch_savepoint; \
+             END",
+            0,
+        )?;
+        assert_eq!(savepoint.persisted, vec![vec![Value::Int(1)]]);
+        assert_session_outside_transaction(&*connection);
+
+        let chained = assert_bounded_matches_unbounded(
+            &*connection,
+            "own_transaction_chain",
+            "BEGIN; \
+             INSERT INTO {table} VALUES (1); \
+             COMMIT AND CHAIN; \
+             INSERT INTO {table} VALUES (2); \
+             COMMIT",
+            0,
+        )?;
+        assert_eq!(chained.persisted.len(), 2);
+        assert_session_outside_transaction(&*connection);
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_bounded_batch_statements_before_begin_join_its_transaction() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+
+        let committed = assert_bounded_matches_unbounded(
+            &*connection,
+            "before_begin_commit",
+            "INSERT INTO {table} VALUES (1); BEGIN; INSERT INTO {table} VALUES (2); COMMIT",
+            0,
+        )?;
+        assert!(
+            committed.outcome.is_ok(),
+            "the warning for the adopted BEGIN must not surface as an error"
+        );
+        assert_eq!(committed.persisted.len(), 2);
+        assert_session_outside_transaction(&*connection);
+
+        let failed = assert_bounded_matches_unbounded(
+            &*connection,
+            "before_begin_failure",
+            "INSERT INTO {table} VALUES (1); \
+             BEGIN; \
+             INSERT INTO {table} VALUES (2); \
+             INSERT INTO {table} VALUES (2); \
+             COMMIT",
+            0,
+        )?;
+        assert!(failed.persisted.is_empty());
+        assert_session_outside_transaction(&*connection);
+
+        let stray_rollback = assert_bounded_matches_unbounded(
+            &*connection,
+            "stray_rollback",
+            "INSERT INTO {table} VALUES (1); ROLLBACK; INSERT INTO {table} VALUES (2)",
+            0,
+        )?;
+        assert_eq!(stray_rollback.persisted, vec![vec![Value::Int(2)]]);
+        assert_session_outside_transaction(&*connection);
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_bounded_batch_refuses_shapes_its_transaction_block_cannot_match() -> Result<(), DbError>
+{
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+
+        for (name, template) in [
+            (
+                "implicit_savepoint",
+                "INSERT INTO {table} VALUES (1); SAVEPOINT s; INSERT INTO {table} VALUES (2)",
+            ),
+            (
+                "prepare_transaction",
+                "BEGIN; INSERT INTO {table} VALUES (1); PREPARE TRANSACTION 'batch'",
+            ),
+            (
+                "implicit_commit_and_chain",
+                "INSERT INTO {table} VALUES (1); COMMIT AND CHAIN; INSERT INTO {table} VALUES (2)",
+            ),
+        ] {
+            let run = run_script(&*connection, name, template, Some(1))?;
+            assert!(
+                matches!(run.outcome, Err(DbError::NotSupported(_))),
+                "{name} must be refused: {:?}",
+                run.outcome.as_ref().map(|result| result.result_set_count())
+            );
+            assert!(
+                run.persisted.is_empty(),
+                "{name} must be refused before any effect"
+            );
+            assert_session_outside_transaction(&*connection);
+        }
+        Ok(())
+    })
+}
+
+/// Runs `template` once unbounded and once with `limit`, each inside a session
+/// transaction opened before the script, then commits that transaction and
+/// asserts both runs end the same way, leave the session in the same state,
+/// and persist the same rows. Returns the bounded run's persisted rows.
+fn assert_bounded_matches_unbounded_in_session_transaction(
+    connection: &dyn dbflux_core::Connection,
+    name: &str,
+    template: &str,
+    limit: u32,
+) -> Result<Vec<Vec<Value>>, DbError> {
+    let mut runs = Vec::new();
+
+    for (table, limit) in [
+        (format!("{name}_unbounded"), None),
+        (format!("{name}_bounded"), Some(limit)),
+    ] {
+        connection.execute(&QueryRequest::new(format!(
+            "CREATE TABLE {table} (id INTEGER PRIMARY KEY)"
+        )))?;
+        connection.execute(&QueryRequest::new("BEGIN"))?;
+
+        let mut request = QueryRequest::new(template.replace("{table}", &table));
+        if let Some(limit) = limit {
+            request = request.with_limit(limit);
+        }
+        let outcome = connection.execute(&request);
+
+        let session_error = connection
+            .execute(&QueryRequest::new("SELECT 1"))
+            .err()
+            .and_then(|error| error_code(&error).map(str::to_string));
+        connection.execute(&QueryRequest::new("COMMIT"))?;
+
+        let persisted = connection
+            .execute(&QueryRequest::new(format!(
+                "SELECT id FROM {table} ORDER BY id"
+            )))?
+            .rows;
+
+        runs.push((outcome, session_error, persisted));
+    }
+
+    let (bounded_outcome, bounded_session, bounded_persisted) = runs.pop().expect("bounded run");
+    let (unbounded_outcome, unbounded_session, unbounded_persisted) =
+        runs.pop().expect("unbounded run");
+
+    assert_eq!(
+        bounded_persisted, unbounded_persisted,
+        "bounded run of {name} must persist what the unbounded run persists"
+    );
+    assert_eq!(
+        bounded_session, unbounded_session,
+        "bounded run of {name} must leave the session transaction in the unbounded state"
+    );
+    match (&unbounded_outcome, &bounded_outcome) {
+        (Ok(unbounded_result), Ok(bounded_result)) => assert_eq!(
+            bounded_result.result_set_count(),
+            unbounded_result.result_set_count()
+        ),
+        (Err(unbounded_error), Err(bounded_error)) => {
+            assert!(
+                !matches!(bounded_error, DbError::NotSupported(_)),
+                "bounded run of {name} must execute, got {bounded_error:?}"
+            );
+            assert_eq!(error_code(bounded_error), error_code(unbounded_error));
+            assert_eq!(error_hint(bounded_error), error_hint(unbounded_error));
+        }
+        (unbounded_outcome, bounded_outcome) => panic!(
+            "{name}: unbounded run returned {:?} but bounded run returned {:?}",
+            unbounded_outcome
+                .as_ref()
+                .map(|result| result.result_set_count()),
+            bounded_outcome
+                .as_ref()
+                .map(|result| result.result_set_count()),
+        ),
+    }
+
+    Ok(bounded_persisted)
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_bounded_batch_in_session_transaction_matches_unbounded() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+
+        let joined = assert_bounded_matches_unbounded_in_session_transaction(
+            &*connection,
+            "session_join",
+            "INSERT INTO {table} VALUES (1); SELECT id FROM {table}",
+            0,
+        )?;
+        assert_eq!(joined, vec![vec![Value::Int(1)]]);
+
+        let failed = assert_bounded_matches_unbounded_in_session_transaction(
+            &*connection,
+            "session_failure",
+            "INSERT INTO {table} VALUES (1); INSERT INTO {table} VALUES (1)",
+            0,
+        )?;
+        assert!(failed.is_empty());
+
+        let nested_begin = assert_bounded_matches_unbounded_in_session_transaction(
+            &*connection,
+            "session_nested_begin",
+            "INSERT INTO {table} VALUES (1); BEGIN; INSERT INTO {table} VALUES (2)",
+            0,
+        )?;
+        assert_eq!(nested_begin.len(), 2);
+
+        let committed_then_implicit = assert_bounded_matches_unbounded_in_session_transaction(
+            &*connection,
+            "session_commit_then_failure",
+            "INSERT INTO {table} VALUES (1); \
+             COMMIT; \
+             INSERT INTO {table} VALUES (2); \
+             INSERT INTO {table} VALUES (2)",
+            0,
+        )?;
+        assert_eq!(committed_then_implicit, vec![vec![Value::Int(1)]]);
+
+        let committed_then_success = assert_bounded_matches_unbounded_in_session_transaction(
+            &*connection,
+            "session_commit_then_success",
+            "INSERT INTO {table} VALUES (1); COMMIT; INSERT INTO {table} VALUES (2)",
+            0,
+        )?;
+        assert_eq!(committed_then_success.len(), 2);
+        Ok(())
+    })
+}
+
+fn assert_no_batch_probe_savepoint(connection: &dyn dbflux_core::Connection) {
+    let release = connection.execute(&QueryRequest::new("RELEASE SAVEPOINT dbflux_batch_probe"));
+    assert!(
+        matches!(release, Err(ref error) if error_code(error) == Some("3B001")),
+        "the batch probe savepoint must not be left behind, got {release:?}"
+    );
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_bounded_batch_probe_leaves_no_savepoint_and_keeps_aborted_state() -> Result<(), DbError>
 {
     containers::with_postgres_url(|uri| {
         let (connection, _) = connect_postgres(uri)?;
         connection.execute(&QueryRequest::new(
-            "CREATE TABLE safety_batch (n INTEGER PRIMARY KEY)",
+            "CREATE TABLE probe_savepoint (id INTEGER PRIMARY KEY)",
         ))?;
-        let result = connection.execute(
+
+        connection.execute(&QueryRequest::new("BEGIN"))?;
+        connection.execute(
+            &QueryRequest::new("INSERT INTO probe_savepoint VALUES (1); SELECT 1").with_limit(1),
+        )?;
+        assert_no_batch_probe_savepoint(&*connection);
+        connection.execute(&QueryRequest::new("ROLLBACK"))?;
+
+        connection.execute(&QueryRequest::new("BEGIN"))?;
+        connection.execute(
             &QueryRequest::new(
-                "INSERT INTO safety_batch VALUES (1); INSERT INTO safety_batch VALUES (2)",
+                "CREATE FUNCTION probe_single() RETURNS int LANGUAGE sql \
+                 BEGIN ATOMIC SELECT 1; END",
             )
             .with_limit(1),
+        )?;
+        assert_no_batch_probe_savepoint(&*connection);
+        connection.execute(&QueryRequest::new("ROLLBACK"))?;
+
+        connection.execute(&QueryRequest::new("BEGIN"))?;
+        connection.execute(&QueryRequest::new("SAVEPOINT user_savepoint"))?;
+        let batch_error = connection
+            .execute(
+                &QueryRequest::new(
+                    "INSERT INTO probe_savepoint VALUES (1); INSERT INTO probe_savepoint VALUES (1)",
+                )
+                .with_limit(1),
+            )
+            .expect_err("duplicate key must fail the batch");
+        assert_eq!(error_code(&batch_error), Some("23505"));
+        connection.execute(&QueryRequest::new("ROLLBACK TO SAVEPOINT user_savepoint"))?;
+        assert_no_batch_probe_savepoint(&*connection);
+        connection.execute(&QueryRequest::new("ROLLBACK"))?;
+
+        connection.execute(&QueryRequest::new("BEGIN"))?;
+        connection.execute(&QueryRequest::new("SAVEPOINT user_savepoint"))?;
+        connection
+            .execute(&QueryRequest::new("SELECT 1 / 0"))
+            .expect_err("division by zero must abort the transaction");
+
+        let aborted_error = connection
+            .execute(&QueryRequest::new("SELECT 1; SELECT 2").with_limit(1))
+            .expect_err("a batch in an aborted transaction must fail");
+        assert_eq!(error_code(&aborted_error), Some("25P02"));
+        let hint = error_hint(&aborted_error).expect("aborted batch error must carry a hint");
+        assert!(hint.contains(TransactionStateNote::Aborted.message()));
+
+        connection.execute(&QueryRequest::new("ROLLBACK TO SAVEPOINT user_savepoint"))?;
+        connection.execute(&QueryRequest::new("SELECT 1"))?;
+        assert_no_batch_probe_savepoint(&*connection);
+        connection.execute(&QueryRequest::new("ROLLBACK"))?;
+
+        assert_session_outside_transaction(&*connection);
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_bounded_batch_inside_open_session_transaction_joins_it() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE open_transaction_batch (id INTEGER PRIMARY KEY)",
+        ))?;
+
+        connection.execute(&QueryRequest::new("BEGIN"))?;
+        let result = connection.execute(
+            &QueryRequest::new(
+                "INSERT INTO open_transaction_batch VALUES (1); \
+                 SELECT id FROM open_transaction_batch",
+            )
+            .with_limit(0),
+        )?;
+        assert_result_set(&result.additional_results[0], 0, true);
+        connection.execute(&QueryRequest::new("ROLLBACK"))?;
+
+        assert!(
+            connection
+                .execute(&QueryRequest::new("SELECT id FROM open_transaction_batch"))?
+                .rows
+                .is_empty(),
+            "the batch must run inside the session transaction, not commit on its own"
+        );
+
+        connection.execute(&QueryRequest::new("BEGIN"))?;
+        let error = connection
+            .execute(
+                &QueryRequest::new(
+                    "INSERT INTO open_transaction_batch VALUES (1); \
+                     INSERT INTO open_transaction_batch VALUES (1);",
+                )
+                .with_limit(1),
+            )
+            .expect_err("duplicate key must fail the batch");
+        let hint = error_hint(&error).expect("failed batch error must carry a hint");
+        assert!(
+            hint.contains(TransactionStateNote::Aborted.message()),
+            "hint must report the aborted transaction, got {hint:?}"
+        );
+
+        let probe_error = connection
+            .execute(&QueryRequest::new("SELECT 1"))
+            .expect_err("the session transaction must still be aborted");
+        assert_eq!(error_code(&probe_error), Some("25P02"));
+
+        connection.execute(&QueryRequest::new("ROLLBACK"))?;
+        connection.execute(&QueryRequest::new("SELECT 1"))?;
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_bounded_batch_keeps_dollar_quoted_bodies_whole() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+
+        let bounded = assert_bounded_matches_unbounded(
+            &*connection,
+            "dollar_body",
+            "DO $$ BEGIN INSERT INTO {table} VALUES (1); INSERT INTO {table} VALUES (2); END $$; \
+             SELECT id FROM {table} ORDER BY id",
+            1,
+        )?;
+
+        assert_eq!(bounded.persisted.len(), 2);
+        let result = bounded.outcome?;
+        assert_result_set(&result.additional_results[0], 1, true);
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_bounded_batch_vacuum_fails_inside_the_batch_transaction() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+
+        let bounded = assert_bounded_matches_unbounded(
+            &*connection,
+            "batch_vacuum",
+            "INSERT INTO {table} VALUES (1); VACUUM {table}",
+            1,
+        )?;
+
+        assert!(bounded.persisted.is_empty());
+        let error = bounded.outcome.unwrap_err();
+        assert_eq!(error_code(&error), Some("25001"));
+        assert!(
+            error
+                .to_string()
+                .contains("VACUUM cannot run inside a transaction block"),
+            "the server error must reach the user: {error}"
+        );
+        assert_session_outside_transaction(&*connection);
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_bounded_batch_ignores_trailing_comments_and_semicolons() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+
+        let result = connection.execute(
+            &QueryRequest::new("SELECT 1; SELECT 2;;; -- trailing line\n/* trailing block */")
+                .with_limit(1),
+        )?;
+
+        let sets: Vec<_> = result.iter_result_sets().collect();
+        assert_eq!(sets.len(), 2);
+        assert_result_set(sets[0], 1, false);
+        assert_result_set(sets[1], 0, true);
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_query_safety_refusal_preserves_existing_cancel_signal() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+        let cancel_handle = connection.cancel_handle();
+
+        cancel_handle.cancel()?;
+        assert!(cancel_handle.is_cancelled());
+
+        let mut timeout_request = QueryRequest::new("SELECT 1");
+        timeout_request.statement_timeout = Some(Duration::from_secs(1));
+        let timeout_result = connection.execute(&timeout_request);
+        assert!(
+            matches!(timeout_result, Err(DbError::NotSupported(_))),
+            "deadline must be refused: {timeout_result:?}"
         );
         assert!(
-            matches!(result, Err(DbError::NotSupported(_))),
-            "bounded batch must be refused: {result:?}"
+            cancel_handle.is_cancelled(),
+            "the timeout refusal erased an existing cancellation"
         );
-        assert_eq!(
-            connection
-                .execute(&QueryRequest::new("SELECT COUNT(*) FROM safety_batch"))?
-                .rows[0][0],
-            Value::Int(0)
+
+        let mut metric_request = QueryRequest::new("SELECT 1").with_limit(0);
+        metric_request.execution_context = Some(dbflux_core::ExecutionContext {
+            source: Some(dbflux_core::ExecutionSourceContext::InstanceMetricQuery {
+                metric_id: "pg.tps".to_string(),
+                start_ms: 0,
+                end_ms: 1,
+            }),
+            ..Default::default()
+        });
+        let metric_result = connection.execute(&metric_request);
+        assert!(
+            matches!(metric_result, Err(DbError::NotSupported(_))),
+            "bounded metric must be refused: {metric_result:?}"
         );
-        assert_eq!(
-            connection
-                .execute(&QueryRequest::new("SELECT 1").with_limit(1))?
-                .rows
-                .len(),
-            1
+        assert!(
+            cancel_handle.is_cancelled(),
+            "the bounded metric refusal erased an existing cancellation"
         );
+
+        connection.execute(&QueryRequest::new("SELECT 1"))?;
         Ok(())
     })
 }

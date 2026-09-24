@@ -3084,6 +3084,22 @@ mod tests {
     }
 
     #[test]
+    fn drop_table_statement_rejects_cascade() {
+        assert!(!SqliteDialect.supports_drop_cascade());
+        assert!(
+            SqliteDialect
+                .drop_table_statement(Some("main"), "orders", true, true)
+                .is_err()
+        );
+        assert_eq!(
+            SqliteDialect
+                .drop_table_statement(Some("main"), "orders", true, false)
+                .expect("a plain drop builds"),
+            "DROP TABLE IF EXISTS \"main\".\"orders\""
+        );
+    }
+
+    #[test]
     fn sqlite_query_safety_refusal_preserves_existing_cancel_signal() {
         use super::{SqliteConnection, SqliteConnectionState};
         use dbflux_core::{

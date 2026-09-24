@@ -11,11 +11,18 @@ use gpui_component::Disableable;
 use gpui_component::button::{Button, ButtonVariants};
 
 /// Outcome emitted when the user resolves the modal.
+///
+/// `Confirmed` carries the options the preview statement was built with, so
+/// the drop that runs is the statement the user confirmed.
 #[derive(Clone, Debug)]
 pub enum DropTableOutcome {
-    Confirmed,
+    Confirmed { if_exists: bool, cascade: bool },
     Cancelled,
 }
+
+/// The sidebar drop always runs `DROP TABLE IF EXISTS`, so the preview
+/// shows it too.
+const DROP_TABLE_IF_EXISTS: bool = true;
 
 /// Request payload for `pending_modal_open` on the sidebar / workspace.
 #[derive(Clone, Debug)]
@@ -26,38 +33,78 @@ pub struct DropTableRequest {
     pub schema_name: Option<String>,
     /// Dependent objects — empty if none.
     pub dependents: Vec<RelationRef>,
-    /// The table reference as the connection's SQL dialect writes it, e.g.
-    /// `"public"."orders"`, `` `shop`.`orders` `` or `[dbo].[orders]`.
-    pub qualified_table: String,
+    /// The `DROP TABLE` statement as the connection's SQL dialect writes it,
+    /// e.g. `DROP TABLE IF EXISTS "public"."orders" CASCADE` or
+    /// `DROP TABLE IF EXISTS [dbo].[orders]`.
+    pub statement: String,
+    /// Whether `statement` includes `IF EXISTS`.
+    pub if_exists: bool,
+    /// Whether `statement` also drops the dependents. False when there are
+    /// none, or when the database has no `DROP TABLE ... CASCADE`.
+    pub cascade: bool,
 }
 
 impl DropTableRequest {
-    /// Builds a request whose SQL preview quotes the table the way `dialect`
-    /// does, so the preview matches the connection it will run against.
+    /// Builds a request whose SQL preview is the statement `dialect` writes,
+    /// so the preview matches the connection it will run against. CASCADE is
+    /// requested only when the table has dependents, and the dialect decides
+    /// whether its database supports it.
     pub fn new(
         table_name: String,
         schema_name: Option<String>,
         dependents: Vec<RelationRef>,
         dialect: &dyn SqlDialect,
     ) -> Self {
-        let qualified_table = dialect.qualified_table(schema_name.as_deref(), &table_name);
+        let if_exists = DROP_TABLE_IF_EXISTS;
+        let cascade = !dependents.is_empty() && dialect.supports_drop_cascade();
+
+        // CASCADE is only requested where the dialect supports it, so this
+        // fails only if a dialect overrides the builder. The preview then
+        // shows the error the drop itself would return.
+        let statement = dialect
+            .drop_table_statement(schema_name.as_deref(), &table_name, if_exists, cascade)
+            .unwrap_or_else(|error| format!("-- {}", error));
 
         Self {
             table_name,
             schema_name,
             dependents,
-            qualified_table,
+            statement,
+            if_exists,
+            cascade,
+        }
+    }
+
+    /// The outcome to emit when the user confirms this request.
+    pub fn confirmed_outcome(&self) -> DropTableOutcome {
+        DropTableOutcome::Confirmed {
+            if_exists: self.if_exists,
+            cascade: self.cascade,
         }
     }
 
     /// Build the SQL preview text for this request.
     pub fn sql_preview(&self) -> String {
-        let base = format!("DROP TABLE {}", self.qualified_table);
+        format!("{};", self.statement)
+    }
 
-        if self.dependents.is_empty() {
-            format!("{};", base)
+    /// Heading shown above the list of dependents: it only mentions CASCADE
+    /// when the statement actually drops them.
+    fn dependents_heading(&self) -> String {
+        if self.cascade {
+            dbflux_i18n::t!("modals.drop_table.cascade_warning")
         } else {
-            format!("{}\n  CASCADE;", base)
+            dbflux_i18n::t!("modals.drop_table.dependents_heading")
+        }
+    }
+
+    /// Warning shown at the top of the modal: it only says dependent objects
+    /// are deleted when the statement cascades.
+    fn delete_warning(&self) -> String {
+        if self.cascade {
+            dbflux_i18n::t!("modals.drop_table.delete_warning")
+        } else {
+            dbflux_i18n::t!("modals.drop_table.delete_warning_table_only")
         }
     }
 }
@@ -168,7 +215,15 @@ impl ModalDropTable {
             return;
         }
 
-        cx.emit(DropTableOutcome::Confirmed);
+        let Some(outcome) = self
+            .request
+            .as_ref()
+            .map(DropTableRequest::confirmed_outcome)
+        else {
+            return;
+        };
+
+        cx.emit(outcome);
         self.close(cx);
     }
 
@@ -195,6 +250,8 @@ impl Render for ModalDropTable {
         let table_name = request.table_name.clone();
         let dependents = request.dependents.clone();
         let sql = request.sql_preview();
+        let dependents_heading = request.dependents_heading();
+        let delete_warning = request.delete_warning();
         let has_deps = !dependents.is_empty();
         let drop_enabled = self.drop_enabled;
 
@@ -218,7 +275,7 @@ impl Render for ModalDropTable {
                     .text_size(FontSizes::XS)
                     .font_weight(gpui::FontWeight::SEMIBOLD)
                     .text_color(theme.muted_foreground)
-                    .child(dbflux_i18n::t!("modals.drop_table.cascade_warning")),
+                    .child(dependents_heading),
             );
 
             for dep in &dependents {
@@ -283,9 +340,7 @@ impl Render for ModalDropTable {
             .flex()
             .flex_col()
             .gap(Spacing::MD)
-            .child(
-                Text::body(dbflux_i18n::t!("modals.drop_table.delete_warning")).into_any_element(),
-            )
+            .child(Text::body(delete_warning).into_any_element())
             .child(name_badge)
             .when(has_deps, |el| el.child(dependents_section))
             .child(sql_block)
@@ -392,6 +447,36 @@ mod tests {
         }
     }
 
+    /// Quotes with double quotes and drops dependents with CASCADE, as
+    /// PostgreSQL does.
+    struct CascadeDialect;
+
+    impl SqlDialect for CascadeDialect {
+        fn quote_identifier(&self, name: &str) -> String {
+            DefaultSqlDialect.quote_identifier(name)
+        }
+
+        fn qualified_table(&self, schema: Option<&str>, table: &str) -> String {
+            DefaultSqlDialect.qualified_table(schema, table)
+        }
+
+        fn value_to_literal(&self, _value: &dbflux_core::Value) -> String {
+            String::new()
+        }
+
+        fn escape_string(&self, text: &str) -> String {
+            text.to_string()
+        }
+
+        fn placeholder_style(&self) -> PlaceholderStyle {
+            PlaceholderStyle::DollarNumber
+        }
+
+        fn supports_drop_cascade(&self) -> bool {
+            true
+        }
+    }
+
     /// Quotes identifiers with brackets, as SQL Server does.
     struct BracketDialect;
 
@@ -430,7 +515,7 @@ mod tests {
             "orders".to_string(),
             Some("public".to_string()),
             vec![],
-            &DefaultSqlDialect,
+            &CascadeDialect,
         );
         let mysql = DropTableRequest::new(
             "orders".to_string(),
@@ -445,11 +530,14 @@ mod tests {
             &BracketDialect,
         );
 
-        assert_eq!(postgres.sql_preview(), "DROP TABLE \"public\".\"orders\";");
-        assert_eq!(mysql.sql_preview(), "DROP TABLE `shop`.`orders`;");
+        assert_eq!(
+            postgres.sql_preview(),
+            "DROP TABLE IF EXISTS \"public\".\"orders\";"
+        );
+        assert_eq!(mysql.sql_preview(), "DROP TABLE IF EXISTS `shop`.`orders`;");
         assert_eq!(
             sql_server.sql_preview(),
-            "DROP TABLE [dbo].[orders]\n  CASCADE;"
+            "DROP TABLE IF EXISTS [dbo].[orders];"
         );
     }
 
@@ -457,7 +545,7 @@ mod tests {
     fn sql_preview_escapes_the_quote_character_inside_a_name() {
         let request = DropTableRequest::new("odd`name".to_string(), None, vec![], &BacktickDialect);
 
-        assert_eq!(request.sql_preview(), "DROP TABLE `odd``name`;");
+        assert_eq!(request.sql_preview(), "DROP TABLE IF EXISTS `odd``name`;");
     }
 
     fn view_dep(name: &str) -> RelationRef {
@@ -470,32 +558,140 @@ mod tests {
     #[test]
     fn sql_preview_no_schema_no_deps() {
         let r = request("orders", None, vec![]);
-        assert_eq!(r.sql_preview(), "DROP TABLE \"orders\";");
+        assert_eq!(r.sql_preview(), "DROP TABLE IF EXISTS \"orders\";");
     }
 
     #[test]
     fn sql_preview_with_schema_no_deps() {
         let r = request("orders", Some("public"), vec![]);
-        assert_eq!(r.sql_preview(), "DROP TABLE \"public\".\"orders\";");
-    }
-
-    #[test]
-    fn sql_preview_with_schema_and_deps() {
-        let r = request(
-            "orders",
-            Some("public"),
-            vec![view_dep("public.order_view")],
-        );
         assert_eq!(
             r.sql_preview(),
-            "DROP TABLE \"public\".\"orders\"\n  CASCADE;"
+            "DROP TABLE IF EXISTS \"public\".\"orders\";"
         );
     }
 
     #[test]
-    fn sql_preview_no_schema_with_deps() {
-        let r = request("orders", None, vec![view_dep("public.order_view")]);
-        assert_eq!(r.sql_preview(), "DROP TABLE \"orders\"\n  CASCADE;");
+    fn sql_preview_cascades_dependents_where_the_dialect_supports_it() {
+        let r = DropTableRequest::new(
+            "orders".to_string(),
+            Some("public".to_string()),
+            vec![view_dep("public.order_view")],
+            &CascadeDialect,
+        );
+
+        assert!(r.cascade);
+        assert_eq!(
+            r.sql_preview(),
+            "DROP TABLE IF EXISTS \"public\".\"orders\" CASCADE;"
+        );
+        assert_eq!(
+            r.dependents_heading(),
+            dbflux_i18n::t!("modals.drop_table.cascade_warning")
+        );
+        assert_eq!(
+            r.delete_warning(),
+            dbflux_i18n::t!("modals.drop_table.delete_warning")
+        );
+    }
+
+    #[test]
+    fn sql_preview_omits_cascade_where_the_dialect_does_not_support_it() {
+        let deps = || vec![view_dep("order_view")];
+        let sql_server = DropTableRequest::new(
+            "orders".to_string(),
+            Some("dbo".to_string()),
+            deps(),
+            &BracketDialect,
+        );
+        let mysql = DropTableRequest::new(
+            "orders".to_string(),
+            Some("shop".to_string()),
+            deps(),
+            &BacktickDialect,
+        );
+        let default = request("orders", None, deps());
+
+        for (r, expected) in [
+            (&sql_server, "DROP TABLE IF EXISTS [dbo].[orders];"),
+            (&mysql, "DROP TABLE IF EXISTS `shop`.`orders`;"),
+            (&default, "DROP TABLE IF EXISTS \"orders\";"),
+        ] {
+            assert!(!r.cascade);
+            assert_eq!(r.sql_preview(), expected);
+            assert_eq!(
+                r.dependents_heading(),
+                dbflux_i18n::t!("modals.drop_table.dependents_heading")
+            );
+            assert_eq!(
+                r.delete_warning(),
+                dbflux_i18n::t!("modals.drop_table.delete_warning_table_only")
+            );
+        }
+    }
+
+    #[test]
+    fn confirmed_outcome_carries_the_options_the_preview_was_built_with() {
+        let cascading = DropTableRequest::new(
+            "orders".to_string(),
+            Some("public".to_string()),
+            vec![view_dep("public.order_view")],
+            &CascadeDialect,
+        );
+        let plain = DropTableRequest::new(
+            "orders".to_string(),
+            Some("dbo".to_string()),
+            vec![view_dep("dbo.order_view")],
+            &BracketDialect,
+        );
+
+        assert!(matches!(
+            cascading.confirmed_outcome(),
+            DropTableOutcome::Confirmed {
+                if_exists: true,
+                cascade: true
+            }
+        ));
+        assert!(matches!(
+            plain.confirmed_outcome(),
+            DropTableOutcome::Confirmed {
+                if_exists: true,
+                cascade: false
+            }
+        ));
+    }
+
+    #[test]
+    fn sql_preview_omits_cascade_without_dependents() {
+        let r = DropTableRequest::new(
+            "orders".to_string(),
+            Some("public".to_string()),
+            vec![],
+            &CascadeDialect,
+        );
+
+        assert!(!r.cascade);
+        assert_eq!(
+            r.sql_preview(),
+            "DROP TABLE IF EXISTS \"public\".\"orders\";"
+        );
+    }
+
+    #[test]
+    fn sql_preview_is_the_statement_the_dialect_writes() {
+        let r = DropTableRequest::new(
+            "orders".to_string(),
+            Some("public".to_string()),
+            vec![view_dep("public.order_view")],
+            &CascadeDialect,
+        );
+
+        assert_eq!(
+            r.statement,
+            CascadeDialect
+                .drop_table_statement(Some("public"), "orders", true, true)
+                .expect("cascade is supported")
+        );
+        assert_eq!(r.sql_preview(), format!("{};", r.statement));
     }
 
     #[test]
@@ -507,7 +703,9 @@ mod tests {
             "modals.drop_table.confirm_placeholder",
             "modals.drop_table.confirm_prompt",
             "modals.drop_table.cascade_warning",
+            "modals.drop_table.dependents_heading",
             "modals.drop_table.delete_warning",
+            "modals.drop_table.delete_warning_table_only",
             "modals.drop_table.relation_kind.view",
             "modals.drop_table.relation_kind.materialized_view",
             "modals.drop_table.relation_kind.foreign_key",
@@ -636,7 +834,10 @@ mod keyboard_tests {
         window.simulate_keystrokes("enter");
         assert!(matches!(
             outcomes.borrow().as_slice(),
-            [DropTableOutcome::Confirmed]
+            [DropTableOutcome::Confirmed {
+                if_exists: true,
+                cascade: false
+            }]
         ));
         assert!(!window.update(|_, cx| modal.read(cx).is_visible()));
     }
