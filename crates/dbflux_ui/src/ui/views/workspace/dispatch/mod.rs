@@ -21,7 +21,7 @@ impl CommandDispatcher for Workspace {
         {
             self.modal_active_query.update(cx, |modal, cx| match cmd {
                 Command::Execute => modal.confirm(cx),
-                _ => modal.cancel(cx),
+                _ => modal.keep_waiting(cx),
             });
             return true;
         }

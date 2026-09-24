@@ -2911,6 +2911,8 @@ settings:
       text_input: Text Input
       dropdown: Dropdown
       sql_preview_modal: SQL Preview
+      cell_editor_modal: Cell Editor
+      document_preview_modal: Document Preview
       context_menu: Context Menu
       confirm_modal: Confirm
       form_navigation: Form Navigation

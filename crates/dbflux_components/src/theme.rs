@@ -18,6 +18,7 @@ pub fn init(cx: &mut App) {
     gpui_component::init(cx);
     crate::highlighting::register_languages();
     crate::controls::register_input_overrides(cx);
+    crate::modals::register_modal_keybindings(cx);
     load_bundled_fonts(cx);
     apply_theme(ThemeSetting::Dark, AppStyle::Default, None, cx);
 }

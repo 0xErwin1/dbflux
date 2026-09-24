@@ -57,6 +57,7 @@ pub(crate) struct SharedState {
     logs: Mutex<VecDeque<LogEntry>>,
     generation: watch::Sender<u64>,
     completed_frame: watch::Sender<FrameStats>,
+    presented_frame: watch::Sender<u64>,
     window_geometry: RwLock<Option<WindowGeometry>>,
 }
 
@@ -64,6 +65,7 @@ impl SharedState {
     pub(crate) fn new() -> Arc<Self> {
         let (generation, _) = watch::channel(0);
         let (completed_frame, _) = watch::channel(FrameStats::default());
+        let (presented_frame, _) = watch::channel(0);
         Arc::new(Self {
             tree: RwLock::new(UiTree::default()),
             pending: Mutex::new(PendingFrame::default()),
@@ -72,6 +74,7 @@ impl SharedState {
             logs: Mutex::new(VecDeque::with_capacity(512)),
             generation,
             completed_frame,
+            presented_frame,
             window_geometry: RwLock::new(None),
         })
     }
@@ -333,6 +336,56 @@ impl SharedState {
         timeout(wait, changed)
             .await
             .map_err(|_| BridgeError::new(ErrorCode::Timeout, "frame wait timed out"))?
+    }
+
+    /// Record that every frame completed so far has been presented to the platform window.
+    ///
+    /// Called from a GPUI next-frame callback. GPUI runs those at the start of a frame
+    /// request, before the request draws, and every earlier request presented the frame it
+    /// drew before returning, so each completed root-paint frame has been handed to the
+    /// platform window by then.
+    pub(crate) fn mark_frames_presented(&self) {
+        let completed = self.completed_frame.borrow().frame_count;
+        self.presented_frame.send_if_modified(|presented| {
+            if completed > *presented {
+                *presented = completed;
+                true
+            } else {
+                false
+            }
+        });
+    }
+
+    #[cfg(test)]
+    pub(crate) fn presented_frame_count(&self) -> u64 {
+        *self.presented_frame.borrow()
+    }
+
+    /// Wait until a frame newer than `after_frame_count` has been presented, then return the
+    /// current frame statistics.
+    ///
+    /// Only [`Self::mark_frames_presented`] advances the presented-frame token, so the caller
+    /// must have scheduled it, as `Operation::Refresh` does.
+    pub(crate) async fn wait_for_presented_frame(
+        &self,
+        after_frame_count: u64,
+        wait: Duration,
+    ) -> Result<FrameStats, BridgeError> {
+        let mut receiver = self.presented_frame.subscribe();
+        let presented = async {
+            loop {
+                if *receiver.borrow_and_update() > after_frame_count {
+                    return Ok(());
+                }
+                receiver.changed().await.map_err(|_| {
+                    BridgeError::new(ErrorCode::Internal, "frame publisher stopped")
+                })?;
+            }
+        };
+        timeout(wait, presented).await.map_err(|_| {
+            BridgeError::new(ErrorCode::Timeout, "presented frame wait timed out")
+        })??;
+        Ok(self.frame_stats())
     }
 
     pub(crate) fn set_highlights(&self, highlights: Vec<Highlight>) {
@@ -686,7 +739,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::time::Duration;
 
-    use gpui_mcp_protocol::{NodeState, Role, SemanticDiagnosticCode, UiNode};
+    use gpui_mcp_protocol::{ErrorCode, NodeState, Role, SemanticDiagnosticCode, UiNode};
 
     use super::SharedState;
 
@@ -810,6 +863,75 @@ mod tests {
             .map_err(|error| error.message)?;
         assert_eq!(observed_frame.frame_count, 2);
         assert_eq!(state.tree().generation, 1);
+        Ok(())
+    }
+
+    fn complete_frame(state: &SharedState) {
+        state.begin_frame();
+        assert!(state.record(node("stable", None)));
+        state.finish_frame();
+        state.begin_root_paint();
+        state.finish_root_paint();
+    }
+
+    /// Root paint is not presentation: a painted frame alone must not release a
+    /// presented-frame wait, only the presentation mark that follows it does.
+    #[tokio::test]
+    async fn presented_frame_wait_waits_for_the_presentation_mark() -> Result<(), String> {
+        let state = SharedState::new();
+        complete_frame(&state);
+        state.mark_frames_presented();
+        assert_eq!(state.presented_frame_count(), 1);
+
+        complete_frame(&state);
+        let wait = state.wait_for_presented_frame(1, Duration::from_secs(1));
+        tokio::pin!(wait);
+        tokio::select! {
+            biased;
+            result = &mut wait => {
+                return Err(format!(
+                    "presented wait completed before the frame was presented: {:?}",
+                    result.map_err(|error| error.message)
+                ));
+            }
+            () = tokio::task::yield_now() => {}
+        }
+
+        state.mark_frames_presented();
+        let observed = wait.await.map_err(|error| error.message)?;
+        assert_eq!(observed.frame_count, 2);
+        assert_eq!(state.presented_frame_count(), 2);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn presentation_mark_without_a_new_frame_does_not_release_a_wait() {
+        let state = SharedState::new();
+        complete_frame(&state);
+        state.mark_frames_presented();
+        state.mark_frames_presented();
+
+        let result = state
+            .wait_for_presented_frame(1, Duration::from_millis(20))
+            .await
+            .map_err(|error| error.code);
+        assert_eq!(result, Err(ErrorCode::Timeout));
+        assert_eq!(state.presented_frame_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn presented_frame_wait_returns_at_once_for_an_already_presented_frame()
+    -> Result<(), String> {
+        let state = SharedState::new();
+        complete_frame(&state);
+        complete_frame(&state);
+        state.mark_frames_presented();
+
+        let observed = state
+            .wait_for_presented_frame(1, Duration::from_millis(20))
+            .await
+            .map_err(|error| error.message)?;
+        assert_eq!(observed.frame_count, 2);
         Ok(())
     }
 

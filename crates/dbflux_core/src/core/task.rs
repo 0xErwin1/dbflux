@@ -62,6 +62,22 @@ impl TaskKind {
             TaskKind::DumpAnalysis => "Dump Analysis",
         }
     }
+
+    /// Whether a user cancel request can stop the work behind a task of this kind.
+    ///
+    /// Key-value scans, reads, and mutations run as one blocking
+    /// `KeyValueApi` call that takes no cancel token, and no key-value driver
+    /// exposes a cancel path for them. Cancelling such a task could only mark
+    /// it cancelled while the driver keeps working (and a mutation still
+    /// commits), so these kinds report `false` and the UI hides their cancel
+    /// control. Internal supersede logic may still cancel them to discard a
+    /// stale result.
+    pub fn supports_cancellation(&self) -> bool {
+        !matches!(
+            self,
+            TaskKind::KeyScan | TaskKind::KeyGet | TaskKind::KeyMutation
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -143,7 +159,7 @@ impl Task {
     }
 
     pub fn is_cancellable(&self) -> bool {
-        self.status == TaskStatus::Running
+        self.status == TaskStatus::Running && self.kind.supports_cancellation()
     }
 }
 
@@ -400,9 +416,18 @@ impl TaskManager {
         self.tasks.values().any(|t| t.status == TaskStatus::Running)
     }
 
+    /// Removes completed and cancelled tasks that finished at least
+    /// `max_age_secs` ago.
+    ///
+    /// Failed tasks are never removed here, so their error output stays
+    /// available until the user dismisses them with [`TaskManager::remove`].
     pub fn cleanup_completed(&mut self, max_age_secs: u64) {
         let now = Instant::now();
         self.tasks.retain(|_, task| {
+            if matches!(task.status, TaskStatus::Failed(_)) {
+                return true;
+            }
+
             if task.status.is_terminal()
                 && let Some(completed) = task.completed_at
             {
@@ -583,5 +608,76 @@ mod tests {
         for kind in kinds {
             assert!(!kind.label().is_empty());
         }
+    }
+
+    #[test]
+    fn key_value_tasks_are_not_cancellable_while_running() {
+        let mut manager = TaskManager::new();
+
+        for kind in [TaskKind::KeyScan, TaskKind::KeyGet, TaskKind::KeyMutation] {
+            let (id, _token) = manager.start(kind, kind.label());
+            let snapshot = manager.get(id).expect("task exists");
+
+            assert_eq!(snapshot.status, TaskStatus::Running);
+            assert!(
+                !snapshot.is_cancellable,
+                "{} must not offer a cancel that cannot stop the driver call",
+                kind.label()
+            );
+        }
+    }
+
+    #[test]
+    fn running_query_task_is_cancellable_and_finished_one_is_not() {
+        let mut manager = TaskManager::new();
+        let (id, _token) = manager.start(TaskKind::Query, "SELECT 1");
+
+        assert!(manager.get(id).expect("task exists").is_cancellable);
+
+        manager.complete(id);
+
+        assert!(!manager.get(id).expect("task exists").is_cancellable);
+    }
+
+    #[test]
+    fn cleanup_keeps_failed_tasks_until_they_are_removed() {
+        let mut manager = TaskManager::new();
+        let (failed_id, _token) = manager.start(TaskKind::KeyScan, "SCAN 0");
+        manager.fail(failed_id, "connection reset");
+
+        manager.cleanup_completed(0);
+
+        let failed = manager
+            .get(failed_id)
+            .expect("failed task survives cleanup");
+        assert_eq!(
+            failed.status,
+            TaskStatus::Failed("connection reset".to_string())
+        );
+
+        manager.remove(failed_id);
+
+        assert!(manager.get(failed_id).is_none());
+    }
+
+    #[test]
+    fn cleanup_removes_completed_and_cancelled_tasks_past_the_retention_window() {
+        let mut manager = TaskManager::new();
+        let (completed_id, _token) = manager.start(TaskKind::Query, "SELECT 1");
+        let (cancelled_id, _token) = manager.start(TaskKind::Export, "Export");
+        let (running_id, _token) = manager.start(TaskKind::LoadSchema, "Load");
+        manager.complete(completed_id);
+        manager.cancel(cancelled_id);
+
+        manager.cleanup_completed(60);
+
+        assert!(manager.get(completed_id).is_some());
+        assert!(manager.get(cancelled_id).is_some());
+
+        manager.cleanup_completed(0);
+
+        assert!(manager.get(completed_id).is_none());
+        assert!(manager.get(cancelled_id).is_none());
+        assert!(manager.get(running_id).is_some());
     }
 }

@@ -111,6 +111,14 @@ All notable changes to DBFlux will be documented in this file.
   Up/Down move to the card above or below, crossing into the neighboring
   section's matching column.
 
+* **Tasks panel cancel and failed-task retention** — key-value scans, reads
+  and mutations no longer show a cancel button, because no key-value driver
+  can stop those calls once they start and cancelling only marked the task
+  cancelled while the work (including a write) went on. Failed tasks now stay
+  in the Tasks panel with a dismiss button instead of disappearing after 60
+  seconds, so their error output remains readable; completed and cancelled
+  tasks are still removed after 60 seconds.
+
 * **Proxy details show readable labels** — the Access tab's proxy details
   card printed the proxy type and authentication as Rust debug output, such
   as `Http` and `Basic { username: "..." }`. It now shows translated labels:
@@ -310,6 +318,12 @@ All notable changes to DBFlux will be documented in this file.
   Document tabs and Connection Manager tabs are exposed as tabs inside a tab
   list, with the active tab reported as selected, instead of as buttons.
 
+* UI automation: screenshots now wait until DBFlux has presented the frame that
+  follows an action and, on Linux, until two consecutive captures match, so they
+  no longer show the previous frame. The new `wait_for_idle` tool waits until
+  the element tree stops changing and the window draws at most one frame per
+  500 ms.
+
 * **The MCP approvals overlay can be closed** — once opened, the approvals
   overlay stayed on screen until the audit viewer was opened. It now closes
   from the close button in its header, with Escape, or with a click on the
@@ -479,6 +493,20 @@ All notable changes to DBFlux will be documented in this file.
   instead of closing over unsaved work; a document that has no save path
   at all keeps its tab too and says so. "Don't save" discards only the
   documents the dialog listed, not every open tab.
+
+* **Modals answer Enter, Escape and close the same way** — only the delete
+  connection and unsaved changes dialogs answered the keyboard, and most
+  dialogs had no close button and ignored clicks on the backdrop. Every dialog
+  built on the shared modal shell now cancels on Escape, the X button and a
+  backdrop click, and confirms on Enter only while its primary action is
+  enabled; Enter inside a multi-line editor still inserts a new line. The drop
+  table and tunnel passphrase dialogs focus their input when they open, the
+  drop table and unsaved changes dialogs use real disabled buttons, and the
+  unsaved changes list uses the standard checkbox. The drop table SQL preview
+  now quotes the table the way the connection's database does, such as
+  backticks on MySQL and brackets on SQL Server, instead of always using
+  PostgreSQL double quotes. The cell editor and document preview have their
+  own keyboard contexts, and Escape closes them.
 
 * **Password save failures are reported** — a failed keyring write while
   saving or duplicating a connection profile now keeps the form open and

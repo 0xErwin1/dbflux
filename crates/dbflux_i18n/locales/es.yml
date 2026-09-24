@@ -2911,6 +2911,8 @@ settings:
       text_input: Campo de texto
       dropdown: Menú desplegable
       sql_preview_modal: Vista previa de SQL
+      cell_editor_modal: Editor de celda
+      document_preview_modal: Vista previa de documento
       context_menu: Menú contextual
       confirm_modal: Confirmar
       form_navigation: Navegación de formulario
