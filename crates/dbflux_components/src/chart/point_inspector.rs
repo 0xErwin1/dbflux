@@ -66,8 +66,6 @@ pub fn point_inspector_element(
     delta_avg: Option<&str>,
     colors: &ChartColors,
 ) -> AnyElement {
-    let show_in_tree_source = source;
-
     div()
         .w(Widths::INSPECTOR)
         .h_full()
@@ -176,31 +174,16 @@ pub fn point_inspector_element(
                 )
                 .child(
                     div()
+                        .id("inspector-quick-actions")
                         .flex()
                         .gap(Spacing::XXS)
-                        // "Show in tree" — active, wired by host via scroll_to_row.
-                        // The host is responsible for connecting this button's
-                        // on_click to its own scroll_to_row implementation.
-                        // We render the button with a stable element ID so the host
-                        // can observe it. For now the inspector emits the source ref
-                        // as a stable display-only element; the host wraps the inspector
-                        // in its own on_click listener pattern.
+                        // The host wraps the dock in its own mouse listener and
+                        // scrolls its table to the source row; the button only
+                        // carries a stable element ID that encodes the row index.
                         .child(action_button(
                             dbflux_i18n::t!("chart.point_inspector.show_in_tree"),
                             "show-in-tree",
-                            show_in_tree_source.row_idx,
-                            colors,
-                        ))
-                        // "Annotate" — stub, coming soon.
-                        .child(action_button_disabled(
-                            dbflux_i18n::t!("chart.point_inspector.annotate"),
-                            &dbflux_i18n::t!("chart.point_inspector.coming_soon"),
-                            colors,
-                        ))
-                        // "Copy as query" — stub.
-                        .child(action_button_disabled(
-                            dbflux_i18n::t!("chart.point_inspector.copy_as_query"),
-                            &dbflux_i18n::t!("chart.point_inspector.coming_soon"),
+                            source.row_idx,
                             colors,
                         )),
                 ),
@@ -292,21 +275,6 @@ fn action_button(
         .child(label)
 }
 
-/// Disabled action button with a tooltip hint.
-fn action_button_disabled(label: String, _tooltip: &str, colors: &ChartColors) -> impl IntoElement {
-    div()
-        .px(Spacing::SM)
-        .py(ChartGeometry::TICK_GAP)
-        .rounded(Spacing::XS)
-        .border_1()
-        .border_color(colors.pill_bg)
-        .bg(colors.panel_bg)
-        .cursor_default()
-        .text_size(FontSizes::XS)
-        .text_color(colors.muted_fg)
-        .child(label)
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -377,9 +345,6 @@ mod tests {
             "chart.point_inspector.source_doc",
             "chart.point_inspector.quick_actions",
             "chart.point_inspector.show_in_tree",
-            "chart.point_inspector.annotate",
-            "chart.point_inspector.copy_as_query",
-            "chart.point_inspector.coming_soon",
         ];
 
         for key in keys {
@@ -395,6 +360,75 @@ mod tests {
         let en = dbflux_i18n::t!("chart.point_inspector.show_in_tree", locale = "en");
         let es = dbflux_i18n::t!("chart.point_inspector.show_in_tree", locale = "es");
         assert_ne!(en, es);
+    }
+
+    struct InspectorHarness;
+
+    impl gpui::Render for InspectorHarness {
+        fn render(
+            &mut self,
+            _window: &mut gpui::Window,
+            _cx: &mut gpui::Context<Self>,
+        ) -> impl IntoElement {
+            let row_values = [("value".to_string(), "42".to_string())];
+
+            div()
+                .id("inspector-harness")
+                .size_full()
+                .child(point_inspector_element(
+                    SourceRowRef { row_idx: 4 },
+                    &row_values,
+                    "cpu",
+                    "12:00:00",
+                    "42",
+                    None,
+                    None,
+                    &ChartColors::dark(),
+                ))
+        }
+    }
+
+    /// Keeps the latest rendered accessibility frame of the window it observes.
+    #[derive(Default)]
+    struct FrameCapture(std::sync::Mutex<Option<gpui::AccessibilityFrame>>);
+
+    impl gpui::FrameObserver for FrameCapture {
+        fn accessibility_updated(&self, frame: &gpui::AccessibilityFrame) {
+            *self.0.lock().expect("frame capture lock") = Some(frame.clone());
+        }
+    }
+
+    /// The quick-actions row renders only the working "Show in tree" action:
+    /// its rendered text carries no label of a placeholder button.
+    #[gpui::test]
+    fn inspector_quick_actions_render_only_show_in_tree(cx: &mut gpui::TestAppContext) {
+        let capture = std::sync::Arc::new(FrameCapture::default());
+        let capture_for_window = capture.clone();
+        let (_view, visual) = cx.add_window_view(move |window, _cx| {
+            window.observe_frames(&capture_for_window);
+            window.refresh();
+            InspectorHarness
+        });
+        visual.run_until_parked();
+
+        let frame = capture
+            .0
+            .lock()
+            .expect("frame capture lock")
+            .clone()
+            .expect("the window rendered a frame");
+
+        let quick_actions_text = frame
+            .nodes()
+            .map(|(_, node)| node)
+            .find(|node| node.id() == "inspector-quick-actions")
+            .map(|node| node.content_text().to_owned())
+            .expect("the quick-actions row is rendered");
+
+        assert_eq!(
+            quick_actions_text,
+            dbflux_i18n::t!("chart.point_inspector.show_in_tree")
+        );
     }
 
     #[test]

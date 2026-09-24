@@ -34,7 +34,7 @@ use dbflux_components::primitives::{Icon, Text};
 use dbflux_components::result_panel::ResultPanel;
 use dbflux_components::semantic::ChartColors;
 use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
-use dbflux_ui_base::toast::{PendingToast, flush_pending_toast, now_hms};
+use dbflux_ui_base::toast::flush_pending_toast;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariant, ButtonVariants};
@@ -320,7 +320,7 @@ impl ChartDocument {
         // and axis rows entirely so the chart canvas fills the panel card.
         let embedded = self.embedded;
 
-        // -- Chart toolbar row: RANGE / REFRESH / window / points / Stats / PNG / Save --
+        // -- Chart toolbar row: RANGE / REFRESH / window / points / Stats / Save --
         let chart_toolbar_row = {
             let resolved_window = self
                 .last_result
@@ -335,7 +335,6 @@ impl ChartDocument {
 
             let shell_for_stats = self.chart_shell.clone();
             let shell_for_kind = self.chart_shell.clone();
-            let weak_self_for_png = cx.weak_entity();
             let weak_self_for_save = cx.weak_entity();
             let weak_self_for_refresh = cx.weak_entity();
 
@@ -367,20 +366,6 @@ impl ChartDocument {
                             toggle_stats_rail(s.chart_rail_open, s.chart_rail_tab);
                         cx.notify();
                     });
-                }),
-                on_png_export: Arc::new(move |_window, cx| {
-                    if let Some(doc) = weak_self_for_png.upgrade() {
-                        doc.update(cx, |this, _cx| {
-                            this.pending_toast = Some(PendingToast {
-                                message: format!(
-                                    "{} — {}",
-                                    dbflux_i18n::t!("document.chart.toast.png_export_coming"),
-                                    now_hms()
-                                ),
-                                is_error: false,
-                            });
-                        });
-                    }
                 }),
                 on_save_chart: Arc::new(move |window, cx| {
                     if let Some(doc) = weak_self_for_save.upgrade() {

@@ -6,7 +6,12 @@
 
 use dbflux_app::keymap::{Command, ContextId, KeymapLayer};
 use dbflux_app::keymap::{KeyChord, KeymapStack, Modifiers};
-use gpui::{Keystroke, SharedString};
+use dbflux_components::components::document_tree;
+use gpui::{
+    Action, App, DummyKeyboardMapper, KeyBinding, KeyBindingContextPredicate, Keystroke,
+    SharedString,
+};
+use std::rc::Rc;
 use std::sync::LazyLock;
 
 // ============================================================================
@@ -99,6 +104,7 @@ static DEFAULT_KEYMAP: LazyLock<KeymapStack> = LazyLock::new(|| {
     stack.add_layer(audit_layer());
     stack.add_layer(event_streams_picker_layer());
     stack.add_layer(schema_viz_layer());
+    stack.add_layer(document_tree_layer());
 
     stack
 });
@@ -487,6 +493,12 @@ fn results_layer() -> KeymapLayer {
     layer.bind(
         KeyChord::new("[", Modifiers::none()),
         Command::ResultsPrevPage,
+    );
+
+    // Refresh the focused document. `r` stays Rename in this layer.
+    layer.bind(
+        KeyChord::new("f5", Modifiers::none()),
+        Command::RefreshSchema,
     );
 
     // Export
@@ -879,18 +891,70 @@ fn audit_layer() -> KeymapLayer {
     layer
 }
 
+/// The schema diagram resolves every keystroke through this layer from its own
+/// key handler (see `SchemaVizDocument`), and swallows the keystroke whether
+/// or not it resolves, so the workspace never takes focus away from the
+/// diagram.
 fn schema_viz_layer() -> KeymapLayer {
     let mut layer = KeymapLayer::new(ContextId::SchemaViz);
 
-    // Zoom (handled in-document via on_key_down, but register for completeness)
-    // + / = zoom in, - / _ zoom out — handled directly in viewport on_key_down
+    // Zoom. `+` and `=` share a key on common layouts, so both zoom in with
+    // or without Shift.
+    for key in ["+", "="] {
+        layer.bind(KeyChord::new(key, Modifiers::none()), Command::ZoomIn);
+        layer.bind(KeyChord::new(key, Modifiers::shift()), Command::ZoomIn);
+    }
+    layer.bind(KeyChord::new("-", Modifiers::none()), Command::ZoomOut);
 
-    // Layout shortcuts — handled directly in viewport on_key_down
-    // s: snowflake, c: compact, r: left-right
+    // Layout
+    layer.bind(
+        KeyChord::new("r", Modifiers::none()),
+        Command::LayoutLeftRight,
+    );
+    layer.bind(
+        KeyChord::new("s", Modifiers::none()),
+        Command::LayoutSnowflake,
+    );
+    layer.bind(
+        KeyChord::new("c", Modifiers::none()),
+        Command::LayoutCompact,
+    );
 
-    // Pan with arrow keys / h,j,k,l — handled directly in viewport on_key_down
-
-    // Selection navigation with Shift — handled directly in viewport on_key_down
+    // Each direction pans with the bare key, selects the nearest table with
+    // Shift, and moves the selected table with Alt.
+    let directions = [
+        (
+            ["h", "left"],
+            Command::PanLeft,
+            Command::SelectTableLeft,
+            Command::MoveTableLeft,
+        ),
+        (
+            ["l", "right"],
+            Command::PanRight,
+            Command::SelectTableRight,
+            Command::MoveTableRight,
+        ),
+        (
+            ["k", "up"],
+            Command::PanUp,
+            Command::SelectTableUp,
+            Command::MoveTableUp,
+        ),
+        (
+            ["j", "down"],
+            Command::PanDown,
+            Command::SelectTableDown,
+            Command::MoveTableDown,
+        ),
+    ];
+    for (keys, pan, select_table, move_table) in directions {
+        for key in keys {
+            layer.bind(KeyChord::new(key, Modifiers::none()), pan);
+            layer.bind(KeyChord::new(key, Modifiers::shift()), select_table);
+            layer.bind(KeyChord::new(key, Modifiers::alt()), move_table);
+        }
+    }
 
     // Context menu
     layer.bind(
@@ -898,7 +962,81 @@ fn schema_viz_layer() -> KeymapLayer {
         Command::OpenContextMenu,
     );
 
-    // Escape — close menu / deselect (handled directly in viewport on_key_down)
+    // Close the context menu, or clear the table selection.
+    layer.bind(KeyChord::new("escape", Modifiers::none()), Command::Cancel);
+
+    layer
+}
+
+/// Keys of the document tree (document databases and JSON values).
+///
+/// The tree dispatches these as native GPUI actions inside its own key
+/// context, generated from this layer by [`document_tree_keybindings`]. The
+/// `d d` delete sequence is not listed: a [`KeyChord`] is a single
+/// keystroke, so that sequence stays a native binding in the tree component.
+fn document_tree_layer() -> KeymapLayer {
+    let mut layer = KeymapLayer::new(ContextId::DocumentTree);
+
+    // Cursor movement
+    layer.bind(KeyChord::new("up", Modifiers::none()), Command::SelectPrev);
+    layer.bind(KeyChord::new("k", Modifiers::none()), Command::SelectPrev);
+    layer.bind(
+        KeyChord::new("down", Modifiers::none()),
+        Command::SelectNext,
+    );
+    layer.bind(KeyChord::new("j", Modifiers::none()), Command::SelectNext);
+
+    // Collapse / go to parent, and expand / go to first child.
+    layer.bind(
+        KeyChord::new("left", Modifiers::none()),
+        Command::ColumnLeft,
+    );
+    layer.bind(KeyChord::new("h", Modifiers::none()), Command::ColumnLeft);
+    layer.bind(
+        KeyChord::new("right", Modifiers::none()),
+        Command::ColumnRight,
+    );
+    layer.bind(KeyChord::new("l", Modifiers::none()), Command::ColumnRight);
+
+    layer.bind(
+        KeyChord::new("home", Modifiers::none()),
+        Command::SelectFirst,
+    );
+    layer.bind(KeyChord::new("g", Modifiers::none()), Command::SelectFirst);
+    layer.bind(KeyChord::new("end", Modifiers::none()), Command::SelectLast);
+    layer.bind(KeyChord::new("g", Modifiers::shift()), Command::SelectLast);
+
+    layer.bind(KeyChord::new("pageup", Modifiers::none()), Command::PageUp);
+    layer.bind(KeyChord::new("u", Modifiers::ctrl()), Command::PageUp);
+    layer.bind(
+        KeyChord::new("pagedown", Modifiers::none()),
+        Command::PageDown,
+    );
+    layer.bind(KeyChord::new("d", Modifiers::ctrl()), Command::PageDown);
+
+    // Node actions
+    layer.bind(
+        KeyChord::new("space", Modifiers::none()),
+        Command::ExpandCollapse,
+    );
+    layer.bind(KeyChord::new("enter", Modifiers::none()), Command::Execute);
+    layer.bind(KeyChord::new("f2", Modifiers::none()), Command::Execute);
+    layer.bind(
+        KeyChord::new("e", Modifiers::none()),
+        Command::PreviewDocument,
+    );
+    layer.bind(KeyChord::new("delete", Modifiers::none()), Command::Delete);
+    layer.bind(
+        KeyChord::new("r", Modifiers::none()),
+        Command::ToggleRawView,
+    );
+
+    // Search
+    layer.bind(KeyChord::new("f", Modifiers::ctrl()), Command::FocusSearch);
+    layer.bind(KeyChord::new("/", Modifiers::none()), Command::FocusSearch);
+    layer.bind(KeyChord::new("n", Modifiers::none()), Command::NextMatch);
+    layer.bind(KeyChord::new("n", Modifiers::shift()), Command::PrevMatch);
+    layer.bind(KeyChord::new("escape", Modifiers::none()), Command::Cancel);
 
     layer
 }
@@ -926,6 +1064,113 @@ fn dropdown_layer() -> KeymapLayer {
     layer.bind(KeyChord::new("s", Modifiers::none()), Command::SaveQuery);
 
     layer
+}
+
+// ============================================================================
+// Document tree native bindings
+// ============================================================================
+
+/// Registers every document tree keybinding.
+///
+/// Call once at startup, in place of calling the tree component's own `init`.
+pub fn init_document_tree_keybindings(cx: &mut App) {
+    document_tree::init(cx);
+    cx.bind_keys(document_tree_keybindings());
+}
+
+/// Native GPUI bindings for the document tree, generated from the keymap's
+/// `DocumentTree` layer.
+///
+/// The tree lives in `dbflux_components`, which cannot depend on the keymap.
+/// It handles its keys as GPUI actions in its own key context, which keeps
+/// the precedence it has always had over the workspace keymap and under the
+/// text inputs nested in it (search box, inline value editor). Generating the
+/// bindings from the layer keeps that dispatch while making the layer the
+/// single source of the tree's keys.
+pub fn document_tree_keybindings() -> Vec<KeyBinding> {
+    let context: Rc<KeyBindingContextPredicate> =
+        match KeyBindingContextPredicate::parse(document_tree::CONTEXT) {
+            Ok(predicate) => predicate.into(),
+            Err(error) => {
+                log::error!("Invalid document tree key context: {error}");
+                return Vec::new();
+            }
+        };
+
+    default_keymap()
+        .bindings_for_context(ContextId::DocumentTree)
+        .into_iter()
+        .filter(|(_, _, source)| *source == ContextId::DocumentTree)
+        .filter_map(|(chord, command, _)| {
+            let action = document_tree_action(command)?;
+            let keystroke = gpui_keystroke(&chord);
+
+            match KeyBinding::load(
+                &keystroke,
+                action,
+                Some(context.clone()),
+                false,
+                None,
+                &DummyKeyboardMapper,
+            ) {
+                Ok(binding) => Some(binding),
+                Err(error) => {
+                    log::error!("Invalid document tree keystroke `{keystroke}`: {error}");
+                    None
+                }
+            }
+        })
+        .collect()
+}
+
+/// Maps a keymap command to the document tree action that performs it.
+fn document_tree_action(command: Command) -> Option<Box<dyn Action>> {
+    use document_tree::actions;
+
+    let action: Box<dyn Action> = match command {
+        Command::SelectPrev => Box::new(actions::MoveUp),
+        Command::SelectNext => Box::new(actions::MoveDown),
+        Command::ColumnLeft => Box::new(actions::MoveLeft),
+        Command::ColumnRight => Box::new(actions::MoveRight),
+        Command::SelectFirst => Box::new(actions::MoveToTop),
+        Command::SelectLast => Box::new(actions::MoveToBottom),
+        Command::PageUp => Box::new(actions::PageUp),
+        Command::PageDown => Box::new(actions::PageDown),
+        Command::ExpandCollapse => Box::new(actions::ToggleExpand),
+        Command::Execute => Box::new(actions::StartEdit),
+        Command::PreviewDocument => Box::new(actions::OpenPreview),
+        Command::Delete => Box::new(actions::DeleteDocument),
+        Command::ToggleRawView => Box::new(actions::ToggleViewMode),
+        Command::FocusSearch => Box::new(actions::OpenSearch),
+        Command::NextMatch => Box::new(actions::NextMatch),
+        Command::PrevMatch => Box::new(actions::PrevMatch),
+        Command::Cancel => Box::new(actions::CloseSearch),
+        _ => return None,
+    };
+
+    Some(action)
+}
+
+/// Formats a chord in GPUI keystroke syntax, for example `ctrl-shift-p`.
+fn gpui_keystroke(chord: &KeyChord) -> String {
+    let modifiers = &chord.modifiers;
+    let mut parts: Vec<&str> = Vec::new();
+
+    if modifiers.platform {
+        parts.push("cmd");
+    }
+    if modifiers.ctrl {
+        parts.push("ctrl");
+    }
+    if modifiers.alt {
+        parts.push("alt");
+    }
+    if modifiers.shift {
+        parts.push("shift");
+    }
+    parts.push(&chord.key);
+
+    parts.join("-")
 }
 
 #[cfg(test)]
@@ -1173,6 +1418,51 @@ mod tests {
         );
     }
 
+    /// `F5` refreshes the focused document from the Results layer, and it is
+    /// the only refresh chord there: `r` keeps renaming, and documents render
+    /// their refresh hint from `shortcut_for_command`.
+    #[test]
+    fn results_layer_binds_f5_to_refresh() {
+        let keymap = default_keymap();
+        let f5 = KeyChord::new("f5", Modifiers::none());
+
+        assert_eq!(
+            keymap.resolve(ContextId::Results, &f5),
+            Some(Command::RefreshSchema)
+        );
+        assert_eq!(
+            keymap.resolve(ContextId::Results, &KeyChord::new("r", Modifiers::none())),
+            Some(Command::Rename)
+        );
+        assert_eq!(
+            keymap
+                .shortcut_for_command(ContextId::Results, Command::RefreshSchema)
+                .as_deref(),
+            Some("f5")
+        );
+    }
+
+    /// No other layer binds `F5`, so the Results binding cannot shadow or be
+    /// shadowed by another command.
+    #[test]
+    fn f5_is_bound_only_in_the_results_layer() {
+        let keymap = default_keymap();
+        let f5 = KeyChord::new("f5", Modifiers::none());
+
+        for context in ContextId::all_variants() {
+            let bound_here = keymap
+                .bindings_for_context(*context)
+                .into_iter()
+                .any(|(chord, _, owner)| chord == f5 && owner == *context);
+
+            assert_eq!(
+                bound_here,
+                *context == ContextId::Results,
+                "unexpected F5 binding ownership in {context:?}"
+            );
+        }
+    }
+
     /// The find shortcut must stay unbound in the text-input context (and in
     /// every context it inherits from).
     ///
@@ -1308,5 +1598,359 @@ mod tests {
                 "ConfirmModal must not resolve {chord:?}",
             );
         }
+    }
+
+    /// Every key the schema diagram used to parse by hand in `on_key_down`
+    /// must resolve, in the SchemaViz context, to the command that performs
+    /// the same action.
+    #[test]
+    fn schema_viz_layer_keeps_the_diagram_keys() {
+        let keymap = default_keymap();
+        let mut expectations = vec![
+            (KeyChord::new("+", Modifiers::none()), Command::ZoomIn),
+            (KeyChord::new("+", Modifiers::shift()), Command::ZoomIn),
+            (KeyChord::new("=", Modifiers::none()), Command::ZoomIn),
+            (KeyChord::new("=", Modifiers::shift()), Command::ZoomIn),
+            (KeyChord::new("-", Modifiers::none()), Command::ZoomOut),
+            (
+                KeyChord::new("r", Modifiers::none()),
+                Command::LayoutLeftRight,
+            ),
+            (
+                KeyChord::new("s", Modifiers::none()),
+                Command::LayoutSnowflake,
+            ),
+            (
+                KeyChord::new("c", Modifiers::none()),
+                Command::LayoutCompact,
+            ),
+            (
+                KeyChord::new("m", Modifiers::none()),
+                Command::OpenContextMenu,
+            ),
+            (KeyChord::new("escape", Modifiers::none()), Command::Cancel),
+        ];
+
+        let directions = [
+            (
+                ["h", "left"],
+                Command::PanLeft,
+                Command::SelectTableLeft,
+                Command::MoveTableLeft,
+            ),
+            (
+                ["l", "right"],
+                Command::PanRight,
+                Command::SelectTableRight,
+                Command::MoveTableRight,
+            ),
+            (
+                ["k", "up"],
+                Command::PanUp,
+                Command::SelectTableUp,
+                Command::MoveTableUp,
+            ),
+            (
+                ["j", "down"],
+                Command::PanDown,
+                Command::SelectTableDown,
+                Command::MoveTableDown,
+            ),
+        ];
+        for (keys, pan, select_table, move_table) in directions {
+            for key in keys {
+                expectations.push((KeyChord::new(key, Modifiers::none()), pan));
+                expectations.push((KeyChord::new(key, Modifiers::shift()), select_table));
+                expectations.push((KeyChord::new(key, Modifiers::alt()), move_table));
+            }
+        }
+
+        for (chord, expected) in expectations {
+            assert_eq!(
+                keymap.resolve(ContextId::SchemaViz, &chord),
+                Some(expected),
+                "SchemaViz must resolve {chord:?} to {expected:?}",
+            );
+        }
+
+        // Shift+- types `_` and never zoomed out.
+        assert_eq!(
+            keymap.resolve(
+                ContextId::SchemaViz,
+                &KeyChord::new("-", Modifiers::shift())
+            ),
+            None
+        );
+    }
+
+    /// While its context menu is open the diagram resolves keys in the
+    /// ContextMenu context, which must keep the keys the diagram's menu used.
+    #[test]
+    fn context_menu_layer_keeps_the_diagram_menu_keys() {
+        let keymap = default_keymap();
+        let expectations = [
+            ("up", Command::MenuUp),
+            ("k", Command::MenuUp),
+            ("down", Command::MenuDown),
+            ("j", Command::MenuDown),
+            ("right", Command::MenuSelect),
+            ("enter", Command::MenuSelect),
+            ("l", Command::MenuSelect),
+            ("escape", Command::MenuBack),
+            ("h", Command::MenuBack),
+            ("left", Command::MenuBack),
+        ];
+
+        for (key, expected) in expectations {
+            assert_eq!(
+                keymap.resolve(
+                    ContextId::ContextMenu,
+                    &KeyChord::new(key, Modifiers::none())
+                ),
+                Some(expected),
+                "ContextMenu must resolve `{key}` to {expected:?}",
+            );
+        }
+    }
+
+    /// The keys the document tree used to bind itself, and the action each
+    /// one ran. `d d` is absent: a two-keystroke sequence is not a chord.
+    fn former_document_tree_bindings() -> Vec<(&'static str, Box<dyn Action>)> {
+        use document_tree::actions;
+
+        vec![
+            ("up", Box::new(actions::MoveUp)),
+            ("k", Box::new(actions::MoveUp)),
+            ("down", Box::new(actions::MoveDown)),
+            ("j", Box::new(actions::MoveDown)),
+            ("left", Box::new(actions::MoveLeft)),
+            ("h", Box::new(actions::MoveLeft)),
+            ("right", Box::new(actions::MoveRight)),
+            ("l", Box::new(actions::MoveRight)),
+            ("home", Box::new(actions::MoveToTop)),
+            ("g", Box::new(actions::MoveToTop)),
+            ("end", Box::new(actions::MoveToBottom)),
+            ("shift-g", Box::new(actions::MoveToBottom)),
+            ("pageup", Box::new(actions::PageUp)),
+            ("ctrl-u", Box::new(actions::PageUp)),
+            ("pagedown", Box::new(actions::PageDown)),
+            ("ctrl-d", Box::new(actions::PageDown)),
+            ("space", Box::new(actions::ToggleExpand)),
+            ("enter", Box::new(actions::StartEdit)),
+            ("f2", Box::new(actions::StartEdit)),
+            ("e", Box::new(actions::OpenPreview)),
+            ("delete", Box::new(actions::DeleteDocument)),
+            ("r", Box::new(actions::ToggleViewMode)),
+            ("ctrl-f", Box::new(actions::OpenSearch)),
+            ("/", Box::new(actions::OpenSearch)),
+            ("n", Box::new(actions::NextMatch)),
+            ("shift-n", Box::new(actions::PrevMatch)),
+            ("escape", Box::new(actions::CloseSearch)),
+        ]
+    }
+
+    /// Each former tree key must resolve through the DocumentTree layer to a
+    /// command whose generated native binding runs the same tree action.
+    #[test]
+    fn document_tree_bindings_run_the_same_actions_as_before() {
+        use gpui::{KeyContext, Keymap};
+
+        let mut native = Keymap::default();
+        native.add_bindings(document_tree_keybindings());
+        let context_stack = [KeyContext::parse(document_tree::CONTEXT).unwrap()];
+
+        for (keystroke, expected) in former_document_tree_bindings() {
+            let typed = [Keystroke::parse(keystroke).unwrap()];
+
+            let chord = key_chord_from_gpui(&typed[0]);
+            assert!(
+                default_keymap()
+                    .resolve(ContextId::DocumentTree, &chord)
+                    .is_some(),
+                "DocumentTree must resolve `{keystroke}`",
+            );
+
+            let (matches, _pending) = native.bindings_for_input(&typed, &context_stack);
+            let top = matches
+                .first()
+                .unwrap_or_else(|| panic!("`{keystroke}` must have a native tree binding"));
+            assert!(
+                top.action().partial_eq(expected.as_ref()),
+                "`{keystroke}` must run {}, got {}",
+                expected.name(),
+                top.action().name(),
+            );
+        }
+    }
+
+    /// Every binding of the DocumentTree layer must produce a native binding;
+    /// a command without a tree action would be listed but never fire.
+    #[test]
+    fn every_document_tree_binding_has_a_native_binding() {
+        let own_bindings = default_keymap()
+            .bindings_for_context(ContextId::DocumentTree)
+            .into_iter()
+            .filter(|(_, _, source)| *source == ContextId::DocumentTree)
+            .count();
+
+        assert_eq!(document_tree_keybindings().len(), own_bindings);
+        assert_eq!(own_bindings, former_document_tree_bindings().len());
+    }
+
+    /// The Keybindings viewer lists `bindings_for_context` for each entry of
+    /// `ContextId::all_variants`, so both contexts must be listed there with
+    /// their own bindings.
+    #[test]
+    fn keybindings_viewer_lists_the_tree_and_diagram_keys() {
+        let keymap = default_keymap();
+
+        for (context, chord, command) in [
+            (
+                ContextId::DocumentTree,
+                KeyChord::new("g", Modifiers::shift()),
+                Command::SelectLast,
+            ),
+            (
+                ContextId::DocumentTree,
+                KeyChord::new("n", Modifiers::none()),
+                Command::NextMatch,
+            ),
+            (
+                ContextId::SchemaViz,
+                KeyChord::new("s", Modifiers::none()),
+                Command::LayoutSnowflake,
+            ),
+            (
+                ContextId::SchemaViz,
+                KeyChord::new("h", Modifiers::alt()),
+                Command::MoveTableLeft,
+            ),
+        ] {
+            assert!(ContextId::all_variants().contains(&context));
+            assert!(
+                keymap
+                    .bindings_for_context(context)
+                    .contains(&(chord.clone(), command, context)),
+                "the viewer must list {chord:?} -> {command:?} under {context:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn document_tree_key_context_matches_the_component() {
+        assert_eq!(
+            ContextId::DocumentTree.as_gpui_context(),
+            document_tree::CONTEXT
+        );
+    }
+
+    #[test]
+    fn gpui_keystroke_formats_modifiers_before_the_key() {
+        assert_eq!(
+            gpui_keystroke(&KeyChord::new("g", Modifiers::shift())),
+            "shift-g"
+        );
+        assert_eq!(
+            gpui_keystroke(&KeyChord::new("u", Modifiers::ctrl())),
+            "ctrl-u"
+        );
+        assert_eq!(
+            gpui_keystroke(&KeyChord {
+                key: "p".to_string(),
+                modifiers: Modifiers {
+                    platform: true,
+                    alt: true,
+                    ..Modifiers::none()
+                },
+            }),
+            "cmd-alt-p"
+        );
+    }
+
+    /// Key presses reach the tree through the generated bindings, and the
+    /// `d d` sequence still reaches it through the component's own binding.
+    #[gpui::test]
+    fn document_tree_key_presses_run_the_tree_actions(cx: &mut gpui::TestAppContext) {
+        use dbflux_components::components::document_tree::{
+            DocumentTree, DocumentTreeEvent, DocumentTreeState, NodeId,
+        };
+        use dbflux_core::Value;
+        use gpui::{AppContext as _, VisualTestContext};
+        use std::cell::RefCell;
+
+        cx.update(gpui_component::init);
+        cx.update(dbflux_components::theme::init);
+        cx.update(init_document_tree_keybindings);
+
+        let state = cx.update(|cx| {
+            cx.new(|cx| {
+                let mut state = DocumentTreeState::new(cx);
+                state.load_from_values(
+                    vec![
+                        ("first".to_string(), Value::Int(1)),
+                        ("second".to_string(), Value::Int(2)),
+                        ("third".to_string(), Value::Int(3)),
+                    ],
+                    cx,
+                );
+                state
+            })
+        });
+        let (_tree, window) = cx.add_window_view({
+            let state = state.clone();
+            move |_, cx| DocumentTree::new("test-document-tree", state, cx)
+        });
+
+        let events: Rc<RefCell<Vec<DocumentTreeEvent>>> = Rc::default();
+        window.update(|window, cx| {
+            let events = events.clone();
+            cx.subscribe(&state, move |_, event: &DocumentTreeEvent, _| {
+                events.borrow_mut().push(event.clone());
+            })
+            .detach();
+            state.update(cx, |state, cx| state.focus(window, cx));
+        });
+        window.run_until_parked();
+
+        let cursor = |window: &mut VisualTestContext| {
+            window.update(|_, cx| state.read(cx).cursor().cloned())
+        };
+
+        window.simulate_keystrokes("j");
+        assert_eq!(cursor(window), Some(NodeId::root(1)), "j moves down");
+
+        window.simulate_keystrokes("shift-g");
+        assert_eq!(cursor(window), Some(NodeId::root(2)), "Shift+G moves last");
+
+        window.simulate_keystrokes("g");
+        assert_eq!(cursor(window), Some(NodeId::root(0)), "g moves first");
+
+        window.simulate_keystrokes("down");
+        assert_eq!(cursor(window), Some(NodeId::root(1)), "Down moves down");
+
+        window.simulate_keystrokes("d d");
+        assert!(
+            events.borrow().iter().any(|event| matches!(
+                event,
+                DocumentTreeEvent::DeleteRequested(id) if *id == NodeId::root(1)
+            )),
+            "`d d` must request deleting the document under the cursor",
+        );
+
+        window.simulate_keystrokes("e");
+        assert!(
+            events.borrow().iter().any(|event| matches!(
+                event,
+                DocumentTreeEvent::DocumentPreviewRequested { doc_index: 1, .. }
+            )),
+            "`e` must request the document preview",
+        );
+
+        window.simulate_keystrokes("/");
+        window.run_until_parked();
+        assert!(
+            window.update(|_, cx| state.read(cx).is_search_visible()),
+            "`/` must open the search bar",
+        );
     }
 }

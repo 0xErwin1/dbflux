@@ -144,21 +144,10 @@ impl ConnectionManagerWindow {
             .find(|f| f.id == "password")
             .and_then(|f| f.help.clone());
 
-        let mut sections = Vec::new();
+        let mut password_field = requires_password.then(|| {
+            let secret_label = self.secret_field_label(cx);
 
-        // Driver-specific form fields
-        sections.extend(self.render_form_tab(&main_tab, false, show_focus, ring_color, cx));
-
-        if requires_password {
-            // Drivers can rename the canonical secret field (e.g. "API Token" for
-            // InfluxDB v2). The override depends on current form values so that
-            // toggles like a version selector can flip the label live.
-            let form_values = self.collect_form_values(driver.form_definition(), cx);
-            let secret_label = driver
-                .secret_field_label(&form_values)
-                .unwrap_or_else(|| dbflux_i18n::t!("connection_manager.placeholder.password"));
-
-            let password_field = self.render_password_field(
+            self.render_password_field(
                 show_focus,
                 keyring_available,
                 save_password,
@@ -166,8 +155,23 @@ impl ConnectionManagerWindow {
                 password_help,
                 &secret_label,
                 cx,
-            );
+            )
+        });
 
+        let mut sections = Vec::new();
+
+        // Driver-specific form fields. The secret input takes the position of the
+        // driver's `password` field when the form declares one.
+        sections.extend(self.render_form_tab(
+            &main_tab,
+            false,
+            show_focus,
+            ring_color,
+            &mut password_field,
+            cx,
+        ));
+
+        if let Some(password_field) = password_field {
             sections.push(password_field);
         }
 

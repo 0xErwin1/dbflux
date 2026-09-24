@@ -1191,12 +1191,12 @@ impl AuditDocument {
         // Left: row count with icon — same as DataGridPanel.
         let left = {
             let row_count_label = if let Some((start, end)) = self.current_page_range() {
-                format!(
-                    "{}-{} of {} {}",
-                    start,
-                    end,
-                    self.total_events,
-                    self.source_row_label()
+                dbflux_i18n::t!(
+                    "document.audit.pager.range",
+                    start = start,
+                    end = end,
+                    total = self.total_events,
+                    unit = self.source_row_label()
                 )
             } else {
                 format!("{} {}", self.total_events, self.source_row_label())
@@ -1498,12 +1498,19 @@ mod tests {
         "document.audit.filter.view_mode.table",
         "document.audit.filter.y_scale.linear",
         "document.audit.filter.y_scale.log",
+        "document.audit.filter.placeholder.search_events",
+        "document.audit.filter.placeholder.filter_events",
+        "document.audit.filter.placeholder.all_time",
+        "document.audit.filter.placeholder.last_12_hours",
+        "document.audit.filter.timezone.local",
+        "document.audit.filter.timezone.utc",
+        "document.audit.pager.range",
     ];
 
     #[test]
     fn audit_filter_keys_resolve_in_both_locales() {
         for key in FILTER_KEYS {
-            for locale in ["en", "es"] {
+            for locale in ["en", "es", "ko", "zh_Hans"] {
                 let value = dbflux_i18n::t!(key, locale = locale);
 
                 assert!(!value.is_empty(), "{key} resolved empty in {locale}");
