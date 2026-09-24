@@ -2314,7 +2314,7 @@ language:
 login:
   window_title: 连接流程
   field:
-    start_url: 起始 URL
+    verification_url: 验证 URL
   action:
     open_browser: 打开浏览器
     copy_url: 复制 URL
@@ -2328,6 +2328,7 @@ login:
   body:
     sign_in_prompt: "使用 %{provider} 登录以继续连接 %{profile}。"
     instructions: 在浏览器中打开登录 URL 并完成认证。登录完成后 DBFlux 将自动继续。
+    waiting: 正在等待你在浏览器中授权…
     elapsed: "登录最多可能需要 5 分钟。已用时：%{seconds}s"
     browser_open_failed: "无法自动打开浏览器。请手动打开该 URL。（%{error}；回退失败：%{fallback_error}）"
   error:
@@ -3646,10 +3647,14 @@ ssh:
 sso_wizard:
   title: AWS SSO 向导
   step:
-    start: 第 1 步：起始 URL
-    account: 第 2 步：账户
-    role: 第 3 步：角色
-    confirm: 第 4 步：确认
+    start: 起始 URL
+    account: 账户
+    role: 角色
+    confirm: 确认
+  field:
+    profile_name: 配置文件名称
+    start_url: SSO 起始 URL
+    region: 区域
   account:
     hint: 使用 AWS SSO 账户发现中的账户 ID
     discovering: 正在发现账户…
