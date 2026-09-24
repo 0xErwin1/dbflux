@@ -3792,6 +3792,8 @@ sso_wizard:
     profile_name: Nombre del perfil
     start_url: URL de inicio de SSO
     region: Región
+    account_id: ID de cuenta
+    role_name: Nombre del rol
   account:
     hint: Usa el ID de cuenta obtenido con el descubrimiento de cuentas de AWS SSO
     discovering: Descubriendo cuentas...

@@ -35,6 +35,13 @@ All notable changes to DBFlux will be documented in this file.
   drops them: the refresh key, the toolbar button and the command palette show
   a warning to save or revert first, and auto-refresh skips its tick.
 
+* **SSO wizard account and role labels** — the account-ID and role inputs on
+  the AWS SSO wizard's second and third steps had only placeholders. They now
+  have visible labels, which are also their accessible names, and stable
+  `sso-field-account-id` and `sso-field-role-name` ids, like the first step.
+  The login modal's waiting indicator now animates while it waits for the
+  browser; the elapsed caption still counts whole wall-clock seconds.
+
 * UI automation: `set_text` and `set_value` now fill a text input addressed by
   its element id, and `click_element` accepts text inputs and focuses them for
   `type_text`. Previously both failed on every input, `set_text` with a

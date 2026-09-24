@@ -73,7 +73,7 @@ fn sso_rail_items(current: WizardStep) -> Vec<RailItem> {
         .collect()
 }
 
-/// A step 1 input with its visible label above it. The label is also the
+/// A wizard input with its visible label above it. The label is also the
 /// input's accessible name, and `id` keeps the input addressable across runs.
 fn labeled_input(
     id: &'static str,
@@ -410,7 +410,12 @@ impl SsoWizard {
                         .flex()
                         .flex_col()
                         .gap(Spacing::SM)
-                        .child(Input::new(&self.input_account_id))
+                        .child(labeled_input(
+                            "sso-field-account-id",
+                            dbflux_i18n::t!("sso_wizard.field.account_id"),
+                            &self.input_account_id,
+                            cx,
+                        ))
                         .child(Text::caption(dbflux_i18n::t!("sso_wizard.account.hint")));
 
                     #[cfg(feature = "aws")]
@@ -507,7 +512,12 @@ impl SsoWizard {
                         .flex()
                         .flex_col()
                         .gap(Spacing::SM)
-                        .child(Input::new(&self.input_role_name))
+                        .child(labeled_input(
+                            "sso-field-role-name",
+                            dbflux_i18n::t!("sso_wizard.field.role_name"),
+                            &self.input_role_name,
+                            cx,
+                        ))
                         .child(Text::caption(dbflux_i18n::t!("sso_wizard.role.hint")));
 
                     #[cfg(feature = "aws")]
@@ -719,10 +729,9 @@ mod tests {
             .expect("the window rendered a frame")
     }
 
-    #[gpui::test]
-    fn start_step_inputs_have_visible_labels_ids_and_names(cx: &mut TestAppContext) {
-        let frame = render_wizard(WizardStep::Start, |_| {}, cx);
-
+    /// Checks that every `(id, label)` pair is a text input addressed by `id`
+    /// whose accessible name is `label`, and that `label` is visible text.
+    fn assert_labeled_inputs(frame: &AccessibilityFrame, expected: &[(&str, String)]) {
         let text_inputs: HashMap<String, Option<String>> = frame
             .nodes()
             .filter_map(|(_, node)| {
@@ -736,24 +745,9 @@ mod tests {
             })
             .collect();
 
-        let expected = [
-            (
-                "sso-field-profile-name",
-                dbflux_i18n::t!("sso_wizard.field.profile_name"),
-            ),
-            (
-                "sso-field-start-url",
-                dbflux_i18n::t!("sso_wizard.field.start_url"),
-            ),
-            (
-                "sso-field-region",
-                dbflux_i18n::t!("sso_wizard.field.region"),
-            ),
-        ];
-
         for (id, label) in expected {
             assert_eq!(
-                text_inputs.get(id),
+                text_inputs.get(*id),
                 Some(&Some(label.clone())),
                 "input {id} in {text_inputs:?}"
             );
@@ -764,6 +758,55 @@ mod tests {
                 "label {label} is not visible"
             );
         }
+    }
+
+    #[gpui::test]
+    fn start_step_inputs_have_visible_labels_ids_and_names(cx: &mut TestAppContext) {
+        let frame = render_wizard(WizardStep::Start, |_| {}, cx);
+
+        assert_labeled_inputs(
+            &frame,
+            &[
+                (
+                    "sso-field-profile-name",
+                    dbflux_i18n::t!("sso_wizard.field.profile_name"),
+                ),
+                (
+                    "sso-field-start-url",
+                    dbflux_i18n::t!("sso_wizard.field.start_url"),
+                ),
+                (
+                    "sso-field-region",
+                    dbflux_i18n::t!("sso_wizard.field.region"),
+                ),
+            ],
+        );
+    }
+
+    #[gpui::test]
+    fn account_step_input_has_visible_label_id_and_name(cx: &mut TestAppContext) {
+        let frame = render_wizard(WizardStep::Account, |_| {}, cx);
+
+        assert_labeled_inputs(
+            &frame,
+            &[(
+                "sso-field-account-id",
+                dbflux_i18n::t!("sso_wizard.field.account_id"),
+            )],
+        );
+    }
+
+    #[gpui::test]
+    fn role_step_input_has_visible_label_id_and_name(cx: &mut TestAppContext) {
+        let frame = render_wizard(WizardStep::Role, |_| {}, cx);
+
+        assert_labeled_inputs(
+            &frame,
+            &[(
+                "sso-field-role-name",
+                dbflux_i18n::t!("sso_wizard.field.role_name"),
+            )],
+        );
     }
 
     #[gpui::test]
@@ -871,6 +914,8 @@ mod tests {
         "sso_wizard.field.profile_name",
         "sso_wizard.field.start_url",
         "sso_wizard.field.region",
+        "sso_wizard.field.account_id",
+        "sso_wizard.field.role_name",
         "sso_wizard.account.hint",
         "sso_wizard.account.discovering",
         "sso_wizard.account.discover_button",
