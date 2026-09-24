@@ -3259,22 +3259,49 @@ mod tests {
         assert_eq!(safe_prefix_by_bytes("aé漢", 6), "aé漢");
     }
 
+    /// The abort window starts when `execute_streaming_process` is called, so the
+    /// test only calls it once the child has proven it printed: the child creates a
+    /// marker file after its output is written, and the test waits for that file.
+    /// The output then already sits in the pipe when the forced stop runs, and the
+    /// reader drains it before the pipe closes, so a slow child start can no longer
+    /// turn the forced stop into a run with no output. The marker wait is a hang
+    /// guard, not the bound under test.
     #[test]
     fn execute_streaming_process_uses_abort_timeout_for_forced_stop() {
+        let working_directory = tempfile::tempdir().unwrap();
+        let ready_marker = working_directory.path().join("ready.marker");
+
         let mut command = if cfg!(target_os = "windows") {
             let mut command = Command::new("cmd");
-            command.args(["/C", "echo before-timeout && ping 127.0.0.1 -n 6 >nul"]);
+            command.args([
+                "/C",
+                "echo before-timeout && type nul > ready.marker && ping 127.0.0.1 -n 6 >nul",
+            ]);
             command
         } else {
             let mut command = Command::new("sh");
-            command.args(["-c", "printf 'before-timeout\n'; sleep 5"]);
+            command.args([
+                "-c",
+                "printf 'before-timeout\\n'; : > ready.marker; sleep 5",
+            ]);
             command
         };
 
+        command.current_dir(working_directory.path());
         command.stdout(Stdio::piped());
         command.stderr(Stdio::piped());
 
         let mut child = command.spawn().unwrap();
+
+        let marker_deadline = Instant::now() + Duration::from_secs(60);
+        while !ready_marker.exists() {
+            assert!(
+                Instant::now() < marker_deadline,
+                "the child never signalled that it printed its output"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+
         let result = execute_streaming_process(
             &mut child,
             None,
