@@ -27,8 +27,8 @@ use dbflux_core::{
     observability::{EventCategory, EventOutcome, EventSeverity},
 };
 use dbflux_storage::repositories::audit::{AuditEventDto, AuditQueryFilter, AuditRepository};
-use dbflux_ui_base::AppStateEntity;
 use dbflux_ui_base::toast::{PendingToast, flush_pending_toast};
+use dbflux_ui_base::{AppStateEntity, AsyncUpdateResultExt};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -1045,25 +1045,12 @@ impl AuditDocument {
             Some(self.pagination_offset()),
         );
         let count_filter = self.active_filter(None, None);
-        let task_id = match &self.source {
-            AuditDocumentSource::ExternalEventStream { profile_id, .. } => {
-                Some(self.app_state.update(cx, |state, _| {
-                    let (task_id, _) = state.start_task_for_profile(
-                        dbflux_core::TaskKind::Query,
-                        crate::labels::audit_loading_event_stream_task_label(&self.title),
-                        Some(*profile_id),
-                    );
-                    task_id
-                }))
-            }
-            AuditDocumentSource::Internal { .. } => None,
-        };
 
-        let task = match &self.source {
+        let (task_id, task) = match &self.source {
             AuditDocumentSource::Internal { adapter } => {
                 let adapter = adapter.clone();
 
-                cx.background_executor().spawn(async move {
+                let task = cx.background_executor().spawn(async move {
                     let events = adapter.query_filter(&page_filter)?;
                     let total = adapter.count_filter(&count_filter)?;
 
@@ -1071,9 +1058,13 @@ impl AuditDocument {
                         events,
                         total_events: total,
                     })
-                })
+                });
+
+                (None, task)
             }
             AuditDocumentSource::ExternalEventStream { profile_id, target } => {
+                // Resolve the connection before registering the background
+                // task, so a missing connection never leaves a task running.
                 let Some(connection) = self
                     .app_state
                     .read(cx)
@@ -1091,6 +1082,15 @@ impl AuditDocument {
                     return;
                 };
 
+                let task_id = self.app_state.update(cx, |state, _| {
+                    let (task_id, _) = state.start_task_for_profile(
+                        dbflux_core::TaskKind::Query,
+                        crate::labels::audit_loading_event_stream_task_label(&self.title),
+                        Some(*profile_id),
+                    );
+                    task_id
+                });
+
                 let target = target.clone();
                 let query = EventQuery {
                     from_ts_ms: self.filters.start_ms,
@@ -1101,20 +1101,31 @@ impl AuditDocument {
                     ..EventQuery::default()
                 };
 
-                cx.background_executor().spawn(async move {
+                let task = cx.background_executor().spawn(async move {
                     let page = connection
                         .browse_event_stream(&target, &query)
                         .map_err(|error| format!("external event stream browse failed: {error}"))?;
 
                     Ok::<_, String>(Self::external_page_to_loaded(page))
-                })
+                });
+
+                (Some(task_id), task)
             }
         };
 
+        // The background task ends with its own load, even when a newer load
+        // has superseded it (a repeated refresh); only the page it returns is
+        // dropped in that case.
         cx.spawn(async move |this, cx| match task.await {
             Ok(page) => {
-                let _ = cx.update(|cx| {
+                cx.update(|cx| {
                     this.update(cx, |doc, cx| {
+                        if let Some(task_id) = task_id {
+                            doc.app_state.update(cx, |state, _| {
+                                state.complete_task(task_id);
+                            });
+                        }
+
                         if doc.load_request_id != request_id {
                             return;
                         }
@@ -1130,19 +1141,21 @@ impl AuditDocument {
                             .retain(|event_id| visible_ids.contains(event_id));
                         doc.retain_external_inline_inputs(&visible_ids);
 
+                        cx.notify();
+                    })
+                })
+                .log_if_dropped();
+            }
+            Err(error) => {
+                cx.update(|cx| {
+                    this.update(cx, |doc, cx| {
                         if let Some(task_id) = task_id {
+                            let details = crate::labels::audit_events_load_failed(&error);
                             doc.app_state.update(cx, |state, _| {
-                                state.complete_task(task_id);
+                                state.fail_task_with_details(task_id, error.clone(), details);
                             });
                         }
 
-                        cx.notify();
-                    })
-                });
-            }
-            Err(error) => {
-                let _ = cx.update(|cx| {
-                    this.update(cx, |doc, cx| {
                         if doc.load_request_id != request_id {
                             return;
                         }
@@ -1154,16 +1167,10 @@ impl AuditDocument {
                         doc.is_loading = false;
                         doc.status_message = Some(crate::labels::audit_events_load_failed(&error));
 
-                        if let Some(task_id) = task_id {
-                            let details = crate::labels::audit_events_load_failed(&error);
-                            doc.app_state.update(cx, |state, _| {
-                                state.fail_task_with_details(task_id, error.clone(), details);
-                            });
-                        }
-
                         cx.notify();
                     })
-                });
+                })
+                .log_if_dropped();
             }
         })
         .detach();
@@ -1826,5 +1833,121 @@ mod tests {
 
         assert_eq!(en, "rows");
         assert_ne!(en, es);
+    }
+
+    fn new_audit_document(
+        cx: &mut gpui::TestAppContext,
+        event_stream_profile: Option<uuid::Uuid>,
+    ) -> (
+        gpui::Entity<AuditDocument>,
+        gpui::Entity<dbflux_ui_base::AppStateEntity>,
+        &mut gpui::VisualTestContext,
+    ) {
+        use gpui::AppContext as _;
+
+        cx.update(gpui_component::init);
+        cx.update(dbflux_components::theme::init);
+        cx.update(|cx| {
+            let host = cx.new(|_cx| dbflux_ui_base::toast::ToastHost::new());
+            cx.set_global(dbflux_ui_base::toast::ToastGlobal { host });
+        });
+
+        let app_state: gpui::Entity<dbflux_ui_base::AppStateEntity> = cx.update(|cx| {
+            cx.new(|_| {
+                let runtime = dbflux_storage::bootstrap::StorageRuntime::in_memory()
+                    .expect("in-memory storage");
+                dbflux_ui_base::AppStateEntity::new_with_storage_runtime(runtime)
+                    .expect("test storage setup")
+            })
+        });
+
+        let (document, window) = cx.add_window_view({
+            let app_state = app_state.clone();
+            move |window, cx| match event_stream_profile {
+                Some(profile_id) => AuditDocument::new_for_event_stream(
+                    profile_id,
+                    dbflux_core::EventStreamTarget {
+                        collection: dbflux_core::CollectionRef::new("logs", "stream"),
+                        child_id: None,
+                    },
+                    "Events".to_string(),
+                    app_state,
+                    window,
+                    cx,
+                ),
+                None => {
+                    let audit_repo = app_state
+                        .read(cx)
+                        .storage_runtime()
+                        .audit()
+                        .expect("audit repo should open in test");
+                    AuditDocument::new(audit_repo, app_state, window, cx)
+                }
+            }
+        });
+        window.run_until_parked();
+
+        (document, app_state, window)
+    }
+
+    /// In the audit viewer `r` resolves to the refresh command, and the
+    /// document handles it by reloading the event list.
+    #[gpui::test]
+    fn refresh_key_reloads_the_audit_list(cx: &mut gpui::TestAppContext) {
+        use dbflux_app::keymap::{Command, KeyChord};
+
+        let (document, _app_state, window) = new_audit_document(cx, None);
+
+        let context = window.update(|_, cx| document.read(cx).active_context());
+        let chord = KeyChord::parse("r").expect("plain letter chord");
+        assert_eq!(
+            dbflux_ui_base::default_keymap().resolve(context, &chord),
+            Some(Command::RefreshSchema)
+        );
+
+        let request_before = window.update(|_, cx| document.read(cx).load_request_id);
+
+        let handled = window.update(|window, cx| {
+            document.update(cx, |document, cx| {
+                document.dispatch_command(Command::RefreshSchema, window, cx)
+            })
+        });
+        window.run_until_parked();
+
+        assert!(handled);
+        window.update(|_, cx| {
+            let document = document.read(cx);
+            assert_eq!(document.load_request_id, request_before + 1);
+            assert!(!document.is_loading);
+        });
+    }
+
+    /// Refreshing an event stream whose connection is gone reports that in
+    /// the status line and registers no background task, instead of leaving
+    /// a "loading" task running forever.
+    #[gpui::test]
+    fn refresh_without_event_stream_connection_starts_no_task(cx: &mut gpui::TestAppContext) {
+        use dbflux_app::keymap::Command;
+
+        let (document, app_state, window) = new_audit_document(cx, Some(uuid::Uuid::new_v4()));
+
+        let handled = window.update(|window, cx| {
+            document.update(cx, |document, cx| {
+                document.dispatch_command(Command::RefreshSchema, window, cx)
+            })
+        });
+        window.run_until_parked();
+
+        assert!(handled);
+        window.update(|_, cx| {
+            assert!(app_state.read(cx).running_tasks().is_empty());
+
+            let document = document.read(cx);
+            assert!(!document.is_loading);
+            assert_eq!(
+                document.status_message,
+                Some(crate::labels::audit_event_source_connection_not_found())
+            );
+        });
     }
 }
