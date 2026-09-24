@@ -298,6 +298,12 @@ All notable changes to DBFlux will be documented in this file.
   Document tabs and Connection Manager tabs are exposed as tabs inside a tab
   list, with the active tab reported as selected, instead of as buttons.
 
+* UI automation: screenshots now wait until DBFlux has presented the frame that
+  follows an action and, on Linux, until two consecutive captures match, so they
+  no longer show the previous frame. The new `wait_for_idle` tool waits until
+  the element tree stops changing and the window draws at most one frame per
+  500 ms.
+
 * **The MCP approvals overlay can be closed** — once opened, the approvals
   overlay stayed on screen until the audit viewer was opened. It now closes
   from the close button in its header, with Escape, or with a click on the

@@ -576,7 +576,7 @@ fn spawn_ui_pump(
 #[allow(clippy::too_many_lines)]
 fn handle_ui_operation(
     operation: Operation,
-    state: &SharedState,
+    state: &Arc<SharedState>,
     document_host: &DocumentHost,
     resource_host: &ResourceHost,
     command_host: &CommandHost,
@@ -616,11 +616,9 @@ fn handle_ui_operation(
             window.refresh();
             Ok(BridgeResult::Ack)
         }
-        Operation::Refresh => {
-            let completed = state.frame_stats();
-            window.refresh();
-            Ok(BridgeResult::FrameStats(completed))
-        }
+        Operation::Refresh => Ok(BridgeResult::FrameStats(refresh_and_track_presentation(
+            state, window,
+        ))),
         Operation::GetPointerLocation => Ok(BridgeResult::PointerLocation(
             input::pointer_location(window),
         )),
@@ -885,11 +883,19 @@ async fn process_request(request: WireRequest, context: ConnectionContext) -> Wi
         Operation::WaitForFrame {
             after_frame_count,
             timeout_ms,
-        } => context
-            .state
-            .wait_for_frame(after_frame_count, Duration::from_millis(timeout_ms))
-            .await
-            .map(BridgeResult::FrameStats),
+            presented,
+        } => {
+            let wait = Duration::from_millis(timeout_ms);
+            if presented {
+                context
+                    .state
+                    .wait_for_presented_frame(after_frame_count, wait)
+                    .await
+            } else {
+                context.state.wait_for_frame(after_frame_count, wait).await
+            }
+            .map(BridgeResult::FrameStats)
+        }
         Operation::GetWindowGeometry => context
             .state
             .window_geometry()
@@ -942,6 +948,30 @@ async fn process_request(request: WireRequest, context: ConnectionContext) -> Wi
         Ok(result) => WireResponse::success(request.request_id, result),
         Err(error) => WireResponse::failure(request.request_id, error),
     }
+}
+
+/// Request a new frame and return the completed-frame token observed before the request,
+/// arranging for the presented-frame token to pass it once the refreshed frame is presented.
+///
+/// GPUI runs next-frame callbacks at the start of a frame request, before that request draws
+/// and presents. The outer callback therefore runs at the start of the request that draws the
+/// refreshed frame, and the inner one, registered from it, at the start of the following
+/// request, after the refreshed frame's `present` has returned.
+fn refresh_and_track_presentation(
+    state: &Arc<SharedState>,
+    window: &mut Window,
+) -> gpui_mcp_protocol::FrameStats {
+    let completed = state.frame_stats();
+    window.refresh();
+    let state = Arc::downgrade(state);
+    window.on_next_frame(move |window, _| {
+        window.on_next_frame(move |_, _| {
+            if let Some(state) = state.upgrade() {
+                state.mark_frames_presented();
+            }
+        });
+    });
+    completed
 }
 
 async fn request_ui_refresh(
@@ -1441,9 +1471,65 @@ mod tests {
     };
 
     use super::{
-        BridgeConfig, encode_hex, validate_context_resource, validate_context_resource_list,
-        validate_operation,
+        BridgeConfig, encode_hex, refresh_and_track_presentation, validate_context_resource,
+        validate_context_resource_list, validate_operation,
     };
+    use crate::Automation;
+
+    struct EmptyView;
+
+    impl gpui::Render for EmptyView {
+        fn render(
+            &mut self,
+            _window: &mut gpui::Window,
+            _cx: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            gpui::div()
+        }
+    }
+
+    /// GPUI runs next-frame callbacks at the start of a frame request, then draws
+    /// and presents. The refreshed frame is drawn by the first request after the
+    /// refresh, so it is only known to be presented when the request after that
+    /// one starts. A token that advanced at the start of the first request would
+    /// report a frame that had not been drawn yet.
+    #[gpui::test]
+    fn refresh_marks_presentation_at_the_request_after_the_refreshed_frame(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let automation = Automation::isolated();
+        let attached = automation.clone();
+        let (_view, visual) = cx.add_window_view(move |window, _| {
+            attached.attach(window);
+            EmptyView
+        });
+        visual.run_until_parked();
+        let state = automation.state.clone();
+
+        let before = visual.update(|window, _| refresh_and_track_presentation(&state, window));
+        visual.run_until_parked();
+        assert!(state.frame_stats().frame_count > before.frame_count);
+        assert!(state.presented_frame_count() <= before.frame_count);
+
+        assert_eq!(
+            visual.update(|window, cx| window.simulate_next_frame(cx)),
+            1
+        );
+        assert!(
+            state.presented_frame_count() <= before.frame_count,
+            "the request that draws the refreshed frame has not presented it yet"
+        );
+
+        assert_eq!(
+            visual.update(|window, cx| window.simulate_next_frame(cx)),
+            1
+        );
+        assert!(state.presented_frame_count() > before.frame_count);
+        assert_eq!(
+            state.presented_frame_count(),
+            state.frame_stats().frame_count
+        );
+    }
 
     #[test]
     fn set_value_requires_a_valid_node_id_and_bounded_value() {
