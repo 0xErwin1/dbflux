@@ -391,14 +391,62 @@ mod active_query_prompt_tests {
     use std::cell::{Cell, RefCell};
     use std::path::PathBuf;
     use std::rc::Rc;
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Condvar, Mutex};
+    use std::thread::ThreadId;
+    use std::time::{Duration, Instant};
     use uuid::Uuid;
+
+    /// Holds driver cancels until released, the way SQLite's cancel used to
+    /// wait for the lock held by the running query.
+    #[derive(Default)]
+    struct CancelGate {
+        released: Mutex<bool>,
+        condvar: Condvar,
+    }
+
+    impl CancelGate {
+        /// Bounded so a regression fails the test instead of hanging it.
+        fn wait(&self) {
+            let Ok(released) = self.released.lock() else {
+                return;
+            };
+
+            let waited =
+                self.condvar
+                    .wait_timeout_while(released, Duration::from_secs(10), |released| !*released);
+
+            if waited.is_err() {
+                log::warn!("cancel gate mutex poisoned");
+            }
+        }
+
+        fn release(&self) {
+            if let Ok(mut released) = self.released.lock() {
+                *released = true;
+            }
+            self.condvar.notify_all();
+        }
+    }
 
     /// Connection that records driver-level cancels and runs nothing.
     struct FakeConnection {
         metadata: DriverMetadata,
         cancel_calls: Arc<AtomicUsize>,
+        cancel_threads: Arc<Mutex<Vec<ThreadId>>>,
+        cancel_gate: Option<Arc<CancelGate>>,
+    }
+
+    impl FakeConnection {
+        fn enter_cancel(&self) {
+            if let Ok(mut threads) = self.cancel_threads.lock() {
+                threads.push(std::thread::current().id());
+            }
+
+            if let Some(gate) = &self.cancel_gate {
+                gate.wait();
+            }
+        }
     }
 
     impl Connection for FakeConnection {
@@ -423,8 +471,14 @@ mod active_query_prompt_tests {
         }
 
         fn cancel_active(&self) -> Result<(), DbError> {
+            self.enter_cancel();
             self.cancel_calls.fetch_add(1, Ordering::SeqCst);
             Ok(())
+        }
+
+        fn cancel_handle(&self) -> Arc<dyn dbflux_core::QueryCancelHandle> {
+            self.enter_cancel();
+            Arc::new(dbflux_core::NoopCancelHandle)
         }
 
         fn schema(&self) -> Result<SchemaSnapshot, DbError> {
@@ -484,10 +538,45 @@ mod active_query_prompt_tests {
         }
     }
 
+    /// Polls real time, because driver cancels run on their own thread.
+    fn wait_until(mut condition: impl FnMut() -> bool) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(5);
+
+        while Instant::now() < deadline {
+            if condition() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+
+        condition()
+    }
+
     impl Harness<'_> {
         /// Connects a fake profile and makes it the active connection.
         fn connect(&mut self, name: &str) -> (Uuid, Arc<AtomicUsize>) {
+            let (profile_id, cancel_calls, _threads) = self.connect_with(name, None);
+            (profile_id, cancel_calls)
+        }
+
+        /// Connects a fake profile whose driver cancels block until `gate`
+        /// is released, and returns the threads the cancels ran on.
+        fn connect_blocking(
+            &mut self,
+            name: &str,
+            gate: Arc<CancelGate>,
+        ) -> (Uuid, Arc<Mutex<Vec<ThreadId>>>) {
+            let (profile_id, _calls, threads) = self.connect_with(name, Some(gate));
+            (profile_id, threads)
+        }
+
+        fn connect_with(
+            &mut self,
+            name: &str,
+            cancel_gate: Option<Arc<CancelGate>>,
+        ) -> (Uuid, Arc<AtomicUsize>, Arc<Mutex<Vec<ThreadId>>>) {
             let cancel_calls = Arc::new(AtomicUsize::new(0));
+            let cancel_threads = Arc::new(Mutex::new(Vec::new()));
             let connection = Arc::new(FakeConnection {
                 metadata: DriverMetadataBuilder::new(
                     "fake",
@@ -497,6 +586,8 @@ mod active_query_prompt_tests {
                 )
                 .build(),
                 cancel_calls: cancel_calls.clone(),
+                cancel_threads: cancel_threads.clone(),
+                cancel_gate,
             });
             let profile = ConnectionProfile::new(
                 name,
@@ -520,7 +611,7 @@ mod active_query_prompt_tests {
                 });
             });
 
-            (profile_id, cancel_calls)
+            (profile_id, cancel_calls, cancel_threads)
         }
 
         fn start_query(&mut self, profile_id: Uuid) -> TaskId {
@@ -732,7 +823,7 @@ mod active_query_prompt_tests {
         assert!(harness.is_connected(profile_id));
         assert_eq!(harness.task_status(query), Some(TaskStatus::Cancelled));
         assert!(
-            cancel_calls.load(Ordering::SeqCst) > 0,
+            wait_until(|| cancel_calls.load(Ordering::SeqCst) > 0),
             "the driver must receive the cancel"
         );
     }
@@ -867,5 +958,87 @@ mod active_query_prompt_tests {
 
         assert!(!harness.prompt_visible());
         assert_eq!(quit_confirmed.get(), 0);
+    }
+
+    /// Asserts a prompt choice returned while the driver cancel was still
+    /// blocked, then that the cancel ran off the UI thread once released.
+    fn assert_cancel_ran_off_the_ui_thread(
+        elapsed: Duration,
+        gate: &CancelGate,
+        cancel_threads: &Mutex<Vec<ThreadId>>,
+    ) {
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "the UI thread waited {elapsed:?} for a blocked driver cancel"
+        );
+
+        gate.release();
+
+        let ui_thread = std::thread::current().id();
+        let threads = || {
+            cancel_threads
+                .lock()
+                .map(|threads| threads.clone())
+                .unwrap_or_default()
+        };
+
+        assert!(
+            wait_until(|| !threads().is_empty()),
+            "the driver must still receive the cancel"
+        );
+        assert!(
+            threads().iter().all(|thread| *thread != ui_thread),
+            "driver cancels must not run on the UI thread"
+        );
+    }
+
+    #[gpui::test]
+    fn cancel_query_returns_while_the_driver_cancel_blocks(cx: &mut TestAppContext) {
+        let mut harness = new_harness(cx);
+        let gate = Arc::new(CancelGate::default());
+        let (profile_id, cancel_threads) = harness.connect_blocking("prod", gate.clone());
+        let query = harness.start_query(profile_id);
+        harness.disconnect_active();
+
+        let started = Instant::now();
+        harness.dispatch(Command::Execute);
+        let elapsed = started.elapsed();
+
+        assert_eq!(harness.task_status(query), Some(TaskStatus::Cancelled));
+        assert!(harness.is_connected(profile_id));
+        assert_cancel_ran_off_the_ui_thread(elapsed, &gate, &cancel_threads);
+    }
+
+    #[gpui::test]
+    fn disconnect_anyway_returns_while_the_driver_cancel_blocks(cx: &mut TestAppContext) {
+        let mut harness = new_harness(cx);
+        let gate = Arc::new(CancelGate::default());
+        let (profile_id, cancel_threads) = harness.connect_blocking("prod", gate.clone());
+        let query = harness.start_query(profile_id);
+        harness.disconnect_active();
+
+        let started = Instant::now();
+        harness.force();
+        let elapsed = started.elapsed();
+
+        assert_eq!(harness.task_status(query), Some(TaskStatus::Cancelled));
+        assert!(!harness.is_connected(profile_id));
+        assert_cancel_ran_off_the_ui_thread(elapsed, &gate, &cancel_threads);
+    }
+
+    #[gpui::test]
+    fn quit_cancel_query_returns_while_the_driver_cancel_blocks(cx: &mut TestAppContext) {
+        let mut harness = new_harness(cx);
+        let gate = Arc::new(CancelGate::default());
+        let (profile_id, cancel_threads) = harness.connect_blocking("prod", gate.clone());
+        let query = harness.start_query(profile_id);
+        assert!(!harness.request_quit());
+
+        let started = Instant::now();
+        harness.dispatch(Command::Execute);
+        let elapsed = started.elapsed();
+
+        assert_eq!(harness.task_status(query), Some(TaskStatus::Cancelled));
+        assert_cancel_ran_off_the_ui_thread(elapsed, &gate, &cancel_threads);
     }
 }

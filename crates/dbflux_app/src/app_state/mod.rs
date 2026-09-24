@@ -1929,18 +1929,31 @@ impl AppState {
             .remove_database_connection(profile_id, database)
     }
 
+    /// Asks the driver to cancel the query running on `target`'s connection.
+    ///
+    /// Returns immediately: the driver calls run on their own thread, because
+    /// they may block (a network round trip to send a cancel or KILL, or a
+    /// connection lock held by the running query) and callers run on the UI
+    /// thread. The query's own task reports the cancellation when it ends.
     pub fn cancel_query_for_target(&self, target: &dbflux_core::TaskTarget) {
         let Some(connection) = self.facade.connections.connection_for_task_target(target) else {
             return;
         };
 
-        let cancel_handle = connection.cancel_handle();
-        if let Err(error) = cancel_handle.cancel() {
-            log::warn!("Failed to send cancel via handle: {}", error);
-        }
+        let spawned = std::thread::Builder::new()
+            .name("dbflux-query-cancel".to_string())
+            .spawn(move || {
+                if let Err(error) = connection.cancel_handle().cancel() {
+                    log::warn!("Failed to send cancel via handle: {}", error);
+                }
 
-        if let Err(error) = connection.cancel_active() {
-            log::warn!("Failed to send cancel to database: {}", error);
+                if let Err(error) = connection.cancel_active() {
+                    log::warn!("Failed to send cancel to database: {}", error);
+                }
+            });
+
+        if let Err(error) = spawned {
+            log::warn!("Failed to start the query cancel thread: {}", error);
         }
     }
 

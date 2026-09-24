@@ -23,6 +23,13 @@ All notable changes to DBFlux will be documented in this file.
   saves pending edits and closes connections. It now takes the same path as
   closing through the window manager. Other windows keep their close behavior.
 
+* **Cancelling a query no longer freezes the UI** — SQLite's cancel waited
+  for the connection lock that the running query holds, so cancelling from the
+  editor, the tasks panel, or the running-query prompt froze the window until
+  the query ended (forever, for an endless query). SQLite now interrupts
+  without taking the lock, and driver cancels for every backend run off the UI
+  thread, so a slow network cancel cannot stall it either.
+
 * Redis, Turso, and InfluxDB now refuse requested row limits (including zero)
   or statement timeouts before execution with `NotSupported`, rather than
   dispatching commands, SQL, HTTP, or instance-context queries without those
