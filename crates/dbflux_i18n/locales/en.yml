@@ -2431,6 +2431,9 @@ modals:
     quit_anyway: Quit anyway
     keep_waiting: Keep waiting
     cancel_query: Cancel query
+    more_queries:
+      one: "And %{count} more running query"
+      many: "And %{count} more running queries"
   add_panel_picker:
     title: Add panels
     submit:
