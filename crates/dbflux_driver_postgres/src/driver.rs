@@ -253,6 +253,10 @@ impl SqlDialect for PostgresDialect {
         true
     }
 
+    fn supports_drop_cascade(&self) -> bool {
+        true
+    }
+
     fn comparison_column_expr(&self, col_name: &str, col_type: &str) -> String {
         if needs_postgres_text_comparison_cast(col_type) {
             format!("({})::text", col_name)
@@ -8058,5 +8062,22 @@ mod tests {
         assert!(plan_bounded_batch(BatchBlock::None, &[RequiresExplicitBlock, None]).is_ok());
         assert!(plan_bounded_batch(BatchBlock::None, &[Open, RequiresExplicitBlock]).is_ok());
         assert!(plan_bounded_batch(BatchBlock::Explicit, &[None, RequiresExplicitBlock]).is_ok());
+    }
+
+    #[test]
+    fn drop_table_statement_cascades_when_asked() {
+        assert!(POSTGRES_DIALECT.supports_drop_cascade());
+        assert_eq!(
+            POSTGRES_DIALECT
+                .drop_table_statement(Some("public"), "orders", true, true)
+                .expect("cascade is supported"),
+            "DROP TABLE IF EXISTS \"public\".\"orders\" CASCADE"
+        );
+        assert_eq!(
+            POSTGRES_DIALECT
+                .drop_table_statement(Some("public"), "orders", false, false)
+                .expect("a plain drop builds"),
+            "DROP TABLE \"public\".\"orders\""
+        );
     }
 }

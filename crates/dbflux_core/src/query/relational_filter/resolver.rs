@@ -573,6 +573,28 @@ mod tests {
     }
 
     #[test]
+    fn resolve_hop_uses_fk_column_name_when_table_name_is_prefixed() {
+        let fks = [
+            make_fk("rf_posts", "created_by_id", "rf_users", "id"),
+            make_fk("rf_users", "org_id", "rf_organizations", "id"),
+        ];
+
+        let by_column = parse("created_by.org.name = 'Acme'").unwrap();
+        let resolved = resolve(by_column, make_source("rf_posts"), &fks, &DefaultSqlDialect)
+            .expect("`org` matches the `org_id` column");
+        assert_eq!(resolved.spec.joins[1].to_table, "rf_organizations");
+
+        // The table-name fallback matches a prefix of the referenced table, so
+        // `organization` does not reach `rf_organizations`.
+        let by_table = parse("created_by.organization.name = 'Acme'").unwrap();
+        let unresolved = resolve(by_table, make_source("rf_posts"), &fks, &DefaultSqlDialect);
+        assert!(
+            matches!(unresolved, Err(ResolveError::Unknown { ref segment, .. }) if segment == "organization"),
+            "expected Unknown for `organization`, got {unresolved:?}"
+        );
+    }
+
+    #[test]
     fn resolve_self_join_aliases() {
         // categories.parent_id → categories.id (S-12)
         let fks = [make_fk("categories", "parent_id", "categories", "id")];

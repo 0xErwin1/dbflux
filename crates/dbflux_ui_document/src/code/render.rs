@@ -671,6 +671,7 @@ impl CodeDocument {
         let entity_cancel = cx.entity().clone();
         let entity_run = cx.entity().clone();
         let entity_close = cx.entity().clone();
+        let entity_confirm = cx.entity().clone();
 
         let statement_count = self
             .pending
@@ -716,9 +717,15 @@ impl CodeDocument {
             footer,
         )
         .width(px(460.0))
+        .focus_handle(self.script_confirm_focus.handle())
         .on_close(move |window, cx| {
             entity_close.update(cx, |doc, cx| {
                 doc.cancel_script_query(window, cx);
+            });
+        })
+        .on_confirm(move |window, cx| {
+            entity_confirm.update(cx, |doc, cx| {
+                doc.confirm_script_query(window, cx);
             });
         })
     }
@@ -731,6 +738,7 @@ impl CodeDocument {
         let entity_cancel = cx.entity().clone();
         let entity_suppress = cx.entity().clone();
         let entity_close = cx.entity().clone();
+        let entity_confirm = cx.entity().clone();
 
         let (title, message) = self
             .pending
@@ -810,9 +818,15 @@ impl CodeDocument {
         ModalShell::new(title, body, footer)
             .width(px(460.0))
             .variant(ModalVariant::Danger)
+            .focus_handle(self.dangerous_query_focus.handle())
             .on_close(move |window, cx| {
                 entity_close.update(cx, |doc, cx| {
                     doc.cancel_dangerous_query(window, cx);
+                });
+            })
+            .on_confirm(move |window, cx| {
+                entity_confirm.update(cx, |doc, cx| {
+                    doc.confirm_dangerous_query(false, window, cx);
                 });
             })
     }

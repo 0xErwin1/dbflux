@@ -3,8 +3,8 @@ use super::{
     InputCommand, Json, KeyArgs, MouseButton, NodeAction, Operation, Parameters, Point,
     PointerButtonArgs, PointerCommand, PointerMoveArgs, Role, ScrollArgs, ScrollPointArgs,
     SetTextArgs, SetValueArgs, ToolRouter, TypeTextArgs, UiNode, Value, ack_json, encode_error,
-    get_node, json, object_output, require_bounds, tool, tool_router, validate_pointer_point,
-    validate_value,
+    focus_click_point, get_node, json, object_output, require_bounds, require_writable, tool,
+    tool_router, validate_pointer_point, validate_value,
 };
 
 #[tool_router(router = input_router)]
@@ -140,7 +140,7 @@ impl GpuiMcp {
     }
 
     #[tool(
-        description = "Click an element by stable semantic ID through GPUI's real hit-testing and mouse-event pipeline. Editable text inputs are clicked at their center, which focuses them for type_text."
+        description = "Click an element by stable semantic ID through GPUI's real hit-testing and mouse-event pipeline. Editable text inputs are clicked inside their text area, near the left edge, which focuses them for type_text."
     )]
     async fn click_element(
         &self,
@@ -251,15 +251,21 @@ impl GpuiMcp {
         Ok(ack_json("text_typed"))
     }
 
-    #[tool(description = "Move keyboard focus to a focusable element by stable semantic ID.")]
+    #[tool(
+        description = "Move keyboard focus to a focusable element by stable semantic ID. Editable text inputs are clicked inside their text area instead, which focuses their editor for type_text."
+    )]
     async fn focus_element(
         &self,
         Parameters(args): Parameters<ElementArgs>,
     ) -> Result<Json<Value>, String> {
-        self.element_with_action(&args.id, NodeAction::Focus)
-            .await?;
-        self.ack_after_frame(Operation::Focus { node_id: args.id })
-            .await?;
+        let tree = self.tree().await?;
+        match focus_click_point(get_node(&tree, &args.id)?)? {
+            Some(point) => self.click_at(point, MouseButton::Left, 1).await?,
+            None => {
+                self.ack_after_frame(Operation::Focus { node_id: args.id })
+                    .await?;
+            }
+        }
         Ok(ack_json("focused"))
     }
 
@@ -279,7 +285,7 @@ impl GpuiMcp {
     }
 
     #[tool(
-        description = "Replace an editable element's text through its accessibility value action, or by focusing it and using GPUI's active input handler when it has no such action."
+        description = "Replace an editable element's text through its accessibility value action, or by focusing it and using GPUI's active input handler when it has no such action. Refused for a read-only element."
     )]
     async fn set_text(
         &self,
@@ -311,7 +317,7 @@ impl GpuiMcp {
     }
 
     #[tool(
-        description = "Set a value through the control's normal GPUI keyboard or click behavior."
+        description = "Set a value through the control's normal GPUI keyboard or click behavior. Refused for a read-only text input."
     )]
     async fn set_value(
         &self,
@@ -372,7 +378,7 @@ impl GpuiMcp {
     }
 
     #[tool(
-        description = "Return visible, enabled, focused, checked, selected, and expanded state for an element."
+        description = "Return visible, enabled, read_only, focused, checked, selected, and expanded state for an element. read_only is present only when true."
     )]
     async fn get_element_state(
         &self,
@@ -403,10 +409,12 @@ impl GpuiMcp {
 
     /// Replace the text of an editable element and settle a frame.
     ///
-    /// An element with an accessibility `SetValue` action receives the text directly, so it
-    /// needs neither focus nor an active input handler. Any other element is focused first
-    /// and its text is replaced through GPUI's active input handler.
+    /// A read-only element is refused. An element with an accessibility `SetValue` action
+    /// receives the text directly, so it needs neither focus nor an active input handler. Any
+    /// other element is focused first and its text is replaced through GPUI's active input
+    /// handler.
     async fn replace_element_text(&self, node: &UiNode, text: String) -> Result<(), String> {
+        require_writable(node)?;
         if node.actions.contains(&NodeAction::SetValue) {
             return self
                 .ack_after_frame(Operation::SetValue {

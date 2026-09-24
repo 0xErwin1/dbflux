@@ -1,8 +1,13 @@
+use std::panic::Location;
+
 use gpui::prelude::*;
 use gpui::{
-    App, ElementId, Entity, FontWeight, IntoElement, KeyBinding, SharedString, Window, actions,
+    AnyElement, App, Bounds, DefiniteLength, ElementId, Entity, FontWeight, GlobalElementId,
+    InspectorElementId, IntoElement, KeyBinding, LayoutId, Pixels, SharedString, StyleRefinement,
+    Window, actions,
 };
 use gpui_component::Sizable;
+use gpui_component::input::{Editor as GpuiEditor, EditorState};
 
 use crate::tokens::FontSizes;
 use crate::typography::AppFonts;
@@ -175,17 +180,135 @@ impl RenderOnce for Input {
     }
 }
 
+/// A code editor that shows text the user cannot change.
+///
+/// It is `gpui_component`'s `Editor` with `readonly(true)`, which rejects typing and
+/// pasting but keeps focus, selection and copy. The wrapper also reports the editor as
+/// read-only to assistive technology and to UI automation, which then refuses to replace
+/// its value; `Editor::readonly` alone does neither. Layout is exactly that of the
+/// editor: the wrapper adds no layout node of its own.
+pub struct ReadOnlyEditor {
+    editor: GpuiEditor,
+}
+
+impl ReadOnlyEditor {
+    pub fn new(state: &Entity<EditorState>) -> Self {
+        Self {
+            editor: GpuiEditor::new(state).readonly(true),
+        }
+    }
+
+    pub fn appearance(mut self, appearance: bool) -> Self {
+        self.editor = self.editor.appearance(appearance);
+        self
+    }
+
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.editor = self.editor.disabled(disabled);
+        self
+    }
+
+    /// Sets the editor height, like `Editor::h`.
+    pub fn h(mut self, height: impl Into<DefiniteLength>) -> Self {
+        self.editor = self.editor.h(height);
+        self
+    }
+}
+
+impl Styled for ReadOnlyEditor {
+    fn style(&mut self) -> &mut StyleRefinement {
+        self.editor.style()
+    }
+}
+
+impl IntoElement for ReadOnlyEditor {
+    type Element = ReadOnlyAccessibility;
+
+    fn into_element(self) -> Self::Element {
+        ReadOnlyAccessibility {
+            child: self.editor.into_any_element(),
+        }
+    }
+}
+
+/// Marks the first accessibility node its child builds as read-only.
+///
+/// It delegates layout, prepaint and paint to the child, so it has no bounds, id or
+/// style of its own.
+pub struct ReadOnlyAccessibility {
+    child: AnyElement,
+}
+
+impl IntoElement for ReadOnlyAccessibility {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl Element for ReadOnlyAccessibility {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, Self::RequestLayoutState) {
+        (self.child.request_layout(window, cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        _bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Self::PrepaintState {
+        window.with_accessibility_read_only(|window| {
+            self.child.prepaint(window, cx);
+        });
+    }
+
+    fn paint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        _bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        _prepaint: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        self.child.paint(window, cx);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
 
     use gpui::{
-        AccessibilityFrame, AppContext as _, Context, Focusable as _, FrameObserver, IntoElement,
-        Modifiers, ParentElement as _, Render, Role, Styled as _, TestAppContext,
-        VisualTestContext, Window, div,
+        AccessibilityFrame, AppContext as _, Bounds, Context, Focusable as _, FrameObserver,
+        IntoElement, Modifiers, ParentElement as _, Pixels, Point, Render, Role, Styled as _,
+        TestAppContext, VisualTestContext, Window, div, point, prelude::FluentBuilder as _, px,
     };
 
-    use super::{Input, InputState};
+    use super::{EditorState, GpuiEditor, GpuiInput, Input, InputState, ReadOnlyEditor};
+    use crate::tokens::Heights;
 
     /// Keeps the latest rendered accessibility frame of the window it observes.
     #[derive(Default)]
@@ -387,5 +510,309 @@ mod tests {
             visual.update(|_, cx| state.read(cx).value()).as_ref(),
             "db.example"
         );
+    }
+
+    /// Where the automation server clicks a text input to focus its editor: vertically
+    /// centered, a third of the width from the left edge and at most 40 px from it.
+    fn text_area_point(bounds: Bounds<Pixels>) -> Point<Pixels> {
+        point(
+            bounds.origin.x + (bounds.size.width / 3.0).min(px(40.0)),
+            bounds.center().y,
+        )
+    }
+
+    /// An input with a trailing clear button, and optionally a leading icon.
+    struct DecoratedField {
+        state: gpui::Entity<InputState>,
+        width: Pixels,
+        leading_icon: bool,
+    }
+
+    impl Render for DecoratedField {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            let input = GpuiInput::new(&self.state)
+                .id("decorated-field")
+                .cleanable(true)
+                .when(self.leading_icon, |input| {
+                    input.prefix(div().size(Heights::ICON_SM))
+                });
+
+            div().size_full().child(div().w(self.width).child(input))
+        }
+    }
+
+    /// Open a window holding one decorated input with text, so its clear button is drawn,
+    /// and return the point the automation server clicks.
+    fn open_decorated_field(
+        width: Pixels,
+        leading_icon: bool,
+        cx: &mut TestAppContext,
+    ) -> (
+        gpui::Entity<DecoratedField>,
+        Point<Pixels>,
+        &mut VisualTestContext,
+    ) {
+        cx.update(gpui_component::init);
+
+        let capture = Arc::new(FrameCapture::default());
+        let capture_for_window = capture.clone();
+        let (view, visual) = cx.add_window_view(move |window, cx| {
+            window.observe_frames(&capture_for_window);
+            window.refresh();
+            let state = cx.new(|cx| InputState::new(window, cx).default_value("abc"));
+            DecoratedField {
+                state,
+                width,
+                leading_icon,
+            }
+        });
+        visual.run_until_parked();
+
+        let bounds = capture
+            .0
+            .lock()
+            .expect("frame capture lock")
+            .as_ref()
+            .and_then(|frame| {
+                frame
+                    .nodes()
+                    .find(|(_, node)| node.id() == "decorated-field")
+                    .map(|(_, node)| node.bounds())
+            })
+            .expect("the input is found by the id it was given");
+
+        (view, text_area_point(bounds), visual)
+    }
+
+    /// Click `target` and type after it, as `focus_element` then `type_text` do.
+    fn click_and_type(
+        view: &gpui::Entity<DecoratedField>,
+        target: Point<Pixels>,
+        visual: &mut VisualTestContext,
+    ) -> (bool, String) {
+        visual.simulate_click(target, Modifiers::none());
+        settle_frame(visual);
+
+        let inserted = visual.update(|window, cx| window.insert_input_text("!", cx));
+        let state = visual.update(|_, cx| view.read(cx).state.clone());
+        let value = visual.update(|_, cx| state.read(cx).value().to_string());
+        (inserted, value)
+    }
+
+    #[gpui::test]
+    fn the_text_area_of_a_narrow_input_with_a_clear_button_focuses_its_editor(
+        cx: &mut TestAppContext,
+    ) {
+        // At this width the bounds center lands on the clear button.
+        let (view, target, visual) = open_decorated_field(px(56.0), false, cx);
+
+        let (inserted, value) = click_and_type(&view, target, visual);
+
+        assert!(
+            inserted,
+            "the click reached the editor, not the clear button"
+        );
+        assert_eq!(value.len(), 4, "one character was typed into {value:?}");
+    }
+
+    #[gpui::test]
+    fn the_text_area_of_an_input_with_a_leading_icon_focuses_its_editor(cx: &mut TestAppContext) {
+        let (view, target, visual) = open_decorated_field(px(320.0), true, cx);
+
+        let (inserted, value) = click_and_type(&view, target, visual);
+
+        assert!(
+            inserted,
+            "the click reached the editor, not the leading icon"
+        );
+        assert_eq!(value.len(), 4, "one character was typed into {value:?}");
+    }
+
+    /// The builder chains the read-only editors of DBFlux's views use.
+    #[derive(Clone, Copy, Debug)]
+    enum ReadOnlyLayout {
+        /// The audit viewer's event details.
+        AuditDetails,
+        /// The object browser's decoded preview.
+        ObjectPreview,
+        /// The query builder's SQL preview.
+        QueryPreview,
+    }
+
+    const LAYOUTS: [ReadOnlyLayout; 3] = [
+        ReadOnlyLayout::AuditDetails,
+        ReadOnlyLayout::ObjectPreview,
+        ReadOnlyLayout::QueryPreview,
+    ];
+
+    /// One code editor, either wrapped in `ReadOnlyEditor` or built as a plain
+    /// `Editor::readonly(true)`, or as a plain editable `Editor`.
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    enum EditorKind {
+        Wrapped,
+        PlainReadOnly,
+        Editable,
+    }
+
+    struct EditorField {
+        state: gpui::Entity<EditorState>,
+        layout: ReadOnlyLayout,
+        kind: EditorKind,
+    }
+
+    impl Render for EditorField {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            let state = &self.state;
+            let editor = match (self.layout, self.kind) {
+                (ReadOnlyLayout::AuditDetails, EditorKind::Wrapped) => ReadOnlyEditor::new(state)
+                    .appearance(false)
+                    .w_full()
+                    .h(px(96.0))
+                    .into_any_element(),
+                (ReadOnlyLayout::AuditDetails, kind) => GpuiEditor::new(state)
+                    .readonly(kind == EditorKind::PlainReadOnly)
+                    .appearance(false)
+                    .w_full()
+                    .h(px(96.0))
+                    .into_any_element(),
+                (ReadOnlyLayout::ObjectPreview, EditorKind::Wrapped) => ReadOnlyEditor::new(state)
+                    .appearance(false)
+                    .disabled(false)
+                    .w_full()
+                    .h_full()
+                    .into_any_element(),
+                (ReadOnlyLayout::ObjectPreview, kind) => GpuiEditor::new(state)
+                    .appearance(false)
+                    .readonly(kind == EditorKind::PlainReadOnly)
+                    .disabled(false)
+                    .w_full()
+                    .h_full()
+                    .into_any_element(),
+                (ReadOnlyLayout::QueryPreview, EditorKind::Wrapped) => ReadOnlyEditor::new(state)
+                    .appearance(false)
+                    .w_full()
+                    .h(px(140.0))
+                    .into_any_element(),
+                (ReadOnlyLayout::QueryPreview, kind) => GpuiEditor::new(state)
+                    .readonly(kind == EditorKind::PlainReadOnly)
+                    .appearance(false)
+                    .w_full()
+                    .h(px(140.0))
+                    .into_any_element(),
+            };
+
+            div().size_full().flex().flex_col().child(editor)
+        }
+    }
+
+    /// What a test learns about the editor node of one rendered frame.
+    struct ObservedEditor {
+        id: String,
+        bounds: Bounds<Pixels>,
+        read_only: bool,
+    }
+
+    /// Open a window holding one code editor and observe its frames.
+    fn open_editor(
+        layout: ReadOnlyLayout,
+        kind: EditorKind,
+        cx: &mut TestAppContext,
+    ) -> (
+        Arc<FrameCapture>,
+        gpui::Entity<EditorField>,
+        &mut VisualTestContext,
+    ) {
+        cx.update(gpui_component::init);
+
+        let capture = Arc::new(FrameCapture::default());
+        let capture_for_window = capture.clone();
+        let (view, visual) = cx.add_window_view(move |window, cx| {
+            window.observe_frames(&capture_for_window);
+            window.refresh();
+            let state = cx.new(|cx| EditorState::new(window, cx).default_value("SELECT 1"));
+            EditorField {
+                state,
+                layout,
+                kind,
+            }
+        });
+        visual.run_until_parked();
+
+        (capture, view, visual)
+    }
+
+    fn observed_editor(capture: &FrameCapture) -> ObservedEditor {
+        let guard = capture.0.lock().expect("frame capture lock");
+        let frame = guard.as_ref().expect("the window rendered a frame");
+        frame
+            .nodes()
+            .find_map(|(_, node)| {
+                let accessible = frame.accessibility_node(node)?;
+                (accessible.role() == Role::MultilineTextInput).then(|| ObservedEditor {
+                    id: node.id().to_owned(),
+                    bounds: node.bounds(),
+                    read_only: accessible.is_read_only(),
+                })
+            })
+            .expect("the editor is rendered as a multi-line text input")
+    }
+
+    fn editor_value(view: &gpui::Entity<EditorField>, visual: &mut VisualTestContext) -> String {
+        let state = visual.update(|_, cx| view.read(cx).state.clone());
+        visual.update(|_, cx| state.read(cx).value().to_string())
+    }
+
+    #[gpui::test]
+    fn read_only_editors_are_reported_read_only_and_refuse_a_new_value(cx: &mut TestAppContext) {
+        for layout in LAYOUTS {
+            let (capture, view, visual) = open_editor(layout, EditorKind::Wrapped, cx);
+            let editor = observed_editor(&capture);
+            assert!(editor.read_only, "{layout:?} is not reported read-only");
+
+            let applied = visual.update(|window, cx| {
+                window.set_observed_element_value(&editor.id, "DROP TABLE users", cx)
+            });
+            settle_frame(visual);
+
+            assert!(!applied, "{layout:?} accepted a new value");
+            assert_eq!(editor_value(&view, visual), "SELECT 1", "{layout:?}");
+            assert!(
+                observed_editor(&capture).read_only,
+                "{layout:?} after a redraw"
+            );
+        }
+    }
+
+    #[gpui::test]
+    fn read_only_editors_keep_the_layout_of_the_plain_editor(cx: &mut TestAppContext) {
+        for layout in LAYOUTS {
+            let (wrapped, _, _) = open_editor(layout, EditorKind::Wrapped, cx);
+            let (plain, _, _) = open_editor(layout, EditorKind::PlainReadOnly, cx);
+
+            let wrapped = observed_editor(&wrapped);
+            let plain = observed_editor(&plain);
+
+            assert!(!plain.read_only, "Editor::readonly alone reports nothing");
+            assert_eq!(wrapped.bounds, plain.bounds, "{layout:?}");
+            assert!(
+                wrapped.bounds.size.height > px(0.0),
+                "{layout:?} has no height"
+            );
+        }
+    }
+
+    #[gpui::test]
+    fn an_editable_editor_still_accepts_a_new_value(cx: &mut TestAppContext) {
+        let (capture, view, visual) =
+            open_editor(ReadOnlyLayout::QueryPreview, EditorKind::Editable, cx);
+        let editor = observed_editor(&capture);
+        assert!(!editor.read_only);
+
+        let applied = visual
+            .update(|window, cx| window.set_observed_element_value(&editor.id, "SELECT 2", cx));
+        settle_frame(visual);
+
+        assert!(applied, "the editable editor handles the SetValue action");
+        assert_eq!(editor_value(&view, visual), "SELECT 2");
     }
 }

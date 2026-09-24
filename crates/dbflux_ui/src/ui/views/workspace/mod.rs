@@ -534,9 +534,9 @@ impl Workspace {
             &modal_drop_table,
             |this, _, outcome: &crate::ui::overlays::modals::DropTableOutcome, cx| {
                 use crate::ui::overlays::modals::DropTableOutcome;
-                if matches!(outcome, DropTableOutcome::Confirmed) {
+                if let DropTableOutcome::Confirmed { if_exists, cascade } = *outcome {
                     this.sidebar.update(cx, |sidebar, cx| {
-                        sidebar.confirm_modal_delete(cx);
+                        sidebar.confirm_modal_drop_table(if_exists, cascade, cx);
                     });
                 } else {
                     this.sidebar.update(cx, |sidebar, cx| {
@@ -1995,6 +1995,7 @@ impl Workspace {
             || self.modal_unsaved_changes.read(cx).is_visible()
             || self.modal_delete_dashboard.read(cx).is_visible()
             || self.modal_delete_saved_chart.read(cx).is_visible()
+            || self.sidebar.read(cx).delete_modal_state().is_some()
         {
             return ContextId::ConfirmModal;
         }

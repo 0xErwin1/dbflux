@@ -7,9 +7,10 @@
 #
 # Downloads that commit of themixednuts/gpui-mcp, keeps the gpui-mcp,
 # gpui-mcp-protocol, gpui-mcp-server and gpui-mcp-capture crates and the
-# license, re-applies dbflux-port.patch, text-input-automation.patch and
-# screenshot-freshness.patch in that order and leaves .rej files for hunks that
-# no longer apply. See VENDOR.md for what to check afterwards.
+# license, re-applies dbflux-port.patch, text-input-automation.patch,
+# screenshot-freshness.patch and text-input-read-only-focus.patch in that order
+# and leaves .rej files for hunks that no longer apply. See VENDOR.md for what to
+# check afterwards.
 
 set -euo pipefail
 
@@ -48,7 +49,12 @@ done
 cp "$source_dir/LICENSE" "$here/LICENSE"
 
 # Each patch is written against the tree the previous ones produce.
-patches=(dbflux-port.patch text-input-automation.patch screenshot-freshness.patch)
+patches=(
+    dbflux-port.patch
+    text-input-automation.patch
+    screenshot-freshness.patch
+    text-input-read-only-focus.patch
+)
 
 cd "$repo_root"
 for patch in "${patches[@]}"; do

@@ -1833,31 +1833,54 @@ pub trait Connection: Send + Sync {
     /// Drop a schema object (table, view, database, or collection).
     ///
     /// SQL drivers use the default implementation which builds a `DROP` statement
-    /// via `dialect().quote_identifier()` and executes it. NoSQL drivers override
-    /// with native commands (e.g., MongoDB `db.collection.drop()`).
+    /// through the connection's dialect and executes it: tables go through
+    /// `SqlDialect::drop_table_statement`, the same builder as the drop table
+    /// preview. NoSQL drivers override with native commands (e.g., MongoDB
+    /// `db.collection.drop()`).
+    ///
+    /// Returns `DbError::NotSupported` without executing anything when
+    /// `cascade` is requested and the dialect does not support
+    /// `DROP ... CASCADE`.
     fn drop_schema_object(
         &self,
         target: &SchemaDropTarget,
         cascade: bool,
         if_exists: bool,
     ) -> Result<(), DbError> {
-        let quoted_name = match target.schema.as_deref() {
-            Some(s) => format!(
-                "{}.{}",
-                self.dialect().quote_identifier(s),
-                self.dialect().quote_identifier(&target.name)
-            ),
-            None => self.dialect().quote_identifier(&target.name),
-        };
+        let dialect = self.dialect();
 
-        let mut sql = format!("DROP {} ", target.kind.drop_keyword());
-        if if_exists {
-            sql.push_str("IF EXISTS ");
-        }
-        sql.push_str(&quoted_name);
-        if cascade {
-            sql.push_str(" CASCADE");
-        }
+        let sql = match target.kind {
+            SchemaObjectKind::Table => dialect.drop_table_statement(
+                target.schema.as_deref(),
+                &target.name,
+                if_exists,
+                cascade,
+            )?,
+            _ => {
+                if cascade && !dialect.supports_drop_cascade() {
+                    return Err(crate::sql::dialect::drop_cascade_not_supported());
+                }
+
+                let quoted_name = match target.schema.as_deref() {
+                    Some(s) => format!(
+                        "{}.{}",
+                        dialect.quote_identifier(s),
+                        dialect.quote_identifier(&target.name)
+                    ),
+                    None => dialect.quote_identifier(&target.name),
+                };
+
+                let mut sql = format!("DROP {} ", target.kind.drop_keyword());
+                if if_exists {
+                    sql.push_str("IF EXISTS ");
+                }
+                sql.push_str(&quoted_name);
+                if cascade {
+                    sql.push_str(" CASCADE");
+                }
+                sql
+            }
+        };
 
         let request = QueryRequest::new(sql).with_database(target.database.clone());
 
@@ -2573,5 +2596,147 @@ mod tests {
             let decoded: VersioningStatus = serde_json::from_str(&json).expect("deserialize");
             assert_eq!(decoded, status);
         }
+    }
+
+    /// Records every statement the default `drop_schema_object` executes.
+    struct RecordingConnection {
+        dialect: Box<dyn crate::sql::dialect::SqlDialect>,
+        executed: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl RecordingConnection {
+        fn new(dialect: impl crate::sql::dialect::SqlDialect + 'static) -> Self {
+            Self {
+                dialect: Box::new(dialect),
+                executed: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+
+        fn executed(&self) -> Vec<String> {
+            self.executed
+                .lock()
+                .map(|executed| executed.clone())
+                .unwrap_or_default()
+        }
+    }
+
+    impl Connection for RecordingConnection {
+        fn metadata(&self) -> &DriverMetadata {
+            unimplemented!("RecordingConnection::metadata not needed for this test")
+        }
+
+        fn ping(&self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn close(&mut self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn execute(&self, request: &QueryRequest) -> Result<QueryResult, DbError> {
+            self.executed
+                .lock()
+                .map_err(|_| DbError::NotSupported("poisoned".to_string()))?
+                .push(request.sql.clone());
+            Ok(QueryResult::empty())
+        }
+
+        fn cancel(&self, _handle: &crate::QueryHandle) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn schema(&self) -> Result<SchemaSnapshot, DbError> {
+            Err(DbError::NotSupported("stub".to_string()))
+        }
+
+        fn kind(&self) -> DbKind {
+            DbKind::Postgres
+        }
+
+        fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
+            SchemaLoadingStrategy::SingleDatabase
+        }
+
+        fn dialect(&self) -> &dyn crate::sql::dialect::SqlDialect {
+            self.dialect.as_ref()
+        }
+    }
+
+    struct CascadeDialect;
+
+    impl crate::sql::dialect::SqlDialect for CascadeDialect {
+        fn quote_identifier(&self, name: &str) -> String {
+            crate::DefaultSqlDialect.quote_identifier(name)
+        }
+
+        fn qualified_table(&self, schema: Option<&str>, table: &str) -> String {
+            crate::DefaultSqlDialect.qualified_table(schema, table)
+        }
+
+        fn value_to_literal(&self, value: &crate::Value) -> String {
+            crate::DefaultSqlDialect.value_to_literal(value)
+        }
+
+        fn escape_string(&self, text: &str) -> String {
+            crate::DefaultSqlDialect.escape_string(text)
+        }
+
+        fn placeholder_style(&self) -> crate::PlaceholderStyle {
+            crate::PlaceholderStyle::DollarNumber
+        }
+
+        fn supports_drop_cascade(&self) -> bool {
+            true
+        }
+    }
+
+    fn orders_table() -> SchemaDropTarget {
+        SchemaDropTarget::new(SchemaObjectKind::Table, "orders").with_schema("public")
+    }
+
+    #[test]
+    fn drop_schema_object_rejects_cascade_the_dialect_does_not_support() {
+        let connection = RecordingConnection::new(crate::DefaultSqlDialect);
+        let view = SchemaDropTarget::new(SchemaObjectKind::View, "order_view");
+
+        let table_result = connection.drop_schema_object(&orders_table(), true, true);
+        let view_result = connection.drop_schema_object(&view, true, false);
+
+        assert!(matches!(table_result, Err(DbError::NotSupported(_))));
+        assert!(matches!(view_result, Err(DbError::NotSupported(_))));
+        assert!(
+            connection.executed().is_empty(),
+            "an unsupported cascade must not reach the database"
+        );
+    }
+
+    #[test]
+    fn drop_schema_object_runs_the_dialect_drop_table_statement() {
+        let plain = RecordingConnection::new(crate::DefaultSqlDialect);
+        let cascading = RecordingConnection::new(CascadeDialect);
+
+        plain
+            .drop_schema_object(&orders_table(), false, true)
+            .expect("a plain drop runs");
+        cascading
+            .drop_schema_object(&orders_table(), true, true)
+            .expect("a supported cascade runs");
+
+        assert_eq!(
+            plain.executed(),
+            vec!["DROP TABLE IF EXISTS \"public\".\"orders\"".to_string()]
+        );
+        assert_eq!(
+            cascading.executed(),
+            vec![
+                CascadeDialect
+                    .drop_table_statement(Some("public"), "orders", true, true)
+                    .expect("cascade is supported")
+            ]
+        );
+        assert_eq!(
+            cascading.executed()[0],
+            "DROP TABLE IF EXISTS \"public\".\"orders\" CASCADE"
+        );
     }
 }

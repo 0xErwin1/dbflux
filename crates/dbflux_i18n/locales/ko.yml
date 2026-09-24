@@ -2510,7 +2510,9 @@ modals:
     confirm_placeholder: 확인하려면 테이블 이름을 입력하세요
     confirm_prompt: '확인하려면 "%{table}"을(를) 입력하세요'
     cascade_warning: "종속 개체도 함께 삭제됩니다(CASCADE):"
+    dependents_heading: "이 테이블에 종속된 개체:"
     delete_warning: 테이블과 종속 개체가 영구적으로 삭제됩니다.
+    delete_warning_table_only: 테이블이 영구적으로 삭제됩니다.
     relation_kind:
       view: 뷰
       materialized_view: MatView

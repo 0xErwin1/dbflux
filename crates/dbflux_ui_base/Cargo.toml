@@ -36,7 +36,7 @@ serde_json.workspace = true
 
 [features]
 default = []
-test-support = []
+test-support = ["gpui/test-support"]
 mcp = ["dbflux_mcp", "dbflux_app/mcp"]
 lua = ["dbflux_app/lua"]
 aws = ["dbflux_aws", "dbflux_app/aws"]
