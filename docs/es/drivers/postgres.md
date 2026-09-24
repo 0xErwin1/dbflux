@@ -35,6 +35,8 @@ Base de datos relacional open-source avanzada.
   PostgreSQL.
 - Muestra valores `numeric`, incluyendo arrays unidimensionales `numeric[]`,
   como el decimal exacto que guarda PostgreSQL.
+- Muestra fechas y timestamps `infinity` y `-infinity`, y sus arrays
+  unidimensionales, con el texto propio de PostgreSQL.
 - Reporta su identidad de cliente al servidor como
   `application_name=dbflux/<version>`, salvo que la connection string ya defina
   `application_name`, en cuyo caso se conserva el valor del usuario.
@@ -93,11 +95,13 @@ Expone snapshots tabulares del estado del servidor en ejecución:
   configurado para construir el gráfico en vivo.
 
 - Driver solo SQL; no expone APIs de documentos ni de key-value.
-- Un valor de una sentencia única que el driver no puede decodificar, como un
-  timestamp o una fecha `infinity`, se muestra como tipo no soportado y queda
-  marcado en el resultado en lugar de aparecer como `NULL`. Convierte la columna
-  a `text` para leer el texto del propio servidor. Los inspectores de instancia
-  registran en el log la columna y el tipo de esa celda.
+- Un valor no `NULL` de una sentencia única que el driver no puede
+  decodificar, como un valor de un tipo sin decodificador o una fecha fuera del
+  rango que puede representar, se muestra como tipo no soportado y queda
+  marcado en el resultado; un `NULL` real sigue apareciendo como `NULL`.
+  Convierte la columna a `text` para leer el texto del propio servidor. Los
+  inspectores de instancia registran en el log la columna y el tipo de esa
+  celda.
 - Los valores `money` se muestran como tipo no soportado: el formato de
   transmisión lleva un importe entero cuya escala decimal proviene de la
   configuración `lc_monetary` del servidor, que el cliente no puede ver.

@@ -22,6 +22,7 @@ Advanced open-source relational database.
 - Displays `pgvector` `vector`, `halfvec`, and `sparsevec` values, including verified one-dimensional arrays, as textual results.
 - Displays full-text search `tsvector` and `tsquery` values, including one-dimensional arrays, in PostgreSQL's canonical text form.
 - Displays `numeric` values, including one-dimensional `numeric[]` arrays, as the exact decimal PostgreSQL stores.
+- Displays `infinity` and `-infinity` dates, timestamps, and their one-dimensional arrays as PostgreSQL's own text.
 - Reports its client identity to the server as `application_name=dbflux/<version>` unless the connection string already sets `application_name`, in which case the user-supplied value is kept.
 - Probes write privilege after connecting: a replica or a read-only transaction mode resolves to read-only regardless of grants, otherwise the authenticated role's `INSERT`/`UPDATE`/`DELETE` privileges on visible base tables decide it; an empty database or a probe failure is inconclusive and leaves the profile's own mutation policy unchanged.
 
@@ -61,7 +62,7 @@ Exposes tabular snapshots of running server state:
 - Instance metrics return a single data point per call (current snapshot), not a historical time series. The UI polls at the configured refresh interval to build the live chart.
 
 - SQL-only driver; it does not expose document or key-value APIs.
-- A single-statement value the driver cannot decode, such as an `infinity` timestamp or date, is shown as an unsupported type and flagged in the result instead of `NULL`. Cast the column to `text` to read the server's own text. Instance inspectors log the column and type of such a cell.
+- A non-NULL single-statement value the driver cannot decode, such as a value of a type it has no decoder for or a date outside the range it can represent, is shown as an unsupported type and flagged in the result; a real `NULL` still shows as `NULL`. Cast the column to `text` to read the server's own text. Instance inspectors log the column and type of such a cell.
 - `money` values are shown as an unsupported type: the wire format carries an integer amount whose decimal scale comes from the server's `lc_monetary` setting, which the client cannot see. Cast the column to `numeric` or `text` to read it.
 - Routine definitions for aggregate and window functions are synthesized from catalog metadata because `pg_get_functiondef` does not support them.
 - Routine editing and execution are not supported; the routine viewer is read-only.

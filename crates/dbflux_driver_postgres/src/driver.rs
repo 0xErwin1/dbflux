@@ -36,7 +36,7 @@ use dbflux_core::{
 use dbflux_ssh::SshTunnel;
 use half::f16;
 use native_tls::TlsConnector;
-use postgres::types::{FromSql, Kind, Type};
+use postgres::types::{Date as PgDate, FromSql, Kind, Timestamp as PgTimestamp, Type};
 use postgres::{
     CancelToken as PgCancelToken, Client, NoTls, SimpleQueryMessage,
     fallible_iterator::FallibleIterator,
@@ -4324,13 +4324,72 @@ pub(crate) fn decoded_to_value<T, E>(
 }
 
 /// Decodes column `idx` of `row` as `T` and maps it through [`decoded_to_value`].
+///
+/// A decoder that rejects the column type fails even when the value is NULL,
+/// so a failure is checked against [`is_sql_null`] before it becomes
+/// `Unsupported`.
 fn decode_to_value<'a, T: FromSql<'a>>(
     row: &'a postgres::Row,
     idx: usize,
     type_name: &str,
     map: impl FnOnce(T) -> Value,
 ) -> Value {
-    decoded_to_value(type_name, row.try_get::<_, Option<T>>(idx), map)
+    match row.try_get::<_, Option<T>>(idx) {
+        Err(_) if is_sql_null(row, idx) => Value::Null,
+        decoded => decoded_to_value(type_name, decoded, map),
+    }
+}
+
+/// Accepts every column type and ignores the payload. It only tells a real SQL
+/// NULL apart from a value that no other decoder can read.
+struct PgAnyValue;
+
+impl<'a> FromSql<'a> for PgAnyValue {
+    fn from_sql(
+        _ty: &Type,
+        _raw: &'a [u8],
+    ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        Ok(PgAnyValue)
+    }
+
+    fn accepts(_ty: &Type) -> bool {
+        true
+    }
+}
+
+fn is_sql_null(row: &postgres::Row, idx: usize) -> bool {
+    matches!(row.try_get::<_, Option<PgAnyValue>>(idx), Ok(None))
+}
+
+/// Maps a value of a type without a decoder: NULL stays `Null`, anything else
+/// is `Unsupported(type_name)`.
+fn undecodable_to_value<E>(type_name: &str, decoded: Result<Option<PgAnyValue>, E>) -> Value {
+    decoded_to_value(type_name, decoded, |PgAnyValue| {
+        Value::Unsupported(type_name.to_string())
+    })
+}
+
+/// Maps a `date`, keeping `infinity` and `-infinity` as PostgreSQL's own text.
+fn pg_date_to_value(date: PgDate<NaiveDate>) -> Value {
+    match date {
+        PgDate::PosInfinity => Value::Text("infinity".to_string()),
+        PgDate::NegInfinity => Value::Text("-infinity".to_string()),
+        PgDate::Value(date) => Value::Date(date),
+    }
+}
+
+/// Maps a `timestamp` or `timestamptz`, keeping `infinity` and `-infinity` as
+/// PostgreSQL's own text.
+fn pg_timestamp_to_value<T>(timestamp: PgTimestamp<T>, map: impl FnOnce(T) -> Value) -> Value {
+    match timestamp {
+        PgTimestamp::PosInfinity => Value::Text("infinity".to_string()),
+        PgTimestamp::NegInfinity => Value::Text("-infinity".to_string()),
+        PgTimestamp::Value(timestamp) => map(timestamp),
+    }
+}
+
+fn naive_timestamp_to_value(timestamp: NaiveDateTime) -> Value {
+    Value::DateTime(DateTime::<Utc>::from_naive_utc_and_offset(timestamp, Utc))
 }
 
 fn numeric_array_to_value(values: Vec<Option<PgNumericText>>) -> Value {
@@ -4490,8 +4549,10 @@ fn postgres_array_to_value(row: &postgres::Row, idx: usize, type_name: &str) -> 
             Err(_) => None,
         },
 
-        "_date" => match row.try_get::<_, Option<Vec<NaiveDate>>>(idx) {
-            Ok(Some(arr)) => Some(Value::Array(arr.into_iter().map(Value::Date).collect())),
+        "_date" => match row.try_get::<_, Option<Vec<PgDate<NaiveDate>>>>(idx) {
+            Ok(Some(arr)) => Some(Value::Array(
+                arr.into_iter().map(pg_date_to_value).collect(),
+            )),
             Ok(None) => Some(Value::Null),
             Err(_) => None,
         },
@@ -4502,18 +4563,22 @@ fn postgres_array_to_value(row: &postgres::Row, idx: usize, type_name: &str) -> 
             Err(_) => None,
         },
 
-        "_timestamp" => match row.try_get::<_, Option<Vec<NaiveDateTime>>>(idx) {
+        "_timestamp" => match row.try_get::<_, Option<Vec<PgTimestamp<NaiveDateTime>>>>(idx) {
             Ok(Some(arr)) => Some(Value::Array(
                 arr.into_iter()
-                    .map(|ts| Value::DateTime(DateTime::<Utc>::from_naive_utc_and_offset(ts, Utc)))
+                    .map(|timestamp| pg_timestamp_to_value(timestamp, naive_timestamp_to_value))
                     .collect(),
             )),
             Ok(None) => Some(Value::Null),
             Err(_) => None,
         },
 
-        "_timestamptz" => match row.try_get::<_, Option<Vec<DateTime<Utc>>>>(idx) {
-            Ok(Some(arr)) => Some(Value::Array(arr.into_iter().map(Value::DateTime).collect())),
+        "_timestamptz" => match row.try_get::<_, Option<Vec<PgTimestamp<DateTime<Utc>>>>>(idx) {
+            Ok(Some(arr)) => Some(Value::Array(
+                arr.into_iter()
+                    .map(|timestamp| pg_timestamp_to_value(timestamp, Value::DateTime))
+                    .collect(),
+            )),
             Ok(None) => Some(Value::Null),
             Err(_) => None,
         },
@@ -4595,15 +4660,17 @@ fn postgres_value_to_value(row: &postgres::Row, idx: usize) -> Value {
             Value::Json(json.to_string())
         }),
 
-        "date" => decode_to_value(row, idx, type_name, Value::Date),
+        "date" => decode_to_value(row, idx, type_name, pg_date_to_value),
 
         "time" => decode_to_value(row, idx, type_name, Value::Time),
 
-        "timestamp" => decode_to_value(row, idx, type_name, |timestamp: NaiveDateTime| {
-            Value::DateTime(DateTime::<Utc>::from_naive_utc_and_offset(timestamp, Utc))
+        "timestamp" => decode_to_value(row, idx, type_name, |timestamp| {
+            pg_timestamp_to_value(timestamp, naive_timestamp_to_value)
         }),
 
-        "timestamptz" => decode_to_value(row, idx, type_name, Value::DateTime),
+        "timestamptz" => decode_to_value(row, idx, type_name, |timestamp| {
+            pg_timestamp_to_value(timestamp, Value::DateTime)
+        }),
 
         "inet" => decode_to_value(row, idx, type_name, |ip: IpAddr| {
             Value::Text(ip.to_string())
@@ -4629,7 +4696,7 @@ fn postgres_value_to_value(row: &postgres::Row, idx: usize) -> Value {
                 })
             }
 
-            _ => Value::Unsupported(type_name.to_string()),
+            _ => undecodable_to_value(type_name, row.try_get::<_, Option<PgAnyValue>>(idx)),
         },
     }
 }
@@ -5767,16 +5834,17 @@ fn get_schema_routines(
 mod tests {
     use super::{
         NUMERIC_SIGN_NAN, NUMERIC_SIGN_NEGATIVE, NUMERIC_SIGN_NEGATIVE_INFINITY,
-        NUMERIC_SIGN_POSITIVE, NUMERIC_SIGN_POSITIVE_INFINITY, POSTGRES_DIALECT, PgNumericText,
-        PgTextSearchText, PgUriSslMode, PgVectorText, PostgresCodeGenerator, PostgresDialect,
-        PostgresDriver, PostgresErrorFormatter, TSQUERY_OP_AND, TSQUERY_OP_NOT, TSQUERY_OP_OR,
-        TSQUERY_OP_PHRASE, build_keyword_conn_string, decode_numeric, decode_pgvector_halfvec,
-        decode_pgvector_sparsevec, decode_pgvector_vector, decode_tsquery, decode_tsvector,
-        decoded_to_value, format_pgvector_dense, format_pgvector_float4, format_pgvector_sparse,
-        inject_password_into_pg_uri, numeric_array_to_value, parse_pg_uri_sslmode,
+        NUMERIC_SIGN_POSITIVE, NUMERIC_SIGN_POSITIVE_INFINITY, POSTGRES_DIALECT, PgAnyValue,
+        PgNumericText, PgTextSearchText, PgUriSslMode, PgVectorText, PostgresCodeGenerator,
+        PostgresDialect, PostgresDriver, PostgresErrorFormatter, TSQUERY_OP_AND, TSQUERY_OP_NOT,
+        TSQUERY_OP_OR, TSQUERY_OP_PHRASE, build_keyword_conn_string, decode_numeric,
+        decode_pgvector_halfvec, decode_pgvector_sparsevec, decode_pgvector_vector, decode_tsquery,
+        decode_tsvector, decoded_to_value, format_pgvector_dense, format_pgvector_float4,
+        format_pgvector_sparse, inject_password_into_pg_uri, naive_timestamp_to_value,
+        numeric_array_to_value, parse_pg_uri_sslmode, pg_date_to_value, pg_timestamp_to_value,
         pgvector_array_decode_to_value, pgvector_array_values_to_value,
         plan_postgres_semantic_request, prokind_to_routine_kind, text_search_array_values_to_value,
-        unsupported_type_names, with_client_identity,
+        undecodable_to_value, unsupported_type_names, with_client_identity,
     };
     use dbflux_core::{
         AddColumnRequest, AlterColumnRequest, CodeGenerator, ColumnAssignment, ConnectionProfile,
@@ -6266,26 +6334,26 @@ mod tests {
             Value::Unsupported("int4".to_string())
         );
 
-        let infinite_timestamp = i64::MAX.to_be_bytes();
-        let timestamp = Option::<chrono::NaiveDateTime>::from_sql_nullable(
-            &Type::TIMESTAMP,
-            Some(&infinite_timestamp),
-        );
+        let out_of_range_timestamp = (i64::MAX - 1).to_be_bytes();
+        let timestamp =
+            Option::<postgres::types::Timestamp<chrono::NaiveDateTime>>::from_sql_nullable(
+                &Type::TIMESTAMP,
+                Some(&out_of_range_timestamp),
+            );
         assert_eq!(
             decoded_to_value("timestamp", timestamp, |timestamp| {
-                Value::DateTime(chrono::DateTime::from_naive_utc_and_offset(
-                    timestamp,
-                    chrono::Utc,
-                ))
+                pg_timestamp_to_value(timestamp, naive_timestamp_to_value)
             }),
             Value::Unsupported("timestamp".to_string())
         );
 
-        let infinite_date = i32::MAX.to_be_bytes();
-        let date =
-            Option::<chrono::NaiveDate>::from_sql_nullable(&Type::DATE, Some(&infinite_date));
+        let out_of_range_date = (i32::MAX - 1).to_be_bytes();
+        let date = Option::<postgres::types::Date<chrono::NaiveDate>>::from_sql_nullable(
+            &Type::DATE,
+            Some(&out_of_range_date),
+        );
         assert_eq!(
-            decoded_to_value("date", date, Value::Date),
+            decoded_to_value("date", date, pg_date_to_value),
             Value::Unsupported("date".to_string())
         );
 
@@ -6299,6 +6367,75 @@ mod tests {
         assert_eq!(
             decoded_to_value("uuid", null_uuid, |uuid| Value::Text(uuid.to_string())),
             Value::Null
+        );
+    }
+
+    #[test]
+    fn infinite_dates_and_timestamps_read_as_server_text() {
+        type PgTimestamp = postgres::types::Timestamp<chrono::NaiveDateTime>;
+        type PgTimestampTz = postgres::types::Timestamp<chrono::DateTime<chrono::Utc>>;
+        type PgDate = postgres::types::Date<chrono::NaiveDate>;
+
+        let decode_timestamp = |micros: i64| {
+            let bytes = micros.to_be_bytes();
+            let decoded = Option::<PgTimestamp>::from_sql_nullable(&Type::TIMESTAMP, Some(&bytes));
+            decoded_to_value("timestamp", decoded, |timestamp| {
+                pg_timestamp_to_value(timestamp, naive_timestamp_to_value)
+            })
+        };
+
+        assert_eq!(
+            decode_timestamp(i64::MAX),
+            Value::Text("infinity".to_string())
+        );
+        assert_eq!(
+            decode_timestamp(i64::MIN),
+            Value::Text("-infinity".to_string())
+        );
+        assert_eq!(
+            decode_timestamp(1_000_000),
+            Value::DateTime(
+                chrono::DateTime::from_timestamp(946_684_801, 0).expect("valid timestamp")
+            )
+        );
+
+        let infinite_tz = i64::MIN.to_be_bytes();
+        let timestamptz =
+            Option::<PgTimestampTz>::from_sql_nullable(&Type::TIMESTAMPTZ, Some(&infinite_tz));
+        assert_eq!(
+            decoded_to_value("timestamptz", timestamptz, |timestamp| {
+                pg_timestamp_to_value(timestamp, Value::DateTime)
+            }),
+            Value::Text("-infinity".to_string())
+        );
+
+        let decode_date = |days: i32| {
+            let bytes = days.to_be_bytes();
+            let decoded = Option::<PgDate>::from_sql_nullable(&Type::DATE, Some(&bytes));
+            decoded_to_value("date", decoded, pg_date_to_value)
+        };
+
+        assert_eq!(decode_date(i32::MAX), Value::Text("infinity".to_string()));
+        assert_eq!(decode_date(i32::MIN), Value::Text("-infinity".to_string()));
+        assert_eq!(
+            decode_date(1),
+            Value::Date(chrono::NaiveDate::from_ymd_opt(2000, 1, 2).expect("valid date"))
+        );
+    }
+
+    #[test]
+    fn types_without_a_decoder_keep_null_distinct_from_values() {
+        assert!(<PgAnyValue as FromSql>::accepts(&Type::MONEY));
+        assert!(<PgAnyValue as FromSql>::accepts(&Type::MONEY_ARRAY));
+
+        let null = Option::<PgAnyValue>::from_sql_nullable(&Type::MONEY, None);
+        assert_eq!(undecodable_to_value("money", null), Value::Null);
+
+        let amount = 1250_i64.to_be_bytes();
+        let value = Option::<PgAnyValue>::from_sql_nullable(&Type::MONEY, Some(&amount));
+        assert_eq!(
+            undecodable_to_value("money", value),
+            Value::Unsupported("money".to_string())
         );
     }
 

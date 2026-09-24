@@ -324,15 +324,18 @@ All notable changes to DBFlux will be documented in this file.
   `Infinity`, and `-Infinity`. A value that still cannot be decoded is reported
   as an unsupported type instead of passing for `NULL`.
 
-* **PostgreSQL values that cannot be decoded no longer show as `NULL`** — a
-  value the driver could not decode, such as an `infinity` timestamp or date,
-  read back as `NULL` in query results, table browsing, MCP `select_data`,
-  exports, and the rows returned after an insert, update, or delete. Every
-  column type now reports such a value as unsupported and flags the result,
-  and only a real SQL `NULL` shows as `NULL`. The instance inspectors log the
-  column and type of a cell they cannot decode and show it as unsupported.
-  `numeric[]` arrays now show their exact decimals; `money` stays unsupported
-  because its scale depends on the server's `lc_monetary` setting.
+* **PostgreSQL values that cannot be decoded no longer show as `NULL`** —
+  `infinity` and `-infinity` dates and timestamps, and any other value the
+  driver could not decode, read back as `NULL` in query results, table
+  browsing, MCP `select_data`, exports, and the rows returned after an insert,
+  update, or delete. Infinite dates and timestamps now show as `infinity` and
+  `-infinity`, as PostgreSQL prints them. A value that still cannot be decoded
+  is reported as an unsupported type and flags the result, and a real SQL
+  `NULL` shows as `NULL` for every column type, including types without a
+  decoder. The instance inspectors log the column and type of a cell they
+  cannot decode and show it as unsupported. `numeric[]` arrays now show their
+  exact decimals; `money` stays unsupported because its scale depends on the
+  server's `lc_monetary` setting.
 
 * **The inspector rail follows the active tab** — switching to a tab, or
   closing the active one, could leave the right-side rail showing the row
