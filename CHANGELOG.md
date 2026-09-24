@@ -43,6 +43,14 @@ All notable changes to DBFlux will be documented in this file.
   as `Http` and `Basic { username: "..." }`. It now shows translated labels:
   HTTP, HTTPS or SOCKS5, and None or Basic with the username.
 
+* **A running import can be cancelled** — the import wizard's running step
+  had no Cancel button, while export and migration did. Cancel now stops the
+  import after the chunk being written, ends its Tasks panel entry as
+  cancelled rather than failed, and reports how many rows were already
+  imported. The import's row counter now also advances while it runs, import
+  and export show the migration wizard's progress bar when the row total is
+  known, and the three data wizards open at the same size.
+
 
 ### Added
 

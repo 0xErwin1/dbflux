@@ -1427,7 +1427,9 @@ document:
       progress:
         of_total: "%{done} / %{total} rows"
         only: "%{done} rows"
+      cancel: Cancel
     done:
+      cancelled_rows: "%{rows} row(s) were imported before the import stopped."
       close: Close
     error:
       no_connection: No active connection for this import
