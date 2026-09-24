@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::future::Future;
 use std::io::Cursor;
 use std::sync::atomic::AtomicU64;
@@ -46,6 +46,16 @@ mod visual;
 const MAX_TREE_SNAPSHOTS: usize = 32;
 const MAX_IMAGE_SNAPSHOTS: usize = 8;
 const MAX_WAIT_MS: u64 = 30_000;
+/// Milliseconds between two idle checks, each of which reads the drawn-frame count and waits
+/// this long for a semantic tree change.
+const IDLE_CHECK_INTERVAL_MS: u64 = 250;
+/// Consecutive check intervals over which the semantic tree must stay unchanged.
+const IDLE_INTERVALS: usize = 2;
+/// Shortest `wait_for_idle` deadline that can prove idleness: [`IDLE_INTERVALS`] intervals.
+const MIN_IDLE_TIMEOUT_MS: u64 = 500;
+/// Frames the window may draw over those intervals and still count as idle. A focused text
+/// input redraws its caret every 500 ms, which must not keep the window from being idle.
+const IDLE_FRAME_ALLOWANCE: u64 = 1;
 
 #[derive(Default)]
 struct SnapshotStore {
@@ -285,6 +295,13 @@ struct WaitStateArgs {
     /// Expected expanded or collapsed state, if specified.
     expanded: Option<bool>,
     /// Deadline in milliseconds, capped at 30000.
+    #[serde(default = "default_timeout_ms")]
+    timeout_ms: u64,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct WaitIdleArgs {
+    /// Deadline in milliseconds, from 500 through 30000.
     #[serde(default = "default_timeout_ms")]
     timeout_ms: u64,
 }
@@ -626,6 +643,7 @@ impl GpuiMcp {
             .call(Operation::WaitForFrame {
                 after_frame_count: frame_count,
                 timeout_ms,
+                presented: false,
             })
             .await?
         {
@@ -636,6 +654,32 @@ impl GpuiMcp {
 
     async fn settle_after_refresh(&self, wait: Duration) -> Result<FrameStats, String> {
         settle_refresh_frames(wait, |operation| self.call(operation)).await
+    }
+
+    /// Read the drawn-frame count and the semantic tree generation for `wait_until_idle`.
+    ///
+    /// Every sample after the first waits up to one check interval for a newer semantic tree,
+    /// so an unchanged tree costs no tree transfer.
+    async fn idle_sample(&self, previous: Option<IdleSample>) -> Result<IdleSample, String> {
+        let generation = match previous {
+            None => self.tree().await?.generation,
+            Some(previous) => match self
+                .wait_for_tree(
+                    previous.generation,
+                    Duration::from_millis(IDLE_CHECK_INTERVAL_MS),
+                )
+                .await
+            {
+                Ok(tree) => tree.generation,
+                Err(error) if error.starts_with("Timeout:") => previous.generation,
+                Err(error) => return Err(error),
+            },
+        };
+        let frame_count = self.frame_stats().await?.frame_count;
+        Ok(IdleSample {
+            frame_count,
+            generation,
+        })
     }
 
     async fn capture(&self, target: ScreenshotTarget) -> Result<Screenshot, String> {
@@ -671,6 +715,72 @@ impl GpuiMcp {
     }
 }
 
+/// Drawn-frame count and semantic tree generation observed by one idle check.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct IdleSample {
+    frame_count: u64,
+    generation: u64,
+}
+
+/// Take up to `checks` idle checks after an initial sample and return the sample that proved
+/// the window idle.
+///
+/// The window is idle when, over the last [`IDLE_INTERVALS`] check intervals, the semantic
+/// tree generation did not change and at most [`IDLE_FRAME_ALLOWANCE`] frames were drawn.
+/// `next_sample` receives the previous sample and is expected to wait one check interval
+/// before sampling again; it receives `None` for the initial sample, which it takes at once.
+async fn wait_until_idle<F, Fut>(checks: u64, mut next_sample: F) -> Result<IdleSample, String>
+where
+    F: FnMut(Option<IdleSample>) -> Fut,
+    Fut: Future<Output = Result<IdleSample, String>>,
+{
+    let mut recent = VecDeque::with_capacity(IDLE_INTERVALS.saturating_add(1));
+    let mut previous = None;
+    for _ in 0..=checks {
+        let sample = next_sample(previous).await?;
+        previous = Some(sample);
+        if recent.len() > IDLE_INTERVALS {
+            recent.pop_front();
+        }
+        recent.push_back(sample);
+        if recent.len() > IDLE_INTERVALS && is_idle(&recent) {
+            return Ok(sample);
+        }
+    }
+
+    let frames = match (recent.front(), recent.back()) {
+        (Some(first), Some(last)) => last.frame_count.saturating_sub(first.frame_count),
+        _ => 0,
+    };
+    let tree = if same_generation(&recent) {
+        "the semantic tree did not change"
+    } else {
+        "the semantic tree changed"
+    };
+    Err(format!(
+        "timed out waiting for the UI to become idle: over the last checks the window drew \
+         {frames} frames and {tree}"
+    ))
+}
+
+fn is_idle(recent: &VecDeque<IdleSample>) -> bool {
+    let (Some(first), Some(last)) = (recent.front(), recent.back()) else {
+        return false;
+    };
+    same_generation(recent)
+        && last.frame_count.saturating_sub(first.frame_count) <= IDLE_FRAME_ALLOWANCE
+}
+
+fn same_generation(recent: &VecDeque<IdleSample>) -> bool {
+    recent.back().is_none_or(|last| {
+        recent
+            .iter()
+            .all(|sample| sample.generation == last.generation)
+    })
+}
+
+/// Refresh twice, each time waiting until the refreshed frame has been presented to the
+/// platform window rather than only painted, so a native capture that follows can read it.
 async fn settle_refresh_frames<F, Fut>(wait: Duration, mut call: F) -> Result<FrameStats, String>
 where
     F: FnMut(Operation) -> Fut,
@@ -687,6 +797,7 @@ where
         let BridgeResult::FrameStats(stats) = call(Operation::WaitForFrame {
             after_frame_count: before_refresh.frame_count,
             timeout_ms,
+            presented: true,
         })
         .await?
         else {
@@ -1231,9 +1342,127 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        FindArgs, Role, StartVideoRecordingArgs, UiTree, WaitStateArgs, click_point,
+        FindArgs, IDLE_CHECK_INTERVAL_MS, IDLE_INTERVALS, IdleSample, MIN_IDLE_TIMEOUT_MS, Role,
+        StartVideoRecordingArgs, UiTree, WaitIdleArgs, WaitStateArgs, click_point,
         default_result_limit_for_test, find_nodes, settle_refresh_frames, state_matches, tree_diff,
+        wait_until_idle,
     };
+
+    fn sample(frame_count: u64, generation: u64) -> IdleSample {
+        IdleSample {
+            frame_count,
+            generation,
+        }
+    }
+
+    /// Run `wait_until_idle` over a scripted sequence and return its outcome and the
+    /// number of samples it took.
+    async fn idle_outcome(
+        checks: u64,
+        samples: Vec<IdleSample>,
+    ) -> (Result<IdleSample, String>, usize) {
+        let queue = Arc::new(Mutex::new(VecDeque::from(samples)));
+        let taken = Arc::new(Mutex::new(0_usize));
+        let outcome = wait_until_idle(checks, {
+            let queue = queue.clone();
+            let taken = taken.clone();
+            move |_previous| {
+                *taken
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) += 1;
+                let next = queue
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .pop_front()
+                    .ok_or_else(|| "test sample queue exhausted".to_owned());
+                async move { next }
+            }
+        })
+        .await;
+        let taken = *taken
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        (outcome, taken)
+    }
+
+    #[tokio::test]
+    async fn idle_needs_two_quiet_intervals() {
+        let (outcome, taken) =
+            idle_outcome(20, vec![sample(10, 3), sample(10, 3), sample(10, 3)]).await;
+        assert_eq!(outcome, Ok(sample(10, 3)));
+        assert_eq!(taken, IDLE_INTERVALS + 1);
+    }
+
+    /// A focused input redraws its caret every 500 ms. One frame over the idle
+    /// span must still count as idle.
+    #[tokio::test]
+    async fn one_caret_frame_over_the_idle_span_is_idle() {
+        let (outcome, taken) =
+            idle_outcome(20, vec![sample(10, 3), sample(11, 3), sample(11, 3)]).await;
+        assert_eq!(outcome, Ok(sample(11, 3)));
+        assert_eq!(taken, 3);
+    }
+
+    #[tokio::test]
+    async fn two_frames_over_the_idle_span_are_not_idle() {
+        let (outcome, taken) = idle_outcome(
+            20,
+            vec![sample(10, 3), sample(11, 3), sample(12, 3), sample(12, 3)],
+        )
+        .await;
+        assert_eq!(outcome, Ok(sample(12, 3)));
+        assert_eq!(
+            taken, 4,
+            "the span 10..12 holds two frames and must not count"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_tree_change_restarts_the_idle_span() {
+        let (outcome, taken) = idle_outcome(
+            20,
+            vec![
+                sample(10, 3),
+                sample(10, 3),
+                sample(10, 4),
+                sample(10, 4),
+                sample(10, 4),
+            ],
+        )
+        .await;
+        assert_eq!(outcome, Ok(sample(10, 4)));
+        assert_eq!(taken, 5);
+    }
+
+    #[tokio::test]
+    async fn a_window_that_keeps_drawing_times_out_after_the_allowed_checks() {
+        let samples = (0..10).map(|index| sample(index * 3, 1)).collect();
+        let (outcome, taken) = idle_outcome(4, samples).await;
+        let error = outcome.err().unwrap_or_default();
+        assert!(
+            error.starts_with("timed out waiting for the UI to become idle"),
+            "{error}"
+        );
+        assert!(error.contains("drew 6 frames"), "{error}");
+        assert_eq!(taken, 5, "one initial sample and one per allowed check");
+    }
+
+    #[tokio::test]
+    async fn a_failed_sample_ends_the_idle_wait() {
+        let (outcome, taken) = idle_outcome(20, vec![sample(10, 3)]).await;
+        assert_eq!(outcome, Err("test sample queue exhausted".to_owned()));
+        assert_eq!(taken, 2);
+    }
+
+    #[test]
+    fn idle_wait_defaults_and_minimum_match_the_check_interval() -> Result<(), String> {
+        let args =
+            serde_json::from_value::<WaitIdleArgs>(json!({})).map_err(|error| error.to_string())?;
+        assert_eq!(args.timeout_ms, 5_000);
+        let intervals = u64::try_from(IDLE_INTERVALS).map_err(|error| error.to_string())?;
+        assert_eq!(MIN_IDLE_TIMEOUT_MS, IDLE_CHECK_INTERVAL_MS * intervals);
+        Ok(())
+    }
 
     fn node_with_actions(role: Role, actions: Vec<NodeAction>) -> UiNode {
         UiNode {
@@ -1326,6 +1555,7 @@ mod tests {
             operations[1],
             Operation::WaitForFrame {
                 after_frame_count: 11,
+                presented: true,
                 ..
             }
         ));
@@ -1334,6 +1564,7 @@ mod tests {
             operations[3],
             Operation::WaitForFrame {
                 after_frame_count: 14,
+                presented: true,
                 ..
             }
         ));
@@ -1479,6 +1710,7 @@ mod tests {
                 "get_element_bounds",
                 "wait_for_element",
                 "wait_for_state",
+                "wait_for_idle",
                 "save_ui_snapshot",
                 "load_ui_snapshot",
                 "diff_ui_snapshots",

@@ -2,7 +2,7 @@
 
 use std::io::Cursor;
 use std::time::Duration;
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "linux", test))]
 use std::time::Instant;
 
 use base64::Engine as _;
@@ -11,7 +11,7 @@ use image::{DynamicImage, ImageFormat, RgbaImage};
 
 const MAX_IMAGE_DIMENSION: u32 = 16_384;
 const MAX_ENCODED_BYTES: usize = 16 * 1024 * 1024;
-#[cfg(any(target_os = "windows", test))]
+#[cfg(any(target_os = "windows", target_os = "linux", test))]
 const COMPOSITOR_POLL_INTERVAL: Duration = Duration::from_millis(16);
 const MIN_STABILITY_DEADLINE: Duration = Duration::from_millis(32);
 const MAX_STABILITY_DEADLINE: Duration = Duration::from_secs(2);
@@ -29,17 +29,21 @@ const MIN_FRESHNESS_SAMPLES: u8 = 3;
 /// actually cost, which needs no frame-size heuristic because a measured sample
 /// already encodes both the size and the build profile. This ceiling keeps a
 /// pathologically slow machine from widening the budget without limit.
-#[cfg(any(target_os = "windows", test))]
+#[cfg(any(target_os = "windows", target_os = "linux", test))]
 const MAX_MEASURED_ALLOWANCE: Duration = Duration::from_secs(4);
 
-/// Bounded Windows Graphics Capture freshness policy.
+/// Bounded compositor freshness policy for screenshots.
+///
+/// Windows takes a fixed number of ordered Windows Graphics Capture samples within the
+/// deadline. Linux samples the X11 window until two consecutive captures are identical and
+/// returns the newest sample when the deadline passes first.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CaptureOptions {
     settle_deadline: Duration,
 }
 
 impl CaptureOptions {
-    /// Configure the maximum time Windows capture spends obtaining fresh compositor samples.
+    /// Configure the maximum time capture spends obtaining fresh compositor samples.
     ///
     /// # Errors
     ///
@@ -100,8 +104,8 @@ impl ScreenshotOptions {
 
 /// Native window pixels plus display metadata reported by the operating system.
 ///
-/// The image is bounded by this crate's safety limits and, on Windows, has
-/// passed the same compositor-freshness policy used by MCP screenshots.
+/// The image is bounded by this crate's safety limits and, on Windows and Linux,
+/// has passed the same compositor-freshness policy used by MCP screenshots.
 #[derive(Clone, Debug)]
 pub struct NativeFrame {
     /// Captured native RGBA pixels, including any frame retained by the OS API.
@@ -668,7 +672,7 @@ fn region_mapping(
     })
 }
 
-fn capture_after_compositor_settle<T>(
+fn capture_after_compositor_settle<T: PartialEq>(
     capture: impl FnMut() -> Result<T, CaptureFailure>,
     options: CaptureOptions,
 ) -> Result<T, CaptureFailure> {
@@ -683,12 +687,40 @@ fn capture_after_compositor_settle<T>(
         )
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "linux")]
+    {
+        capture_stable_frame(capture, options, Instant::now, std::thread::sleep)
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     {
         let _ = options;
         let mut capture = capture;
         capture()
     }
+}
+
+/// Deadline of a sampling sequence whose first sample started at `started` and ended at
+/// `first_sample_finished`.
+///
+/// `settle_deadline` is the allowance for waiting on the compositor, so the readbacks the
+/// policy itself demands must not be paid out of it: a 5120x1440 window in an unoptimized
+/// build spends most of a second inside one readback, and three of those overran a
+/// one-second budget before the frame was ever judged. The first sample is the measurement:
+/// each of the `remaining_samples` is credited with what it actually cost, bounded by
+/// [`MAX_MEASURED_ALLOWANCE`]. Returns `None` when the deadline is not representable.
+#[cfg(any(target_os = "windows", target_os = "linux", test))]
+fn sampling_deadline(
+    started: Instant,
+    first_sample_finished: Instant,
+    remaining_samples: u32,
+    options: CaptureOptions,
+) -> Option<Instant> {
+    let allowance = first_sample_finished
+        .saturating_duration_since(started)
+        .saturating_mul(remaining_samples)
+        .min(MAX_MEASURED_ALLOWANCE);
+    started.checked_add(options.settle_deadline().saturating_add(allowance))
 }
 
 #[cfg(any(target_os = "windows", test))]
@@ -704,18 +736,12 @@ fn capture_fresh_frame<T, E: Clone>(
     // native capture borders and legitimate animation may change between every sample.
     let started = now();
     let mut latest = capture()?;
-    // The first sample is the measurement. `settle_deadline` is the allowance
-    // for waiting on the compositor, so the readbacks the policy itself demands
-    // must not be paid out of it: a 5120x1440 window in an unoptimized build
-    // spends most of a second inside one readback, and three of those overran a
-    // one-second budget before this frame was ever judged stale. Credit the
-    // remaining samples with what the first actually cost, bounded.
-    let allowance = now()
-        .saturating_duration_since(started)
-        .saturating_mul(u32::from(MIN_FRESHNESS_SAMPLES.saturating_sub(1)))
-        .min(MAX_MEASURED_ALLOWANCE);
-    let Some(deadline) = started.checked_add(options.settle_deadline().saturating_add(allowance))
-    else {
+    let Some(deadline) = sampling_deadline(
+        started,
+        now(),
+        u32::from(MIN_FRESHNESS_SAMPLES.saturating_sub(1)),
+        options,
+    ) else {
         return Err(unstable_error.clone());
     };
     for _ in 1..MIN_FRESHNESS_SAMPLES {
@@ -733,6 +759,43 @@ fn capture_fresh_frame<T, E: Clone>(
         latest = capture()?;
     }
     Ok(latest)
+}
+
+/// Sample until two consecutive captures are identical, bounded by the settle deadline.
+///
+/// X11 capture reads whatever the X server holds for the window. After the application
+/// presents a frame, XWayland may apply it a display refresh later, and a capture that reads
+/// the window while the GPU is still writing it can miss glyphs, so a single sample may show
+/// the previous frame or a partial one. Two identical samples taken one poll interval apart
+/// mean the pixels stopped changing. A window that keeps animating (a blinking caret, a
+/// spinner) may never produce two identical samples, so at the deadline the newest sample is
+/// returned instead of failing the capture.
+#[cfg(any(target_os = "linux", test))]
+fn capture_stable_frame<T: PartialEq, E>(
+    mut capture: impl FnMut() -> Result<T, E>,
+    options: CaptureOptions,
+    mut now: impl FnMut() -> Instant,
+    mut wait: impl FnMut(Duration),
+) -> Result<T, E> {
+    let started = now();
+    let mut previous = capture()?;
+    let Some(deadline) = sampling_deadline(started, now(), 1, options) else {
+        return Ok(previous);
+    };
+
+    loop {
+        let remaining = deadline.saturating_duration_since(now());
+        if remaining.is_zero() {
+            return Ok(previous);
+        }
+        wait(COMPOSITOR_POLL_INTERVAL.min(remaining));
+
+        let current = capture()?;
+        if current == previous || now() >= deadline {
+            return Ok(current);
+        }
+        previous = current;
+    }
 }
 
 fn validate_target(target: ScreenshotTarget) -> Result<(), CaptureFailure> {
@@ -777,7 +840,7 @@ mod tests {
     use super::{
         CaptureFailure, CaptureGeometry, CaptureOptions, DEFAULT_SETTLE_DEADLINE,
         MAX_MEASURED_ALLOWANCE, MIN_FRESHNESS_SAMPLES, RegionMapping, capture_fresh_frame,
-        region_mapping, validate_target,
+        capture_stable_frame, region_mapping, validate_target,
     };
 
     #[test]
@@ -959,6 +1022,132 @@ mod tests {
             "this test only means anything while the bounded budget is smaller \
              than the pathological sample it rejects"
         );
+    }
+
+    /// The frame that was presented last reaches the X server a refresh later, so
+    /// the first sample can still hold the previous frame. Sampling stops at the
+    /// first pair of identical consecutive samples and returns that frame.
+    #[test]
+    fn stable_sampling_returns_once_two_consecutive_samples_match() -> Result<(), CaptureFailure> {
+        let calls = Cell::new(0_usize);
+        let elapsed = Cell::new(Duration::ZERO);
+        let started = Instant::now();
+        let frames = [1_u8, 2, 3, 3, 4];
+
+        let captured = capture_stable_frame(
+            || {
+                let call = calls.get();
+                calls.set(call.saturating_add(1));
+                Ok::<_, CaptureFailure>(frames.get(call).copied().unwrap_or(u8::MAX))
+            },
+            CaptureOptions::default(),
+            || started + elapsed.get(),
+            |duration| elapsed.set(elapsed.get().saturating_add(duration)),
+        )?;
+
+        assert_eq!(captured, 3);
+        assert_eq!(calls.get(), 4);
+        Ok(())
+    }
+
+    #[test]
+    fn stable_sampling_waits_one_poll_interval_between_samples() -> Result<(), CaptureFailure> {
+        let waits = std::cell::RefCell::new(Vec::new());
+        let elapsed = Cell::new(Duration::ZERO);
+        let started = Instant::now();
+
+        let captured = capture_stable_frame(
+            || Ok::<_, CaptureFailure>(7_u8),
+            CaptureOptions::default(),
+            || started + elapsed.get(),
+            |duration| {
+                waits.borrow_mut().push(duration);
+                elapsed.set(elapsed.get().saturating_add(duration));
+            },
+        )?;
+
+        assert_eq!(captured, 7);
+        assert_eq!(waits.into_inner(), [super::COMPOSITOR_POLL_INTERVAL]);
+        Ok(())
+    }
+
+    /// A blinking caret or a spinner can change every sample. The capture must
+    /// not fail because of it: at the deadline the newest sample is returned.
+    #[test]
+    fn stable_sampling_returns_the_newest_sample_at_the_deadline() -> Result<(), CaptureFailure> {
+        let calls = Cell::new(0_u32);
+        let elapsed = Cell::new(Duration::ZERO);
+        let started = Instant::now();
+        let deadline = Duration::from_millis(100);
+
+        let captured = capture_stable_frame(
+            || {
+                let frame = calls.get();
+                calls.set(frame.saturating_add(1));
+                Ok::<_, CaptureFailure>(frame)
+            },
+            CaptureOptions::new(deadline)?,
+            || started + elapsed.get(),
+            |duration| elapsed.set(elapsed.get().saturating_add(duration)),
+        )?;
+
+        assert_eq!(captured, calls.get().saturating_sub(1));
+        assert!(
+            calls.get() > 2,
+            "sampling must continue while samples differ"
+        );
+        assert!(
+            elapsed.get() <= deadline,
+            "sampling must stop at the deadline, it ran for {:?}",
+            elapsed.get()
+        );
+        Ok(())
+    }
+
+    /// A readback that costs more than the whole deadline still gets its
+    /// comparison sample: the first sample's cost is credited to the second, as
+    /// it is for the Windows freshness samples.
+    #[test]
+    fn stable_sampling_credits_an_expensive_readback() -> Result<(), CaptureFailure> {
+        let calls = Cell::new(0_usize);
+        let elapsed = Cell::new(Duration::ZERO);
+        let started = Instant::now();
+
+        let captured = capture_stable_frame(
+            || {
+                calls.set(calls.get().saturating_add(1));
+                elapsed.set(elapsed.get().saturating_add(Duration::from_millis(1_200)));
+                Ok::<_, CaptureFailure>(image::RgbaImage::new(64, 64))
+            },
+            CaptureOptions::default(),
+            || started + elapsed.get(),
+            |duration| elapsed.set(elapsed.get().saturating_add(duration)),
+        )?;
+
+        assert_eq!(captured.dimensions(), (64, 64));
+        assert_eq!(calls.get(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn stable_sampling_propagates_a_failed_sample() {
+        let calls = Cell::new(0_u8);
+        let captured = capture_stable_frame(
+            || {
+                let call = calls.get();
+                calls.set(call.saturating_add(1));
+                if call == 0 {
+                    Ok(0_u8)
+                } else {
+                    Err(CaptureFailure::CaptureUnavailable)
+                }
+            },
+            CaptureOptions::default(),
+            Instant::now,
+            |_| {},
+        );
+
+        assert_eq!(captured, Err(CaptureFailure::CaptureUnavailable));
     }
 
     #[test]
