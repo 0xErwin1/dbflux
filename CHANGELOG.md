@@ -18,12 +18,29 @@ All notable changes to DBFlux will be documented in this file.
   
 * Reject MongoDB execution requests with row limits or statement timeouts before any operation dispatches.
 
-* The empty-workspace hint for a new connection now works: `Ctrl+Shift+N`
-  (`Cmd+Shift+N` on macOS) opens the Connection Manager, and every hint reads
-  its chord from the keymap, so macOS shows `Cmd` instead of `Ctrl`.
+* **CloudWatch query safety** — reject requested row limits and statement timeouts before Logs or Metrics dispatch; unprotected Logs queries retain the fixed SDK `StartQuery` limit of 1000, without a default timeout or server-work guarantee.
+
+* The Redis key browser now fills each page across `SCAN` batches (and across
+  masters on Cluster), bounded to 1000 round trips and 500 ms per page, so a
+  sparse filter no longer returns empty pages. Keys repeated by `SCAN` appear
+  once per page, and the page's key types are fetched in one pipeline instead
+  of one `TYPE` round trip per key.
+
+* The key browser filter now passes input containing `*`, `?` or `[` through
+  as a glob, so a prefix search such as `leaderboard*` works; plain text still
+  matches anywhere in the key. The header count now reads as the number of
+  keys on the current page instead of implying a total.
+
+* **The new-connection shortcut shown in the empty workspace works** — the
+  empty workspace advertised `Ctrl+Shift+N` for a new connection, but nothing
+  was bound to it. `Ctrl+Shift+N` (`Cmd+Shift+N` on macOS) now opens the
+  Connection Manager, and every empty-state hint reads its chord from the
+  keymap, so macOS shows `Cmd` instead of `Ctrl`.
 
 
 ### Added
+
+* **PostgreSQL bounded query execution** — single-statement row limits retain only the requested rows while draining execution to completion; unsupported bounded batches, instance catalog requests, and statement deadlines are rejected before execution.
 
 * **DynamoDB execution safety** — requested timeouts and row-limited writes
   now fail before execution; scan/query use the smaller request/envelope cap

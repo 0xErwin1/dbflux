@@ -1582,8 +1582,8 @@ document:
       next: 下一页
       page: "第 %{page} 页"
       keys_count:
-        one: "%{count} 个键"
-        many: "%{count} 个键"
+        one: "本页 %{count} 个键"
+        many: "本页 %{count} 个键"
       filter:
         keys_placeholder: 筛选键…
         members_placeholder: 筛选元素…

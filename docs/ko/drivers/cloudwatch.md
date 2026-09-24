@@ -13,7 +13,7 @@
 
 - `DatabaseCategory::LogStream`으로 분류되는 로그 스트리밍 드라이버입니다. `deployment_class`는 `CloudManaged`이며, 선언된 기능은 `AUTHENTICATION`과 `METRIC_SERIES`입니다.
 - 리전, 이름이 지정된 프로필, 선택적 엔드포인트 재정의를 통한 AWS 연결 구성으로, DynamoDB의 AWS 연결 흐름과 일치합니다.
-- 대상 로그 그룹과 시간 범위를 공급하는 편집기 관리 소스 컨텍스트와 함께, `StartQuery` + 폴링 `GetQueryResults`(폴링 간격 500 ms, 최대 120회 시도)를 통한 쿼리 실행.
+- 대상 로그 그룹과 시간 범위를 공급하는 편집기 관리 소스 컨텍스트와 함께, `StartQuery` + 폴링 `GetQueryResults`(폴링 간격 500 ms, 최대 120회 시도)를 통한 쿼리 실행. 별도의 제한을 요청하지 않은 Logs 쿼리는 SDK의 고정 `StartQuery` 결과 제한 1000을 사용합니다.
 - 소스 컨텍스트의 "Syntax" 드롭다운에서 선택할 수 있는 세 가지 쿼리 문법:
   - CloudWatch Logs Insights QL (`cwli`, 기본값) — `QueryLanguage::CloudWatchLogsInsightsQl`.
   - OpenSearch PPL (`ppl`) — `QueryLanguage::OpenSearchPpl`.
@@ -32,6 +32,7 @@
 
 ## 제한 사항
 
+- `execute`는 요청된 행 제한(0 포함)이나 문장 시간 제한이 있으면 Logs 또는 Metrics 요청을 보내기 전에 `NotSupported`를 반환합니다. Logs SDK의 고정 제한은 요청별 제한이 아니며, 기본 시간 제한이나 서버 측 작업량 보장은 없습니다.
 - `profile` 필드(AWS 이름이 지정된 프로필)는 `AuthProfileRef` 폼 필드입니다. 일반 이식성 경계(`DbDriver::export_field_hint`)는 모든 `AuthProfileRef` 필드를 `RequiredOnImport`로 매핑하므로, 필드 값은 내보낸 번들에서 생략되며 수신자는 가져오는 시점에 일치하는 인증 프로필을 제공하거나 만들어야 합니다. 드라이버별 재정의는 필요하지 않습니다.
 - 쿼리 취소는 구현되어 있지 않으며, `cancel()`은 `NotSupported`를 반환합니다.
 - OpenSearch SQL 모드는 외부 로그 그룹을 받지 않습니다: CloudWatch API가 SQL 모드에 외부 로그 그룹 매개변수를 받아들이지 않기 때문에(CWLI와 PPL만 `set_log_group_names`를 받음), SQL 쿼리는 쿼리 대상 로그 그룹을 SQL 텍스트 안에서 선언해야 합니다.
