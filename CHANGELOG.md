@@ -48,6 +48,12 @@ All notable changes to DBFlux will be documented in this file.
   as `Http` and `Basic { username: "..." }`. It now shows translated labels:
   HTTP, HTTPS or SOCKS5, and None or Basic with the username.
 
+* **The new-connection shortcut shown in the empty workspace works** — the
+  empty workspace advertised `Ctrl+Shift+N` for a new connection, but nothing
+  was bound to it. `Ctrl+Shift+N` (`Cmd+Shift+N` on macOS) now opens the
+  Connection Manager, and every empty-state hint reads its chord from the
+  keymap, so macOS shows `Cmd` instead of `Ctrl`.
+
 
 ### Added
 
