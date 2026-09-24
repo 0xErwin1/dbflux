@@ -3429,6 +3429,7 @@ sidebar:
     generate_query: Generate Query
     drop_collection: Drop Collection
     connect: Connect
+    retry_connect: Retry
     disconnect: Disconnect
     edit: Edit
     duplicate: Duplicate
@@ -3597,6 +3598,7 @@ sidebar:
       profile_connecting: "Connecting to %{name}…"
       database_loading: "%{name} (loading…)"
       error_retry: "Error: %{error} — click to retry"
+      connect_failed: "Connection failed: %{error}"
       remote_listing_count: "%{label} (%{count})"
       remote_dashboards_error_retry: "Error: %{error} — collapse and expand to retry"
       used_by_objects:

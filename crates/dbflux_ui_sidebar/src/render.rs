@@ -261,6 +261,7 @@ impl Sidebar {
 
         let tree_params = TreeRenderParams {
             connections: Vec::new(),
+            connect_failures: HashMap::new(),
             active_id: None,
             profile_icons: HashMap::new(),
             active_databases: HashMap::new(),
@@ -370,6 +371,19 @@ impl Render for Sidebar {
             })
             .collect();
 
+        let connect_failures: HashMap<Uuid, SharedString> = state
+            .profiles()
+            .iter()
+            .filter_map(|profile| {
+                state.connect_failure(profile.id).map(|error| {
+                    (
+                        profile.id,
+                        SharedString::from(crate::labels::connect_failed_tooltip_label(error)),
+                    )
+                })
+            })
+            .collect();
+
         let active_databases = self.active_databases.clone();
         let sidebar_entity = cx.entity().clone();
         let multi_selection = self.multi_selection.clone();
@@ -377,6 +391,7 @@ impl Render for Sidebar {
 
         let tree_params = TreeRenderParams {
             connections,
+            connect_failures,
             active_id,
             profile_icons,
             active_databases,

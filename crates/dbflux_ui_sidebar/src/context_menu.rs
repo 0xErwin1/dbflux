@@ -1,6 +1,82 @@
 use super::*;
 use dbflux_core::DdlCapabilities;
 
+/// Whether rows of `kind` offer a context menu. Right click, the row's menu
+/// button and the keyboard menu command all consult this, and
+/// `build_context_menu_items` defines an arm for exactly these kinds.
+///
+/// A menu may still come out empty at runtime when every entry is gated on a
+/// capability the connection lacks (generated SQL for indexes, foreign keys
+/// and custom types); opening it is then a no-op.
+pub(crate) fn node_kind_has_context_menu(kind: SchemaNodeKind) -> bool {
+    match kind {
+        SchemaNodeKind::ConnectionFolder
+        | SchemaNodeKind::Profile
+        | SchemaNodeKind::DatabasesFolder
+        | SchemaNodeKind::Database
+        | SchemaNodeKind::Table
+        | SchemaNodeKind::View
+        | SchemaNodeKind::Collection
+        | SchemaNodeKind::CustomType
+        | SchemaNodeKind::Index
+        | SchemaNodeKind::SchemaIndex
+        | SchemaNodeKind::ForeignKey
+        | SchemaNodeKind::SchemaForeignKey
+        | SchemaNodeKind::ScriptsFolder
+        | SchemaNodeKind::ScriptFile
+        | SchemaNodeKind::DashboardsFolder
+        | SchemaNodeKind::DashboardItem
+        | SchemaNodeKind::RemoteDashboardsFolder
+        | SchemaNodeKind::SavedChartsFolder
+        | SchemaNodeKind::SavedChartItem
+        | SchemaNodeKind::InstanceMetricsFolder
+        | SchemaNodeKind::InstanceMetricLeaf
+        | SchemaNodeKind::InstanceInspectorsFolder
+        | SchemaNodeKind::InstanceInspectorLeaf
+        | SchemaNodeKind::InstanceOverviewLeaf => true,
+
+        SchemaNodeKind::Loading
+        | SchemaNodeKind::Schema
+        | SchemaNodeKind::TablesFolder
+        | SchemaNodeKind::ViewsFolder
+        | SchemaNodeKind::TypesFolder
+        | SchemaNodeKind::TypesLoadingFolder
+        | SchemaNodeKind::SchemaIndexesFolder
+        | SchemaNodeKind::SchemaIndexesLoadingFolder
+        | SchemaNodeKind::SchemaForeignKeysFolder
+        | SchemaNodeKind::SchemaForeignKeysLoadingFolder
+        | SchemaNodeKind::RoutinesFolder
+        | SchemaNodeKind::RoutinesLoadingFolder
+        | SchemaNodeKind::CollectionsFolder
+        | SchemaNodeKind::MetricsFolder
+        | SchemaNodeKind::MetricNamespaceFolder
+        | SchemaNodeKind::MetricLeaf
+        | SchemaNodeKind::RemoteDashboardItem
+        | SchemaNodeKind::CollectionChild
+        | SchemaNodeKind::CollectionChildrenMore
+        | SchemaNodeKind::ColumnsFolder
+        | SchemaNodeKind::IndexesFolder
+        | SchemaNodeKind::ForeignKeysFolder
+        | SchemaNodeKind::ConstraintsFolder
+        | SchemaNodeKind::StorageHintsFolder
+        | SchemaNodeKind::Column
+        | SchemaNodeKind::Constraint
+        | SchemaNodeKind::StorageHintItem
+        | SchemaNodeKind::Routine
+        | SchemaNodeKind::DatabaseIndexesFolder
+        | SchemaNodeKind::CollectionFieldsFolder
+        | SchemaNodeKind::CollectionField
+        | SchemaNodeKind::CollectionIndexesFolder
+        | SchemaNodeKind::CollectionIndex
+        | SchemaNodeKind::EnumValue
+        | SchemaNodeKind::BaseType
+        | SchemaNodeKind::Placeholder
+        | SchemaNodeKind::DependentsFolder
+        | SchemaNodeKind::DependentItem
+        | SchemaNodeKind::Bucket => false,
+    }
+}
+
 impl ContextMenuState {
     /// Transition the menu when the still-visible parent (left) menu is hovered at
     /// `index` while a submenu is open. Returns `true` when the menu changed and the
@@ -128,6 +204,10 @@ impl Sidebar {
         cx: &mut Context<Self>,
     ) {
         let node_kind = parse_node_kind(item_id);
+        if !node_kind_has_context_menu(node_kind) {
+            return;
+        }
+
         let items = self.build_context_menu_items(node_kind, item_id, cx);
 
         if items.is_empty() {
@@ -484,14 +564,15 @@ impl Sidebar {
                 items
             }
             SchemaNodeKind::Profile => {
-                let is_connected =
+                let (is_connected, connect_failed) =
                     if let Some(SchemaNodeId::Profile { profile_id }) = parse_node_id(item_id) {
-                        self.app_state
-                            .read(cx)
-                            .connections()
-                            .contains_key(&profile_id)
+                        let state = self.app_state.read(cx);
+                        (
+                            state.connections().contains_key(&profile_id),
+                            state.connect_failure(profile_id).is_some(),
+                        )
                     } else {
-                        false
+                        (false, false)
                     };
 
                 let mut items = Vec::new();
@@ -511,10 +592,15 @@ impl Sidebar {
                         ],
                     );
                 } else {
+                    let connect_label = if connect_failed {
+                        dbflux_i18n::t!("sidebar.menu.retry_connect")
+                    } else {
+                        dbflux_i18n::t!("sidebar.menu.connect")
+                    };
                     Self::append_menu_section(
                         &mut items,
                         [ContextMenuItem::item(
-                            dbflux_i18n::t!("sidebar.menu.connect"),
+                            connect_label,
                             ContextMenuAction::Connect,
                         )],
                     );
@@ -1530,7 +1616,11 @@ impl Sidebar {
                     SchemaNodeKind::Collection => {
                         self.browse_collection(&item_id, cx);
                     }
-                    SchemaNodeKind::DashboardItem | SchemaNodeKind::SavedChartItem => {
+                    SchemaNodeKind::DashboardItem
+                    | SchemaNodeKind::SavedChartItem
+                    | SchemaNodeKind::InstanceMetricLeaf
+                    | SchemaNodeKind::InstanceInspectorLeaf
+                    | SchemaNodeKind::InstanceOverviewLeaf => {
                         // Delegate to execute_item which emits the correct sidebar event.
                         self.execute_item(&item_id, cx);
                     }
@@ -2098,5 +2188,473 @@ mod menu_i18n_tests {
         assert_eq!(english, "New Dashboard...");
         assert_eq!(spanish, "Nuevo dashboard...");
         assert_ne!(english, spanish);
+    }
+}
+
+#[cfg(test)]
+mod menu_availability_tests {
+    use super::node_kind_has_context_menu;
+    use crate::table_loading::object_tree_adapter_tests::{
+        AdapterFakeConnection, connect_profile, register_per_database_driver, snapshot_naming,
+        test_app_state,
+    };
+    use crate::{ContextMenuAction, Sidebar, SidebarEvent};
+    use dbflux_core::{SchemaNodeId, SchemaNodeKind};
+    use dbflux_ui_base::app_state_entity::AppStateEntity;
+    use gpui::{
+        AppContext as _, Bounds, Context, Entity, IntoElement, Modifiers, MouseButton, Pixels,
+        Render, TestAppContext, VisualTestContext, Window, div, point, px,
+    };
+    use std::sync::atomic::Ordering;
+    use std::sync::{Arc, Mutex};
+    use uuid::Uuid;
+
+    /// Every `SchemaNodeKind`, in declaration order.
+    const ALL_KINDS: [SchemaNodeKind; 62] = [
+        SchemaNodeKind::ConnectionFolder,
+        SchemaNodeKind::Profile,
+        SchemaNodeKind::DatabasesFolder,
+        SchemaNodeKind::Database,
+        SchemaNodeKind::Loading,
+        SchemaNodeKind::Schema,
+        SchemaNodeKind::TablesFolder,
+        SchemaNodeKind::ViewsFolder,
+        SchemaNodeKind::TypesFolder,
+        SchemaNodeKind::TypesLoadingFolder,
+        SchemaNodeKind::SchemaIndexesFolder,
+        SchemaNodeKind::SchemaIndexesLoadingFolder,
+        SchemaNodeKind::SchemaForeignKeysFolder,
+        SchemaNodeKind::SchemaForeignKeysLoadingFolder,
+        SchemaNodeKind::RoutinesFolder,
+        SchemaNodeKind::RoutinesLoadingFolder,
+        SchemaNodeKind::CollectionsFolder,
+        SchemaNodeKind::MetricsFolder,
+        SchemaNodeKind::MetricNamespaceFolder,
+        SchemaNodeKind::MetricLeaf,
+        SchemaNodeKind::DashboardsFolder,
+        SchemaNodeKind::DashboardItem,
+        SchemaNodeKind::RemoteDashboardsFolder,
+        SchemaNodeKind::RemoteDashboardItem,
+        SchemaNodeKind::SavedChartsFolder,
+        SchemaNodeKind::SavedChartItem,
+        SchemaNodeKind::Table,
+        SchemaNodeKind::View,
+        SchemaNodeKind::Collection,
+        SchemaNodeKind::CollectionChild,
+        SchemaNodeKind::CollectionChildrenMore,
+        SchemaNodeKind::CustomType,
+        SchemaNodeKind::ColumnsFolder,
+        SchemaNodeKind::IndexesFolder,
+        SchemaNodeKind::ForeignKeysFolder,
+        SchemaNodeKind::ConstraintsFolder,
+        SchemaNodeKind::StorageHintsFolder,
+        SchemaNodeKind::Column,
+        SchemaNodeKind::Index,
+        SchemaNodeKind::ForeignKey,
+        SchemaNodeKind::Constraint,
+        SchemaNodeKind::StorageHintItem,
+        SchemaNodeKind::SchemaIndex,
+        SchemaNodeKind::SchemaForeignKey,
+        SchemaNodeKind::Routine,
+        SchemaNodeKind::DatabaseIndexesFolder,
+        SchemaNodeKind::CollectionFieldsFolder,
+        SchemaNodeKind::CollectionField,
+        SchemaNodeKind::CollectionIndexesFolder,
+        SchemaNodeKind::CollectionIndex,
+        SchemaNodeKind::EnumValue,
+        SchemaNodeKind::BaseType,
+        SchemaNodeKind::Placeholder,
+        SchemaNodeKind::DependentsFolder,
+        SchemaNodeKind::DependentItem,
+        SchemaNodeKind::ScriptsFolder,
+        SchemaNodeKind::ScriptFile,
+        SchemaNodeKind::InstanceMetricsFolder,
+        SchemaNodeKind::InstanceMetricLeaf,
+        SchemaNodeKind::InstanceInspectorsFolder,
+        SchemaNodeKind::InstanceInspectorLeaf,
+        SchemaNodeKind::InstanceOverviewLeaf,
+    ];
+
+    /// Kinds whose rows open a context menu.
+    const KINDS_WITH_MENU: [SchemaNodeKind; 24] = [
+        SchemaNodeKind::ConnectionFolder,
+        SchemaNodeKind::Profile,
+        SchemaNodeKind::DatabasesFolder,
+        SchemaNodeKind::Database,
+        SchemaNodeKind::Table,
+        SchemaNodeKind::View,
+        SchemaNodeKind::Collection,
+        SchemaNodeKind::CustomType,
+        SchemaNodeKind::Index,
+        SchemaNodeKind::SchemaIndex,
+        SchemaNodeKind::ForeignKey,
+        SchemaNodeKind::SchemaForeignKey,
+        SchemaNodeKind::ScriptsFolder,
+        SchemaNodeKind::ScriptFile,
+        SchemaNodeKind::DashboardsFolder,
+        SchemaNodeKind::DashboardItem,
+        SchemaNodeKind::RemoteDashboardsFolder,
+        SchemaNodeKind::SavedChartsFolder,
+        SchemaNodeKind::SavedChartItem,
+        SchemaNodeKind::InstanceMetricsFolder,
+        SchemaNodeKind::InstanceMetricLeaf,
+        SchemaNodeKind::InstanceInspectorsFolder,
+        SchemaNodeKind::InstanceInspectorLeaf,
+        SchemaNodeKind::InstanceOverviewLeaf,
+    ];
+
+    #[test]
+    fn every_node_kind_declares_whether_it_has_a_menu() {
+        let mut all_kinds = ALL_KINDS.to_vec();
+        all_kinds.push(SchemaNodeKind::Bucket);
+
+        let discriminants: Vec<usize> = all_kinds.iter().map(|kind| *kind as usize).collect();
+        let expected: Vec<usize> = (0..=SchemaNodeKind::Bucket as usize).collect();
+        assert_eq!(
+            discriminants, expected,
+            "ALL_KINDS must list every SchemaNodeKind variant in declaration order"
+        );
+
+        for kind in all_kinds {
+            assert_eq!(
+                node_kind_has_context_menu(kind),
+                KINDS_WITH_MENU.contains(&kind),
+                "{kind:?}"
+            );
+        }
+    }
+
+    struct EventRecorder;
+
+    impl Render for EventRecorder {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+        }
+    }
+
+    /// Records the instance-leaf open events the sidebar emits, as
+    /// `"<kind>:<id>"` strings.
+    fn record_instance_open_events(
+        sidebar: &Entity<Sidebar>,
+        cx: &mut TestAppContext,
+    ) -> (Entity<EventRecorder>, Arc<Mutex<Vec<String>>>) {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let recorder = cx.update(|cx| {
+            cx.new(|cx| {
+                let events = events.clone();
+                cx.subscribe(sidebar, move |_, _, event: &SidebarEvent, _| {
+                    let recorded = match event {
+                        SidebarEvent::OpenInstanceMetric { metric_id, .. } => {
+                            format!("metric:{metric_id}")
+                        }
+                        SidebarEvent::OpenInstanceInspector { metric_id, .. } => {
+                            format!("inspector:{metric_id}")
+                        }
+                        SidebarEvent::OpenInstanceOverview { profile_id } => {
+                            format!("overview:{profile_id}")
+                        }
+                        _ => return,
+                    };
+                    events.lock().expect("events").push(recorded);
+                })
+                .detach();
+                EventRecorder
+            })
+        });
+        (recorder, events)
+    }
+
+    fn connected_profile(cx: &mut TestAppContext) -> (Entity<AppStateEntity>, Uuid) {
+        let state = test_app_state(cx);
+        let profile_id = Uuid::new_v4();
+        let main = dbflux_core::DatabaseInfo {
+            name: "main".into(),
+            is_current: true,
+        };
+
+        let connection = AdapterFakeConnection::lazy();
+        *connection.databases.lock().expect("fake databases") = vec![main.clone()];
+
+        connect_profile(
+            &state,
+            cx,
+            profile_id,
+            connection,
+            Some(snapshot_naming(vec![main])),
+        );
+        (state, profile_id)
+    }
+
+    /// Menus whose entries do not depend on driver capabilities are never
+    /// empty for a kind the predicate allows, and a kind the predicate
+    /// rejects never gets entries from the builder.
+    #[gpui::test]
+    async fn menu_builder_agrees_with_the_menu_predicate(cx: &mut TestAppContext) {
+        let (state, profile_id) = connected_profile(cx);
+        let window = cx.add_window(|window, cx| Sidebar::new(state.clone(), window, cx));
+
+        let unconditional_menus = [
+            SchemaNodeId::ConnectionFolder {
+                node_id: Uuid::new_v4(),
+            },
+            SchemaNodeId::Profile { profile_id },
+            SchemaNodeId::DatabasesFolder { profile_id },
+            SchemaNodeId::Database {
+                profile_id,
+                name: "main".into(),
+            },
+            SchemaNodeId::Table {
+                profile_id,
+                database: Some("main".into()),
+                schema: "public".into(),
+                name: "users".into(),
+            },
+            SchemaNodeId::View {
+                profile_id,
+                database: Some("main".into()),
+                schema: "public".into(),
+                name: "active_users".into(),
+            },
+            SchemaNodeId::Collection {
+                profile_id,
+                database: "main".into(),
+                name: "events".into(),
+            },
+            SchemaNodeId::ScriptsFolder { path: None },
+            SchemaNodeId::ScriptFile {
+                path: "/scripts/report.sql".into(),
+            },
+            SchemaNodeId::DashboardsFolder { profile_id },
+            SchemaNodeId::DashboardItem {
+                profile_id,
+                dashboard_id: Uuid::new_v4(),
+            },
+            SchemaNodeId::RemoteDashboardsFolder { profile_id },
+            SchemaNodeId::SavedChartsFolder { profile_id },
+            SchemaNodeId::SavedChartItem {
+                profile_id,
+                chart_id: Uuid::new_v4(),
+            },
+            SchemaNodeId::InstanceMetricsFolder { profile_id },
+            SchemaNodeId::InstanceMetricLeaf {
+                profile_id,
+                metric_id: "cpu".into(),
+            },
+            SchemaNodeId::InstanceInspectorsFolder { profile_id },
+            SchemaNodeId::InstanceInspectorLeaf {
+                profile_id,
+                metric_id: "sessions".into(),
+            },
+            SchemaNodeId::InstanceOverviewLeaf { profile_id },
+        ];
+
+        window
+            .update(cx, |sidebar, _, cx| {
+                for node_id in &unconditional_menus {
+                    let kind = node_id.kind();
+                    assert!(node_kind_has_context_menu(kind), "{kind:?}");
+
+                    let items = sidebar.build_context_menu_items(kind, &node_id.to_string(), cx);
+                    assert!(!items.is_empty(), "{kind:?} must build a menu");
+                }
+
+                for kind in ALL_KINDS
+                    .into_iter()
+                    .filter(|kind| !node_kind_has_context_menu(*kind))
+                {
+                    let items = sidebar.build_context_menu_items(kind, "unused", cx);
+                    assert!(items.is_empty(), "{kind:?} must not build a menu");
+                }
+            })
+            .expect("sidebar alive");
+    }
+
+    fn center(bounds: Bounds<Pixels>) -> gpui::Point<Pixels> {
+        point(
+            bounds.origin.x + bounds.size.width / 2.0,
+            bounds.origin.y + bounds.size.height / 2.0,
+        )
+    }
+
+    fn rendered_bounds(cx: &mut VisualTestContext, selector: String) -> Bounds<Pixels> {
+        let selector: &'static str = selector.leak();
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+        cx.debug_bounds(selector)
+            .unwrap_or_else(|| panic!("{selector} was not rendered"))
+    }
+
+    fn open_menu_item_id(sidebar: &Entity<Sidebar>, cx: &mut VisualTestContext) -> Option<String> {
+        sidebar.read_with(cx, |sidebar, _| {
+            sidebar
+                .context_menu_state()
+                .map(|menu| menu.item_id.clone())
+        })
+    }
+
+    /// The Databases folder was missing from the old right-click and row
+    /// button lists. Right click, the row button and the keyboard menu
+    /// command must all open its menu.
+    #[gpui::test]
+    async fn databases_folder_menu_opens_from_right_click_row_button_and_keyboard(
+        cx: &mut TestAppContext,
+    ) {
+        let (state, profile_id) = connected_profile(cx);
+        let (sidebar, cx) =
+            cx.add_window_view(|window, cx| Sidebar::new(state.clone(), window, cx));
+
+        let profile_item = SchemaNodeId::Profile { profile_id }.to_string();
+        let folder_item = SchemaNodeId::DatabasesFolder { profile_id }.to_string();
+        sidebar.update(cx, |sidebar, cx| {
+            sidebar.set_expanded(&profile_item, true, cx);
+        });
+
+        let row = rendered_bounds(cx, format!("row-{folder_item}"));
+        cx.simulate_mouse_down(center(row), MouseButton::Right, Modifiers::none());
+        cx.simulate_mouse_up(center(row), MouseButton::Right, Modifiers::none());
+        assert_eq!(
+            open_menu_item_id(&sidebar, cx),
+            Some(folder_item.clone()),
+            "right click must open the Databases folder menu"
+        );
+
+        sidebar.update(cx, |sidebar, cx| sidebar.close_context_menu(cx));
+        let button = rendered_bounds(cx, format!("menu-btn-{folder_item}"));
+        cx.simulate_click(center(button), Modifiers::none());
+        assert_eq!(
+            open_menu_item_id(&sidebar, cx),
+            Some(folder_item.clone()),
+            "the row button must open the Databases folder menu"
+        );
+
+        sidebar.update(cx, |sidebar, cx| {
+            sidebar.close_context_menu(cx);
+
+            let index = sidebar
+                .find_item_index(&folder_item, cx)
+                .expect("visible Databases folder");
+            sidebar
+                .tree_state
+                .update(cx, |tree, cx| tree.set_selected_index(Some(index), cx));
+
+            let position = sidebar.selected_item_menu_position(cx);
+            sidebar.open_item_menu(position, cx);
+        });
+        assert_eq!(
+            open_menu_item_id(&sidebar, cx),
+            Some(folder_item),
+            "the keyboard menu command must open the Databases folder menu"
+        );
+    }
+
+    #[gpui::test]
+    async fn instance_leaf_open_entry_opens_the_leaf(cx: &mut TestAppContext) {
+        let (state, profile_id) = connected_profile(cx);
+        let window = cx.add_window(|window, cx| Sidebar::new(state.clone(), window, cx));
+        let sidebar = window.entity(cx).expect("sidebar entity");
+        let (_recorder, events) = record_instance_open_events(&sidebar, cx);
+
+        let leaves = [
+            SchemaNodeId::InstanceMetricLeaf {
+                profile_id,
+                metric_id: "cpu".into(),
+            },
+            SchemaNodeId::InstanceInspectorLeaf {
+                profile_id,
+                metric_id: "sessions".into(),
+            },
+            SchemaNodeId::InstanceOverviewLeaf { profile_id },
+        ];
+
+        for leaf in &leaves {
+            sidebar.update(cx, |sidebar, cx| {
+                sidebar.open_menu_for_item(&leaf.to_string(), point(px(0.0), px(0.0)), cx);
+
+                let open_index = sidebar
+                    .context_menu_state()
+                    .expect("leaf menu open")
+                    .items
+                    .iter()
+                    .position(|item| matches!(item.action, ContextMenuAction::Open))
+                    .expect("leaf menu has Open");
+                sidebar.context_menu_execute_at(open_index, cx);
+            });
+        }
+
+        assert_eq!(
+            *events.lock().expect("events"),
+            vec![
+                "metric:cpu".to_string(),
+                "inspector:sessions".to_string(),
+                format!("overview:{profile_id}"),
+            ]
+        );
+    }
+
+    #[gpui::test]
+    async fn failed_connect_marks_the_profile_until_a_retry_starts(cx: &mut TestAppContext) {
+        let state = test_app_state(cx);
+        let (connect_calls, fail_next_connect) = register_per_database_driver(&state, cx);
+
+        let mut profile = dbflux_core::ConnectionProfile::new(
+            "retry-test",
+            dbflux_core::DbConfig::default_postgres(),
+        );
+        let profile_id = Uuid::new_v4();
+        profile.id = profile_id;
+        state.update(cx, |state, _| {
+            state.profiles_mut().push(profile);
+            state.connection_tree_mut().add_node(
+                dbflux_core::ConnectionTreeNode::new_connection_ref(profile_id, None, 1000),
+            );
+        });
+
+        let (sidebar, cx) =
+            cx.add_window_view(|window, cx| Sidebar::new(state.clone(), window, cx));
+        let profile_item = SchemaNodeId::Profile { profile_id }.to_string();
+
+        fail_next_connect.store(true, Ordering::SeqCst);
+        sidebar.update(cx, |sidebar, cx| sidebar.connect_to_profile(profile_id, cx));
+        cx.run_until_parked();
+
+        let failure = state.read_with(cx, |state, _| {
+            state.connect_failure(profile_id).map(str::to_string)
+        });
+        assert!(
+            failure
+                .as_deref()
+                .is_some_and(|error| error.contains("fake connect failure")),
+            "failed connect must be recorded, got {failure:?}"
+        );
+        rendered_bounds(cx, format!("connect-error-{profile_id}"));
+
+        let first_entry = sidebar.update(cx, |sidebar, cx| {
+            sidebar.build_context_menu_items(SchemaNodeKind::Profile, &profile_item, cx)[0].clone()
+        });
+        assert_eq!(
+            first_entry.label,
+            dbflux_i18n::t!("sidebar.menu.retry_connect")
+        );
+        assert!(matches!(first_entry.action, ContextMenuAction::Connect));
+
+        sidebar.update(cx, |sidebar, cx| sidebar.connect_to_profile(profile_id, cx));
+        assert_eq!(
+            state.read_with(cx, |state, _| state.connect_failure(profile_id).is_some()),
+            false,
+            "starting a retry must clear the failure"
+        );
+
+        cx.run_until_parked();
+        assert_eq!(connect_calls.load(Ordering::SeqCst), 2);
+        state.read_with(cx, |state, _| {
+            assert!(state.connections().contains_key(&profile_id));
+            assert_eq!(state.connect_failure(profile_id), None);
+        });
+        cx.run_until_parked();
+        assert!(
+            cx.debug_bounds(format!("connect-error-{profile_id}").leak())
+                .is_none(),
+            "a connected profile must not show the error indicator"
+        );
     }
 }

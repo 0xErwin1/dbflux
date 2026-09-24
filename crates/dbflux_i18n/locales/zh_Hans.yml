@@ -3427,6 +3427,7 @@ sidebar:
     generate_query: 生成查询
     drop_collection: 删除集合
     connect: 连接
+    retry_connect: 重试
     disconnect: 断开连接
     edit: 编辑
     duplicate: 复制
@@ -3595,6 +3596,7 @@ sidebar:
       profile_connecting: "正在连接 %{name}…"
       database_loading: "%{name}（加载中…）"
       error_retry: "错误：%{error} — 点击重试"
+      connect_failed: "连接失败：%{error}"
       remote_listing_count: "%{label}（%{count}）"
       remote_dashboards_error_retry: "错误：%{error} — 折叠再展开以重试"
       used_by_objects:

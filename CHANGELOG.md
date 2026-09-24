@@ -10,6 +10,14 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **Sidebar menus and failed connections** — the Databases folder, the
+  instance metric and inspector folders, and the metric, inspector and
+  Instance Overview leaves now open their context menu from right click and
+  the row button, as `m` already did, and **Open** on those leaves opens them.
+  A failed connect now leaves a red error icon on the connection row, with the
+  error in its tooltip and **Retry** in its menu, until a new attempt starts,
+  the connection succeeds, or the connection is edited.
+
 * Redis, Turso, and InfluxDB now refuse requested row limits (including zero)
   or statement timeouts before execution with `NotSupported`, rather than
   dispatching commands, SQL, HTTP, or instance-context queries without those

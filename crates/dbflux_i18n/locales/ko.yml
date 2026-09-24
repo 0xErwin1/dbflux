@@ -3428,6 +3428,7 @@ sidebar:
     generate_query: 쿼리 생성
     drop_collection: 컬렉션 삭제
     connect: 연결
+    retry_connect: 다시 시도
     disconnect: 연결 끊기
     edit: 편집
     duplicate: 복제
@@ -3596,6 +3597,7 @@ sidebar:
       profile_connecting: "%{name}에 연결하는 중…"
       database_loading: "%{name} (불러오는 중…)"
       error_retry: "오류: %{error} — 클릭하여 다시 시도"
+      connect_failed: "연결 실패: %{error}"
       remote_listing_count: "%{label} (%{count})"
       remote_dashboards_error_retry: "오류: %{error} — 접었다 펼쳐서 다시 시도"
       used_by_objects:

@@ -34,6 +34,8 @@ fn sidebar_tree_label(
 
 pub(super) struct TreeRenderParams {
     pub connections: Vec<Uuid>,
+    /// Tooltip text for profiles whose latest connect attempt failed.
+    pub connect_failures: HashMap<Uuid, SharedString>,
     pub active_id: Option<Uuid>,
     pub profile_icons: HashMap<Uuid, AppIcon>,
     pub active_databases: HashMap<Uuid, String>,
@@ -193,6 +195,14 @@ pub(super) fn render_tree_item(
         None
     };
 
+    let connect_failure: Option<(Uuid, SharedString)> = match &parsed_id {
+        Some(SchemaNodeId::Profile { profile_id }) if !is_connected => params
+            .connect_failures
+            .get(profile_id)
+            .map(|tooltip| (*profile_id, tooltip.clone())),
+        _ => None,
+    };
+
     let (node_icon, unicode_icon, icon_color) = resolve_node_icon(
         node_kind,
         &parsed_id,
@@ -202,6 +212,11 @@ pub(super) fn render_tree_item(
         params,
         &item.label,
     );
+    let icon_color = if connect_failure.is_some() {
+        theme.danger
+    } else {
+        icon_color
+    };
 
     let label_color = resolve_label_color(node_kind, theme, params);
 
@@ -222,6 +237,8 @@ pub(super) fn render_tree_item(
             .is_some_and(|ep| ep == std::path::Path::new(p)),
         _ => false,
     };
+
+    let has_context_menu = crate::context_menu::node_kind_has_context_menu(node_kind);
 
     let is_table_or_view = matches!(
         node_kind,
@@ -275,6 +292,10 @@ pub(super) fn render_tree_item(
         .child(
             div()
                 .id(SharedString::from(format!("row-{}", item_id)))
+                .debug_selector({
+                    let item_id = item_id.clone();
+                    move || format!("row-{item_id}")
+                })
                 .w_full()
                 .flex()
                 .items_center()
@@ -386,6 +407,8 @@ pub(super) fn render_tree_item(
                             |el| {
                                 let dot_variant = if is_connected {
                                     StatusDotVariant::Success
+                                } else if connect_failure.is_some() {
+                                    StatusDotVariant::Danger
                                 } else {
                                     StatusDotVariant::Idle
                                 };
@@ -423,6 +446,20 @@ pub(super) fn render_tree_item(
                                 is_active_database,
                                 label_color,
                             )),
+                    )
+                })
+                .when_some(connect_failure, |el, (profile_id, tooltip)| {
+                    el.child(
+                        div()
+                            .id(SharedString::from(format!("connect-error-{profile_id}")))
+                            .debug_selector(move || format!("connect-error-{profile_id}"))
+                            .flex_shrink_0()
+                            .ml(Spacing::XS)
+                            .child(Icon::new(AppIcon::CircleAlert).small().color(theme.danger))
+                            .tooltip(move |window, cx| {
+                                gpui_component::tooltip::Tooltip::new(tooltip.clone())
+                                    .build(window, cx)
+                            }),
                     )
                 })
                 .when(
@@ -834,110 +871,68 @@ pub(super) fn render_tree_item(
                         })
                 })
                 // Menu button for items that have context menus
-                .when(
-                    matches!(
-                        node_kind,
-                        SchemaNodeKind::Profile
-                            | SchemaNodeKind::ConnectionFolder
-                            | SchemaNodeKind::Table
-                            | SchemaNodeKind::View
-                            | SchemaNodeKind::Collection
-                            | SchemaNodeKind::Database
-                            | SchemaNodeKind::Index
-                            | SchemaNodeKind::SchemaIndex
-                            | SchemaNodeKind::ForeignKey
-                            | SchemaNodeKind::SchemaForeignKey
-                            | SchemaNodeKind::CustomType
-                            | SchemaNodeKind::ScriptsFolder
-                            | SchemaNodeKind::ScriptFile
-                            | SchemaNodeKind::DashboardsFolder
-                            | SchemaNodeKind::RemoteDashboardsFolder
-                            | SchemaNodeKind::SavedChartsFolder
-                            | SchemaNodeKind::DashboardItem
-                            | SchemaNodeKind::SavedChartItem
-                    ),
-                    |el| {
-                        let sidebar_for_menu = sidebar_entity.clone();
-                        let item_id_for_menu = item_id.clone();
-                        let hover_bg = theme.secondary;
+                .when(has_context_menu, |el| {
+                    let sidebar_for_menu = sidebar_entity.clone();
+                    let item_id_for_menu = item_id.clone();
+                    let hover_bg = theme.secondary;
 
-                        // Render the ⋯ button as fully transparent when the row is not hovered.
-                        // The button still occupies its layout slot so no reflow happens on hover.
-                        // Visibility is driven by `params.hovered_item_id` which the sidebar
-                        // entity updates on `on_mouse_enter` for the list item.
-                        let is_row_hovered = params
-                            .hovered_item_id
-                            .as_ref()
-                            .is_some_and(|id| id == &item_id_for_menu);
+                    // Render the ⋯ button as fully transparent when the row is not hovered.
+                    // The button still occupies its layout slot so no reflow happens on hover.
+                    // Visibility is driven by `params.hovered_item_id` which the sidebar
+                    // entity updates on `on_mouse_enter` for the list item.
+                    let is_row_hovered = params
+                        .hovered_item_id
+                        .as_ref()
+                        .is_some_and(|id| id == &item_id_for_menu);
 
-                        let btn_opacity: f32 = if is_row_hovered { 1.0 } else { 0.0 };
+                    let btn_opacity: f32 = if is_row_hovered { 1.0 } else { 0.0 };
 
-                        el.child(
-                            div()
-                                .id(SharedString::from(format!("menu-btn-{}", item_id_for_menu)))
-                                .flex_shrink_0()
-                                .ml_auto()
-                                .px_1()
-                                .rounded(Radii::SM)
-                                .cursor_pointer()
-                                .opacity(btn_opacity)
-                                .hover(move |d| d.bg(hover_bg))
-                                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                    el.child(
+                        div()
+                            .id(SharedString::from(format!("menu-btn-{}", item_id_for_menu)))
+                            .debug_selector({
+                                let item_id = item_id_for_menu.clone();
+                                move || format!("menu-btn-{item_id}")
+                            })
+                            .flex_shrink_0()
+                            .ml_auto()
+                            .px_1()
+                            .rounded(Radii::SM)
+                            .cursor_pointer()
+                            .opacity(btn_opacity)
+                            .hover(move |d| d.bg(hover_bg))
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                cx.stop_propagation();
+                            })
+                            .on_click({
+                                let sidebar = sidebar_for_menu.clone();
+                                let item_id = item_id_for_menu.clone();
+                                move |event, _, cx| {
                                     cx.stop_propagation();
-                                })
-                                .on_click({
-                                    let sidebar = sidebar_for_menu.clone();
-                                    let item_id = item_id_for_menu.clone();
-                                    move |event, _, cx| {
-                                        cx.stop_propagation();
-                                        let position = event.position();
-                                        sidebar.update(cx, |this, cx| {
-                                            cx.emit(SidebarEvent::RequestFocus);
-                                            this.open_menu_for_item(&item_id, position, cx);
-                                        });
-                                    }
-                                })
-                                .child("\u{22EF}"),
-                        )
-                    },
-                )
+                                    let position = event.position();
+                                    sidebar.update(cx, |this, cx| {
+                                        cx.emit(SidebarEvent::RequestFocus);
+                                        this.open_menu_for_item(&item_id, position, cx);
+                                    });
+                                }
+                            })
+                            .child("\u{22EF}"),
+                    )
+                })
                 // Right-click context menu
-                .when(
-                    matches!(
-                        node_kind,
-                        SchemaNodeKind::Profile
-                            | SchemaNodeKind::ConnectionFolder
-                            | SchemaNodeKind::Table
-                            | SchemaNodeKind::View
-                            | SchemaNodeKind::Collection
-                            | SchemaNodeKind::Database
-                            | SchemaNodeKind::Index
-                            | SchemaNodeKind::SchemaIndex
-                            | SchemaNodeKind::ForeignKey
-                            | SchemaNodeKind::SchemaForeignKey
-                            | SchemaNodeKind::CustomType
-                            | SchemaNodeKind::ScriptsFolder
-                            | SchemaNodeKind::ScriptFile
-                            | SchemaNodeKind::DashboardsFolder
-                            | SchemaNodeKind::RemoteDashboardsFolder
-                            | SchemaNodeKind::SavedChartsFolder
-                            | SchemaNodeKind::DashboardItem
-                            | SchemaNodeKind::SavedChartItem
-                    ),
-                    |el| {
-                        let sidebar_for_ctx = sidebar_entity.clone();
-                        let item_id_for_ctx = item_id.clone();
+                .when(has_context_menu, |el| {
+                    let sidebar_for_ctx = sidebar_entity.clone();
+                    let item_id_for_ctx = item_id.clone();
 
-                        el.on_mouse_down(MouseButton::Right, move |event, _, cx| {
-                            cx.stop_propagation();
-                            let position = event.position;
-                            sidebar_for_ctx.update(cx, |this, cx| {
-                                cx.emit(SidebarEvent::RequestFocus);
-                                this.open_menu_for_item(&item_id_for_ctx, position, cx);
-                            });
-                        })
-                    },
-                ),
+                    el.on_mouse_down(MouseButton::Right, move |event, _, cx| {
+                        cx.stop_propagation();
+                        let position = event.position;
+                        sidebar_for_ctx.update(cx, |this, cx| {
+                            cx.emit(SidebarEvent::RequestFocus);
+                            this.open_menu_for_item(&item_id_for_ctx, position, cx);
+                        });
+                    })
+                }),
         );
 
     // Track which row is hovered so the ⋯ button opacity can be driven by
