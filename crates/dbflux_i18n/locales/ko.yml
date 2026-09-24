@@ -2877,6 +2877,27 @@ settings:
       open_saved_chart: "차트 열기..."
       import_dashboard: "JSON에서 대시보드 가져오기..."
       new_dashboard: "새 대시보드..."
+      preview_document: 문서 미리 보기
+      toggle_raw_view: 원시 JSON 보기 전환
+      next_match: 다음 일치 항목
+      prev_match: 이전 일치 항목
+      zoom_in: 확대
+      zoom_out: 축소
+      pan_left: 왼쪽으로 이동
+      pan_right: 오른쪽으로 이동
+      pan_up: 위로 이동
+      pan_down: 아래로 이동
+      select_table_left: 왼쪽 테이블 선택
+      select_table_right: 오른쪽 테이블 선택
+      select_table_up: 위쪽 테이블 선택
+      select_table_down: 아래쪽 테이블 선택
+      move_table_left: 테이블을 왼쪽으로 이동
+      move_table_right: 테이블을 오른쪽으로 이동
+      move_table_up: 테이블을 위로 이동
+      move_table_down: 테이블을 아래로 이동
+      layout_left_right: 왼쪽-오른쪽 레이아웃
+      layout_snowflake: 스노우플레이크 레이아웃
+      layout_compact: 컴팩트 레이아웃
     context:
       global: 전역
       sidebar: 사이드바
@@ -2897,6 +2918,7 @@ settings:
       context_bar: 컨텍스트 바
       audit: 감사 뷰어
       event_streams_picker: 이벤트 스트림 선택기
+      document_tree: 문서 트리
     category:
       global: 전역
       focus: 포커스

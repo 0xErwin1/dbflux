@@ -91,10 +91,25 @@ All notable changes to DBFlux will be documented in this file.
   Up/Down move to the card above or below, crossing into the neighboring
   section's matching column.
 
+* **Tasks panel cancel and failed-task retention** — key-value scans, reads
+  and mutations no longer show a cancel button, because no key-value driver
+  can stop those calls once they start and cancelling only marked the task
+  cancelled while the work (including a write) went on. Failed tasks now stay
+  in the Tasks panel with a dismiss button instead of disappearing after 60
+  seconds, so their error output remains readable; completed and cancelled
+  tasks are still removed after 60 seconds.
+
 * **Proxy details show readable labels** — the Access tab's proxy details
   card printed the proxy type and authentication as Rust debug output, such
   as `Http` and `Basic { username: "..." }`. It now shows translated labels:
   HTTP, HTTPS or SOCKS5, and None or Basic with the username.
+
+* **Document tree and schema diagram keys in the keymap** — the document tree's
+  keys and the schema diagram's zoom, pan, selection, table-move and layout
+  keys now come from the app keymap instead of being hard-coded in each view,
+  so Settings → Keybindings lists them under Document Tree and Schema Viz.
+  The default keys are unchanged. The tree's `d d` delete sequence stays built
+  into the tree, because a keymap entry holds a single keystroke.
 
 * **The new-connection shortcut shown in the empty workspace works** — the
   empty workspace advertised `Ctrl+Shift+N` for a new connection, but nothing
@@ -282,6 +297,12 @@ All notable changes to DBFlux will be documented in this file.
   field (`cm-field-host`, `cm-field-ssh_user`, `cm-setting-refresh_interval`).
   Document tabs and Connection Manager tabs are exposed as tabs inside a tab
   list, with the active tab reported as selected, instead of as buttons.
+
+* UI automation: screenshots now wait until DBFlux has presented the frame that
+  follows an action and, on Linux, until two consecutive captures match, so they
+  no longer show the previous frame. The new `wait_for_idle` tool waits until
+  the element tree stops changing and the window draws at most one frame per
+  500 ms.
 
 * **The MCP approvals overlay can be closed** — once opened, the approvals
   overlay stayed on screen until the audit viewer was opened. It now closes

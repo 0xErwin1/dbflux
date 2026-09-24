@@ -119,6 +119,31 @@ pub enum Command {
     ImportDashboard,
     /// Open the "New Dashboard..." creation modal (profile picker then name input).
     NewDashboard,
+
+    // === Document Tree ===
+    PreviewDocument,
+    ToggleRawView,
+    NextMatch,
+    PrevMatch,
+
+    // === Schema Diagram ===
+    ZoomIn,
+    ZoomOut,
+    PanLeft,
+    PanRight,
+    PanUp,
+    PanDown,
+    SelectTableLeft,
+    SelectTableRight,
+    SelectTableUp,
+    SelectTableDown,
+    MoveTableLeft,
+    MoveTableRight,
+    MoveTableUp,
+    MoveTableDown,
+    LayoutLeftRight,
+    LayoutSnowflake,
+    LayoutCompact,
 }
 
 impl Command {
@@ -262,6 +287,28 @@ impl Command {
             Command::OpenSavedChart => "Open Chart...",
             Command::ImportDashboard => "Import Dashboard from JSON...",
             Command::NewDashboard => "New Dashboard...",
+
+            Command::PreviewDocument => "Preview Document",
+            Command::ToggleRawView => "Toggle Raw JSON View",
+            Command::NextMatch => "Next Match",
+            Command::PrevMatch => "Previous Match",
+            Command::ZoomIn => "Zoom In",
+            Command::ZoomOut => "Zoom Out",
+            Command::PanLeft => "Pan Left",
+            Command::PanRight => "Pan Right",
+            Command::PanUp => "Pan Up",
+            Command::PanDown => "Pan Down",
+            Command::SelectTableLeft => "Select Table Left",
+            Command::SelectTableRight => "Select Table Right",
+            Command::SelectTableUp => "Select Table Up",
+            Command::SelectTableDown => "Select Table Down",
+            Command::MoveTableLeft => "Move Table Left",
+            Command::MoveTableRight => "Move Table Right",
+            Command::MoveTableUp => "Move Table Up",
+            Command::MoveTableDown => "Move Table Down",
+            Command::LayoutLeftRight => "Left-Right Layout",
+            Command::LayoutSnowflake => "Snowflake Layout",
+            Command::LayoutCompact => "Compact Layout",
         }
     }
 
@@ -369,6 +416,28 @@ impl Command {
             Command::OpenSavedChart => "open_saved_chart",
             Command::ImportDashboard => "import_dashboard",
             Command::NewDashboard => "new_dashboard",
+
+            Command::PreviewDocument => "preview_document",
+            Command::ToggleRawView => "toggle_raw_view",
+            Command::NextMatch => "next_match",
+            Command::PrevMatch => "prev_match",
+            Command::ZoomIn => "zoom_in",
+            Command::ZoomOut => "zoom_out",
+            Command::PanLeft => "pan_left",
+            Command::PanRight => "pan_right",
+            Command::PanUp => "pan_up",
+            Command::PanDown => "pan_down",
+            Command::SelectTableLeft => "select_table_left",
+            Command::SelectTableRight => "select_table_right",
+            Command::SelectTableUp => "select_table_up",
+            Command::SelectTableDown => "select_table_down",
+            Command::MoveTableLeft => "move_table_left",
+            Command::MoveTableRight => "move_table_right",
+            Command::MoveTableUp => "move_table_up",
+            Command::MoveTableDown => "move_table_down",
+            Command::LayoutLeftRight => "layout_left_right",
+            Command::LayoutSnowflake => "layout_snowflake",
+            Command::LayoutCompact => "layout_compact",
         }
     }
 
@@ -462,6 +531,27 @@ impl Command {
             Command::OpenSavedChart,
             Command::ImportDashboard,
             Command::NewDashboard,
+            Command::PreviewDocument,
+            Command::ToggleRawView,
+            Command::NextMatch,
+            Command::PrevMatch,
+            Command::ZoomIn,
+            Command::ZoomOut,
+            Command::PanLeft,
+            Command::PanRight,
+            Command::PanUp,
+            Command::PanDown,
+            Command::SelectTableLeft,
+            Command::SelectTableRight,
+            Command::SelectTableUp,
+            Command::SelectTableDown,
+            Command::MoveTableLeft,
+            Command::MoveTableRight,
+            Command::MoveTableUp,
+            Command::MoveTableDown,
+            Command::LayoutLeftRight,
+            Command::LayoutSnowflake,
+            Command::LayoutCompact,
         ];
 
         #[cfg(feature = "mcp")]
@@ -570,6 +660,30 @@ impl Command {
             Command::OpenSavedChart | Command::ImportDashboard | Command::NewDashboard => {
                 "Dashboards"
             }
+
+            Command::NextMatch | Command::PrevMatch => "Navigation",
+
+            Command::PreviewDocument => "Actions",
+
+            Command::ToggleRawView
+            | Command::ZoomIn
+            | Command::ZoomOut
+            | Command::LayoutLeftRight
+            | Command::LayoutSnowflake
+            | Command::LayoutCompact => "View",
+
+            Command::PanLeft
+            | Command::PanRight
+            | Command::PanUp
+            | Command::PanDown
+            | Command::SelectTableLeft
+            | Command::SelectTableRight
+            | Command::SelectTableUp
+            | Command::SelectTableDown
+            | Command::MoveTableLeft
+            | Command::MoveTableRight
+            | Command::MoveTableUp
+            | Command::MoveTableDown => "Navigation",
         }
     }
 
@@ -688,6 +802,9 @@ pub enum ContextId {
 
     /// Schema visualization document.
     SchemaViz,
+
+    /// Document tree view (document databases and JSON values).
+    DocumentTree,
 }
 
 impl ContextId {
@@ -717,6 +834,7 @@ impl ContextId {
             ContextId::BackgroundTasks => Some(ContextId::Global),
             ContextId::Audit => Some(ContextId::Global),
             ContextId::SchemaViz => Some(ContextId::Global),
+            ContextId::DocumentTree => Some(ContextId::Global),
         }
     }
 
@@ -770,6 +888,7 @@ impl ContextId {
             ContextId::Audit => "Audit Viewer",
             ContextId::EventStreamsPicker => "Event Streams Picker",
             ContextId::SchemaViz => "Schema Viz",
+            ContextId::DocumentTree => "Document Tree",
         }
     }
 
@@ -796,6 +915,7 @@ impl ContextId {
             ContextId::Audit => "audit",
             ContextId::EventStreamsPicker => "event_streams_picker",
             ContextId::SchemaViz => "schema_viz",
+            ContextId::DocumentTree => "document_tree",
         }
     }
 
@@ -822,6 +942,7 @@ impl ContextId {
             ContextId::Audit,
             ContextId::EventStreamsPicker,
             ContextId::SchemaViz,
+            ContextId::DocumentTree,
         ]
     }
 
@@ -848,6 +969,7 @@ impl ContextId {
             ContextId::Audit => "Audit",
             ContextId::EventStreamsPicker => "EventStreamsPicker",
             ContextId::SchemaViz => "SchemaViz",
+            ContextId::DocumentTree => "DocumentTree",
         }
     }
 }

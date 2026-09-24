@@ -2877,6 +2877,27 @@ settings:
       open_saved_chart: "Abrir gráfico..."
       import_dashboard: "Importar dashboard desde JSON..."
       new_dashboard: "Nuevo dashboard..."
+      preview_document: Vista previa del documento
+      toggle_raw_view: Alternar vista JSON sin formato
+      next_match: Siguiente coincidencia
+      prev_match: Coincidencia anterior
+      zoom_in: Acercar
+      zoom_out: Alejar
+      pan_left: Desplazar a la izquierda
+      pan_right: Desplazar a la derecha
+      pan_up: Desplazar arriba
+      pan_down: Desplazar abajo
+      select_table_left: Seleccionar tabla a la izquierda
+      select_table_right: Seleccionar tabla a la derecha
+      select_table_up: Seleccionar tabla arriba
+      select_table_down: Seleccionar tabla abajo
+      move_table_left: Mover tabla a la izquierda
+      move_table_right: Mover tabla a la derecha
+      move_table_up: Mover tabla arriba
+      move_table_down: Mover tabla abajo
+      layout_left_right: Diseño Izquierda-Derecha
+      layout_snowflake: Diseño Copo de nieve
+      layout_compact: Diseño Compacto
     context:
       global: Global
       sidebar: Barra lateral
@@ -2898,6 +2919,7 @@ settings:
       audit: Visor de auditoría
       event_streams_picker: Selector de flujos de eventos
       schema_viz: Visualización de esquema
+      document_tree: Árbol de documentos
     category:
       global: Global
       focus: Foco

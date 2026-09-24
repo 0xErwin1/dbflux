@@ -2877,6 +2877,27 @@ settings:
       open_saved_chart: 打开图表…
       import_dashboard: 从 JSON 导入仪表盘…
       new_dashboard: 新建仪表盘…
+      preview_document: 预览文档
+      toggle_raw_view: 切换原始 JSON 视图
+      next_match: 下一个匹配项
+      prev_match: 上一个匹配项
+      zoom_in: 放大
+      zoom_out: 缩小
+      pan_left: 向左平移
+      pan_right: 向右平移
+      pan_up: 向上平移
+      pan_down: 向下平移
+      select_table_left: 选择左侧的表
+      select_table_right: 选择右侧的表
+      select_table_up: 选择上方的表
+      select_table_down: 选择下方的表
+      move_table_left: 向左移动表
+      move_table_right: 向右移动表
+      move_table_up: 向上移动表
+      move_table_down: 向下移动表
+      layout_left_right: 左右布局
+      layout_snowflake: 雪花布局
+      layout_compact: 紧凑布局
     context:
       global: 全局
       sidebar: 侧边栏
@@ -2898,6 +2919,7 @@ settings:
       audit: 审计查看器
       event_streams_picker: 事件流选择器
       schema_viz: 架构可视化
+      document_tree: 文档树
     category:
       global: 全局
       focus: 聚焦
