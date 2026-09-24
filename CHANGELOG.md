@@ -10,6 +10,14 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **Tasks panel cancel and failed-task retention** — key-value scans, reads
+  and mutations no longer show a cancel button, because no key-value driver
+  can stop those calls once they start and cancelling only marked the task
+  cancelled while the work (including a write) went on. Failed tasks now stay
+  in the Tasks panel with a dismiss button instead of disappearing after 60
+  seconds, so their error output remains readable; completed and cancelled
+  tasks are still removed after 60 seconds.
+
 * Redis, Turso, and InfluxDB now refuse requested row limits (including zero)
   or statement timeouts before execution with `NotSupported`, rather than
   dispatching commands, SQL, HTTP, or instance-context queries without those
