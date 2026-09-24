@@ -67,11 +67,14 @@ chart:
     source_doc: DOCUMENTO DE ORIGEN
     quick_actions: ACCIONES RÁPIDAS
     show_in_tree: Mostrar en árbol
-    annotate: Anotar
-    copy_as_query: Copiar como consulta
-    coming_soon: Próximamente
 common:
   time_range:
+    preset:
+      custom: "Personalizado…"
+    picker:
+      date_range_placeholder: "Seleccionar rango de fechas"
+      from: "desde"
+      to: "hasta"
     error:
       invalid_selection: La selección de hora no es válida
       ambiguous_local: La hora local es ambigua o no válida
@@ -511,6 +514,8 @@ diagnostics:
   shutdown_flush_timed_out: "Es posible que algunas ediciones no hayan llegado a sus archivos: DBFlux se quedó sin tiempo para guardarlas al salir. Se conservan en el session store para recuperarlas."
 document:
   audit:
+    pager:
+      range: "%{start}-%{end} de %{total} %{unit}"
     actor:
       app: Aplicación
       external_auth_provider: Proveedor de autenticación externo
@@ -558,11 +563,18 @@ document:
       summary: Resumen
       time: Hora
     filter:
+      timezone:
+        local: "Local"
+        utc: "UTC"
       apply: Aplicar
       clear: Limpiar
       group_label: "Agrupar:"
       loading: "Cargando…"
       placeholder:
+        search_events: "Buscar eventos..."
+        filter_events: "Filtrar eventos..."
+        all_time: "Todo el período"
+        last_12_hours: "Últimas 12 h"
         local: Local
       retry: Reintentar
       view_mode:
@@ -644,7 +656,7 @@ document:
       error_detail: "Error al listar buckets: %{error}"
       no_match: "Ningún bucket coincide con \"%{query}\""
       no_buckets: Esta conexión no tiene buckets
-      hint_refresh: r para actualizar
+      hint_refresh: "%{key} para actualizar"
     delete_confirm:
       title: ¿Eliminar bucket?
       body: "\"%{bucket}\" está vacío y se eliminará. Esta acción no se puede deshacer."
@@ -719,7 +731,6 @@ document:
     toast:
       chart_saved: Gráfico guardado
       save_failed: "No se pudo guardar el gráfico: %{error}"
-      png_export_coming: "La exportación a PNG llega en la v0.7"
     error:
       source: "Error del origen del gráfico: %{error}"
       no_connection_selected: No hay ninguna conexión seleccionada
@@ -767,6 +778,9 @@ document:
       query_history: Historial de consultas
       explain_query: Explicar consulta
       open_in_chart: Abrir la consulta actual en un documento de gráfico
+    vim:
+      normal: "NORMAL"
+      insert: "INSERTAR"
     output:
       running: "Ejecutando..."
       stopped: Detenido
@@ -915,7 +929,6 @@ document:
         last_hour: Última hora
     configure:
       action:
-        export_png: Exportar PNG
         stats: Estadísticas
       apply: Aplicar
       bindings_hint: Ejecuta el gráfico al menos una vez para configurar los enlaces.
@@ -1108,6 +1121,7 @@ document:
           many: "%{count} cambios sin guardar"
         save: Guardar
         revert: Descartar
+        refresh_blocked: Guarda o descarta los cambios sin guardar antes de actualizar
       toolbar:
         refresh: Actualizar
         builder: Constructor
@@ -1143,7 +1157,6 @@ document:
         trigger: Exportar
         save_as_file: Guardar como archivo
         copy_to_clipboard: Copiar al portapapeles
-        png_coming_soon: "Exportación PNG disponible en v0.7 — %{detail}"
         format:
           csv: CSV
           json_pretty: "JSON (con formato)"
@@ -1375,6 +1388,8 @@ document:
       continue: Continuar
       close: Cerrar
   governance:
+    semantics_preview: "solicitante: %{requester} | conexión: %{connection} | clasificación: %{classification}"
+    pending_actor: "actor: %{actor}"
     refresh: Actualizar pendientes
     no_pending: No hay ejecuciones pendientes
     pending_title: "Pendiente %{id}"
@@ -1427,7 +1442,9 @@ document:
       progress:
         of_total: "%{done} / %{total} filas"
         only: "%{done} filas"
+      cancel: Cancelar
     done:
+      cancelled_rows: "Se importaron %{rows} filas antes de que se detuviera la importación."
       close: Cerrar
     error:
       no_connection: No hay una conexión activa para esta importación
@@ -1552,6 +1569,10 @@ document:
       error:
         background_task_limit: Demasiadas tareas en segundo plano en ejecución, espere por favor
     parsing:
+      preview:
+        binary:
+          one: "%{count} byte (binario)"
+          many: "%{count} bytes (binario)"
       type:
         string: String
         bytes: Bytes
@@ -1563,6 +1584,7 @@ document:
         stream: Stream
         unknown: "?"
     render:
+      size_bytes: "%{size} B"
       delete_key:
         title: ¿Eliminar clave?
         message: '¿Eliminar "%{key}"? Esta acción no se puede deshacer.'
@@ -1598,6 +1620,13 @@ document:
         truncated: "Valor parcial — mostrando %{returned} de %{total}"
         truncated_unknown_total: "Valor parcial — mostrando %{returned}"
       decode:
+        choice:
+          auto: "Automático"
+          raw: "Raw"
+        preview:
+          image:
+            one: "%{count} byte (imagen: %{format})"
+            many: "%{count} bytes (imagen: %{format})"
         failed: no se pudo decodificar
         too_large: la salida decodificada es demasiado grande
         edit_locked: Cambia a Raw para editar
@@ -1849,6 +1878,9 @@ document:
         open: Abrir
         presign: Prefirmar
       body:
+        text_kind:
+          json: "JSON"
+          text: "Texto"
         decode_failed: "Detectado como %{encoding}, pero no se pudo decodificar: %{reason}"
         decode_too_large: "Detectado como %{encoding}, pero decodificarlo supera el límite de vista previa de %{limit}."
         decoded_not_utf8: "Los bytes decodificados no son UTF-8 válido."
@@ -2001,6 +2033,7 @@ document:
         and: AND
         or: OR
     group_by:
+      managed_select_notice: "Consulta agrupada — el SELECT se gestiona automáticamente"
       heading: Agrupar por columnas
       add_column: "+ Columna de agrupación"
       aggregates_heading: Agregaciones
@@ -2025,6 +2058,11 @@ document:
     mutation:
       preview_placeholder: "-- %{kind}: configure las asignaciones o el filtro para previsualizar el SQL"
     section:
+      joins: "JOINS"
+      group_by_aggregates: "GROUP BY / AGREGACIONES"
+      having: "HAVING"
+      limit_offset: "LIMIT & OFFSET"
+      set: "SET"
       columns: COLUMNAS
       execution: EJECUCIÓN
       filters: FILTROS
@@ -2319,7 +2357,7 @@ language:
 login:
   window_title: Flujo de conexión
   field:
-    start_url: URL de inicio
+    verification_url: URL de verificación
   action:
     open_browser: Abrir navegador
     copy_url: Copiar URL
@@ -2333,6 +2371,7 @@ login:
   body:
     sign_in_prompt: 'Inicia sesión con %{provider} para continuar conectando "%{profile}".'
     instructions: Abre la URL de inicio de sesión en tu navegador y completa la autenticación. DBFlux continuará automáticamente cuando el inicio de sesión finalice.
+    waiting: Esperando a que autorices en el navegador…
     elapsed: "El inicio de sesión puede tardar hasta 5 minutos. Transcurrido: %{seconds}s"
     browser_open_failed: "No se pudo abrir el navegador automáticamente. Abre la URL manualmente. (%{error}; fallo alternativo: %{fallback_error})"
   error:
@@ -2510,6 +2549,9 @@ modals:
     dont_save: No guardar
     cancel: Cancelar
 palette:
+  footer:
+    navigate: "navegar"
+    run: "ejecutar"
   search:
     placeholder: Buscar comandos, conexiones, tablas, scripts…
   empty: No hay coincidencias
@@ -2528,6 +2570,7 @@ palette:
     keyspace: Keyspace
     script: Script
   chart:
+    no_saved_charts: "No hay gráficos guardados para el perfil actual"
     browse_suffix: "[explorar]"
   import_dashboard:
     name: Importar dashboard desde JSON…
@@ -2648,6 +2691,10 @@ settings:
     storage:
       group: Almacenamiento
     theme:
+      option:
+        ayu_dark: "Ayu Oscuro"
+        ayu_mirage: "Ayu Mirage"
+        ayu_light: "Ayu Claro"
       label: Tema
     style:
       label: Estilo
@@ -2656,6 +2703,11 @@ settings:
       option:
         system: Sistema
       notice: Los cambios de idioma se aplican al reiniciar DBFlux.
+    editor:
+      group: "Editor"
+    vim_mode:
+      label: "Modo Vim en los editores de código"
+      hint: "Modos Normal e Insertar: h, j, k, l y Enter mueven el cursor, i inserta, Esc vuelve a Normal, x borra un carácter, u deshace. Se aplica a los editores abiertos al guardar."
     restore_session:
       label: Restaurar la sesión al iniciar
     reopen_connections:
@@ -2992,6 +3044,9 @@ settings:
       secret_store_failed: "No se pudo almacenar el secreto del perfil (el llavero del sistema operativo puede estar bloqueado o no disponible) y no persistirá tras reiniciar."
       write_config_failed: "No se pudo escribir el perfil en la configuración: %{error}"
   mcp:
+    badge:
+      active: "activo"
+      inactive: "inactivo"
     tool:
       list_connections:
         name: Listar conexiones
@@ -3322,6 +3377,12 @@ settings:
     discard_dialog:
       body: Tienes cambios sin guardar en el proxy. ¿Deseas descartarlos?
   audit:
+    log_level:
+      trace: "Traza"
+      debug: "Depuración"
+      info: "Información"
+      warn: "Advertencia"
+      error: "Error"
     placeholder_level: Nivel
     section_title: Auditoría
     section_description: Configura la captura y retención de eventos de auditoría globales
@@ -3349,7 +3410,7 @@ settings:
     action:
       save: Guardar
     status:
-      degraded: Auditoría degradada (requiere reiniciar)
+      degraded: La auditoría está en pausa porque no se pudo abrir su base de datos. Reinicia DBFlux.
       enabled: Auditoría habilitada
       disabled: Auditoría deshabilitada
     error:
@@ -3358,7 +3419,7 @@ settings:
       purge_interval_invalid: El intervalo de purga debe ser un número
       cannot_enable: La auditoría no se puede habilitar
       cannot_enable_body: "La auditoría no se puede habilitar: no se pudo abrir la base de datos de auditoría. Reinicia la aplicación. Si el problema persiste, revisa el espacio en disco y los permisos de archivo del directorio de datos de dbflux."
-      cannot_enable_copy: "La auditoría no se puede habilitar: La auditoría no se puede habilitar: no se pudo abrir la base de datos de auditoría. Reinicia la aplicación. Si el problema persiste, revisa el espacio en disco y los permisos de archivo del directorio de datos de dbflux."
+      cannot_enable_copy: "La auditoría no se puede habilitar: no se pudo abrir la base de datos de auditoría. Reinicia la aplicación. Si el problema persiste, revisa el espacio en disco y los permisos de archivo del directorio de datos de dbflux."
       save_failed: No se pudo guardar
       save_failed_copy: "No se pudo guardar: %{error}"
     toast:
@@ -3431,6 +3492,7 @@ sidebar:
     generate_query: Generar consulta
     drop_collection: Eliminar colección
     connect: Conectar
+    retry_connect: Reintentar
     disconnect: Desconectar
     edit: Editar
     duplicate: Duplicar
@@ -3454,7 +3516,6 @@ sidebar:
     schema_diff_unsupported: La comparación de esquemas solo está disponible para conexiones relacionales.
     new_dashboard: Nuevo dashboard...
     import_dashboard: Importar dashboard desde JSON...
-    new_saved_chart: Nuevo gráfico...
     rename_ellipsis: Renombrar...
     delete_ellipsis: Eliminar...
     copy_metric_id: Copiar ID de métrica
@@ -3599,6 +3660,7 @@ sidebar:
       profile_connecting: "Conectando a %{name}…"
       database_loading: "%{name} (cargando…)"
       error_retry: "Error: %{error} — clic para reintentar"
+      connect_failed: "Error de conexión: %{error}"
       remote_listing_count: "%{label} (%{count})"
       remote_dashboards_error_retry: "Error: %{error} — colapsa y expande para reintentar"
       used_by_objects:
@@ -3654,10 +3716,14 @@ ssh:
 sso_wizard:
   title: Asistente de AWS SSO
   step:
-    start: "Paso 1: URL de inicio"
-    account: "Paso 2: Cuenta"
-    role: "Paso 3: Rol"
-    confirm: "Paso 4: Confirmar"
+    start: URL de inicio
+    account: Cuenta
+    role: Rol
+    confirm: Confirmar
+  field:
+    profile_name: Nombre del perfil
+    start_url: URL de inicio de SSO
+    region: Región
   account:
     hint: Usa el ID de cuenta obtenido con el descubrimiento de cuentas de AWS SSO
     discovering: Descubriendo cuentas...

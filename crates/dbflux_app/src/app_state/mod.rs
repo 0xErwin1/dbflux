@@ -492,6 +492,22 @@ impl AppState {
             .finish_pending_operation(profile_id, database);
     }
 
+    // --- Connect failures ---
+
+    pub fn record_connect_failure(&mut self, profile_id: Uuid, message: impl Into<String>) {
+        self.facade
+            .connections
+            .record_connect_failure(profile_id, message);
+    }
+
+    pub fn clear_connect_failure(&mut self, profile_id: Uuid) {
+        self.facade.connections.clear_connect_failure(profile_id);
+    }
+
+    pub fn connect_failure(&self, profile_id: Uuid) -> Option<&str> {
+        self.facade.connections.connect_failure(profile_id)
+    }
+
     // --- Prepare/Apply ---
 
     pub fn prepare_connect_profile(
@@ -1110,6 +1126,7 @@ impl AppState {
 
     pub fn remove_profile(&mut self, idx: usize) -> Option<ConnectionProfile> {
         let removed = self.facade.remove_profile(idx)?;
+        self.facade.connections.clear_connect_failure(removed.id);
 
         self.record_config_event(
             EventOutcome::Success,
@@ -1138,6 +1155,7 @@ impl AppState {
     pub fn update_profile(&mut self, profile: ConnectionProfile) {
         let profile_name = profile.name.clone();
         let profile_id = profile.id.to_string();
+        self.facade.connections.clear_connect_failure(profile.id);
         self.facade.profiles.update(profile);
 
         self.record_config_event(
@@ -3403,6 +3421,30 @@ mod tests {
             .external_driver_diagnostic("missing.sock")
             .expect("app diagnostic");
         assert_eq!(diagnostic.summary, "Probe failed");
+    }
+
+    #[test]
+    fn editing_or_removing_a_profile_clears_its_connect_failure() {
+        let edited = ConnectionProfile::new("edited", DbConfig::default_postgres());
+        let removed = ConnectionProfile::new("removed", DbConfig::default_postgres());
+        let (edited_id, removed_id) = (edited.id, removed.id);
+
+        let mut state =
+            test_state_with_profiles(HashMap::new(), vec![edited.clone(), removed.clone()]);
+        state.record_connect_failure(edited_id, "connection refused");
+        state.record_connect_failure(removed_id, "timed out");
+
+        state.update_profile(edited);
+        assert_eq!(state.connect_failure(edited_id), None);
+        assert_eq!(state.connect_failure(removed_id), Some("timed out"));
+
+        let removed_index = state
+            .profiles()
+            .iter()
+            .position(|profile| profile.id == removed_id)
+            .expect("profile present");
+        state.remove_profile(removed_index);
+        assert_eq!(state.connect_failure(removed_id), None);
     }
 
     /// D.2.1 — With the influxdb feature enabled, the builtin driver registry must contain

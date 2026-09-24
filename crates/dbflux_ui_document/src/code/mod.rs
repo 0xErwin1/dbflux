@@ -69,11 +69,13 @@ mod focus;
 mod live_output;
 pub mod pane;
 mod render;
+mod vim;
 
 use code_actions::SqlCodeActionProvider;
 use completion::QueryCompletionProvider;
 use execution_session::ExecutionSessionBinding;
 use live_output::LiveOutputState;
+pub use vim::VimMode;
 
 /// A single result tab within the CodeDocument.
 ///
@@ -446,6 +448,9 @@ pub struct CodeDocument {
     /// Set when a save was started by the interrupted-close flow, so a write
     /// that lands also asks the workspace to close the tab.
     close_after_save: bool,
+
+    /// Opt-in modal editing state for the editor.
+    vim: vim::VimState,
 }
 
 struct PendingQueryResult {
@@ -940,6 +945,7 @@ impl CodeDocument {
             this.invalidate_execution_session_if_context_changed(cx);
             this.sync_context_dropdowns(cx);
             this.try_fetch_pending_routine_definition(cx);
+            this.sync_vim_setting(cx);
         });
 
         let refresh_policy = default_refresh;
@@ -1049,9 +1055,11 @@ impl CodeDocument {
             },
             pending: PendingActions::default(),
             close_after_save: false,
+            vim: vim::VimState::default(),
         };
 
         document.sync_context_dropdowns(cx);
+        document.sync_vim_setting(cx);
         document
     }
 

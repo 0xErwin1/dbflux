@@ -3894,4 +3894,169 @@ mod tab_close_request_tests {
             "a click on the backdrop must close the overlay"
         );
     }
+
+    fn toast_count(window: &mut VisualTestContext) -> usize {
+        window.update(|_, cx| {
+            cx.global::<dbflux_ui_base::toast::ToastGlobal>()
+                .host
+                .read(cx)
+                .toast_count()
+        })
+    }
+
+    fn last_toast_title(window: &mut VisualTestContext) -> Option<String> {
+        window.update(|_, cx| {
+            cx.global::<dbflux_ui_base::toast::ToastGlobal>()
+                .host
+                .read(cx)
+                .last_toast_title()
+        })
+    }
+
+    /// Opens a buckets table for a profile with no live connection, so its
+    /// refresh settles synchronously into the error state without any I/O.
+    /// Returns the document and a counter of its change notifications.
+    fn open_buckets_tab(
+        window: &mut VisualTestContext,
+        workspace: &Entity<Workspace>,
+        app_state: &Entity<AppStateEntity>,
+    ) -> (
+        Entity<crate::ui::document::BucketsTableDocument>,
+        Rc<Cell<usize>>,
+        gpui::Subscription,
+    ) {
+        let document = window.update(|window, cx| {
+            cx.new(|cx| {
+                crate::ui::document::BucketsTableDocument::new(
+                    uuid::Uuid::new_v4(),
+                    app_state.clone(),
+                    window,
+                    cx,
+                )
+            })
+        });
+
+        window.update(|_, cx| {
+            workspace.update(cx, |workspace, cx| {
+                let pane =
+                    crate::ui::document::BucketsTableDocument::into_pane(document.clone(), cx);
+                workspace.tab_manager.update(cx, |manager, cx| {
+                    manager.open(Tab::Pane(Box::new(pane)), cx);
+                });
+            });
+        });
+
+        let notifications = Rc::new(Cell::new(0));
+        let subscription = window.update(|_, cx| {
+            cx.observe(&document, {
+                let notifications = notifications.clone();
+                move |_, _| notifications.set(notifications.get() + 1)
+            })
+        });
+
+        (document, notifications, subscription)
+    }
+
+    #[gpui::test]
+    fn refresh_schema_refreshes_the_focused_document_that_handles_it(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let (_document, notifications, _subscription) =
+            open_buckets_tab(window, &workspace, &app_state);
+
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.set_focus(FocusTarget::Document, window, cx);
+            });
+        });
+        window.run_until_parked();
+
+        let toasts_before = toast_count(window);
+        notifications.set(0);
+
+        let handled = window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.dispatch(Command::RefreshSchema, window, cx)
+            })
+        });
+        window.run_until_parked();
+
+        assert!(handled);
+        assert!(
+            notifications.get() > 0,
+            "the buckets table must reload when it has document focus"
+        );
+        assert_eq!(
+            toast_count(window),
+            toasts_before,
+            "the connection-schema refresh must not run when the document handled the refresh"
+        );
+    }
+
+    #[gpui::test]
+    fn refresh_schema_falls_back_to_the_connection_schema_when_the_document_declines(
+        cx: &mut TestAppContext,
+    ) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        open_code_tab(window, &workspace, &app_state);
+
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.set_focus(FocusTarget::Document, window, cx);
+            });
+        });
+        window.run_until_parked();
+
+        let toasts_before = toast_count(window);
+
+        let handled = window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.dispatch(Command::RefreshSchema, window, cx)
+            })
+        });
+        window.run_until_parked();
+
+        assert!(handled);
+        assert_eq!(toast_count(window), toasts_before + 1);
+        assert_eq!(
+            last_toast_title(window),
+            Some(crate::ui::labels::connections_no_active_connection_message()),
+            "a query tab has no refresh, so the connection-schema refresh must run"
+        );
+    }
+
+    #[gpui::test]
+    fn refresh_schema_from_the_sidebar_reloads_only_the_connection_schema(cx: &mut TestAppContext) {
+        let (workspace, app_state, window) = new_workspace(cx);
+        let (_document, notifications, _subscription) =
+            open_buckets_tab(window, &workspace, &app_state);
+
+        window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.set_focus(FocusTarget::Sidebar, window, cx);
+            });
+        });
+        window.run_until_parked();
+
+        let toasts_before = toast_count(window);
+        notifications.set(0);
+
+        let handled = window.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.dispatch(Command::RefreshSchema, window, cx)
+            })
+        });
+        window.run_until_parked();
+
+        assert!(handled);
+        assert_eq!(
+            notifications.get(),
+            0,
+            "the active document must not refresh while the sidebar has focus"
+        );
+        assert_eq!(toast_count(window), toasts_before + 1);
+        assert_eq!(
+            last_toast_title(window),
+            Some(crate::ui::labels::connections_no_active_connection_message()),
+        );
+    }
 }

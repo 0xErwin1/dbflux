@@ -3,6 +3,11 @@
 //! highlight on the current one, and optional click-to-return navigation.
 //! Domain-free — callers supply their own phase enum's labels and completion
 //! state via [`RailItem`]; this module only renders.
+//!
+//! The same family also shares its modal size ([`WIZARD_MODAL_WIDTH`],
+//! [`WIZARD_MODAL_HEIGHT_FRACTION`]) and the running step's determinate
+//! progress bar ([`render_wizard_progress_bar`]), so the three wizards open at
+//! one size and report progress the same way.
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -11,6 +16,13 @@ use gpui_component::ActiveTheme;
 use crate::icons::AppIcon;
 use crate::primitives::{Icon, Text};
 use crate::tokens::Spacing;
+
+/// Modal width every data wizard opens at.
+pub const WIZARD_MODAL_WIDTH: Pixels = px(1000.0);
+
+/// Modal height every data wizard opens at, as a fraction of the window
+/// height, so the running step's per-table list has room on tall windows.
+pub const WIZARD_MODAL_HEIGHT_FRACTION: f32 = 0.8;
 
 /// One rail row's presentation state: a completed entry shows a checkmark and
 /// (when `on_select` is provided) is clickable for back-navigation; the
@@ -130,4 +142,50 @@ where
                 .hover(|style| style.bg(colors.hover_bg))
                 .on_click(move |_event, window, app| on_select(index, window, app))
         })
+}
+
+/// Fraction of rows done for the running step's progress bar, or `None` when
+/// the total is unknown or zero — the caller then shows only the row counter.
+pub fn wizard_progress_fraction(rows_done: u64, estimated_total: Option<u64>) -> Option<f32> {
+    match estimated_total {
+        Some(total) if total > 0 => Some((rows_done as f32 / total as f32).clamp(0.0, 1.0)),
+        _ => None,
+    }
+}
+
+/// Renders a full-width determinate progress bar filled to `fraction`
+/// (clamped to `0.0..=1.0`). Callers render it only when a total is known;
+/// without one they keep a text-only row counter.
+pub fn render_wizard_progress_bar(fraction: f32, cx: &App) -> impl IntoElement {
+    let theme = cx.theme();
+
+    div()
+        .w_full()
+        .h(px(6.0)) // guardrail-allow: progress-bar track height
+        .rounded_full()
+        .bg(theme.muted)
+        .child(
+            div()
+                .h_full()
+                .w(relative(fraction.clamp(0.0, 1.0)))
+                .rounded_full()
+                .bg(theme.primary),
+        )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::wizard_progress_fraction;
+
+    #[test]
+    fn progress_fraction_is_none_without_a_positive_total() {
+        assert_eq!(wizard_progress_fraction(10, None), None);
+        assert_eq!(wizard_progress_fraction(10, Some(0)), None);
+    }
+
+    #[test]
+    fn progress_fraction_divides_and_clamps_to_one() {
+        assert_eq!(wizard_progress_fraction(25, Some(100)), Some(0.25));
+        assert_eq!(wizard_progress_fraction(150, Some(100)), Some(1.0));
+    }
 }

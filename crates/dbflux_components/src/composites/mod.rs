@@ -43,4 +43,7 @@ pub use section_header::{
 };
 pub use split_toolbar_action::split_toolbar_action;
 pub use tab_strip::tab_strip;
-pub use wizard_rail::{RailItem, render_wizard_rail};
+pub use wizard_rail::{
+    RailItem, WIZARD_MODAL_HEIGHT_FRACTION, WIZARD_MODAL_WIDTH, render_wizard_progress_bar,
+    render_wizard_rail, wizard_progress_fraction,
+};
