@@ -181,8 +181,8 @@ mod tests {
 
     use gpui::{
         AccessibilityFrame, AppContext as _, Context, Focusable as _, FrameObserver, IntoElement,
-        ParentElement as _, Render, Role, Styled as _, TestAppContext, VisualTestContext, Window,
-        div,
+        Modifiers, ParentElement as _, Render, Role, Styled as _, TestAppContext,
+        VisualTestContext, Window, div,
     };
 
     use super::{Input, InputState};
@@ -311,6 +311,9 @@ mod tests {
         assert!(focused, "the input frame is focusable by its id");
         settle_frame(visual);
 
+        let has_handler = visual.update(|window, _| window.has_input_handler());
+        assert!(!has_handler, "no input handler is installed for the frame");
+
         let replaced = visual.update(|window, cx| window.replace_input_text("db.example", cx));
         assert!(
             !replaced,
@@ -354,5 +357,35 @@ mod tests {
         let applied =
             visual.update(|window, cx| window.set_observed_element_value("missing", "value", cx));
         assert!(!applied, "an unknown id has no SetValue listener");
+    }
+
+    #[gpui::test]
+    fn clicking_the_input_center_gives_its_editor_the_input_handler(cx: &mut TestAppContext) {
+        let (capture, view, visual) = open_field(true, cx);
+
+        let center = capture
+            .0
+            .lock()
+            .expect("frame capture lock")
+            .as_ref()
+            .and_then(|frame| {
+                frame
+                    .nodes()
+                    .find(|(_, node)| node.id() == "cm-field-host")
+                    .map(|(_, node)| node.bounds().center())
+            })
+            .expect("the input is found by the id it was given");
+
+        visual.simulate_click(center, Modifiers::none());
+        settle_frame(visual);
+
+        let inserted = visual.update(|window, cx| window.insert_input_text("db.example", cx));
+        assert!(inserted, "a click at the input center focuses its editor");
+
+        let state = visual.update(|_, cx| view.read(cx).state.clone());
+        assert_eq!(
+            visual.update(|_, cx| state.read(cx).value()).as_ref(),
+            "db.example"
+        );
     }
 }

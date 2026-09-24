@@ -2561,6 +2561,18 @@ impl Window {
         replaced
     }
 
+    /// Report whether the current frame installed an input handler for the focused element.
+    ///
+    /// Tells apart the two reasons [`Window::replace_input_text`] returns `false`: no
+    /// handler at all, or a handler that cannot provide its document range.
+    pub fn has_input_handler(&mut self) -> bool {
+        let Some(input_handler) = self.platform_window.take_input_handler() else {
+            return false;
+        };
+        self.platform_window.set_input_handler(input_handler);
+        true
+    }
+
     /// Close this window.
     pub fn remove_window(&mut self) {
         self.removed = true;

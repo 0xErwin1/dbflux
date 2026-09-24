@@ -89,6 +89,10 @@ dispatch of `Window::handle_a11y_action`, extracted into `dispatch_a11y_action_l
 returns whether a listener handled the action. The built-in fallbacks of `handle_a11y_action`
 (click, focus, blur) are unchanged and are not run by the new method.
 
+It also adds `Window::has_input_handler`, so the bridge can tell apart the two reasons
+`Window::replace_input_text` returns `false`: no input handler at all, or a handler that
+cannot provide its document range.
+
 ### Why vendor
 
 Depending on either fork would put `main` back on a personal git source for the whole
@@ -113,7 +117,7 @@ delta to this directory.
 - Patch 3: `subscription-drop-log.patch`, written for DBFlux against this directory with
   patches 1 and 2 applied — three files, 166 diff lines. It has no upstream counterpart.
 - Patch 4: `text-input-automation.patch`, written for DBFlux against this directory with
-  patches 1 to 3 applied — one file, 86 diff lines. It has no upstream counterpart.
+  patches 1 to 3 applied — one file, 105 diff lines. It has no upstream counterpart.
 - `[workspace]` is appended to `Cargo.toml` so Cargo does not expect this crate in the
   parent workspace's member list.
 

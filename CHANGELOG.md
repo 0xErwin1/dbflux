@@ -10,6 +10,11 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* UI automation: `set_text` and `set_value` now fill a text input addressed by
+  its element id, and `click_element` accepts text inputs and focuses them for
+  `type_text`. Previously both failed on every input, `set_text` with a
+  misleading document-range error, so filling a form needed coordinates.
+
 * Redis, Turso, and InfluxDB now refuse requested row limits (including zero)
   or statement timeouts before execution with `NotSupported`, rather than
   dispatching commands, SQL, HTTP, or instance-context queries without those
