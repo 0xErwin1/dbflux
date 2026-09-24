@@ -16,6 +16,8 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Changed
 
+* SQLite explicit row limits retain at most N rows of any single row-producing statement (including `PRAGMA`, `WITH`, `VALUES`, and `RETURNING`) and flag actual omissions, including at zero; the statement still runs to completion, so mutations finish and late errors propagate. Explicit timeouts, bounded multi-statement batches, and bounded instance requests are refused before execution; unbounded requests remain compatible. The row cap does not bound memory, engine work, or elapsed time.
+
 * ClickHouse and Redshift now refuse explicit query row limits (including zero) and statement timeouts before dispatch or preparation; unprotected queries retain existing behavior, including possible full-result buffering. ClickHouse HTTP timeout does not guarantee server cancellation, and the Redshift early-refusal regression uses PostgreSQL 16 protocol compatibility rather than a hosted Redshift cluster.
 
 ### Fixed
