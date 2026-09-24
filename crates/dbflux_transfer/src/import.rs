@@ -148,6 +148,10 @@ pub fn run_import(
         warnings.extend(report.warnings);
         tables[index].status = if matches!(plan.mapping_mode, TableMappingMode::Skip) {
             TableTransferStatus::Skipped
+        } else if was_cancelled {
+            TableTransferStatus::Cancelled {
+                rows: report.rows_transferred,
+            }
         } else {
             TableTransferStatus::Completed {
                 rows: report.rows_transferred,
@@ -1025,7 +1029,7 @@ mod tests {
         assert!(outcome.cancelled);
         assert_eq!(
             outcome.tables[0].status,
-            TableTransferStatus::Completed { rows: 1 },
+            TableTransferStatus::Cancelled { rows: 1 },
             "only the chunk in flight when the cancel arrived may be written"
         );
         assert_eq!(
@@ -1045,8 +1049,10 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// A cancel that lands between tables leaves the finished table intact
-    /// and never starts the next one.
+    /// A cancel that lands during a table's last chunk leaves every row of
+    /// that table written and never starts the next one. The pipeline stops
+    /// before it asks the source for end-of-data, so the table reports
+    /// `Cancelled` with all of its rows rather than `Completed`.
     #[test]
     fn cancel_after_a_table_finishes_never_starts_the_next_table() {
         let dir = temp_dir("cancel_between_tables");
@@ -1076,7 +1082,7 @@ mod tests {
         assert!(outcome.cancelled);
         assert_eq!(
             outcome.tables[0].status,
-            TableTransferStatus::Completed { rows: 2 }
+            TableTransferStatus::Cancelled { rows: 2 }
         );
         assert_eq!(outcome.tables[1].status, TableTransferStatus::NotStarted);
         assert!(

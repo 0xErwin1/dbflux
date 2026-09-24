@@ -266,6 +266,9 @@ jobs:
       - name: Run MySQL live integration tests
         run: cargo test -p dbflux_driver_mysql --locked --test live_integration -- --ignored
 
+      - name: Run MySQL query safety cancellation regression
+        run: cargo test -p dbflux_driver_mysql --locked --lib mysql_query_safety_refusal_preserves_existing_cancel_signal -- --ignored
+
       - name: Run MongoDB live integration tests
         run: cargo test -p dbflux_driver_mongodb --locked --test live_integration -- --ignored
 
@@ -295,6 +298,9 @@ jobs:
       # exhausting the runner with concurrent containers.
       - name: Run MSSQL live integration tests
         run: cargo test -p dbflux_driver_mssql --locked --test live_integration -- --ignored --test-threads=1
+
+      - name: Run MSSQL query safety collector regression
+        run: cargo test -p dbflux_driver_mssql --locked --lib mssql_query_safety_collector_consumes_budget_before_late_error -- --ignored --test-threads=1
 
       - name: Run MSSQL DDL integration tests
         run: cargo test -p dbflux_driver_mssql --locked --test ddl_integration -- --ignored --test-threads=1

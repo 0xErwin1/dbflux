@@ -14,6 +14,7 @@ use dbflux_core::{
 };
 use dbflux_driver_mysql::MysqlDriver;
 use dbflux_test_support::containers;
+use mysql::prelude::Queryable;
 use std::time::Duration;
 
 fn connect_mysql(uri: String) -> Result<(Box<dyn dbflux_core::Connection>, MysqlDriver), DbError> {
@@ -563,6 +564,433 @@ fn mysql_failed_statement_leaves_an_earlier_transaction_open() -> Result<(), DbE
             "ROLLBACK must discard the earlier insert, proving the transaction stayed open"
         );
 
+        Ok(())
+    })
+}
+
+fn assert_explicit_transaction_statement_opens_a_transaction(
+    connection: &dyn dbflux_core::Connection,
+    statement: &str,
+    table: &str,
+) -> Result<(), DbError> {
+    connection.execute(&QueryRequest::new(format!(
+        "CREATE TABLE {table} (id INT PRIMARY KEY)"
+    )))?;
+
+    connection.execute(&QueryRequest::new(statement))?;
+    connection.execute(&QueryRequest::new(format!(
+        "INSERT INTO {table} VALUES (1)"
+    )))?;
+    connection.execute(&QueryRequest::new("ROLLBACK"))?;
+
+    let rows = connection
+        .execute(&QueryRequest::new(format!("SELECT id FROM {table}")))?
+        .rows;
+    assert!(
+        rows.is_empty(),
+        "ROLLBACK must discard the insert, proving `{statement}` opened a transaction"
+    );
+
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mysql_start_transaction_statement_opens_a_transaction() -> Result<(), DbError> {
+    containers::with_mysql_url(|uri| {
+        let (connection, _) = connect_mysql(uri)?;
+        connection.set_active_database(Some("testdb"))?;
+
+        assert_explicit_transaction_statement_opens_a_transaction(
+            connection.as_ref(),
+            "START TRANSACTION",
+            "tx_start_transaction",
+        )
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mysql_begin_statement_opens_a_transaction() -> Result<(), DbError> {
+    containers::with_mysql_url(|uri| {
+        let (connection, _) = connect_mysql(uri)?;
+        connection.set_active_database(Some("testdb"))?;
+
+        assert_explicit_transaction_statement_opens_a_transaction(
+            connection.as_ref(),
+            "BEGIN",
+            "tx_begin",
+        )
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mysql_script_starting_with_start_transaction_rolls_back_and_commits() -> Result<(), DbError> {
+    containers::with_mysql_url(|uri| {
+        let (connection, _) = connect_mysql(uri)?;
+        connection.set_active_database(Some("testdb"))?;
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE tx_script (id INT PRIMARY KEY)",
+        ))?;
+
+        connection.execute(&QueryRequest::new(
+            "START TRANSACTION; INSERT INTO tx_script VALUES (1); ROLLBACK;",
+        ))?;
+        let rows = connection
+            .execute(&QueryRequest::new("SELECT id FROM tx_script"))?
+            .rows;
+        assert!(rows.is_empty(), "the rolled-back script must leave no row");
+
+        connection.execute(&QueryRequest::new(
+            "START TRANSACTION; INSERT INTO tx_script VALUES (2); COMMIT;",
+        ))?;
+        let rows = connection
+            .execute(&QueryRequest::new("SELECT id FROM tx_script"))?
+            .rows;
+        assert_eq!(rows, vec![vec![Value::Int(2)]]);
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mysql_bounded_script_starting_with_start_transaction_succeeds() -> Result<(), DbError> {
+    containers::with_mysql_url(|uri| {
+        let (connection, _) = connect_mysql(uri)?;
+        connection.set_active_database(Some("testdb"))?;
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE tx_bounded_script (id INT PRIMARY KEY)",
+        ))?;
+
+        let result = connection.execute(
+            &QueryRequest::new(
+                "START TRANSACTION; INSERT INTO tx_bounded_script VALUES (1), (2); \
+                 SELECT id FROM tx_bounded_script ORDER BY id; ROLLBACK;",
+            )
+            .with_limit(1),
+        )?;
+        assert_eq!(result.additional_results.len(), 3);
+        assert_eq!(result.additional_results[0].affected_rows, Some(2));
+        assert_eq!(result.additional_results[1].rows, vec![vec![Value::Int(1)]]);
+        assert!(result.additional_results[1].rows_truncated());
+
+        let rows = connection
+            .execute(&QueryRequest::new("SELECT id FROM tx_bounded_script"))?
+            .rows;
+        assert!(
+            rows.is_empty(),
+            "the bounded script's ROLLBACK must discard its rows"
+        );
+
+        connection.execute(&QueryRequest::new("BEGIN").with_limit(1))?;
+        connection.execute(&QueryRequest::new(
+            "INSERT INTO tx_bounded_script VALUES (3)",
+        ))?;
+        connection.execute(&QueryRequest::new("ROLLBACK"))?;
+        let rows = connection
+            .execute(&QueryRequest::new("SELECT id FROM tx_bounded_script"))?
+            .rows;
+        assert!(rows.is_empty(), "a bounded BEGIN must open a transaction");
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mysql_failed_script_rolls_back_the_transaction_start_transaction_opened() -> Result<(), DbError>
+{
+    containers::with_mysql_url(|uri| {
+        let (connection, _) = connect_mysql(uri)?;
+        connection.set_active_database(Some("testdb"))?;
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE tx_failed_start (id INT PRIMARY KEY)",
+        ))?;
+
+        let Err(error) = connection.execute(&QueryRequest::new(
+            "START TRANSACTION; \
+             INSERT INTO tx_failed_start VALUES (1); \
+             INSERT INTO tx_failed_start VALUES (1); \
+             COMMIT;",
+        )) else {
+            panic!("the duplicate key must fail the script");
+        };
+        assert_transaction_note(&error, TransactionStateNote::RolledBack);
+
+        let rows = connection
+            .execute(&QueryRequest::new("SELECT id FROM tx_failed_start"))?
+            .rows;
+        assert!(rows.is_empty(), "the partial insert must be rolled back");
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mysql_invalid_statement_still_returns_the_query_error() -> Result<(), DbError> {
+    containers::with_mysql_url(|uri| {
+        let (connection, _) = connect_mysql(uri)?;
+
+        for request in [
+            QueryRequest::new("SELEC 1"),
+            QueryRequest::new("SELEC 1").with_limit(1),
+        ] {
+            let Err(error) = connection.execute(&request) else {
+                panic!("an invalid statement must fail");
+            };
+            let DbError::QueryFailed(formatted) = &error else {
+                panic!("expected a query error, got {error:?}");
+            };
+            assert_eq!(
+                formatted.code.as_deref(),
+                Some("1064"),
+                "expected the server's syntax error, got {error:?}"
+            );
+        }
+
+        Ok(())
+    })
+}
+
+fn assert_no_truncation(result: &dbflux_core::QueryResult, expected_rows: usize) {
+    assert_eq!(result.rows.len(), expected_rows);
+    assert!(!result.rows_truncated());
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mysql_query_safety_limit_below_exact_and_over_retains_and_flags() -> Result<(), DbError> {
+    containers::with_mysql_url(|uri| {
+        let (connection, _) = connect_mysql(uri)?;
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE mysql_safety_limit (id INT PRIMARY KEY)",
+        ))?;
+        connection.execute(&QueryRequest::new(
+            "INSERT INTO mysql_safety_limit (id) VALUES (1), (2), (3), (4), (5)",
+        ))?;
+        let query = "SELECT id FROM mysql_safety_limit ORDER BY id";
+        assert_no_truncation(
+            &connection.execute(&QueryRequest::new(query).with_limit(8))?,
+            5,
+        );
+        assert_no_truncation(
+            &connection.execute(&QueryRequest::new(query).with_limit(5))?,
+            5,
+        );
+        let capped = connection.execute(&QueryRequest::new(query).with_limit(3))?;
+        assert_eq!(capped.rows.len(), 3);
+        assert_eq!(capped.rows[0][0], Value::Int(1));
+        assert_eq!(capped.rows[2][0], Value::Int(3));
+        assert!(capped.rows_truncated());
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mysql_query_safety_zero_limit_retains_nothing_only_when_rows_exist() -> Result<(), DbError> {
+    containers::with_mysql_url(|uri| {
+        let (connection, _) = connect_mysql(uri)?;
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE mysql_safety_zero (id INT PRIMARY KEY)",
+        ))?;
+        connection.execute(&QueryRequest::new(
+            "INSERT INTO mysql_safety_zero (id) VALUES (1), (2), (3)",
+        ))?;
+        let nonempty = connection
+            .execute(&QueryRequest::new("SELECT id FROM mysql_safety_zero").with_limit(0))?;
+        assert!(nonempty.rows.is_empty());
+        assert!(nonempty.rows_truncated());
+        let empty = connection.execute(
+            &QueryRequest::new("SELECT id FROM mysql_safety_zero WHERE id > 100").with_limit(0),
+        )?;
+        assert!(empty.rows.is_empty());
+        assert!(!empty.rows_truncated());
+        let insert = connection.execute(
+            &QueryRequest::new("INSERT INTO mysql_safety_zero (id) VALUES (4)").with_limit(0),
+        )?;
+        assert_eq!(insert.affected_rows, Some(1));
+        assert!(!insert.rows_truncated());
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mysql_query_safety_explicit_none_limit_keeps_uncapped_behavior() -> Result<(), DbError> {
+    containers::with_mysql_url(|uri| {
+        let (connection, _) = connect_mysql(uri)?;
+
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE mysql_safety_uncapped (id INT PRIMARY KEY)",
+        ))?;
+        connection.execute(&QueryRequest::new(
+            "INSERT INTO mysql_safety_uncapped (id) VALUES (1), (2), (3), (4), (5), (6), (7)",
+        ))?;
+
+        let mut request = QueryRequest::new("SELECT id FROM mysql_safety_uncapped");
+        request.limit = None;
+        let result = connection.execute(&request)?;
+        assert_no_truncation(&result, 7);
+
+        let batch = connection.execute(&QueryRequest::new(
+            "INSERT INTO mysql_safety_uncapped (id) VALUES (8); SELECT id FROM mysql_safety_uncapped",
+        ))?;
+        assert_eq!(batch.additional_results.len(), 1);
+        assert_no_truncation(&batch.additional_results[0], 8);
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mysql_query_safety_budget_spans_batch_and_later_mutations_execute() -> Result<(), DbError> {
+    containers::with_mysql_url(|uri| {
+        let (connection, _) = connect_mysql(uri)?;
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE mysql_safety_batch (n INT PRIMARY KEY)",
+        ))?;
+        let result = connection.execute(&QueryRequest::new(
+            "SELECT n FROM mysql_safety_batch; INSERT INTO mysql_safety_batch (n) VALUES (1), (2), (3), (4); SELECT n FROM mysql_safety_batch ORDER BY n; INSERT INTO mysql_safety_batch (n) VALUES (5); SELECT n FROM mysql_safety_batch ORDER BY n"
+        ).with_limit(2))?;
+        assert_no_truncation(&result, 0);
+        assert_eq!(result.additional_results.len(), 4);
+        assert_eq!(result.additional_results[0].affected_rows, Some(4));
+        assert_eq!(result.additional_results[1].rows.len(), 2);
+        assert!(result.additional_results[1].rows_truncated());
+        assert_eq!(result.additional_results[2].affected_rows, Some(1));
+        assert!(result.additional_results[3].rows.is_empty());
+        assert!(result.additional_results[3].rows_truncated());
+        let count = connection.execute(&QueryRequest::new(
+            "SELECT COUNT(*) FROM mysql_safety_batch",
+        ))?;
+        assert_eq!(count.rows[0][0], Value::Int(5));
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mysql_query_safety_call_server_result_sets_share_budget() -> Result<(), DbError> {
+    containers::with_mysql_url(|uri| {
+        let (connection, _) = connect_mysql(uri.clone())?;
+
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE mysql_safety_call (n INT PRIMARY KEY)",
+        ))?;
+        connection.execute(&QueryRequest::new(
+            "INSERT INTO mysql_safety_call (n) VALUES (1), (2), (3), (4), (5)",
+        ))?;
+
+        // The driver's statement splitter cannot create a multi-SELECT procedure;
+        // setup and cleanup use the text protocol, while CALL uses the request API.
+        let setup_opts = mysql::Opts::from_url(&uri)
+            .map_err(|e| DbError::query_failed(format!("setup options invalid: {e}")))?;
+        let mut setup = mysql::Conn::new(setup_opts)
+            .map_err(|e| DbError::query_failed(format!("setup connect failed: {e}")))?;
+        setup
+            .query_drop(
+                "CREATE PROCEDURE dbflux_safety_proc() \
+                 BEGIN \
+                 SELECT n FROM mysql_safety_call ORDER BY n; \
+                 SELECT n + 100 FROM mysql_safety_call ORDER BY n; \
+                 END",
+            )
+            .map_err(|e| DbError::query_failed(format!("procedure setup failed: {e}")))?;
+
+        let call =
+            connection.execute(&QueryRequest::new("CALL dbflux_safety_proc()").with_limit(3))?;
+        assert_eq!(call.rows.len(), 3);
+        assert_eq!(call.rows[2][0], Value::Int(3));
+        assert!(call.rows_truncated());
+
+        assert_eq!(call.additional_results.len(), 2);
+        let second_set = &call.additional_results[0];
+        assert!(second_set.rows.is_empty());
+        assert!(
+            second_set.rows_truncated(),
+            "the second set's rows were omitted"
+        );
+        let completion = &call.additional_results[1];
+        assert!(completion.columns.is_empty());
+        assert_eq!(completion.affected_rows, Some(0));
+        assert!(!completion.rows_truncated());
+
+        setup
+            .query_drop("DROP PROCEDURE dbflux_safety_proc")
+            .map_err(|e| DbError::query_failed(format!("procedure cleanup failed: {e}")))?;
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mysql_query_safety_late_stream_error_propagates_after_cap_reached() -> Result<(), DbError> {
+    containers::with_mysql_url(|uri| {
+        let (connection, _) = connect_mysql(uri)?;
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE mysql_safety_late (g INT PRIMARY KEY)",
+        ))?;
+        connection.execute(&QueryRequest::new(
+            "INSERT INTO mysql_safety_late (g) VALUES (1), (2), (3), (4), (5)",
+        ))?;
+        let result = connection.execute(&QueryRequest::new(
+            "SELECT g, CAST(CASE WHEN g = 3 THEN 'not-json' ELSE '[]' END AS JSON) AS j FROM mysql_safety_late ORDER BY g"
+        ).with_limit(2));
+        match result {
+            Err(DbError::QueryFailed(formatted)) => assert!(
+                formatted
+                    .to_display_string()
+                    .to_lowercase()
+                    .contains("json")
+            ),
+            Err(other) => panic!("unexpected error kind: {other:?}"),
+            Ok(result) => panic!("the cap must not hide the late stream error, got {result:?}"),
+        }
+        assert_eq!(
+            connection
+                .execute(&QueryRequest::new("SELECT 1"))?
+                .rows
+                .len(),
+            1
+        );
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mysql_query_safety_statement_timeout_rejected_before_execution() -> Result<(), DbError> {
+    containers::with_mysql_url(|uri| {
+        let (connection, _) = connect_mysql(uri)?;
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE mysql_safety_timeout (n INT PRIMARY KEY)",
+        ))?;
+        let mut request = QueryRequest::new("INSERT INTO mysql_safety_timeout (n) VALUES (1)");
+        request.statement_timeout = Some(Duration::from_secs(5));
+        match connection.execute(&request) {
+            Err(DbError::NotSupported(reason)) => {
+                assert!(reason.to_lowercase().contains("timeout"))
+            }
+            Err(other) => panic!("unexpected error kind: {other:?}"),
+            Ok(result) => panic!("requested deadline must be rejected, got {result:?}"),
+        }
+        let count = connection.execute(&QueryRequest::new(
+            "SELECT COUNT(*) FROM mysql_safety_timeout",
+        ))?;
+        assert_eq!(count.rows[0][0], Value::Int(0));
+        assert_eq!(
+            connection
+                .execute(&QueryRequest::new("SELECT 1"))?
+                .rows
+                .len(),
+            1
+        );
         Ok(())
     })
 }

@@ -9,6 +9,8 @@ use dbflux_core::{
 };
 use postgres::Client;
 
+use crate::driver::decoded_to_value;
+
 /// Postgres instance metrics and inspector catalog.
 ///
 /// Holds a shared reference to the connection's postgres client so it can
@@ -689,17 +691,37 @@ fn fetch_locks_snapshot(client: &mut Client) -> Result<QueryResult, DbError> {
 }
 
 fn pg_text_opt(row: &postgres::Row, idx: usize) -> Value {
-    row.try_get::<_, Option<String>>(idx)
-        .map(|opt| opt.map(Value::Text).unwrap_or(Value::Null))
-        .unwrap_or(Value::Null)
+    inspector_cell(row, idx, row.try_get::<_, Option<String>>(idx), Value::Text)
 }
 
 fn pg_f64_opt(row: &postgres::Row, idx: usize) -> Value {
-    row.try_get::<_, Option<f64>>(idx)
-        .ok()
-        .flatten()
-        .map(Value::Float)
-        .unwrap_or(Value::Null)
+    inspector_cell(row, idx, row.try_get::<_, Option<f64>>(idx), Value::Float)
+}
+
+/// Maps one inspector snapshot cell to a value.
+///
+/// A decode failure is logged with the column and its type and shown as
+/// `Unsupported` instead of `Null`. It does not fail the snapshot, because the
+/// other cells of the row, and the other rows, remain valid.
+fn inspector_cell<T>(
+    row: &postgres::Row,
+    idx: usize,
+    decoded: Result<Option<T>, postgres::Error>,
+    map: impl FnOnce(T) -> Value,
+) -> Value {
+    let (column_name, type_name) = row
+        .columns()
+        .get(idx)
+        .map(|column| (column.name(), column.type_().name()))
+        .unwrap_or(("<unknown>", "unknown"));
+
+    if let Err(error) = &decoded {
+        log::warn!(
+            "PostgreSQL inspector column {column_name} ({type_name}) could not be decoded: {error}"
+        );
+    }
+
+    decoded_to_value(type_name, decoded, map)
 }
 
 /// Dispatches an `InstanceMetricQuery` synchronously using an already-locked client.

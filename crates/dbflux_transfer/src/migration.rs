@@ -186,6 +186,10 @@ pub fn run_migration(
             warnings.extend(report.warnings);
             migrated[index].status = if matches!(plan.mapping_mode, TableMappingMode::Skip) {
                 TableTransferStatus::Skipped
+            } else if was_cancelled {
+                TableTransferStatus::Cancelled {
+                    rows: report.rows_transferred,
+                }
             } else {
                 TableTransferStatus::Completed {
                     rows: report.rows_transferred,
@@ -1228,7 +1232,8 @@ mod tests {
         assert_eq!(run.tables.len(), 2, "every planned table must be itemized");
         assert_eq!(
             run.tables[0].status,
-            TableTransferStatus::Completed { rows: 1 }
+            TableTransferStatus::Cancelled { rows: 1 },
+            "the table in flight when the cancel arrived must report the rows it kept"
         );
         assert_eq!(
             run.tables[1].status,

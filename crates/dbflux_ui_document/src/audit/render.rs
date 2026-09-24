@@ -39,18 +39,21 @@ impl AuditDocument {
             .child(Text::caption("NULL").muted_foreground())
     }
 
-    pub(super) fn short_category_label(category: Option<&str>) -> &'static str {
-        match category {
-            Some("config") => "CONFIG",
-            Some("connection") => "CONN",
-            Some("query") => "QUERY",
-            Some("hook") => "HOOK",
-            Some("script") => "SCRIPT",
-            Some("system") => "SYS",
-            Some("mcp") => "MCP",
-            Some("governance") => "GOV",
-            _ => "NULL",
-        }
+    /// Category chip text for an audit row. A missing or unrecognized
+    /// category keeps the table's `NULL` placeholder.
+    pub(super) fn short_category_label(category: Option<&str>) -> String {
+        category
+            .and_then(dbflux_core::EventCategory::from_str_repr)
+            .map(crate::labels::audit_category_chip_label)
+            .unwrap_or_else(|| "NULL".to_string())
+    }
+
+    /// Level chip text for an audit row. An unrecognized level is shown as
+    /// its stored value in uppercase, as before translation.
+    pub(super) fn short_level_label(level: &str) -> String {
+        dbflux_core::EventSeverity::from_str_repr(level)
+            .map(crate::labels::audit_level_chip_label)
+            .unwrap_or_else(|| level.to_uppercase())
     }
 
     /// Foreground color for a level chip, tinted via `BannerColors`.
@@ -711,7 +714,7 @@ impl AuditDocument {
                                 .bg(Self::level_bg_color(Some(l), &banners, &theme))
                                 .flex_shrink_0()
                                 .child(
-                                    Text::label_sm(l.to_uppercase())
+                                    Text::label_sm(Self::short_level_label(l))
                                         .font_size(FontSizes::XS)
                                         .color(Self::level_color(Some(l), &banners, &theme)),
                                 )
@@ -733,7 +736,7 @@ impl AuditDocument {
                             .bg(neutral_bg)
                             .flex_shrink_0()
                             .child(
-                                Text::label_sm(category.to_string())
+                                Text::label_sm(category)
                                     .font_size(FontSizes::XS)
                                     .color(theme.muted_foreground),
                             );

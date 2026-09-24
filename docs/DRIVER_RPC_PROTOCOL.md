@@ -90,6 +90,7 @@ DriverRequestBody::Hello(DriverHelloRequest {
         ProtocolVersion::new(1, 2),
         ProtocolVersion::new(1, 3),
         ProtocolVersion::new(1, 4),
+        ProtocolVersion::new(1, 5),
     ],
     requested_capabilities: vec![
         DriverCapability::Cancellation,
@@ -172,6 +173,12 @@ Both fields are plain, `#[serde(default)]` struct fields on existing request/res
 `SchemaColumns { database, schema }` fetches the columns of every relation in a schema in a single call and answers `SchemaColumns { columns: Vec<SchemaColumnInfo> }`, where each entry carries its `table_name` next to the usual `ColumnInfo`. The host dispatches the request to the connection's `schema_columns` seam, exactly like `SchemaIndexes` and `SchemaForeignKeys`.
 
 Unlike the v1.3 fields above, this operation is not additive on the wire: frames are encoded with postcard, which tags enum variants with a varint discriminant index, never a name. `SchemaColumns` is therefore appended after the last v1.3 variant of both the request and the response enum; inserting it mid-enum would shift every later variant's index, so a peer that negotiated v1.3 would decode the shifted variants as the wrong ones and leave the rest of the frame undecoded, desynchronising the stream. The client also gates locally: `IpcConnection::schema_columns` inspects the version selected during `Hello` and returns `DbError::NotSupported` without sending anything when the negotiated minor is below 1.4, so an older host never receives the new variant at all. Consumers treat that error the same as the trait's own `NotSupported` default and fall back to per-table `table_details` loads.
+
+### Key count (v1.5+)
+
+`KvKeyCount { keyspace }` asks for the number of keys in a keyspace (`None` means the session's current one) and answers `KvKeyCountResult { count }`. The host dispatches the request to the connection's `KeyValueApi::key_count` seam; a driver that does not implement it answers with the trait's `NotSupported` default, which reaches the client as `UnsupportedMethod`.
+
+Both variants are appended after the last v1.4 variant of their enum, for the wire-index reason described above. The client gates locally in the same way: `IpcConnection::key_count` returns `DbError::NotSupported` without sending anything when the negotiated minor is below 1.5. The key browser treats that error as "no total" and shows only the page count.
 
 ## Auth-provider RPC contract
 
