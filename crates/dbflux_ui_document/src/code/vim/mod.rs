@@ -63,6 +63,13 @@ impl CodeDocument {
         cx.notify();
     }
 
+    /// Follows the persisted Vim mode setting. A no-op while it is unchanged, so
+    /// unrelated app-state events keep the document's current mode.
+    pub(super) fn sync_vim_setting(&mut self, cx: &mut Context<Self>) {
+        let enabled = self.app_state.read(cx).general_settings().vim_mode;
+        self.set_vim_enabled(enabled, cx);
+    }
+
     /// The current Vim mode, or `None` when Vim mode is disabled.
     pub fn vim_mode(&self) -> Option<VimMode> {
         self.vim.enabled.then_some(self.vim.mode)

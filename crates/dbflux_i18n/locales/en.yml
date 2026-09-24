@@ -767,6 +767,9 @@ document:
       query_history: Query history
       explain_query: Explain query
       open_in_chart: Open current query in a chart document
+    vim:
+      normal: "NORMAL"
+      insert: "INSERT"
     output:
       running: "Running..."
       stopped: Stopped
@@ -2656,6 +2659,11 @@ settings:
       option:
         system: System
       notice: Language changes apply after restarting DBFlux.
+    editor:
+      group: "Editor"
+    vim_mode:
+      label: "Vim mode in code editors"
+      hint: "Normal and Insert modes: h, j, k, l and Enter move, i inserts, Esc returns to Normal, x deletes a character, u undoes. Applies to open editors when saved."
     restore_session:
       label: Restore session on startup
     reopen_connections:

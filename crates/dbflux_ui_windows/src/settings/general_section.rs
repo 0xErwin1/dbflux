@@ -13,6 +13,7 @@ pub(super) enum GeneralFormRow {
     Theme,
     Style,
     Language,
+    VimMode,
     RestoreSession,
     ReopenConnections,
     DefaultFocus,

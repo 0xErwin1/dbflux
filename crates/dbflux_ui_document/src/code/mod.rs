@@ -945,6 +945,7 @@ impl CodeDocument {
             this.invalidate_execution_session_if_context_changed(cx);
             this.sync_context_dropdowns(cx);
             this.try_fetch_pending_routine_definition(cx);
+            this.sync_vim_setting(cx);
         });
 
         let refresh_policy = default_refresh;
@@ -1058,6 +1059,7 @@ impl CodeDocument {
         };
 
         document.sync_context_dropdowns(cx);
+        document.sync_vim_setting(cx);
         document
     }
 

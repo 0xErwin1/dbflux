@@ -4,6 +4,7 @@ use dbflux_components::controls::Dropdown;
 use dbflux_components::controls::{GpuiInput as Input, InputState};
 use dbflux_components::tokens::Radii;
 use dbflux_components::typography::{Body, FieldLabel, SubSectionLabel};
+use dbflux_ui_base::AppStateChanged;
 use dbflux_ui_base::keymap::key_chord_from_gpui;
 use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error};
@@ -32,6 +33,7 @@ impl GeneralSection {
             || self.gen_settings.confirm_dangerous_queries != saved.confirm_dangerous_queries
             || self.gen_settings.dangerous_requires_where != saved.dangerous_requires_where
             || self.gen_settings.dangerous_requires_preview != saved.dangerous_requires_preview
+            || self.gen_settings.vim_mode != saved.vim_mode
         {
             return true;
         }
@@ -71,6 +73,7 @@ impl GeneralSection {
             GeneralFormRow::Theme,
             GeneralFormRow::Style,
             GeneralFormRow::Language,
+            GeneralFormRow::VimMode,
             GeneralFormRow::RestoreSession,
             GeneralFormRow::ReopenConnections,
             GeneralFormRow::DefaultFocus,
@@ -166,6 +169,10 @@ impl GeneralSection {
             Some(GeneralFormRow::Language) => {
                 self.dropdown_language
                     .update(cx, |dropdown, cx| dropdown.toggle_open(cx));
+                cx.notify();
+            }
+            Some(GeneralFormRow::VimMode) => {
+                self.gen_settings.vim_mode = !self.gen_settings.vim_mode;
                 cx.notify();
             }
             Some(GeneralFormRow::RestoreSession) => {
@@ -522,8 +529,10 @@ impl GeneralSection {
             return;
         }
 
-        self.app_state.update(cx, |state, _cx| {
+        // Open code editors pick up settings such as Vim mode from this event.
+        self.app_state.update(cx, |state, cx| {
             state.update_general_settings(self.gen_settings.clone());
+            cx.emit(AppStateChanged);
         });
 
         // Update the density global so cx-based accessors reflect the new style immediately.
@@ -594,6 +603,23 @@ impl GeneralSection {
                 ))
                 .child(div().px_2().child(
                     Body::new(dbflux_i18n::t!("settings.general.language.notice")).color(muted_fg),
+                ))
+                .child(self.render_gen_group_header(
+                    dbflux_i18n::t!("settings.general.editor.group"),
+                    border,
+                    muted_fg,
+                ))
+                .child(self.render_gen_checkbox(
+                    "vim-mode",
+                    dbflux_i18n::t!("settings.general.vim_mode.label"),
+                    self.gen_settings.vim_mode,
+                    is_at(GeneralFormRow::VimMode),
+                    GeneralFormRow::VimMode,
+                    |this, value, _cx| this.gen_settings.vim_mode = value,
+                    cx,
+                ))
+                .child(div().px_2().child(
+                    Body::new(dbflux_i18n::t!("settings.general.vim_mode.hint")).color(muted_fg),
                 ))
                 .child(self.render_gen_group_header(
                     dbflux_i18n::t!("settings.general.startup.group"),

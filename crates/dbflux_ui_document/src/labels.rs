@@ -549,6 +549,14 @@ pub(crate) fn live_output_truncated_label(limit: usize) -> String {
 ///
 /// Uses the singular catalog bucket only for exactly one result tab; every
 /// other count, including zero, uses the plural bucket.
+/// Mode indicator shown under the code editor while Vim mode is enabled.
+pub(crate) fn vim_mode_label(mode: crate::code::VimMode) -> String {
+    match mode {
+        crate::code::VimMode::Normal => dbflux_i18n::t!("document.code.vim.normal"),
+        crate::code::VimMode::Insert => dbflux_i18n::t!("document.code.vim.insert"),
+    }
+}
+
 pub(crate) fn result_tab_count_label(count: usize) -> String {
     if count == 1 {
         dbflux_i18n::t!("document.code.result.count.one", count = count)

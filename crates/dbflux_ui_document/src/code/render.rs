@@ -319,10 +319,29 @@ impl CodeDocument {
                             .w_full()
                             .h_full(),
                     ),
-                ),
+                )
+                .when_some(self.vim_mode(), |el, mode| {
+                    el.child(self.render_vim_mode_indicator(mode, cx))
+                }),
             cx,
         )
         .size_full()
+    }
+
+    fn render_vim_mode_indicator(&self, mode: VimMode, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+
+        div()
+            .id("vim-mode-indicator")
+            .flex()
+            .flex_none()
+            .items_center()
+            .h(Heights::ROW_COMPACT)
+            .px(Spacing::SM)
+            .border_t_1()
+            .border_color(theme.border)
+            .bg(theme.tab_bar)
+            .child(Text::caption(crate::labels::vim_mode_label(mode)))
     }
 
     fn render_results(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {

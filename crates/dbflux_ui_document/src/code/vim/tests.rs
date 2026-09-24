@@ -14,9 +14,9 @@ use dbflux_components::controls::{GpuiInput, InputState};
 use dbflux_components::theme;
 use dbflux_core::QueryLanguage;
 use dbflux_storage::bootstrap::StorageRuntime;
-use dbflux_ui_base::AppStateEntity;
 use dbflux_ui_base::keymap::{default_keymap, key_chord_from_gpui};
 use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
+use dbflux_ui_base::{AppStateChanged, AppStateEntity};
 use gpui::{
     AppContext as _, ClipboardItem, Context, Entity, EntityInputHandler, Focusable as _,
     InteractiveElement as _, IntoElement, KeyBinding, KeyDownEvent, ParentElement as _, Render,
@@ -31,6 +31,8 @@ actions!(vim_mode_test, [HarnessRunQuery]);
 
 struct Harness {
     document: Entity<CodeDocument>,
+    /// A second document, standing in for another open tab.
+    second: Option<Entity<CodeDocument>>,
     /// An ordinary input outside the editor, to prove Vim mode stays scoped.
     other_input: Entity<InputState>,
     commands: Vec<Command>,
@@ -53,6 +55,7 @@ impl Render for Harness {
                 }
             }))
             .child(self.document.clone())
+            .children(self.second.clone())
             .child(GpuiInput::new(&self.other_input))
     }
 }
@@ -76,6 +79,7 @@ fn init_runtime(cx: &mut TestAppContext) {
 type FixtureSlot = Rc<RefCell<Option<(Entity<CodeDocument>, Entity<Harness>)>>>;
 
 struct Fixture<'a> {
+    app_state: Entity<AppStateEntity>,
     document: Entity<CodeDocument>,
     harness: Entity<Harness>,
     window: &'a mut VisualTestContext,
@@ -143,12 +147,107 @@ impl Fixture<'_> {
         });
     }
 
+    /// Saves the Vim mode setting the way Settings > General does: the new
+    /// settings, then the app-state event open editors listen to.
     fn set_vim(&mut self, enabled: bool) {
-        let document = self.document.clone();
+        let app_state = self.app_state.clone();
         self.window.update(|_, cx| {
-            document.update(cx, |document, cx| document.set_vim_enabled(enabled, cx));
+            app_state.update(cx, |state, cx| {
+                let mut settings = state.general_settings().clone();
+                settings.vim_mode = enabled;
+                state.update_general_settings(settings);
+                cx.emit(AppStateChanged);
+            });
         });
         self.window.run_until_parked();
+    }
+
+    fn emit_unrelated_app_state_change(&mut self) {
+        let app_state = self.app_state.clone();
+        self.window
+            .update(|_, cx| app_state.update(cx, |_, cx| cx.emit(AppStateChanged)));
+        self.window.run_until_parked();
+    }
+
+    fn focus_document(&mut self, document: &Entity<CodeDocument>) {
+        let document = document.clone();
+        self.window.update(|window, cx| {
+            document.update(cx, |document, cx| document.focus(window, cx));
+        });
+        self.window.run_until_parked();
+    }
+
+    fn focus_other_input(&mut self) {
+        let harness = self.harness.clone();
+        self.window.update(|window, cx| {
+            let other_input = harness.read(cx).other_input.clone();
+            other_input.update(cx, |state, cx| state.focus(window, cx));
+        });
+        self.window.run_until_parked();
+    }
+
+    fn other_input_text(&mut self) -> String {
+        let harness = self.harness.clone();
+        self.window
+            .update(|_, cx| harness.read(cx).other_input.read(cx).value().to_string())
+    }
+
+    /// Opens a second document next to the first, as another tab would be.
+    fn open_second_document(&mut self, content: &str) -> Entity<CodeDocument> {
+        let app_state = self.app_state.clone();
+        let harness = self.harness.clone();
+        let content = content.to_string();
+
+        let document = self.window.update(|window, cx| {
+            let document = cx.new(|cx| {
+                let mut document = CodeDocument::new_with_language(
+                    app_state,
+                    None,
+                    QueryLanguage::Lua,
+                    window,
+                    cx,
+                );
+                document.set_content(&content, window, cx);
+                document
+            });
+            harness.update(cx, |harness, cx| {
+                harness.second = Some(document.clone());
+                cx.notify();
+            });
+            document
+        });
+        self.window.run_until_parked();
+
+        document
+    }
+
+    fn close_second_document(&mut self) {
+        let harness = self.harness.clone();
+        self.window.update(|_, cx| {
+            harness.update(cx, |harness, cx| {
+                harness.second = None;
+                cx.notify();
+            });
+        });
+        self.window.run_until_parked();
+    }
+
+    fn text_of(&mut self, document: &Entity<CodeDocument>) -> String {
+        let document = document.clone();
+        self.window.update(|_, cx| {
+            document
+                .read(cx)
+                .editor
+                .input_state
+                .read(cx)
+                .value()
+                .to_string()
+        })
+    }
+
+    fn mode_of(&mut self, document: &Entity<CodeDocument>) -> Option<VimMode> {
+        let document = document.clone();
+        self.window.update(|_, cx| document.read(cx).vim_mode())
     }
 
     fn keys(&mut self, keystrokes: &str) {
@@ -205,6 +304,14 @@ fn open_editor_with<'a>(cx: &'a mut TestAppContext, setup: EditorSetup<'_>) -> F
         })
     });
 
+    cx.update(|cx| {
+        app_state.update(cx, |state, _cx| {
+            let mut settings = state.general_settings().clone();
+            settings.vim_mode = setup.vim_enabled;
+            state.update_general_settings(settings);
+        });
+    });
+
     let slot: FixtureSlot = Rc::new(RefCell::new(None));
     let slot_writer = slot.clone();
     let content = setup.content.to_string();
@@ -231,6 +338,7 @@ fn open_editor_with<'a>(cx: &'a mut TestAppContext, setup: EditorSetup<'_>) -> F
 
         let harness = cx.new(|_cx| Harness {
             document: document.clone(),
+            second: None,
             other_input,
             commands: Vec::new(),
             run_query_actions: 0,
@@ -243,14 +351,12 @@ fn open_editor_with<'a>(cx: &'a mut TestAppContext, setup: EditorSetup<'_>) -> F
     let (document, harness) = slot.borrow().clone().expect("editor fixture");
 
     window.update(|window, cx| {
-        document.update(cx, |document, cx| {
-            document.set_vim_enabled(setup.vim_enabled, cx);
-            document.focus(window, cx);
-        });
+        document.update(cx, |document, cx| document.focus(window, cx));
     });
     window.run_until_parked();
 
     Fixture {
+        app_state,
         document,
         harness,
         window,
@@ -744,5 +850,172 @@ fn programmatic_edits_still_apply_in_normal_mode(cx: &mut TestAppContext) {
         "formatted",
         "a whole-buffer replacement applies"
     );
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+}
+
+#[gpui::test]
+fn vim_mode_is_off_unless_the_setting_enables_it(
+    default_cx: &mut TestAppContext,
+    enabled_cx: &mut TestAppContext,
+) {
+    let mut editor = open_editor(default_cx, "", false);
+    assert_eq!(editor.mode(), None);
+
+    let mut editor = open_editor(enabled_cx, "", true);
+    assert_eq!(
+        editor.mode(),
+        Some(VimMode::Normal),
+        "a document opens in Normal mode"
+    );
+}
+
+#[gpui::test]
+fn changing_the_setting_applies_to_open_editors(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "", false);
+
+    editor.type_text("a");
+    assert_eq!(editor.text(), "a");
+
+    editor.set_vim(true);
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+    editor.type_text("b");
+    assert_eq!(
+        editor.text(),
+        "a",
+        "turning Vim mode on starts in Normal mode"
+    );
+
+    editor.keys("i");
+    assert_eq!(editor.mode(), Some(VimMode::Insert));
+
+    editor.set_vim(false);
+    assert_eq!(editor.mode(), None);
+    editor.keys("escape");
+    assert_eq!(
+        editor.commands(),
+        vec![Command::Cancel],
+        "with Vim mode off, Esc reaches the workspace again"
+    );
+    editor.focus_document(&editor.document.clone());
+    editor.type_text("c");
+    assert_eq!(
+        editor.text(),
+        "ca",
+        "turning Vim mode off drops the lock; enabling had moved the cursor onto the `a`"
+    );
+
+    editor.set_vim(true);
+    assert_eq!(
+        editor.mode(),
+        Some(VimMode::Normal),
+        "turning it back on starts in Normal mode again"
+    );
+}
+
+#[gpui::test]
+fn unrelated_app_state_changes_keep_the_current_mode(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "", true);
+    editor.keys("i");
+
+    editor.emit_unrelated_app_state_change();
+
+    assert_eq!(editor.mode(), Some(VimMode::Insert));
+}
+
+#[gpui::test]
+fn each_document_keeps_its_own_mode_across_focus_changes(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "first", true);
+    let first = editor.document.clone();
+    let second = editor.open_second_document("second");
+
+    editor.keys("i");
+    assert_eq!(editor.mode_of(&first), Some(VimMode::Insert));
+
+    editor.focus_document(&second);
+    assert_eq!(editor.mode_of(&second), Some(VimMode::Normal));
+    editor.keys("x");
+    editor.type_text("zz");
+    assert_eq!(editor.text_of(&second), "econd");
+
+    editor.focus_other_input();
+    editor.type_text("q");
+    assert_eq!(editor.other_input_text(), "q");
+
+    editor.focus_document(&first);
+    assert_eq!(
+        editor.mode_of(&first),
+        Some(VimMode::Insert),
+        "switching away and back keeps the mode"
+    );
+    editor.type_text("y");
+    assert_eq!(editor.text_of(&first), "yfirst");
+    assert_eq!(editor.text_of(&second), "econd");
+    assert_eq!(editor.mode_of(&second), Some(VimMode::Normal));
+}
+
+#[gpui::test]
+fn closing_a_document_leaves_nothing_behind(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "first", true);
+    let second = editor.open_second_document("second");
+    editor.focus_document(&second);
+    editor.keys("l j i escape x u");
+    let released = second.downgrade();
+    drop(second);
+
+    editor.close_second_document();
+    // Let the document's own edit debounces (auto-save, diagnostics) run out.
+    editor
+        .window
+        .executor()
+        .advance_clock(std::time::Duration::from_secs(60));
+    editor.window.run_until_parked();
+
+    assert!(
+        released.upgrade().is_none(),
+        "no Vim callback keeps a closed document alive"
+    );
+
+    editor.focus_other_input();
+    editor.type_text("hjkl");
+    assert_eq!(editor.other_input_text(), "hjkl");
+}
+
+#[gpui::test]
+fn another_window_is_unaffected_by_a_normal_mode_editor(cx: &mut TestAppContext) {
+    struct PlainInput {
+        input: Entity<InputState>,
+    }
+
+    impl Render for PlainInput {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child(GpuiInput::new(&self.input))
+        }
+    }
+
+    let mut editor = open_editor(cx, "abc", true);
+
+    let slot: Rc<RefCell<Option<Entity<InputState>>>> = Rc::new(RefCell::new(None));
+    let slot_writer = slot.clone();
+    let other_window = editor.window.add_window(|window, cx| {
+        let input = cx.new(|cx| InputState::new(window, cx));
+        slot_writer.replace(Some(input.clone()));
+        let view = cx.new(|_cx| PlainInput { input });
+        Root::new(view, window, cx)
+    });
+    let input = slot.borrow().clone().expect("plain input");
+
+    other_window
+        .update(&mut **editor.window, |_, window, cx| {
+            input.update(cx, |state, cx| state.focus(window, cx));
+        })
+        .expect("focus the other window's input");
+
+    TestAppContext::simulate_input(&mut **editor.window, other_window.into(), "hjklxu");
+
+    let value = other_window
+        .read_with(&**editor.window, |_, cx| input.read(cx).value().to_string())
+        .expect("read the other window's input");
+    assert_eq!(value, "hjklxu");
+    assert_eq!(editor.text(), "abc");
     assert_eq!(editor.mode(), Some(VimMode::Normal));
 }
