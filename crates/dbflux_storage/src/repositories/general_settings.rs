@@ -39,7 +39,7 @@ impl GeneralSettingsRepository {
                        dangerous_requires_where, dangerous_requires_preview,
                        style, schema_snapshot_retention,
                        object_preview_size_limit_mib, language,
-                       key_value_size_limit_mib, updated_at
+                       key_value_size_limit_mib, editor_row_limit, updated_at
                 FROM cfg_general_settings WHERE id = 1
                 "#,
             )
@@ -70,7 +70,8 @@ impl GeneralSettingsRepository {
                 object_preview_size_limit_mib: row.get(17)?,
                 language: row.get(18)?,
                 key_value_size_limit_mib: row.get(19)?,
-                updated_at: row.get(20)?,
+                editor_row_limit: row.get(20)?,
+                updated_at: row.get(21)?,
             })
         });
 
@@ -98,8 +99,8 @@ impl GeneralSettingsRepository {
                     dangerous_requires_where, dangerous_requires_preview,
                     style, schema_snapshot_retention,
                     object_preview_size_limit_mib, language,
-                    key_value_size_limit_mib, updated_at
-                ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, datetime('now'))
+                    key_value_size_limit_mib, editor_row_limit, updated_at
+                ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, datetime('now'))
                 ON CONFLICT(id) DO UPDATE SET
                     theme = excluded.theme,
                     restore_session_on_startup = excluded.restore_session_on_startup,
@@ -120,6 +121,7 @@ impl GeneralSettingsRepository {
                     object_preview_size_limit_mib = excluded.object_preview_size_limit_mib,
                     language = excluded.language,
                     key_value_size_limit_mib = excluded.key_value_size_limit_mib,
+                    editor_row_limit = excluded.editor_row_limit,
                     updated_at = datetime('now')
                 "#,
                 params![
@@ -142,6 +144,7 @@ impl GeneralSettingsRepository {
                     settings.object_preview_size_limit_mib,
                     settings.language,
                     settings.key_value_size_limit_mib,
+                    settings.editor_row_limit,
                 ],
             )
             .map_err(|source| StorageError::Sqlite {
@@ -188,6 +191,7 @@ pub struct GeneralSettingsDto {
     /// Largest key-value entry size (in MiB) whose bytes may be fetched for
     /// an in-app key-value preview.
     pub key_value_size_limit_mib: i64,
+    pub editor_row_limit: i64,
     pub updated_at: String,
 }
 
@@ -242,6 +246,7 @@ mod tests {
             object_preview_size_limit_mib: 25,
             language: String::new(),
             key_value_size_limit_mib: 10,
+            editor_row_limit: 10_000,
             updated_at: String::new(),
         };
 
@@ -291,6 +296,7 @@ mod tests {
                 object_preview_size_limit_mib: 10,
                 language: String::new(),
                 key_value_size_limit_mib: 10,
+                editor_row_limit: 10_000,
                 updated_at: String::new(),
             };
 
@@ -360,6 +366,7 @@ mod tests {
             object_preview_size_limit_mib: 10,
             language: "es".to_string(),
             key_value_size_limit_mib: 10,
+            editor_row_limit: 10_000,
             updated_at: String::new(),
         };
 
@@ -438,6 +445,7 @@ mod tests {
             object_preview_size_limit_mib: 10,
             language: String::new(),
             key_value_size_limit_mib: 42,
+            editor_row_limit: 10_000,
             updated_at: String::new(),
         };
 
