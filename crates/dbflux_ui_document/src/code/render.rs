@@ -273,12 +273,18 @@ impl CodeDocument {
                         cx.emit(DocumentEvent::RequestFocus);
                     }),
                 )
-                // gpui-component's completion menu hides itself on Esc via
-                // InputState::escape but never restores focus to the editor
-                // input. Synchronously the input still owns focus when we
-                // observe Esc, but the menu's cx.notify() + the resulting
-                // re-render reset window.focus before the next paint — so we
-                // refocus on the next tick rather than inline.
+                .capture_action(cx.listener(
+                    |this, _: &gpui_component::input::Escape, window, cx| {
+                        if this.handle_vim_escape_action(window, cx) {
+                            cx.stop_propagation();
+                        }
+                    },
+                ))
+                .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                    if this.handle_vim_key_down(event, window, cx) {
+                        cx.stop_propagation();
+                    }
+                }))
                 .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
                     if event.keystroke.key != "escape"
                         || event.keystroke.modifiers.alt
@@ -289,23 +295,13 @@ impl CodeDocument {
                     {
                         return;
                     }
-                    if this.focus_mode != SqlQueryFocus::Editor {
-                        return;
-                    }
-                    let input = this.editor.input_state.clone();
-                    cx.spawn_in(window, async move |_this, cx| {
-                        cx.update(|window, cx| {
-                            input.update(cx, |state, cx| state.focus(window, cx));
-                        })
-                        .ok();
-                    })
-                    .detach();
+                    this.schedule_editor_refocus(window, cx);
                 }))
                 .child(
                     div().flex_1().min_h_0().overflow_hidden().child(
                         gpui_component::input::Editor::new(&self.editor.input_state)
                             .appearance(false)
-                            .readonly(self.read_only)
+                            .readonly(self.editor_input_locked())
                             .w_full()
                             .h_full(),
                     ),
