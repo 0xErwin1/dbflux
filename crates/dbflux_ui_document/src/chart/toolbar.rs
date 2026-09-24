@@ -361,11 +361,11 @@ mod tests {
         RefreshPolicy, render_chart_toolbar,
     };
     use gpui::{
-        AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
-        Render, Styled as _, Window, div,
+        AccessibilityFrame, AppContext as _, Context, Entity, FrameObserver,
+        InteractiveElement as _, IntoElement, ParentElement as _, Render, Styled as _, Window, div,
     };
     use gpui_component::ActiveTheme as _;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     struct ToolbarHarness {
         chart_shell: Entity<ChartShell>,
@@ -402,15 +402,26 @@ mod tests {
         }
     }
 
+    /// Keeps the latest rendered accessibility frame of the window it observes.
+    #[derive(Default)]
+    struct FrameCapture(Mutex<Option<AccessibilityFrame>>);
+
+    impl FrameObserver for FrameCapture {
+        fn accessibility_updated(&self, frame: &AccessibilityFrame) {
+            *self.0.lock().expect("frame capture lock") = Some(frame.clone());
+        }
+    }
+
     /// Renders the toolbar with saving enabled and returns the element ids of
     /// its buttons.
     fn rendered_toolbar_button_ids(cx: &mut gpui::TestAppContext) -> Vec<String> {
         cx.update(gpui_component::init);
 
-        let automation = gpui_mcp::Automation::isolated();
-        let automation_for_window = automation.clone();
+        let capture = Arc::new(FrameCapture::default());
+        let capture_for_window = capture.clone();
         let (_view, visual) = cx.add_window_view(move |window, cx| {
-            automation_for_window.attach(window);
+            window.observe_frames(&capture_for_window);
+            window.refresh();
             ToolbarHarness {
                 chart_shell: cx.new(ChartShell::new_standalone),
                 refresh_dropdown: cx.new(|_cx| Dropdown::new("toolbar-harness-refresh")),
@@ -418,10 +429,16 @@ mod tests {
         });
         visual.run_until_parked();
 
-        automation
-            .snapshot()
-            .nodes
-            .into_keys()
+        let frame = capture
+            .0
+            .lock()
+            .expect("frame capture lock")
+            .clone()
+            .expect("the window rendered a frame");
+
+        frame
+            .nodes()
+            .map(|(_, node)| node.id().to_owned())
             .filter(|id| id.starts_with("chart-toolbar-"))
             .collect()
     }

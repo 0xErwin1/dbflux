@@ -47,7 +47,6 @@ aws = ["dbflux_app/aws", "dbflux_ui_base/aws"]
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
-gpui-mcp.workspace = true
 dbflux_driver_mssql = { workspace = true }
 dbflux_test_support = { workspace = true }
 flate2.workspace = true

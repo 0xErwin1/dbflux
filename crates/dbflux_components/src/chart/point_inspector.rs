@@ -174,6 +174,7 @@ pub fn point_inspector_element(
                 )
                 .child(
                     div()
+                        .id("inspector-quick-actions")
                         .flex()
                         .gap(Spacing::XXS)
                         // The host wraps the dock in its own mouse listener and
@@ -387,27 +388,47 @@ mod tests {
         }
     }
 
-    /// The quick-actions row exposes exactly one interactive action, the
-    /// working "Show in tree" button, and no placeholder for a feature that
-    /// does not exist.
+    /// Keeps the latest rendered accessibility frame of the window it observes.
+    #[derive(Default)]
+    struct FrameCapture(std::sync::Mutex<Option<gpui::AccessibilityFrame>>);
+
+    impl gpui::FrameObserver for FrameCapture {
+        fn accessibility_updated(&self, frame: &gpui::AccessibilityFrame) {
+            *self.0.lock().expect("frame capture lock") = Some(frame.clone());
+        }
+    }
+
+    /// The quick-actions row renders only the working "Show in tree" action:
+    /// its rendered text carries no label of a placeholder button.
     #[gpui::test]
-    fn inspector_renders_only_working_quick_actions(cx: &mut gpui::TestAppContext) {
-        let automation = gpui_mcp::Automation::isolated();
-        let automation_for_window = automation.clone();
+    fn inspector_quick_actions_render_only_show_in_tree(cx: &mut gpui::TestAppContext) {
+        let capture = std::sync::Arc::new(FrameCapture::default());
+        let capture_for_window = capture.clone();
         let (_view, visual) = cx.add_window_view(move |window, _cx| {
-            automation_for_window.attach(window);
+            window.observe_frames(&capture_for_window);
+            window.refresh();
             InspectorHarness
         });
         visual.run_until_parked();
 
-        let tree = automation.snapshot();
-        let action_ids: Vec<&str> = tree
-            .nodes
-            .keys()
-            .map(String::as_str)
-            .filter(|id| id.starts_with("inspector-action-"))
-            .collect();
-        assert_eq!(action_ids, ["inspector-action-show-in-tree-row-4"]);
+        let frame = capture
+            .0
+            .lock()
+            .expect("frame capture lock")
+            .clone()
+            .expect("the window rendered a frame");
+
+        let quick_actions_text = frame
+            .nodes()
+            .map(|(_, node)| node)
+            .find(|node| node.id() == "inspector-quick-actions")
+            .map(|node| node.content_text().to_owned())
+            .expect("the quick-actions row is rendered");
+
+        assert_eq!(
+            quick_actions_text,
+            dbflux_i18n::t!("chart.point_inspector.show_in_tree")
+        );
     }
 
     #[test]
