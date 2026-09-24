@@ -1,4 +1,4 @@
-use crate::Value;
+use crate::{DbError, Value};
 use serde::{Deserialize, Serialize};
 
 /// Placeholder style for parameterized queries.
@@ -130,6 +130,66 @@ pub trait SqlDialect: Send + Sync {
         false
     }
 
+    /// Whether `DROP ... CASCADE` drops the objects that depend on the
+    /// dropped object.
+    ///
+    /// Defaults to `false`: SQL Server and SQLite reject the keyword, and
+    /// MySQL parses it but does nothing with it. Dialects whose database
+    /// honors it (PostgreSQL, Redshift) opt in.
+    fn supports_drop_cascade(&self) -> bool {
+        false
+    }
+
+    /// Build a `DROP TABLE` statement for this dialect, without a trailing
+    /// semicolon. This is the one builder behind the drop table preview, the
+    /// sidebar drop and the MCP `drop_table` tool, so all three run the same
+    /// text.
+    ///
+    /// The schema and table are quoted one by one rather than through
+    /// [`Self::qualified_table`], because some dialects (SQLite) drop the
+    /// schema there, and an unqualified `DROP TABLE` can resolve to a
+    /// same-named temporary table.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DbError::NotSupported`] when `cascade` is requested and
+    /// [`Self::supports_drop_cascade`] is `false`, instead of writing a
+    /// statement the database would reject or silently ignore.
+    fn drop_table_statement(
+        &self,
+        schema: Option<&str>,
+        table: &str,
+        if_exists: bool,
+        cascade: bool,
+    ) -> Result<String, DbError> {
+        if cascade && !self.supports_drop_cascade() {
+            return Err(drop_cascade_not_supported());
+        }
+
+        let quoted_table = match schema {
+            Some(schema) => format!(
+                "{}.{}",
+                self.quote_identifier(schema),
+                self.quote_identifier(table)
+            ),
+            None => self.quote_identifier(table),
+        };
+
+        let mut statement = String::from("DROP TABLE ");
+
+        if if_exists {
+            statement.push_str("IF EXISTS ");
+        }
+
+        statement.push_str(&quoted_table);
+
+        if cascade {
+            statement.push_str(" CASCADE");
+        }
+
+        Ok(statement)
+    }
+
     /// Build an UPSERT statement for this dialect.
     fn build_upsert_statement(
         &self,
@@ -141,6 +201,14 @@ pub trait SqlDialect: Send + Sync {
     ) -> Option<String> {
         None
     }
+}
+
+/// The error returned when a drop asks for CASCADE on a dialect without it.
+pub(crate) fn drop_cascade_not_supported() -> DbError {
+    DbError::NotSupported(
+        "this database does not support DROP ... CASCADE; drop the dependent objects first"
+            .to_string(),
+    )
 }
 
 /// Default SQL dialect using ANSI SQL conventions (double-quote identifiers).
@@ -336,5 +404,75 @@ mod tests {
     fn default_limit_offset_clause_with_nonzero_offset_appends_offset() {
         let dialect = NopDialect;
         assert_eq!(dialect.limit_offset_clause(5, 10), "LIMIT 5 OFFSET 10");
+    }
+
+    #[test]
+    fn default_drop_table_statement_rejects_cascade() {
+        let dialect = DefaultSqlDialect;
+
+        assert!(!dialect.supports_drop_cascade());
+        assert!(matches!(
+            dialect.drop_table_statement(Some("public"), "orders", true, true),
+            Err(DbError::NotSupported(_))
+        ));
+        assert_eq!(
+            dialect
+                .drop_table_statement(Some("public"), "orders", true, false)
+                .expect("a plain drop builds"),
+            "DROP TABLE IF EXISTS \"public\".\"orders\""
+        );
+        assert_eq!(
+            dialect
+                .drop_table_statement(None, "orders", false, false)
+                .expect("a plain drop builds"),
+            "DROP TABLE \"orders\""
+        );
+    }
+
+    #[test]
+    fn drop_table_statement_adds_cascade_when_asked_and_supported() {
+        struct CascadeDialect;
+
+        impl SqlDialect for CascadeDialect {
+            fn quote_identifier(&self, name: &str) -> String {
+                format!("\"{}\"", name)
+            }
+
+            fn qualified_table(&self, _schema: Option<&str>, table: &str) -> String {
+                self.quote_identifier(table)
+            }
+
+            fn value_to_literal(&self, _value: &crate::Value) -> String {
+                "?".to_string()
+            }
+
+            fn escape_string(&self, s: &str) -> String {
+                s.to_string()
+            }
+
+            fn placeholder_style(&self) -> PlaceholderStyle {
+                PlaceholderStyle::DollarNumber
+            }
+
+            fn supports_drop_cascade(&self) -> bool {
+                true
+            }
+        }
+
+        let dialect = CascadeDialect;
+
+        assert_eq!(
+            dialect
+                .drop_table_statement(Some("main"), "orders", true, true)
+                .expect("cascade is supported"),
+            "DROP TABLE IF EXISTS \"main\".\"orders\" CASCADE",
+            "the schema is kept even where qualified_table drops it"
+        );
+        assert_eq!(
+            dialect
+                .drop_table_statement(None, "orders", false, false)
+                .expect("a plain drop builds"),
+            "DROP TABLE \"orders\""
+        );
     }
 }

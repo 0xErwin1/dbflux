@@ -121,6 +121,9 @@ pub enum CountState {
 /// `CountState::Unknown { reason: TimedOut }` if it exceeds the deadline,
 /// or `CountState::Unknown { reason: Failed(..) }` on a connection error.
 ///
+/// `params` are inlined into `sql` with the connection's dialect because drivers do
+/// not bind `QueryRequest.params`.
+///
 /// The query is run on a detached thread so the deadline is enforced via
 /// `std::sync::mpsc::Receiver::recv_timeout`.
 #[allow(dead_code)]
@@ -133,8 +136,7 @@ pub fn count_with_deadline(
     let (tx, rx) = std::sync::mpsc::channel::<Result<u64, String>>();
 
     std::thread::spawn(move || {
-        let mut request = QueryRequest::new(sql);
-        request.params = params;
+        let request = QueryRequest::new(inline_params(&sql, &params, connection.dialect()));
 
         let result = connection
             .execute(&request)
@@ -3488,6 +3490,134 @@ mod tests {
                 Duration::from_millis(500),
             );
             assert_eq!(result, CountState::Done(7));
+        }
+
+        struct PlaceholderDialect(dbflux_core::PlaceholderStyle);
+
+        static DOLLAR_DIALECT: PlaceholderDialect =
+            PlaceholderDialect(dbflux_core::PlaceholderStyle::DollarNumber);
+        static AT_SIGN_DIALECT: PlaceholderDialect =
+            PlaceholderDialect(dbflux_core::PlaceholderStyle::AtSign);
+
+        impl dbflux_core::SqlDialect for PlaceholderDialect {
+            fn quote_identifier(&self, name: &str) -> String {
+                format!("\"{}\"", name)
+            }
+
+            fn qualified_table(&self, _schema: Option<&str>, table: &str) -> String {
+                self.quote_identifier(table)
+            }
+
+            fn value_to_literal(&self, value: &dbflux_core::Value) -> String {
+                DefaultSqlDialect.value_to_literal(value)
+            }
+
+            fn escape_string(&self, s: &str) -> String {
+                s.replace('\'', "''")
+            }
+
+            fn placeholder_style(&self) -> dbflux_core::PlaceholderStyle {
+                self.0
+            }
+        }
+
+        struct RequestRecordingCountConnection {
+            dialect: &'static dyn dbflux_core::SqlDialect,
+            requests: std::sync::Mutex<Vec<dbflux_core::QueryRequest>>,
+        }
+
+        impl dbflux_core::Connection for RequestRecordingCountConnection {
+            fn metadata(&self) -> &dbflux_core::DriverMetadata {
+                fake_meta()
+            }
+
+            fn ping(&self) -> Result<(), dbflux_core::DbError> {
+                Ok(())
+            }
+
+            fn close(&mut self) -> Result<(), dbflux_core::DbError> {
+                Ok(())
+            }
+
+            fn execute(
+                &self,
+                req: &dbflux_core::QueryRequest,
+            ) -> Result<dbflux_core::QueryResult, dbflux_core::DbError> {
+                self.requests.lock().unwrap().push(req.clone());
+
+                let mut result = QueryResult::empty();
+                result.rows = vec![vec![dbflux_core::Value::Int(3)]];
+                Ok(result)
+            }
+
+            fn cancel(&self, _handle: &QueryHandle) -> Result<(), dbflux_core::DbError> {
+                Ok(())
+            }
+
+            fn schema(&self) -> Result<SchemaSnapshot, dbflux_core::DbError> {
+                Err(dbflux_core::DbError::NotSupported("stub".to_string()))
+            }
+
+            fn kind(&self) -> DbKind {
+                DbKind::Postgres
+            }
+
+            fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
+                SchemaLoadingStrategy::SingleDatabase
+            }
+
+            fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
+                self.dialect
+            }
+        }
+
+        fn counted_request_for(
+            dialect: &'static dyn dbflux_core::SqlDialect,
+            sql: &str,
+        ) -> dbflux_core::QueryRequest {
+            let conn = Arc::new(RequestRecordingCountConnection {
+                dialect,
+                requests: std::sync::Mutex::new(Vec::new()),
+            });
+
+            let result = count_with_deadline(
+                Arc::clone(&conn) as Arc<dyn dbflux_core::Connection>,
+                sql.to_string(),
+                vec![dbflux_core::Value::Text("it's".to_string())],
+                Duration::from_millis(1_000),
+            );
+            assert_eq!(result, CountState::Done(3));
+
+            let requests = conn.requests.lock().unwrap().clone();
+            assert_eq!(requests.len(), 1);
+            requests.into_iter().next().unwrap()
+        }
+
+        #[test]
+        fn count_inlines_values_for_dollar_placeholders() {
+            let request =
+                counted_request_for(&DOLLAR_DIALECT, "SELECT COUNT(*) FROM t WHERE a = $1");
+
+            assert_eq!(request.sql, "SELECT COUNT(*) FROM t WHERE a = 'it''s'");
+            assert!(request.params.is_empty(), "drivers do not bind params");
+        }
+
+        #[test]
+        fn count_inlines_values_for_at_sign_placeholders() {
+            let request =
+                counted_request_for(&AT_SIGN_DIALECT, "SELECT COUNT(*) FROM t WHERE a = @p1");
+
+            assert!(
+                !request.sql.contains("@p1"),
+                "placeholder must be inlined: {}",
+                request.sql
+            );
+            assert!(
+                request.sql.ends_with("'it''s'"),
+                "value must be an escaped literal: {}",
+                request.sql
+            );
+            assert!(request.params.is_empty(), "drivers do not bind params");
         }
     }
 

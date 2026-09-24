@@ -1069,15 +1069,18 @@ fn require_visible_and_enabled(node: &UiNode) -> Result<(), String> {
     Ok(())
 }
 
-/// Return the bounds center that clicks `node`.
+/// Return the point that clicks `node`.
 ///
-/// Editable text inputs are accepted without a click action of their own: a click at their
-/// center reaches the text editor and focuses it, as a pointer click at those coordinates does.
+/// Editable text inputs are accepted without a click action of their own: a click inside their
+/// text area reaches the text editor and focuses it, as a pointer click at those coordinates
+/// does. They are clicked at [`text_area_point`] rather than at the center, which a narrow
+/// input can give to a trailing button. Other nodes are clicked at their bounds center.
 fn click_point(node: &UiNode) -> Result<Point, String> {
     require_visible_and_enabled(node)?;
-    let clickable =
-        node.actions.contains(&NodeAction::Click) || node.actions.contains(&NodeAction::SetText);
-    if !clickable {
+    if node.actions.contains(&NodeAction::SetText) {
+        return Ok(text_area_point(require_bounds(node)?));
+    }
+    if !node.actions.contains(&NodeAction::Click) {
         return Err(format!(
             "element {:?} does not support {:?}",
             node.id,
@@ -1085,6 +1088,56 @@ fn click_point(node: &UiNode) -> Result<Point, String> {
         ));
     }
     Ok(require_bounds(node)?.center())
+}
+
+/// Farthest a text-input click lands from the input's left edge, in logical pixels.
+///
+/// It clears the left padding and a leading icon, which the input frame owns: a click there
+/// focuses the frame, which has no text input handler.
+const TEXT_AREA_MAX_OFFSET: f32 = 40.0;
+
+/// Return the point inside a text input's bounds that reaches its text editor.
+///
+/// The point is vertically centered and a third of the width from the left edge, at most
+/// [`TEXT_AREA_MAX_OFFSET`]. Trailing buttons (clear, show password) sit at the right edge,
+/// so a narrow input keeps the point left of them, and a wide one keeps it past a leading
+/// icon.
+fn text_area_point(bounds: Rect) -> Point {
+    Point {
+        x: bounds.x + (bounds.width / 3.0).min(TEXT_AREA_MAX_OFFSET),
+        y: bounds.y + bounds.height / 2.0,
+    }
+}
+
+/// Return where `focus_element` clicks `node`, or `None` when it sends `Focus` instead.
+///
+/// An editable text input is focused by a click inside its text area, as `click_element`
+/// does: its `Focus` action focuses the input frame, which has no text input handler, so
+/// `type_text` would find no target. Other nodes keep the `Focus` action.
+fn focus_click_point(node: &UiNode) -> Result<Option<Point>, String> {
+    require_visible_and_enabled(node)?;
+    if node.actions.contains(&NodeAction::SetText) {
+        return Ok(Some(text_area_point(require_bounds(node)?)));
+    }
+    if !node.actions.contains(&NodeAction::Focus) {
+        return Err(format!(
+            "element {:?} does not support {:?}",
+            node.id,
+            NodeAction::Focus
+        ));
+    }
+    Ok(None)
+}
+
+/// Fail when `node` reports that it rejects changes to its value.
+fn require_writable(node: &UiNode) -> Result<(), String> {
+    if node.state.read_only {
+        return Err(format!(
+            "element {:?} is read-only and does not accept a new value",
+            node.id
+        ));
+    }
+    Ok(())
 }
 
 fn require_bounds(node: &UiNode) -> Result<Rect, String> {
@@ -1343,8 +1396,9 @@ mod tests {
 
     use super::{
         FindArgs, IDLE_CHECK_INTERVAL_MS, IDLE_INTERVALS, IdleSample, MIN_IDLE_TIMEOUT_MS, Role,
-        StartVideoRecordingArgs, UiTree, WaitIdleArgs, WaitStateArgs, click_point,
-        default_result_limit_for_test, find_nodes, settle_refresh_frames, state_matches, tree_diff,
+        StartVideoRecordingArgs, TEXT_AREA_MAX_OFFSET, UiTree, WaitIdleArgs, WaitStateArgs,
+        click_point, default_result_limit_for_test, find_nodes, focus_click_point,
+        require_writable, settle_refresh_frames, state_matches, text_area_point, tree_diff,
         wait_until_idle,
     };
 
@@ -1493,7 +1547,86 @@ mod tests {
             vec![NodeAction::Focus, NodeAction::SetText, NodeAction::SetValue],
         );
 
-        assert_eq!(click_point(&input), Ok(Point { x: 110.0, y: 35.0 }));
+        assert_eq!(click_point(&input), Ok(Point { x: 50.0, y: 35.0 }));
+    }
+
+    #[test]
+    fn click_point_keeps_the_center_for_nodes_that_are_not_text_inputs() {
+        let button = node_with_actions(Role::Button, vec![NodeAction::Click]);
+
+        assert_eq!(click_point(&button), Ok(Point { x: 110.0, y: 35.0 }));
+    }
+
+    #[test]
+    fn text_area_point_stays_left_of_trailing_buttons_and_past_a_leading_icon() {
+        let narrow = Rect {
+            x: 100.0,
+            y: 50.0,
+            width: 60.0,
+            height: 24.0,
+        };
+        assert_eq!(text_area_point(narrow), Point { x: 120.0, y: 62.0 });
+
+        let wide = Rect {
+            width: 400.0,
+            ..narrow
+        };
+        assert_eq!(
+            text_area_point(wide),
+            Point {
+                x: 100.0 + TEXT_AREA_MAX_OFFSET,
+                y: 62.0
+            }
+        );
+
+        for width in [1.0, 12.0, 60.0, 119.0, 120.0, 400.0] {
+            let bounds = Rect { width, ..narrow };
+            let point = text_area_point(bounds);
+            assert!(bounds.contains(point), "{point:?} is outside {bounds:?}");
+            assert!(point.x < bounds.x + bounds.width / 2.0 + f32::EPSILON);
+        }
+    }
+
+    #[test]
+    fn focus_clicks_text_inputs_and_sends_focus_to_other_nodes() {
+        let input = node_with_actions(
+            Role::TextInput,
+            vec![NodeAction::Focus, NodeAction::SetText, NodeAction::SetValue],
+        );
+        assert_eq!(
+            focus_click_point(&input),
+            Ok(Some(Point { x: 50.0, y: 35.0 }))
+        );
+
+        let button = node_with_actions(Role::Button, vec![NodeAction::Click, NodeAction::Focus]);
+        assert_eq!(focus_click_point(&button), Ok(None));
+
+        let label = node_with_actions(Role::Text, vec![NodeAction::Click]);
+        assert_eq!(
+            focus_click_point(&label),
+            Err("element \"cm-field-host\" does not support Focus".to_owned())
+        );
+
+        let mut disabled = node_with_actions(Role::TextInput, vec![NodeAction::SetText]);
+        disabled.state.enabled = false;
+        assert!(focus_click_point(&disabled).is_err());
+    }
+
+    #[test]
+    fn read_only_nodes_refuse_a_new_value() {
+        let mut input = node_with_actions(
+            Role::TextInput,
+            vec![NodeAction::Focus, NodeAction::SetText, NodeAction::SetValue],
+        );
+        assert_eq!(require_writable(&input), Ok(()));
+
+        input.state.read_only = true;
+        assert_eq!(
+            require_writable(&input),
+            Err(
+                "element \"cm-field-host\" is read-only and does not accept a new value".to_owned()
+            )
+        );
     }
 
     #[test]

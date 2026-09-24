@@ -1,10 +1,10 @@
 # Vendored `gpui-pre`
 
-This directory is the published `gpui-pre` crate source plus four patches. It exists so the
+This directory is the published `gpui-pre` crate source plus five patches. It exists so the
 schema visualizer can pan and zoom, and so agents can drive a running DBFlux window, without
 DBFlux depending on a fork of Zed. The third patch makes a dropped window-bound subscription
 delivery visible in the log. The fourth lets the automation bridge fill a text input by its
-element id.
+element id. The fifth lets a wrapper report a text input it does not render as read-only.
 
 ## Why
 
@@ -93,6 +93,26 @@ It also adds `Window::has_input_handler`, so the bridge can tell apart the two r
 `Window::replace_input_text` returns `false`: no input handler at all, or a handler that
 cannot provide its document range.
 
+### Read-only accessibility
+
+gpui-component's `Input` and `Editor` accept `readonly(true)`, which rejects typing and
+pasting, but they never mark their accessibility node read-only, and they register the
+`SetValue` listener on every enabled input. A read-only editor therefore looked editable to
+assistive technology and to UI automation, and `Window::set_observed_element_value` replaced
+its text. The node belongs to gpui-component's input frame, which DBFlux cannot configure.
+
+The patch adds `Window::with_accessibility_read_only`. A wrapper element calls it around the
+prepaint of its child, and the first accessibility node the child builds is marked read-only,
+as `aria_read_only(true)` would mark it. Its descendants are unaffected, so a search field
+inside a read-only editor stays editable. When calls nest, a node built inside the inner call
+also satisfies the outer one. `dbflux_components::controls::ReadOnlyEditor` is that wrapper; it
+delegates layout, prepaint and paint to the editor and adds no layout node.
+
+Every read-only node of a frame, whether marked this way or with `aria_read_only`, is recorded,
+and `SetValue` and `ReplaceSelectedText` requests to it run no listener. This covers
+`Window::set_observed_element_value`, which then returns `false`, and requests from an
+assistive technology through `Window::handle_a11y_action`.
+
 ### Why vendor
 
 Depending on either fork would put `main` back on a personal git source for the whole
@@ -118,6 +138,8 @@ delta to this directory.
   patches 1 and 2 applied — three files, 166 diff lines. It has no upstream counterpart.
 - Patch 4: `text-input-automation.patch`, written for DBFlux against this directory with
   patches 1 to 3 applied — one file, 105 diff lines. It has no upstream counterpart.
+- Patch 5: `read-only-accessibility.patch`, written for DBFlux against this directory with
+  patches 1 to 4 applied — three files, 108 diff lines. It has no upstream counterpart.
 - `[workspace]` is appended to `Cargo.toml` so Cargo does not expect this crate in the
   parent workspace's member list.
 
@@ -170,8 +192,8 @@ vendor/gpui-pre/refresh.sh 0.3.6   # new upstream version
 ```
 
 The script downloads the published crate, rebuilds this directory from it and re-applies
-`element-transform.patch`, `frame-observer.patch`, `subscription-drop-log.patch` and then
-`text-input-automation.patch`.
+`element-transform.patch`, `frame-observer.patch`, `subscription-drop-log.patch`,
+`text-input-automation.patch` and then `read-only-accessibility.patch`.
 It leaves a
 `<file>.<patch>.rej` file behind for any hunk that no longer applies, for example
 `src/window.rs.frame-observer.rej`; resolve them by reading the rejected hunk and porting

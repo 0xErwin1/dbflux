@@ -29,7 +29,7 @@ use crate::object_text::{
 // `CodeDocument` renders its editor with: only it supports the full-height,
 // line-numbered code-editor layout.
 use dbflux_app::keymap::Modifiers;
-use dbflux_components::controls::{GpuiInput, InputEvent};
+use dbflux_components::controls::{GpuiInput, InputEvent, ReadOnlyEditor};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Text, overlay_bg, surface_panel};
 use dbflux_components::tokens::{Heights, Radii, Spacing};
@@ -596,9 +596,8 @@ impl ObjectBrowserDocument {
                         }
                     }))
                     .child(
-                        gpui_component::input::Editor::new(&editor.input)
+                        ReadOnlyEditor::new(&editor.input)
                             .appearance(false)
-                            .readonly(true)
                             .disabled(!is_editable)
                             .w_full()
                             .h_full(),

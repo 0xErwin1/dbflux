@@ -17,6 +17,38 @@ struct SidebarDropOperation {
     is_database: bool,
 }
 
+/// Options for the `DROP` statement the sidebar runs.
+///
+/// The default (`IF EXISTS`, no `CASCADE`) is what the generic inline
+/// confirm runs. The drop table modal passes the options its preview was
+/// built with, so the statement that runs is the one the user confirmed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct DropOptions {
+    pub(crate) if_exists: bool,
+    pub(crate) cascade: bool,
+}
+
+impl Default for DropOptions {
+    fn default() -> Self {
+        Self {
+            if_exists: true,
+            cascade: false,
+        }
+    }
+}
+
+/// Drops `target` on `connection` with the confirmed options, returning the
+/// driver's error message on failure.
+fn run_drop(
+    connection: &dyn Connection,
+    target: &SchemaDropTarget,
+    options: DropOptions,
+) -> Result<(), String> {
+    connection
+        .drop_schema_object(target, options.cascade, options.if_exists)
+        .map_err(|error| error.to_string())
+}
+
 enum DatabaseDropReleasePlan {
     None,
     ConnectionPerDatabase(Box<HeldDatabaseConnection>),
@@ -316,7 +348,12 @@ impl Sidebar {
     }
 
     /// Drop a schema object through the driver-owned schema drop API.
-    pub(crate) fn execute_drop_ddl(&mut self, item_id: &str, cx: &mut Context<Self>) {
+    pub(crate) fn execute_drop_ddl(
+        &mut self,
+        item_id: &str,
+        options: DropOptions,
+        cx: &mut Context<Self>,
+    ) {
         let Some(operation) = self.build_drop_operation(item_id, cx) else {
             return;
         };
@@ -443,16 +480,12 @@ impl Sidebar {
                             };
                         }
 
-                        match operation.connection.drop_schema_object(
-                            &operation.target,
-                            false,
-                            true,
-                        ) {
+                        match run_drop(operation.connection.as_ref(), &operation.target, options) {
                             Ok(()) => DropExecutionOutcome::Dropped {
                                 database_release_applied,
                             },
                             Err(error) => DropExecutionOutcome::Failed {
-                                error: error.to_string(),
+                                error,
                                 held_connection: None,
                             },
                         }
@@ -755,5 +788,153 @@ mod tests {
             Some("analytics".to_string()),
             "restore reinstates the previous active database"
         );
+    }
+
+    /// Records the statements `drop_schema_object` runs, through a dialect
+    /// that either supports `DROP ... CASCADE` or not.
+    struct RecordingConnection {
+        metadata: DriverMetadata,
+        supports_cascade: bool,
+        executed: std::sync::Mutex<Vec<String>>,
+    }
+
+    struct RecordingDialect {
+        supports_cascade: bool,
+    }
+
+    impl SqlDialect for RecordingDialect {
+        fn quote_identifier(&self, name: &str) -> String {
+            dbflux_core::DefaultSqlDialect.quote_identifier(name)
+        }
+
+        fn qualified_table(&self, schema: Option<&str>, table: &str) -> String {
+            dbflux_core::DefaultSqlDialect.qualified_table(schema, table)
+        }
+
+        fn value_to_literal(&self, value: &dbflux_core::Value) -> String {
+            dbflux_core::DefaultSqlDialect.value_to_literal(value)
+        }
+
+        fn escape_string(&self, text: &str) -> String {
+            dbflux_core::DefaultSqlDialect.escape_string(text)
+        }
+
+        fn placeholder_style(&self) -> dbflux_core::PlaceholderStyle {
+            dbflux_core::PlaceholderStyle::DollarNumber
+        }
+
+        fn supports_drop_cascade(&self) -> bool {
+            self.supports_cascade
+        }
+    }
+
+    static CASCADE_DIALECT: RecordingDialect = RecordingDialect {
+        supports_cascade: true,
+    };
+    static PLAIN_DIALECT: RecordingDialect = RecordingDialect {
+        supports_cascade: false,
+    };
+
+    impl RecordingConnection {
+        fn new(supports_cascade: bool) -> Self {
+            let metadata = ReleaseTestConnection::new().metadata.clone();
+
+            Self {
+                metadata,
+                supports_cascade,
+                executed: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+
+        fn executed(&self) -> Vec<String> {
+            self.executed
+                .lock()
+                .map(|executed| executed.clone())
+                .unwrap_or_default()
+        }
+    }
+
+    impl Connection for RecordingConnection {
+        fn metadata(&self) -> &DriverMetadata {
+            &self.metadata
+        }
+
+        fn ping(&self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn close(&mut self) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn execute(&self, request: &QueryRequest) -> Result<QueryResult, DbError> {
+            self.executed
+                .lock()
+                .map_err(|_| DbError::NotSupported("poisoned".to_string()))?
+                .push(request.sql.clone());
+            Ok(QueryResult::empty())
+        }
+
+        fn cancel(&self, _handle: &QueryHandle) -> Result<(), DbError> {
+            Ok(())
+        }
+
+        fn schema(&self) -> Result<SchemaSnapshot, DbError> {
+            Ok(SchemaSnapshot::default())
+        }
+
+        fn kind(&self) -> DbKind {
+            DbKind::Postgres
+        }
+
+        fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
+            SchemaLoadingStrategy::SingleDatabase
+        }
+
+        fn dialect(&self) -> &dyn SqlDialect {
+            if self.supports_cascade {
+                &CASCADE_DIALECT
+            } else {
+                &PLAIN_DIALECT
+            }
+        }
+    }
+
+    #[test]
+    fn confirmed_drop_table_runs_the_statement_the_preview_shows() {
+        use dbflux_components::modals::{DropTableOutcome, DropTableRequest};
+        use dbflux_core::{RelationKind, RelationRef, SchemaDropTarget, SchemaObjectKind};
+
+        for supports_cascade in [true, false] {
+            let connection = RecordingConnection::new(supports_cascade);
+            let request = DropTableRequest::new(
+                "orders".to_string(),
+                Some("public".to_string()),
+                vec![RelationRef {
+                    kind: RelationKind::View,
+                    qualified_name: "public.order_view".to_string(),
+                }],
+                connection.dialect(),
+            );
+
+            let DropTableOutcome::Confirmed { if_exists, cascade } = request.confirmed_outcome()
+            else {
+                panic!("a request confirms with its options");
+            };
+            assert_eq!(cascade, supports_cascade);
+
+            let target =
+                SchemaDropTarget::new(SchemaObjectKind::Table, "orders").with_schema("public");
+            super::run_drop(
+                &connection,
+                &target,
+                super::DropOptions { if_exists, cascade },
+            )
+            .expect("the confirmed drop runs");
+
+            let executed = connection.executed();
+            assert_eq!(executed.len(), 1);
+            assert_eq!(format!("{};", executed[0]), request.sql_preview());
+        }
     }
 }
