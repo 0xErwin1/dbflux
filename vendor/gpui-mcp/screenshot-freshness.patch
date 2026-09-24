@@ -1,0 +1,758 @@
+diff --git a/crates/gpui-mcp-capture/src/lib.rs b/crates/gpui-mcp-capture/src/lib.rs
+index b4f78e70..bdedaf69 100644
+--- a/crates/gpui-mcp-capture/src/lib.rs
++++ b/crates/gpui-mcp-capture/src/lib.rs
+@@ -2,7 +2,7 @@
+ 
+ use std::io::Cursor;
+ use std::time::Duration;
+-#[cfg(target_os = "windows")]
++#[cfg(any(target_os = "windows", target_os = "linux", test))]
+ use std::time::Instant;
+ 
+ use base64::Engine as _;
+@@ -11,7 +11,7 @@ use image::{DynamicImage, ImageFormat, RgbaImage};
+ 
+ const MAX_IMAGE_DIMENSION: u32 = 16_384;
+ const MAX_ENCODED_BYTES: usize = 16 * 1024 * 1024;
+-#[cfg(any(target_os = "windows", test))]
++#[cfg(any(target_os = "windows", target_os = "linux", test))]
+ const COMPOSITOR_POLL_INTERVAL: Duration = Duration::from_millis(16);
+ const MIN_STABILITY_DEADLINE: Duration = Duration::from_millis(32);
+ const MAX_STABILITY_DEADLINE: Duration = Duration::from_secs(2);
+@@ -29,17 +29,21 @@ const MIN_FRESHNESS_SAMPLES: u8 = 3;
+ /// actually cost, which needs no frame-size heuristic because a measured sample
+ /// already encodes both the size and the build profile. This ceiling keeps a
+ /// pathologically slow machine from widening the budget without limit.
+-#[cfg(any(target_os = "windows", test))]
++#[cfg(any(target_os = "windows", target_os = "linux", test))]
+ const MAX_MEASURED_ALLOWANCE: Duration = Duration::from_secs(4);
+ 
+-/// Bounded Windows Graphics Capture freshness policy.
++/// Bounded compositor freshness policy for screenshots.
++///
++/// Windows takes a fixed number of ordered Windows Graphics Capture samples within the
++/// deadline. Linux samples the X11 window until two consecutive captures are identical and
++/// returns the newest sample when the deadline passes first.
+ #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+ pub struct CaptureOptions {
+     settle_deadline: Duration,
+ }
+ 
+ impl CaptureOptions {
+-    /// Configure the maximum time Windows capture spends obtaining fresh compositor samples.
++    /// Configure the maximum time capture spends obtaining fresh compositor samples.
+     ///
+     /// # Errors
+     ///
+@@ -100,8 +104,8 @@ impl ScreenshotOptions {
+ 
+ /// Native window pixels plus display metadata reported by the operating system.
+ ///
+-/// The image is bounded by this crate's safety limits and, on Windows, has
+-/// passed the same compositor-freshness policy used by MCP screenshots.
++/// The image is bounded by this crate's safety limits and, on Windows and Linux,
++/// has passed the same compositor-freshness policy used by MCP screenshots.
+ #[derive(Clone, Debug)]
+ pub struct NativeFrame {
+     /// Captured native RGBA pixels, including any frame retained by the OS API.
+@@ -668,7 +672,7 @@ fn region_mapping(
+     })
+ }
+ 
+-fn capture_after_compositor_settle<T>(
++fn capture_after_compositor_settle<T: PartialEq>(
+     capture: impl FnMut() -> Result<T, CaptureFailure>,
+     options: CaptureOptions,
+ ) -> Result<T, CaptureFailure> {
+@@ -683,7 +687,12 @@ fn capture_after_compositor_settle<T>(
+         )
+     }
+ 
+-    #[cfg(not(target_os = "windows"))]
++    #[cfg(target_os = "linux")]
++    {
++        capture_stable_frame(capture, options, Instant::now, std::thread::sleep)
++    }
++
++    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+     {
+         let _ = options;
+         let mut capture = capture;
+@@ -691,6 +700,29 @@ fn capture_after_compositor_settle<T>(
+     }
+ }
+ 
++/// Deadline of a sampling sequence whose first sample started at `started` and ended at
++/// `first_sample_finished`.
++///
++/// `settle_deadline` is the allowance for waiting on the compositor, so the readbacks the
++/// policy itself demands must not be paid out of it: a 5120x1440 window in an unoptimized
++/// build spends most of a second inside one readback, and three of those overran a
++/// one-second budget before the frame was ever judged. The first sample is the measurement:
++/// each of the `remaining_samples` is credited with what it actually cost, bounded by
++/// [`MAX_MEASURED_ALLOWANCE`]. Returns `None` when the deadline is not representable.
++#[cfg(any(target_os = "windows", target_os = "linux", test))]
++fn sampling_deadline(
++    started: Instant,
++    first_sample_finished: Instant,
++    remaining_samples: u32,
++    options: CaptureOptions,
++) -> Option<Instant> {
++    let allowance = first_sample_finished
++        .saturating_duration_since(started)
++        .saturating_mul(remaining_samples)
++        .min(MAX_MEASURED_ALLOWANCE);
++    started.checked_add(options.settle_deadline().saturating_add(allowance))
++}
++
+ #[cfg(any(target_os = "windows", test))]
+ fn capture_fresh_frame<T, E: Clone>(
+     mut capture: impl FnMut() -> Result<T, E>,
+@@ -704,18 +736,12 @@ fn capture_fresh_frame<T, E: Clone>(
+     // native capture borders and legitimate animation may change between every sample.
+     let started = now();
+     let mut latest = capture()?;
+-    // The first sample is the measurement. `settle_deadline` is the allowance
+-    // for waiting on the compositor, so the readbacks the policy itself demands
+-    // must not be paid out of it: a 5120x1440 window in an unoptimized build
+-    // spends most of a second inside one readback, and three of those overran a
+-    // one-second budget before this frame was ever judged stale. Credit the
+-    // remaining samples with what the first actually cost, bounded.
+-    let allowance = now()
+-        .saturating_duration_since(started)
+-        .saturating_mul(u32::from(MIN_FRESHNESS_SAMPLES.saturating_sub(1)))
+-        .min(MAX_MEASURED_ALLOWANCE);
+-    let Some(deadline) = started.checked_add(options.settle_deadline().saturating_add(allowance))
+-    else {
++    let Some(deadline) = sampling_deadline(
++        started,
++        now(),
++        u32::from(MIN_FRESHNESS_SAMPLES.saturating_sub(1)),
++        options,
++    ) else {
+         return Err(unstable_error.clone());
+     };
+     for _ in 1..MIN_FRESHNESS_SAMPLES {
+@@ -735,6 +761,43 @@ fn capture_fresh_frame<T, E: Clone>(
+     Ok(latest)
+ }
+ 
++/// Sample until two consecutive captures are identical, bounded by the settle deadline.
++///
++/// X11 capture reads whatever the X server holds for the window. After the application
++/// presents a frame, XWayland may apply it a display refresh later, and a capture that reads
++/// the window while the GPU is still writing it can miss glyphs, so a single sample may show
++/// the previous frame or a partial one. Two identical samples taken one poll interval apart
++/// mean the pixels stopped changing. A window that keeps animating (a blinking caret, a
++/// spinner) may never produce two identical samples, so at the deadline the newest sample is
++/// returned instead of failing the capture.
++#[cfg(any(target_os = "linux", test))]
++fn capture_stable_frame<T: PartialEq, E>(
++    mut capture: impl FnMut() -> Result<T, E>,
++    options: CaptureOptions,
++    mut now: impl FnMut() -> Instant,
++    mut wait: impl FnMut(Duration),
++) -> Result<T, E> {
++    let started = now();
++    let mut previous = capture()?;
++    let Some(deadline) = sampling_deadline(started, now(), 1, options) else {
++        return Ok(previous);
++    };
++
++    loop {
++        let remaining = deadline.saturating_duration_since(now());
++        if remaining.is_zero() {
++            return Ok(previous);
++        }
++        wait(COMPOSITOR_POLL_INTERVAL.min(remaining));
++
++        let current = capture()?;
++        if current == previous || now() >= deadline {
++            return Ok(current);
++        }
++        previous = current;
++    }
++}
++
+ fn validate_target(target: ScreenshotTarget) -> Result<(), CaptureFailure> {
+     if let ScreenshotTarget::Region { rect } = target
+         && (!rect.is_valid() || rect.width < 1.0 || rect.height < 1.0)
+@@ -777,7 +840,7 @@ mod tests {
+     use super::{
+         CaptureFailure, CaptureGeometry, CaptureOptions, DEFAULT_SETTLE_DEADLINE,
+         MAX_MEASURED_ALLOWANCE, MIN_FRESHNESS_SAMPLES, RegionMapping, capture_fresh_frame,
+-        region_mapping, validate_target,
++        capture_stable_frame, region_mapping, validate_target,
+     };
+ 
+     #[test]
+@@ -961,6 +1024,132 @@ mod tests {
+         );
+     }
+ 
++    /// The frame that was presented last reaches the X server a refresh later, so
++    /// the first sample can still hold the previous frame. Sampling stops at the
++    /// first pair of identical consecutive samples and returns that frame.
++    #[test]
++    fn stable_sampling_returns_once_two_consecutive_samples_match() -> Result<(), CaptureFailure> {
++        let calls = Cell::new(0_usize);
++        let elapsed = Cell::new(Duration::ZERO);
++        let started = Instant::now();
++        let frames = [1_u8, 2, 3, 3, 4];
++
++        let captured = capture_stable_frame(
++            || {
++                let call = calls.get();
++                calls.set(call.saturating_add(1));
++                Ok::<_, CaptureFailure>(frames.get(call).copied().unwrap_or(u8::MAX))
++            },
++            CaptureOptions::default(),
++            || started + elapsed.get(),
++            |duration| elapsed.set(elapsed.get().saturating_add(duration)),
++        )?;
++
++        assert_eq!(captured, 3);
++        assert_eq!(calls.get(), 4);
++        Ok(())
++    }
++
++    #[test]
++    fn stable_sampling_waits_one_poll_interval_between_samples() -> Result<(), CaptureFailure> {
++        let waits = std::cell::RefCell::new(Vec::new());
++        let elapsed = Cell::new(Duration::ZERO);
++        let started = Instant::now();
++
++        let captured = capture_stable_frame(
++            || Ok::<_, CaptureFailure>(7_u8),
++            CaptureOptions::default(),
++            || started + elapsed.get(),
++            |duration| {
++                waits.borrow_mut().push(duration);
++                elapsed.set(elapsed.get().saturating_add(duration));
++            },
++        )?;
++
++        assert_eq!(captured, 7);
++        assert_eq!(waits.into_inner(), [super::COMPOSITOR_POLL_INTERVAL]);
++        Ok(())
++    }
++
++    /// A blinking caret or a spinner can change every sample. The capture must
++    /// not fail because of it: at the deadline the newest sample is returned.
++    #[test]
++    fn stable_sampling_returns_the_newest_sample_at_the_deadline() -> Result<(), CaptureFailure> {
++        let calls = Cell::new(0_u32);
++        let elapsed = Cell::new(Duration::ZERO);
++        let started = Instant::now();
++        let deadline = Duration::from_millis(100);
++
++        let captured = capture_stable_frame(
++            || {
++                let frame = calls.get();
++                calls.set(frame.saturating_add(1));
++                Ok::<_, CaptureFailure>(frame)
++            },
++            CaptureOptions::new(deadline)?,
++            || started + elapsed.get(),
++            |duration| elapsed.set(elapsed.get().saturating_add(duration)),
++        )?;
++
++        assert_eq!(captured, calls.get().saturating_sub(1));
++        assert!(
++            calls.get() > 2,
++            "sampling must continue while samples differ"
++        );
++        assert!(
++            elapsed.get() <= deadline,
++            "sampling must stop at the deadline, it ran for {:?}",
++            elapsed.get()
++        );
++        Ok(())
++    }
++
++    /// A readback that costs more than the whole deadline still gets its
++    /// comparison sample: the first sample's cost is credited to the second, as
++    /// it is for the Windows freshness samples.
++    #[test]
++    fn stable_sampling_credits_an_expensive_readback() -> Result<(), CaptureFailure> {
++        let calls = Cell::new(0_usize);
++        let elapsed = Cell::new(Duration::ZERO);
++        let started = Instant::now();
++
++        let captured = capture_stable_frame(
++            || {
++                calls.set(calls.get().saturating_add(1));
++                elapsed.set(elapsed.get().saturating_add(Duration::from_millis(1_200)));
++                Ok::<_, CaptureFailure>(image::RgbaImage::new(64, 64))
++            },
++            CaptureOptions::default(),
++            || started + elapsed.get(),
++            |duration| elapsed.set(elapsed.get().saturating_add(duration)),
++        )?;
++
++        assert_eq!(captured.dimensions(), (64, 64));
++        assert_eq!(calls.get(), 2);
++        Ok(())
++    }
++
++    #[test]
++    fn stable_sampling_propagates_a_failed_sample() {
++        let calls = Cell::new(0_u8);
++        let captured = capture_stable_frame(
++            || {
++                let call = calls.get();
++                calls.set(call.saturating_add(1));
++                if call == 0 {
++                    Ok(0_u8)
++                } else {
++                    Err(CaptureFailure::CaptureUnavailable)
++                }
++            },
++            CaptureOptions::default(),
++            Instant::now,
++            |_| {},
++        );
++
++        assert_eq!(captured, Err(CaptureFailure::CaptureUnavailable));
++    }
++
+     #[test]
+     fn capture_stability_deadline_is_bounded() {
+         assert!(CaptureOptions::new(Duration::from_millis(31)).is_err());
+diff --git a/crates/gpui-mcp-protocol/src/lib.rs b/crates/gpui-mcp-protocol/src/lib.rs
+index 6b4eca0a..41ae0b0a 100644
+--- a/crates/gpui-mcp-protocol/src/lib.rs
++++ b/crates/gpui-mcp-protocol/src/lib.rs
+@@ -966,9 +966,15 @@ pub enum Operation {
+         after_frame_count: u64,
+         /// Maximum wait duration from one through 30,000 milliseconds.
+         timeout_ms: u64,
++        /// Wait until a newer frame has also been presented to the platform window, not only
++        /// painted. Only [`Operation::Refresh`] advances the presented-frame token, so send one
++        /// before waiting. Absent means `false`, which keeps the root-paint behavior.
++        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
++        presented: bool,
+     },
+     /// Request a new GPUI frame and return the last completed-frame token observed before the
+-    /// refresh was scheduled.
++    /// refresh was scheduled. Once the refreshed frame has been presented, the presented-frame
++    /// token that [`Operation::WaitForFrame`] waits on with `presented` passes that value.
+     Refresh,
+     /// Return current GPUI client-area geometry for native region capture.
+     GetWindowGeometry,
+@@ -1143,7 +1149,7 @@ impl WireResponse {
+ mod tests {
+     use super::{
+         AppId, Capabilities, EndpointDescriptor, InstanceId, LocalEndpoint, NativeWindowId,
+-        PROTOCOL_VERSION, Point, ProcessId, Rect, RequestId, WireResponse,
++        Operation, PROTOCOL_VERSION, Point, ProcessId, Rect, RequestId, WireResponse,
+     };
+ 
+     #[test]
+@@ -1223,6 +1229,38 @@ mod tests {
+         Ok(())
+     }
+ 
++    /// A frame wait that does not ask for presentation keeps the wire shape it had
++    /// before the `presented` field existed, in both directions.
++    #[test]
++    fn frame_wait_without_presentation_keeps_its_wire_shape() -> Result<(), serde_json::Error> {
++        let legacy = serde_json::json!({
++            "kind": "wait_for_frame",
++            "after_frame_count": 4,
++            "timeout_ms": 100
++        });
++        let parsed: Operation = serde_json::from_value(legacy.clone())?;
++        assert_eq!(
++            parsed,
++            Operation::WaitForFrame {
++                after_frame_count: 4,
++                timeout_ms: 100,
++                presented: false,
++            }
++        );
++        assert_eq!(serde_json::to_value(&parsed)?, legacy);
++
++        let presented = serde_json::to_value(Operation::WaitForFrame {
++            after_frame_count: 4,
++            timeout_ms: 100,
++            presented: true,
++        })?;
++        assert_eq!(
++            presented.get("presented"),
++            Some(&serde_json::Value::Bool(true))
++        );
++        Ok(())
++    }
++
+     #[test]
+     fn endpoint_identity_rejects_zero_ids() {
+         let value = serde_json::json!({
+diff --git a/crates/gpui-mcp-server/src/tools.rs b/crates/gpui-mcp-server/src/tools.rs
+index 8443c9b1..741d396a 100644
+--- a/crates/gpui-mcp-server/src/tools.rs
++++ b/crates/gpui-mcp-server/src/tools.rs
+@@ -626,6 +626,7 @@ impl GpuiMcp {
+             .call(Operation::WaitForFrame {
+                 after_frame_count: frame_count,
+                 timeout_ms,
++                presented: false,
+             })
+             .await?
+         {
+@@ -671,6 +672,8 @@ impl GpuiMcp {
+     }
+ }
+ 
++/// Refresh twice, each time waiting until the refreshed frame has been presented to the
++/// platform window rather than only painted, so a native capture that follows can read it.
+ async fn settle_refresh_frames<F, Fut>(wait: Duration, mut call: F) -> Result<FrameStats, String>
+ where
+     F: FnMut(Operation) -> Fut,
+@@ -687,6 +690,7 @@ where
+         let BridgeResult::FrameStats(stats) = call(Operation::WaitForFrame {
+             after_frame_count: before_refresh.frame_count,
+             timeout_ms,
++            presented: true,
+         })
+         .await?
+         else {
+@@ -1326,6 +1330,7 @@ mod tests {
+             operations[1],
+             Operation::WaitForFrame {
+                 after_frame_count: 11,
++                presented: true,
+                 ..
+             }
+         ));
+@@ -1334,6 +1339,7 @@ mod tests {
+             operations[3],
+             Operation::WaitForFrame {
+                 after_frame_count: 14,
++                presented: true,
+                 ..
+             }
+         ));
+diff --git a/crates/gpui-mcp/src/registry.rs b/crates/gpui-mcp/src/registry.rs
+index 11e929a4..581cb4ec 100644
+--- a/crates/gpui-mcp/src/registry.rs
++++ b/crates/gpui-mcp/src/registry.rs
+@@ -57,6 +57,7 @@ pub(crate) struct SharedState {
+     logs: Mutex<VecDeque<LogEntry>>,
+     generation: watch::Sender<u64>,
+     completed_frame: watch::Sender<FrameStats>,
++    presented_frame: watch::Sender<u64>,
+     window_geometry: RwLock<Option<WindowGeometry>>,
+ }
+ 
+@@ -64,6 +65,7 @@ impl SharedState {
+     pub(crate) fn new() -> Arc<Self> {
+         let (generation, _) = watch::channel(0);
+         let (completed_frame, _) = watch::channel(FrameStats::default());
++        let (presented_frame, _) = watch::channel(0);
+         Arc::new(Self {
+             tree: RwLock::new(UiTree::default()),
+             pending: Mutex::new(PendingFrame::default()),
+@@ -72,6 +74,7 @@ impl SharedState {
+             logs: Mutex::new(VecDeque::with_capacity(512)),
+             generation,
+             completed_frame,
++            presented_frame,
+             window_geometry: RwLock::new(None),
+         })
+     }
+@@ -335,6 +338,56 @@ impl SharedState {
+             .map_err(|_| BridgeError::new(ErrorCode::Timeout, "frame wait timed out"))?
+     }
+ 
++    /// Record that every frame completed so far has been presented to the platform window.
++    ///
++    /// Called from a GPUI next-frame callback. GPUI runs those at the start of a frame
++    /// request, before the request draws, and every earlier request presented the frame it
++    /// drew before returning, so each completed root-paint frame has been handed to the
++    /// platform window by then.
++    pub(crate) fn mark_frames_presented(&self) {
++        let completed = self.completed_frame.borrow().frame_count;
++        self.presented_frame.send_if_modified(|presented| {
++            if completed > *presented {
++                *presented = completed;
++                true
++            } else {
++                false
++            }
++        });
++    }
++
++    #[cfg(test)]
++    pub(crate) fn presented_frame_count(&self) -> u64 {
++        *self.presented_frame.borrow()
++    }
++
++    /// Wait until a frame newer than `after_frame_count` has been presented, then return the
++    /// current frame statistics.
++    ///
++    /// Only [`Self::mark_frames_presented`] advances the presented-frame token, so the caller
++    /// must have scheduled it, as `Operation::Refresh` does.
++    pub(crate) async fn wait_for_presented_frame(
++        &self,
++        after_frame_count: u64,
++        wait: Duration,
++    ) -> Result<FrameStats, BridgeError> {
++        let mut receiver = self.presented_frame.subscribe();
++        let presented = async {
++            loop {
++                if *receiver.borrow_and_update() > after_frame_count {
++                    return Ok(());
++                }
++                receiver.changed().await.map_err(|_| {
++                    BridgeError::new(ErrorCode::Internal, "frame publisher stopped")
++                })?;
++            }
++        };
++        timeout(wait, presented).await.map_err(|_| {
++            BridgeError::new(ErrorCode::Timeout, "presented frame wait timed out")
++        })??;
++        Ok(self.frame_stats())
++    }
++
+     pub(crate) fn set_highlights(&self, highlights: Vec<Highlight>) {
+         *self
+             .highlights
+@@ -686,7 +739,7 @@ mod tests {
+     use std::collections::BTreeMap;
+     use std::time::Duration;
+ 
+-    use gpui_mcp_protocol::{NodeState, Role, SemanticDiagnosticCode, UiNode};
++    use gpui_mcp_protocol::{ErrorCode, NodeState, Role, SemanticDiagnosticCode, UiNode};
+ 
+     use super::SharedState;
+ 
+@@ -813,6 +866,75 @@ mod tests {
+         Ok(())
+     }
+ 
++    fn complete_frame(state: &SharedState) {
++        state.begin_frame();
++        assert!(state.record(node("stable", None)));
++        state.finish_frame();
++        state.begin_root_paint();
++        state.finish_root_paint();
++    }
++
++    /// Root paint is not presentation: a painted frame alone must not release a
++    /// presented-frame wait, only the presentation mark that follows it does.
++    #[tokio::test]
++    async fn presented_frame_wait_waits_for_the_presentation_mark() -> Result<(), String> {
++        let state = SharedState::new();
++        complete_frame(&state);
++        state.mark_frames_presented();
++        assert_eq!(state.presented_frame_count(), 1);
++
++        complete_frame(&state);
++        let wait = state.wait_for_presented_frame(1, Duration::from_secs(1));
++        tokio::pin!(wait);
++        tokio::select! {
++            biased;
++            result = &mut wait => {
++                return Err(format!(
++                    "presented wait completed before the frame was presented: {:?}",
++                    result.map_err(|error| error.message)
++                ));
++            }
++            () = tokio::task::yield_now() => {}
++        }
++
++        state.mark_frames_presented();
++        let observed = wait.await.map_err(|error| error.message)?;
++        assert_eq!(observed.frame_count, 2);
++        assert_eq!(state.presented_frame_count(), 2);
++        Ok(())
++    }
++
++    #[tokio::test]
++    async fn presentation_mark_without_a_new_frame_does_not_release_a_wait() {
++        let state = SharedState::new();
++        complete_frame(&state);
++        state.mark_frames_presented();
++        state.mark_frames_presented();
++
++        let result = state
++            .wait_for_presented_frame(1, Duration::from_millis(20))
++            .await
++            .map_err(|error| error.code);
++        assert_eq!(result, Err(ErrorCode::Timeout));
++        assert_eq!(state.presented_frame_count(), 1);
++    }
++
++    #[tokio::test]
++    async fn presented_frame_wait_returns_at_once_for_an_already_presented_frame()
++    -> Result<(), String> {
++        let state = SharedState::new();
++        complete_frame(&state);
++        complete_frame(&state);
++        state.mark_frames_presented();
++
++        let observed = state
++            .wait_for_presented_frame(1, Duration::from_millis(20))
++            .await
++            .map_err(|error| error.message)?;
++        assert_eq!(observed.frame_count, 2);
++        Ok(())
++    }
++
+     #[tokio::test]
+     async fn frame_wait_never_returns_a_started_but_incomplete_frame() -> Result<(), String> {
+         let state = SharedState::new();
+diff --git a/crates/gpui-mcp/src/service.rs b/crates/gpui-mcp/src/service.rs
+index 06791283..5249f72f 100644
+--- a/crates/gpui-mcp/src/service.rs
++++ b/crates/gpui-mcp/src/service.rs
+@@ -576,7 +576,7 @@ fn spawn_ui_pump(
+ #[allow(clippy::too_many_lines)]
+ fn handle_ui_operation(
+     operation: Operation,
+-    state: &SharedState,
++    state: &Arc<SharedState>,
+     document_host: &DocumentHost,
+     resource_host: &ResourceHost,
+     command_host: &CommandHost,
+@@ -616,11 +616,9 @@ fn handle_ui_operation(
+             window.refresh();
+             Ok(BridgeResult::Ack)
+         }
+-        Operation::Refresh => {
+-            let completed = state.frame_stats();
+-            window.refresh();
+-            Ok(BridgeResult::FrameStats(completed))
+-        }
++        Operation::Refresh => Ok(BridgeResult::FrameStats(refresh_and_track_presentation(
++            state, window,
++        ))),
+         Operation::GetPointerLocation => Ok(BridgeResult::PointerLocation(
+             input::pointer_location(window),
+         )),
+@@ -885,11 +883,19 @@ async fn process_request(request: WireRequest, context: ConnectionContext) -> Wi
+         Operation::WaitForFrame {
+             after_frame_count,
+             timeout_ms,
+-        } => context
+-            .state
+-            .wait_for_frame(after_frame_count, Duration::from_millis(timeout_ms))
+-            .await
+-            .map(BridgeResult::FrameStats),
++            presented,
++        } => {
++            let wait = Duration::from_millis(timeout_ms);
++            if presented {
++                context
++                    .state
++                    .wait_for_presented_frame(after_frame_count, wait)
++                    .await
++            } else {
++                context.state.wait_for_frame(after_frame_count, wait).await
++            }
++            .map(BridgeResult::FrameStats)
++        }
+         Operation::GetWindowGeometry => context
+             .state
+             .window_geometry()
+@@ -944,6 +950,30 @@ async fn process_request(request: WireRequest, context: ConnectionContext) -> Wi
+     }
+ }
+ 
++/// Request a new frame and return the completed-frame token observed before the request,
++/// arranging for the presented-frame token to pass it once the refreshed frame is presented.
++///
++/// GPUI runs next-frame callbacks at the start of a frame request, before that request draws
++/// and presents. The outer callback therefore runs at the start of the request that draws the
++/// refreshed frame, and the inner one, registered from it, at the start of the following
++/// request, after the refreshed frame's `present` has returned.
++fn refresh_and_track_presentation(
++    state: &Arc<SharedState>,
++    window: &mut Window,
++) -> gpui_mcp_protocol::FrameStats {
++    let completed = state.frame_stats();
++    window.refresh();
++    let state = Arc::downgrade(state);
++    window.on_next_frame(move |window, _| {
++        window.on_next_frame(move |_, _| {
++            if let Some(state) = state.upgrade() {
++                state.mark_frames_presented();
++            }
++        });
++    });
++    completed
++}
++
+ async fn request_ui_refresh(
+     command_tx: &Sender<UiCommand>,
+     operation_timeout: Duration,
+@@ -1441,9 +1471,65 @@ mod tests {
+     };
+ 
+     use super::{
+-        BridgeConfig, encode_hex, validate_context_resource, validate_context_resource_list,
+-        validate_operation,
++        BridgeConfig, encode_hex, refresh_and_track_presentation, validate_context_resource,
++        validate_context_resource_list, validate_operation,
+     };
++    use crate::Automation;
++
++    struct EmptyView;
++
++    impl gpui::Render for EmptyView {
++        fn render(
++            &mut self,
++            _window: &mut gpui::Window,
++            _cx: &mut gpui::Context<Self>,
++        ) -> impl gpui::IntoElement {
++            gpui::div()
++        }
++    }
++
++    /// GPUI runs next-frame callbacks at the start of a frame request, then draws
++    /// and presents. The refreshed frame is drawn by the first request after the
++    /// refresh, so it is only known to be presented when the request after that
++    /// one starts. A token that advanced at the start of the first request would
++    /// report a frame that had not been drawn yet.
++    #[gpui::test]
++    fn refresh_marks_presentation_at_the_request_after_the_refreshed_frame(
++        cx: &mut gpui::TestAppContext,
++    ) {
++        let automation = Automation::isolated();
++        let attached = automation.clone();
++        let (_view, visual) = cx.add_window_view(move |window, _| {
++            attached.attach(window);
++            EmptyView
++        });
++        visual.run_until_parked();
++        let state = automation.state.clone();
++
++        let before = visual.update(|window, _| refresh_and_track_presentation(&state, window));
++        visual.run_until_parked();
++        assert!(state.frame_stats().frame_count > before.frame_count);
++        assert!(state.presented_frame_count() <= before.frame_count);
++
++        assert_eq!(
++            visual.update(|window, cx| window.simulate_next_frame(cx)),
++            1
++        );
++        assert!(
++            state.presented_frame_count() <= before.frame_count,
++            "the request that draws the refreshed frame has not presented it yet"
++        );
++
++        assert_eq!(
++            visual.update(|window, cx| window.simulate_next_frame(cx)),
++            1
++        );
++        assert!(state.presented_frame_count() > before.frame_count);
++        assert_eq!(
++            state.presented_frame_count(),
++            state.frame_stats().frame_count
++        );
++    }
+ 
+     #[test]
+     fn set_value_requires_a_valid_node_id_and_bounded_value() {

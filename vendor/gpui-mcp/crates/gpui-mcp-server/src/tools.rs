@@ -626,6 +626,7 @@ impl GpuiMcp {
             .call(Operation::WaitForFrame {
                 after_frame_count: frame_count,
                 timeout_ms,
+                presented: false,
             })
             .await?
         {
@@ -671,6 +672,8 @@ impl GpuiMcp {
     }
 }
 
+/// Refresh twice, each time waiting until the refreshed frame has been presented to the
+/// platform window rather than only painted, so a native capture that follows can read it.
 async fn settle_refresh_frames<F, Fut>(wait: Duration, mut call: F) -> Result<FrameStats, String>
 where
     F: FnMut(Operation) -> Fut,
@@ -687,6 +690,7 @@ where
         let BridgeResult::FrameStats(stats) = call(Operation::WaitForFrame {
             after_frame_count: before_refresh.frame_count,
             timeout_ms,
+            presented: true,
         })
         .await?
         else {
@@ -1326,6 +1330,7 @@ mod tests {
             operations[1],
             Operation::WaitForFrame {
                 after_frame_count: 11,
+                presented: true,
                 ..
             }
         ));
@@ -1334,6 +1339,7 @@ mod tests {
             operations[3],
             Operation::WaitForFrame {
                 after_frame_count: 14,
+                presented: true,
                 ..
             }
         ));
