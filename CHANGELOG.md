@@ -31,6 +31,14 @@ All notable changes to DBFlux will be documented in this file.
   matches anywhere in the key. The header count now reads as the number of
   keys on the current page instead of implying a total.
 
+* Connection Manager forms: long field labels (such as Redis "Sentinel Master
+  Name" and the InfluxDB default bucket/database) now wrap inside the label
+  column instead of running into their input, single-choice options such as
+  the Redis topology render as radio buttons instead of checkboxes, the secret
+  input's placeholder follows its label (InfluxDB v2 shows "API Token", not
+  "Password"), and the secret input sits where the driver form places it, so
+  the S3 Secret Access Key follows the Access Key ID.
+
 
 ### Added
 
