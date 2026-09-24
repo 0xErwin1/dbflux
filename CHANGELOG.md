@@ -10,6 +10,13 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **Document tree and schema diagram keys in the keymap** — the document tree's
+  keys and the schema diagram's zoom, pan, selection, table-move and layout
+  keys now come from the app keymap instead of being hard-coded in each view,
+  so Settings → Keybindings lists them under Document Tree and Schema Viz.
+  The default keys are unchanged. The tree's `d d` delete sequence stays built
+  into the tree, because a keymap entry holds a single keystroke.
+
 * Redis, Turso, and InfluxDB now refuse requested row limits (including zero)
   or statement timeouts before execution with `NotSupported`, rather than
   dispatching commands, SQL, HTTP, or instance-context queries without those

@@ -2825,6 +2825,27 @@ settings:
       open_saved_chart: "Open Chart..."
       import_dashboard: "Import Dashboard from JSON..."
       new_dashboard: "New Dashboard..."
+      preview_document: Preview Document
+      toggle_raw_view: Toggle Raw JSON View
+      next_match: Next Match
+      prev_match: Previous Match
+      zoom_in: Zoom In
+      zoom_out: Zoom Out
+      pan_left: Pan Left
+      pan_right: Pan Right
+      pan_up: Pan Up
+      pan_down: Pan Down
+      select_table_left: Select Table Left
+      select_table_right: Select Table Right
+      select_table_up: Select Table Up
+      select_table_down: Select Table Down
+      move_table_left: Move Table Left
+      move_table_right: Move Table Right
+      move_table_up: Move Table Up
+      move_table_down: Move Table Down
+      layout_left_right: Left-Right Layout
+      layout_snowflake: Snowflake Layout
+      layout_compact: Compact Layout
     context:
       global: Global
       sidebar: Sidebar
@@ -2844,6 +2865,7 @@ settings:
       audit: Audit Viewer
       event_streams_picker: Event Streams Picker
       schema_viz: Schema Viz
+      document_tree: Document Tree
     category:
       global: Global
       focus: Focus
