@@ -20,6 +20,7 @@ install there is nothing to restore, so focus defaults to the sidebar.
 
 Open the Connection Manager to create or edit connections:
 
+- Press `Ctrl+Shift+N` (`Cmd+Shift+N` on macOS).
 - From the sidebar, press `c`.
 - Or use the command palette (`Ctrl+Shift+P` / `Cmd+Shift+P` on macOS) and run
   **Open Connection Manager**.
@@ -512,6 +513,7 @@ stay `Ctrl` on all platforms (to avoid clashing with macOS system shortcuts).
 | Keys | Action |
 |------|--------|
 | `Ctrl+Shift+P` / `Cmd+Shift+P` | Toggle command palette |
+| `Ctrl+Shift+N` / `Cmd+Shift+N` | Open Connection Manager |
 | `Ctrl+n` / `Cmd+n` | New query tab |
 | `Ctrl+w` / `Cmd+w` | Close current tab |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous tab |
