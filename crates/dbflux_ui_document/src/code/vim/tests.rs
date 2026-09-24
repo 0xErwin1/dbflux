@@ -1010,7 +1010,7 @@ fn another_window_is_unaffected_by_a_normal_mode_editor(cx: &mut TestAppContext)
         })
         .expect("focus the other window's input");
 
-    TestAppContext::simulate_input(&mut **editor.window, other_window.into(), "hjklxu");
+    TestAppContext::simulate_input(editor.window, other_window.into(), "hjklxu");
 
     let value = other_window
         .read_with(&**editor.window, |_, cx| input.read(cx).value().to_string())
