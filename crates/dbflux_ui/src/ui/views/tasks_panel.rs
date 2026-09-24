@@ -99,25 +99,7 @@ impl TasksPanel {
     ) {
         match task_kind {
             TaskKind::Query => {
-                let task_target = self
-                    .app_state
-                    .read(cx)
-                    .tasks()
-                    .get(task_id)
-                    .and_then(|task| task.target);
-
-                if let Some(target) = task_target {
-                    self.app_state.read(cx).cancel_query_for_target(&target);
-                } else if let Some(profile_id) = profile_id {
-                    let fallback_target = dbflux_core::TaskTarget {
-                        profile_id,
-                        database: None,
-                    };
-
-                    self.app_state
-                        .read(cx)
-                        .cancel_query_for_target(&fallback_target);
-                }
+                self.app_state.read(cx).cancel_query_for_task(task_id);
             }
 
             TaskKind::Connect => {

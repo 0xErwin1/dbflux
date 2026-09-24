@@ -337,6 +337,12 @@ pub struct GeneralSettings {
     #[serde(default)]
     pub auto_refresh_only_if_visible: bool,
 
+    #[serde(
+        default = "default_editor_row_limit",
+        deserialize_with = "deserialize_editor_row_limit"
+    )]
+    pub editor_row_limit: usize,
+
     // -- Execution Safety --
     #[serde(default = "default_true")]
     pub confirm_dangerous_queries: bool,
@@ -378,6 +384,23 @@ pub struct GeneralSettings {
     pub vim_mode: bool,
 }
 
+fn default_editor_row_limit() -> usize {
+    10_000
+}
+
+fn deserialize_editor_row_limit<'de, D>(deserializer: D) -> Result<usize, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = usize::deserialize(deserializer)?;
+    if value == 0 {
+        return Err(serde::de::Error::custom(
+            "editor_row_limit must be positive",
+        ));
+    }
+    Ok(value)
+}
+
 impl Default for GeneralSettings {
     fn default() -> Self {
         Self {
@@ -396,6 +419,7 @@ impl Default for GeneralSettings {
             auto_refresh_pause_on_error: true,
             auto_refresh_only_if_visible: false,
 
+            editor_row_limit: default_editor_row_limit(),
             confirm_dangerous_queries: true,
             dangerous_requires_where: true,
             dangerous_requires_preview: false,
@@ -405,6 +429,22 @@ impl Default for GeneralSettings {
             key_value_size_limit_mib: default_key_value_size_limit_mib(),
             vim_mode: false,
         }
+    }
+}
+
+#[cfg(test)]
+mod editor_row_limit_tests {
+    use super::GeneralSettings;
+
+    #[test]
+    fn editor_row_limit_json_defaults_and_serializes() {
+        let default = serde_json::to_value(GeneralSettings::default()).expect("serialize settings");
+        assert_eq!(default["editor_row_limit"], 10_000);
+
+        let previous: GeneralSettings = serde_json::from_str("{}").expect("legacy settings");
+        let serialized = serde_json::to_value(previous).expect("serialize legacy settings");
+        assert_eq!(serialized["editor_row_limit"], 10_000);
+        assert!(serde_json::from_str::<GeneralSettings>(r#"{"editor_row_limit":0}"#).is_err());
     }
 }
 

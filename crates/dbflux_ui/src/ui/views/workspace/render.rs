@@ -203,8 +203,14 @@ impl Render for Workspace {
                 vec![]
             }
         };
-        let linux_title_bar =
-            platform::render_csd_title_bar_with_crumbs(window, cx, "DBFlux", &crumbs);
+        let title_bar_close = self.title_bar_close_handler(cx);
+        let linux_title_bar = platform::render_csd_title_bar_with_crumbs(
+            window,
+            cx,
+            "DBFlux",
+            &crumbs,
+            Some(title_bar_close),
+        );
 
         let right_pane = if has_tabs {
             let workspace = cx.entity().clone();
@@ -737,6 +743,11 @@ impl Render for Workspace {
             })
             .when(self.export_modal.read(cx).is_visible(), |root| {
                 root.child(self.export_modal.clone())
+            })
+            // Last of the modals so a quit prompt sits above any dialog that
+            // was already open.
+            .when(self.modal_active_query.read(cx).is_visible(), |root| {
+                root.child(self.modal_active_query.clone())
             })
             .child(
                 div()

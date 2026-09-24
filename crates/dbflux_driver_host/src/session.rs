@@ -59,6 +59,9 @@ pub fn dispatch(conn: &dyn Connection, body: DriverRequestBody) -> DriverRespons
 
         DriverRequestBody::Execute { request } => {
             let req = request.into();
+            if let Err(error) = reject_protected_query(&req) {
+                return db_error_to_response(error);
+            }
             match conn.execute(&req) {
                 Ok(result) => DriverResponseBody::ExecuteResult {
                     result: QueryResultDto::from(&result),
@@ -69,6 +72,9 @@ pub fn dispatch(conn: &dyn Connection, body: DriverRequestBody) -> DriverRespons
 
         DriverRequestBody::ExecuteWithHandle { request } => {
             let req = request.into();
+            if let Err(error) = reject_protected_query(&req) {
+                return db_error_to_response(error);
+            }
             match conn.execute_with_handle(&req) {
                 Ok((handle, result)) => DriverResponseBody::ExecuteWithHandleResult {
                     handle_id: handle.id,
@@ -398,6 +404,16 @@ fn dispatch_kv(
     }
 }
 
+#[allow(clippy::result_large_err)]
+fn reject_protected_query(request: &dbflux_core::QueryRequest) -> Result<(), DbError> {
+    if request.limit.is_some() || request.statement_timeout.is_some() {
+        return Err(DbError::NotSupported(
+            "IPC drivers cannot certify query limit or statement timeout enforcement".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn db_error_to_response(err: DbError) -> DriverResponseBody {
     let (code, retriable) = match &err {
         DbError::Timeout => (DriverRpcErrorCode::Timeout, true),
@@ -423,13 +439,20 @@ fn rpc_error(code: DriverRpcErrorCode, message: &str) -> DriverResponseBody {
 
 #[cfg(test)]
 mod tests {
-    use super::dispatch;
+    use super::{DriverRpcErrorCode, dispatch};
     use dbflux_core::{
         Connection, DatabaseCategory, DbError, DbKind, DefaultSqlDialect, DriverMetadataBuilder,
         QueryLanguage, QueryRequest, QueryResult, SchemaLoadingStrategy, SchemaSnapshot,
         SemanticPlan, SemanticPlanKind, SemanticRequest, TableBrowseRequest, TableRef,
     };
     use dbflux_ipc::driver_protocol::{DriverRequestBody, DriverResponseBody};
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        time::Duration,
+    };
 
     struct SemanticPlanConnection {
         metadata: dbflux_core::DriverMetadata,
@@ -559,6 +582,119 @@ mod tests {
                 "semantic planning is intentionally unsupported".into(),
             ))
         }
+    }
+
+    struct CountingConnection {
+        metadata: dbflux_core::DriverMetadata,
+        executes: Arc<AtomicUsize>,
+        handles: Arc<AtomicUsize>,
+    }
+
+    impl Connection for CountingConnection {
+        fn metadata(&self) -> &dbflux_core::DriverMetadata {
+            &self.metadata
+        }
+        fn ping(&self) -> Result<(), DbError> {
+            Ok(())
+        }
+        fn close(&mut self) -> Result<(), DbError> {
+            Ok(())
+        }
+        fn execute(&self, _req: &QueryRequest) -> Result<QueryResult, DbError> {
+            self.executes.fetch_add(1, Ordering::SeqCst);
+            Ok(QueryResult::empty())
+        }
+        fn execute_with_handle(
+            &self,
+            _req: &QueryRequest,
+        ) -> Result<(dbflux_core::QueryHandle, QueryResult), DbError> {
+            self.handles.fetch_add(1, Ordering::SeqCst);
+            Ok((
+                dbflux_core::QueryHandle {
+                    id: uuid::Uuid::nil(),
+                },
+                QueryResult::empty(),
+            ))
+        }
+        fn cancel(&self, _handle: &dbflux_core::QueryHandle) -> Result<(), DbError> {
+            Ok(())
+        }
+        fn schema(&self) -> Result<SchemaSnapshot, DbError> {
+            Ok(SchemaSnapshot::default())
+        }
+        fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
+            SchemaLoadingStrategy::SingleDatabase
+        }
+        fn kind(&self) -> DbKind {
+            DbKind::SQLite
+        }
+        fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
+            &DefaultSqlDialect
+        }
+    }
+
+    #[test]
+    fn protected_host_calls_do_not_reach_driver() {
+        let executes = Arc::new(AtomicUsize::new(0));
+        let handles = Arc::new(AtomicUsize::new(0));
+        let connection = CountingConnection {
+            metadata: DriverMetadataBuilder::new(
+                "test",
+                "Test",
+                DatabaseCategory::Relational,
+                QueryLanguage::Sql,
+            )
+            .build(),
+            executes: executes.clone(),
+            handles: handles.clone(),
+        };
+        for mut request in [
+            QueryRequest::new("SELECT 1").with_limit(0),
+            QueryRequest::new("SELECT 1"),
+        ] {
+            if request.limit.is_none() {
+                request.statement_timeout = Some(Duration::ZERO);
+            }
+            for body in [
+                DriverRequestBody::Execute {
+                    request: (&request).into(),
+                },
+                DriverRequestBody::ExecuteWithHandle {
+                    request: (&request).into(),
+                },
+            ] {
+                match dispatch(&connection, body) {
+                    DriverResponseBody::Error(error) => {
+                        assert_eq!(error.code, DriverRpcErrorCode::UnsupportedMethod);
+                        assert!(!error.retriable);
+                        assert!(error.message.contains("cannot certify"));
+                    }
+                    other => panic!("expected protected request rejection, got {other:?}"),
+                }
+            }
+        }
+        assert_eq!(executes.load(Ordering::SeqCst), 0);
+        assert_eq!(handles.load(Ordering::SeqCst), 0);
+        assert!(matches!(
+            dispatch(
+                &connection,
+                DriverRequestBody::Execute {
+                    request: (&QueryRequest::new("SELECT 1")).into()
+                }
+            ),
+            DriverResponseBody::ExecuteResult { .. }
+        ));
+        assert!(matches!(
+            dispatch(
+                &connection,
+                DriverRequestBody::ExecuteWithHandle {
+                    request: (&QueryRequest::new("SELECT 1")).into()
+                }
+            ),
+            DriverResponseBody::ExecuteWithHandleResult { .. }
+        ));
+        assert_eq!(executes.load(Ordering::SeqCst), 1);
+        assert_eq!(handles.load(Ordering::SeqCst), 1);
     }
 
     #[test]

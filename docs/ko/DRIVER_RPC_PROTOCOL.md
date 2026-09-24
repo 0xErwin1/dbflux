@@ -279,6 +279,8 @@ DbConfig::External {
 
 이 프로토콜은 탐색, CRUD, 키-값, 코드 생성 작업도 지원합니다. 전체 열거형 집합은 `crates/dbflux_ipc/src/driver_protocol.rs`를 참고하세요.
 
+**보호된 실행:** 외부 드라이버가 행 제한이나 문장 타임아웃을 적용한다고 보증할 수 있는 협상된 기능이 없으므로 보호된 쿼리는 거부됩니다. `IpcConnection`은 `QueryRequest.limit`가 `Some(n)`(`Some(0)` 포함)이거나 `statement_timeout`이 `Some(...)`이면 RPC를 보내기 전에 `Execute`와 `ExecuteWithHandle`을 `NotSupported`로 거부합니다. 호스트 세션 디스패치도 플러그인 연결을 호출하기 전에 같은 요청을 `UnsupportedMethod`로 독립적으로 거부합니다. 두 옵션이 모두 `None`인 요청은 계속 실행되며, 탐색 및 CRUD 작업은 영향을 받지 않습니다.
+
 ## 드라이버의 감사 이벤트 내보내기 (v1.2+)
 
 프로토콜 버전 v1.2 이상으로 협상한 드라이버는 중간 응답 프레임(`done=false`)으로 감사 이벤트를 호스트에 되돌려 보낼 수 있습니다. 호스트는 이를 마스킹하고 속도를 제한한 뒤 `aud_audit_events`에 기록합니다.
