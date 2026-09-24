@@ -15,6 +15,22 @@ All notable changes to DBFlux will be documented in this file.
   `type_text`. Previously both failed on every input, `set_text` with a
   misleading document-range error, so filling a form needed coordinates.
 
+* Redis, Turso, and InfluxDB now refuse requested row limits (including zero)
+  or statement timeouts before execution with `NotSupported`, rather than
+  dispatching commands, SQL, HTTP, or instance-context queries without those
+  protections. Unprotected execution remains available; the default editor
+  cannot promise these protections on these backends.
+  
+* Reject MongoDB execution requests with row limits or statement timeouts before any operation dispatches.
+
+* **CloudWatch query safety** — reject requested row limits and statement timeouts before Logs or Metrics dispatch; unprotected Logs queries retain the fixed SDK `StartQuery` limit of 1000, without a default timeout or server-work guarantee.
+
+* The Redis key browser now fills each page across `SCAN` batches (and across
+  masters on Cluster), bounded to 1000 round trips and 500 ms per page, so a
+  sparse filter no longer returns empty pages. Keys repeated by `SCAN` appear
+  once per page, and the page's key types are fetched in one pipeline instead
+  of one `TYPE` round trip per key.
+
 * **Prompt before abandoning a running query** — disconnecting a connection
   with a query still running, or closing the DBFlux window while any
   connection runs one, now opens the "Active query running" prompt instead of
@@ -34,22 +50,6 @@ All notable changes to DBFlux will be documented in this file.
   the query ended (forever, for an endless query). SQLite now interrupts
   without taking the lock, and driver cancels for every backend run off the UI
   thread, so a slow network cancel cannot stall it either.
-
-* Redis, Turso, and InfluxDB now refuse requested row limits (including zero)
-  or statement timeouts before execution with `NotSupported`, rather than
-  dispatching commands, SQL, HTTP, or instance-context queries without those
-  protections. Unprotected execution remains available; the default editor
-  cannot promise these protections on these backends.
-  
-* Reject MongoDB execution requests with row limits or statement timeouts before any operation dispatches.
-
-* **CloudWatch query safety** — reject requested row limits and statement timeouts before Logs or Metrics dispatch; unprotected Logs queries retain the fixed SDK `StartQuery` limit of 1000, without a default timeout or server-work guarantee.
-
-* The Redis key browser now fills each page across `SCAN` batches (and across
-  masters on Cluster), bounded to 1000 round trips and 500 ms per page, so a
-  sparse filter no longer returns empty pages. Keys repeated by `SCAN` appear
-  once per page, and the page's key types are fetched in one pipeline instead
-  of one `TYPE` round trip per key.
 
 * The key browser filter now passes input containing `*`, `?` or `[` through
   as a glob, so a prefix search such as `leaderboard*` works; plain text still
