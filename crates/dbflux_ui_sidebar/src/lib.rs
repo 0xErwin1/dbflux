@@ -245,6 +245,13 @@ pub enum SidebarEvent {
         profile_id: Uuid,
     },
 
+    /// The user asked to disconnect a connection that still has a query
+    /// running. The host asks what to do with the query instead of
+    /// disconnecting right away.
+    RequestActiveQueryDisconnect {
+        profile_id: Uuid,
+    },
+
     /// Request to prompt the user for an SSH tunnel passphrase.
     ///
     /// Emitted when a connection attempt fails with a passphrase-required error

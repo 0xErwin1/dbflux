@@ -693,13 +693,7 @@ impl CodeDocument {
         cx.spawn(async move |this, cx| {
             let session_execution = task.await;
             let session_isolated = session_execution.isolated;
-            let mut result = session_execution.result;
-
-            if let Ok(query_result) = result.as_mut() {
-                crate::result_warnings::handoff_sql_editor_result(query_result, |warning| {
-                    dbflux_ui_base::user_error::report_error_async(warning, cx)
-                });
-            }
+            let result = session_execution.result;
 
             if cancel_token.is_cancelled() && session_isolated {
                 // Local task cancellation does not cancel the remote isolated session. Wait for
@@ -1190,7 +1184,13 @@ impl CodeDocument {
         let is_script = pending.is_script;
 
         match pending.result {
-            Ok(qr) => {
+            Ok(mut qr) => {
+                if !is_script {
+                    crate::result_warnings::handoff_sql_editor_result(&mut qr, |warning| {
+                        dbflux_ui_base::user_error::report_error(warning, cx)
+                    });
+                }
+
                 self.runner.complete_primary(pending.task_id, cx);
 
                 // Use affected_rows when available (INSERT/UPDATE/DELETE), otherwise rows.len() (SELECT)

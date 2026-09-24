@@ -279,6 +279,8 @@ The service should parse `profile_json`, expect `DbConfig::External`, and valida
 
 The protocol also supports browse, CRUD, key-value, and code generation operations. See `crates/dbflux_ipc/src/driver_protocol.rs` for the full enum set.
 
+**Protected execution:** no negotiated capability lets an external driver certify that it enforces a row limit or a statement timeout, so protected queries are refused. `IpcConnection` rejects `Execute` and `ExecuteWithHandle` with `NotSupported` before sending the RPC when `QueryRequest.limit` is `Some(n)` (including `Some(0)`) or `statement_timeout` is `Some(...)`. Host session dispatch independently rejects the same requests with `UnsupportedMethod` before invoking the plugin connection. Requests with both options `None` still run, and browse and CRUD operations are unaffected.
+
 ## Audit emission from drivers (v1.2+)
 
 Drivers that negotiate protocol version v1.2 or higher may emit audit events back to the host as intermediate response frames (`done=false`). The host sanitizes, rate-limits, and writes them to `aud_audit_events`.

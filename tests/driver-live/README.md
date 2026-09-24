@@ -64,7 +64,7 @@ Driver Live Integration job of `.github/workflows/tests.yml`.
 | MongoDB | `live_integration`, `instance_catalog` *(local only)* | `mongo:7` | |
 | Redis | `live_integration`, `live_cluster`, `live_rdb`, `instance_catalog` *(local only)* | `redis:7`, `grokzen/redis-cluster:7.0.10` | `live_cluster` needs `--test-threads=1` (fixed ports 7000–7005). `live_rdb` exercises the RDB analyzer against the container's `dump.rdb` after a forced `SAVE`. |
 | DynamoDB | `live_integration` | `amazon/dynamodb-local` | |
-| S3 | `live_integration` | MinIO (`quay.io/minio/minio`, pinned tag in `dbflux_test_support`) | |
+| S3 | `live_integration` | MinIO (`cgr.dev/chainguard/minio`, pinned by digest in `dbflux_test_support`) | |
 | SQLite | `live_integration`, `ddl_integration` *(local only)* | temporary local file | No Docker. Not `#[ignore]`d — run without `-- --ignored`. |
 | SQL Server | `live_integration`, `ddl_integration`, `instance_catalog` | `mcr.microsoft.com/mssql/server:2022-latest` | amd64 image; single-threaded (one ~2 GB container per test). See specifics below. |
 | InfluxDB | `live_integration` | `influxdb:2.7` and `influxdb:1.8` | Covers both the v2 API and v1 (InfluxQL) code paths; single-threaded. |

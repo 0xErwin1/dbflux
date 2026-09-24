@@ -20,6 +20,12 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* External RPC drivers now refuse a query that sets a row limit (including
+  zero) or a statement timeout, both in the client before the request is sent
+  and in the driver host before the plugin connection runs it. Previously the
+  host passed those options through with nothing to guarantee the driver
+  honored them. Queries without either option run as before.
+
 * **Checkbox names in Settings and the Connection Manager** — every checkbox in
   the Settings window and the Connection Manager now has the text shown next to
   it as its accessible name. In Settings > General all eight checkboxes
@@ -47,6 +53,11 @@ All notable changes to DBFlux will be documented in this file.
   from the form. Each input takes comma-separated hook IDs or names, shows the
   extras already bound when a connection is edited, is reachable with j/k, and
   is addressable as `cm-setting-<phase>_hook_extra`.
+
+* The SQL editor warns once when any delivered result set actually omitted rows; the
+  data grid shows the warning for its selected result set, even when no rows were
+  retained. A result that merely fills its limit is not flagged, and discarded
+  stale executions do not raise omission warnings.
 
 * Redis, Turso, and InfluxDB now refuse requested row limits (including zero)
   or statement timeouts before execution with `NotSupported`, rather than
@@ -81,6 +92,26 @@ All notable changes to DBFlux will be documented in this file.
   sparse filter no longer returns empty pages. Keys repeated by `SCAN` appear
   once per page, and the page's key types are fetched in one pipeline instead
   of one `TYPE` round trip per key.
+
+* **Prompt before abandoning a running query** — disconnecting a connection
+  with a query still running, or closing the DBFlux window while any
+  connection runs one, now opens the "Active query running" prompt instead of
+  acting right away. **Cancel query** cancels the query and stays connected,
+  **Keep waiting** changes nothing, and **Disconnect anyway** / **Quit anyway**
+  cancels the query and continues. The prompt existed but nothing opened it.
+
+* **Linux title-bar close follows the window-manager close** — the main
+  window's in-app close button (client-side decorations) removed the window
+  directly, skipping the running-query prompt and the graceful shutdown that
+  saves pending edits and closes connections. It now takes the same path as
+  closing through the window manager. Other windows keep their close behavior.
+
+* **Cancelling a query no longer freezes the UI** — SQLite's cancel waited
+  for the connection lock that the running query holds, so cancelling from the
+  editor, the tasks panel, or the running-query prompt froze the window until
+  the query ended (forever, for an endless query). SQLite now interrupts
+  without taking the lock, and driver cancels for every backend run off the UI
+  thread, so a slow network cancel cannot stall it either.
 
 * The key browser filter now passes input containing `*`, `?` or `[` through
   as a glob, so a prefix search such as `leaderboard*` works; plain text still
