@@ -20,6 +20,12 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* External RPC drivers now refuse a query that sets a row limit (including
+  zero) or a statement timeout, both in the client before the request is sent
+  and in the driver host before the plugin connection runs it. Previously the
+  host passed those options through with nothing to guarantee the driver
+  honored them. Queries without either option run as before.
+
 * `F5` now refreshes the focused document (table data, bucket list, object
   listing, key browser), and the audit viewer's `r` refreshes the audit list
   instead of the connection schema. The buckets empty state showed `r refresh`,
