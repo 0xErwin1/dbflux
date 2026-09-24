@@ -114,6 +114,11 @@ pub(crate) fn access_proxy_disabled_label(name: &str) -> String {
     dbflux_i18n::t!("access.proxy_disabled_label", name = name)
 }
 
+/// Formats the "Basic (<username>)" auth label shown in the Access tab's proxy details card.
+pub(crate) fn access_proxy_auth_basic_with_username(username: &str) -> String {
+    dbflux_i18n::t!("access.proxy_auth_basic_with_username", username = username)
+}
+
 /// Formats the "Private Key (<path>)" label shown for a saved SSH tunnel's private key auth.
 pub(crate) fn ssh_private_key_with_path(path: &str) -> String {
     dbflux_i18n::t!("ssh.private_key_with_path", path = path)
