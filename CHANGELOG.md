@@ -26,13 +26,6 @@ All notable changes to DBFlux will be documented in this file.
   host passed those options through with nothing to guarantee the driver
   honored them. Queries without either option run as before.
 
-* **More English-only labels are translated** — the audit viewer's tab title,
-  filter-bar labels and its category and level chips, the "Off" and "Custom"
-  auto-refresh options, the Default and Compact style options in Settings, the
-  short time-range presets (15m, 1h, 6h, 24h, 7d), and the dashboard-import
-  and export-connection toasts now follow the selected language. Object-storage
-  audit events showed a `NULL` category chip; they now show their category.
-
 * `F5` now refreshes the focused document (table data, bucket list, object
   listing, key browser), and the audit viewer's `r` refreshes the audit list
   instead of the connection schema. The buckets empty state showed `r refresh`,
@@ -53,6 +46,13 @@ All notable changes to DBFlux will be documented in this file.
   from the form. Each input takes comma-separated hook IDs or names, shows the
   extras already bound when a connection is edited, is reachable with j/k, and
   is addressable as `cm-setting-<phase>_hook_extra`.
+
+* **More English-only labels are translated** — the audit viewer's tab title,
+  filter-bar labels and its category and level chips, the "Off" and "Custom"
+  auto-refresh options, the Default and Compact style options in Settings, the
+  short time-range presets (15m, 1h, 6h, 24h, 7d), and the dashboard-import
+  and export-connection toasts now follow the selected language. Object-storage
+  audit events showed a `NULL` category chip; they now show their category.
 
 * The SQL editor warns once when any delivered result set actually omitted rows; the
   data grid shows the warning for its selected result set, even when no rows were
