@@ -1,10 +1,11 @@
 use crate::controls::{Button, ButtonVariant, Checkbox, InputEvent, InputState};
-use crate::modals::shell::{ModalShell, ModalVariant};
+use crate::modals::shell::{ModalFocus, ModalShell, ModalVariant};
 use crate::primitives::surface_raised;
 use crate::tokens::{FontSizes, Spacing};
 use crate::typography::AppFonts;
+use dbflux_core::LogErr;
 use gpui::prelude::*;
-use gpui::{Context, Entity, EventEmitter, SharedString, Subscription, Window, div, px};
+use gpui::{Context, Entity, EventEmitter, Focusable, SharedString, Subscription, Window, div, px};
 use gpui_component::ActiveTheme;
 
 /// Outcome emitted by both mutation confirmation modals when resolved.
@@ -41,13 +42,15 @@ pub struct MutationConfirmRequest {
 pub struct ModalMutationConfirm {
     request: Option<MutationConfirmRequest>,
     visible: bool,
+    focus: ModalFocus,
 }
 
 impl ModalMutationConfirm {
-    pub fn new(_window: &mut Window, _cx: &mut Context<Self>) -> Self {
+    pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
         Self {
             request: None,
             visible: false,
+            focus: ModalFocus::new(cx),
         }
     }
 
@@ -58,23 +61,39 @@ impl ModalMutationConfirm {
     pub fn open(&mut self, request: MutationConfirmRequest, cx: &mut Context<Self>) {
         self.request = Some(request);
         self.visible = true;
+        self.focus.focus_on_next_render();
         cx.notify();
     }
 
     pub fn close(&mut self, cx: &mut Context<Self>) {
         self.visible = false;
         self.request = None;
+        self.focus.restore(cx);
         cx.notify();
+    }
+
+    /// Run the mutation, as the Confirm button does.
+    pub fn confirm(&mut self, cx: &mut Context<Self>) {
+        cx.emit(MutationConfirmOutcome::Confirmed);
+        self.close(cx);
+    }
+
+    /// Dismiss the modal without running the mutation.
+    pub fn cancel(&mut self, cx: &mut Context<Self>) {
+        cx.emit(MutationConfirmOutcome::Cancelled);
+        self.close(cx);
     }
 }
 
 impl EventEmitter<MutationConfirmOutcome> for ModalMutationConfirm {}
 
 impl Render for ModalMutationConfirm {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if !self.visible {
             return div().into_any_element();
         }
+
+        self.focus.apply_pending(window, cx);
 
         let Some(ref request) = self.request else {
             return div().into_any_element();
@@ -170,9 +189,7 @@ impl Render for ModalMutationConfirm {
                 )
                 .variant(ButtonVariant::Default)
                 .on_click(cx.listener(|this, _event, _window, cx| {
-                    this.visible = false;
-                    cx.emit(MutationConfirmOutcome::Cancelled);
-                    cx.notify();
+                    this.cancel(cx);
                 })),
             )
             .child(
@@ -182,9 +199,7 @@ impl Render for ModalMutationConfirm {
                 )
                 .variant(ButtonVariant::Primary)
                 .on_click(cx.listener(|this, _event, _window, cx| {
-                    this.visible = false;
-                    cx.emit(MutationConfirmOutcome::Confirmed);
-                    cx.notify();
+                    this.confirm(cx);
                 })),
             );
 
@@ -195,6 +210,19 @@ impl Render for ModalMutationConfirm {
         )
         .variant(ModalVariant::Default)
         .width(px(520.0))
+        .focus_handle(self.focus.handle())
+        .on_close({
+            let entity = cx.entity().downgrade();
+            move |_, cx| {
+                entity.update(cx, |this, cx| this.cancel(cx)).log_err();
+            }
+        })
+        .on_confirm({
+            let entity = cx.entity().downgrade();
+            move |_, cx| {
+                entity.update(cx, |this, cx| this.confirm(cx)).log_err();
+            }
+        })
         .into_any_element()
     }
 }
@@ -234,6 +262,7 @@ pub struct ModalMutationConfirmHard {
     confirm_input: Entity<InputState>,
     type_matches: bool,
     opt_in_checked: bool,
+    focus: ModalFocus,
     _subscription: Option<Subscription>,
 }
 
@@ -250,6 +279,7 @@ impl ModalMutationConfirmHard {
             confirm_input,
             type_matches: false,
             opt_in_checked: false,
+            focus: ModalFocus::new(cx),
             _subscription: None,
         }
     }
@@ -293,6 +323,10 @@ impl ModalMutationConfirmHard {
         self.request = Some(request);
         self.visible = true;
         self._subscription = Some(subscription);
+
+        let input_focus = self.confirm_input.read(cx).focus_handle(cx);
+        self.focus.focus(Some(&input_focus), window, cx);
+
         cx.notify();
     }
 
@@ -302,7 +336,25 @@ impl ModalMutationConfirmHard {
         self.type_matches = false;
         self.opt_in_checked = false;
         self._subscription = None;
+        self.focus.restore(cx);
         cx.notify();
+    }
+
+    /// Run the mutation, as the Confirm button does. Does nothing until the
+    /// typed name matches and, when required, the opt-in box is checked.
+    pub fn confirm(&mut self, cx: &mut Context<Self>) {
+        if !self.confirm_enabled() {
+            return;
+        }
+
+        cx.emit(MutationConfirmOutcome::Confirmed);
+        self.close(cx);
+    }
+
+    /// Dismiss the modal without running the mutation.
+    pub fn cancel(&mut self, cx: &mut Context<Self>) {
+        cx.emit(MutationConfirmOutcome::Cancelled);
+        self.close(cx);
     }
 
     fn confirm_enabled(&self) -> bool {
@@ -452,9 +504,7 @@ impl Render for ModalMutationConfirmHard {
                 )
                 .variant(ButtonVariant::Default)
                 .on_click(cx.listener(|this, _event, _window, cx| {
-                    this.visible = false;
-                    cx.emit(MutationConfirmOutcome::Cancelled);
-                    cx.notify();
+                    this.cancel(cx);
                 })),
             )
             .child(
@@ -465,12 +515,7 @@ impl Render for ModalMutationConfirmHard {
                 .variant(ButtonVariant::Danger)
                 .disabled(!confirm_enabled)
                 .on_click(cx.listener(|this, _event, _window, cx| {
-                    if !this.confirm_enabled() {
-                        return;
-                    }
-                    this.visible = false;
-                    cx.emit(MutationConfirmOutcome::Confirmed);
-                    cx.notify();
+                    this.confirm(cx);
                 })),
             );
 
@@ -481,6 +526,20 @@ impl Render for ModalMutationConfirmHard {
         )
         .variant(ModalVariant::Danger)
         .width(px(560.0))
+        .focus_handle(self.focus.handle())
+        .on_close({
+            let entity = cx.entity().downgrade();
+            move |_, cx| {
+                entity.update(cx, |this, cx| this.cancel(cx)).log_err();
+            }
+        })
+        .on_confirm({
+            let entity = cx.entity().downgrade();
+            move |_, cx| {
+                entity.update(cx, |this, cx| this.confirm(cx)).log_err();
+            }
+        })
+        .confirm_enabled(confirm_enabled)
         .into_any_element()
     }
 }

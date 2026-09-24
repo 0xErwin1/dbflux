@@ -1,7 +1,8 @@
-use crate::modals::shell::{ModalShell, ModalVariant};
+use crate::modals::shell::{ModalFocus, ModalShell, ModalVariant};
 use crate::primitives::{Text, surface_raised};
 use crate::tokens::{FontSizes, Spacing};
 use crate::typography::AppFonts;
+use dbflux_core::LogErr;
 use gpui::prelude::*;
 use gpui::{Context, EventEmitter, Task, Window, div, px};
 use gpui_component::ActiveTheme;
@@ -45,15 +46,17 @@ pub struct ModalActiveQuery {
     request: Option<ActiveQueryRequest>,
     visible: bool,
     elapsed_secs: u64,
+    focus: ModalFocus,
     _elapsed_task: Option<Task<()>>,
 }
 
 impl ModalActiveQuery {
-    pub fn new(_cx: &mut Context<Self>) -> Self {
+    pub fn new(cx: &mut Context<Self>) -> Self {
         Self {
             request: None,
             visible: false,
             elapsed_secs: 0,
+            focus: ModalFocus::new(cx),
             _elapsed_task: None,
         }
     }
@@ -67,6 +70,7 @@ impl ModalActiveQuery {
         self.visible = true;
         self.elapsed_secs = 0;
         self.start_timer(cx);
+        self.focus.focus_on_next_render();
         cx.notify();
     }
 
@@ -74,7 +78,16 @@ impl ModalActiveQuery {
         self.visible = false;
         self.request = None;
         self._elapsed_task = None;
+        self.focus.restore(cx);
         cx.notify();
+    }
+
+    /// Dismiss the modal and let the query keep running. This is what the
+    /// close button, a backdrop click and Escape do: none of them may cancel
+    /// the query or force the disconnect.
+    pub fn keep_waiting(&mut self, cx: &mut Context<Self>) {
+        cx.emit(ActiveQueryOutcome::KeepWaiting);
+        self.close(cx);
     }
 
     fn start_timer(&mut self, cx: &mut Context<Self>) {
@@ -109,10 +122,12 @@ fn elapsed_label(seconds: u64) -> String {
 impl EventEmitter<ActiveQueryOutcome> for ModalActiveQuery {}
 
 impl Render for ModalActiveQuery {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if !self.visible {
             return div().into_any_element();
         }
+
+        self.focus.apply_pending(window, cx);
 
         let Some(ref request) = self.request else {
             return div().into_any_element();
@@ -157,8 +172,7 @@ impl Render for ModalActiveQuery {
         });
 
         let on_keep_waiting = cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
-            cx.emit(ActiveQueryOutcome::KeepWaiting);
-            this.close(cx);
+            this.keep_waiting(cx);
         });
 
         let on_force_disconnect = cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
@@ -203,6 +217,15 @@ impl Render for ModalActiveQuery {
         )
         .variant(ModalVariant::Default)
         .width(px(520.0))
+        .focus_handle(self.focus.handle())
+        .on_close({
+            let entity = cx.entity().downgrade();
+            move |_, cx| {
+                entity
+                    .update(cx, |this, cx| this.keep_waiting(cx))
+                    .log_err();
+            }
+        })
         .into_any_element()
     }
 }

@@ -1,12 +1,13 @@
 use crate::controls::{GpuiInput as Input, InputEvent, InputState};
-use crate::modals::shell::{ModalShell, ModalVariant};
+use crate::modals::shell::{ModalFocus, ModalShell, ModalVariant};
 use crate::primitives::{Text, surface_raised};
 use crate::tokens::{FontSizes, Spacing};
 use crate::typography::AppFonts;
-use dbflux_core::{RelationKind, RelationRef};
+use dbflux_core::{LogErr, RelationKind, RelationRef};
 use gpui::prelude::*;
-use gpui::{Context, Entity, EventEmitter, Subscription, Window, div, px};
+use gpui::{Context, Entity, EventEmitter, Focusable, Subscription, Window, div, px};
 use gpui_component::ActiveTheme;
+use gpui_component::Disableable;
 use gpui_component::button::{Button, ButtonVariants};
 
 /// Outcome emitted when the user resolves the modal.
@@ -82,6 +83,7 @@ pub struct ModalDropTable {
     visible: bool,
     confirm_input: Entity<InputState>,
     drop_enabled: bool,
+    focus: ModalFocus,
     _subscription: Option<Subscription>,
 }
 
@@ -96,6 +98,7 @@ impl ModalDropTable {
             visible: false,
             confirm_input,
             drop_enabled: false,
+            focus: ModalFocus::new(cx),
             _subscription: None,
         }
     }
@@ -133,6 +136,10 @@ impl ModalDropTable {
         self.request = Some(request);
         self.visible = true;
         self._subscription = Some(subscription);
+
+        let input_focus = self.confirm_input.read(cx).focus_handle(cx);
+        self.focus.focus(Some(&input_focus), window, cx);
+
         cx.notify();
     }
 
@@ -141,7 +148,25 @@ impl ModalDropTable {
         self.request = None;
         self.drop_enabled = false;
         self._subscription = None;
+        self.focus.restore(cx);
         cx.notify();
+    }
+
+    /// Drop the table, as the "Drop table" button does. Does nothing until
+    /// the typed name matches.
+    pub fn confirm(&mut self, cx: &mut Context<Self>) {
+        if !self.drop_enabled {
+            return;
+        }
+
+        cx.emit(DropTableOutcome::Confirmed);
+        self.close(cx);
+    }
+
+    /// Dismiss the modal without dropping anything.
+    pub fn cancel(&mut self, cx: &mut Context<Self>) {
+        cx.emit(DropTableOutcome::Cancelled);
+        self.close(cx);
     }
 }
 
@@ -259,13 +284,11 @@ impl Render for ModalDropTable {
             .when_some(hint, |el, h| el.child(h));
 
         let on_cancel = cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
-            cx.emit(DropTableOutcome::Cancelled);
-            this.close(cx);
+            this.cancel(cx);
         });
 
         let on_drop = cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
-            cx.emit(DropTableOutcome::Confirmed);
-            this.close(cx);
+            this.confirm(cx);
         });
 
         let footer = div()
@@ -277,30 +300,13 @@ impl Render for ModalDropTable {
                     .label(dbflux_i18n::t!("modals.drop_table.cancel"))
                     .on_click(on_cancel),
             )
-            .child(if drop_enabled {
+            .child(
                 Button::new("drop-table-confirm")
                     .label(dbflux_i18n::t!("modals.drop_table.confirm"))
                     .danger()
-                    .on_click(on_drop)
-                    .into_any_element()
-            } else {
-                div()
-                    .flex()
-                    .items_center()
-                    .px(Spacing::SM)
-                    .py(Spacing::XS)
-                    .rounded(px(4.0)) // guardrail-allow: border radius, not spacing
-                    .opacity(0.4)
-                    .bg(theme.danger)
-                    .cursor(gpui::CursorStyle::default())
-                    .child(
-                        div()
-                            .text_size(FontSizes::SM)
-                            .text_color(theme.background)
-                            .child(dbflux_i18n::t!("modals.drop_table.confirm")),
-                    )
-                    .into_any_element()
-            });
+                    .disabled(!drop_enabled)
+                    .on_click(on_drop),
+            );
 
         ModalShell::new(
             dbflux_i18n::t!("modals.drop_table.title"),
@@ -309,6 +315,20 @@ impl Render for ModalDropTable {
         )
         .variant(ModalVariant::Danger)
         .width(px(560.0))
+        .focus_handle(self.focus.handle())
+        .on_close({
+            let entity = cx.entity().downgrade();
+            move |_, cx| {
+                entity.update(cx, |this, cx| this.cancel(cx)).log_err();
+            }
+        })
+        .on_confirm({
+            let entity = cx.entity().downgrade();
+            move |_, cx| {
+                entity.update(cx, |this, cx| this.confirm(cx)).log_err();
+            }
+        })
+        .confirm_enabled(drop_enabled)
         .into_any_element()
     }
 }
@@ -426,5 +446,99 @@ mod tests {
             hint,
             dbflux_i18n::t!("modals.drop_table.confirm_prompt", table = "orders")
         );
+    }
+}
+
+#[cfg(test)]
+mod keyboard_tests {
+    // Explicit imports rather than the parent glob: combining `use super::*`
+    // with `#[gpui::test]` sends the gpui_macros expansion into unbounded
+    // recursion.
+    use super::{DropTableOutcome, DropTableRequest, ModalDropTable};
+    use gpui::{
+        AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, Styled as _,
+        TestAppContext, VisualTestContext, Window, div,
+    };
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    struct Host {
+        modal: Entity<ModalDropTable>,
+    }
+
+    impl Render for Host {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child(self.modal.clone())
+        }
+    }
+
+    fn open_modal(
+        cx: &mut TestAppContext,
+    ) -> (
+        Entity<ModalDropTable>,
+        &mut VisualTestContext,
+        Rc<RefCell<Vec<DropTableOutcome>>>,
+    ) {
+        cx.update(gpui_component::init);
+
+        let (host, window) = cx.add_window_view(|window, cx| Host {
+            modal: cx.new(|cx| ModalDropTable::new(window, cx)),
+        });
+        let modal = window.update(|_, cx| host.read(cx).modal.clone());
+
+        let outcomes: Rc<RefCell<Vec<DropTableOutcome>>> = Rc::default();
+        window.update(|window, cx| {
+            let sink = outcomes.clone();
+            cx.subscribe(&modal, move |_, outcome: &DropTableOutcome, _| {
+                sink.borrow_mut().push(outcome.clone());
+            })
+            .detach();
+
+            modal.update(cx, |modal, cx| {
+                modal.open(
+                    DropTableRequest {
+                        table_name: "orders".to_string(),
+                        schema_name: None,
+                        dependents: Vec::new(),
+                    },
+                    window,
+                    cx,
+                );
+            });
+        });
+        window.run_until_parked();
+
+        (modal, window, outcomes)
+    }
+
+    #[gpui::test]
+    fn enter_drops_only_once_the_typed_name_matches(cx: &mut TestAppContext) {
+        let (modal, window, outcomes) = open_modal(cx);
+
+        window.simulate_input("order");
+        window.simulate_keystrokes("enter");
+        assert!(outcomes.borrow().is_empty(), "a partial name must not drop");
+        assert!(window.update(|_, cx| modal.read(cx).is_visible()));
+
+        window.simulate_input("s");
+        window.simulate_keystrokes("enter");
+        assert!(matches!(
+            outcomes.borrow().as_slice(),
+            [DropTableOutcome::Confirmed]
+        ));
+        assert!(!window.update(|_, cx| modal.read(cx).is_visible()));
+    }
+
+    #[gpui::test]
+    fn escape_cancels_from_the_confirmation_input(cx: &mut TestAppContext) {
+        let (modal, window, outcomes) = open_modal(cx);
+
+        window.simulate_keystrokes("escape");
+
+        assert!(matches!(
+            outcomes.borrow().as_slice(),
+            [DropTableOutcome::Cancelled]
+        ));
+        assert!(!window.update(|_, cx| modal.read(cx).is_visible()));
     }
 }

@@ -1,11 +1,11 @@
 use crate::icons::AppIcon;
-use crate::modals::shell::{ModalShell, ModalVariant};
+use crate::modals::shell::{ModalFocus, ModalShell, ModalVariant};
 use crate::primitives::Icon;
 use crate::semantic::BannerColors as SemBannerColors;
 use crate::tokens::{FontSizes, Spacing};
 use crate::typography::AppFonts;
 use dbflux_core::{
-    ColumnSnapshot, IndexSnapshot, QueryTableRef, SchemaChange, SchemaDriftDetected,
+    ColumnSnapshot, IndexSnapshot, LogErr, QueryTableRef, SchemaChange, SchemaDriftDetected,
 };
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -35,14 +35,16 @@ pub struct ModalSchemaDrift {
     drift: Option<SchemaDriftDetected>,
     visible: bool,
     loading: bool,
+    focus: ModalFocus,
 }
 
 impl ModalSchemaDrift {
-    pub fn new(_cx: &mut Context<Self>) -> Self {
+    pub fn new(cx: &mut Context<Self>) -> Self {
         Self {
             drift: None,
             visible: false,
             loading: false,
+            focus: ModalFocus::new(cx),
         }
     }
 
@@ -55,6 +57,7 @@ impl ModalSchemaDrift {
         self.drift = Some(drift);
         self.visible = true;
         self.loading = false;
+        self.focus.focus_on_next_render();
         cx.notify();
     }
 
@@ -62,7 +65,25 @@ impl ModalSchemaDrift {
         self.visible = false;
         self.drift = None;
         self.loading = false;
+        self.focus.restore(cx);
         cx.notify();
+    }
+
+    /// Start the refresh, as the Refresh button does. Does nothing while a
+    /// refresh is already running.
+    pub fn refresh(&mut self, cx: &mut Context<Self>) {
+        if self.loading {
+            return;
+        }
+
+        self.set_loading(true, cx);
+        cx.emit(SchemaDriftRefresh);
+    }
+
+    /// Dismiss the modal, as the close button and Escape do.
+    pub fn dismiss(&mut self, cx: &mut Context<Self>) {
+        cx.emit(SchemaDriftDismissed);
+        self.close(cx);
     }
 
     /// Mark the modal as loading (while refresh is in progress).
@@ -73,10 +94,12 @@ impl ModalSchemaDrift {
 }
 
 impl Render for ModalSchemaDrift {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if !self.visible {
             return div().into_any_element();
         }
+
+        self.focus.apply_pending(window, cx);
 
         let Some(ref drift) = self.drift else {
             return div().into_any_element();
@@ -163,13 +186,11 @@ impl Render for ModalSchemaDrift {
         });
 
         let on_refresh = cx.listener(|this, _event: &gpui::ClickEvent, _, cx| {
-            this.set_loading(true, cx);
-            cx.emit(SchemaDriftRefresh);
+            this.refresh(cx);
         });
 
         let on_close = cx.listener(|this, _event: &gpui::ClickEvent, _, cx| {
-            cx.emit(SchemaDriftDismissed);
-            this.close(cx);
+            this.dismiss(cx);
         });
 
         let footer = div()
@@ -216,6 +237,20 @@ impl Render for ModalSchemaDrift {
         )
         .variant(ModalVariant::Default)
         .width(px(640.0))
+        .focus_handle(self.focus.handle())
+        .on_close({
+            let entity = cx.entity().downgrade();
+            move |_, cx| {
+                entity.update(cx, |this, cx| this.dismiss(cx)).log_err();
+            }
+        })
+        .on_confirm({
+            let entity = cx.entity().downgrade();
+            move |_, cx| {
+                entity.update(cx, |this, cx| this.refresh(cx)).log_err();
+            }
+        })
+        .confirm_enabled(!loading)
         .into_any_element()
     }
 }

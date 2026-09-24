@@ -1,10 +1,11 @@
 use crate::components::json_editor_view;
 use crate::controls::{GpuiInput as Input, InputState};
 use crate::icons::AppIcon;
-use crate::modals::shell::{ModalShell, ModalVariant};
+use crate::modals::shell::{ModalFocus, ModalShell, ModalVariant};
 use crate::primitives::{Icon, Text};
 use crate::tokens::{FontSizes, Heights, Spacing};
 use crate::typography::AppFonts;
+use dbflux_core::LogErr;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -39,7 +40,7 @@ pub struct ModalImportDashboard {
     input: gpui::Entity<EditorState>,
     /// Text input for the dashboard name, pre-filled from pasted JSON.
     name_input: gpui::Entity<InputState>,
-    focus_handle: gpui::FocusHandle,
+    focus: ModalFocus,
     validation_error: Option<String>,
     name_error: Option<String>,
 }
@@ -63,7 +64,7 @@ impl ModalImportDashboard {
             visible: false,
             input,
             name_input,
-            focus_handle: cx.focus_handle(),
+            focus: ModalFocus::new(cx),
             validation_error: None,
             name_error: None,
         }
@@ -85,14 +86,15 @@ impl ModalImportDashboard {
 
         self.input.update(cx, |state, cx| {
             state.set_value("", window, cx);
-            state.focus(window, cx);
         });
 
         self.name_input.update(cx, |state, cx| {
             state.set_value(DEFAULT_IMPORT_NAME, window, cx);
         });
 
-        self.focus_handle.focus(window, cx);
+        let editor_focus = self.input.read(cx).focus_handle(cx);
+        self.focus.focus(Some(&editor_focus), window, cx);
+
         cx.notify();
     }
 
@@ -103,6 +105,7 @@ impl ModalImportDashboard {
             cx.emit(ImportDashboardCancelled);
         }
 
+        self.focus.restore(cx);
         cx.notify();
     }
 
@@ -160,6 +163,7 @@ impl ModalImportDashboard {
             name: final_name,
         });
 
+        self.focus.restore(cx);
         cx.notify();
     }
 
@@ -206,7 +210,7 @@ impl Render for ModalImportDashboard {
         let theme = cx.theme();
         let entity = cx.entity().downgrade();
         let close = move |_window: &mut Window, cx: &mut App| {
-            entity.update(cx, |this, cx| this.close(cx)).ok();
+            entity.update(cx, |this, cx| this.close(cx)).log_err();
         };
 
         let name_error = self.name_error.clone();
@@ -355,7 +359,16 @@ impl Render for ModalImportDashboard {
         )
         .variant(ModalVariant::Default)
         .width(px(720.0))
+        .focus_handle(self.focus.handle())
         .on_close(close)
+        .on_confirm({
+            let entity = cx.entity().downgrade();
+            move |window, cx| {
+                entity
+                    .update(cx, |this, cx| this.confirm(window, cx))
+                    .log_err();
+            }
+        })
         .into_any_element()
     }
 }

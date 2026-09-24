@@ -1,8 +1,9 @@
 use crate::icons::AppIcon;
-use crate::modals::shell::{ModalShell, ModalVariant};
+use crate::modals::shell::{ModalFocus, ModalShell, ModalVariant};
 use crate::primitives::{Icon, Text, surface_raised};
 use crate::tokens::{FontSizes, Heights, Spacing};
 use crate::typography::AppFonts;
+use dbflux_core::LogErr;
 use gpui::prelude::*;
 use gpui::{Context, EventEmitter, Window, div, px};
 use gpui_component::ActiveTheme;
@@ -32,13 +33,15 @@ pub struct DeleteConnectionRequest {
 pub struct ModalDeleteConnection {
     request: Option<DeleteConnectionRequest>,
     visible: bool,
+    focus: ModalFocus,
 }
 
 impl ModalDeleteConnection {
-    pub fn new(_cx: &mut Context<Self>) -> Self {
+    pub fn new(cx: &mut Context<Self>) -> Self {
         Self {
             request: None,
             visible: false,
+            focus: ModalFocus::new(cx),
         }
     }
 
@@ -49,12 +52,14 @@ impl ModalDeleteConnection {
     pub fn open(&mut self, request: DeleteConnectionRequest, cx: &mut Context<Self>) {
         self.request = Some(request);
         self.visible = true;
+        self.focus.focus_on_next_render();
         cx.notify();
     }
 
     pub fn close(&mut self, cx: &mut Context<Self>) {
         self.visible = false;
         self.request = None;
+        self.focus.restore(cx);
         cx.notify();
     }
 
@@ -77,10 +82,12 @@ impl ModalDeleteConnection {
 impl EventEmitter<DeleteConnectionOutcome> for ModalDeleteConnection {}
 
 impl Render for ModalDeleteConnection {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if !self.visible {
             return div().into_any_element();
         }
+
+        self.focus.apply_pending(window, cx);
 
         let Some(ref request) = self.request else {
             return div().into_any_element();
@@ -138,13 +145,11 @@ impl Render for ModalDeleteConnection {
             });
 
         let on_cancel = cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
-            cx.emit(DeleteConnectionOutcome::Cancelled);
-            this.close(cx);
+            this.cancel(cx);
         });
 
         let on_confirm = cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
-            cx.emit(DeleteConnectionOutcome::Confirmed);
-            this.close(cx);
+            this.confirm(cx);
         });
 
         let footer = div()
@@ -170,6 +175,19 @@ impl Render for ModalDeleteConnection {
         )
         .variant(ModalVariant::Danger)
         .width(px(460.0))
+        .focus_handle(self.focus.handle())
+        .on_close({
+            let entity = cx.entity().downgrade();
+            move |_, cx| {
+                entity.update(cx, |this, cx| this.cancel(cx)).log_err();
+            }
+        })
+        .on_confirm({
+            let entity = cx.entity().downgrade();
+            move |_, cx| {
+                entity.update(cx, |this, cx| this.confirm(cx)).log_err();
+            }
+        })
         .into_any_element()
     }
 }
