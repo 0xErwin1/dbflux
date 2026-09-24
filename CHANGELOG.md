@@ -10,6 +10,11 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* UI automation: `set_text` and `set_value` now fill a text input addressed by
+  its element id, and `click_element` accepts text inputs and focuses them for
+  `type_text`. Previously both failed on every input, `set_text` with a
+  misleading document-range error, so filling a form needed coordinates.
+
 * Redis, Turso, and InfluxDB now refuse requested row limits (including zero)
   or statement timeouts before execution with `NotSupported`, rather than
   dispatching commands, SQL, HTTP, or instance-context queries without those
@@ -42,6 +47,12 @@ All notable changes to DBFlux will be documented in this file.
   card printed the proxy type and authentication as Rust debug output, such
   as `Http` and `Basic { username: "..." }`. It now shows translated labels:
   HTTP, HTTPS or SOCKS5, and None or Basic with the username.
+
+* **The new-connection shortcut shown in the empty workspace works** — the
+  empty workspace advertised `Ctrl+Shift+N` for a new connection, but nothing
+  was bound to it. `Ctrl+Shift+N` (`Cmd+Shift+N` on macOS) now opens the
+  Connection Manager, and every empty-state hint reads its chord from the
+  keymap, so macOS shows `Cmd` instead of `Ctrl`.
 
 * **A running import can be cancelled** — the import wizard's running step
   had no Cancel button, while export and migration did. Cancel now stops the

@@ -1,0 +1,428 @@
+diff --git a/crates/gpui-mcp-protocol/src/lib.rs b/crates/gpui-mcp-protocol/src/lib.rs
+index 9d22cd15..6b4eca0a 100644
+--- a/crates/gpui-mcp-protocol/src/lib.rs
++++ b/crates/gpui-mcp-protocol/src/lib.rs
+@@ -945,6 +945,14 @@ pub enum Operation {
+         /// Stable semantic node identifier.
+         node_id: String,
+     },
++    /// Set the value of one element from the current semantic frame through its
++    /// accessibility `SetValue` action, without moving focus or using an input handler.
++    SetValue {
++        /// Stable semantic node identifier.
++        node_id: String,
++        /// Replacement value, bounded like typed text.
++        value: String,
++    },
+     /// Wait without polling until a newer semantic tree is published.
+     WaitForTree {
+         /// Return immediately when the current generation is newer than this value.
+diff --git a/crates/gpui-mcp-server/src/tools.rs b/crates/gpui-mcp-server/src/tools.rs
+index 2640c919..8443c9b1 100644
+--- a/crates/gpui-mcp-server/src/tools.rs
++++ b/crates/gpui-mcp-server/src/tools.rs
+@@ -590,15 +590,18 @@ impl GpuiMcp {
+     async fn element_with_action(&self, id: &str, action: NodeAction) -> Result<UiNode, String> {
+         let tree = self.tree().await?;
+         let node = get_node(&tree, id)?;
+-        if !node.state.visible || !node.state.enabled {
+-            return Err(format!("element {id:?} is not visible and enabled"));
+-        }
++        require_visible_and_enabled(node)?;
+         if !node.actions.contains(&action) {
+             return Err(format!("element {id:?} does not support {action:?}"));
+         }
+         Ok(node.clone())
+     }
+ 
++    async fn element_click_point(&self, id: &str) -> Result<Point, String> {
++        let tree = self.tree().await?;
++        click_point(get_node(&tree, id)?)
++    }
++
+     async fn wait_for_tree(&self, generation: u64, wait: Duration) -> Result<UiTree, String> {
+         let timeout_ms = u64::try_from(wait.as_millis())
+             .unwrap_or(MAX_WAIT_MS)
+@@ -948,6 +951,31 @@ fn get_node<'a>(tree: &'a UiTree, id: &str) -> Result<&'a UiNode, String> {
+         .ok_or_else(|| format!("semantic element {id:?} was not found"))
+ }
+ 
++fn require_visible_and_enabled(node: &UiNode) -> Result<(), String> {
++    if !node.state.visible || !node.state.enabled {
++        return Err(format!("element {:?} is not visible and enabled", node.id));
++    }
++    Ok(())
++}
++
++/// Return the bounds center that clicks `node`.
++///
++/// Editable text inputs are accepted without a click action of their own: a click at their
++/// center reaches the text editor and focuses it, as a pointer click at those coordinates does.
++fn click_point(node: &UiNode) -> Result<Point, String> {
++    require_visible_and_enabled(node)?;
++    let clickable =
++        node.actions.contains(&NodeAction::Click) || node.actions.contains(&NodeAction::SetText);
++    if !clickable {
++        return Err(format!(
++            "element {:?} does not support {:?}",
++            node.id,
++            NodeAction::Click
++        ));
++    }
++    Ok(require_bounds(node)?.center())
++}
++
+ fn require_bounds(node: &UiNode) -> Result<Rect, String> {
+     node.bounds
+         .filter(|bounds| bounds.is_valid())
+@@ -1197,14 +1225,61 @@ mod tests {
+     use std::sync::{Arc, Mutex};
+     use std::time::Duration;
+ 
+-    use gpui_mcp_protocol::{BridgeResult, FrameStats, NodeState, Operation, UiNode};
++    use gpui_mcp_protocol::{
++        BridgeResult, FrameStats, NodeAction, NodeState, Operation, Point, Rect, UiNode,
++    };
+     use serde_json::json;
+ 
+     use super::{
+-        FindArgs, Role, StartVideoRecordingArgs, UiTree, WaitStateArgs,
++        FindArgs, Role, StartVideoRecordingArgs, UiTree, WaitStateArgs, click_point,
+         default_result_limit_for_test, find_nodes, settle_refresh_frames, state_matches, tree_diff,
+     };
+ 
++    fn node_with_actions(role: Role, actions: Vec<NodeAction>) -> UiNode {
++        UiNode {
++            id: "cm-field-host".to_owned(),
++            parent: None,
++            children: Vec::new(),
++            role,
++            label: None,
++            description: None,
++            bounds: Some(Rect {
++                x: 10.0,
++                y: 20.0,
++                width: 200.0,
++                height: 30.0,
++            }),
++            state: NodeState::default(),
++            actions,
++            text: None,
++            value: None,
++            metadata: BTreeMap::new(),
++        }
++    }
++
++    #[test]
++    fn click_point_accepts_editable_text_inputs_without_a_click_action() {
++        let input = node_with_actions(
++            Role::TextInput,
++            vec![NodeAction::Focus, NodeAction::SetText, NodeAction::SetValue],
++        );
++
++        assert_eq!(click_point(&input), Ok(Point { x: 110.0, y: 35.0 }));
++    }
++
++    #[test]
++    fn click_point_keeps_rejecting_nodes_without_click_or_text_editing() {
++        let group = node_with_actions(Role::Group, vec![NodeAction::Focus]);
++        assert_eq!(
++            click_point(&group),
++            Err("element \"cm-field-host\" does not support Click".to_owned())
++        );
++
++        let mut disabled = node_with_actions(Role::TextInput, vec![NodeAction::SetText]);
++        disabled.state.enabled = false;
++        assert!(click_point(&disabled).is_err());
++    }
++
+     #[tokio::test]
+     async fn mutation_settlement_waits_from_each_refresh_token() -> Result<(), String> {
+         let operations = Arc::new(Mutex::new(Vec::new()));
+diff --git a/crates/gpui-mcp-server/src/tools/input.rs b/crates/gpui-mcp-server/src/tools/input.rs
+index 2ae5d88f..9e17348b 100644
+--- a/crates/gpui-mcp-server/src/tools/input.rs
++++ b/crates/gpui-mcp-server/src/tools/input.rs
+@@ -2,8 +2,9 @@ use super::{
+     ClickElementArgs, ClickPointArgs, DragElementArgs, DragPointArgs, ElementArgs, GpuiMcp,
+     InputCommand, Json, KeyArgs, MouseButton, NodeAction, Operation, Parameters, Point,
+     PointerButtonArgs, PointerCommand, PointerMoveArgs, Role, ScrollArgs, ScrollPointArgs,
+-    SetTextArgs, SetValueArgs, ToolRouter, TypeTextArgs, Value, ack_json, encode_error, get_node,
+-    json, object_output, require_bounds, tool, tool_router, validate_pointer_point, validate_value,
++    SetTextArgs, SetValueArgs, ToolRouter, TypeTextArgs, UiNode, Value, ack_json, encode_error,
++    get_node, json, object_output, require_bounds, tool, tool_router, validate_pointer_point,
++    validate_value,
+ };
+ 
+ #[tool_router(router = input_router)]
+@@ -139,13 +140,13 @@ impl GpuiMcp {
+     }
+ 
+     #[tool(
+-        description = "Click an element by stable semantic ID through GPUI's real hit-testing and mouse-event pipeline."
++        description = "Click an element by stable semantic ID through GPUI's real hit-testing and mouse-event pipeline. Editable text inputs are clicked at their center, which focuses them for type_text."
+     )]
+     async fn click_element(
+         &self,
+         Parameters(args): Parameters<ClickElementArgs>,
+     ) -> Result<Json<Value>, String> {
+-        let point = self.element_point(&args.id, NodeAction::Click).await?;
++        let point = self.element_click_point(&args.id).await?;
+         self.click_at(point, args.button, args.count).await?;
+         Ok(ack_json("clicked"))
+     }
+@@ -157,7 +158,7 @@ impl GpuiMcp {
+         &self,
+         Parameters(args): Parameters<ElementArgs>,
+     ) -> Result<Json<Value>, String> {
+-        let point = self.element_point(&args.id, NodeAction::Click).await?;
++        let point = self.element_click_point(&args.id).await?;
+         self.click_at(point, MouseButton::Left, 2).await?;
+         Ok(ack_json("double_clicked"))
+     }
+@@ -278,7 +279,7 @@ impl GpuiMcp {
+     }
+ 
+     #[tool(
+-        description = "Focus an editable element and replace its text through GPUI's active input handler."
++        description = "Replace an editable element's text through its accessibility value action, or by focusing it and using GPUI's active input handler when it has no such action."
+     )]
+     async fn set_text(
+         &self,
+@@ -290,10 +291,7 @@ impl GpuiMcp {
+         if node.text.as_ref().is_none_or(|text| text.redacted) {
+             return Err("element is not an editable non-secret text field".to_owned());
+         }
+-        self.ack_after_frame(Operation::Focus { node_id: args.id })
+-            .await?;
+-        self.dispatch_input(InputCommand::ReplaceText { text: args.text })
+-            .await?;
++        self.replace_element_text(&node, args.text).await?;
+         Ok(ack_json("text_replaced"))
+     }
+ 
+@@ -332,10 +330,7 @@ impl GpuiMcp {
+                     .as_ref()
+                     .ok_or_else(|| format!("element {:?} has no value", args.id))?;
+                 validate_value(&args.value, value)?;
+-                self.ack_after_frame(Operation::Focus { node_id: args.id })
+-                    .await?;
+-                self.dispatch_input(InputCommand::ReplaceText { text: args.value })
+-                    .await?;
++                self.replace_element_text(&node, args.value).await?;
+             }
+             Role::Checkbox | Role::Radio | Role::Switch => {
+                 let requested = parse_boolean(&args.value)?;
+@@ -406,6 +401,28 @@ impl GpuiMcp {
+         Ok(ack_json("scrolled"))
+     }
+ 
++    /// Replace the text of an editable element and settle a frame.
++    ///
++    /// An element with an accessibility `SetValue` action receives the text directly, so it
++    /// needs neither focus nor an active input handler. Any other element is focused first
++    /// and its text is replaced through GPUI's active input handler.
++    async fn replace_element_text(&self, node: &UiNode, text: String) -> Result<(), String> {
++        if node.actions.contains(&NodeAction::SetValue) {
++            return self
++                .ack_after_frame(Operation::SetValue {
++                    node_id: node.id.clone(),
++                    value: text,
++                })
++                .await;
++        }
++        self.ack_after_frame(Operation::Focus {
++            node_id: node.id.clone(),
++        })
++        .await?;
++        self.dispatch_input(InputCommand::ReplaceText { text })
++            .await
++    }
++
+     async fn set_slider_value(
+         &self,
+         id: &str,
+diff --git a/crates/gpui-mcp/src/input.rs b/crates/gpui-mcp/src/input.rs
+index aee8bace..259f6f58 100644
+--- a/crates/gpui-mcp/src/input.rs
++++ b/crates/gpui-mcp/src/input.rs
+@@ -139,18 +139,22 @@ pub(crate) fn dispatch_keyboard(
+                 window.dispatch_keystroke(parsed, cx);
+             }
+         }
+-        InputCommand::TypeText { text } => require_input_handler(
+-            window.insert_input_text(&text, cx),
+-            "focused element has no active text input handler",
+-        )?,
+-        InputCommand::ReplaceText { text } => require_input_handler(
+-            window.replace_input_text(&text, cx),
+-            "focused input cannot expose its complete document range",
+-        )?,
++        InputCommand::TypeText { text } => {
++            require_input_handler(window.insert_input_text(&text, cx), NO_INPUT_HANDLER)?;
++        }
++        InputCommand::ReplaceText { text } => {
++            require_input_handler(window.has_input_handler(), NO_INPUT_HANDLER)?;
++            require_input_handler(
++                window.replace_input_text(&text, cx),
++                "focused input cannot expose its complete document range",
++            )?;
++        }
+     }
+     Ok(())
+ }
+ 
++const NO_INPUT_HANDLER: &str = "focused element has no active text input handler";
++
+ fn require_input_handler(available: bool, message: &'static str) -> Result<(), BridgeError> {
+     if !available {
+         return Err(BridgeError::new(ErrorCode::Unsupported, message));
+@@ -197,7 +201,7 @@ fn validate_point(point: Point) -> Result<(), BridgeError> {
+     Ok(())
+ }
+ 
+-fn validate_text(text: &str) -> Result<(), BridgeError> {
++pub(crate) fn validate_text(text: &str) -> Result<(), BridgeError> {
+     if text.len() > MAX_TEXT_BYTES {
+         return Err(invalid("text exceeds the 64 KiB safety bound"));
+     }
+@@ -218,9 +222,11 @@ mod tests {
+         MouseButton as GpuiMouseButton, ParentElement as _, Render,
+         StatefulInteractiveElement as _, Styled as _, TestAppContext, Window, div, point, px, size,
+     };
+-    use gpui_mcp_protocol::{InputCommand, MAX_KEY_SEQUENCE, MouseButton, Point, PointerCommand};
++    use gpui_mcp_protocol::{
++        BridgeError, ErrorCode, InputCommand, MAX_KEY_SEQUENCE, MouseButton, Point, PointerCommand,
++    };
+ 
+-    use super::{dispatch_pointer, validate};
++    use super::{NO_INPUT_HANDLER, dispatch_keyboard, dispatch_pointer, validate};
+ 
+     #[test]
+     fn key_sequences_are_bounded_and_fully_validated() {
+@@ -244,6 +250,33 @@ mod tests {
+         );
+     }
+ 
++    #[gpui::test]
++    fn replacing_text_without_an_input_handler_reports_the_missing_handler(
++        cx: &mut TestAppContext,
++    ) {
++        let visual = cx.add_empty_window();
++        visual.draw(
++            point(px(0.0), px(0.0)),
++            size(px(300.0), px(100.0)),
++            |_, _| div().id("no-input-handler").w(px(100.0)).h(px(100.0)),
++        );
++
++        visual.update(|window, cx| {
++            let result = dispatch_keyboard(
++                InputCommand::ReplaceText {
++                    text: "db.example".to_owned(),
++                },
++                window,
++                cx,
++            );
++
++            assert_eq!(
++                result,
++                Err(BridgeError::new(ErrorCode::Unsupported, NO_INPUT_HANDLER))
++            );
++        });
++    }
++
+     #[derive(Clone, Copy)]
+     struct DragValue;
+ 
+diff --git a/crates/gpui-mcp/src/service.rs b/crates/gpui-mcp/src/service.rs
+index 49e3d781..06791283 100644
+--- a/crates/gpui-mcp/src/service.rs
++++ b/crates/gpui-mcp/src/service.rs
+@@ -606,6 +606,16 @@ fn handle_ui_operation(
+             }
+             Ok(BridgeResult::Ack)
+         }
++        Operation::SetValue { node_id, value } => {
++            if !window.set_observed_element_value(&node_id, &value, cx) {
++                return Err(BridgeError::new(
++                    ErrorCode::Unsupported,
++                    "semantic node has no accessibility value handler in the current frame",
++                ));
++            }
++            window.refresh();
++            Ok(BridgeResult::Ack)
++        }
+         Operation::Refresh => {
+             let completed = state.frame_stats();
+             window.refresh();
+@@ -917,6 +927,7 @@ async fn process_request(request: WireRequest, context: ConnectionContext) -> Wi
+         operation @ (Operation::Input { .. }
+         | Operation::PointerInput { .. }
+         | Operation::Focus { .. }
++        | Operation::SetValue { .. }
+         | Operation::Refresh
+         | Operation::GetLiveDocument
+         | Operation::PreviewLiveDocument { .. }
+@@ -968,18 +979,21 @@ async fn dispatch_to_ui(
+         .map_err(|_| BridgeError::new(ErrorCode::Internal, "UI command pump stopped"))?
+ }
+ 
++fn validate_node_id(node_id: &str) -> Result<(), BridgeError> {
++    if node_id.is_empty() || node_id.len() > MAX_ID_BYTES || node_id.chars().any(char::is_control) {
++        return Err(invalid("semantic node identifier is invalid"));
++    }
++    Ok(())
++}
++
+ fn validate_operation(operation: &Operation) -> Result<(), BridgeError> {
+     match operation {
+         Operation::Input { command } => input::validate(command),
+         Operation::PointerInput { command } => input::validate_pointer(command),
+-        Operation::Focus { node_id } => {
+-            if node_id.is_empty()
+-                || node_id.len() > MAX_ID_BYTES
+-                || node_id.chars().any(char::is_control)
+-            {
+-                return Err(invalid("semantic node identifier is invalid"));
+-            }
+-            Ok(())
++        Operation::Focus { node_id } => validate_node_id(node_id),
++        Operation::SetValue { node_id, value } => {
++            validate_node_id(node_id)?;
++            input::validate_text(value)
+         }
+         Operation::WaitForTree { timeout_ms, .. }
+             if *timeout_ms == 0 || *timeout_ms > MAX_WAIT_MS =>
+@@ -1422,12 +1436,31 @@ fn invalid(message: &'static str) -> BridgeError {
+ 
+ #[cfg(test)]
+ mod tests {
+-    use gpui_mcp_protocol::{AppId, ContextResource, ContextResourceDescriptor};
++    use gpui_mcp_protocol::{
++        AppId, ContextResource, ContextResourceDescriptor, MAX_TEXT_BYTES, Operation,
++    };
+ 
+     use super::{
+         BridgeConfig, encode_hex, validate_context_resource, validate_context_resource_list,
++        validate_operation,
+     };
+ 
++    #[test]
++    fn set_value_requires_a_valid_node_id_and_bounded_value() {
++        let set_value = |node_id: &str, value: String| Operation::SetValue {
++            node_id: node_id.to_owned(),
++            value,
++        };
++
++        assert!(validate_operation(&set_value("cm-field-host", "db.example".to_owned())).is_ok());
++        assert!(validate_operation(&set_value("", "db.example".to_owned())).is_err());
++        assert!(validate_operation(&set_value("cm\nfield", "db.example".to_owned())).is_err());
++        assert!(
++            validate_operation(&set_value("cm-field-host", "x".repeat(MAX_TEXT_BYTES + 1)))
++                .is_err()
++        );
++    }
++
+     #[test]
+     fn application_identifier_blocks_path_traversal() {
+         assert!(AppId::new("../unsafe").is_err());
