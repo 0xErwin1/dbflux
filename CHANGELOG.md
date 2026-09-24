@@ -15,13 +15,6 @@ All notable changes to DBFlux will be documented in this file.
   `type_text`. Previously both failed on every input, `set_text` with a
   misleading document-range error, so filling a form needed coordinates.
 
-* **Document tree and schema diagram keys in the keymap** — the document tree's
-  keys and the schema diagram's zoom, pan, selection, table-move and layout
-  keys now come from the app keymap instead of being hard-coded in each view,
-  so Settings → Keybindings lists them under Document Tree and Schema Viz.
-  The default keys are unchanged. The tree's `d d` delete sequence stays built
-  into the tree, because a keymap entry holds a single keystroke.
-
 * Redis, Turso, and InfluxDB now refuse requested row limits (including zero)
   or statement timeouts before execution with `NotSupported`, rather than
   dispatching commands, SQL, HTTP, or instance-context queries without those
@@ -54,6 +47,13 @@ All notable changes to DBFlux will be documented in this file.
   card printed the proxy type and authentication as Rust debug output, such
   as `Http` and `Basic { username: "..." }`. It now shows translated labels:
   HTTP, HTTPS or SOCKS5, and None or Basic with the username.
+
+* **Document tree and schema diagram keys in the keymap** — the document tree's
+  keys and the schema diagram's zoom, pan, selection, table-move and layout
+  keys now come from the app keymap instead of being hard-coded in each view,
+  so Settings → Keybindings lists them under Document Tree and Schema Viz.
+  The default keys are unchanged. The tree's `d d` delete sequence stays built
+  into the tree, because a keymap entry holds a single keystroke.
 
 * **The new-connection shortcut shown in the empty workspace works** — the
   empty workspace advertised `Ctrl+Shift+N` for a new connection, but nothing
