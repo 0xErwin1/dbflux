@@ -73,6 +73,13 @@ from the row's context menu, or press `Enter` on the row, to connect again. The 
 clears when a new attempt starts, when the connection succeeds, or when you edit
 the connection.
 
+Disconnecting a connection that still has a query running asks first: **Cancel
+query** stops the query and keeps the connection open, **Keep waiting** leaves
+both alone, and **Disconnect anyway** cancels the query and disconnects. `Enter`
+picks **Cancel query** and `Escape` picks **Keep waiting**. Closing the DBFlux
+window while a query runs on any connection asks the same question, naming the
+connections, with **Quit anyway** in place of **Disconnect anyway**.
+
 ---
 
 ## 2. Browsing the Schema
@@ -196,6 +203,8 @@ instead, and **Save File As** is offered when you close them.
 
 If a non-empty text selection exists, only the selected text runs. With no
 selection, the full editor buffer is used.
+
+When execution actually omits rows, the editor reports one warning for the query and the grid marks the affected result set, even if no rows were retained. A result that exactly fills a limit without omitting rows does not trigger the warning. A retained-row cap limits stored rows only; byte and time limits are separate execution controls. This does not imply a default editor row cap.
 
 ### Multi-statement scripts
 
