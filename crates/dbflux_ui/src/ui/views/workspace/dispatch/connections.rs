@@ -25,10 +25,30 @@ impl Workspace {
                 Some(true)
             }
             Command::RefreshSchema => {
-                self.refresh_schema(window, cx);
+                self.refresh_document_or_schema(window, cx);
                 Some(true)
             }
             _ => None,
         }
+    }
+
+    /// Refreshes the active document when the document area has focus and the
+    /// document implements a refresh; otherwise reloads the active
+    /// connection's schema.
+    ///
+    /// The sidebar and background-tasks panel keep the connection-schema
+    /// refresh, so the sidebar's refresh key is unchanged.
+    fn refresh_document_or_schema(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.focus_target == FocusTarget::Document {
+            let handled = self.tab_manager.update(cx, |manager, cx| {
+                manager.dispatch_active(Command::RefreshSchema, window, cx)
+            });
+
+            if handled {
+                return;
+            }
+        }
+
+        self.refresh_schema(window, cx);
     }
 }

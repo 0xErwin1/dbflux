@@ -18,6 +18,12 @@ pub(crate) fn unsaved_changes_label(count: usize) -> String {
     }
 }
 
+/// Warning shown when a refresh is refused because the grid holds unsaved
+/// edits that the reload would drop.
+pub(crate) fn grid_refresh_blocked_by_pending_edits() -> String {
+    dbflux_i18n::t!("document.data.grid.edit_bar.refresh_blocked")
+}
+
 /// Label for a [`dbflux_core::RefreshPolicy`], mirroring
 /// `RefreshPolicy::label()` in English while routing every arm through the
 /// translation catalog.

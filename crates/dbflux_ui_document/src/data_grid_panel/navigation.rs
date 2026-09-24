@@ -469,7 +469,7 @@ impl DataGridPanel {
                 cx.notify();
             }
             ToolbarFocus::Refresh => {
-                self.refresh(window, cx);
+                self.request_refresh(window, cx);
                 self.focus_table(window, cx);
             }
         }
@@ -647,7 +647,7 @@ impl DataGridPanel {
                 true
             }
             Command::RefreshSchema => {
-                self.refresh(window, cx);
+                self.request_refresh(window, cx);
                 true
             }
             Command::ExportResults => {

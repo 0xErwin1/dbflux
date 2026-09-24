@@ -644,7 +644,7 @@ document:
       error_detail: "버킷 목록을 조회하지 못했습니다: %{error}"
       no_match: '"%{query}"와 일치하는 버킷이 없습니다'
       no_buckets: 이 연결에는 버킷이 없습니다
-      hint_refresh: r 새로고침
+      hint_refresh: "%{key} 새로고침"
     delete_confirm:
       title: 버킷 삭제?
       body: '"%{bucket}" 버킷은 비어 있으며 삭제됩니다. 이 작업은 되돌릴 수 없습니다.'
@@ -1108,6 +1108,7 @@ document:
           many: "저장하지 않은 변경 사항 %{count}개"
         save: 저장
         revert: 되돌리기
+        refresh_blocked: 새로고침하기 전에 저장하지 않은 변경 사항을 저장하거나 되돌리세요
       toolbar:
         refresh: 새로고침
         builder: 빌더

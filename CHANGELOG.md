@@ -10,6 +10,15 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* `F5` now refreshes the focused document (table data, bucket list, object
+  listing, key browser), and the audit viewer's `r` refreshes the audit list
+  instead of the connection schema. The buckets empty state showed `r refresh`,
+  but `r` renames in that view; the hint now shows the key the keymap binds.
+
+* Refreshing a table or collection grid with unsaved cell edits no longer
+  drops them: the refresh key, the toolbar button and the command palette show
+  a warning to save or revert first, and auto-refresh skips its tick.
+
 * UI automation: `set_text` and `set_value` now fill a text input addressed by
   its element id, and `click_element` accepts text inputs and focuses them for
   `type_text`. Previously both failed on every input, `set_text` with a
