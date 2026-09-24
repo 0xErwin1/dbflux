@@ -279,6 +279,13 @@ All notable changes to DBFlux will be documented in this file.
   snapshot deduplication no longer discards a fresh capture just because the
   structural fingerprint is unchanged.
 
+* **Key total in the Redis key browser** — with no filter set, the key browser
+  now shows how many keys the whole keyspace holds next to the keys on the
+  current page. Drivers report it through a new defaulted
+  `KeyValueApi::key_count` seam: Redis answers with `DBSIZE`, and a Cluster
+  connection sums `DBSIZE` over every master. External drivers carry it over
+  driver RPC 1.5; against an older host the total is simply not shown.
+
 * **Interactive schema visualization** — a table or a whole database can now be
   opened as a diagram of the schema instead of a list of objects. Tables render
   as nodes carrying their columns, primary keys and flags, and foreign keys as

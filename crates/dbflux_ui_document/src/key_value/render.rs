@@ -111,8 +111,33 @@ impl super::KeyValueDocument {
     }
 }
 
+/// Page key count, followed by the keyspace total when one is known.
+fn keys_label(key_count: usize, key_total: Option<u64>) -> String {
+    let page_label = if key_count == 1 {
+        dbflux_i18n::t!(
+            "document.key_value.render.keys_count.one",
+            count = key_count
+        )
+    } else {
+        dbflux_i18n::t!(
+            "document.key_value.render.keys_count.many",
+            count = key_count
+        )
+    };
+
+    match key_total {
+        Some(total) => format!(
+            "{page_label} · {}",
+            dbflux_i18n::t!("document.key_value.render.keys_total", count = total)
+        ),
+        None => page_label,
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::keys_label;
+
     #[test]
     fn key_value_refresh_label_differs_between_locales() {
         let english = dbflux_i18n::t!("document.data.grid.toolbar.refresh", locale = "en");
@@ -142,6 +167,7 @@ mod tests {
             "document.key_value.render.page",
             "document.key_value.render.keys_count.one",
             "document.key_value.render.keys_count.many",
+            "document.key_value.render.keys_total",
             "document.key_value.render.filter.keys_placeholder",
             "document.key_value.render.filter.members_placeholder",
             "document.key_value.render.ttl.no_limit",
@@ -173,6 +199,33 @@ mod tests {
         );
 
         assert!(message.contains("session:42"));
+    }
+
+    #[test]
+    fn key_value_keys_total_resolves_in_every_locale() {
+        for locale in ["en", "es", "ko", "zh_Hans"] {
+            let value = dbflux_i18n::t!(
+                "document.key_value.render.keys_total",
+                locale = locale,
+                count = 3400
+            );
+
+            assert!(value.contains("3400"), "{locale}: {value}");
+            assert!(
+                !value.contains("keys_total"),
+                "keys_total missing from {locale} catalog"
+            );
+        }
+    }
+
+    #[test]
+    fn keys_label_appends_the_total_only_when_known() {
+        assert_eq!(keys_label(12, None), "12 keys on this page");
+        assert_eq!(
+            keys_label(12, Some(3400)),
+            "12 keys on this page · 3400 total"
+        );
+        assert_eq!(keys_label(1, Some(1)), "1 key on this page · 1 total");
     }
 
     #[test]
@@ -844,6 +897,7 @@ impl Render for super::KeyValueDocument {
                 let can_next = self.can_go_next();
                 let current_page = self.current_page;
                 let key_count = self.keys.len();
+                let key_total = self.key_total;
 
                 div()
                     .flex()
@@ -872,16 +926,8 @@ impl Render for super::KeyValueDocument {
                             })
                             .child(Text::caption(if self.runner.is_primary_active() {
                                 dbflux_i18n::t!("document.data.grid.loading")
-                            } else if key_count == 1 {
-                                dbflux_i18n::t!(
-                                    "document.key_value.render.keys_count.one",
-                                    count = key_count
-                                )
                             } else {
-                                dbflux_i18n::t!(
-                                    "document.key_value.render.keys_count.many",
-                                    count = key_count
-                                )
+                                keys_label(key_count, key_total)
                             })),
                     )
                     .child(
