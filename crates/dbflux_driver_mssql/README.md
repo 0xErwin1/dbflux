@@ -51,6 +51,21 @@ Microsoft SQL Server driver for DBFlux, built on the
   Pure preparation batches (`SET LOCK_TIMEOUT 5000`) still surface as a
   single empty primary. Callers that want to walk every set use
   `QueryResult::iter_result_sets()`.
+- Bounded execution: a requested row limit (`QueryRequest::limit`) is
+  enforced during collection — the tiberius stream is read lazily and only
+  the requested rows are retained and converted. One remaining-row budget is
+  shared across the whole execute request: every server result set of the
+  batch draws from the same budget in actual stream order (the limit is a
+  total, not a per-set cap), and each set is drained to completion, so a
+  mutation's effects finish fully, later statements still execute once the
+  budget is exhausted, late errors propagate instead of being discarded, and
+  each set reports `rows_truncated` only when it actually omitted a row. The
+  primary result remains the last set. A limit of `0` retains zero rows but
+  still executes and drains everything; requests without a limit keep the
+  previous uncapped behavior.
+- Rejects, before any execution and without clearing a pending cancellation,
+  requests it cannot bound safely: a requested statement timeout, and a
+  row-limited request aimed at the driver's instance metrics or inspectors.
 - Data-transfer engine: native multi-row `INSERT` bulk-load (`BULK_INSERT`,
   capped at 1000 rows per statement per T-SQL's `VALUES` row limit, exposed
   via `DriverLimits::max_bulk_insert_rows`) and driver-native `CREATE TABLE`
@@ -300,6 +315,26 @@ Requires the `VIEW SERVER STATE` permission.
   `simple_query`. CRUD helpers compose values into the SQL text through the
   shared `SqlQueryBuilder` and dialect literal formatters. Large binary or
   Unicode payloads are inlined as `0x…` or `N'…'` literals.
+- Bounded execution is a retention cap, not a server-side bound: the
+  statement still runs to completion on the server, all rows past the cap
+  are received and discarded, and no server-work, time, or byte budget is
+  enforced. The bound applies to retained rows, not to total transferred
+  bytes, and a single huge row is retained in full. A mutation under a row
+  limit completes all of its effects.
+- The row-limit cap applies to ordinary SQL execution, not to every execute
+  context: a capped request aimed at the driver's instance metrics or
+  inspectors is rejected before the connection lock or any dispatch — those
+  internal catalog queries have no place to apply a cap — while uncapped
+  requests against them keep working.
+- A requested statement timeout (`QueryRequest::statement_timeout`) is
+  unsupported and rejected before execution: the driver implements no
+  deadline mechanism of its own — no watchdog, no `KILL`-based deadline, and
+  no session-level `SET`. Ordinary uncapped queries remain cancellable
+  through the existing `KILL` path.
+- The bounded-execution and rejection behavior was live-tested against the
+  `mcr.microsoft.com/mssql/server:2022-latest` container image (SQL Server
+  2022) only; it was not tested against Azure SQL Database or Managed
+  Instance.
 - Streaming: result sets are materialized into `Vec<Row>`. The
   `Connection::execute` trait returns a fully-resolved `QueryResult`, so
   cursor-style streaming would require a workspace-level API change rather

@@ -296,6 +296,9 @@ jobs:
       - name: Run MSSQL live integration tests
         run: cargo test -p dbflux_driver_mssql --locked --test live_integration -- --ignored --test-threads=1
 
+      - name: Run MSSQL query safety collector regression
+        run: cargo test -p dbflux_driver_mssql --locked --lib mssql_query_safety_collector_consumes_budget_before_late_error -- --ignored --test-threads=1
+
       - name: Run MSSQL DDL integration tests
         run: cargo test -p dbflux_driver_mssql --locked --test ddl_integration -- --ignored --test-threads=1
 
