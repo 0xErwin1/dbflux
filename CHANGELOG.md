@@ -329,6 +329,12 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **Modal footers no longer cover the body** — the shared modal shell sized its
+  body to its 96 px minimum instead of its content, so the footer covered the
+  end of any taller body, such as the connection name in the Delete connection
+  dialog. The body now grows to fit its content and scrolls only when the
+  dialog reaches its maximum height.
+
 * **Missing PostgreSQL relations no longer open as empty tables** — asking a
   PostgreSQL connection for the details of a table or view that does not exist
   returned an empty structure instead of an error, so the grid showed a blank
