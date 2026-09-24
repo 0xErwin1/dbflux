@@ -380,6 +380,16 @@ All notable changes to DBFlux will be documented in this file.
   dialog. The body now grows to fit its content and scrolls only when the
   dialog reaches its maximum height.
 
+* **Dropping a table runs the statement the preview shows** — the drop table
+  dialog previewed `DROP TABLE ... CASCADE` whenever the table had dependents,
+  which SQL Server and SQLite reject and MySQL ignores, while the drop itself
+  ran `DROP TABLE IF EXISTS` without `CASCADE` everywhere. Both now come from
+  one dialect-owned builder: the dialog shows the exact statement that runs,
+  `CASCADE` is used only on PostgreSQL and Redshift, and other databases list
+  the dependent objects without claiming they will be dropped. The MCP
+  `drop_table` tool and the generic schema drop use the same builder and
+  return an error when `cascade` is requested on a database without it.
+
 * **Missing PostgreSQL relations no longer open as empty tables** — asking a
   PostgreSQL connection for the details of a table or view that does not exist
   returned an empty structure instead of an error, so the grid showed a blank

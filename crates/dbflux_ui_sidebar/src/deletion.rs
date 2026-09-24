@@ -1,4 +1,5 @@
 use super::*;
+use crate::operations::DropOptions;
 
 impl Sidebar {
     pub fn request_delete_selected(&mut self, cx: &mut Context<Self>) {
@@ -310,10 +311,37 @@ impl Sidebar {
         }
 
         if modal.is_ddl {
-            self.execute_drop_ddl(&modal.item_id, cx);
+            self.execute_drop_ddl(&modal.item_id, DropOptions::default(), cx);
         } else {
             self.execute_delete(&modal.item_id, cx);
         }
+    }
+
+    /// Runs the table drop the drop table modal confirmed, with the
+    /// `IF EXISTS` and `CASCADE` options its preview statement was built with.
+    pub fn confirm_modal_drop_table(
+        &mut self,
+        if_exists: bool,
+        cascade: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(modal) = self.delete_confirm_modal.take() else {
+            log::warn!(
+                "confirm_modal_drop_table called but delete_confirm_modal was None — \
+                 state was cleared before the drop table modal confirmed",
+            );
+            return;
+        };
+
+        if !modal.is_ddl {
+            log::warn!(
+                "confirm_modal_drop_table called for non-DDL item {}; nothing dropped",
+                modal.item_id
+            );
+            return;
+        }
+
+        self.execute_drop_ddl(&modal.item_id, DropOptions { if_exists, cascade }, cx);
     }
 
     pub fn cancel_modal_delete(&mut self, cx: &mut Context<Self>) {
