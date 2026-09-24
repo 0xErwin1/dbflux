@@ -33,6 +33,8 @@ Base de datos relacional open-source avanzada.
 - Muestra valores `tsvector` y `tsquery` de búsqueda de texto completo,
   incluyendo arrays unidimensionales, en la forma de texto canónica de
   PostgreSQL.
+- Muestra valores `numeric`, incluyendo arrays unidimensionales `numeric[]`,
+  como el decimal exacto que guarda PostgreSQL.
 - Reporta su identidad de cliente al servidor como
   `application_name=dbflux/<version>`, salvo que la connection string ya defina
   `application_name`, en cuyo caso se conserva el valor del usuario.
@@ -91,6 +93,15 @@ Expone snapshots tabulares del estado del servidor en ejecución:
   configurado para construir el gráfico en vivo.
 
 - Driver solo SQL; no expone APIs de documentos ni de key-value.
+- Un valor de una sentencia única que el driver no puede decodificar, como un
+  timestamp o una fecha `infinity`, se muestra como tipo no soportado y queda
+  marcado en el resultado en lugar de aparecer como `NULL`. Convierte la columna
+  a `text` para leer el texto del propio servidor. Los inspectores de instancia
+  registran en el log la columna y el tipo de esa celda.
+- Los valores `money` se muestran como tipo no soportado: el formato de
+  transmisión lleva un importe entero cuya escala decimal proviene de la
+  configuración `lc_monetary` del servidor, que el cliente no puede ver.
+  Convierte la columna a `numeric` o `text` para leerla.
 - Las definiciones de routines para funciones agregadas y window se sintetizan a
   partir de metadata del catálogo porque `pg_get_functiondef` no las soporta.
 - La edición y ejecución de routines no están soportadas; el visor de routines

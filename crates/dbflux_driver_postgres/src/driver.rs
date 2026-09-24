@@ -4305,14 +4305,45 @@ impl<'a> FromSql<'a> for PgNumericText {
     }
 }
 
-/// Maps a NUMERIC decode result to a cell value. A decode failure becomes
-/// `Unsupported` rather than `Null`, so it cannot pass for a real SQL NULL.
-fn numeric_decode_to_value<E>(type_name: &str, decoded: Result<Option<PgNumericText>, E>) -> Value {
+/// Maps a column decode result to a cell value.
+///
+/// A real SQL NULL becomes `Null`. A decode failure (the decoder rejects the
+/// column type, or the payload is out of its range) becomes
+/// `Unsupported(type_name)`, so it cannot pass for NULL and the result carries
+/// an unsupported-type warning.
+pub(crate) fn decoded_to_value<T, E>(
+    type_name: &str,
+    decoded: Result<Option<T>, E>,
+    map: impl FnOnce(T) -> Value,
+) -> Value {
     match decoded {
-        Ok(Some(PgNumericText(text))) => Value::Decimal(text),
+        Ok(Some(value)) => map(value),
         Ok(None) => Value::Null,
         Err(_) => Value::Unsupported(type_name.to_string()),
     }
+}
+
+/// Decodes column `idx` of `row` as `T` and maps it through [`decoded_to_value`].
+fn decode_to_value<'a, T: FromSql<'a>>(
+    row: &'a postgres::Row,
+    idx: usize,
+    type_name: &str,
+    map: impl FnOnce(T) -> Value,
+) -> Value {
+    decoded_to_value(type_name, row.try_get::<_, Option<T>>(idx), map)
+}
+
+fn numeric_array_to_value(values: Vec<Option<PgNumericText>>) -> Value {
+    Value::Array(
+        values
+            .into_iter()
+            .map(|value| {
+                value
+                    .map(|PgNumericText(text)| Value::Decimal(text))
+                    .unwrap_or(Value::Null)
+            })
+            .collect(),
+    )
 }
 
 fn text_search_array_values_to_value(values: Option<Vec<Option<PgTextSearchText>>>) -> Value {
@@ -4497,6 +4528,8 @@ fn postgres_array_to_value(row: &postgres::Row, idx: usize, type_name: &str) -> 
             Err(_) => None,
         },
 
+        "_numeric" => Some(decode_to_value(row, idx, type_name, numeric_array_to_value)),
+
         _ => None,
     }
 }
@@ -4520,148 +4553,80 @@ fn postgres_value_to_value(row: &postgres::Row, idx: usize) -> Value {
     }
 
     match type_name {
-        "bool" => row
-            .try_get::<_, Option<bool>>(idx)
-            .map(|value| value.map(Value::Bool).unwrap_or(Value::Null))
-            .unwrap_or(Value::Null),
+        "bool" => decode_to_value(row, idx, type_name, Value::Bool),
 
-        "int2" => row
-            .try_get::<_, Option<i16>>(idx)
-            .map(|value| value.map(|v| Value::Int(v as i64)).unwrap_or(Value::Null))
-            .unwrap_or(Value::Null),
+        "int2" => decode_to_value(row, idx, type_name, |value: i16| {
+            Value::Int(i64::from(value))
+        }),
 
-        "int4" => row
-            .try_get::<_, Option<i32>>(idx)
-            .map(|value| value.map(|v| Value::Int(v as i64)).unwrap_or(Value::Null))
-            .unwrap_or(Value::Null),
+        "int4" => decode_to_value(row, idx, type_name, |value: i32| {
+            Value::Int(i64::from(value))
+        }),
 
-        "int8" => row
-            .try_get::<_, Option<i64>>(idx)
-            .map(|value| value.map(Value::Int).unwrap_or(Value::Null))
-            .unwrap_or(Value::Null),
+        "int8" => decode_to_value(row, idx, type_name, Value::Int),
 
-        "float4" => row
-            .try_get::<_, Option<f32>>(idx)
-            .map(|value| {
-                value
-                    .map(|float| Value::Float(float as f64))
-                    .unwrap_or(Value::Null)
-            })
-            .unwrap_or(Value::Null),
+        "float4" => decode_to_value(row, idx, type_name, |value: f32| {
+            Value::Float(f64::from(value))
+        }),
 
-        "float8" => row
-            .try_get::<_, Option<f64>>(idx)
-            .map(|value| value.map(Value::Float).unwrap_or(Value::Null))
-            .unwrap_or(Value::Null),
+        "float8" => decode_to_value(row, idx, type_name, Value::Float),
 
-        "numeric" => {
-            numeric_decode_to_value(type_name, row.try_get::<_, Option<PgNumericText>>(idx))
+        "numeric" => decode_to_value(row, idx, type_name, |PgNumericText(text)| {
+            Value::Decimal(text)
+        }),
+
+        "text" | "varchar" | "bpchar" | "name" | "citext" => {
+            decode_to_value(row, idx, type_name, Value::Text)
         }
 
-        "text" | "varchar" | "bpchar" | "name" | "citext" => row
-            .try_get::<_, Option<String>>(idx)
-            .map(|value| value.map(Value::Text).unwrap_or(Value::Null))
-            .unwrap_or(Value::Null),
+        "tsvector" | "tsquery" => decode_to_value(row, idx, type_name, |PgTextSearchText(text)| {
+            Value::Text(text)
+        }),
 
-        "tsvector" | "tsquery" => row
-            .try_get::<_, Option<PgTextSearchText>>(idx)
-            .map(|value| {
-                value
-                    .map(|PgTextSearchText(text)| Value::Text(text))
-                    .unwrap_or(Value::Null)
-            })
-            .unwrap_or_else(|_| Value::Unsupported(type_name.to_string())),
+        "vector" | "halfvec" | "sparsevec" => {
+            decode_to_value(row, idx, type_name, |PgVectorText(text)| Value::Text(text))
+        }
 
-        "vector" | "halfvec" | "sparsevec" => row
-            .try_get::<_, Option<PgVectorText>>(idx)
-            .map(|value| {
-                value
-                    .map(|PgVectorText(text)| Value::Text(text))
-                    .unwrap_or(Value::Null)
-            })
-            .unwrap_or_else(|_| Value::Unsupported(type_name.to_string())),
+        "uuid" => decode_to_value(row, idx, type_name, |uuid: Uuid| {
+            Value::Text(uuid.to_string())
+        }),
 
-        "uuid" => row
-            .try_get::<_, Option<Uuid>>(idx)
-            .map(|value| {
-                value
-                    .map(|uuid| Value::Text(uuid.to_string()))
-                    .unwrap_or(Value::Null)
-            })
-            .unwrap_or(Value::Null),
+        "json" | "jsonb" => decode_to_value(row, idx, type_name, |json: JsonValue| {
+            Value::Json(json.to_string())
+        }),
 
-        "json" | "jsonb" => row
-            .try_get::<_, Option<JsonValue>>(idx)
-            .map(|value| {
-                value
-                    .map(|json| Value::Json(json.to_string()))
-                    .unwrap_or(Value::Null)
-            })
-            .unwrap_or(Value::Null),
+        "date" => decode_to_value(row, idx, type_name, Value::Date),
 
-        "date" => row
-            .try_get::<_, Option<NaiveDate>>(idx)
-            .map(|value| value.map(Value::Date).unwrap_or(Value::Null))
-            .unwrap_or(Value::Null),
+        "time" => decode_to_value(row, idx, type_name, Value::Time),
 
-        "time" => row
-            .try_get::<_, Option<NaiveTime>>(idx)
-            .map(|value| value.map(Value::Time).unwrap_or(Value::Null))
-            .unwrap_or(Value::Null),
+        "timestamp" => decode_to_value(row, idx, type_name, |timestamp: NaiveDateTime| {
+            Value::DateTime(DateTime::<Utc>::from_naive_utc_and_offset(timestamp, Utc))
+        }),
 
-        "timestamp" => row
-            .try_get::<_, Option<NaiveDateTime>>(idx)
-            .map(|value| {
-                value
-                    .map(|timestamp| {
-                        Value::DateTime(DateTime::<Utc>::from_naive_utc_and_offset(timestamp, Utc))
-                    })
-                    .unwrap_or(Value::Null)
-            })
-            .unwrap_or(Value::Null),
+        "timestamptz" => decode_to_value(row, idx, type_name, Value::DateTime),
 
-        "timestamptz" => row
-            .try_get::<_, Option<DateTime<Utc>>>(idx)
-            .map(|value| value.map(Value::DateTime).unwrap_or(Value::Null))
-            .unwrap_or(Value::Null),
+        "inet" => decode_to_value(row, idx, type_name, |ip: IpAddr| {
+            Value::Text(ip.to_string())
+        }),
 
-        "inet" => row
-            .try_get::<_, Option<IpAddr>>(idx)
-            .map(|value| {
-                value
-                    .map(|ip| Value::Text(ip.to_string()))
-                    .unwrap_or(Value::Null)
-            })
-            .unwrap_or(Value::Null),
-
-        "bytea" => row
-            .try_get::<_, Option<Vec<u8>>>(idx)
-            .map(|value| value.map(Value::Bytes).unwrap_or(Value::Null))
-            .unwrap_or(Value::Null),
+        "bytea" => decode_to_value(row, idx, type_name, Value::Bytes),
 
         _ => match col_type.kind() {
-            Kind::Enum(_) => match row.try_get::<_, Option<PgText>>(idx) {
-                Ok(Some(PgText(s))) => Value::Text(s),
-                Ok(None) => Value::Null,
-                Err(_) => Value::Unsupported(type_name.to_string()),
-            },
+            Kind::Enum(_) => decode_to_value(row, idx, type_name, |PgText(text)| Value::Text(text)),
 
             Kind::Domain(inner) if is_textual_pg_type(inner) => {
-                match row.try_get::<_, Option<PgText>>(idx) {
-                    Ok(Some(PgText(s))) => Value::Text(s),
-                    Ok(None) => Value::Null,
-                    Err(_) => Value::Unsupported(type_name.to_string()),
-                }
+                decode_to_value(row, idx, type_name, |PgText(text)| Value::Text(text))
             }
 
             Kind::Array(inner) if is_textual_pg_type(inner) => {
-                match row.try_get::<_, Option<Vec<PgText>>>(idx) {
-                    Ok(Some(arr)) => {
-                        Value::Array(arr.into_iter().map(|PgText(s)| Value::Text(s)).collect())
-                    }
-                    Ok(None) => Value::Null,
-                    Err(_) => Value::Unsupported(type_name.to_string()),
-                }
+                decode_to_value(row, idx, type_name, |values: Vec<PgText>| {
+                    Value::Array(
+                        values
+                            .into_iter()
+                            .map(|PgText(text)| Value::Text(text))
+                            .collect(),
+                    )
+                })
             }
 
             _ => Value::Unsupported(type_name.to_string()),
@@ -5807,8 +5772,8 @@ mod tests {
         PostgresDriver, PostgresErrorFormatter, TSQUERY_OP_AND, TSQUERY_OP_NOT, TSQUERY_OP_OR,
         TSQUERY_OP_PHRASE, build_keyword_conn_string, decode_numeric, decode_pgvector_halfvec,
         decode_pgvector_sparsevec, decode_pgvector_vector, decode_tsquery, decode_tsvector,
-        format_pgvector_dense, format_pgvector_float4, format_pgvector_sparse,
-        inject_password_into_pg_uri, numeric_decode_to_value, parse_pg_uri_sslmode,
+        decoded_to_value, format_pgvector_dense, format_pgvector_float4, format_pgvector_sparse,
+        inject_password_into_pg_uri, numeric_array_to_value, parse_pg_uri_sslmode,
         pgvector_array_decode_to_value, pgvector_array_values_to_value,
         plan_postgres_semantic_request, prokind_to_routine_kind, text_search_array_values_to_value,
         unsupported_type_names, with_client_identity,
@@ -6239,26 +6204,119 @@ mod tests {
         assert!(!<PgNumericText as FromSql>::accepts(&Type::FLOAT8));
     }
 
+    fn decimal_text(PgNumericText(text): PgNumericText) -> Value {
+        Value::Decimal(text)
+    }
+
     #[test]
     fn numeric_cells_keep_null_distinct_from_decode_failures() {
         let payload = numeric_payload(0, NUMERIC_SIGN_POSITIVE, 2, &[1123, 4000]);
 
         let decoded = Option::<PgNumericText>::from_sql_nullable(&Type::NUMERIC, Some(&payload));
         assert_eq!(
-            numeric_decode_to_value("numeric", decoded),
+            decoded_to_value("numeric", decoded, decimal_text),
             Value::Decimal("1123.40".to_string())
         );
 
         let null = Option::<PgNumericText>::from_sql_nullable(&Type::NUMERIC, None);
-        assert_eq!(numeric_decode_to_value("numeric", null), Value::Null);
+        assert_eq!(decoded_to_value("numeric", null, decimal_text), Value::Null);
 
         let malformed = Option::<PgNumericText>::from_sql_nullable(&Type::NUMERIC, Some(&[0, 1]));
-        let value = numeric_decode_to_value("numeric", malformed);
+        let value = decoded_to_value("numeric", malformed, decimal_text);
 
         assert_eq!(value, Value::Unsupported("numeric".to_string()));
         assert_eq!(
             unsupported_type_names(&[vec![value]]),
             ["numeric".to_string()].into()
+        );
+    }
+
+    #[test]
+    fn decoded_to_value_maps_success_null_and_decode_failure() {
+        let success: Result<Option<i32>, &str> = Ok(Some(7));
+        assert_eq!(
+            decoded_to_value("int4", success, |value| Value::Int(i64::from(value))),
+            Value::Int(7)
+        );
+
+        let null: Result<Option<i32>, &str> = Ok(None);
+        assert_eq!(
+            decoded_to_value("int4", null, |value| Value::Int(i64::from(value))),
+            Value::Null
+        );
+
+        let failure: Result<Option<i32>, &str> = Err("wrong type");
+        assert_eq!(
+            decoded_to_value("int4", failure, |value| Value::Int(i64::from(value))),
+            Value::Unsupported("int4".to_string())
+        );
+    }
+
+    #[test]
+    fn scalar_decode_failures_are_unsupported_instead_of_null() {
+        let bool_value = Option::<bool>::from_sql_nullable(&Type::BOOL, Some(&[1]));
+        assert_eq!(
+            decoded_to_value("bool", bool_value, Value::Bool),
+            Value::Bool(true)
+        );
+
+        let short_int = Option::<i32>::from_sql_nullable(&Type::INT4, Some(&[0, 1]));
+        assert_eq!(
+            decoded_to_value("int4", short_int, |value| Value::Int(i64::from(value))),
+            Value::Unsupported("int4".to_string())
+        );
+
+        let infinite_timestamp = i64::MAX.to_be_bytes();
+        let timestamp = Option::<chrono::NaiveDateTime>::from_sql_nullable(
+            &Type::TIMESTAMP,
+            Some(&infinite_timestamp),
+        );
+        assert_eq!(
+            decoded_to_value("timestamp", timestamp, |timestamp| {
+                Value::DateTime(chrono::DateTime::from_naive_utc_and_offset(
+                    timestamp,
+                    chrono::Utc,
+                ))
+            }),
+            Value::Unsupported("timestamp".to_string())
+        );
+
+        let infinite_date = i32::MAX.to_be_bytes();
+        let date =
+            Option::<chrono::NaiveDate>::from_sql_nullable(&Type::DATE, Some(&infinite_date));
+        assert_eq!(
+            decoded_to_value("date", date, Value::Date),
+            Value::Unsupported("date".to_string())
+        );
+
+        let short_uuid = Option::<uuid::Uuid>::from_sql_nullable(&Type::UUID, Some(&[0; 4]));
+        assert_eq!(
+            decoded_to_value("uuid", short_uuid, |uuid| Value::Text(uuid.to_string())),
+            Value::Unsupported("uuid".to_string())
+        );
+
+        let null_uuid = Option::<uuid::Uuid>::from_sql_nullable(&Type::UUID, None);
+        assert_eq!(
+            decoded_to_value("uuid", null_uuid, |uuid| Value::Text(uuid.to_string())),
+            Value::Null
+        );
+    }
+
+    #[test]
+    fn numeric_array_keeps_exact_decimals_and_null_elements() {
+        assert!(<Vec<Option<PgNumericText>> as FromSql>::accepts(
+            &Type::NUMERIC_ARRAY
+        ));
+        assert!(!<Vec<Option<PgNumericText>> as FromSql>::accepts(
+            &Type::FLOAT8_ARRAY
+        ));
+
+        let payload = numeric_payload(0, NUMERIC_SIGN_NEGATIVE, 1, &[12, 5000]);
+        let element = decode_numeric(&payload).expect("valid numeric payload");
+
+        assert_eq!(
+            numeric_array_to_value(vec![Some(element), None]),
+            Value::Array(vec![Value::Decimal("-12.5".to_string()), Value::Null])
         );
     }
 

@@ -631,6 +631,96 @@ fn postgres_numeric_values_read_as_exact_decimals() -> Result<(), DbError> {
     })
 }
 
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_numeric_arrays_read_as_exact_decimals() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+
+        let mut result = connection.execute(&QueryRequest::new(
+            "SELECT ARRAY[1123.40, NULL, -0.0001, 'NaN']::numeric[], NULL::numeric[]",
+        ))?;
+        assert!(result.take_unsupported_types().is_empty());
+
+        assert_eq!(
+            result.rows,
+            vec![vec![
+                Value::Array(vec![
+                    Value::Decimal("1123.40".to_string()),
+                    Value::Null,
+                    Value::Decimal("-0.0001".to_string()),
+                    Value::Decimal("NaN".to_string()),
+                ]),
+                Value::Null,
+            ]]
+        );
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn postgres_undecodable_values_are_unsupported_not_null() -> Result<(), DbError> {
+    containers::with_postgres_url(|uri| {
+        let (connection, _) = connect_postgres(uri)?;
+
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE undecodable_values (
+                id INTEGER PRIMARY KEY,
+                happened_at TIMESTAMP,
+                happened_at_tz TIMESTAMPTZ,
+                happened_on DATE,
+                price MONEY
+            )",
+        ))?;
+        connection.execute(&QueryRequest::new(
+            "INSERT INTO undecodable_values VALUES
+                (1, 'infinity', '-infinity', 'infinity', 12.5),
+                (2, NULL, NULL, NULL, NULL)",
+        ))?;
+
+        let mut result = connection.execute(&QueryRequest::new(
+            "SELECT happened_at, happened_at_tz, happened_on, price
+             FROM undecodable_values ORDER BY id",
+        ))?;
+
+        assert_eq!(
+            result.rows[0],
+            vec![
+                Value::Unsupported("timestamp".to_string()),
+                Value::Unsupported("timestamptz".to_string()),
+                Value::Unsupported("date".to_string()),
+                Value::Unsupported("money".to_string()),
+            ]
+        );
+        assert_eq!(result.rows[1][..3], [Value::Null, Value::Null, Value::Null]);
+        assert_eq!(
+            result.take_unsupported_types(),
+            ["date", "money", "timestamp", "timestamptz"].map(String::from)
+        );
+
+        let inserted = connection.insert_row(&RowInsert::new(
+            "undecodable_values".to_string(),
+            Some("public".to_string()),
+            vec!["id".to_string(), "happened_at".to_string()],
+            vec![Value::Int(3), Value::Text("infinity".to_string())],
+        ))?;
+        let returning_row = inserted.returning_row.expect("RETURNING row");
+        assert_eq!(
+            returning_row[..4],
+            [
+                Value::Int(3),
+                Value::Unsupported("timestamp".to_string()),
+                Value::Null,
+                Value::Null,
+            ]
+        );
+
+        Ok(())
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Browse and count
 // ---------------------------------------------------------------------------
