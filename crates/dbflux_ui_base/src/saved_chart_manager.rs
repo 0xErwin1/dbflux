@@ -524,6 +524,7 @@ fn series_dto_to_spec(dto: SeriesDto) -> SeriesSpec {
         column_index: dto.column_index as usize,
         label: dto.label,
         color_slot: dto.color_slot as u8,
+        group_value: None,
     }
 }
 
@@ -788,6 +789,7 @@ mod tests {
                     column_index: 1,
                     label: "value".to_string(),
                     color_slot: 0,
+                    group_value: None,
                 }],
                 legend_visible: false,
                 decimation_threshold: 10_000,
@@ -1096,6 +1098,7 @@ mod tests {
                     column_index: 1,
                     label: "value".to_string(),
                     color_slot: 0,
+                    group_value: None,
                 }],
                 legend_visible: false,
                 decimation_threshold: 10_000,

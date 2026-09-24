@@ -14,6 +14,12 @@ pub(super) fn extract_pk_columns(result: &QueryResult) -> Vec<(usize, String)> {
         .collect()
 }
 
+/// Joins a multi-line query onto one line, collapsing every whitespace run to
+/// a single space, so it fits a one-row toolbar label.
+pub(super) fn single_line(query: &str) -> String {
+    query.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 pub(super) fn value_to_json(value: &Value) -> serde_json::Value {
     match value {
         Value::Null => serde_json::Value::Null,
@@ -150,5 +156,20 @@ impl DataGridPanel {
                     .and_then(|c| c.default_value.clone())
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::single_line;
+
+    #[test]
+    fn single_line_collapses_a_multi_line_query() {
+        let flux = "from(bucket: \"metrics\")\n  |> range(start: -24h)\n  |> limit(n: 100)";
+
+        assert_eq!(
+            single_line(flux),
+            "from(bucket: \"metrics\") |> range(start: -24h) |> limit(n: 100)"
+        );
     }
 }

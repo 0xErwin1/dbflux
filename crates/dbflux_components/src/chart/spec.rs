@@ -1,6 +1,6 @@
 //! Chart specification types that define what to render.
 
-use dbflux_core::ColumnKind;
+use dbflux_core::{ColumnKind, QueryResult, Value};
 use serde::{Deserialize, Serialize};
 
 /// Y-axis scale mode.
@@ -79,6 +79,10 @@ pub struct SeriesSpec {
     pub label: String,
     /// Index into the panel palette; wraps modulo palette length.
     pub color_slot: u8,
+    /// Value of the `binding.group_by` column this series is restricted to.
+    /// `None` plots every row. Set by `ChartSpec::with_group_series`.
+    #[serde(default)]
+    pub group_value: Option<String>,
 }
 
 /// Aggregation kind for the AxisBar binding.
@@ -173,6 +177,13 @@ fn default_decimation_threshold() -> usize {
 pub struct ManualChartSelection {
     pub x_col: usize,
     pub y_cols: Vec<usize>,
+    /// Column whose distinct values split every Y column into one series each.
+    pub group_by: Option<usize>,
+}
+
+/// Key a row's group-by cell is matched on.
+pub fn group_key(value: &Value) -> String {
+    value.as_display_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -224,6 +235,7 @@ impl ChartSpec {
                     column_index: col_idx,
                     label: meta.name.clone(),
                     color_slot: slot as u8,
+                    group_value: None,
                 })
             })
             .collect();
@@ -274,6 +286,7 @@ impl ChartSpec {
                     column_index: col_idx,
                     label: meta.name.clone(),
                     color_slot: slot as u8,
+                    group_value: None,
                 })
             })
             .collect();
@@ -342,6 +355,7 @@ impl ChartSpec {
                     column_index: col_idx,
                     label: meta.name.clone(),
                     color_slot: slot as u8,
+                    group_value: None,
                 })
             })
             .collect();
@@ -352,10 +366,14 @@ impl ChartSpec {
 
         let legend_visible = series.len() > 1;
 
+        let group_by = selection
+            .group_by
+            .filter(|&column| column != selection.x_col && column < columns.len());
+
         let binding = BindingSpec {
             x: selection.x_col,
             y: y_cols,
-            group_by: None,
+            group_by,
             filter: None,
             aggregation: AggKind::None,
         };
@@ -370,6 +388,72 @@ impl ChartSpec {
             track_source_indices: false,
             y_scale: YScale::Linear,
         })
+    }
+
+    /// Splits each series into one series per distinct value of the
+    /// `binding.group_by` column, in the order the values first appear.
+    ///
+    /// A single Y column is labelled by the group value alone. Several Y
+    /// columns are labelled `"<column> · <value>"`. The spec is returned
+    /// unchanged when no group is bound, the group column is out of range,
+    /// the result has no rows, or the series are already split.
+    pub fn with_group_series(mut self, result: &QueryResult) -> Self {
+        let Some(group_column) = self.binding.group_by else {
+            return self;
+        };
+
+        if group_column >= result.columns.len()
+            || self
+                .series
+                .iter()
+                .any(|series| series.group_value.is_some())
+        {
+            return self;
+        }
+
+        let mut group_values: Vec<String> = Vec::new();
+        for row in &result.rows {
+            let Some(cell) = row.get(group_column) else {
+                continue;
+            };
+
+            let key = group_key(cell);
+            if !group_values.contains(&key) {
+                group_values.push(key);
+            }
+        }
+
+        if group_values.is_empty() {
+            return self;
+        }
+
+        let label_with_column = self.series.len() > 1;
+
+        let grouped: Vec<SeriesSpec> = self
+            .series
+            .iter()
+            .flat_map(|series| {
+                group_values.iter().map(move |value| {
+                    let label = if label_with_column {
+                        format!("{} · {}", series.label, value)
+                    } else {
+                        value.clone()
+                    };
+
+                    (series.column_index, label, value.clone())
+                })
+            })
+            .enumerate()
+            .map(|(slot, (column_index, label, value))| SeriesSpec {
+                column_index,
+                label,
+                color_slot: u8::try_from(slot).unwrap_or(u8::MAX),
+                group_value: Some(value),
+            })
+            .collect();
+
+        self.series = grouped;
+        self
     }
 }
 
@@ -447,6 +531,107 @@ mod tests {
             ChartKind::Line,
             "missing 'kind' should default to Line"
         );
+    }
+
+    fn grouped_result() -> dbflux_core::QueryResult {
+        let column = |name: &str, kind: ColumnKind| dbflux_core::ColumnMeta {
+            name: name.to_string(),
+            type_name: String::new(),
+            kind,
+            nullable: true,
+            is_primary_key: false,
+        };
+
+        dbflux_core::QueryResult::table(
+            vec![
+                column("time", ColumnKind::Timestamp),
+                column("load", ColumnKind::Float),
+                column("host", ColumnKind::Text),
+                column("mem", ColumnKind::Float),
+            ],
+            ["a", "b", "a", "b"]
+                .iter()
+                .enumerate()
+                .map(|(i, host)| {
+                    vec![
+                        Value::Int(i as i64),
+                        Value::Float(1.0),
+                        Value::Text((*host).to_string()),
+                        Value::Float(2.0),
+                    ]
+                })
+                .collect(),
+            None,
+            std::time::Duration::ZERO,
+        )
+    }
+
+    fn grouped_selection(y_cols: Vec<usize>) -> ManualChartSelection {
+        ManualChartSelection {
+            x_col: 0,
+            y_cols,
+            group_by: Some(2),
+        }
+    }
+
+    #[test]
+    fn manual_selection_keeps_its_group_in_the_binding() {
+        let result = grouped_result();
+        let spec =
+            ChartSpec::from_manual_selection(&grouped_selection(vec![1]), &result.columns, 100)
+                .expect("spec");
+
+        assert_eq!(spec.binding.group_by, Some(2));
+    }
+
+    #[test]
+    fn with_group_series_splits_one_column_by_group_value() {
+        let result = grouped_result();
+        let spec =
+            ChartSpec::from_manual_selection(&grouped_selection(vec![1]), &result.columns, 100)
+                .expect("spec")
+                .with_group_series(&result);
+
+        let series: Vec<(usize, &str, Option<&str>)> = spec
+            .series
+            .iter()
+            .map(|s| (s.column_index, s.label.as_str(), s.group_value.as_deref()))
+            .collect();
+        assert_eq!(series, vec![(1, "a", Some("a")), (1, "b", Some("b"))]);
+        assert_ne!(spec.series[0].color_slot, spec.series[1].color_slot);
+    }
+
+    #[test]
+    fn with_group_series_names_each_column_and_group_pair() {
+        let result = grouped_result();
+        let spec =
+            ChartSpec::from_manual_selection(&grouped_selection(vec![1, 3]), &result.columns, 100)
+                .expect("spec")
+                .with_group_series(&result);
+
+        let labels: Vec<&str> = spec.series.iter().map(|s| s.label.as_str()).collect();
+        assert_eq!(labels, vec!["load · a", "load · b", "mem · a", "mem · b"]);
+    }
+
+    #[test]
+    fn with_group_series_is_idempotent_and_ignores_missing_groups() {
+        let result = grouped_result();
+        let grouped =
+            ChartSpec::from_manual_selection(&grouped_selection(vec![1]), &result.columns, 100)
+                .expect("spec")
+                .with_group_series(&result)
+                .with_group_series(&result);
+        assert_eq!(
+            grouped.series.len(),
+            2,
+            "splitting twice must not split again"
+        );
+
+        let ungrouped = ChartSpec::from_detection(0, vec![1], &result.columns, 100)
+            .expect("spec")
+            .with_group_series(&result);
+        assert_eq!(ungrouped.series.len(), 1);
+        assert!(ungrouped.series[0].group_value.is_none());
     }
 
     #[test]

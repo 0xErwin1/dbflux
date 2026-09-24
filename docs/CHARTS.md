@@ -45,7 +45,7 @@ Chart kinds are defined by the `ChartKind` enum in
 | `Bar` | Bar chart. |
 | `Scatter` | Scatter chart. |
 | `Area` | Filled line chart; the area between the series line and the baseline is shaded. Shares Line's geometry and hover behaviour. |
-| `StackedBar` | Stacked vertical bars. Each X position shows one bar per series, stacked cumulatively rather than grouped side-by-side. The Y axis is re-scaled at render time to the maximum stack sum. |
+| `StackedBar` | Stacked vertical bars. Each X position shows one bar per series, stacked cumulatively rather than grouped side-by-side. Series are aligned on their X values: a series with no value at an X adds nothing to that bar. The Y axis is re-scaled at render time to run from zero to the maximum stack sum, and the tick labels use that same range. |
 | `Pie` | Pie chart. No X/Y axes; each visible series becomes one wedge sized by the sum of that series' Y values. |
 
 `ChartKind` carries `#[serde(default)]` semantics on the containing
@@ -176,7 +176,7 @@ and therefore is not deduplicated until it is saved.
 
 ## Creating a chart in the UI
 
-There are two entry points.
+There are three entry points.
 
 ### Chart this query
 
@@ -198,6 +198,28 @@ non-empty query causes the document to auto-execute on its first render.
 The "Open chart..." command lists saved charts (built by
 `build_saved_chart_palette_items`) for the active profile, and opens the
 selected chart via `open_saved_chart` as described above.
+
+### Time-series collections
+
+Opening a collection on a connection whose category is
+`DatabaseCategory::TimeSeries` (an InfluxDB measurement, for example) gives its
+data grid the Data, Chart and JSON views that query results have. The first page
+opens as a chart when `detect_chart_columns` returns `Ok`, with the axes seeded
+by `default_bindings_for_time_series` (time on X, the first numeric column on Y,
+the first `Text` column as the group). A group draws one line per distinct
+value of its column, labelled by that value, so a tag such as `host` gives each
+host its own line. The default group applies only when that column holds at
+most 12 distinct values in the result (`DEFAULT_GROUP_MAX_VALUES`). Otherwise
+the chart starts ungrouped. A group picked in the axis bar has no such limit.
+Data shows the rows in the grid rather
+than the document tree other collections use. A refresh, whether manual,
+automatic or a page change, keeps the view the user picked, and falls back to
+Data only when the new page is no longer chartable.
+
+The toolbar and the status bar name the browse by the query the driver runs,
+taken from `QueryGenerator::collection_browse_query`, so the label is written in
+the connection's own query language. A driver that does not implement that
+method keeps the generic label.
 
 ### Saving
 

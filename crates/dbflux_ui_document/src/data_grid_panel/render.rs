@@ -313,12 +313,8 @@ impl DataGridPanel {
                 DataSource::Table { .. } | DataSource::Collection { .. }
             );
         let is_paginated = self.source.is_paginated();
-        let source_name = match &self.source {
-            DataSource::Table { table, .. } => table.qualified_name(),
-            DataSource::Collection { collection, .. } => collection.qualified_name(),
-            DataSource::QueryResult { .. } => String::new(),
-        };
-        let (source_query_prefix, raw_filter_keyword) =
+        let (source_query_prefix, source_name) = self.source_query_labels(cx);
+        let (_, raw_filter_keyword) =
             DataGridPanel::filter_labels_for_source(&self.source, &self.app_state, cx);
         let filter_keyword = if self.builder.filter_input_hidden {
             String::new()
@@ -707,18 +703,13 @@ pub(super) fn render_filter_bar_as_segment(
         return div().into_any();
     }
 
-    let (source_query_prefix, raw_filter_keyword) =
+    let (source_query_prefix, source_name) = g.source_query_labels(cx);
+    let (_, raw_filter_keyword) =
         DataGridPanel::filter_labels_for_source(&g.source, &g.app_state, cx);
     let filter_keyword = if g.builder.filter_input_hidden {
         String::new()
     } else {
         raw_filter_keyword.to_string()
-    };
-
-    let source_name = match &g.source {
-        DataSource::Table { table, .. } => table.qualified_name(),
-        DataSource::Collection { collection, .. } => collection.qualified_name(),
-        DataSource::QueryResult { .. } => String::new(),
     };
 
     let filter_input = g.filter_bar.filter_input.clone();
@@ -827,7 +818,9 @@ pub(super) fn render_filter_bar_as_segment(
                 .flex()
                 .items_center()
                 .gap(Spacing::XS)
-                .child(Text::caption(source_query_prefix).primary())
+                .when(!source_query_prefix.is_empty(), |d| {
+                    d.child(Text::caption(source_query_prefix).primary())
+                })
                 .child(Text::label(source_name)),
         )
         // Toolbar order: WHERE filter (flex_1) | LIMIT | Builder | Refresh.
@@ -1097,7 +1090,9 @@ impl DataGridPanel {
                     .flex()
                     .items_center()
                     .gap(Spacing::XS)
-                    .child(Text::caption(source_query_prefix.to_string()).primary())
+                    .when(!source_query_prefix.is_empty(), |d| {
+                        d.child(Text::caption(source_query_prefix.to_string()).primary())
+                    })
                     .child(Text::label(source_name.to_string())),
             )
             // Toolbar order: WHERE filter (flex_1) | LIMIT | view toggle | Builder | Refresh.
@@ -2708,6 +2703,7 @@ impl DataGridPanel {
                                 let selection = ManualChartSelection {
                                     x_col: x_col_snapshot,
                                     y_cols: y_col_indices.clone(),
+                                    group_by: None,
                                 };
                                 shell.update(cx, |s, _| {
                                     s.chart_manual_selection = Some(selection);

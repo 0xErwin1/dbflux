@@ -286,6 +286,7 @@ mod tests {
                 column_index: 1,
                 label: "value".to_string(),
                 color_slot: 0,
+                group_value: None,
             }],
             legend_visible: false,
             decimation_threshold: 10_000,
