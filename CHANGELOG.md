@@ -10,13 +10,6 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
-
-* UI automation: screenshots now wait until DBFlux has presented the frame that
-  follows an action and, on Linux, until two consecutive captures match, so they
-  no longer show the previous frame. The new `wait_for_idle` tool waits until
-  the element tree stops changing and the window draws at most one frame per
-  500 ms.
-
 * UI automation: `set_text` and `set_value` now fill a text input addressed by
   its element id, and `click_element` accepts text inputs and focuses them for
   `type_text`. Previously both failed on every input, `set_text` with a
@@ -241,6 +234,12 @@ All notable changes to DBFlux will be documented in this file.
   field (`cm-field-host`, `cm-field-ssh_user`, `cm-setting-refresh_interval`).
   Document tabs and Connection Manager tabs are exposed as tabs inside a tab
   list, with the active tab reported as selected, instead of as buttons.
+
+* UI automation: screenshots now wait until DBFlux has presented the frame that
+  follows an action and, on Linux, until two consecutive captures match, so they
+  no longer show the previous frame. The new `wait_for_idle` tool waits until
+  the element tree stops changing and the window draws at most one frame per
+  500 ms.
 
 * **The MCP approvals overlay can be closed** — once opened, the approvals
   overlay stayed on screen until the audit viewer was opened. It now closes
