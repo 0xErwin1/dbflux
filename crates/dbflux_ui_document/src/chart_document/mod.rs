@@ -217,7 +217,7 @@ impl ChartDocument {
         let refresh_dropdown = cx.new(|_cx| {
             let items = RefreshPolicy::ALL
                 .iter()
-                .map(|p| DropdownItem::new(p.label()))
+                .map(|policy| DropdownItem::new(crate::labels::refresh_policy_label(*policy)))
                 .collect();
 
             Dropdown::new("chart-doc-refresh")
@@ -438,7 +438,7 @@ impl ChartDocument {
         let refresh_dropdown = cx.new(|_cx| {
             let items = RefreshPolicy::ALL
                 .iter()
-                .map(|p| DropdownItem::new(p.label()))
+                .map(|policy| DropdownItem::new(crate::labels::refresh_policy_label(*policy)))
                 .collect();
 
             Dropdown::new("chart-doc-refresh")
