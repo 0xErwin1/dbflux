@@ -33,7 +33,9 @@ Base de datos relacional open-source popular.
   lectura; la definición no es editable ni ejecutable en el visor).
 - Los scripts multi-sentencia (varias sentencias separadas por `;`) se dividen y
   ejecutan sentencia por sentencia, cada una a través del camino preparado
-  tipado, devolviendo un result set por sentencia. Un límite explícito retiene
+  tipado, devolviendo un result set por sentencia. Una sentencia que el
+  servidor se niega a preparar, como `START TRANSACTION` o `BEGIN` en MySQL, se
+  ejecuta por el protocolo de texto. Un límite explícito retiene
   como máximo N filas en total entre los resultados del script y del servidor,
   e indica las filas realmente omitidas incluso si N es cero; las mutaciones
   posteriores se completan y los errores se propagan.

@@ -568,6 +568,193 @@ fn mysql_failed_statement_leaves_an_earlier_transaction_open() -> Result<(), DbE
     })
 }
 
+fn assert_explicit_transaction_statement_opens_a_transaction(
+    connection: &dyn dbflux_core::Connection,
+    statement: &str,
+    table: &str,
+) -> Result<(), DbError> {
+    connection.execute(&QueryRequest::new(format!(
+        "CREATE TABLE {table} (id INT PRIMARY KEY)"
+    )))?;
+
+    connection.execute(&QueryRequest::new(statement))?;
+    connection.execute(&QueryRequest::new(format!(
+        "INSERT INTO {table} VALUES (1)"
+    )))?;
+    connection.execute(&QueryRequest::new("ROLLBACK"))?;
+
+    let rows = connection
+        .execute(&QueryRequest::new(format!("SELECT id FROM {table}")))?
+        .rows;
+    assert!(
+        rows.is_empty(),
+        "ROLLBACK must discard the insert, proving `{statement}` opened a transaction"
+    );
+
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mysql_start_transaction_statement_opens_a_transaction() -> Result<(), DbError> {
+    containers::with_mysql_url(|uri| {
+        let (connection, _) = connect_mysql(uri)?;
+        connection.set_active_database(Some("testdb"))?;
+
+        assert_explicit_transaction_statement_opens_a_transaction(
+            connection.as_ref(),
+            "START TRANSACTION",
+            "tx_start_transaction",
+        )
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mysql_begin_statement_opens_a_transaction() -> Result<(), DbError> {
+    containers::with_mysql_url(|uri| {
+        let (connection, _) = connect_mysql(uri)?;
+        connection.set_active_database(Some("testdb"))?;
+
+        assert_explicit_transaction_statement_opens_a_transaction(
+            connection.as_ref(),
+            "BEGIN",
+            "tx_begin",
+        )
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mysql_script_starting_with_start_transaction_rolls_back_and_commits() -> Result<(), DbError> {
+    containers::with_mysql_url(|uri| {
+        let (connection, _) = connect_mysql(uri)?;
+        connection.set_active_database(Some("testdb"))?;
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE tx_script (id INT PRIMARY KEY)",
+        ))?;
+
+        connection.execute(&QueryRequest::new(
+            "START TRANSACTION; INSERT INTO tx_script VALUES (1); ROLLBACK;",
+        ))?;
+        let rows = connection
+            .execute(&QueryRequest::new("SELECT id FROM tx_script"))?
+            .rows;
+        assert!(rows.is_empty(), "the rolled-back script must leave no row");
+
+        connection.execute(&QueryRequest::new(
+            "START TRANSACTION; INSERT INTO tx_script VALUES (2); COMMIT;",
+        ))?;
+        let rows = connection
+            .execute(&QueryRequest::new("SELECT id FROM tx_script"))?
+            .rows;
+        assert_eq!(rows, vec![vec![Value::Int(2)]]);
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mysql_bounded_script_starting_with_start_transaction_succeeds() -> Result<(), DbError> {
+    containers::with_mysql_url(|uri| {
+        let (connection, _) = connect_mysql(uri)?;
+        connection.set_active_database(Some("testdb"))?;
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE tx_bounded_script (id INT PRIMARY KEY)",
+        ))?;
+
+        let result = connection.execute(
+            &QueryRequest::new(
+                "START TRANSACTION; INSERT INTO tx_bounded_script VALUES (1), (2); \
+                 SELECT id FROM tx_bounded_script ORDER BY id; ROLLBACK;",
+            )
+            .with_limit(1),
+        )?;
+        assert_eq!(result.additional_results.len(), 3);
+        assert_eq!(result.additional_results[0].affected_rows, Some(2));
+        assert_eq!(result.additional_results[1].rows, vec![vec![Value::Int(1)]]);
+        assert!(result.additional_results[1].rows_truncated());
+
+        let rows = connection
+            .execute(&QueryRequest::new("SELECT id FROM tx_bounded_script"))?
+            .rows;
+        assert!(
+            rows.is_empty(),
+            "the bounded script's ROLLBACK must discard its rows"
+        );
+
+        connection.execute(&QueryRequest::new("BEGIN").with_limit(1))?;
+        connection.execute(&QueryRequest::new(
+            "INSERT INTO tx_bounded_script VALUES (3)",
+        ))?;
+        connection.execute(&QueryRequest::new("ROLLBACK"))?;
+        let rows = connection
+            .execute(&QueryRequest::new("SELECT id FROM tx_bounded_script"))?
+            .rows;
+        assert!(rows.is_empty(), "a bounded BEGIN must open a transaction");
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mysql_failed_script_rolls_back_the_transaction_start_transaction_opened() -> Result<(), DbError>
+{
+    containers::with_mysql_url(|uri| {
+        let (connection, _) = connect_mysql(uri)?;
+        connection.set_active_database(Some("testdb"))?;
+        connection.execute(&QueryRequest::new(
+            "CREATE TABLE tx_failed_start (id INT PRIMARY KEY)",
+        ))?;
+
+        let Err(error) = connection.execute(&QueryRequest::new(
+            "START TRANSACTION; \
+             INSERT INTO tx_failed_start VALUES (1); \
+             INSERT INTO tx_failed_start VALUES (1); \
+             COMMIT;",
+        )) else {
+            panic!("the duplicate key must fail the script");
+        };
+        assert_transaction_note(&error, TransactionStateNote::RolledBack);
+
+        let rows = connection
+            .execute(&QueryRequest::new("SELECT id FROM tx_failed_start"))?
+            .rows;
+        assert!(rows.is_empty(), "the partial insert must be rolled back");
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn mysql_invalid_statement_still_returns_the_query_error() -> Result<(), DbError> {
+    containers::with_mysql_url(|uri| {
+        let (connection, _) = connect_mysql(uri)?;
+
+        for request in [
+            QueryRequest::new("SELEC 1"),
+            QueryRequest::new("SELEC 1").with_limit(1),
+        ] {
+            let Err(error) = connection.execute(&request) else {
+                panic!("an invalid statement must fail");
+            };
+            let DbError::QueryFailed(formatted) = &error else {
+                panic!("expected a query error, got {error:?}");
+            };
+            assert_eq!(
+                formatted.code.as_deref(),
+                Some("1064"),
+                "expected the server's syntax error, got {error:?}"
+            );
+        }
+
+        Ok(())
+    })
+}
+
 fn assert_no_truncation(result: &dbflux_core::QueryResult, expected_rows: usize) {
     assert_eq!(result.rows.len(), expected_rows);
     assert!(!result.rows_truncated());

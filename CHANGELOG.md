@@ -28,6 +28,10 @@ All notable changes to DBFlux will be documented in this file.
   host passed those options through with nothing to guarantee the driver
   honored them. Queries without either option run as before.
 
+* `START TRANSACTION` and `BEGIN` now work from the SQL editor on MySQL,
+  including as the first statement of a script. MySQL 8.4 refused them with
+  "This command is not supported in the prepared statement protocol yet".
+
 * `F5` now refreshes the focused document (table data, bucket list, object
   listing, key browser), and the audit viewer's `r` refreshes the audit list
   instead of the connection schema. The buckets empty state showed `r refresh`,
