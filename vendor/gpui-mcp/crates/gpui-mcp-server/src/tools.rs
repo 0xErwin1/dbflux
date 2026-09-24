@@ -590,13 +590,16 @@ impl GpuiMcp {
     async fn element_with_action(&self, id: &str, action: NodeAction) -> Result<UiNode, String> {
         let tree = self.tree().await?;
         let node = get_node(&tree, id)?;
-        if !node.state.visible || !node.state.enabled {
-            return Err(format!("element {id:?} is not visible and enabled"));
-        }
+        require_visible_and_enabled(node)?;
         if !node.actions.contains(&action) {
             return Err(format!("element {id:?} does not support {action:?}"));
         }
         Ok(node.clone())
+    }
+
+    async fn element_click_point(&self, id: &str) -> Result<Point, String> {
+        let tree = self.tree().await?;
+        click_point(get_node(&tree, id)?)
     }
 
     async fn wait_for_tree(&self, generation: u64, wait: Duration) -> Result<UiTree, String> {
@@ -948,6 +951,31 @@ fn get_node<'a>(tree: &'a UiTree, id: &str) -> Result<&'a UiNode, String> {
         .ok_or_else(|| format!("semantic element {id:?} was not found"))
 }
 
+fn require_visible_and_enabled(node: &UiNode) -> Result<(), String> {
+    if !node.state.visible || !node.state.enabled {
+        return Err(format!("element {:?} is not visible and enabled", node.id));
+    }
+    Ok(())
+}
+
+/// Return the bounds center that clicks `node`.
+///
+/// Editable text inputs are accepted without a click action of their own: a click at their
+/// center reaches the text editor and focuses it, as a pointer click at those coordinates does.
+fn click_point(node: &UiNode) -> Result<Point, String> {
+    require_visible_and_enabled(node)?;
+    let clickable =
+        node.actions.contains(&NodeAction::Click) || node.actions.contains(&NodeAction::SetText);
+    if !clickable {
+        return Err(format!(
+            "element {:?} does not support {:?}",
+            node.id,
+            NodeAction::Click
+        ));
+    }
+    Ok(require_bounds(node)?.center())
+}
+
 fn require_bounds(node: &UiNode) -> Result<Rect, String> {
     node.bounds
         .filter(|bounds| bounds.is_valid())
@@ -1197,13 +1225,60 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
-    use gpui_mcp_protocol::{BridgeResult, FrameStats, NodeState, Operation, UiNode};
+    use gpui_mcp_protocol::{
+        BridgeResult, FrameStats, NodeAction, NodeState, Operation, Point, Rect, UiNode,
+    };
     use serde_json::json;
 
     use super::{
-        FindArgs, Role, StartVideoRecordingArgs, UiTree, WaitStateArgs,
+        FindArgs, Role, StartVideoRecordingArgs, UiTree, WaitStateArgs, click_point,
         default_result_limit_for_test, find_nodes, settle_refresh_frames, state_matches, tree_diff,
     };
+
+    fn node_with_actions(role: Role, actions: Vec<NodeAction>) -> UiNode {
+        UiNode {
+            id: "cm-field-host".to_owned(),
+            parent: None,
+            children: Vec::new(),
+            role,
+            label: None,
+            description: None,
+            bounds: Some(Rect {
+                x: 10.0,
+                y: 20.0,
+                width: 200.0,
+                height: 30.0,
+            }),
+            state: NodeState::default(),
+            actions,
+            text: None,
+            value: None,
+            metadata: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn click_point_accepts_editable_text_inputs_without_a_click_action() {
+        let input = node_with_actions(
+            Role::TextInput,
+            vec![NodeAction::Focus, NodeAction::SetText, NodeAction::SetValue],
+        );
+
+        assert_eq!(click_point(&input), Ok(Point { x: 110.0, y: 35.0 }));
+    }
+
+    #[test]
+    fn click_point_keeps_rejecting_nodes_without_click_or_text_editing() {
+        let group = node_with_actions(Role::Group, vec![NodeAction::Focus]);
+        assert_eq!(
+            click_point(&group),
+            Err("element \"cm-field-host\" does not support Click".to_owned())
+        );
+
+        let mut disabled = node_with_actions(Role::TextInput, vec![NodeAction::SetText]);
+        disabled.state.enabled = false;
+        assert!(click_point(&disabled).is_err());
+    }
 
     #[tokio::test]
     async fn mutation_settlement_waits_from_each_refresh_token() -> Result<(), String> {

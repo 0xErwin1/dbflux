@@ -2,8 +2,9 @@ use super::{
     ClickElementArgs, ClickPointArgs, DragElementArgs, DragPointArgs, ElementArgs, GpuiMcp,
     InputCommand, Json, KeyArgs, MouseButton, NodeAction, Operation, Parameters, Point,
     PointerButtonArgs, PointerCommand, PointerMoveArgs, Role, ScrollArgs, ScrollPointArgs,
-    SetTextArgs, SetValueArgs, ToolRouter, TypeTextArgs, Value, ack_json, encode_error, get_node,
-    json, object_output, require_bounds, tool, tool_router, validate_pointer_point, validate_value,
+    SetTextArgs, SetValueArgs, ToolRouter, TypeTextArgs, UiNode, Value, ack_json, encode_error,
+    get_node, json, object_output, require_bounds, tool, tool_router, validate_pointer_point,
+    validate_value,
 };
 
 #[tool_router(router = input_router)]
@@ -139,13 +140,13 @@ impl GpuiMcp {
     }
 
     #[tool(
-        description = "Click an element by stable semantic ID through GPUI's real hit-testing and mouse-event pipeline."
+        description = "Click an element by stable semantic ID through GPUI's real hit-testing and mouse-event pipeline. Editable text inputs are clicked at their center, which focuses them for type_text."
     )]
     async fn click_element(
         &self,
         Parameters(args): Parameters<ClickElementArgs>,
     ) -> Result<Json<Value>, String> {
-        let point = self.element_point(&args.id, NodeAction::Click).await?;
+        let point = self.element_click_point(&args.id).await?;
         self.click_at(point, args.button, args.count).await?;
         Ok(ack_json("clicked"))
     }
@@ -157,7 +158,7 @@ impl GpuiMcp {
         &self,
         Parameters(args): Parameters<ElementArgs>,
     ) -> Result<Json<Value>, String> {
-        let point = self.element_point(&args.id, NodeAction::Click).await?;
+        let point = self.element_click_point(&args.id).await?;
         self.click_at(point, MouseButton::Left, 2).await?;
         Ok(ack_json("double_clicked"))
     }
@@ -278,7 +279,7 @@ impl GpuiMcp {
     }
 
     #[tool(
-        description = "Focus an editable element and replace its text through GPUI's active input handler."
+        description = "Replace an editable element's text through its accessibility value action, or by focusing it and using GPUI's active input handler when it has no such action."
     )]
     async fn set_text(
         &self,
@@ -290,10 +291,7 @@ impl GpuiMcp {
         if node.text.as_ref().is_none_or(|text| text.redacted) {
             return Err("element is not an editable non-secret text field".to_owned());
         }
-        self.ack_after_frame(Operation::Focus { node_id: args.id })
-            .await?;
-        self.dispatch_input(InputCommand::ReplaceText { text: args.text })
-            .await?;
+        self.replace_element_text(&node, args.text).await?;
         Ok(ack_json("text_replaced"))
     }
 
@@ -332,10 +330,7 @@ impl GpuiMcp {
                     .as_ref()
                     .ok_or_else(|| format!("element {:?} has no value", args.id))?;
                 validate_value(&args.value, value)?;
-                self.ack_after_frame(Operation::Focus { node_id: args.id })
-                    .await?;
-                self.dispatch_input(InputCommand::ReplaceText { text: args.value })
-                    .await?;
+                self.replace_element_text(&node, args.value).await?;
             }
             Role::Checkbox | Role::Radio | Role::Switch => {
                 let requested = parse_boolean(&args.value)?;
@@ -404,6 +399,28 @@ impl GpuiMcp {
         };
         self.scroll_at(point, args.delta_x, args.delta_y).await?;
         Ok(ack_json("scrolled"))
+    }
+
+    /// Replace the text of an editable element and settle a frame.
+    ///
+    /// An element with an accessibility `SetValue` action receives the text directly, so it
+    /// needs neither focus nor an active input handler. Any other element is focused first
+    /// and its text is replaced through GPUI's active input handler.
+    async fn replace_element_text(&self, node: &UiNode, text: String) -> Result<(), String> {
+        if node.actions.contains(&NodeAction::SetValue) {
+            return self
+                .ack_after_frame(Operation::SetValue {
+                    node_id: node.id.clone(),
+                    value: text,
+                })
+                .await;
+        }
+        self.ack_after_frame(Operation::Focus {
+            node_id: node.id.clone(),
+        })
+        .await?;
+        self.dispatch_input(InputCommand::ReplaceText { text })
+            .await
     }
 
     async fn set_slider_value(
