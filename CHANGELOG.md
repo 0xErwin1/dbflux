@@ -10,6 +10,13 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **Prompt before abandoning a running query** — disconnecting a connection
+  with a query still running, or closing the DBFlux window while any
+  connection runs one, now opens the "Active query running" prompt instead of
+  acting right away. **Cancel query** cancels the query and stays connected,
+  **Keep waiting** changes nothing, and **Disconnect anyway** / **Quit anyway**
+  cancels the query and continues. The prompt existed but nothing opened it.
+
 * Redis, Turso, and InfluxDB now refuse requested row limits (including zero)
   or statement timeouts before execution with `NotSupported`, rather than
   dispatching commands, SQL, HTTP, or instance-context queries without those

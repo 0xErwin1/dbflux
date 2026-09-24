@@ -723,6 +723,11 @@ impl Render for Workspace {
             .when(self.export_modal.read(cx).is_visible(), |root| {
                 root.child(self.export_modal.clone())
             })
+            // Last of the modals so a quit prompt sits above any dialog that
+            // was already open.
+            .when(self.modal_active_query.read(cx).is_visible(), |root| {
+                root.child(self.modal_active_query.clone())
+            })
             .child(
                 div()
                     .absolute()

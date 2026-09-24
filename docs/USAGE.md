@@ -66,6 +66,13 @@ by the driver connect and an initial schema fetch. Connection hooks (if
 configured) run at the PreConnect, PostConnect, PreDisconnect, and PostDisconnect
 phases. See the Settings overview for where hooks are defined.
 
+Disconnecting a connection that still has a query running asks first: **Cancel
+query** stops the query and keeps the connection open, **Keep waiting** leaves
+both alone, and **Disconnect anyway** cancels the query and disconnects. `Enter`
+picks **Cancel query** and `Escape` picks **Keep waiting**. Closing the DBFlux
+window while a query runs on any connection asks the same question, naming the
+connections, with **Quit anyway** in place of **Disconnect anyway**.
+
 ---
 
 ## 2. Browsing the Schema

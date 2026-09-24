@@ -14,6 +14,18 @@ use preflight::sidebar_tree_command_is_blocked_by_search_focus;
 
 impl CommandDispatcher for Workspace {
     fn dispatch(&mut self, cmd: Command, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        // The active-query prompt is checked first: it can open over another
+        // confirmation (quitting while one is visible) and is drawn on top.
+        if matches!(cmd, Command::Execute | Command::Cancel)
+            && self.modal_active_query.read(cx).is_visible()
+        {
+            self.modal_active_query.update(cx, |modal, cx| match cmd {
+                Command::Execute => modal.confirm(cx),
+                _ => modal.cancel(cx),
+            });
+            return true;
+        }
+
         // A visible workspace confirmation captures the keyboard
         // (ContextId::ConfirmModal resolves only Enter/Escape), so it is
         // resolved before every other dispatch domain, including the sidebar

@@ -2343,6 +2343,7 @@ modals:
   active_query:
     title: 有查询正在执行
     prompt: 此连接上仍有查询在执行。您想怎么做？
+    prompt_shutdown: "%{connections} 上仍有查询在执行。您想怎么做？"
     elapsed: "已执行 %{seconds}s"
     disconnect_anyway: 仍然断开
     quit_anyway: 仍然退出

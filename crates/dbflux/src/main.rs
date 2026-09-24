@@ -23,7 +23,9 @@ use dbflux_ui::ipc_server::IpcServer;
 use dbflux_ui::keymap::{input_context_keybindings, workspace_keybindings};
 use dbflux_ui::platform;
 use dbflux_ui::ui::overlays::command_palette::command_palette_keybindings;
-use dbflux_ui::ui::views::workspace::{DocumentFlushOutcome, Workspace, await_document_flush};
+use dbflux_ui::ui::views::workspace::{
+    DocumentFlushOutcome, QuitConfirmed, Workspace, await_document_flush,
+};
 use dbflux_ui_base::user_error::{ErrorKind, UserFacingError, report_error_async};
 use gpui::*;
 use gpui_component::Root;
@@ -437,6 +439,14 @@ fn run_gui() {
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(workspace.downgrade());
 
+                // "Quit anyway" in the active-query prompt resumes the close
+                // the prompt interrupted.
+                let app_state_for_quit = app_state.clone();
+                cx.subscribe(&workspace, move |_, _: &QuitConfirmed, cx| {
+                    initiate_graceful_shutdown(&app_state_for_quit, cx);
+                })
+                .detach();
+
                 IpcServer::start_with_listener(
                     listener,
                     workspace.clone(),
@@ -455,13 +465,27 @@ fn run_gui() {
         let app_state_for_close = app_state.clone();
         window_handle
             .update(cx, |_root, window, cx| {
-                window.on_window_should_close(cx, move |_window, cx| {
+                window.on_window_should_close(cx, move |window, cx| {
                     let already_shutting_down = app_state_for_close.read(cx).is_shutting_down();
                     if already_shutting_down {
                         let phase = app_state_for_close.read(cx).shutdown_phase();
                         if matches!(phase, ShutdownPhase::Complete | ShutdownPhase::Failed) {
                             return true;
                         }
+                        return false;
+                    }
+
+                    // A running query asks first; the shutdown starts from the
+                    // prompt's "Quit anyway" instead of from here.
+                    let workspace = WORKSPACE_FOR_SHUTDOWN
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .as_ref()
+                        .and_then(|weak| weak.upgrade());
+
+                    if let Some(workspace) = workspace
+                        && !workspace.update(cx, |workspace, cx| workspace.request_quit(window, cx))
+                    {
                         return false;
                     }
 

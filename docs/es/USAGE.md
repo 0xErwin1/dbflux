@@ -73,6 +73,15 @@ Los hooks de conexión (si están configurados) se ejecutan en las fases
 PreConnect, PostConnect, PreDisconnect y PostDisconnect. Ver el resumen de
 Settings para dónde se definen los hooks.
 
+Desconectar una conexión que todavía tiene una consulta en ejecución pregunta
+primero: **Cancelar consulta** detiene la consulta y mantiene la conexión
+abierta, **Seguir esperando** no toca ninguna de las dos, y **Desconectar de
+todos modos** cancela la consulta y desconecta. `Enter` elige **Cancelar
+consulta** y `Escape` elige **Seguir esperando**. Cerrar la ventana de DBFlux
+mientras hay una consulta en ejecución en cualquier conexión hace la misma
+pregunta, nombrando las conexiones, con **Salir de todos modos** en lugar de
+**Desconectar de todos modos**.
+
 ---
 
 ## 2. Explorar el schema
