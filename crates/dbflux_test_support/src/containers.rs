@@ -699,6 +699,39 @@ mod tests {
     /// pre-pulled loses the throttling protection the list exists to give,
     /// and an image pre-pulled but no longer started is dead weight that
     /// slows every run.
+    /// Collects `name:tag` from every `GenericImage::new` call with two string literals in
+    /// `source`, including calls that rustfmt wrapped across several lines.
+    /// Occurrences not followed by a string literal (such as this test's own
+    /// escaped examples) are skipped.
+    fn generic_image_references(source: &str) -> Vec<String> {
+        let mut references = Vec::new();
+
+        for (_, after) in source
+            .match_indices("GenericImage::new(")
+            .map(|(index, marker)| (index, &source[index + marker.len()..]))
+        {
+            let Some(image_start) = after.trim_start().strip_prefix('"') else {
+                continue;
+            };
+            let Some((image, rest)) = image_start.split_once('"') else {
+                continue;
+            };
+            let Some(rest) = rest.trim_start().strip_prefix(',') else {
+                continue;
+            };
+            let Some(tag_start) = rest.trim_start().strip_prefix('"') else {
+                continue;
+            };
+            let Some((tag, _)) = tag_start.split_once('"') else {
+                continue;
+            };
+
+            references.push(format!("{image}:{tag}"));
+        }
+
+        references
+    }
+
     #[test]
     fn pre_pull_list_covers_every_mirrored_image() {
         let source = include_str!("containers.rs");
@@ -715,12 +748,9 @@ mod tests {
                 let tag = rest.split('"').next().expect("hub_image tag");
                 let prefix = if image.contains('/') { "" } else { "library/" };
                 started.push(format!("mirror.gcr.io/{prefix}{image}:{tag}"));
-            } else if let Some(rest) = line.split_once("GenericImage::new(\"") {
-                let (image, rest) = rest.1.split_once("\", \"").expect("GenericImage arity");
-                let tag = rest.split('"').next().expect("GenericImage tag");
-                started.push(format!("{image}:{tag}"));
             }
         }
+        started.extend(generic_image_references(source));
         started.sort();
         started.dedup();
         assert!(!started.is_empty(), "found no images in containers.rs");
