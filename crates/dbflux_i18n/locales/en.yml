@@ -23,6 +23,7 @@ access:
   proxy_type: Type
   proxy_host: Host
   proxy_auth: Auth
+  proxy_auth_basic_with_username: "Basic (%{username})"
   proxy_enabled: Enabled
   proxy_no_proxy: No Proxy
   value_yes: "Yes"
@@ -1583,8 +1584,8 @@ document:
       next: Next
       page: "Page %{page}"
       keys_count:
-        one: "%{count} key"
-        many: "%{count} keys"
+        one: "%{count} key on this page"
+        many: "%{count} keys on this page"
       filter:
         keys_placeholder: "Filter keys..."
         members_placeholder: "Filter members..."

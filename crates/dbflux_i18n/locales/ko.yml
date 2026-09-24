@@ -23,6 +23,7 @@ access:
   proxy_type: 유형
   proxy_host: 호스트
   proxy_auth: 인증
+  proxy_auth_basic_with_username: "Basic (%{username})"
   proxy_enabled: 사용
   proxy_no_proxy: 프록시 없음
   value_yes: "예"
@@ -1583,8 +1584,8 @@ document:
       next: 다음
       page: "%{page}페이지"
       keys_count:
-        one: "키 %{count}개"
-        many: "키 %{count}개"
+        one: "이 페이지의 키 %{count}개"
+        many: "이 페이지의 키 %{count}개"
       filter:
         keys_placeholder: "키 필터링..."
         members_placeholder: "멤버 필터링..."

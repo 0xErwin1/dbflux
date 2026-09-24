@@ -69,13 +69,13 @@ impl super::KeyValueDocument {
         let filter = self.filter_input.read(cx).value().trim().to_string();
         let is_first_page = self.current_page == 1;
         let is_unfiltered = filter.is_empty();
+        let pattern = key_scan_pattern(&filter);
         let database = self.database.clone();
         let entity = cx.entity().clone();
 
-        let description = if filter.is_empty() {
-            format!("SCAN {}", database)
-        } else {
-            format!("SCAN {} *{}*", database, filter)
+        let description = match &pattern {
+            Some(pattern) => format!("SCAN {} {}", database, pattern),
+            None => format!("SCAN {}", database),
         };
 
         let (task_id, cancel_token) = self
@@ -95,11 +95,7 @@ impl super::KeyValueDocument {
 
         let request = KeyScanRequest {
             cursor: self.current_cursor.clone(),
-            filter: if filter.is_empty() {
-                None
-            } else {
-                Some(format!("*{}*", filter))
-            },
+            filter: pattern,
             limit: scan_batch_size,
             keyspace: parse_database_name(&database),
         };
@@ -254,8 +250,56 @@ impl super::KeyValueDocument {
     }
 }
 
+/// Builds the key scan pattern for the filter the user typed.
+///
+/// Plain text matches anywhere in the key, so it is wrapped as `*text*`. Input
+/// that already contains a glob metacharacter (`*`, `?` or `[`) is passed
+/// through unchanged, which lets the user search by prefix (`user:*`) or with
+/// any other glob. An empty filter scans every key.
+fn key_scan_pattern(filter: &str) -> Option<String> {
+    if filter.is_empty() {
+        return None;
+    }
+
+    let has_glob = filter.contains(['*', '?', '[']);
+
+    if has_glob {
+        Some(filter.to_string())
+    } else {
+        Some(format!("*{}*", filter))
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::key_scan_pattern;
+
+    #[test]
+    fn key_scan_pattern_scans_everything_for_an_empty_filter() {
+        assert_eq!(key_scan_pattern(""), None);
+    }
+
+    #[test]
+    fn key_scan_pattern_wraps_plain_text_as_a_substring_match() {
+        assert_eq!(
+            key_scan_pattern("leaderboard"),
+            Some("*leaderboard*".to_string())
+        );
+    }
+
+    #[test]
+    fn key_scan_pattern_passes_globs_through_unchanged() {
+        assert_eq!(
+            key_scan_pattern("leaderboard*"),
+            Some("leaderboard*".to_string())
+        );
+        assert_eq!(key_scan_pattern("user:?"), Some("user:?".to_string()));
+        assert_eq!(
+            key_scan_pattern("session:[ab]*"),
+            Some("session:[ab]*".to_string())
+        );
+    }
+
     #[test]
     fn key_value_pagination_keys_resolve_in_both_locales() {
         let keys = ["document.key_value.pagination.error.background_task_limit"];

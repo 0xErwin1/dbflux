@@ -499,6 +499,39 @@ fn redis_scan_keys() -> Result<(), DbError> {
     })
 }
 
+#[test]
+#[ignore = "requires Docker daemon"]
+fn redis_scan_keys_fills_sparse_filtered_page_across_batches() -> Result<(), DbError> {
+    containers::with_redis_url(|uri| {
+        let connection = connect_redis(uri)?;
+        let kv = connection
+            .key_value_api()
+            .expect("Redis should have KV API");
+
+        for i in 0..1500 {
+            kv.set_key(
+                &KeySetRequest::new(format!("filler:key:{i}"), b"v".to_vec())
+                    .with_repr(ValueRepr::Text),
+            )?;
+        }
+        kv.set_key(
+            &KeySetRequest::new("leaderboard:weekly", b"v".to_vec()).with_repr(ValueRepr::Text),
+        )?;
+
+        let page = kv.scan_keys(&KeyScanRequest::new(100).with_filter("leaderboard*"))?;
+
+        let keys: Vec<&str> = page
+            .entries
+            .iter()
+            .map(|entry| entry.key.as_str())
+            .collect();
+        assert_eq!(keys, vec!["leaderboard:weekly"]);
+        assert_eq!(page.entries[0].key_type, Some(KeyType::String));
+
+        Ok(())
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Bulk get
 // ---------------------------------------------------------------------------
