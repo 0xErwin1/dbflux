@@ -139,17 +139,21 @@ pub(crate) fn dispatch_keyboard(
                 window.dispatch_keystroke(parsed, cx);
             }
         }
-        InputCommand::TypeText { text } => require_input_handler(
-            window.insert_input_text(&text, cx),
-            "focused element has no active text input handler",
-        )?,
-        InputCommand::ReplaceText { text } => require_input_handler(
-            window.replace_input_text(&text, cx),
-            "focused input cannot expose its complete document range",
-        )?,
+        InputCommand::TypeText { text } => {
+            require_input_handler(window.insert_input_text(&text, cx), NO_INPUT_HANDLER)?;
+        }
+        InputCommand::ReplaceText { text } => {
+            require_input_handler(window.has_input_handler(), NO_INPUT_HANDLER)?;
+            require_input_handler(
+                window.replace_input_text(&text, cx),
+                "focused input cannot expose its complete document range",
+            )?;
+        }
     }
     Ok(())
 }
+
+const NO_INPUT_HANDLER: &str = "focused element has no active text input handler";
 
 fn require_input_handler(available: bool, message: &'static str) -> Result<(), BridgeError> {
     if !available {
@@ -197,7 +201,7 @@ fn validate_point(point: Point) -> Result<(), BridgeError> {
     Ok(())
 }
 
-fn validate_text(text: &str) -> Result<(), BridgeError> {
+pub(crate) fn validate_text(text: &str) -> Result<(), BridgeError> {
     if text.len() > MAX_TEXT_BYTES {
         return Err(invalid("text exceeds the 64 KiB safety bound"));
     }
@@ -218,9 +222,11 @@ mod tests {
         MouseButton as GpuiMouseButton, ParentElement as _, Render,
         StatefulInteractiveElement as _, Styled as _, TestAppContext, Window, div, point, px, size,
     };
-    use gpui_mcp_protocol::{InputCommand, MAX_KEY_SEQUENCE, MouseButton, Point, PointerCommand};
+    use gpui_mcp_protocol::{
+        BridgeError, ErrorCode, InputCommand, MAX_KEY_SEQUENCE, MouseButton, Point, PointerCommand,
+    };
 
-    use super::{dispatch_pointer, validate};
+    use super::{NO_INPUT_HANDLER, dispatch_keyboard, dispatch_pointer, validate};
 
     #[test]
     fn key_sequences_are_bounded_and_fully_validated() {
@@ -242,6 +248,33 @@ mod tests {
             })
             .is_err()
         );
+    }
+
+    #[gpui::test]
+    fn replacing_text_without_an_input_handler_reports_the_missing_handler(
+        cx: &mut TestAppContext,
+    ) {
+        let visual = cx.add_empty_window();
+        visual.draw(
+            point(px(0.0), px(0.0)),
+            size(px(300.0), px(100.0)),
+            |_, _| div().id("no-input-handler").w(px(100.0)).h(px(100.0)),
+        );
+
+        visual.update(|window, cx| {
+            let result = dispatch_keyboard(
+                InputCommand::ReplaceText {
+                    text: "db.example".to_owned(),
+                },
+                window,
+                cx,
+            );
+
+            assert_eq!(
+                result,
+                Err(BridgeError::new(ErrorCode::Unsupported, NO_INPUT_HANDLER))
+            );
+        });
     }
 
     #[derive(Clone, Copy)]

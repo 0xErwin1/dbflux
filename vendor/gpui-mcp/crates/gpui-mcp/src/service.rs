@@ -606,6 +606,16 @@ fn handle_ui_operation(
             }
             Ok(BridgeResult::Ack)
         }
+        Operation::SetValue { node_id, value } => {
+            if !window.set_observed_element_value(&node_id, &value, cx) {
+                return Err(BridgeError::new(
+                    ErrorCode::Unsupported,
+                    "semantic node has no accessibility value handler in the current frame",
+                ));
+            }
+            window.refresh();
+            Ok(BridgeResult::Ack)
+        }
         Operation::Refresh => {
             let completed = state.frame_stats();
             window.refresh();
@@ -917,6 +927,7 @@ async fn process_request(request: WireRequest, context: ConnectionContext) -> Wi
         operation @ (Operation::Input { .. }
         | Operation::PointerInput { .. }
         | Operation::Focus { .. }
+        | Operation::SetValue { .. }
         | Operation::Refresh
         | Operation::GetLiveDocument
         | Operation::PreviewLiveDocument { .. }
@@ -968,18 +979,21 @@ async fn dispatch_to_ui(
         .map_err(|_| BridgeError::new(ErrorCode::Internal, "UI command pump stopped"))?
 }
 
+fn validate_node_id(node_id: &str) -> Result<(), BridgeError> {
+    if node_id.is_empty() || node_id.len() > MAX_ID_BYTES || node_id.chars().any(char::is_control) {
+        return Err(invalid("semantic node identifier is invalid"));
+    }
+    Ok(())
+}
+
 fn validate_operation(operation: &Operation) -> Result<(), BridgeError> {
     match operation {
         Operation::Input { command } => input::validate(command),
         Operation::PointerInput { command } => input::validate_pointer(command),
-        Operation::Focus { node_id } => {
-            if node_id.is_empty()
-                || node_id.len() > MAX_ID_BYTES
-                || node_id.chars().any(char::is_control)
-            {
-                return Err(invalid("semantic node identifier is invalid"));
-            }
-            Ok(())
+        Operation::Focus { node_id } => validate_node_id(node_id),
+        Operation::SetValue { node_id, value } => {
+            validate_node_id(node_id)?;
+            input::validate_text(value)
         }
         Operation::WaitForTree { timeout_ms, .. }
             if *timeout_ms == 0 || *timeout_ms > MAX_WAIT_MS =>
@@ -1422,11 +1436,30 @@ fn invalid(message: &'static str) -> BridgeError {
 
 #[cfg(test)]
 mod tests {
-    use gpui_mcp_protocol::{AppId, ContextResource, ContextResourceDescriptor};
+    use gpui_mcp_protocol::{
+        AppId, ContextResource, ContextResourceDescriptor, MAX_TEXT_BYTES, Operation,
+    };
 
     use super::{
         BridgeConfig, encode_hex, validate_context_resource, validate_context_resource_list,
+        validate_operation,
     };
+
+    #[test]
+    fn set_value_requires_a_valid_node_id_and_bounded_value() {
+        let set_value = |node_id: &str, value: String| Operation::SetValue {
+            node_id: node_id.to_owned(),
+            value,
+        };
+
+        assert!(validate_operation(&set_value("cm-field-host", "db.example".to_owned())).is_ok());
+        assert!(validate_operation(&set_value("", "db.example".to_owned())).is_err());
+        assert!(validate_operation(&set_value("cm\nfield", "db.example".to_owned())).is_err());
+        assert!(
+            validate_operation(&set_value("cm-field-host", "x".repeat(MAX_TEXT_BYTES + 1)))
+                .is_err()
+        );
+    }
 
     #[test]
     fn application_identifier_blocks_path_traversal() {
