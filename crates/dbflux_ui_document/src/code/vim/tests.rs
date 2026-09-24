@@ -111,6 +111,25 @@ impl Fixture<'_> {
         self.window.update(|_, cx| document.read(cx).vim_mode())
     }
 
+    fn selection(&mut self) -> std::ops::Range<usize> {
+        let document = self.document.clone();
+        self.window.update(|_, cx| {
+            document
+                .read(cx)
+                .editor
+                .input_state
+                .read(cx)
+                .selected_range()
+        })
+    }
+
+    fn selected_query(&mut self) -> Option<String> {
+        let document = self.document.clone();
+        self.window.update(|window, cx| {
+            document.update(cx, |document, cx| document.selected_query(window, cx))
+        })
+    }
+
     fn cursor_shape(&mut self) -> InputCursorShape {
         let document = self.document.clone();
         self.window
@@ -368,6 +387,128 @@ fn open_editor_with<'a>(cx: &'a mut TestAppContext, setup: EditorSetup<'_>) -> F
         harness,
         window,
     }
+}
+
+#[gpui::test]
+fn visual_character_selection_tracks_reverse_unicode_and_escape(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "é中🎉x\r\nlast", true);
+    editor.keys("v");
+    assert_eq!(editor.mode(), Some(VimMode::Visual));
+    assert_eq!(editor.selection(), 0..2);
+    editor.keys("2 l");
+    assert_eq!(editor.selection(), 0..9);
+    assert_eq!(editor.selected_query().as_deref(), Some("é中🎉"));
+    editor.keys("h h");
+    assert_eq!(editor.selection(), 0..2);
+    editor.keys("escape");
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+    assert_eq!(editor.selection(), 0..0);
+    assert!(editor.editor_focused());
+    assert_eq!(editor.text(), "é中🎉x\r\nlast");
+}
+
+#[gpui::test]
+fn visual_line_selection_includes_terminators_and_reverses(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "first\r\nsecond\nlast", true);
+    editor.keys("shift-v j");
+    assert_eq!(editor.mode(), Some(VimMode::VisualLine));
+    assert_eq!(editor.selection(), 0..14);
+    assert_eq!(editor.selected_query().as_deref(), Some("first\r\nsecond"));
+    editor.keys("j");
+    assert_eq!(editor.selection(), 0..18);
+    editor.keys("k k");
+    assert_eq!(editor.selection(), 0..7);
+    editor.keys("tab shift-tab escape");
+    assert_eq!(editor.selection(), 0..0);
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+    assert!(editor.editor_focused());
+}
+
+#[gpui::test]
+fn visual_reverse_word_motion_and_mode_switch_keep_anchor(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "one two three", true);
+    editor.set_cursor(8);
+    editor.keys("v b");
+    assert_eq!(editor.selection(), 4..9);
+    assert_eq!(editor.selected_query().as_deref(), Some("two t"));
+    editor.keys("shift-v");
+    assert_eq!(editor.selection(), 0..13);
+    editor.keys("v");
+    assert_eq!(editor.selection(), 4..9);
+    editor.keys("v");
+    assert_eq!(editor.selection(), 4..4);
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+}
+
+#[gpui::test]
+fn disabling_visual_clears_selection_without_changing_text_or_focus(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "  one  two  ", true);
+    editor.keys("v l");
+    assert_eq!(editor.selection(), 0..2);
+    editor.set_vim(false);
+    assert_eq!(editor.mode(), None);
+    assert_eq!(editor.selection(), 1..1);
+    assert_eq!(editor.selected_query(), None);
+    assert_eq!(editor.text(), "  one  two  ");
+    assert!(editor.editor_focused());
+    editor.set_vim(true);
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+    assert_eq!(editor.selection(), 1..1);
+}
+
+#[gpui::test]
+fn selected_query_trims_visual_and_non_visual_selections(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "  one  two  ", true);
+    editor.keys("v 5 l");
+    assert_eq!(editor.selected_query().as_deref(), Some("one"));
+    editor.set_vim(false);
+    editor.set_cursor(0);
+    let document = editor.document.clone();
+    editor.window.update(|_, cx| {
+        document.update(cx, |document, cx| {
+            document.editor.input_state.update(cx, |state, cx| {
+                state.set_selected_range(0..7, cx);
+            });
+        });
+    });
+    assert_eq!(editor.selected_query().as_deref(), Some("one"));
+    editor.set_cursor(0);
+    assert_eq!(editor.selected_query(), None);
+}
+
+#[gpui::test]
+fn visual_selection_is_scoped_to_focused_document(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "one two", true);
+    editor.keys("v l");
+    let first_selection = editor.selection();
+    editor.focus_other_input();
+    editor.type_text("vjl");
+    assert_eq!(editor.other_input_text(), "vjl");
+    assert_eq!(editor.selection(), first_selection);
+    editor.focus_document(&editor.document.clone());
+    editor.keys("l");
+    assert_eq!(editor.selection(), 0..3);
+}
+
+#[gpui::test]
+fn visual_empty_and_read_only_keep_text_and_shortcuts(cx: &mut TestAppContext) {
+    let mut editor = open_editor_with(
+        cx,
+        EditorSetup {
+            content: "",
+            vim_enabled: true,
+            language: QueryLanguage::Sql,
+            read_only: true,
+        },
+    );
+    editor.keys("v h j k l");
+    assert_eq!(editor.selection(), 0..0);
+    assert_eq!(editor.selected_query(), None);
+    editor.keys("ctrl-s ctrl-enter tab escape");
+    assert!(editor.commands().contains(&Command::SaveQuery));
+    assert_eq!(editor.run_query_actions(), 1);
+    assert_eq!(editor.text(), "");
+    assert!(editor.editor_focused());
 }
 
 #[gpui::test]

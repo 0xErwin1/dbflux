@@ -644,7 +644,7 @@ query, Lua, Python, Bash) y a nada más, así que los cuadros de búsqueda, los
 formularios y la paleta de comandos siguen escribiendo como siempre.
 
 Un editor empieza en modo Normal al abrirse y al activar el modo Vim. Una franja
-debajo del editor muestra el modo, `NORMAL` o `INSERTAR`. Cada tab conserva su
+debajo del editor muestra el modo: `NORMAL`, `INSERTAR`, `VISUAL` o `VISUAL LÍNEA`. Cada tab conserva su
 propio modo al cambiar de tab o al mover el focus y volver.
 
 | Modo | Teclas | Acción |
@@ -658,11 +658,15 @@ propio modo al cambiar de tab o al mover el focus y volver.
 | Normal | `E` / `W` / `B` | Los mismos movimientos, con palabras separadas por espacios en blanco |
 | Normal | `x` | Borrar el carácter bajo el cursor |
 | Normal | `u` | Deshacer |
+| Normal | `v` / `V` | Seleccionar caracteres / líneas completas en modo Visual |
+| Visual / Visual Línea | `h` / `j` / `k` / `l`, `e` / `E` / `w` / `W` / `b` / `B`, `0`, `Enter` | Extender la selección con los mismos movimientos y contadores del modo Normal |
+| Visual / Visual Línea | `v` / `V` | Salir del modo Visual activo / alternar entre selección de caracteres y líneas |
+| Visual / Visual Línea | `Escape` | Borrar la selección y volver al modo Normal |
 | Insertar | `Escape` | Cerrar un menú de autocompletado abierto; si no hay ninguno, volver al modo Normal |
 
 Puedes anteponer un contador a un movimiento o a `x` / `u` (por ejemplo,
 `3w`, `2x`, `2u`). `x` con contador borra hasta el final de la línea sin unir
-líneas; `u` con contador deshace esa cantidad de pasos. `0` sin contador mueve al inicio de la línea; después de un dígito distinto de cero sigue formando parte del contador (por ejemplo, `20w`). Un contador interrumpido no se aplica al siguiente comando.
+líneas; `u` con contador deshace esa cantidad de pasos. `0` sin contador mueve al inicio de la línea; después de un dígito distinto de cero sigue formando parte del contador (por ejemplo, `20w`). Un contador interrumpido no se aplica al siguiente comando. En modo Visual, los movimientos con contador extienden la selección real del editor. `Ctrl+Enter` usa la selección sin espacios al inicio ni al final solo si contiene texto no blanco; si está vacía o contiene solo espacios, usa todo el editor. Esto describe el enrutamiento de la selección, no garantiza la ejecución integral.
 
 Todo lo demás en modo Normal:
 
@@ -696,7 +700,7 @@ otro. `u` deshace los mismos pasos que `Ctrl+z` / `Cmd+z`.
 
 **Limitaciones.**
 
-- Solo existen los comandos de la primera tabla. No hay operadores (`d`, `c`, `y`), modo visual, búsqueda, selección en bloque,
+- Solo existen los comandos de la primera tabla. No hay operadores (`d`, `c`, `y`), búsqueda, selección Visual en bloque,
   objetos de texto, registros, macros, repetición con `.`, comandos `:` ni una
   tecla de rehacer.
 - Los movimientos avanzan un code point de Unicode por vez, como las flechas, así

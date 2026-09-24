@@ -16,6 +16,8 @@ pub enum VimMode {
     #[default]
     Normal,
     Insert,
+    Visual,
+    VisualLine,
 }
 
 /// What a key does in the current mode.
@@ -26,6 +28,9 @@ pub(crate) enum VimCommand {
     MoveUp,
     MoveDown,
     EnterInsert,
+    EnterVisual,
+    EnterVisualLine,
+    LeaveVisual,
     Append,
     AppendLine,
     InsertLine,
@@ -60,7 +65,25 @@ pub(crate) fn command_for(mode: VimMode, key: VimKey<'_>) -> Option<VimCommand> 
 
     match mode {
         VimMode::Insert => (key.key == "escape" && !key.shift).then_some(VimCommand::LeaveInsert),
-        VimMode::Normal => {
+        VimMode::Normal | VimMode::Visual | VimMode::VisualLine => {
+            let visual = matches!(mode, VimMode::Visual | VimMode::VisualLine);
+            if key.key == "escape" && visual {
+                return Some(VimCommand::LeaveVisual);
+            }
+            if key.key == "v" && !key.shift {
+                return Some(if mode == VimMode::Visual {
+                    VimCommand::LeaveVisual
+                } else {
+                    VimCommand::EnterVisual
+                });
+            }
+            if key.key == "v" && key.shift {
+                return Some(if mode == VimMode::VisualLine {
+                    VimCommand::LeaveVisual
+                } else {
+                    VimCommand::EnterVisualLine
+                });
+            }
             // Tab and Shift+Tab would otherwise indent or move focus out of the editor.
             if key.key == "tab" {
                 return Some(VimCommand::Swallow);
@@ -68,8 +91,8 @@ pub(crate) fn command_for(mode: VimMode, key: VimKey<'_>) -> Option<VimCommand> 
 
             if key.shift {
                 return match key.key {
-                    "a" => Some(VimCommand::AppendLine),
-                    "i" => Some(VimCommand::InsertLine),
+                    "a" if !visual => Some(VimCommand::AppendLine),
+                    "i" if !visual => Some(VimCommand::InsertLine),
                     "e" => Some(VimCommand::WordEnd(true)),
                     "w" => Some(VimCommand::WordForward(true)),
                     "b" => Some(VimCommand::WordBackward(true)),
@@ -82,8 +105,8 @@ pub(crate) fn command_for(mode: VimMode, key: VimKey<'_>) -> Option<VimCommand> 
                 "l" => Some(VimCommand::MoveRight),
                 "j" | "enter" => Some(VimCommand::MoveDown),
                 "k" => Some(VimCommand::MoveUp),
-                "i" => Some(VimCommand::EnterInsert),
-                "a" => Some(VimCommand::Append),
+                "i" if !visual => Some(VimCommand::EnterInsert),
+                "a" if !visual => Some(VimCommand::Append),
                 "e" => Some(VimCommand::WordEnd(false)),
                 "w" => Some(VimCommand::WordForward(false)),
                 "b" => Some(VimCommand::WordBackward(false)),
@@ -91,8 +114,8 @@ pub(crate) fn command_for(mode: VimMode, key: VimKey<'_>) -> Option<VimCommand> 
                 digit if digit.len() == 1 && digit.as_bytes()[0].is_ascii_digit() => {
                     Some(VimCommand::Digit(digit.as_bytes()[0] - b'0'))
                 }
-                "x" => Some(VimCommand::DeleteChar),
-                "u" => Some(VimCommand::Undo),
+                "x" if !visual => Some(VimCommand::DeleteChar),
+                "u" if !visual => Some(VimCommand::Undo),
                 _ => None,
             }
         }
@@ -103,7 +126,9 @@ pub(crate) fn command_for(mode: VimMode, key: VimKey<'_>) -> Option<VimCommand> 
 pub(crate) fn mode_after(mode: VimMode, command: VimCommand) -> VimMode {
     match command {
         VimCommand::EnterInsert => VimMode::Insert,
-        VimCommand::LeaveInsert => VimMode::Normal,
+        VimCommand::LeaveInsert | VimCommand::LeaveVisual => VimMode::Normal,
+        VimCommand::EnterVisual => VimMode::Visual,
+        VimCommand::EnterVisualLine => VimMode::VisualLine,
         _ => mode,
     }
 }
@@ -361,6 +386,29 @@ pub(crate) fn step_vertical(
 
 /// Byte range of the character under the cursor, or `None` on an empty line.
 /// Never includes a line terminator, so `x` cannot join lines.
+pub(crate) fn visual_range(
+    text: &Rope,
+    anchor: usize,
+    cursor: usize,
+    linewise: bool,
+) -> Range<usize> {
+    if linewise {
+        let start = line_start(text, anchor.min(cursor));
+        let end_line = Line::containing(text, anchor.max(cursor));
+        let end = if end_line.row + 1 < text.lines_len() {
+            text.line_start_offset(end_line.row + 1)
+        } else {
+            text.len()
+        };
+        start..end
+    } else {
+        let start = anchor.min(cursor);
+        let end = anchor.max(cursor);
+        let width = counted_character_range(text, end, 1).map_or(0, |range| range.len());
+        start..end + width
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn character_range(text: &Rope, offset: usize) -> Option<Range<usize>> {
     counted_character_range(text, offset, 1)

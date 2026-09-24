@@ -593,7 +593,7 @@ editor (SQL and the other query languages, Lua, Python, Bash) and to nothing
 else, so search boxes, forms, and the command palette keep typing as usual.
 
 An editor starts in Normal mode when it opens and when you turn Vim mode on. A
-strip under the editor shows the mode, `NORMAL` or `INSERT`. Each tab keeps its
+strip under the editor shows the mode: `NORMAL`, `INSERT`, `VISUAL`, or `VISUAL LINE`. Each tab keeps its
 own mode when you switch tabs or move focus away and back.
 
 | Mode | Keys | Action |
@@ -607,12 +607,16 @@ own mode when you switch tabs or move focus away and back.
 | Normal | `E` / `W` / `B` | Make the corresponding word motion using whitespace-delimited words |
 | Normal | `x` | Delete the character under the cursor |
 | Normal | `u` | Undo |
+| Normal | `v` / `V` | Select characters / whole lines in Visual mode |
+| Visual / Visual Line | `h` / `j` / `k` / `l`, `e` / `E` / `w` / `W` / `b` / `B`, `0`, `Enter` | Extend the selection with the same motions and counts as Normal mode |
+| Visual / Visual Line | `v` / `V` | Exit the active Visual mode / switch between characterwise and linewise selection |
+| Visual / Visual Line | `Escape` | Clear the selection and return to Normal mode |
 | Insert | `Escape` | Close an open completion menu, otherwise return to Normal mode |
 
 Prefix a motion or `x` / `u` with a count (for example, `3w`, `2x`,
 `2u`). A counted `x` deletes up to the end of the line without joining lines;
 a counted `u` undoes that many steps. `0` without a count moves to the start of the line; after a nonzero digit it remains part of the count (for example, `20w`). An
-interrupted count does not carry over to the next command.
+interrupted count does not carry over to the next command. In Visual mode, counted motions extend the actual editor selection. `Ctrl+Enter` uses the trimmed selection only if it contains non-whitespace text; an empty or whitespace-only selection falls back to the full buffer. This describes selection routing, not an end-to-end execution guarantee.
 
 Everything else in Normal mode:
 
@@ -645,7 +649,7 @@ do nothing there.
 
 **Limitations.**
 
-- Only the commands in the first table exist. There are no operators (`d`, `c`, `y`), visual mode, search, block selection,
+- Only the commands in the first table exist. There are no operators (`d`, `c`, `y`), search, block Visual selection,
   text objects, registers, macros, `.` repeat, `:` commands, or a redo key.
 - Motions step one Unicode code point at a time, like the arrow keys, so a
   letter written with a separate combining accent takes two presses.

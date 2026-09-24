@@ -49,6 +49,8 @@ pub(super) struct VimState {
     /// any other cursor change (a click, an arrow key, an edit) resets it.
     vertical_goal: Option<(usize, usize)>,
     count: Option<usize>,
+    visual_anchor: Option<usize>,
+    visual_cursor: Option<usize>,
 }
 
 impl CodeDocument {
@@ -56,6 +58,16 @@ impl CodeDocument {
     pub fn set_vim_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
         if self.vim.enabled == enabled {
             return;
+        }
+
+        if !enabled && matches!(self.vim.mode, VimMode::Visual | VimMode::VisualLine) {
+            let cursor = self
+                .vim
+                .visual_cursor
+                .unwrap_or_else(|| self.editor_cursor(cx));
+            self.editor
+                .input_state
+                .update(cx, |state, cx| state.set_selected_range(cursor..cursor, cx));
         }
 
         self.vim = VimState {
@@ -87,7 +99,7 @@ impl CodeDocument {
     /// Whether the editor must reject user text changes right now.
     pub(super) fn editor_input_locked(&self) -> bool {
         self.read_only
-            || (self.vim.enabled && self.vim.mode == VimMode::Normal && !self.vim.history_unlocked)
+            || (self.vim.enabled && self.vim.mode != VimMode::Insert && !self.vim.history_unlocked)
     }
 
     /// Applies the lock immediately. Render applies it again every frame, but text
@@ -103,7 +115,7 @@ impl CodeDocument {
     fn sync_editor_cursor_shape(&mut self, cx: &mut Context<Self>) {
         use gpui_base::input::InputCursorShape;
 
-        let shape = if self.vim.enabled && self.vim.mode == VimMode::Normal {
+        let shape = if self.vim.enabled && self.vim.mode != VimMode::Insert {
             InputCursorShape::Block
         } else {
             InputCursorShape::Bar
@@ -191,6 +203,36 @@ impl CodeDocument {
                 self.set_vim_mode(VimMode::Insert, cx);
             }
             VimCommand::EnterInsert => self.set_vim_mode(VimMode::Insert, cx),
+            VimCommand::EnterVisual | VimCommand::EnterVisualLine => {
+                let cursor = self
+                    .vim
+                    .visual_cursor
+                    .unwrap_or_else(|| self.editor_cursor(cx));
+                if self.vim.visual_anchor.is_none() {
+                    self.vim.visual_anchor = Some(cursor);
+                }
+                self.vim.visual_cursor = Some(cursor);
+                self.set_vim_mode(
+                    if command == VimCommand::EnterVisual {
+                        VimMode::Visual
+                    } else {
+                        VimMode::VisualLine
+                    },
+                    cx,
+                );
+                self.update_visual_selection(cx);
+            }
+            VimCommand::LeaveVisual => {
+                let cursor = self
+                    .vim
+                    .visual_cursor
+                    .unwrap_or_else(|| self.editor_cursor(cx));
+                self.vim.visual_anchor = None;
+                self.vim.visual_cursor = None;
+                self.set_vim_mode(VimMode::Normal, cx);
+                self.set_editor_cursor(cursor, cx);
+                self.schedule_editor_refocus(window, cx);
+            }
             VimCommand::LeaveInsert => self.leave_insert(window, cx),
             // A read-only document keeps its text: motions work, edits do nothing.
             VimCommand::DeleteChar if !self.read_only => self.delete_chars(count, window, cx),
@@ -225,7 +267,14 @@ impl CodeDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if !self.vim.enabled || self.vim.mode != VimMode::Insert || !self.editor_menu_open(cx) {
+        if !self.vim.enabled || self.focus_mode != SqlQueryFocus::Editor {
+            return false;
+        }
+        if matches!(self.vim.mode, VimMode::Visual | VimMode::VisualLine) {
+            self.apply_vim_command(VimCommand::LeaveVisual, window, cx);
+            return true;
+        }
+        if self.vim.mode != VimMode::Insert || !self.editor_menu_open(cx) {
             return false;
         }
 
@@ -290,15 +339,41 @@ impl CodeDocument {
     }
 
     fn set_editor_cursor(&mut self, offset: usize, cx: &mut Context<Self>) {
-        self.editor
-            .input_state
-            .update(cx, |state, cx| state.set_selected_range(offset..offset, cx));
+        if matches!(self.vim.mode, VimMode::Visual | VimMode::VisualLine) {
+            self.vim.visual_cursor = Some(offset);
+            self.update_visual_selection(cx);
+        } else {
+            self.editor
+                .input_state
+                .update(cx, |state, cx| state.set_selected_range(offset..offset, cx));
+        }
+    }
+
+    fn update_visual_selection(&mut self, cx: &mut Context<Self>) {
+        let (Some(anchor), Some(cursor)) = (self.vim.visual_anchor, self.vim.visual_cursor) else {
+            return;
+        };
+        self.editor.input_state.update(cx, |state, cx| {
+            let range = machine::visual_range(
+                state.text(),
+                anchor,
+                cursor,
+                self.vim.mode == VimMode::VisualLine,
+            );
+            state.set_selected_range(range, cx);
+        });
+    }
+
+    fn motion_cursor(&self, cx: &App) -> usize {
+        self.vim
+            .visual_cursor
+            .unwrap_or_else(|| self.editor_cursor(cx))
     }
 
     fn move_cursor_with(&mut self, step: fn(&Rope, usize) -> usize, cx: &mut Context<Self>) {
         let target = step(
             self.editor.input_state.read(cx).text(),
-            self.editor_cursor(cx),
+            self.motion_cursor(cx),
         );
 
         self.vim.vertical_goal = None;
@@ -311,7 +386,7 @@ impl CodeDocument {
         count: usize,
         cx: &mut Context<Self>,
     ) {
-        let mut target = self.editor_cursor(cx);
+        let mut target = self.motion_cursor(cx);
         {
             let text = self.editor.input_state.read(cx);
             for _ in 0..count.min(text.text().len().saturating_add(1)) {
@@ -333,7 +408,7 @@ impl CodeDocument {
         count: usize,
         cx: &mut Context<Self>,
     ) {
-        let mut target = self.editor_cursor(cx);
+        let mut target = self.motion_cursor(cx);
         {
             let text = self.editor.input_state.read(cx);
             let chars = machine::word_offsets(text.text());
@@ -351,16 +426,16 @@ impl CodeDocument {
 
     fn repeat_vertical(&mut self, delta: isize, count: usize, cx: &mut Context<Self>) {
         for _ in 0..count.min(self.editor.input_state.read(cx).text().lines_len()) {
-            let before = self.editor_cursor(cx);
+            let before = self.motion_cursor(cx);
             self.move_cursor_vertically(delta, cx);
-            if self.editor_cursor(cx) == before {
+            if self.motion_cursor(cx) == before {
                 break;
             }
         }
     }
 
     fn move_cursor_vertically(&mut self, delta: isize, cx: &mut Context<Self>) {
-        let cursor = self.editor_cursor(cx);
+        let cursor = self.motion_cursor(cx);
         let goal = self
             .vim
             .vertical_goal

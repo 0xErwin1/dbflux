@@ -816,6 +816,8 @@ document:
     vim:
       normal: "노멀"
       insert: "삽입"
+      visual: "비주얼"
+      visual_line: "비주얼 줄"
     output:
       running: "실행 중..."
       stopped: 중지됨

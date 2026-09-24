@@ -816,6 +816,8 @@ document:
     vim:
       normal: "NORMAL"
       insert: "INSERTAR"
+      visual: "VISUAL"
+      visual_line: "VISUAL LÍNEA"
     output:
       running: "Ejecutando..."
       stopped: Detenido

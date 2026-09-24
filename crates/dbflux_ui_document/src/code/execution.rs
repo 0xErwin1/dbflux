@@ -85,7 +85,11 @@ fn task_target_for_execution(
 
 impl CodeDocument {
     /// Returns selected text when a non-empty selection exists.
-    fn selected_query(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<String> {
+    pub(super) fn selected_query(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<String> {
         self.editor.input_state.update(cx, |state, cx| {
             let sel = state.selected_text_range(false, window, cx)?;
 
