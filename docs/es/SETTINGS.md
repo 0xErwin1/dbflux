@@ -84,6 +84,25 @@ las mismas reglas aplican a `DELETE`/`DROP`/`TRUNCATE` de SQL,
 | **Require WHERE for DELETE/UPDATE**              | On      | Trata un `DELETE`/`UPDATE` sin `WHERE` como peligroso.                                                      |
 | **Always require preview (ignore suppressions)** | Off     | Fuerza el modal de confirmación/preview incluso para queries que anteriormente elegiste dejar de confirmar. |
 
+**Editor row limit** (límite de filas del editor, 10.000 por defecto) limita
+cuántas filas devuelve una query ejecutada desde el editor. Es una opción de
+seguridad independiente de los tres controles de queries peligrosas de arriba.
+Acepta cualquier número entero desde 1 y no se puede poner en cero ni
+desactivar: al guardar cualquier otro valor se muestra un error y se conserva
+el límite anterior. DBFlux envía el límite al driver con cada query del editor
+en lugar de agregar un `LIMIT` al texto de la query, y muestra una advertencia
+cuando un resultado omitió filas. En un script con varias sentencias, el límite
+es un único presupuesto compartido por todos sus resultados, y todas las
+sentencias se ejecutan igual.
+
+Los drivers que no pueden aplicar un límite de filas rechazan la query antes de
+ejecutarla en lugar de ignorar el límite. Por eso las queries del editor fallan
+con un error "Operation not supported" en MongoDB, Redis, Turso, InfluxDB, ClickHouse,
+Redshift, CloudWatch, drivers RPC externos y escrituras de DynamoDB (PartiQL
+`INSERT`/`UPDATE`/`DELETE` y los comandos put, update y delete). Cambiar el
+límite no cambia esto. El límite no agrega un timeout y no se aplica a scripts
+Lua, Python o Bash, hooks de conexión ni métricas.
+
 ### Almacenamiento (solo builds Nightly)
 
 | Setting                     | Default | Qué hace                                                                                                               |

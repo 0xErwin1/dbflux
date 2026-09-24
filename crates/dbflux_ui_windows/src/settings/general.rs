@@ -58,6 +58,11 @@ impl GeneralSection {
             return true;
         }
 
+        if self.input_editor_row_limit.read(cx).value().trim() != saved.editor_row_limit.to_string()
+        {
+            return true;
+        }
+
         if self.input_object_preview_limit.read(cx).value().trim()
             != saved.object_preview_size_limit_mib.to_string()
         {
@@ -66,6 +71,14 @@ impl GeneralSection {
 
         self.input_key_value_size_limit.read(cx).value().trim()
             != saved.key_value_size_limit_mib.to_string()
+    }
+
+    /// Parses the editor row limit input. Accepts a whole number of at least 1
+    /// that also fits the signed 64-bit storage column; anything else is `None`.
+    pub(super) fn parse_editor_row_limit(value: &str) -> Option<usize> {
+        let limit = value.trim().parse::<usize>().ok()?;
+
+        (limit >= 1 && i64::try_from(limit).is_ok()).then_some(limit)
     }
 
     pub(super) fn gen_form_rows(&self) -> Vec<GeneralFormRow> {
@@ -87,6 +100,7 @@ impl GeneralSection {
             GeneralFormRow::ConfirmDangerous,
             GeneralFormRow::RequiresWhere,
             GeneralFormRow::RequiresPreview,
+            GeneralFormRow::EditorRowLimit,
             GeneralFormRow::ObjectPreviewLimit,
             GeneralFormRow::KeyValueSizeLimit,
         ];
@@ -228,6 +242,7 @@ impl GeneralSection {
             | Some(GeneralFormRow::AutoSaveInterval)
             | Some(GeneralFormRow::DefaultRefreshInterval)
             | Some(GeneralFormRow::MaxBackgroundTasks)
+            | Some(GeneralFormRow::EditorRowLimit)
             | Some(GeneralFormRow::ObjectPreviewLimit)
             | Some(GeneralFormRow::KeyValueSizeLimit) => {
                 self.gen_focus_current_input(window, cx);
@@ -257,6 +272,10 @@ impl GeneralSection {
             }
             Some(GeneralFormRow::MaxBackgroundTasks) => {
                 self.input_max_bg_tasks
+                    .update(cx, |state, cx| state.focus(window, cx));
+            }
+            Some(GeneralFormRow::EditorRowLimit) => {
+                self.input_editor_row_limit
                     .update(cx, |state, cx| state.focus(window, cx));
             }
             Some(GeneralFormRow::ObjectPreviewLimit) => {
@@ -472,6 +491,16 @@ impl GeneralSection {
             }
         };
 
+        let editor_row_limit_str = self.input_editor_row_limit.read(cx).value().to_string();
+        let Some(editor_row_limit) = Self::parse_editor_row_limit(&editor_row_limit_str) else {
+            let message = dbflux_i18n::t!("settings.general.editor_row_limit.error");
+            Toast::error(message.clone())
+                .meta_right(now_hms())
+                .action(copy_action(message))
+                .push(cx);
+            return;
+        };
+
         let preview_limit_str = self
             .input_object_preview_limit
             .read(cx)
@@ -512,6 +541,7 @@ impl GeneralSection {
         self.gen_settings.auto_save_interval_ms = auto_save_ms;
         self.gen_settings.default_refresh_interval_secs = refresh_interval;
         self.gen_settings.max_concurrent_background_tasks = max_bg_tasks;
+        self.gen_settings.editor_row_limit = editor_row_limit;
         self.gen_settings.object_preview_size_limit_mib = object_preview_limit;
         self.gen_settings.key_value_size_limit_mib = key_value_size_limit;
 
@@ -747,6 +777,14 @@ impl GeneralSection {
                     |this, value, _cx| this.gen_settings.dangerous_requires_preview = value,
                     cx,
                 ))
+                .child(self.render_gen_input_field(
+                    dbflux_i18n::t!("settings.general.editor_row_limit.label"),
+                    &self.input_editor_row_limit,
+                    is_at(GeneralFormRow::EditorRowLimit),
+                    primary,
+                    GeneralFormRow::EditorRowLimit,
+                    cx,
+                ))
                 .child(self.render_gen_group_header(
                     dbflux_i18n::t!("settings.general.object_storage.group"),
                     border,
@@ -950,6 +988,14 @@ impl GeneralSection {
             .child(div().min_w(px(140.0)).child(dropdown.clone()))
     }
 
+    /// Stable element id for inputs that UI automation addresses by name.
+    fn input_element_id(row: GeneralFormRow) -> Option<&'static str> {
+        match row {
+            GeneralFormRow::EditorRowLimit => Some("editor-row-limit"),
+            _ => None,
+        }
+    }
+
     fn render_gen_input_field(
         &self,
         label: impl Into<SharedString>,
@@ -993,7 +1039,12 @@ impl GeneralSection {
                                 cx.notify();
                             }),
                         )
-                        .child(Input::new(input).small().w_full()),
+                        .child(
+                            Input::new(input)
+                                .small()
+                                .w_full()
+                                .when_some(Self::input_element_id(row), |input, id| input.id(id)),
+                        ),
                 ),
         )
     }

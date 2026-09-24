@@ -16,6 +16,15 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Changed
 
+* **Editor queries now carry a row limit, and drivers that cannot enforce it
+  refuse them.** Every query run from the query editor asks the driver for at
+  most Settings → General → Execution Safety → **Editor row limit** rows
+  (default 10,000, minimum 1, cannot be turned off). MongoDB, Redis, Turso,
+  InfluxDB, ClickHouse, Redshift, CloudWatch, external RPC drivers, and
+  DynamoDB writes cannot enforce a row limit, so editor queries on them now
+  fail with an "Operation not supported" error before they run. Scripts,
+  connection hooks, and metrics are unaffected, and no timeout is added.
+
 * ClickHouse and Redshift now refuse explicit query row limits (including zero) and statement timeouts before dispatch or preparation; unprotected queries retain existing behavior, including possible full-result buffering. ClickHouse HTTP timeout does not guarantee server cancellation, and the Redshift early-refusal regression uses PostgreSQL 16 protocol compatibility rather than a hosted Redshift cluster.
 
 ### Fixed

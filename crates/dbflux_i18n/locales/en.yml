@@ -2749,6 +2749,9 @@ settings:
       label: Require WHERE for DELETE/UPDATE
     requires_preview:
       label: Always require preview (ignore suppressions)
+    editor_row_limit:
+      label: Editor row limit
+      error: Editor row limit must be a whole number from 1 to 9223372036854775807
     object_preview_limit:
       label: Object preview size limit (MiB)
       error: Object preview size limit must be >= 1 MiB
