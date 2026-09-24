@@ -3915,6 +3915,40 @@ mod tests {
     }
 
     #[test]
+    fn topology_is_a_single_choice_field_that_loads_saved_profiles_unchanged() {
+        let driver = RedisDriver::new();
+        let topology_field = driver
+            .form_definition()
+            .field("topology")
+            .expect("redis form must declare a topology field");
+
+        let FormFieldKind::Select { options } = &topology_field.kind else {
+            panic!("topology must be a single-choice Select field");
+        };
+        let option_values: Vec<&str> = options.iter().map(|opt| opt.value.as_str()).collect();
+        assert_eq!(option_values, ["standalone", "cluster", "sentinel"]);
+        assert_eq!(topology_field.default_value, "standalone");
+
+        for saved_topology in [None, Some("standalone"), Some("cluster"), Some("sentinel")] {
+            let mut config = base_redis_config();
+            if let DbConfig::Redis { topology, .. } = &mut config {
+                *topology = saved_topology.map(str::to_string);
+            }
+
+            let values = driver.extract_values(&config);
+            let loaded = values
+                .get("topology")
+                .expect("extract_values must always emit a topology value");
+
+            assert_eq!(loaded, saved_topology.unwrap_or("standalone"));
+            assert!(
+                option_values.contains(&loaded.as_str()),
+                "saved topology {saved_topology:?} must select one of the form options"
+            );
+        }
+    }
+
+    #[test]
     fn extract_values_round_trips_sentinel_topology_fields() {
         let driver = RedisDriver::new();
         let mut config = base_redis_config();
