@@ -1384,6 +1384,7 @@ document:
       skipped: "%{table}: omitida"
       failed: "%{table}: FALLIDA — %{error}"
       not_attempted: "%{table}: no intentada"
+      cancelled: "%{table}: cancelada tras %{rows} fila(s)"
     footer:
       back: Atrás
       continue: Continuar
@@ -1462,6 +1463,7 @@ document:
       skipped: "%{table}: omitida"
       failed: "%{table}: FALLIDA — %{error}"
       not_attempted: "%{table}: no intentada"
+      cancelled: "%{table}: cancelada tras %{rows} fila(s)"
   instance_inspector:
     task_label: "Inspector: %{metric_id}"
     connection_not_found: Conexión no encontrada
@@ -1703,6 +1705,7 @@ document:
       skipped: "%{table}: omitida"
       failed: "%{table}: FALLIDA — %{error}"
       not_attempted: "%{table}: no intentada"
+      cancelled: "%{table}: cancelada tras %{rows} fila(s)"
     mapping:
       target_placeholder: Tabla destino
       mode_placeholder: Modo

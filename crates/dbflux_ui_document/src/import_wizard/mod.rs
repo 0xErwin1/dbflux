@@ -112,7 +112,10 @@ fn resolve_run_outcome(result: Result<ImportOutcome, TransferError>) -> RunResol
                 "document.import_wizard.done.cancelled_rows",
                 rows = imported_row_count(&outcome.tables)
             )];
-            warnings.extend(outcome.warnings.iter().cloned());
+            warnings.extend(ImportWizard::itemized_status_lines(
+                &outcome.tables,
+                &outcome.warnings,
+            ));
 
             RunResolution {
                 task_action: RunTaskAction::Cancel,
@@ -169,13 +172,15 @@ fn resolve_run_outcome(result: Result<ImportOutcome, TransferError>) -> RunResol
     }
 }
 
-/// Rows written across every table that reached `Completed`, including the
-/// partially loaded table a cancel stopped.
+/// Rows written across every table that reached `Completed`, plus the rows
+/// the partially loaded table a cancel stopped (`Cancelled`) kept.
 fn imported_row_count(tables: &[ImportedTable]) -> u64 {
     tables
         .iter()
         .map(|t| match &t.status {
-            TableTransferStatus::Completed { rows } => *rows,
+            TableTransferStatus::Completed { rows } | TableTransferStatus::Cancelled { rows } => {
+                *rows
+            }
             _ => 0,
         })
         .sum()
@@ -525,22 +530,25 @@ impl ImportWizard {
 
     fn continue_from_configure(&mut self, cx: &mut Context<Self>) {
         let has_destructive = self.rows.iter().any(|row| row.config.is_destructive());
-        self.step = if has_destructive {
-            WizardStep::Confirm
+        if has_destructive {
+            self.step = WizardStep::Confirm;
         } else {
             self.start_import(cx);
-            WizardStep::Running
-        };
+        }
         cx.notify();
     }
 
     fn confirm_destructive_and_run(&mut self, cx: &mut Context<Self>) {
         self.confirmed_destructive = true;
         self.start_import(cx);
-        self.step = WizardStep::Running;
         cx.notify();
     }
 
+    /// Starts the import run. The wizard enters `Running` only once the run's
+    /// task and cancel token exist, so the running step's Cancel always has a
+    /// token to trip. When the run cannot start (the connection went away, or
+    /// no bundle is loaded) the wizard returns to `Configure` with the
+    /// destructive confirmation cleared, as a Back from `Confirm` would.
     fn start_import(&mut self, cx: &mut Context<Self>) {
         let Some(connection) = self.resolve_connection(cx) else {
             report_error(
@@ -550,9 +558,11 @@ impl ImportWizard {
                 ),
                 cx,
             );
+            self.return_to_configure();
             return;
         };
         let Some(manifest_dir) = self.manifest_dir.clone() else {
+            self.return_to_configure();
             return;
         };
         let target_database = self.target_database(&connection);
@@ -592,6 +602,7 @@ impl ImportWizard {
         });
         self.active_task_id = Some(task_id);
         self.cancel_token = Some(cancel_token.clone());
+        self.step = WizardStep::Running;
 
         let app_state = self.app_state.clone();
         let progress = Arc::clone(&self.progress);
@@ -710,6 +721,11 @@ impl ImportWizard {
         .detach();
     }
 
+    fn return_to_configure(&mut self) {
+        self.step = WizardStep::Configure;
+        self.confirmed_destructive = false;
+    }
+
     /// Requests cancellation of the running import. The engine checks the
     /// token before each chunk, so the chunk already in flight is written and
     /// committed, and no later chunk or table is started.
@@ -742,16 +758,19 @@ impl ImportWizard {
     }
 
     /// Renders one status line per planned table when the run left any table
-    /// `Failed` or `NotStarted`, so the user sees exactly which tables
-    /// succeeded, which one failed with what error, and which were never
-    /// attempted — not just the last error swallowed into a single toast
-    /// (R4-002/B-007). On a fully successful/skipped run, only the engine's
-    /// own warnings are shown, unchanged.
+    /// `Failed`, `Cancelled` or `NotStarted`, so the user sees exactly which
+    /// tables succeeded, which one failed with what error, which one a cancel
+    /// stopped partway, and which were never attempted — not just the last
+    /// error swallowed into a single toast (R4-002/B-007). On a fully
+    /// successful/skipped run, only the engine's own warnings are shown,
+    /// unchanged.
     fn itemized_status_lines(tables: &[ImportedTable], engine_warnings: &[String]) -> Vec<String> {
         let has_issue = tables.iter().any(|t| {
             matches!(
                 t.status,
-                TableTransferStatus::Failed { .. } | TableTransferStatus::NotStarted
+                TableTransferStatus::Failed { .. }
+                    | TableTransferStatus::Cancelled { .. }
+                    | TableTransferStatus::NotStarted
             )
         });
 
@@ -895,9 +914,22 @@ impl ImportWizard {
         div()
             .flex()
             .flex_col()
+            .flex_1()
+            .min_h(px(0.0))
             .gap(Spacing::MD)
             .p(Spacing::MD)
-            .children(rows)
+            .child(
+                div()
+                    .id("import-wizard-tables")
+                    .debug_selector(|| "import-wizard-tables".to_string())
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .overflow_y_scroll()
+                    .flex()
+                    .flex_col()
+                    .gap(Spacing::MD)
+                    .children(rows),
+            )
             .child(
                 Button::new(
                     "import-wizard-continue",
@@ -1034,12 +1066,16 @@ mod tests {
         AppStateEntity, ImportWizard, RunTaskAction, TableImportConfig, WizardStep,
         resolve_run_outcome,
     };
-    use dbflux_core::CancelToken;
+    use crate::migrate_wizard::source_target::shared_coordinator_tests::{
+        PickerFakeConnection, connect_profile,
+    };
+    use dbflux_core::{CancelToken, SchemaLoadingStrategy};
     use dbflux_transfer::import::{ImportOutcome, ImportedTable};
     use dbflux_transfer::manifest::ManifestTable;
     use dbflux_transfer::{TableMappingMode, TableTransferStatus, TransferError};
     use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
-    use gpui::{AppContext, Entity};
+    use gpui::{AppContext, Entity, px};
+    use uuid::Uuid;
 
     fn isolated_test_app_state(cx: &mut gpui::TestAppContext) -> Entity<AppStateEntity> {
         cx.update(|cx| {
@@ -1059,6 +1095,28 @@ mod tests {
             let host = cx.new(|_cx| ToastHost::new());
             cx.set_global(ToastGlobal { host });
         });
+    }
+
+    /// A single-column table plan named `name` that targets an existing
+    /// table, so it runs without the destructive confirmation.
+    fn table_config(name: &str) -> TableImportConfig {
+        let manifest_table = ManifestTable {
+            schema: None,
+            name: name.to_string(),
+            file: format!("{name}.csv"),
+            format: "csv".to_string(),
+            columns: vec![dbflux_core::TransferColumn {
+                name: "id".to_string(),
+                type_name: Some("integer".to_string()),
+                nullable: false,
+                is_primary_key: true,
+            }],
+            row_count: 0,
+            fk_order_index: 0,
+        };
+        let mut config = TableImportConfig::new(&manifest_table, true, Vec::new());
+        config.mapping_mode = TableMappingMode::Existing;
+        config
     }
 
     /// One destructive (`Recreate`) table plan — the shape that must route
@@ -1117,22 +1175,139 @@ mod tests {
 
     /// B-003/JD-W2 regression: only the explicit "Yes, proceed" action may
     /// set `confirmed_destructive` — this is what `start_import` reads into
-    /// `ImportOptions::destructive_confirmed`.
+    /// `ImportOptions::destructive_confirmed`. With a live connection the run
+    /// starts, and the wizard enters `Running` holding the run's task and
+    /// cancel token.
     #[gpui::test]
-    fn confirm_destructive_and_run_sets_the_confirm_flag(cx: &mut gpui::TestAppContext) {
+    fn confirm_destructive_and_run_sets_the_confirm_flag_and_starts_the_run(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        init_test_runtime(cx);
+        let app_state = isolated_test_app_state(cx);
+        let profile_id = Uuid::new_v4();
+        connect_profile(
+            &app_state,
+            cx,
+            profile_id,
+            PickerFakeConnection::new(SchemaLoadingStrategy::SingleDatabase),
+            None,
+        );
+        let wizard = cx.update(|cx| cx.new(|cx| ImportWizard::new(app_state, cx)));
+
+        wizard.update(cx, |this, cx| {
+            this.profile_id = Some(profile_id);
+            this.manifest_dir = Some(std::env::temp_dir().join("dbflux-import-wizard-no-bundle"));
+            this.build_rows(vec![destructive_table_config()], cx);
+            this.step = WizardStep::Confirm;
+        });
+        wizard.update(cx, |this, cx| this.confirm_destructive_and_run(cx));
+
+        cx.update(|cx| {
+            let wizard = wizard.read(cx);
+            assert!(
+                wizard.confirmed_destructive,
+                "the explicit Yes-proceed action must set the confirm flag"
+            );
+            assert!(matches!(wizard.step, WizardStep::Running));
+            assert!(wizard.cancel_token.is_some());
+            assert!(wizard.active_task_id.is_some());
+        });
+    }
+
+    /// When the connection is gone by the time the run starts, the wizard
+    /// never enters `Running` without a task or cancel token (where Cancel
+    /// would do nothing): it reports the error and returns to `Configure`.
+    #[gpui::test]
+    fn continue_from_configure_without_a_connection_returns_to_configure(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        init_test_runtime(cx);
+        let app_state = isolated_test_app_state(cx);
+        let wizard = cx.update(|cx| cx.new(|cx| ImportWizard::new(app_state.clone(), cx)));
+
+        wizard.update(cx, |this, cx| {
+            this.profile_id = Some(Uuid::new_v4());
+            this.manifest_dir = Some(std::env::temp_dir());
+            this.build_rows(vec![table_config("users")], cx);
+            this.step = WizardStep::Configure;
+        });
+        wizard.update(cx, |this, cx| this.continue_from_configure(cx));
+
+        cx.update(|cx| {
+            let wizard = wizard.read(cx);
+            assert!(matches!(wizard.step, WizardStep::Configure));
+            assert!(!wizard.running);
+            assert!(wizard.cancel_token.is_none());
+            assert!(wizard.active_task_id.is_none());
+            assert!(
+                app_state.read(cx).tasks().recent_tasks(10).is_empty(),
+                "no task may be registered for a run that never started"
+            );
+        });
+    }
+
+    /// The destructive path loses its connection the same way: back to
+    /// `Configure`, with the confirmation cleared so the next run must be
+    /// confirmed again.
+    #[gpui::test]
+    fn confirm_destructive_and_run_without_a_connection_returns_to_configure(
+        cx: &mut gpui::TestAppContext,
+    ) {
         init_test_runtime(cx);
         let app_state = isolated_test_app_state(cx);
         let wizard = cx.update(|cx| cx.new(|cx| ImportWizard::new(app_state, cx)));
 
         wizard.update(cx, |this, cx| {
+            this.profile_id = Some(Uuid::new_v4());
+            this.manifest_dir = Some(std::env::temp_dir());
             this.build_rows(vec![destructive_table_config()], cx);
+            this.step = WizardStep::Confirm;
         });
         wizard.update(cx, |this, cx| this.confirm_destructive_and_run(cx));
 
-        let confirmed = cx.update(|cx| wizard.read(cx).confirmed_destructive);
+        cx.update(|cx| {
+            let wizard = wizard.read(cx);
+            assert!(matches!(wizard.step, WizardStep::Configure));
+            assert!(!wizard.confirmed_destructive);
+            assert!(wizard.cancel_token.is_none());
+            assert!(wizard.active_task_id.is_none());
+        });
+    }
+
+    /// A bundle with more tables than fit in the modal keeps the table list
+    /// inside a bounded scroll container that ends inside the window, rather
+    /// than growing past the modal with every row.
+    #[gpui::test]
+    fn configure_step_scrolls_a_long_table_list(cx: &mut gpui::TestAppContext) {
+        init_test_runtime(cx);
+        let app_state = isolated_test_app_state(cx);
+
+        let (_root, window) = cx.add_window_view(|window, cx| {
+            let wizard = cx.new(|cx| ImportWizard::new(app_state, cx));
+            wizard.update(cx, |this, cx| {
+                this.open(Uuid::new_v4(), None, window, cx);
+                let configs = (0..60)
+                    .map(|index| table_config(&format!("table_{index}")))
+                    .collect();
+                this.build_rows(configs, cx);
+                this.step = WizardStep::Configure;
+            });
+            gpui_component::Root::new(wizard, window, cx)
+        });
+        window.run_until_parked();
+
+        let viewport = window.update(|window, _| window.viewport_size());
+        let list = window
+            .debug_bounds("import-wizard-tables")
+            .expect("the configure step should render its table list");
+
         assert!(
-            confirmed,
-            "the explicit Yes-proceed action must set the confirm flag"
+            list.bottom() <= viewport.height,
+            "the table list {list:?} must end inside the window {viewport:?}"
+        );
+        assert!(
+            list.size.height < px(60.0 * 40.0),
+            "sixty table rows cannot fit in {list:?}, so the list must be clipped and scroll"
         );
     }
 
@@ -1153,13 +1328,14 @@ mod tests {
     }
 
     /// A cancelled run ends its task as cancelled, never as a failure or a
-    /// success, and tells the user how many rows were already written.
+    /// success, tells the user how many rows were already written, and lists
+    /// each table's status with the one the cancel stopped as `Cancelled`.
     #[test]
     fn resolve_run_outcome_cancelled_run_cancels_the_task_and_reports_rows_written() {
         let result = Ok(outcome(
             vec![
                 imported("users", TableTransferStatus::Completed { rows: 500 }),
-                imported("orders", TableTransferStatus::Completed { rows: 20 }),
+                imported("orders", TableTransferStatus::Cancelled { rows: 20 }),
                 imported("line_items", TableTransferStatus::NotStarted),
             ],
             true,
@@ -1173,7 +1349,13 @@ mod tests {
         assert_eq!(resolution.summary, "Import cancelled");
         assert_eq!(
             resolution.warnings,
-            vec!["520 row(s) were imported before the import stopped.".to_string()]
+            vec![
+                "520 row(s) were imported before the import stopped.".to_string(),
+                "users: completed (500 row(s))".to_string(),
+                "orders: cancelled after 20 row(s)".to_string(),
+                "line_items: not attempted".to_string(),
+            ],
+            "the table the cancel stopped must be listed as cancelled, not completed"
         );
     }
 

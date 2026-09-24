@@ -52,6 +52,15 @@ All notable changes to DBFlux will be documented in this file.
   retained. A result that merely fills its limit is not flagged, and discarded
   stale executions do not raise omission warnings.
 
+* **Cancelled import and migration tables** — after a cancel, the Done screen
+  of the import and migrate wizards lists every table, and the table the
+  cancel stopped shows as cancelled with the rows it kept instead of
+  completed. An import whose connection closed just before the run started
+  now reports the error and returns to the configure step, where it used to
+  sit on a running screen whose Cancel did nothing. The import configure step
+  scrolls its table list, so a bundle with many tables no longer overflows
+  the dialog.
+
 * Redis, Turso, and InfluxDB now refuse requested row limits (including zero)
   or statement timeouts before execution with `NotSupported`, rather than
   dispatching commands, SQL, HTTP, or instance-context queries without those
