@@ -68,7 +68,13 @@ Expone snapshots tabulares del estado del servidor en ejecución:
   state, wait event, duración)
 - `pg.locks` — locks activos de `pg_locks` unidos con `pg_class`
 
+- Los límites de filas en sentencias únicas retienen solo las filas solicitadas e informan si se omitieron filas; la ejecución termina antes de devolver el resultado.
+- Los lotes con límite de filas y los tiempos de espera solicitados se rechazan antes de ejecutar.
+
 ## Limitaciones
+
+- El límite de filas restringe la retención, no el trabajo del servidor, el tráfico ni el tiempo; las mutaciones completan todos sus efectos.
+- Los límites de filas en métricas e inspectores de instancia se rechazan antes del despacho. Los lotes sin límite conservan su comportamiento previo.
 
 - Las columnas de resultados en lote (multi-sentencia) no llevan metadata de
   tipo; los valores se devuelven como texto y la auto-detección de gráficos está

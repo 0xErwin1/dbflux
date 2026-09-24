@@ -266,6 +266,12 @@ impl Connection for CloudWatchConnection {
     }
 
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
+        if req.limit.is_some() || req.statement_timeout.is_some() {
+            return Err(DbError::NotSupported(
+                "CloudWatch query row limits and statement timeouts are not supported".to_string(),
+            ));
+        }
+
         let started = Instant::now();
 
         let source = req
@@ -319,7 +325,6 @@ impl Connection for CloudWatchConnection {
             ));
         }
 
-        let query_limit = req.limit.unwrap_or(1000).clamp(1, 10_000);
         let start_seconds = start_ms.div_euclid(1000);
         let end_seconds = end_ms.div_euclid(1000);
 
@@ -329,7 +334,7 @@ impl Connection for CloudWatchConnection {
             .query_string(req.sql.clone())
             .start_time(start_seconds)
             .end_time(end_seconds)
-            .limit(query_limit as i32)
+            .limit(1000)
             .query_language(cloudwatch_sdk_query_language(query_mode));
 
         if query_mode != CLOUDWATCH_QUERY_MODE_SQL {
@@ -1848,6 +1853,10 @@ fn fetch_log_stream_page(
 #[cfg(test)]
 mod tests {
     use super::{
+        BehaviorVersion, Client, CloudWatchConfigBuilder, CloudWatchMetricsConfigBuilder,
+        Credentials, Region,
+    };
+    use super::{
         CLOUDWATCH_FORM, CLOUDWATCH_METADATA, CloudWatchCollectionFilter, CloudWatchConnection,
         CloudWatchDriver, CloudWatchProfileConfig, build_clients, classify_cw,
         cloudwatch_column_kind, cwli_column_kind, cwli_field_value,
@@ -1864,6 +1873,162 @@ mod tests {
         MetricQuerySeries, Value,
     };
     use std::collections::HashMap;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    #[test]
+    fn cloudwatch_query_safety() {
+        use dbflux_core::{DbError, ExecutionContext, ExecutionSourceContext, QueryRequest};
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind local fixture");
+        let endpoint = format!("http://{}", listener.local_addr().expect("local address"));
+        let config = CloudWatchProfileConfig {
+            region: "us-east-1".to_string(),
+            profile: None,
+            endpoint: Some(endpoint),
+        };
+        let credentials = Credentials::new("test", "test", None, None, "cloudwatch-test");
+        let client = Client::from_conf(
+            CloudWatchConfigBuilder::new()
+                .behavior_version(BehaviorVersion::latest())
+                .region(Region::new("us-east-1"))
+                .credentials_provider(credentials.clone())
+                .endpoint_url(config.endpoint.as_deref().expect("fixture endpoint"))
+                .build(),
+        );
+        let metrics_client = aws_sdk_cloudwatch::Client::from_conf(
+            CloudWatchMetricsConfigBuilder::new()
+                .behavior_version(BehaviorVersion::latest())
+                .region(Region::new("us-east-1"))
+                .credentials_provider(credentials)
+                .endpoint_url(config.endpoint.as_deref().expect("fixture endpoint"))
+                .build(),
+        );
+        let connection = CloudWatchConnection {
+            client,
+            metrics_client: metrics_client.clone(),
+            config,
+            metric_catalog_impl: CloudWatchMetricCatalog::new(Box::new(RealCloudWatchClient::new(
+                metrics_client.clone(),
+            ))),
+            dashboard_importer_impl: CloudWatchDashboardImporter,
+            dashboard_source_impl: CloudWatchDashboardSource::new(Box::new(
+                RealCloudWatchDashboardApi::new(metrics_client),
+            )),
+        };
+        let (sender, receiver) = mpsc::channel();
+        let server = std::thread::spawn(move || {
+            listener.set_nonblocking(true).expect("nonblocking fixture");
+            let deadline = std::time::Instant::now() + Duration::from_secs(15);
+            let mut requests = Vec::new();
+            while std::time::Instant::now() < deadline {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        stream
+                            .set_read_timeout(Some(Duration::from_secs(2)))
+                            .expect("read timeout");
+                        stream
+                            .set_write_timeout(Some(Duration::from_secs(2)))
+                            .expect("write timeout");
+                        let mut bytes = [0; 8192];
+                        let count = stream.read(&mut bytes).expect("read request");
+                        let request = String::from_utf8_lossy(&bytes[..count]).into_owned();
+                        let start = request.contains("StartQuery");
+                        let metric = request.contains("GetMetricData");
+                        requests.push((start, metric));
+                        let body = if start {
+                            r#"{"queryId":"fixture-query"}"#
+                        } else if metric {
+                            r#"{"MetricDataResults":[],"Messages":[]} "#
+                        } else {
+                            r#"{"status":"Complete","results":[]}"#
+                        };
+                        let response = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/x-amz-json-1.1\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            body.len(),
+                            body
+                        );
+                        stream
+                            .write_all(response.as_bytes())
+                            .expect("write response");
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        if receiver.try_recv().is_ok() {
+                            break;
+                        }
+                        std::thread::yield_now();
+                    }
+                    Err(error) => panic!("accept failed: {error}"),
+                }
+            }
+            requests
+        });
+        let log_context = ExecutionContext {
+            source: Some(ExecutionSourceContext::CollectionWindow {
+                targets: vec!["fixture-group".to_string()],
+                start_ms: 1000,
+                end_ms: 2000,
+                query_mode: None,
+            }),
+            ..ExecutionContext::default()
+        };
+        let metric_context = ExecutionContext {
+            source: Some(ExecutionSourceContext::MetricQuery {
+                series: vec![dbflux_core::MetricQuerySeries {
+                    namespace: "Fixture".to_string(),
+                    metric_name: "Count".to_string(),
+                    dimensions: vec![],
+                    period_s: 60,
+                    statistic: "Sum".to_string(),
+                    label: None,
+                }],
+                start_ms: 1000,
+                end_ms: 2000,
+            }),
+            ..ExecutionContext::default()
+        };
+        let mut failures = Vec::new();
+        for context in [log_context.clone(), metric_context.clone()] {
+            for limit in [Some(0), Some(5)] {
+                let mut request = QueryRequest::new("fields @message".to_string())
+                    .with_execution_context(Some(context.clone()));
+                request.limit = limit;
+                if !matches!(connection.execute(&request), Err(DbError::NotSupported(_))) {
+                    failures.push(format!("limit {limit:?} was not refused"));
+                }
+            }
+            for timeout in [Duration::ZERO, Duration::from_secs(1)] {
+                let mut request = QueryRequest::new("fields @message".to_string())
+                    .with_execution_context(Some(context.clone()));
+                request.statement_timeout = Some(timeout);
+                if !matches!(connection.execute(&request), Err(DbError::NotSupported(_))) {
+                    failures.push(format!("timeout {timeout:?} was not refused"));
+                }
+            }
+        }
+        let healthy = connection.execute(
+            &QueryRequest::new("fields @message".to_string())
+                .with_execution_context(Some(log_context)),
+        );
+        sender.send(()).expect("stop fixture");
+        let requests = server.join().expect("fixture thread");
+        assert!(
+            healthy.is_ok(),
+            "unprotected log request failed: {healthy:?}; requests: {requests:?}"
+        );
+        assert_eq!(
+            requests,
+            vec![(true, false), (false, false)],
+            "protected request reached fixture"
+        );
+        assert!(
+            failures.is_empty(),
+            "{}; observed requests: {requests:?}",
+            failures.join("; ")
+        );
+    }
 
     #[test]
     fn cloudwatch_column_kind_name_based() {
