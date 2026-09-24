@@ -945,6 +945,14 @@ pub enum Operation {
         /// Stable semantic node identifier.
         node_id: String,
     },
+    /// Set the value of one element from the current semantic frame through its
+    /// accessibility `SetValue` action, without moving focus or using an input handler.
+    SetValue {
+        /// Stable semantic node identifier.
+        node_id: String,
+        /// Replacement value, bounded like typed text.
+        value: String,
+    },
     /// Wait without polling until a newer semantic tree is published.
     WaitForTree {
         /// Return immediately when the current generation is newer than this value.
