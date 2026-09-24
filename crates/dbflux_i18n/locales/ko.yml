@@ -23,6 +23,7 @@ access:
   proxy_type: 유형
   proxy_host: 호스트
   proxy_auth: 인증
+  proxy_auth_basic_with_username: "Basic (%{username})"
   proxy_enabled: 사용
   proxy_no_proxy: 프록시 없음
   value_yes: "예"
