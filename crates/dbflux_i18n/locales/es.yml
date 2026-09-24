@@ -1583,8 +1583,8 @@ document:
       next: Siguiente
       page: "Página %{page}"
       keys_count:
-        one: "%{count} clave"
-        many: "%{count} claves"
+        one: "%{count} clave en esta página"
+        many: "%{count} claves en esta página"
       filter:
         keys_placeholder: "Filtrar claves..."
         members_placeholder: "Filtrar miembros..."

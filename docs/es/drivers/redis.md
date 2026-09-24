@@ -60,13 +60,20 @@ Driver de clave-valor Redis para DBFlux, construido sobre el crate
     comando fallido antes de propagar el error.
 - Exploración y descubrimiento de claves:
   - Escaneo de claves basado en cursor (`KV_SCAN`, `PaginationStyle::Cursor`).
-    En una conexión Cluster, un `SCAN` plano no tiene sentido de nodo único,
-    así que el driver lo reparte entre todos los masters: el presupuesto de
-    página se divide equitativamente entre los masters aún pendientes, el
-    cursor de cada nodo se rastrea de forma independiente, y el cursor
-    agregado viaja como un objeto JSON opaco que mapea `"<host>:<port>"` a su
-    cursor `SCAN` pendiente. El escaneo completo termina cuando todos los
-    masters reportan cursor 0.
+    Una solicitud de página sigue emitiendo `SCAN` hasta que la página tiene
+    la cantidad de claves pedida o el escaneo termina, así que un filtro
+    `MATCH` poco frecuente no produce páginas vacías. Cada página está
+    limitada a 1000 round trips de `SCAN` y 500 ms; al llegar al límite, la
+    página devuelve las claves encontradas hasta ese momento con un cursor
+    pendiente. Una clave que `SCAN` repite aparece una sola vez por página, y
+    una página puede superar el tamaño pedido en a lo sumo un lote de `SCAN`.
+    Los tipos de las claves de la página se obtienen en un solo pipeline. En
+    una conexión Cluster, un `SCAN` plano no tiene sentido de nodo único, así
+    que el driver recorre los masters pendientes uno tras otro con el mismo
+    límite de página: el cursor de cada nodo se rastrea de forma
+    independiente, y el cursor agregado viaja como un objeto JSON opaco que
+    mapea `"<host>:<port>"` a su cursor `SCAN` pendiente. El escaneo completo
+    termina cuando todos los masters reportan cursor 0.
   - Descubrimiento de tipo por clave (`KV_KEY_TYPES`) entre string, hash, list,
     set, sorted set y stream.
   - Inspección de TTL (`KV_TTL`) y reporte de tamaño de valor (`KV_VALUE_SIZE`).
