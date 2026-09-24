@@ -11,7 +11,7 @@ use super::filters::{TimeRange, format_timestamp_ms};
 use super::{AuditContextMenuAction, AuditDocument, AuditDocumentSource, ToolbarSlot};
 use crate::handle::DocumentEvent;
 use dbflux_components::chart::YScale;
-use dbflux_components::controls::{GpuiInput as Input, InputState};
+use dbflux_components::controls::{GpuiInput as Input, InputState, ReadOnlyEditor};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Label, Text, surface_raised};
 use dbflux_components::semantic::BannerColors as SemBannerColors;
@@ -22,9 +22,7 @@ use gpui::*;
 use gpui_component::ActiveTheme;
 use gpui_component::Sizable;
 use gpui_component::button::ButtonVariants;
-use gpui_component::input::{
-    Editor as GpuiEditor, EditorState as GpuiEditorState, Textarea, TextareaState,
-};
+use gpui_component::input::{EditorState as GpuiEditorState, Textarea, TextareaState};
 use gpui_component::scroll::ScrollableElement;
 
 use super::super::chrome::{
@@ -1080,8 +1078,7 @@ impl AuditDocument {
                         .child(Label::new(dbflux_i18n::t!("document.audit.detail.details")))
                         .child(
                             div().bg(theme.secondary).p_2().rounded(Radii::SM).child(
-                                GpuiEditor::new(&details_input)
-                                    .readonly(true)
+                                ReadOnlyEditor::new(&details_input)
                                     .appearance(false)
                                     .w_full()
                                     .h(Self::event_text_height(details_rows)),

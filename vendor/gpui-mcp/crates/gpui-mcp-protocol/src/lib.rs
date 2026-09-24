@@ -422,6 +422,9 @@ pub struct NodeState {
     pub visible: bool,
     /// Whether the node accepts input.
     pub enabled: bool,
+    /// Whether an editable node rejects changes to its value. Absent means `false`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub read_only: bool,
     /// Whether the node owns keyboard focus.
     pub focused: bool,
     /// Optional checked state.
@@ -437,6 +440,7 @@ impl Default for NodeState {
         Self {
             visible: true,
             enabled: true,
+            read_only: false,
             focused: false,
             checked: None,
             selected: None,
@@ -1149,7 +1153,7 @@ impl WireResponse {
 mod tests {
     use super::{
         AppId, Capabilities, EndpointDescriptor, InstanceId, LocalEndpoint, NativeWindowId,
-        Operation, PROTOCOL_VERSION, Point, ProcessId, Rect, RequestId, WireResponse,
+        NodeState, Operation, PROTOCOL_VERSION, Point, ProcessId, Rect, RequestId, WireResponse,
     };
 
     #[test]
@@ -1258,6 +1262,32 @@ mod tests {
             presented.get("presented"),
             Some(&serde_json::Value::Bool(true))
         );
+        Ok(())
+    }
+
+    #[test]
+    fn read_only_state_is_serialized_only_when_set() -> Result<(), serde_json::Error> {
+        let writable = serde_json::to_value(NodeState::default())?;
+        assert!(writable.get("read_only").is_none());
+
+        let read_only = serde_json::to_value(NodeState {
+            read_only: true,
+            ..NodeState::default()
+        })?;
+        assert_eq!(
+            read_only.get("read_only"),
+            Some(&serde_json::Value::Bool(true))
+        );
+
+        let legacy = serde_json::from_value::<NodeState>(serde_json::json!({
+            "visible": true,
+            "enabled": true,
+            "focused": false,
+            "checked": null,
+            "selected": null,
+            "expanded": null
+        }))?;
+        assert!(!legacy.read_only);
         Ok(())
     }
 

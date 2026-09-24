@@ -26,11 +26,18 @@ Base de datos embebida basada en archivos.
   `RETURNING`) reteniendo solo las filas pedidas durante la iteración: la iteración drena hasta el final, así que
   los efectos de una mutación siempre se completan, un error tardío por fila
   aún se propaga, y el resultado informa cuando se omitieron filas.
+- Ejecuta un lote multi-sentencia con límite de filas sentencia por sentencia,
+  con un único presupuesto de filas compartido por todo el pedido. El lote se
+  divide con el lexer propio de SQLite, así que una barra invertida no es un
+  escape y los punto y coma dentro de literales, comentarios y cuerpos de
+  triggers no dividen una sentencia; los comentarios o punto y coma finales no
+  crean una sentencia extra. Cada sentencia que produce filas retiene filas solo
+  mientras quede presupuesto, las sentencias posteriores al agotamiento del
+  presupuesto se siguen ejecutando, y el lote se detiene en el primer fallo
+  exactamente como un lote sin límite.
 - Rechaza, antes de cualquier preparación o ejecución, los pedidos que no puede
-  acotar de forma segura: un lote multi-sentencia combinado con un límite de
-  filas (los comentarios o punto y coma finales no crean un lote), un pedido con
-  límite de filas dirigido a instance metrics o inspectors, y un statement
-  timeout solicitado.
+  acotar de forma segura: un pedido con límite de filas dirigido a instance
+  metrics o inspectors, y un statement timeout solicitado.
 - Motor de transferencia de datos: carga masiva nativa multi-fila con `INSERT`
   (`BULK_INSERT`), DDL `CREATE TABLE` nativo del driver a partir de las columnas
   de una tabla origen, y un toggle de integridad referencial por conexión
@@ -46,12 +53,11 @@ Base de datos embebida basada en archivos.
   aplica ningún presupuesto de bytes, memoria ni tiempo — las asignaciones del
   sorter y de `RETURNING` no están acotadas por el tope. Una mutación con
   límite de filas completa todos sus efectos.
-- Los pedidos acotados (con límite de filas) no pueden ejecutar lotes
-  multi-sentencia: preparar o ejecutar un lote puede ejecutar sentencias
-  anteriores antes de que un tope pudiera aplicarse, así que esos pedidos se
-  rechazan antes de preparar cualquier sentencia. Los lotes sin límite mantienen
-  el comportamiento previo de división y ejecución. Una sentencia única acotada
-  con comentarios o punto y coma finales no se trata como un lote.
+- Dividir un lote con límite de filas no prepara nada, pero consulta el texto de
+  la sentencia con el lexer de SQLite en cada `;`, lo que es cuadrático en la
+  longitud de una sentencia con muchos punto y coma dentro de literales,
+  comentarios o cuerpos de triggers. Los lotes sin límite mantienen el
+  comportamiento previo de división y ejecución.
 - Sin límite de filas, `WITH ... SELECT`, `VALUES` y DML con `RETURNING`
   mantienen el comportamiento previo: reportan un error de ejecución no
   soportada después de que la sentencia ya se ejecutó.

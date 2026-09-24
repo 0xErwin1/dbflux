@@ -10,10 +10,11 @@ use dbflux_components::controls::{
     InputState,
 };
 use dbflux_components::icons::AppIcon;
-use dbflux_components::modals::shell::ModalShell;
+use dbflux_components::modals::shell::{ModalFocus, ModalShell};
 use dbflux_components::primitives::{BannerBlock, BannerVariant, IconButton, Text, surface_raised};
 use dbflux_components::tokens::{FontSizes, Heights, Spacing};
 use dbflux_components::typography::AppFonts;
+use dbflux_core::LogErr;
 use dbflux_core::access::AccessKind;
 use dbflux_core::secrecy::SecretString;
 use dbflux_portability::{AuthExportMode, AwsRef, EncryptionChoice, ExportOptions, IncludeExclude};
@@ -166,7 +167,7 @@ pub struct ExportBundleModal {
     pending_result: Option<ExportResult>,
     validation_error: Option<String>,
 
-    focus_handle: FocusHandle,
+    focus: ModalFocus,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -221,8 +222,6 @@ impl ExportBundleModal {
             }
         });
 
-        let focus_handle = cx.focus_handle();
-
         Self {
             app_state,
             visible: false,
@@ -246,7 +245,7 @@ impl ExportBundleModal {
             is_exporting: false,
             pending_result: None,
             validation_error: None,
-            focus_handle,
+            focus: ModalFocus::new(cx),
             _subscriptions: vec![passphrase_sub, confirm_sub, output_sub],
         }
     }
@@ -352,7 +351,7 @@ impl ExportBundleModal {
             .update(cx, |state, cx| state.set_value(default_path, window, cx));
 
         self.visible = true;
-        window.focus(&self.focus_handle, cx);
+        self.focus.focus(None, window, cx);
         cx.notify();
     }
 
@@ -411,7 +410,20 @@ impl ExportBundleModal {
         self.auth_profile = None;
         self.auth_dropdown = None;
         self.auth_dropdown_sub = None;
+        self.focus.restore(cx);
         cx.notify();
+    }
+
+    /// Dismiss the modal, as the Cancel button does. Does nothing while an
+    /// export is running, since the export closes the modal itself when it
+    /// succeeds.
+    pub fn cancel(&mut self, cx: &mut Context<Self>) {
+        if self.is_exporting {
+            return;
+        }
+
+        self.close(cx);
+        cx.emit(ExportBundleModalEvent::Close);
     }
 
     /// Build the read-only summary block for the target.
@@ -616,6 +628,10 @@ impl ExportBundleModal {
     /// Validate inputs, assemble the export graph for the target, and run the
     /// export on a background thread.
     fn do_export(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.is_exporting {
+            return;
+        }
+
         let Some(target) = self.target else {
             return;
         };
@@ -682,7 +698,7 @@ impl ExportBundleModal {
         self.pending_result = None;
         cx.notify();
 
-        window.focus(&self.focus_handle, cx);
+        window.focus(self.focus.handle(), cx);
 
         cx.spawn(async move |_this, cx| {
             // Run the export and write the file entirely on the background
@@ -975,18 +991,10 @@ impl Render for ExportBundleModal {
             state.set_masked(!show_passphrase, window, cx);
         });
 
-        let can_export = self.can_export(cx);
         let is_exporting = self.is_exporting;
+        let export_enabled = self.can_export(cx) && !is_exporting;
 
         let body = div()
-            .track_focus(&self.focus_handle)
-            .key_context(dbflux_core::keymap_types::ContextId::ConfirmModal.as_gpui_context())
-            .on_key_down(cx.listener(|this, ev: &KeyDownEvent, _w, cx| {
-                if ev.keystroke.key == "escape" {
-                    this.close(cx);
-                    cx.emit(ExportBundleModalEvent::Close);
-                }
-            }))
             .flex()
             .flex_col()
             .gap(Spacing::MD)
@@ -1002,10 +1010,7 @@ impl Render for ExportBundleModal {
             })
             .when_some(self.render_result(), |el, banner| el.child(banner));
 
-        let on_cancel = cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
-            this.close(cx);
-            cx.emit(ExportBundleModalEvent::Close);
-        });
+        let on_cancel = cx.listener(|this, _: &gpui::ClickEvent, _, cx| this.cancel(cx));
 
         let export_label = if is_exporting {
             dbflux_i18n::t!("connection_manager.export.status.exporting")
@@ -1026,31 +1031,48 @@ impl Render for ExportBundleModal {
                     dbflux_i18n::t!("connection_manager.import.action.cancel"),
                 )
                 .ghost()
+                .disabled(is_exporting)
                 .on_click(on_cancel),
             )
             .child(
                 Button::new("export-conn-confirm", export_label)
                     .primary()
-                    .disabled(!can_export || is_exporting)
+                    .disabled(!export_enabled)
                     .on_click(on_export),
             );
-
-        let close_for_x = cx.entity().clone();
 
         let title = match self.target {
             Some(target) => crate::labels::export_title_with_kind(&target.kind_display_label()),
             None => dbflux_i18n::t!("connection_manager.export.title"),
         };
 
-        ModalShell::new(title, body.into_any_element(), footer.into_any_element())
+        let shell = ModalShell::new(title, body.into_any_element(), footer.into_any_element())
             .width(px(640.0))
-            .on_close(move |_window, cx| {
-                close_for_x.update(cx, |this, cx| {
-                    this.close(cx);
-                    cx.emit(ExportBundleModalEvent::Close);
-                });
+            .focus_handle(self.focus.handle())
+            .on_confirm({
+                let entity = cx.entity().downgrade();
+                move |window, cx| {
+                    entity
+                        .update(cx, |this, cx| this.do_export(window, cx))
+                        .log_err();
+                }
             })
-            .into_any_element()
+            .confirm_enabled(export_enabled);
+
+        // A running export cannot be cancelled, so the shell draws no close
+        // button and ignores Escape and backdrop clicks until it finishes.
+        let shell = if is_exporting {
+            shell
+        } else {
+            shell.on_close({
+                let entity = cx.entity().downgrade();
+                move |_, cx| {
+                    entity.update(cx, |this, cx| this.cancel(cx)).log_err();
+                }
+            })
+        };
+
+        shell.into_any_element()
     }
 }
 
@@ -1581,5 +1603,151 @@ mod tests {
             let label = target.kind_display_label();
             assert!(!label.is_empty(), "{target:?} resolved an empty label");
         }
+    }
+}
+
+#[cfg(test)]
+mod keyboard_tests {
+    // Explicit imports rather than the parent glob: combining `use super::*`
+    // with `#[gpui::test]` sends the gpui_macros expansion into unbounded
+    // recursion.
+    use super::{ExportBundleModal, ExportBundleModalEvent, ExportTarget};
+    use dbflux_storage::bootstrap::StorageRuntime;
+    use dbflux_ui_base::AppStateEntity;
+    use dbflux_ui_base::modals::test_host::{click_backdrop, has_focus, host_modal};
+    use gpui::{AppContext as _, Entity, FocusHandle, TestAppContext, VisualTestContext};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use uuid::Uuid;
+
+    type Events = Rc<RefCell<Vec<ExportBundleModalEvent>>>;
+
+    /// Shows the modal for a connection that does not exist, with a valid
+    /// plaintext configuration.
+    ///
+    /// `open_target` is not used because it creates the exports directory in
+    /// the real data directory to pre-fill the output path; this sets the same
+    /// state and moves focus the way it does.
+    fn open_modal(
+        cx: &mut TestAppContext,
+    ) -> (
+        Entity<ExportBundleModal>,
+        FocusHandle,
+        &mut VisualTestContext,
+        Events,
+    ) {
+        cx.update(dbflux_components::theme::init);
+        let app_state = cx.new(|_| {
+            AppStateEntity::new_with_storage_runtime(
+                StorageRuntime::in_memory().expect("in-memory storage"),
+            )
+            .expect("app state")
+        });
+
+        let (modal, outside, window) = host_modal(cx, move |window, cx| {
+            ExportBundleModal::new(app_state, window, cx)
+        });
+
+        let events: Events = Rc::default();
+        window.update(|window, cx| {
+            let sink = events.clone();
+            cx.subscribe(&modal, move |_, event: &ExportBundleModalEvent, _| {
+                sink.borrow_mut().push(event.clone());
+            })
+            .detach();
+
+            modal.update(cx, |modal, cx| {
+                modal.target = Some(ExportTarget::Connection(Uuid::nil()));
+                modal.force_plaintext = true;
+                modal.output_input.update(cx, |state, cx| {
+                    state.set_value("/nonexistent/bundle.toml", window, cx)
+                });
+                modal.visible = true;
+                modal.focus.focus(None, window, cx);
+                cx.notify();
+            });
+        });
+        window.run_until_parked();
+
+        (modal, outside, window, events)
+    }
+
+    fn validation_error(
+        window: &mut VisualTestContext,
+        modal: &Entity<ExportBundleModal>,
+    ) -> Option<String> {
+        window.update(|_, cx| modal.read(cx).validation_error.clone())
+    }
+
+    #[gpui::test]
+    fn enter_exports_when_the_form_is_complete(cx: &mut TestAppContext) {
+        let (modal, _outside, window, _events) = open_modal(cx);
+
+        window.simulate_keystrokes("enter");
+
+        // The connection does not exist, so the export stops at assembling
+        // its inputs; reaching that check proves Enter ran the export.
+        assert_eq!(
+            validation_error(window, &modal),
+            Some(dbflux_i18n::t!(
+                "connection_manager.export.error.target_removed"
+            ))
+        );
+    }
+
+    #[gpui::test]
+    fn enter_does_nothing_while_the_form_is_incomplete(cx: &mut TestAppContext) {
+        let (modal, _outside, window, _events) = open_modal(cx);
+        window.update(|_, cx| {
+            modal.update(cx, |modal, cx| {
+                modal.force_plaintext = false;
+                cx.notify();
+            });
+        });
+        window.run_until_parked();
+
+        window.simulate_keystrokes("enter");
+
+        assert_eq!(validation_error(window, &modal), None);
+        assert!(window.update(|_, cx| modal.read(cx).is_visible()));
+    }
+
+    #[gpui::test]
+    fn escape_closes_and_gives_focus_back(cx: &mut TestAppContext) {
+        let (modal, outside, window, events) = open_modal(cx);
+
+        window.simulate_keystrokes("escape");
+
+        assert_eq!(events.borrow().as_slice(), [ExportBundleModalEvent::Close]);
+        assert!(!window.update(|_, cx| modal.read(cx).is_visible()));
+        assert!(has_focus(window, &outside));
+    }
+
+    #[gpui::test]
+    fn a_backdrop_click_closes(cx: &mut TestAppContext) {
+        let (modal, _outside, window, events) = open_modal(cx);
+
+        click_backdrop(window);
+
+        assert_eq!(events.borrow().as_slice(), [ExportBundleModalEvent::Close]);
+        assert!(!window.update(|_, cx| modal.read(cx).is_visible()));
+    }
+
+    #[gpui::test]
+    fn a_running_export_ignores_escape_and_the_backdrop(cx: &mut TestAppContext) {
+        let (modal, _outside, window, events) = open_modal(cx);
+        window.update(|_, cx| {
+            modal.update(cx, |modal, cx| {
+                modal.is_exporting = true;
+                cx.notify();
+            });
+        });
+        window.run_until_parked();
+
+        window.simulate_keystrokes("escape");
+        click_backdrop(window);
+
+        assert!(events.borrow().is_empty());
+        assert!(window.update(|_, cx| modal.read(cx).is_visible()));
     }
 }

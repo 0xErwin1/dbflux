@@ -38,15 +38,17 @@ bridge's exact protocol version.
 - License: Apache-2.0. `LICENSE` is upstream's license file, copied verbatim.
 - Contents: `crates/gpui-mcp/`, `crates/gpui-mcp-protocol/`, `crates/gpui-mcp-server/` and
   `crates/gpui-mcp-capture/` as they are at that commit, with `dbflux-port.patch`,
-  `text-input-automation.patch` and then `screenshot-freshness.patch` applied. `refresh.sh`
-  rebuilds exactly this tree.
+  `text-input-automation.patch`, `screenshot-freshness.patch` and then
+  `text-input-read-only-focus.patch` applied. `refresh.sh` rebuilds exactly this tree.
 
 ## The DBFlux delta
 
-Three patches, applied in this order. `dbflux-port.patch` changes only the four `Cargo.toml`
-files. `text-input-automation.patch` and `screenshot-freshness.patch` are the only changes to
-Rust source and are described in [Text input automation](#text-input-automation) and
-[Screenshot freshness](#screenshot-freshness) below.
+Four patches, applied in this order. `dbflux-port.patch` changes only the four `Cargo.toml`
+files. `text-input-automation.patch`, `screenshot-freshness.patch` and
+`text-input-read-only-focus.patch` are the only changes to Rust source and are described in
+[Text input automation](#text-input-automation),
+[Screenshot freshness](#screenshot-freshness) and
+[Read-only state and text input focus](#read-only-state-and-text-input-focus) below.
 
 - Package metadata. Upstream inherits `version`, `edition`, `license`, `repository` and
   `homepage` from its own workspace root, which is not vendored. Inheriting from DBFlux's
@@ -89,8 +91,8 @@ input it finds no handler; and the frame has no click listener, so `click_elemen
 - `gpui-mcp-server`: `set_text`, and `set_value` on text inputs, send `SetValue` when the
   node advertises the `SetValue` action and settle a frame, with no focus step. Other
   editable nodes keep upstream's focus-then-`ReplaceText` path. `click_element` and
-  `double_click_element` also accept a node with the `SetText` action and click its bounds
-  center, which focuses the editor for `type_text`. Other nodes keep the `Click` check.
+  `double_click_element` also accept a node with the `SetText` action and click it, which
+  focuses the editor for `type_text`. Other nodes keep the `Click` check.
 
 ### Screenshot freshness
 
@@ -125,6 +127,34 @@ could show the previous frame.
   returns the newest sample instead of failing, so a blinking caret or a spinner does not make
   a screenshot fail. Windows and macOS keep upstream's behavior, and video recording does not
   use this path.
+
+### Read-only state and text input focus
+
+`text-input-read-only-focus.patch` was written for DBFlux against this directory with the first
+three patches applied, and has no upstream counterpart. It reads the read-only state that
+`aria_read_only` and `vendor/gpui-pre/read-only-accessibility.patch` set on AccessKit nodes.
+Five files, 435 diff lines.
+
+- `gpui-mcp-protocol`: `NodeState` gains `read_only`. It defaults to `false` and is serialized
+  only when `true`, so a tree without it keeps its wire shape.
+- `gpui-mcp`: the observer reports `read_only` from the node's AccessKit read-only state. The
+  node's actions are unchanged, so a read-only text input still advertises `SetText` and can
+  still be clicked and focused to select and copy its text.
+- `gpui-mcp-server`: `set_text`, and `set_value` on text inputs, fail with "element ... is
+  read-only and does not accept a new value" on a node that reports `read_only`, before any
+  operation reaches the bridge. The app refuses the same write on its own (see
+  `vendor/gpui-pre/VENDOR.md`), so the bridge's `SetValue` now reports "semantic node is
+  read-only or has no accessibility value handler" when `set_observed_element_value` fails.
+- `gpui-mcp-server`: `focus_element` on a node with the `SetText` action clicks it instead of
+  sending `Focus`, the way `click_element` does, and settles after the click. `Focus` on a
+  gpui-component input focuses its frame, whose focus handle does not own the text input
+  handler, so `type_text` failed after it. Other nodes keep `Focus`.
+- `gpui-mcp-server`: `click_element`, `double_click_element` and `focus_element` click a node
+  with the `SetText` action at a third of its width from the left edge, at most 40 logical
+  pixels, and at its vertical center, instead of at its bounds center. In a narrow input the
+  center can land on a trailing clear or show-password button. The 40 pixel cap clears the
+  left padding and a leading icon, which belong to the input frame: a click there focuses the
+  frame, not the editor. Other nodes are still clicked at their center.
 
 ### Dependencies the server and capture crates add
 
@@ -236,8 +266,9 @@ vendor/gpui-mcp/refresh.sh <full commit SHA>
 ```
 
 The script downloads that commit, rebuilds `crates/` and `LICENSE` from it and re-applies
-`dbflux-port.patch`, `text-input-automation.patch` and then `screenshot-freshness.patch`,
-leaving a `.rej` file next to any hunk that no longer applies. Refresh `vendor/gpui-pre/frame-observer.patch` from the same commit first (see
+`dbflux-port.patch`, `text-input-automation.patch`, `screenshot-freshness.patch` and then
+`text-input-read-only-focus.patch`, leaving a `.rej` file next to any hunk that no longer
+applies. Refresh `vendor/gpui-pre/frame-observer.patch` from the same commit first (see
 `vendor/gpui-pre/VENDOR.md`); the bridge calls the hooks that patch adds.
 
 Afterwards, update the commit in this file and re-check:

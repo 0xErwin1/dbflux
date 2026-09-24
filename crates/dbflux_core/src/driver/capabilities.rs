@@ -1742,10 +1742,15 @@ pub struct DriverLimits {
     /// Maximum number of parameters in a query (0 = unlimited).
     pub max_parameters: u32,
 
-    /// Maximum number of rows in a result set (0 = unlimited).
+    /// Informational only: DBFlux never reads or enforces it, and every
+    /// built-in driver leaves it at 0. Row caps are requested per execution
+    /// through `QueryRequest::limit`. The field stays because `DriverMetadata`
+    /// crosses the driver RPC protocol in postcard's positional layout, so
+    /// removing it would break external drivers built against older releases.
     pub max_result_rows: u64,
 
-    /// Maximum number of connections in a pool (0 = use driver default).
+    /// Informational only: DBFlux never reads or enforces it. Kept for the same
+    /// wire-compatibility reason as `max_result_rows`.
     pub max_connections: u32,
 
     /// Maximum depth of nested subqueries (0 = unlimited).

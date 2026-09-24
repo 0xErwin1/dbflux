@@ -398,6 +398,12 @@ impl<E: Element> Drawable<E> {
                                 y1: ((bounds.origin.y.0 + bounds.size.height.0) * scale) as f64,
                             });
                             self.element.write_a11y_info(&mut node);
+                            if mem::take(&mut window.a11y.read_only_next) {
+                                node.set_read_only();
+                            }
+                            if node.is_read_only() {
+                                window.a11y.read_only_nodes.insert(node_id);
+                            }
                             window.a11y.node_bounds.insert(node_id, bounds);
                             pushed_a11y_node = window.a11y.nodes.push(node_id, node);
                             #[cfg(debug_assertions)]

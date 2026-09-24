@@ -147,6 +147,7 @@ fn to_node(frame: &AccessibilityFrame, rendered: &FrameNode) -> UiNode {
             visible: !rendered.bounds().is_empty()
                 && !accessible.is_some_and(accesskit::Node::is_hidden),
             enabled: !accessible.is_some_and(accesskit::Node::is_disabled),
+            read_only: accessible.is_some_and(accesskit::Node::is_read_only),
             focused,
             checked: accessible.and_then(|node| match node.toggled() {
                 Some(Toggled::True) => Some(true),
@@ -355,9 +356,9 @@ mod tests {
     use std::rc::Rc;
 
     use gpui::{
-        AppContext as _, Context, Entity, InteractiveElement as _, IntoElement, ParentElement as _,
-        Render, Role, SharedString, StatefulInteractiveElement as _, Styled as _, StyledText,
-        TestAppContext, Window, div, px,
+        AccessibleAction, AppContext as _, Context, Entity, InteractiveElement as _, IntoElement,
+        ParentElement as _, Render, Role, SharedString, StatefulInteractiveElement as _,
+        Styled as _, StyledText, TestAppContext, Window, div, px,
     };
     use gpui_mcp_protocol::{MouseButton, NodeAction, Point, PointerCommand, Role as McpRole};
 
@@ -527,6 +528,51 @@ mod tests {
                 .as_ref()
                 .is_some_and(|value| value.value.is_empty())
         );
+    }
+
+    struct EditableFixture;
+
+    impl Render for EditableFixture {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .id("root")
+                .role(Role::Application)
+                .size_full()
+                .child(
+                    div()
+                        .id("writable")
+                        .role(Role::TextInput)
+                        .w(px(100.))
+                        .h(px(30.))
+                        .on_a11y_action(AccessibleAction::SetValue, |_, _, _| {}),
+                )
+                .child(
+                    div()
+                        .id("locked")
+                        .role(Role::TextInput)
+                        .aria_read_only(true)
+                        .w(px(100.))
+                        .h(px(30.))
+                        .on_a11y_action(AccessibleAction::SetValue, |_, _, _| {}),
+                )
+        }
+    }
+
+    #[gpui::test]
+    fn read_only_inputs_are_reported_read_only(cx: &mut TestAppContext) {
+        let automation = Automation::isolated();
+        let automation_for_window = automation.clone();
+        let (_view, visual) = cx.add_window_view(move |window, _| {
+            automation_for_window.attach(window);
+            EditableFixture
+        });
+        visual.run_until_parked();
+
+        let tree = automation.snapshot();
+        assert!(!tree.nodes["writable"].state.read_only);
+        assert!(tree.nodes["locked"].state.read_only);
+        assert!(tree.nodes["locked"].state.enabled);
+        assert!(tree.nodes["locked"].actions.contains(&NodeAction::SetText));
     }
 
     /// One dock panel, rendered as its own view exactly as

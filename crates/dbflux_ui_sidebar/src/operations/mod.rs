@@ -9,6 +9,8 @@ mod script_ops;
 mod tree_edit;
 mod tree_ops;
 
+pub(crate) use dnd::DropOptions;
+
 pub(crate) use connection::{
     HeldDatabaseConnection, retain_database_cache_entries, try_close_held_database_connection,
 };

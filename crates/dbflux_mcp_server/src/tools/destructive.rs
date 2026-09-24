@@ -12,7 +12,7 @@ use crate::{
 };
 use dbflux_core::{
     DatabaseCategory, DocumentDelete, DocumentFilter, MutationRequest, QueryRequest,
-    SemanticRequest, SqlDeleteRequest, TableRef, parse_semantic_filter_json,
+    SemanticRequest, SqlDeleteRequest, SqlDialect, TableRef, parse_semantic_filter_json,
 };
 use rmcp::{
     ErrorData, handler::server::wrapper::Parameters, model::CallToolResult, schemars::JsonSchema,
@@ -328,6 +328,27 @@ impl DbFluxServer {
         ))
     }
 
+    /// Builds the `DROP TABLE` statement through the connection's dialect, the
+    /// same builder the UI drop uses. A `cascade` request on a database
+    /// without `DROP TABLE ... CASCADE` is an error rather than invalid SQL.
+    fn build_drop_table_sql(
+        dialect: &dyn SqlDialect,
+        table: &str,
+        if_exists: bool,
+        cascade: bool,
+    ) -> Result<String, String> {
+        let table_ref = TableRef::from_qualified(table);
+
+        dialect
+            .drop_table_statement(
+                table_ref.schema.as_deref(),
+                &table_ref.name,
+                if_exists,
+                cascade,
+            )
+            .map_err(|error| format!("Drop table error: {}", error))
+    }
+
     async fn drop_table_impl(
         state: ServerState,
         connection_id: &str,
@@ -336,18 +357,7 @@ impl DbFluxServer {
         if_exists: bool,
     ) -> Result<(serde_json::Value, String), String> {
         let connection = Self::get_or_connect(state, connection_id).await?;
-        let dialect = connection.dialect();
-
-        let table_ref = TableRef::from_qualified(table);
-        let table_quoted = table_ref.quoted_with(dialect);
-
-        let if_exists_clause = if if_exists { "IF EXISTS " } else { "" };
-        let cascade_clause = if cascade { " CASCADE" } else { "" };
-
-        let sql = format!(
-            "DROP TABLE {}{}{}",
-            if_exists_clause, table_quoted, cascade_clause
-        );
+        let sql = Self::build_drop_table_sql(connection.dialect(), table, if_exists, cascade)?;
         let sql_for_audit = sql.clone();
 
         let request = QueryRequest::new(&sql);
@@ -422,5 +432,31 @@ mod tests {
         assert_eq!(delete.table, "users");
         assert_eq!(delete.schema.as_deref(), Some("public"));
         assert_eq!(delete.returning.as_deref(), Some(&["id".to_string()][..]));
+    }
+
+    #[test]
+    fn build_drop_table_sql_uses_the_dialect_builder() {
+        let sql = DbFluxServer::build_drop_table_sql(
+            &dbflux_core::DefaultSqlDialect,
+            "public.orders",
+            true,
+            false,
+        )
+        .expect("a plain drop builds");
+
+        assert_eq!(sql, "DROP TABLE IF EXISTS \"public\".\"orders\"");
+    }
+
+    #[test]
+    fn build_drop_table_sql_rejects_cascade_the_dialect_does_not_support() {
+        let error = DbFluxServer::build_drop_table_sql(
+            &dbflux_core::DefaultSqlDialect,
+            "public.orders",
+            true,
+            true,
+        )
+        .expect_err("cascade is not supported by the default dialect");
+
+        assert!(error.contains("CASCADE"), "unexpected error: {error}");
     }
 }

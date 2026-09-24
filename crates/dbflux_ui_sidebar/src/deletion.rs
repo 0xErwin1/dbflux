@@ -1,4 +1,5 @@
 use super::*;
+use crate::operations::DropOptions;
 
 impl Sidebar {
     pub fn request_delete_selected(&mut self, cx: &mut Context<Self>) {
@@ -127,16 +128,18 @@ impl Sidebar {
                 let Some(node) = state.connection_tree().find_by_id(node_id) else {
                     return;
                 };
-                self.delete_confirm_modal = Some(DeleteConfirmState {
-                    item_id: item_id.to_string(),
-                    item_name: node.name.clone(),
-                    is_folder: true,
-                    object_type: None,
-                    is_ddl: false,
-                    multi_item_ids: Vec::new(),
-                    delegated_to_modal: false,
-                });
-                cx.notify();
+                self.show_inline_delete_modal(
+                    DeleteConfirmState {
+                        item_id: item_id.to_string(),
+                        item_name: node.name.clone(),
+                        is_folder: true,
+                        object_type: None,
+                        is_ddl: false,
+                        multi_item_ids: Vec::new(),
+                        delegated_to_modal: false,
+                    },
+                    cx,
+                );
             }
 
             Some(SchemaNodeId::ScriptFile { ref path }) => {
@@ -144,16 +147,18 @@ impl Sidebar {
                     .file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_else(|| path.clone());
-                self.delete_confirm_modal = Some(DeleteConfirmState {
-                    item_id: item_id.to_string(),
-                    item_name: name,
-                    is_folder: false,
-                    object_type: None,
-                    is_ddl: false,
-                    multi_item_ids: Vec::new(),
-                    delegated_to_modal: false,
-                });
-                cx.notify();
+                self.show_inline_delete_modal(
+                    DeleteConfirmState {
+                        item_id: item_id.to_string(),
+                        item_name: name,
+                        is_folder: false,
+                        object_type: None,
+                        is_ddl: false,
+                        multi_item_ids: Vec::new(),
+                        delegated_to_modal: false,
+                    },
+                    cx,
+                );
             }
 
             Some(SchemaNodeId::ScriptsFolder { path: Some(ref p) }) => {
@@ -161,16 +166,18 @@ impl Sidebar {
                     .file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_else(|| p.clone());
-                self.delete_confirm_modal = Some(DeleteConfirmState {
-                    item_id: item_id.to_string(),
-                    item_name: name,
-                    is_folder: true,
-                    object_type: None,
-                    is_ddl: false,
-                    multi_item_ids: Vec::new(),
-                    delegated_to_modal: false,
-                });
-                cx.notify();
+                self.show_inline_delete_modal(
+                    DeleteConfirmState {
+                        item_id: item_id.to_string(),
+                        item_name: name,
+                        is_folder: true,
+                        object_type: None,
+                        is_ddl: false,
+                        multi_item_ids: Vec::new(),
+                        delegated_to_modal: false,
+                    },
+                    cx,
+                );
             }
 
             _ => {}
@@ -188,16 +195,18 @@ impl Sidebar {
         let count = ids.len();
         let anchor_id = ids.first().cloned().unwrap_or_default();
 
-        self.delete_confirm_modal = Some(DeleteConfirmState {
-            item_id: anchor_id,
-            item_name: crate::labels::items_label(count),
-            is_folder: false,
-            object_type: None,
-            is_ddl: false,
-            multi_item_ids: ids,
-            delegated_to_modal: false,
-        });
-        cx.notify();
+        self.show_inline_delete_modal(
+            DeleteConfirmState {
+                item_id: anchor_id,
+                item_name: crate::labels::items_label(count),
+                is_folder: false,
+                object_type: None,
+                is_ddl: false,
+                multi_item_ids: ids,
+                delegated_to_modal: false,
+            },
+            cx,
+        );
     }
 
     /// Show a DDL drop confirmation modal for schema objects (table, view,
@@ -255,16 +264,18 @@ impl Sidebar {
             | Some(SchemaNodeId::Collection { name, .. })
             | Some(SchemaNodeId::Database { name, .. }) => {
                 // Views, collections, databases use the existing inline confirm.
-                self.delete_confirm_modal = Some(DeleteConfirmState {
-                    item_id: item_id.to_string(),
-                    item_name: name,
-                    is_folder: false,
-                    object_type: Some(object_type.to_string()),
-                    is_ddl: true,
-                    multi_item_ids: Vec::new(),
-                    delegated_to_modal: false,
-                });
-                cx.notify();
+                self.show_inline_delete_modal(
+                    DeleteConfirmState {
+                        item_id: item_id.to_string(),
+                        item_name: name,
+                        is_folder: false,
+                        object_type: Some(object_type.to_string()),
+                        is_ddl: true,
+                        multi_item_ids: Vec::new(),
+                        delegated_to_modal: false,
+                    },
+                    cx,
+                );
             }
 
             _ => {}
@@ -279,6 +290,8 @@ impl Sidebar {
             );
             return;
         };
+
+        self.delete_modal_focus.restore(cx);
 
         log::debug!(
             "confirm_modal_delete: item_id={}, name={}, is_ddl={}, multi={}, delegated={}",
@@ -298,17 +311,64 @@ impl Sidebar {
         }
 
         if modal.is_ddl {
-            self.execute_drop_ddl(&modal.item_id, cx);
+            self.execute_drop_ddl(&modal.item_id, DropOptions::default(), cx);
         } else {
             self.execute_delete(&modal.item_id, cx);
         }
     }
 
+    /// Runs the table drop the drop table modal confirmed, with the
+    /// `IF EXISTS` and `CASCADE` options its preview statement was built with.
+    pub fn confirm_modal_drop_table(
+        &mut self,
+        if_exists: bool,
+        cascade: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(modal) = self.delete_confirm_modal.take() else {
+            log::warn!(
+                "confirm_modal_drop_table called but delete_confirm_modal was None — \
+                 state was cleared before the drop table modal confirmed",
+            );
+            return;
+        };
+
+        if !modal.is_ddl {
+            log::warn!(
+                "confirm_modal_drop_table called for non-DDL item {}; nothing dropped",
+                modal.item_id
+            );
+            return;
+        }
+
+        self.execute_drop_ddl(&modal.item_id, DropOptions { if_exists, cascade }, cx);
+    }
+
     pub fn cancel_modal_delete(&mut self, cx: &mut Context<Self>) {
         if self.delete_confirm_modal.is_some() {
             self.delete_confirm_modal = None;
+            self.delete_modal_focus.restore(cx);
             cx.notify();
         }
+    }
+
+    /// Shows the inline delete confirmation that the workspace draws, and
+    /// asks for keyboard focus to move into it once it is on screen.
+    fn show_inline_delete_modal(&mut self, state: DeleteConfirmState, cx: &mut Context<Self>) {
+        self.delete_confirm_modal = Some(state);
+        self.delete_modal_focus.focus_on_next_render();
+        cx.notify();
+    }
+
+    /// The handle the inline delete confirmation's modal shell tracks.
+    pub fn delete_modal_focus_handle(&self) -> &FocusHandle {
+        self.delete_modal_focus.handle()
+    }
+
+    /// Moves focus into the inline delete confirmation after it was opened.
+    /// The workspace calls this from the render that draws the confirmation.
+    pub fn apply_delete_modal_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.delete_modal_focus.apply_pending(window, cx);
     }
 
     pub fn has_delete_modal(&self) -> bool {

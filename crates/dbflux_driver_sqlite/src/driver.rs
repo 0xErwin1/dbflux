@@ -796,11 +796,10 @@ impl Connection for SqliteConnection {
         // or any statement is prepared, so a rejection never carries side
         // effects and never clears a pending cancellation. A requested
         // statement deadline cannot be honored safely (no watchdog, no progress
-        // hook), a bounded request must not reach an instance dispatch context
-        // this engine has no cap seam for, and a bounded request must never
-        // expand into a multi-statement batch: preparing or stepping a batch can
-        // execute earlier statements, and some PRAGMA actions run at prepare
-        // time, so the batch check precedes all preparation.
+        // hook), and a bounded request must not reach an instance dispatch
+        // context this engine has no cap seam for. A bounded request is split
+        // into statements here, with SQLite's own lexer and without preparing
+        // anything, so a request it cannot split is refused just as early.
         if req.statement_timeout.is_some() {
             return Err(DbError::NotSupported(
                 "SQLite: the requested statement timeout cannot be honored safely by this driver; the request was rejected before execution".to_string(),
@@ -828,11 +827,10 @@ impl Connection for SqliteConnection {
             }
         }
 
-        if req.limit.is_some() && bounded_sql_has_batch(&req.sql)? {
-            return Err(DbError::NotSupported(
-                "SQLite: a row limit cannot be enforced on a multi-statement batch; the batch was rejected before execution. Run the statements individually with a limit".to_string(),
-            ));
-        }
+        let bounded_statements = match req.limit {
+            Some(_) => split_bounded_sql(&req.sql)?,
+            None => Vec::new(),
+        };
 
         self.cancelled.store(false, Ordering::SeqCst);
 
@@ -841,8 +839,14 @@ impl Connection for SqliteConnection {
 
         let autocommit_before = conn.is_autocommit();
 
-        execute_sql(&conn, &req.sql, req.limit, start, &self.cancelled)
-            .map_err(|error| settle_failed_transaction(&conn, autocommit_before, error))
+        let outcome = match req.limit {
+            Some(limit) if bounded_statements.len() > 1 => {
+                execute_bounded_batch(&conn, &bounded_statements, limit, start, &self.cancelled)
+            }
+            _ => execute_sql(&conn, &req.sql, req.limit, start, &self.cancelled),
+        };
+
+        outcome.map_err(|error| settle_failed_transaction(&conn, autocommit_before, error))
     }
 
     fn cancel(&self, _handle: &QueryHandle) -> Result<(), DbError> {
@@ -1890,10 +1894,10 @@ impl SqliteConnection {
 /// statement runs on its own, stopping at the first failure. The typed
 /// single-statement path stays the common case.
 ///
-/// A bounded request skips the split: `execute` has already refused bounded
-/// batches using SQLite's own lexer, so what remains is one statement,
-/// possibly followed by comments or semicolons that the generic splitter would
-/// otherwise turn into extra, empty statements.
+/// A bounded request skips the split: `execute` routes bounded batches, split
+/// with SQLite's own lexer, to `execute_bounded_batch`, so what reaches this
+/// function is one statement, possibly followed by comments or semicolons that
+/// the generic splitter would otherwise turn into extra, empty statements.
 fn execute_sql(
     conn: &RusqliteConnection,
     sql: &str,
@@ -1957,8 +1961,41 @@ fn settle_failed_transaction(
     }
 }
 
+/// Runs a bounded multi-statement batch in order under one shared row budget.
+///
+/// Each statement goes through the single-statement path with the rows the
+/// budget has left, so a row-producing statement still drains to completion
+/// and flags truncation only when it dropped a row, and statements after the
+/// budget is exhausted still run. Like the unbounded batch path, the batch
+/// stops at the first failure and the first result set is the primary one.
+fn execute_bounded_batch(
+    conn: &RusqliteConnection,
+    statements: &[&str],
+    limit: u32,
+    start: Instant,
+    cancelled: &AtomicBool,
+) -> Result<QueryResult, DbError> {
+    let mut remaining_rows = limit;
+    let mut primary: Option<QueryResult> = None;
+
+    for statement in statements {
+        let result =
+            execute_one_statement(conn, statement, Some(remaining_rows), start, cancelled)?;
+
+        let retained_rows = u32::try_from(result.rows.len()).unwrap_or(u32::MAX);
+        remaining_rows = remaining_rows.saturating_sub(retained_rows);
+
+        match primary.as_mut() {
+            Some(primary) => primary.push_additional_result(result),
+            None => primary = Some(result),
+        }
+    }
+
+    primary.ok_or_else(|| DbError::query_failed("SQLite: the bounded batch held no statements"))
+}
+
 /// Returns `sql` with leading whitespace, SQL comments and byte-order marks
-/// removed, so the batch check can tell whether any statement follows.
+/// removed, so the splitter can tell whether a fragment holds a statement.
 fn sqlite_leading_sql(sql: &str) -> &str {
     let mut remaining = sql.trim_start();
     loop {
@@ -1967,6 +2004,19 @@ fn sqlite_leading_sql(sql: &str) -> &str {
         match remaining.strip_prefix('\u{feff}') {
             Some(after_bom) => remaining = after_bom.trim_start(),
             None => return remaining,
+        }
+    }
+}
+
+/// Returns whether `fragment` holds anything besides whitespace, comments,
+/// byte-order marks and semicolons.
+fn sqlite_fragment_has_statement(fragment: &str) -> bool {
+    let mut rest = fragment;
+    loop {
+        rest = sqlite_leading_sql(rest);
+        match rest.strip_prefix(';') {
+            Some(after_semicolon) => rest = after_semicolon,
+            None => return !rest.is_empty(),
         }
     }
 }
@@ -1983,12 +2033,16 @@ fn sqlite_statement_is_complete(sql: &CStr) -> bool {
     unsafe { rusqlite::ffi::sqlite3_complete(sql.as_ptr()) != 0 }
 }
 
-/// Returns whether `sql` holds more than one statement, ignoring trailing
-/// comments and semicolons after the first one.
+/// Splits a bounded request into its statements with SQLite's own lexer.
 ///
-/// Only prefixes that end at a `;` are probed, and nothing is prepared.
-/// Repeated prefix probes are quadratic in the number of bytes.
-fn bounded_sql_has_batch(sql: &str) -> Result<bool, DbError> {
+/// A statement ends at the first `;` where the text since the previous
+/// statement is complete according to `sqlite3_complete`, so semicolons inside
+/// literals, comments and trigger bodies never split it. Fragments that hold
+/// only comments or semicolons are dropped, so trailing comments and
+/// semicolons never produce an extra, empty statement. Nothing is prepared.
+/// Each `;` inside a statement probes the whole statement so far, which is
+/// quadratic in the statement's length.
+fn split_bounded_sql(sql: &str) -> Result<Vec<&str>, DbError> {
     let sql = sql.trim_start_matches('\u{feff}');
     if sql.contains('\0') {
         return Err(DbError::NotSupported(
@@ -1996,33 +2050,39 @@ fn bounded_sql_has_batch(sql: &str) -> Result<bool, DbError> {
         ));
     }
 
+    let mut statements = Vec::new();
+    let mut statement_start = 0;
+
     for (index, byte) in sql.bytes().enumerate() {
         if byte != b';' {
             continue;
         }
 
-        let Some((prefix, mut rest)) = sql.split_at_checked(index + 1) else {
+        let Some(candidate) = sql.get(statement_start..=index) else {
             continue;
         };
-        let prefix = CString::new(prefix).map_err(|error| {
+        let probe = CString::new(candidate).map_err(|error| {
             DbError::NotSupported(format!(
-                "SQLite: a row-limited request could not be checked for multiple statements: {error}"
+                "SQLite: a row-limited request could not be split into statements: {error}"
             ))
         })?;
-        if !sqlite_statement_is_complete(&prefix) {
+        if !sqlite_statement_is_complete(&probe) {
             continue;
         }
 
-        loop {
-            rest = sqlite_leading_sql(rest);
-            match rest.strip_prefix(';') {
-                Some(after_semicolon) => rest = after_semicolon,
-                None => return Ok(!rest.is_empty()),
-            }
+        if sqlite_fragment_has_statement(candidate) {
+            statements.push(candidate.trim());
         }
+        statement_start = index + 1;
     }
 
-    Ok(false)
+    if let Some(remainder) = sql.get(statement_start..)
+        && sqlite_fragment_has_statement(remainder)
+    {
+        statements.push(remainder.trim());
+    }
+
+    Ok(statements)
 }
 
 /// Executes a single SQLite statement and returns its result set.
@@ -3024,6 +3084,22 @@ mod tests {
     }
 
     #[test]
+    fn drop_table_statement_rejects_cascade() {
+        assert!(!SqliteDialect.supports_drop_cascade());
+        assert!(
+            SqliteDialect
+                .drop_table_statement(Some("main"), "orders", true, true)
+                .is_err()
+        );
+        assert_eq!(
+            SqliteDialect
+                .drop_table_statement(Some("main"), "orders", true, false)
+                .expect("a plain drop builds"),
+            "DROP TABLE IF EXISTS \"main\".\"orders\""
+        );
+    }
+
+    #[test]
     fn sqlite_query_safety_refusal_preserves_existing_cancel_signal() {
         use super::{SqliteConnection, SqliteConnectionState};
         use dbflux_core::{
@@ -3070,14 +3146,14 @@ mod tests {
             "bounded metric refusal erased an existing cancellation"
         );
 
-        let outcome = connection.execute(&QueryRequest::new("SELECT 1; SELECT 2").with_limit(1));
+        let outcome = connection.execute(&QueryRequest::new("SELECT 1;\0").with_limit(1));
         assert!(
             matches!(outcome, Err(DbError::NotSupported(_))),
-            "bounded batch must be refused, got {outcome:?}"
+            "bounded request with a NUL character must be refused, got {outcome:?}"
         );
         assert!(
             connection.cancelled.load(Ordering::SeqCst),
-            "bounded batch refusal erased an existing cancellation"
+            "NUL refusal erased an existing cancellation"
         );
     }
 }

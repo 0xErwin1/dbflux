@@ -18,7 +18,7 @@ All notable changes to DBFlux will be documented in this file.
 
 * SQL Server explicit row limits retain at most N rows across every result set of a batch and flag actual omissions, including at zero; every set is drained, so later statements and mutations finish and late errors propagate. Explicit timeouts and bounded instance requests are refused before execution without clearing a pending cancellation; unbounded requests remain compatible. The row cap does not bound bytes, server work, or elapsed time; Azure SQL Database and Managed Instance were not verified.
 
-* SQLite explicit row limits retain at most N rows of any single row-producing statement (including `PRAGMA`, `WITH`, `VALUES`, and `RETURNING`) and flag actual omissions, including at zero; the statement still runs to completion, so mutations finish and late errors propagate. Explicit timeouts, bounded multi-statement batches, and bounded instance requests are refused before execution; unbounded requests remain compatible. The row cap does not bound memory, engine work, or elapsed time.
+* SQLite explicit row limits retain at most N rows across the row-producing statements of a request (including `PRAGMA`, `WITH`, `VALUES`, and `RETURNING`) and flag actual omissions, including at zero; every statement still runs to completion, so mutations finish and late errors propagate. Bounded multi-statement batches are split with SQLite's own lexer and run in order under that one budget, so statements after the budget is exhausted still run, and a failure stops the batch as it does without a limit. Explicit timeouts and bounded instance requests are refused before execution; unbounded requests remain compatible. The row cap does not bound memory, engine work, or elapsed time, and splitting a bounded batch is quadratic in statement length.
 
 * MySQL/MariaDB explicit row limits retain at most N rows across script/server result sets and flag actual omissions, including at zero; later mutations finish and errors propagate. Explicit timeouts and bounded instance requests are refused before execution; unbounded requests remain compatible. The row cap does not bound bytes, server work, engine allocation, or elapsed time; hosted MariaDB was not verified.
 
@@ -380,6 +380,16 @@ All notable changes to DBFlux will be documented in this file.
   dialog. The body now grows to fit its content and scrolls only when the
   dialog reaches its maximum height.
 
+* **Dropping a table runs the statement the preview shows** — the drop table
+  dialog previewed `DROP TABLE ... CASCADE` whenever the table had dependents,
+  which SQL Server and SQLite reject and MySQL ignores, while the drop itself
+  ran `DROP TABLE IF EXISTS` without `CASCADE` everywhere. Both now come from
+  one dialect-owned builder: the dialog shows the exact statement that runs,
+  `CASCADE` is used only on PostgreSQL and Redshift, and other databases list
+  the dependent objects without claiming they will be dropped. The MCP
+  `drop_table` tool and the generic schema drop use the same builder and
+  return an error when `cascade` is requested on a database without it.
+
 * **Missing PostgreSQL relations no longer open as empty tables** — asking a
   PostgreSQL connection for the details of a table or view that does not exist
   returned an empty structure instead of an error, so the grid showed a blank
@@ -401,6 +411,17 @@ All notable changes to DBFlux will be documented in this file.
   no longer show the previous frame. The new `wait_for_idle` tool waits until
   the element tree stops changing and the window draws at most one frame per
   500 ms.
+
+* UI automation: `focus_element` on a text input now focuses its editor, so a
+  following `type_text` types into it instead of failing with "no active text
+  input handler". `focus_element`, `click_element` and `double_click_element`
+  click a text input inside its text area, near the left edge, instead of at
+  its center, which in a narrow input could land on the clear or show-password
+  button. Read-only inputs (the audit viewer's event details, the object
+  browser's decoded preview, the query builder's SQL preview) now report
+  `read_only` in the element tree, and `set_text` and `set_value` refuse them
+  with an error instead of replacing text a user could not edit. DBFlux itself
+  also ignores a value sent to a read-only input, whichever client sends it.
 
 * **The MCP approvals overlay can be closed** — once opened, the approvals
   overlay stayed on screen until the audit viewer was opened. It now closes
@@ -598,6 +619,20 @@ All notable changes to DBFlux will be documented in this file.
   backticks on MySQL and brackets on SQL Server, instead of always using
   PostgreSQL double quotes. The cell editor and document preview have their
   own keyboard contexts, and Escape closes them.
+
+* **The remaining dialogs answer Enter, Escape and close too** — the dashboard
+  and saved chart dialogs (new dashboard, rename, delete, add panel), the
+  connection import and export dialogs, the script and dangerous query
+  confirmations, the chart Configure popover and the sidebar's delete
+  confirmation for folders, scripts, views and multi-selections ignored the
+  keyboard or had no close on the backdrop. They now take focus when they
+  open, cancel on Escape, the X button and a backdrop click, confirm on Enter
+  only while their primary action is enabled, and give focus back when they
+  close. New dashboard and rename need a non-blank name, and their Create and
+  Rename buttons are now disabled until then; add panel needs a complete tab,
+  the import and export dialogs follow their primary button, and Enter in the
+  Configure popover applies. While an import or export runs, Escape, the
+  backdrop and Cancel do nothing, since the run cannot be stopped.
 
 * **Password save failures are reported** — a failed keyring write while
   saving or duplicating a connection profile now keeps the form open and
