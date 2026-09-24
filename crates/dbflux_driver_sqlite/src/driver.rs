@@ -585,7 +585,9 @@ impl std::ops::Deref for SqliteConnectionState {
 pub struct SqliteConnection {
     state: Arc<Mutex<SqliteConnectionState>>,
     table_alter_planner: SqliteTableAlterPlanner,
-    interrupt_handle: InterruptHandle,
+    /// Shared with every cancel handle, so cancelling never has to lock
+    /// `state`, which a running query holds until it finishes.
+    interrupt_handle: Arc<InterruptHandle>,
     cancelled: Arc<AtomicBool>,
     #[allow(dead_code)]
     path: PathBuf,
@@ -593,7 +595,7 @@ pub struct SqliteConnection {
 
 struct SqliteCancelHandle {
     cancelled: Arc<AtomicBool>,
-    interrupt_handle: InterruptHandle,
+    interrupt_handle: Arc<InterruptHandle>,
 }
 
 impl QueryCancelHandle for SqliteCancelHandle {
@@ -809,18 +811,10 @@ impl Connection for SqliteConnection {
         Ok(())
     }
 
-    // Invariant: trait returns Arc<dyn QueryCancelHandle> with no Result — cannot propagate.
-    // Mutex poison only occurs if another thread panicked while holding this lock, which is
-    // already a fatal application state.
-    #[allow(clippy::expect_used)]
     fn cancel_handle(&self) -> Arc<dyn QueryCancelHandle> {
         Arc::new(SqliteCancelHandle {
             cancelled: self.cancelled.clone(),
-            interrupt_handle: self
-                .state
-                .lock()
-                .map(|state| state.interrupt_handle())
-                .expect("Failed to get interrupt handle"),
+            interrupt_handle: self.interrupt_handle.clone(),
         })
     }
 
@@ -1428,7 +1422,7 @@ impl SqliteConnection {
         Self {
             table_alter_planner: SqliteTableAlterPlanner::new(state.clone(), cancelled.clone()),
             state,
-            interrupt_handle,
+            interrupt_handle: Arc::new(interrupt_handle),
             cancelled,
             path,
         }
@@ -2372,6 +2366,73 @@ pub fn fetch_dependents(
     }
 
     Ok(deps)
+}
+
+#[cfg(test)]
+mod cancel_tests {
+    use super::{SqliteConnection, SqliteConnectionState};
+    use dbflux_core::{Connection, QueryRequest};
+    use rusqlite::Connection as RusqliteConnection;
+    use std::sync::mpsc;
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    const ENDLESS_QUERY: &str =
+        "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c) SELECT count(*) FROM c";
+
+    /// Regression: `cancel_handle()` used to lock the connection mutex, which
+    /// a running query holds until it finishes, so the thread asking to
+    /// cancel blocked for as long as the query ran (the UI thread, forever,
+    /// for an endless query).
+    #[test]
+    fn cancel_handle_interrupts_a_running_query_without_waiting_for_it() {
+        let raw = RusqliteConnection::open_in_memory().expect("open in-memory SQLite");
+        let state = Arc::new(Mutex::new(SqliteConnectionState::new(raw)));
+        let connection = Arc::new(SqliteConnection::for_test(state.clone()));
+
+        let (query_done_tx, query_done_rx) = mpsc::channel();
+        std::thread::spawn({
+            let connection = connection.clone();
+            move || {
+                let failed = connection
+                    .execute(&QueryRequest::new(ENDLESS_QUERY))
+                    .is_err();
+                if let Err(error) = query_done_tx.send(failed) {
+                    log::warn!("query result channel closed: {error}");
+                }
+            }
+        });
+
+        // Wait until the query holds the connection lock.
+        let mut waited = Duration::ZERO;
+        while state.try_lock().is_ok() {
+            assert!(waited < Duration::from_secs(5), "query never started");
+            std::thread::sleep(Duration::from_millis(5));
+            waited += Duration::from_millis(5);
+        }
+
+        let (cancel_done_tx, cancel_done_rx) = mpsc::channel();
+        std::thread::spawn({
+            let connection = connection.clone();
+            move || {
+                let cancelled = connection.cancel_handle().cancel().is_ok();
+                if let Err(error) = cancel_done_tx.send(cancelled) {
+                    log::warn!("cancel result channel closed: {error}");
+                }
+            }
+        });
+
+        assert_eq!(
+            cancel_done_rx.recv_timeout(Duration::from_secs(2)),
+            Ok(true),
+            "cancel must return while the query still holds the connection"
+        );
+        assert_eq!(
+            query_done_rx.recv_timeout(Duration::from_secs(5)),
+            Ok(true),
+            "the interrupt must end the running query with an error"
+        );
+    }
 }
 
 #[cfg(test)]

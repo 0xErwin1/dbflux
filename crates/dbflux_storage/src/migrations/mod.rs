@@ -173,6 +173,7 @@ impl MigrationRegistry {
         registry.register(mod_028_redis_topology_columns::MigrationImpl);
         registry.register(mod_029_sch_snapshot_creation_metadata::MigrationImpl);
         registry.register(mod_030_general_settings_vim_mode::MigrationImpl);
+        registry.register(mod_031_general_settings_editor_row_limit::MigrationImpl);
         registry
     }
 
@@ -386,6 +387,7 @@ mod mod_027_general_settings_key_value_size_limit;
 mod mod_028_redis_topology_columns;
 mod mod_029_sch_snapshot_creation_metadata;
 mod mod_030_general_settings_vim_mode;
+mod mod_031_general_settings_editor_row_limit;
 
 pub use mod_001_initial::MigrationImpl;
 pub use mod_002_audit_extended::MigrationImpl as MigrationImplAuditExtended;
@@ -1041,6 +1043,7 @@ mod tests {
             "028_redis_topology_columns",
             "029_sch_snapshot_creation_metadata",
             "030_general_settings_vim_mode",
+            "031_general_settings_editor_row_limit",
         ];
 
         let pending = registry.get_pending(&conn).unwrap();

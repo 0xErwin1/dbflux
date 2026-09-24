@@ -1947,19 +1947,101 @@ impl AppState {
             .remove_database_connection(profile_id, database)
     }
 
+    /// Asks the driver to cancel the query running on `target`'s connection.
+    ///
+    /// Returns immediately: the driver calls run on their own thread, because
+    /// they may block (a network round trip to send a cancel or KILL, or a
+    /// connection lock held by the running query) and callers run on the UI
+    /// thread. The query's own task reports the cancellation when it ends.
     pub fn cancel_query_for_target(&self, target: &dbflux_core::TaskTarget) {
         let Some(connection) = self.facade.connections.connection_for_task_target(target) else {
             return;
         };
 
-        let cancel_handle = connection.cancel_handle();
-        if let Err(error) = cancel_handle.cancel() {
-            log::warn!("Failed to send cancel via handle: {}", error);
+        let spawned = std::thread::Builder::new()
+            .name("dbflux-query-cancel".to_string())
+            .spawn(move || {
+                if let Err(error) = connection.cancel_handle().cancel() {
+                    log::warn!("Failed to send cancel via handle: {}", error);
+                }
+
+                if let Err(error) = connection.cancel_active() {
+                    log::warn!("Failed to send cancel to database: {}", error);
+                }
+            });
+
+        if let Err(error) = spawned {
+            log::warn!("Failed to start the query cancel thread: {}", error);
+        }
+    }
+
+    /// Sends a driver-level cancel for a running query task.
+    ///
+    /// Uses the task's own target, falling back to the profile's primary
+    /// connection when the task was started without a database target. The
+    /// task itself is left running; callers mark it cancelled separately.
+    pub fn cancel_query_for_task(&self, task_id: TaskId) {
+        let Some(task) = self.facade.tasks.get(task_id) else {
+            return;
+        };
+
+        let target = task.target.or_else(|| {
+            task.profile_id.map(|profile_id| dbflux_core::TaskTarget {
+                profile_id,
+                database: None,
+            })
+        });
+
+        if let Some(target) = target {
+            self.cancel_query_for_target(&target);
+        }
+    }
+
+    /// Running query tasks bound to a connection, longest-running first.
+    ///
+    /// `Some(profile_id)` limits the result to that connection; `None`
+    /// returns the queries running on every connection. Script runs that are
+    /// not bound to a connection are never included.
+    pub fn running_query_tasks(&self, profile_id: Option<Uuid>) -> Vec<TaskSnapshot> {
+        let mut tasks: Vec<TaskSnapshot> = self
+            .facade
+            .tasks
+            .running_tasks()
+            .into_iter()
+            .filter(|task| task.kind == TaskKind::Query)
+            .filter(|task| match (profile_id, task.profile_id) {
+                (_, None) => false,
+                (None, Some(_)) => true,
+                (Some(wanted), Some(owner)) => wanted == owner,
+            })
+            .collect();
+
+        tasks.sort_by(|left, right| right.elapsed_secs.total_cmp(&left.elapsed_secs));
+        tasks
+    }
+
+    /// Cancels the running query tasks selected like [`Self::running_query_tasks`],
+    /// sending the driver-level cancel before marking each task cancelled.
+    ///
+    /// Returns the number of tasks that were cancelled.
+    pub fn cancel_running_query_tasks(&mut self, profile_id: Option<Uuid>) -> usize {
+        let task_ids: Vec<TaskId> = self
+            .running_query_tasks(profile_id)
+            .into_iter()
+            .map(|task| task.id)
+            .collect();
+
+        let mut cancelled = 0;
+
+        for task_id in task_ids {
+            self.cancel_query_for_task(task_id);
+
+            if self.facade.tasks.cancel(task_id) {
+                cancelled += 1;
+            }
         }
 
-        if let Err(error) = connection.cancel_active() {
-            log::warn!("Failed to send cancel to database: {}", error);
-        }
+        cancelled
     }
 
     pub fn cancel_running_connect_tasks_for_profile(&mut self, profile_id: Uuid) -> usize {
@@ -3966,5 +4048,77 @@ mod tests {
             ),
             "resolved hook must carry the seeded command"
         );
+    }
+
+    fn state_for_task_tests() -> AppState {
+        let runtime = dbflux_storage::bootstrap::StorageRuntime::in_memory()
+            .expect("in-memory storage runtime");
+        AppState::new_with_storage_runtime(runtime).expect("build app state")
+    }
+
+    fn start_query_on(state: &mut AppState, profile_id: Uuid, description: &str) -> TaskId {
+        let (task_id, _cancel_token) = state.start_task_for_target(
+            TaskKind::Query,
+            description,
+            Some(dbflux_core::TaskTarget {
+                profile_id,
+                database: None,
+            }),
+        );
+        task_id
+    }
+
+    #[test]
+    fn running_query_tasks_selects_connection_queries_only() {
+        let mut state = state_for_task_tests();
+        let first_profile = Uuid::new_v4();
+        let second_profile = Uuid::new_v4();
+
+        let first_query = start_query_on(&mut state, first_profile, "SELECT 1");
+        let second_query = start_query_on(&mut state, second_profile, "SELECT 2");
+        state.start_task_for_profile(TaskKind::SchemaRefresh, "refresh", Some(first_profile));
+        state.start_task(TaskKind::Query, "script run without a connection");
+        let finished = start_query_on(&mut state, first_profile, "SELECT 3");
+        state.complete_task(finished);
+
+        let first_only: Vec<TaskId> = state
+            .running_query_tasks(Some(first_profile))
+            .into_iter()
+            .map(|task| task.id)
+            .collect();
+        assert_eq!(first_only, vec![first_query]);
+
+        let mut every_connection: Vec<TaskId> = state
+            .running_query_tasks(None)
+            .into_iter()
+            .map(|task| task.id)
+            .collect();
+        every_connection.sort();
+        let mut expected = vec![first_query, second_query];
+        expected.sort();
+        assert_eq!(every_connection, expected);
+    }
+
+    #[test]
+    fn cancel_running_query_tasks_cancels_only_the_selected_connection() {
+        let mut state = state_for_task_tests();
+        let first_profile = Uuid::new_v4();
+        let second_profile = Uuid::new_v4();
+
+        let first_query = start_query_on(&mut state, first_profile, "SELECT 1");
+        let second_query = start_query_on(&mut state, second_profile, "SELECT 2");
+
+        assert_eq!(state.cancel_running_query_tasks(Some(first_profile)), 1);
+        assert_eq!(
+            state.tasks().get(first_query).map(|task| task.status),
+            Some(dbflux_core::TaskStatus::Cancelled)
+        );
+        assert_eq!(
+            state.tasks().get(second_query).map(|task| task.status),
+            Some(dbflux_core::TaskStatus::Running)
+        );
+
+        assert_eq!(state.cancel_running_query_tasks(None), 1);
+        assert!(state.running_query_tasks(None).is_empty());
     }
 }
