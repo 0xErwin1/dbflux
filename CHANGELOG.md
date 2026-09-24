@@ -54,14 +54,6 @@ All notable changes to DBFlux will be documented in this file.
   Connection Manager, and every empty-state hint reads its chord from the
   keymap, so macOS shows `Cmd` instead of `Ctrl`.
 
-* **AWS login and SSO wizard labels** — the login modal captioned the
-  verification URL as "Start URL"; it now reads "Verification URL" and shows a
-  loading indicator while it waits for the browser. The SSO wizard's first-step
-  inputs now have visible labels, which are also their accessible names, and
-  stable `sso-field-*` ids. Its steps appear in the shared wizard rail instead
-  of "Step N:" text, and long account and role lists scroll inside a
-  fixed-height box, so the Back and Next buttons stay in view.
-
 
 ### Added
 
@@ -296,6 +288,14 @@ All notable changes to DBFlux will be documented in this file.
   consumed those keystrokes before the search input saw them. All unmodified
   letters now reach the input; list navigation stays on the arrow keys, with
   Enter to run and Escape to close unchanged.
+
+* **AWS login and SSO wizard labels** — the login modal captioned the
+  verification URL as "Start URL"; it now reads "Verification URL" and shows a
+  loading indicator while it waits for the browser. The SSO wizard's first-step
+  inputs now have visible labels, which are also their accessible names, and
+  stable `sso-field-*` ids. Its steps appear in the shared wizard rail instead
+  of "Step N:" text, and long account and role lists scroll inside a
+  fixed-height box, so the Back and Next buttons stay in view.
 
 * **Composite foreign keys keep the constraint's own column order** — the referenced
   columns came from a join between two catalog views that matched the constraint as a
