@@ -275,6 +275,7 @@ impl CodeDocument {
                 )
                 .capture_action(cx.listener(
                     |this, _: &gpui_component::input::Escape, window, cx| {
+                        this.clear_vim_count();
                         if this.handle_vim_escape_action(window, cx) {
                             cx.stop_propagation();
                         }
@@ -296,6 +297,7 @@ impl CodeDocument {
                 ))
                 .capture_action(
                     cx.listener(|this, _: &gpui_component::input::Undo, window, cx| {
+                        this.clear_vim_count();
                         if this.handle_vim_history_action(vim::HistoryStep::Undo, window, cx) {
                             cx.stop_propagation();
                         }
@@ -303,6 +305,7 @@ impl CodeDocument {
                 )
                 .capture_action(
                     cx.listener(|this, _: &gpui_component::input::Redo, window, cx| {
+                        this.clear_vim_count();
                         if this.handle_vim_history_action(vim::HistoryStep::Redo, window, cx) {
                             cx.stop_propagation();
                         }

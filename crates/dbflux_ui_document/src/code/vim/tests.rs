@@ -368,11 +368,105 @@ fn normal_mode_inserts_no_text_for_unbound_keys(cx: &mut TestAppContext) {
     let mut editor = open_editor(cx, "abc", true);
     assert_eq!(editor.mode(), Some(VimMode::Normal));
 
-    editor.keys("a b c d 1 2 9 0 ; , . / ? space shift-a shift-z");
+    editor.keys("b c d 1 2 9 0 ; , . / ? space shift-z");
     editor.type_text("é中🎉ñ");
 
     assert_eq!(editor.text(), "abc");
     assert!(editor.editor_focused());
+}
+
+#[gpui::test]
+fn entry_positions_and_counted_word_motions(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "é_foo, bar\nlast", true);
+    editor.keys("2 w");
+    assert_eq!(editor.cursor(), 8);
+    editor.keys("b");
+    assert_eq!(editor.cursor(), 6);
+    editor.keys("shift-w");
+    assert_eq!(editor.cursor(), 8);
+    editor.keys("shift-e");
+    assert_eq!(editor.cursor(), 10);
+    editor.keys("0 shift-a");
+    assert_eq!(editor.mode(), Some(VimMode::Insert));
+    assert_eq!(editor.cursor(), 11);
+    editor.type_text("!");
+    editor.keys("escape shift-i");
+    assert_eq!(editor.cursor(), 0);
+    editor.type_text("X");
+    assert_eq!(editor.text(), "Xé_foo, bar!\nlast");
+}
+
+#[gpui::test]
+fn insert_line_uses_first_nonblank_and_zero_uses_line_start(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "  \t\u{2003}éx\n \t\nlast", true);
+    editor.keys("shift-i");
+    assert_eq!(editor.cursor(), 6);
+    editor.keys("escape 0");
+    assert_eq!(editor.cursor(), 0);
+    editor.keys("j shift-i");
+    assert_eq!(editor.cursor(), 10, "blank lines insert at their start");
+    editor.keys("escape 0 j 2 0 w");
+    assert_eq!(editor.cursor(), 16, "zero remains part of a count prefix");
+}
+
+#[gpui::test]
+fn interrupted_count_does_not_reach_next_motion(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "abcdef", true);
+    editor.keys("3 ctrl-s l");
+    assert_eq!(editor.cursor(), 1);
+    assert!(editor.commands().contains(&Command::SaveQuery));
+    editor.keys("4 z l");
+    assert_eq!(editor.cursor(), 2);
+    assert_eq!(editor.text(), "abcdef");
+}
+
+#[gpui::test]
+fn counted_delete_on_long_unicode_line_stops_before_newline(cx: &mut TestAppContext) {
+    let line = "é".repeat(8_192);
+    let mut editor = open_editor(cx, &format!("{line}\nnext"), true);
+    editor.keys("8 1 9 2 x");
+    assert_eq!(editor.text(), "\nnext");
+    editor.keys("u");
+    assert_eq!(editor.text(), format!("{line}\nnext"));
+    editor.keys("x");
+    assert_eq!(editor.text(), format!("{}\nnext", "é".repeat(8_191)));
+}
+
+#[gpui::test]
+fn action_and_focus_boundaries_discard_pending_count(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "abcdef", true);
+    editor.keys("3 tab l");
+    assert_eq!(editor.cursor(), 1);
+    editor.keys("4 ctrl-z l");
+    assert_eq!(editor.cursor(), 2);
+    editor.keys("5");
+    editor.focus_other_input();
+    editor.focus_document(&editor.document.clone());
+    editor.keys("l");
+    assert_eq!(editor.cursor(), 3);
+}
+
+#[gpui::test]
+fn counted_delete_and_undo_keep_normal_lock(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "abcdef\nnext", true);
+    editor.keys("2 x");
+    assert_eq!(editor.text(), "cdef\nnext");
+    editor.keys("x");
+    assert_eq!(editor.text(), "def\nnext");
+    editor.keys("2 u");
+    assert_eq!(editor.text(), "abcdef\nnext");
+    editor.type_text("z");
+    assert_eq!(editor.text(), "abcdef\nnext");
+}
+
+#[gpui::test]
+fn counted_undo_can_restore_from_an_empty_buffer(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "ab", true);
+    editor.keys("x x");
+    assert_eq!(editor.text(), "");
+    editor.keys("2 u");
+    assert_eq!(editor.text(), "ab");
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
 }
 
 #[gpui::test]
@@ -550,7 +644,7 @@ fn x_deletes_one_character_per_press_and_u_undoes_each(cx: &mut TestAppContext) 
         "x on the last character leaves the cursor on the new last one"
     );
 
-    editor.keys("a z");
+    editor.keys("z");
     assert_eq!(editor.text(), "ab\n\nd", "u restored the Normal-mode lock");
 }
 

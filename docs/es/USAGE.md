@@ -653,15 +653,22 @@ propio modo al cambiar de tab o al mover el focus y volver.
 | Normal | `j` / `k` | Mover una línea abajo / arriba, conservando la columna a través de líneas más cortas |
 | Normal | `Enter` | Mover una línea abajo |
 | Normal | `i` | Insertar antes del cursor |
+| Normal | `a` / `A` / `I` | Insertar después del cursor / al final de la línea / en el primer carácter no blanco de la línea |
+| Normal | `e` / `w` / `b` | Ir al final de una palabra / al inicio de la siguiente / al inicio de la anterior |
+| Normal | `E` / `W` / `B` | Los mismos movimientos, con palabras separadas por espacios en blanco |
 | Normal | `x` | Borrar el carácter bajo el cursor |
 | Normal | `u` | Deshacer |
 | Insertar | `Escape` | Cerrar un menú de autocompletado abierto; si no hay ninguno, volver al modo Normal |
+
+Puedes anteponer un contador a un movimiento o a `x` / `u` (por ejemplo,
+`3w`, `2x`, `2u`). `x` con contador borra hasta el final de la línea sin unir
+líneas; `u` con contador deshace esa cantidad de pasos. `0` sin contador mueve al inicio de la línea; después de un dígito distinto de cero sigue formando parte del contador (por ejemplo, `20w`). Un contador interrumpido no se aplica al siguiente comando.
 
 Todo lo demás en modo Normal:
 
 | Entrada | Comportamiento en modo Normal |
 |---------|-------------------------------|
-| Otras letras, dígitos, puntuación, `Space` | Nada |
+| Otras letras no admitidas, puntuación, `Space` | Nada |
 | `Tab` / `Shift+Tab` | Nada: no indenta y el focus se queda en el editor |
 | Pegar (`Ctrl+v` / `Cmd+v` o el menú contextual) | Nada |
 | Composición y confirmación del método de entrada (IME) | Se descartan |
@@ -680,7 +687,7 @@ modo Normal. En ambos casos el focus se queda en el editor. Con varios cursores
 o una sugerencia en línea visible, el primer `Escape` los descarta y el
 siguiente vuelve al modo Normal.
 
-**Deshacer.** Cada `x` es un paso de deshacer. Todo lo escrito en una misma
+**Deshacer.** Cada ejecución de `x` es un paso de deshacer, también con contador. Todo lo escrito en una misma
 sesión de modo Insertar es un paso, y cada nueva sesión de modo Insertar empieza
 otro. `u` deshace los mismos pasos que `Ctrl+z` / `Cmd+z`.
 
@@ -689,9 +696,9 @@ otro. `u` deshace los mismos pasos que `Ctrl+z` / `Cmd+z`.
 
 **Limitaciones.**
 
-- Solo existen los comandos de la primera tabla. No hay contadores, operadores
-  (`d`, `c`, `y`), modo visual, objetos de texto, registros, macros, repetición
-  con `.`, comandos `:` ni una tecla de rehacer.
+- Solo existen los comandos de la primera tabla. No hay operadores (`d`, `c`, `y`), modo visual, búsqueda, selección en bloque,
+  objetos de texto, registros, macros, repetición con `.`, comandos `:` ni una
+  tecla de rehacer.
 - Los movimientos avanzan un code point de Unicode por vez, como las flechas, así
   que una letra escrita con un acento combinante separado requiere dos pulsaciones.
 - El modo Normal solo bloquea lo que escribes y pegas. Las ediciones que hace

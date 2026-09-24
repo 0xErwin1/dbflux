@@ -26,6 +26,13 @@ pub(crate) enum VimCommand {
     MoveUp,
     MoveDown,
     EnterInsert,
+    Append,
+    AppendLine,
+    InsertLine,
+    WordEnd(bool),
+    WordForward(bool),
+    WordBackward(bool),
+    Digit(u8),
     LeaveInsert,
     DeleteChar,
     Undo,
@@ -60,7 +67,14 @@ pub(crate) fn command_for(mode: VimMode, key: VimKey<'_>) -> Option<VimCommand> 
             }
 
             if key.shift {
-                return None;
+                return match key.key {
+                    "a" => Some(VimCommand::AppendLine),
+                    "i" => Some(VimCommand::InsertLine),
+                    "e" => Some(VimCommand::WordEnd(true)),
+                    "w" => Some(VimCommand::WordForward(true)),
+                    "b" => Some(VimCommand::WordBackward(true)),
+                    _ => None,
+                };
             }
 
             match key.key {
@@ -69,6 +83,14 @@ pub(crate) fn command_for(mode: VimMode, key: VimKey<'_>) -> Option<VimCommand> 
                 "j" | "enter" => Some(VimCommand::MoveDown),
                 "k" => Some(VimCommand::MoveUp),
                 "i" => Some(VimCommand::EnterInsert),
+                "a" => Some(VimCommand::Append),
+                "e" => Some(VimCommand::WordEnd(false)),
+                "w" => Some(VimCommand::WordForward(false)),
+                "b" => Some(VimCommand::WordBackward(false)),
+                "0" => Some(VimCommand::Digit(0)),
+                digit if digit.len() == 1 && digit.as_bytes()[0].is_ascii_digit() => {
+                    Some(VimCommand::Digit(digit.as_bytes()[0] - b'0'))
+                }
                 "x" => Some(VimCommand::DeleteChar),
                 "u" => Some(VimCommand::Undo),
                 _ => None,
@@ -177,6 +199,133 @@ pub(crate) fn step_right(text: &Rope, offset: usize) -> usize {
     line.start + target.min(line.last_column())
 }
 
+pub(crate) fn line_start(text: &Rope, offset: usize) -> usize {
+    Line::containing(text, offset).start
+}
+
+pub(crate) fn line_first_nonblank(text: &Rope, offset: usize) -> usize {
+    let line = Line::containing(text, offset);
+    line.start
+        + line
+            .content
+            .char_indices()
+            .find(|(_, character)| !character.is_whitespace())
+            .map_or(0, |(column, _)| column)
+}
+
+pub(crate) fn line_end(text: &Rope, offset: usize) -> usize {
+    let line = Line::containing(text, offset);
+    line.start + line.content.len()
+}
+
+pub(crate) fn append_after(text: &Rope, offset: usize) -> usize {
+    let line = Line::containing(text, offset);
+    let column = line.column_of(offset);
+    line.start
+        + column
+        + line.content[column..]
+            .chars()
+            .next()
+            .map_or(0, char::len_utf8)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WordClass {
+    Space,
+    Keyword,
+    Punctuation,
+}
+
+fn word_class(character: char, big: bool) -> WordClass {
+    if character.is_whitespace() {
+        WordClass::Space
+    } else if big || character.is_alphanumeric() || character == '_' {
+        WordClass::Keyword
+    } else {
+        WordClass::Punctuation
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum WordMotion {
+    End,
+    Forward,
+    Backward,
+}
+
+pub(crate) fn word_offsets(text: &Rope) -> Vec<(usize, char)> {
+    text.to_string().char_indices().collect()
+}
+
+pub(crate) fn step_word(
+    text: &Rope,
+    chars: &[(usize, char)],
+    offset: usize,
+    motion: WordMotion,
+    big: bool,
+) -> usize {
+    if chars.is_empty() {
+        return 0;
+    }
+    let mut index = chars.partition_point(|(start, _)| *start < offset);
+    if index == chars.len() || chars[index].0 != offset {
+        index = index.saturating_sub(1);
+    }
+    let class = |at: usize| word_class(chars[at].1, big);
+    match motion {
+        WordMotion::Forward => {
+            let current = class(index);
+            if current != WordClass::Space {
+                while index < chars.len() && class(index) == current {
+                    index += 1;
+                }
+            }
+            while index < chars.len() && class(index) == WordClass::Space {
+                index += 1;
+            }
+            chars
+                .get(index)
+                .map_or_else(|| clamp_to_character(text, text.len()), |item| item.0)
+        }
+        WordMotion::Backward => {
+            index = index.saturating_sub(1);
+            while index > 0 && class(index) == WordClass::Space {
+                index -= 1;
+            }
+            let current = class(index);
+            while index > 0 && class(index - 1) == current {
+                index -= 1;
+            }
+            chars[index].0
+        }
+        WordMotion::End => {
+            if class(index) != WordClass::Space {
+                let current = class(index);
+                if index + 1 < chars.len() && class(index + 1) == current {
+                    index += 1;
+                } else {
+                    index += 1;
+                    while index < chars.len() && class(index) == WordClass::Space {
+                        index += 1;
+                    }
+                }
+            } else {
+                while index < chars.len() && class(index) == WordClass::Space {
+                    index += 1;
+                }
+            }
+            if index >= chars.len() {
+                return clamp_to_character(text, text.len());
+            }
+            let current = class(index);
+            while index + 1 < chars.len() && class(index + 1) == current {
+                index += 1;
+            }
+            clamp_to_character(text, chars[index].0)
+        }
+    }
+}
+
 /// Result of a vertical move.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct VerticalStep {
@@ -212,13 +361,26 @@ pub(crate) fn step_vertical(
 
 /// Byte range of the character under the cursor, or `None` on an empty line.
 /// Never includes a line terminator, so `x` cannot join lines.
+#[cfg(test)]
 pub(crate) fn character_range(text: &Rope, offset: usize) -> Option<Range<usize>> {
+    counted_character_range(text, offset, 1)
+}
+
+/// Selects at most `count` characters from one line without copying the line
+/// again for each character. A zero count selects nothing.
+pub(crate) fn counted_character_range(
+    text: &Rope,
+    offset: usize,
+    count: usize,
+) -> Option<Range<usize>> {
     let line = Line::containing(text, offset);
     let column = line.column_of(offset);
-    let character = line.content[column..].chars().next()?;
-    let start = line.start + column;
-
-    Some(start..start + character.len_utf8())
+    let width: usize = line.content[column..]
+        .chars()
+        .take(count)
+        .map(char::len_utf8)
+        .sum();
+    (width > 0).then_some(line.start + column..line.start + column + width)
 }
 
 #[cfg(test)]
@@ -269,25 +431,14 @@ mod tests {
             );
         }
 
-        for name in [
-            "a",
-            "o",
-            "p",
-            "d",
-            "0",
-            "1",
-            "/",
-            "escape",
-            "backspace",
-            "space",
-        ] {
+        for name in ["o", "p", "d", "/", "escape", "backspace", "space"] {
             assert_eq!(command_for(VimMode::Normal, key(name)), None, "{name}");
         }
     }
 
     #[test]
     fn shifted_keys_are_not_their_lowercase_commands() {
-        for name in ["h", "j", "k", "l", "i", "x", "u", "enter"] {
+        for name in ["h", "j", "k", "l", "x", "u", "enter"] {
             assert_eq!(command_for(VimMode::Normal, shifted(name)), None, "{name}");
         }
 
@@ -344,6 +495,19 @@ mod tests {
         ] {
             assert_eq!(mode_after(VimMode::Normal, command), VimMode::Normal);
         }
+    }
+
+    #[test]
+    fn words_on_empty_and_crlf_lines_remain_on_character_boundaries() {
+        let empty = Rope::from("");
+        let chars = word_offsets(&empty);
+        assert_eq!(step_word(&empty, &chars, 0, WordMotion::Forward, false), 0);
+        let text = Rope::from("é!\r\n\r\n中 x");
+        let chars = word_offsets(&text);
+        assert_eq!(step_word(&text, &chars, 0, WordMotion::Forward, false), 2);
+        assert_eq!(step_word(&text, &chars, 2, WordMotion::Forward, false), 7);
+        assert_eq!(step_word(&text, &chars, 7, WordMotion::Backward, false), 2);
+        assert_eq!(step_word(&text, &chars, 7, WordMotion::End, false), 11);
     }
 
     #[test]

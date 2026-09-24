@@ -602,15 +602,23 @@ own mode when you switch tabs or move focus away and back.
 | Normal | `j` / `k` | Move one line down / up, keeping the column across shorter lines |
 | Normal | `Enter` | Move one line down |
 | Normal | `i` | Insert before the cursor |
+| Normal | `a` / `A` / `I` | Insert after the cursor / at the end of the line / at the first non-blank character of the line |
+| Normal | `e` / `w` / `b` | Move to the end of a word / start of the next word / start of the previous word |
+| Normal | `E` / `W` / `B` | Make the corresponding word motion using whitespace-delimited words |
 | Normal | `x` | Delete the character under the cursor |
 | Normal | `u` | Undo |
 | Insert | `Escape` | Close an open completion menu, otherwise return to Normal mode |
+
+Prefix a motion or `x` / `u` with a count (for example, `3w`, `2x`,
+`2u`). A counted `x` deletes up to the end of the line without joining lines;
+a counted `u` undoes that many steps. `0` without a count moves to the start of the line; after a nonzero digit it remains part of the count (for example, `20w`). An
+interrupted count does not carry over to the next command.
 
 Everything else in Normal mode:
 
 | Input | Behavior in Normal mode |
 |-------|-------------------------|
-| Other letters, digits, punctuation, `Space` | Nothing |
+| Other unsupported letters, punctuation, `Space` | Nothing |
 | `Tab` / `Shift+Tab` | Nothing: no indent, and focus stays in the editor |
 | Paste (`Ctrl+v` / `Cmd+v` or the context menu) | Nothing |
 | Input method (IME) composition and commit | Dropped |
@@ -628,7 +636,7 @@ and stays in Insert mode; otherwise it returns to Normal mode. Focus stays in
 the editor either way. With several cursors or an inline suggestion showing,
 the first `Escape` clears them and the next one returns to Normal mode.
 
-**Undo.** Each `x` is one undo step. Everything typed in one Insert session is
+**Undo.** Each `x` invocation is one undo step, including a counted `x`. Everything typed in one Insert session is
 one undo step, and each new Insert session starts another. `u` undoes the same
 steps as `Ctrl+z` / `Cmd+z`.
 
@@ -637,9 +645,8 @@ do nothing there.
 
 **Limitations.**
 
-- Only the commands in the first table exist. There are no counts, operators
-  (`d`, `c`, `y`), visual mode, text objects, registers, macros, `.` repeat,
-  `:` commands, or a redo key.
+- Only the commands in the first table exist. There are no operators (`d`, `c`, `y`), visual mode, search, block selection,
+  text objects, registers, macros, `.` repeat, `:` commands, or a redo key.
 - Motions step one Unicode code point at a time, like the arrow keys, so a
   letter written with a separate combining accent takes two presses.
 - Normal mode blocks your typing and pasting only. Edits DBFlux makes itself,

@@ -48,6 +48,7 @@ pub(super) struct VimState {
     /// aimed for. The goal is reused only while the cursor is still there, so
     /// any other cursor change (a click, an arrow key, an edit) resets it.
     vertical_goal: Option<(usize, usize)>,
+    count: Option<usize>,
 }
 
 impl CodeDocument {
@@ -122,9 +123,22 @@ impl CodeDocument {
         };
 
         let Some(command) = machine::command_for(self.vim.mode, key) else {
+            self.vim.count = None;
             return false;
         };
 
+        if let VimCommand::Digit(digit) = command {
+            if digit != 0 || self.vim.count.is_some() {
+                self.vim.count = Some(
+                    self.vim
+                        .count
+                        .unwrap_or(0)
+                        .saturating_mul(10)
+                        .saturating_add(digit as usize),
+                );
+                return true;
+            }
+        }
         self.apply_vim_command(command, window, cx);
         true
     }
@@ -135,20 +149,46 @@ impl CodeDocument {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let count = self.vim.count.take().unwrap_or(1);
         match command {
-            VimCommand::MoveLeft => self.move_cursor_with(machine::step_left, cx),
-            VimCommand::MoveRight => self.move_cursor_with(machine::step_right, cx),
-            VimCommand::MoveUp => self.move_cursor_vertically(-1, cx),
-            VimCommand::MoveDown => self.move_cursor_vertically(1, cx),
+            VimCommand::Digit(0) => self.move_cursor_with(machine::line_start, cx),
+            VimCommand::Digit(_) => {}
+            VimCommand::MoveLeft => self.repeat_cursor(machine::step_left, count, cx),
+            VimCommand::MoveRight => self.repeat_cursor(machine::step_right, count, cx),
+            VimCommand::MoveUp => self.repeat_vertical(-1, count, cx),
+            VimCommand::MoveDown => self.repeat_vertical(1, count, cx),
+            VimCommand::WordEnd(big) => self.move_word(machine::WordMotion::End, big, count, cx),
+            VimCommand::WordForward(big) => {
+                self.move_word(machine::WordMotion::Forward, big, count, cx)
+            }
+            VimCommand::WordBackward(big) => {
+                self.move_word(machine::WordMotion::Backward, big, count, cx)
+            }
+            VimCommand::Append => {
+                self.move_cursor_with(machine::append_after, cx);
+                self.set_vim_mode(VimMode::Insert, cx);
+            }
+            VimCommand::AppendLine => {
+                self.move_cursor_with(machine::line_end, cx);
+                self.set_vim_mode(VimMode::Insert, cx);
+            }
+            VimCommand::InsertLine => {
+                self.move_cursor_with(machine::line_first_nonblank, cx);
+                self.set_vim_mode(VimMode::Insert, cx);
+            }
             VimCommand::EnterInsert => self.set_vim_mode(VimMode::Insert, cx),
             VimCommand::LeaveInsert => self.leave_insert(window, cx),
             // A read-only document keeps its text: motions work, edits do nothing.
-            VimCommand::DeleteChar if !self.read_only => self.delete_char(window, cx),
+            VimCommand::DeleteChar if !self.read_only => self.delete_chars(count, window, cx),
             VimCommand::Undo if !self.read_only => {
-                self.run_history_in_normal_mode(HistoryStep::Undo, window, cx)
+                self.run_history_in_normal_mode(HistoryStep::Undo, count, window, cx)
             }
             VimCommand::DeleteChar | VimCommand::Undo | VimCommand::Swallow => {}
         }
+    }
+
+    pub(super) fn clear_vim_count(&mut self) {
+        self.vim.count = None;
     }
 
     fn set_vim_mode(&mut self, mode: VimMode, cx: &mut Context<Self>) {
@@ -185,7 +225,8 @@ impl CodeDocument {
     /// the keys would fall through to the root's focus navigation and move focus
     /// out of the editor. Checked in the actions' capture phase, because key
     /// bindings are dispatched before any key listener runs.
-    pub(super) fn vim_swallows_indent_action(&self) -> bool {
+    pub(super) fn vim_swallows_indent_action(&mut self) -> bool {
+        self.clear_vim_count();
         self.vim.enabled
             && self.focus_mode == SqlQueryFocus::Editor
             && machine::command_for(
@@ -249,6 +290,60 @@ impl CodeDocument {
         self.set_editor_cursor(target, cx);
     }
 
+    fn repeat_cursor(
+        &mut self,
+        step: fn(&Rope, usize) -> usize,
+        count: usize,
+        cx: &mut Context<Self>,
+    ) {
+        let mut target = self.editor_cursor(cx);
+        {
+            let text = self.editor.input_state.read(cx);
+            for _ in 0..count.min(text.text().len().saturating_add(1)) {
+                let next = step(text.text(), target);
+                if next == target {
+                    break;
+                }
+                target = next;
+            }
+        }
+        self.vim.vertical_goal = None;
+        self.set_editor_cursor(target, cx);
+    }
+
+    fn move_word(
+        &mut self,
+        motion: machine::WordMotion,
+        big: bool,
+        count: usize,
+        cx: &mut Context<Self>,
+    ) {
+        let mut target = self.editor_cursor(cx);
+        {
+            let text = self.editor.input_state.read(cx);
+            let chars = machine::word_offsets(text.text());
+            for _ in 0..count.min(chars.len().saturating_add(1)) {
+                let next = machine::step_word(text.text(), &chars, target, motion, big);
+                if next == target {
+                    break;
+                }
+                target = next;
+            }
+        }
+        self.vim.vertical_goal = None;
+        self.set_editor_cursor(target, cx);
+    }
+
+    fn repeat_vertical(&mut self, delta: isize, count: usize, cx: &mut Context<Self>) {
+        for _ in 0..count.min(self.editor.input_state.read(cx).text().lines_len()) {
+            let before = self.editor_cursor(cx);
+            self.move_cursor_vertically(delta, cx);
+            if self.editor_cursor(cx) == before {
+                break;
+            }
+        }
+    }
+
     fn move_cursor_vertically(&mut self, delta: isize, cx: &mut Context<Self>) {
         let cursor = self.editor_cursor(cx);
         let goal = self
@@ -276,12 +371,15 @@ impl CodeDocument {
         }
     }
 
-    fn delete_char(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(range) = machine::character_range(
-            self.editor.input_state.read(cx).text(),
-            self.editor_cursor(cx),
-        ) else {
-            return;
+    fn delete_chars(&mut self, count: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let range = {
+            let text = self.editor.input_state.read(cx);
+            let Some(range) =
+                machine::counted_character_range(text.text(), self.editor_cursor(cx), count)
+            else {
+                return;
+            };
+            range
         };
 
         self.vim.vertical_goal = None;
@@ -312,7 +410,8 @@ impl CodeDocument {
             return false;
         }
 
-        self.run_history_in_normal_mode(step, window, cx);
+        self.clear_vim_count();
+        self.run_history_in_normal_mode(step, 1, window, cx);
         true
     }
 
@@ -326,6 +425,7 @@ impl CodeDocument {
     fn run_history_in_normal_mode(
         &mut self,
         step: HistoryStep,
+        count: usize,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -340,9 +440,12 @@ impl CodeDocument {
             window.draw(cx).clear(cx);
 
             let focus_handle = input.read(cx).focus_handle(cx);
-            match step {
-                HistoryStep::Undo => focus_handle.dispatch_action(&Undo, window, cx),
-                HistoryStep::Redo => focus_handle.dispatch_action(&Redo, window, cx),
+            // History depth is not exposed by the editor; cap pathological counts.
+            for _ in 0..count.min(10_000) {
+                match step {
+                    HistoryStep::Undo => focus_handle.dispatch_action(&Undo, window, cx),
+                    HistoryStep::Redo => focus_handle.dispatch_action(&Redo, window, cx),
+                }
             }
 
             document

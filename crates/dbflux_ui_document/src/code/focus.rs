@@ -2,6 +2,7 @@ use super::*;
 
 impl CodeDocument {
     pub(super) fn enter_editor_mode(&mut self, cx: &mut Context<Self>) {
+        self.clear_vim_count();
         if self.focus_mode != SqlQueryFocus::Editor {
             self.focus_mode = SqlQueryFocus::Editor;
             cx.notify();
@@ -9,6 +10,7 @@ impl CodeDocument {
     }
 
     pub fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.clear_vim_count();
         self.focus_handle.focus(window, cx);
 
         if self.focus_mode == SqlQueryFocus::Editor {

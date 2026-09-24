@@ -6,6 +6,11 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Added
 
+* **Expanded Vim editing in code editors** — Normal mode now supports `a`/`A`/`I`
+  insertion positions, `e`/`E`/`w`/`W`/`b`/`B` word motions, motion counts,
+  and counted `x`/`u`. Visual mode, operators, search, and block selection
+  are not included.
+
 * **Opt-in Vim mode for code editors** — Settings → General → Editor adds a
   Vim mode toggle, off by default. Code editors then open in Normal mode,
   where `h`/`j`/`k`/`l` and `Enter` move, `i` enters Insert mode, `x` deletes
