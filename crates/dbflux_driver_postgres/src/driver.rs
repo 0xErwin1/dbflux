@@ -1660,8 +1660,6 @@ impl Connection for PostgresConnection {
     }
 
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
-        self.cancelled.store(false, Ordering::SeqCst);
-
         if req.statement_timeout.is_some() {
             return Err(DbError::NotSupported(
                 "PostgreSQL: requested statement timeout is unsupported; rejected before execution"
@@ -1679,6 +1677,8 @@ impl Connection for PostgresConnection {
         {
             return Err(DbError::NotSupported("PostgreSQL: row limits on instance catalog queries are unsupported; rejected before execution".to_string()));
         }
+
+        self.cancelled.store(false, Ordering::SeqCst);
 
         if let Some(source) = req
             .execution_context
@@ -1732,7 +1732,14 @@ impl Connection for PostgresConnection {
             return execute_statement_batch(&mut client, &req.sql, query_id, start, req.limit);
         }
         if let Some(limit) = req.limit {
-            return execute_bounded_single_statement(&mut client, &req.sql, query_id, start, limit);
+            return execute_bounded_request(
+                &mut client,
+                &req.sql,
+                query_id,
+                start,
+                limit,
+                &self.cancelled,
+            );
         }
 
         let (columns, rows) = {
@@ -5107,35 +5114,115 @@ fn comment_only_segment(segment: &str) -> bool {
     }
 }
 
-/// Retain only the requested rows while draining the complete statement, including mutations.
-fn execute_bounded_single_statement(
+/// Runs a row-limited request, retaining only the requested rows while every
+/// statement drains to completion, so mutations always finish.
+///
+/// Parse is the final authority on batches: preparing never executes a
+/// statement, and only a request that splits into several statements,
+/// ignoring comment-only segments, and that PostgreSQL rejects as a syntax
+/// error runs as a batch. Ordinary syntax errors are reported unchanged.
+fn execute_bounded_request(
     client: &mut Client,
     sql: &str,
     query_id: Uuid,
     start: Instant,
     limit: u32,
+    cancelled: &AtomicBool,
 ) -> Result<QueryResult, DbError> {
-    let stmt = client.prepare(sql).map_err(|error| {
-        if error.code() == Some(&postgres::error::SqlState::QUERY_CANCELED) {
-            return DbError::Cancelled;
-        }
-        // Parse is the final authority: even if the splitter misses a boundary,
-        // preparation never executes any statement. Ignore comment-only segments
-        // when identifying a batch, and keep ordinary syntax errors unchanged.
-        if error.code() == Some(&postgres::error::SqlState::SYNTAX_ERROR)
-            && QueryLanguage::Sql
-                .split_statements(sql)
-                .iter()
-                .filter(|segment| !comment_only_segment(segment))
-                .take(2)
-                .count()
-                > 1
+    let statements: Vec<String> = QueryLanguage::Sql
+        .split_statements(sql)
+        .into_iter()
+        .filter(|segment| !comment_only_segment(segment))
+        .collect();
+
+    let (initial_block, prepared) = if statements.len() > 1 {
+        prepare_batch_candidate(client, sql)
+            .map_err(|error| bounded_statement_error(&error, query_id))?
+    } else {
+        (BatchBlock::None, client.prepare(sql))
+    };
+
+    let statement = match prepared {
+        Ok(statement) => statement,
+        Err(error)
+            if statements.len() > 1
+                && error.code() == Some(&postgres::error::SqlState::SYNTAX_ERROR) =>
         {
-            return DbError::NotSupported("PostgreSQL: a row limit cannot be enforced on a multi-statement batch; rejected before execution".to_string());
+            return execute_bounded_batch(
+                client,
+                sql,
+                &statements,
+                initial_block,
+                query_id,
+                start,
+                limit,
+                cancelled,
+            );
         }
-        format_pg_statement_error(&error)
-    })?;
-    let columns: Vec<ColumnMeta> = stmt
+        Err(error) => return Err(bounded_statement_error(&error, query_id)),
+    };
+
+    let mut remaining_rows = limit as usize;
+    stream_bounded_statement(client, &statement, &mut remaining_rows, start)
+        .map_err(|error| bounded_statement_error(&error, query_id))
+}
+
+/// Prepares a request that splits into several statements without letting a
+/// rejected parse abort the user's transaction, and reports the transaction
+/// block the session is in.
+///
+/// Inside a transaction block, a failed parse aborts the transaction, so the
+/// parse runs under a savepoint that is rolled back when it fails. `SAVEPOINT`
+/// is rejected with SQLSTATE 25P01 only outside a block, which also reads the
+/// block state the `postgres` crate does not expose. An already aborted
+/// transaction is left for the parse to report.
+fn prepare_batch_candidate(
+    client: &mut Client,
+    sql: &str,
+) -> Result<(BatchBlock, Result<postgres::Statement, postgres::Error>), postgres::Error> {
+    match client.batch_execute("SAVEPOINT dbflux_batch_probe") {
+        Ok(()) => {}
+        Err(error)
+            if error.code() == Some(&postgres::error::SqlState::NO_ACTIVE_SQL_TRANSACTION) =>
+        {
+            return Ok((BatchBlock::None, client.prepare(sql)));
+        }
+        Err(error) if is_in_failed_transaction(&error) => {
+            return Ok((BatchBlock::Explicit, client.prepare(sql)));
+        }
+        Err(error) => return Err(error),
+    }
+
+    let prepared = client.prepare(sql);
+    if prepared.is_err() {
+        client.batch_execute("ROLLBACK TO SAVEPOINT dbflux_batch_probe")?;
+    }
+    client.batch_execute("RELEASE SAVEPOINT dbflux_batch_probe")?;
+
+    Ok((BatchBlock::Explicit, prepared))
+}
+
+fn bounded_statement_error(error: &postgres::Error, query_id: Uuid) -> DbError {
+    if error.code() == Some(&postgres::error::SqlState::QUERY_CANCELED) {
+        log::info!("[QUERY] Query {} was cancelled", query_id);
+        DbError::Cancelled
+    } else {
+        format_pg_statement_error(error)
+    }
+}
+
+/// Streams one prepared statement to completion, retaining rows only while
+/// `remaining_rows` lasts and deducting the rows it retains.
+///
+/// The result is flagged as truncated only when this statement produced rows
+/// it could not retain.
+fn stream_bounded_statement(
+    client: &mut Client,
+    statement: &postgres::Statement,
+    remaining_rows: &mut usize,
+    start: Instant,
+) -> Result<QueryResult, postgres::Error> {
+    let columns: Vec<ColumnMeta> = statement
         .columns()
         .iter()
         .map(|column| ColumnMeta {
@@ -5146,40 +5233,252 @@ fn execute_bounded_single_statement(
             is_primary_key: false,
         })
         .collect();
-    let mut stream = client
-        .query_raw(&stmt, std::iter::empty::<i32>())
-        .map_err(|error| {
-            if error.code() == Some(&postgres::error::SqlState::QUERY_CANCELED) {
-                DbError::Cancelled
-            } else {
-                format_pg_statement_error(&error)
-            }
-        })?;
+
+    let mut stream = client.query_raw(statement, std::iter::empty::<i32>())?;
     let mut rows: Vec<Row> = Vec::new();
     let mut truncated = false;
-    loop {
-        match stream.next() {
-            Ok(Some(row)) if rows.len() < limit as usize => rows.push(
+    while let Some(row) = stream.next()? {
+        if *remaining_rows > 0 {
+            *remaining_rows -= 1;
+            rows.push(
                 (0..columns.len())
                     .map(|index| postgres_value_to_value(&row, index))
                     .collect(),
-            ),
-            Ok(Some(_)) => truncated = true,
-            Ok(None) => break,
-            Err(error) if error.code() == Some(&postgres::error::SqlState::QUERY_CANCELED) => {
-                log::info!("[QUERY] Query {} was cancelled", query_id);
-                return Err(DbError::Cancelled);
-            }
-            Err(error) => return Err(format_pg_statement_error(&error)),
+            );
+        } else {
+            truncated = true;
         }
     }
     let affected = stream.rows_affected();
     drop(stream);
+
     let affected_rows = if columns.is_empty() { affected } else { None };
     let mut result = QueryResult::table(columns, rows, affected_rows, start.elapsed());
     result.set_rows_truncated(truncated);
     result.set_unsupported_types(unsupported_type_names(&result.rows));
     Ok(result)
+}
+
+/// Transaction block the session is in while a bounded batch runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BatchBlock {
+    None,
+    /// A block the driver opened to stand in for PostgreSQL's implicit
+    /// transaction block, which it commits or rolls back itself.
+    Implicit,
+    /// A block the user opened, in this batch or before it.
+    Explicit,
+}
+
+/// How a top-level statement of a bounded batch interacts with the
+/// transaction block.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TransactionControl {
+    None,
+    /// `BEGIN` or `START TRANSACTION`.
+    Open,
+    /// `COMMIT`, `END`, `ROLLBACK` or `ABORT`.
+    Close,
+    /// `SAVEPOINT`, `RELEASE`, `ROLLBACK TO`, or a chained `COMMIT` or
+    /// `ROLLBACK`: statements PostgreSQL rejects inside an implicit block.
+    RequiresExplicitBlock,
+    /// `PREPARE TRANSACTION`.
+    PrepareTransaction,
+}
+
+fn classify_transaction_control(statement: &str) -> TransactionControl {
+    if statement_opens_transaction(statement) {
+        return TransactionControl::Open;
+    }
+
+    let mut keywords = Vec::new();
+    let mut rest = statement;
+    while keywords.len() < 4 {
+        let (keyword, remainder) = split_leading_keyword(rest);
+        let continues_identifier = remainder
+            .starts_with(|character: char| character.is_alphanumeric() || "_$".contains(character));
+        if keyword.is_empty() || continues_identifier {
+            break;
+        }
+        keywords.push(keyword.to_ascii_uppercase());
+        rest = remainder;
+    }
+
+    let Some(first_keyword) = keywords.first() else {
+        return TransactionControl::None;
+    };
+    let later_keywords = keywords.get(1..).unwrap_or_default();
+    let second_keyword = later_keywords.first().map(String::as_str);
+
+    match first_keyword.as_str() {
+        "SAVEPOINT" | "RELEASE" => TransactionControl::RequiresExplicitBlock,
+        "PREPARE" if second_keyword == Some("TRANSACTION") => {
+            TransactionControl::PrepareTransaction
+        }
+        "COMMIT" | "ROLLBACK" if second_keyword == Some("PREPARED") => TransactionControl::None,
+        "COMMIT" | "END" | "ROLLBACK" | "ABORT" => {
+            let chained = later_keywords
+                .windows(2)
+                .any(|pair| matches!(pair, [and, chain] if and == "AND" && chain == "CHAIN"));
+            let rolls_back_to_savepoint =
+                first_keyword == "ROLLBACK" && later_keywords.iter().any(|later| later == "TO");
+
+            if chained || rolls_back_to_savepoint {
+                TransactionControl::RequiresExplicitBlock
+            } else {
+                TransactionControl::Close
+            }
+        }
+        _ => TransactionControl::None,
+    }
+}
+
+/// Decides, before anything runs, where the driver opens its own block for a
+/// bounded batch that starts in `initial_block`.
+///
+/// A simple-protocol batch runs every statement outside a user block inside
+/// one implicit block: a user `BEGIN` adopts the statements before it, a
+/// `COMMIT` or `ROLLBACK` closes it, and an error rolls it back. The driver
+/// reproduces that by opening a block before the first statement that runs
+/// outside any block. A statement PostgreSQL would reject inside an implicit
+/// block would succeed inside the driver's block, so that shape is refused,
+/// as is `PREPARE TRANSACTION`.
+fn plan_bounded_batch(
+    initial_block: BatchBlock,
+    controls: &[TransactionControl],
+) -> Result<Vec<bool>, DbError> {
+    let mut block = initial_block;
+    let mut opens_implicit_block = Vec::with_capacity(controls.len());
+
+    for control in controls {
+        let opens = *control == TransactionControl::None && block == BatchBlock::None;
+        if opens {
+            block = BatchBlock::Implicit;
+        }
+
+        match control {
+            TransactionControl::PrepareTransaction => {
+                return Err(DbError::NotSupported("PostgreSQL: PREPARE TRANSACTION cannot run in a row-limited batch; rejected before execution".to_string()));
+            }
+            TransactionControl::RequiresExplicitBlock if block == BatchBlock::Implicit => {
+                return Err(DbError::NotSupported("PostgreSQL: a row-limited batch cannot run SAVEPOINT, RELEASE, ROLLBACK TO or a chained COMMIT/ROLLBACK after statements outside an explicit transaction; rejected before execution".to_string()));
+            }
+            _ => {}
+        }
+
+        opens_implicit_block.push(opens);
+        block = block_after_statement(block, *control);
+    }
+
+    Ok(opens_implicit_block)
+}
+
+fn block_after_statement(block: BatchBlock, control: TransactionControl) -> BatchBlock {
+    match control {
+        TransactionControl::Open => BatchBlock::Explicit,
+        TransactionControl::Close => BatchBlock::None,
+        _ => block,
+    }
+}
+
+fn rollback_implicit_block(client: &mut Client) {
+    if let Err(error) = client.batch_execute("ROLLBACK") {
+        log::warn!(
+            "[QUERY] ROLLBACK of a failed bounded batch failed: {}",
+            error
+        );
+    }
+}
+
+/// Runs a row-limited multi-statement batch one statement at a time, every
+/// statement streaming through the bounded path under one row budget shared
+/// by the whole request.
+///
+/// The sync `postgres` crate cannot stream a simple-protocol batch, so the
+/// batch is split instead, and [`plan_bounded_batch`] reproduces the
+/// transaction boundaries the same script has as one simple query. Statements
+/// after the budget is exhausted still run. The batch stops at the first
+/// failure, which is reported and recovered from like an unbounded batch.
+#[allow(clippy::too_many_arguments)]
+fn execute_bounded_batch(
+    client: &mut Client,
+    sql: &str,
+    statements: &[String],
+    initial_block: BatchBlock,
+    query_id: Uuid,
+    start: Instant,
+    limit: u32,
+    cancelled: &AtomicBool,
+) -> Result<QueryResult, DbError> {
+    let controls: Vec<TransactionControl> = statements
+        .iter()
+        .map(|statement| classify_transaction_control(statement))
+        .collect();
+
+    let opens_implicit_block = plan_bounded_batch(initial_block, &controls)?;
+
+    let mut block = initial_block;
+    let mut remaining_rows = limit as usize;
+    let mut results = Vec::with_capacity(statements.len());
+
+    for ((statement, control), opens) in statements.iter().zip(&controls).zip(opens_implicit_block)
+    {
+        if cancelled.load(Ordering::SeqCst) {
+            if block == BatchBlock::Implicit {
+                rollback_implicit_block(client);
+            }
+            log::info!("[QUERY] Batch query {} was cancelled", query_id);
+            return Err(DbError::Cancelled);
+        }
+
+        if opens {
+            client
+                .batch_execute("BEGIN")
+                .map_err(|error| recover_from_failed_batch(client, sql, &error))?;
+            block = BatchBlock::Implicit;
+        }
+
+        let outcome = client.prepare(statement).and_then(|prepared| {
+            stream_bounded_statement(client, &prepared, &mut remaining_rows, start)
+        });
+
+        match outcome {
+            Ok(result) => results.push(result),
+            Err(error) => {
+                if block == BatchBlock::Implicit {
+                    rollback_implicit_block(client);
+                }
+                if error.code() == Some(&postgres::error::SqlState::QUERY_CANCELED) {
+                    log::info!("[QUERY] Batch query {} was cancelled", query_id);
+                    return Err(DbError::Cancelled);
+                }
+                return Err(recover_from_failed_batch(client, sql, &error));
+            }
+        }
+
+        block = block_after_statement(block, *control);
+    }
+
+    if block == BatchBlock::Implicit {
+        client
+            .batch_execute("COMMIT")
+            .map_err(|error| recover_from_failed_batch(client, sql, &error))?;
+    }
+
+    let mut result_sets = results.into_iter();
+    let Some(mut primary) = result_sets.next() else {
+        return Ok(QueryResult::table(
+            Vec::new(),
+            Vec::new(),
+            None,
+            start.elapsed(),
+        ));
+    };
+    for extra in result_sets {
+        primary.push_additional_result(extra);
+    }
+
+    Ok(primary)
 }
 
 /// Groups the flat stream of [`SimpleQueryMessage`]s into one [`QueryResult`]
@@ -7678,5 +7977,86 @@ mod tests {
     #[test]
     fn begin_inside_string_literal_does_not_open_transaction() {
         assert!(!script_opens_transaction("SELECT 'BEGIN'; SELECT 1;"));
+    }
+
+    // ===== Bounded batch transaction planning =====
+
+    use super::{BatchBlock, TransactionControl, classify_transaction_control, plan_bounded_batch};
+
+    #[test]
+    fn transaction_control_statements_are_classified() {
+        for (statement, expected) in [
+            ("BEGIN", TransactionControl::Open),
+            ("start transaction read only", TransactionControl::Open),
+            ("COMMIT", TransactionControl::Close),
+            ("END", TransactionControl::Close),
+            ("ABORT", TransactionControl::Close),
+            ("ROLLBACK WORK AND NO CHAIN", TransactionControl::Close),
+            ("-- done\nrollback", TransactionControl::Close),
+            (
+                "COMMIT AND CHAIN",
+                TransactionControl::RequiresExplicitBlock,
+            ),
+            ("SAVEPOINT s", TransactionControl::RequiresExplicitBlock),
+            (
+                "RELEASE SAVEPOINT s",
+                TransactionControl::RequiresExplicitBlock,
+            ),
+            ("ROLLBACK TO s", TransactionControl::RequiresExplicitBlock),
+            (
+                "ROLLBACK TRANSACTION TO SAVEPOINT s",
+                TransactionControl::RequiresExplicitBlock,
+            ),
+            (
+                "PREPARE TRANSACTION 'x'",
+                TransactionControl::PrepareTransaction,
+            ),
+            ("COMMIT PREPARED 'x'", TransactionControl::None),
+            ("ROLLBACK PREPARED 'x'", TransactionControl::None),
+            ("PREPARE fetch_one AS SELECT 1", TransactionControl::None),
+            (
+                "PREPARE transaction_rows AS SELECT 1",
+                TransactionControl::None,
+            ),
+            ("SAVEPOINT s1", TransactionControl::RequiresExplicitBlock),
+            ("SELECT 'COMMIT'", TransactionControl::None),
+            ("DO $$ BEGIN PERFORM 1; END $$", TransactionControl::None),
+        ] {
+            assert_eq!(
+                classify_transaction_control(statement),
+                expected,
+                "classification of {statement:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn bounded_batch_opens_a_block_where_postgres_opens_an_implicit_one() {
+        use TransactionControl::{Close, None, Open};
+
+        let plan = plan_bounded_batch(BatchBlock::None, &[None, None, Open, None, Close, None])
+            .expect("plan");
+        assert_eq!(plan, vec![true, false, false, false, false, true]);
+
+        let plan =
+            plan_bounded_batch(BatchBlock::Explicit, &[None, Close, None, None]).expect("plan");
+        assert_eq!(plan, vec![false, false, true, false]);
+    }
+
+    #[test]
+    fn bounded_batch_refuses_statements_an_implicit_block_would_reject() {
+        use TransactionControl::{None, Open, PrepareTransaction, RequiresExplicitBlock};
+
+        assert!(matches!(
+            plan_bounded_batch(BatchBlock::None, &[None, RequiresExplicitBlock]),
+            Err(DbError::NotSupported(_))
+        ));
+        assert!(matches!(
+            plan_bounded_batch(BatchBlock::None, &[Open, PrepareTransaction]),
+            Err(DbError::NotSupported(_))
+        ));
+        assert!(plan_bounded_batch(BatchBlock::None, &[RequiresExplicitBlock, None]).is_ok());
+        assert!(plan_bounded_batch(BatchBlock::None, &[Open, RequiresExplicitBlock]).is_ok());
+        assert!(plan_bounded_batch(BatchBlock::Explicit, &[None, RequiresExplicitBlock]).is_ok());
     }
 }

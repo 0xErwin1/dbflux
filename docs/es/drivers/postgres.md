@@ -72,15 +72,20 @@ Expone snapshots tabulares del estado del servidor en ejecución:
   state, wait event, duración)
 - `pg.locks` — locks activos de `pg_locks` unidos con `pg_class`
 
-- Los límites de filas en sentencias únicas retienen solo las filas solicitadas e informan si se omitieron filas; la ejecución termina antes de devolver el resultado.
-- Los lotes con límite de filas y los tiempos de espera solicitados se rechazan antes de ejecutar.
+- Los límites de filas transmiten los resultados, retienen como máximo la cantidad solicitada en todo el pedido e informan por cada result set si omitió filas; la ejecución siempre termina por completo.
+- Un lote multi-sentencia con límite de filas se ejecuta sentencia por sentencia por la misma ruta tipada de streaming, con un único presupuesto de filas compartido por todo el pedido. Las sentencias posteriores al agotamiento del presupuesto se siguen ejecutando, los result sets conservan el orden sin límite (el primero es el resultado principal) y el lote se detiene en el primer fallo.
+- Un lote con límite de filas conserva los límites de transacción que tiene el mismo script cuando se ejecuta sin límite como una única simple query. Las sentencias fuera de una transacción del usuario se ejecutan dentro de una transacción que el driver abre y confirma, o revierte si hay un fallo, así que un fallo no deja ninguna de ellas aplicada. Un `BEGIN` en el script adopta las sentencias anteriores y un `COMMIT` o `ROLLBACK` la termina, como hace el bloque de transacción implícito de PostgreSQL. Dentro de una transacción de sesión abierta, las sentencias se suman a ella y un fallo la deja abortada.
+- Los tiempos de espera solicitados se rechazan antes de ejecutar.
 
 ## Limitaciones
 
 - El límite de filas restringe la retención, no el trabajo del servidor, el tráfico ni el tiempo; las mutaciones completan todos sus efectos.
 - Los límites de filas en métricas e inspectores de instancia se rechazan antes del despacho. Los lotes sin límite conservan su comportamiento previo.
+- Un lote con límite de filas rechaza, antes de ejecutar cualquier sentencia, `PREPARE TRANSACTION`, y un `SAVEPOINT`, `RELEASE`, `ROLLBACK TO` o `COMMIT`/`ROLLBACK` encadenado que sigue a sentencias fuera de una transacción explícita. PostgreSQL los rechaza dentro de su bloque de transacción implícito, mientras que la transacción que abre el driver los aceptaría.
+- Las sentencias que no pueden ejecutarse dentro de un bloque de transacción, como `VACUUM` o `CREATE INDEX CONCURRENTLY`, fallan dentro de un lote con límite de filas con el error propio de PostgreSQL, igual que en un lote sin límite.
+- Un lote con límite de filas se divide con el divisor de sentencias del editor SQL, que no reconoce los cuerpos de función `BEGIN ATOMIC` del estándar SQL. Un lote que contiene uno falla con un error de sintaxis y se revierte en lugar de ejecutarse; la misma función sola en un pedido se ejecuta normalmente.
 
-- Las columnas de resultados en lote (multi-sentencia) no llevan metadata de
+- Las columnas de resultados en lote sin límite (multi-sentencia) no llevan metadata de
   tipo; los valores se devuelven como texto y la auto-detección de gráficos está
   deshabilitada para ellas. Ejecuta una única sentencia para obtener columnas
   completamente tipadas.
