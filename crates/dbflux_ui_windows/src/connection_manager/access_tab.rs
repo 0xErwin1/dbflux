@@ -568,9 +568,9 @@ impl ConnectionManagerWindow {
             .and_then(|id| proxies.iter().find(|p| p.id == id))
             .cloned()
         {
-            let kind_label = format!("{:?}", proxy.kind);
+            let kind_label = proxy_kind_label(proxy.kind);
             let host_port = format!("{}:{}", proxy.host, proxy.port);
-            let auth_label = format!("{:?}", proxy.auth);
+            let auth_label = proxy_auth_label(&proxy.auth);
             let enabled_label = if proxy.enabled {
                 dbflux_i18n::t!("access.value_yes")
             } else {
@@ -1389,6 +1389,29 @@ impl ConnectionManagerWindow {
     }
 }
 
+/// Returns the translated protocol label shown in the proxy details card,
+/// reusing the same keys as the Settings proxy form.
+fn proxy_kind_label(kind: dbflux_core::ProxyKind) -> String {
+    match kind {
+        dbflux_core::ProxyKind::Http => dbflux_i18n::t!("settings.proxies.kind.http"),
+        dbflux_core::ProxyKind::Https => dbflux_i18n::t!("settings.proxies.kind.https"),
+        dbflux_core::ProxyKind::Socks5 => dbflux_i18n::t!("settings.proxies.kind.socks5"),
+    }
+}
+
+/// Returns the translated auth label shown in the proxy details card.
+///
+/// Only the username is surfaced for basic auth. The password lives in the
+/// keyring and is never part of this label.
+fn proxy_auth_label(auth: &dbflux_core::ProxyAuth) -> String {
+    match auth {
+        dbflux_core::ProxyAuth::None => dbflux_i18n::t!("settings.proxies.auth.none"),
+        dbflux_core::ProxyAuth::Basic { username } => {
+            crate::labels::access_proxy_auth_basic_with_username(username)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     const ACCESS_DIRECT_SSM_KEYS: &[&str] = &[
@@ -1607,5 +1630,86 @@ mod tests {
 
         assert_eq!(en, "Leave empty if key has no passphrase");
         assert_eq!(es, "Déjala vacía si la clave no tiene frase");
+    }
+
+    #[test]
+    fn proxy_kind_label_covers_every_kind() {
+        assert_eq!(
+            super::proxy_kind_label(dbflux_core::ProxyKind::Http),
+            "HTTP"
+        );
+        assert_eq!(
+            super::proxy_kind_label(dbflux_core::ProxyKind::Https),
+            "HTTPS"
+        );
+        assert_eq!(
+            super::proxy_kind_label(dbflux_core::ProxyKind::Socks5),
+            "SOCKS5"
+        );
+    }
+
+    #[test]
+    fn proxy_auth_label_none_is_translated() {
+        assert_eq!(
+            super::proxy_auth_label(&dbflux_core::ProxyAuth::None),
+            "None"
+        );
+    }
+
+    #[test]
+    fn proxy_auth_label_basic_shows_username_only() {
+        let auth = dbflux_core::ProxyAuth::Basic {
+            username: "alice".to_string(),
+        };
+
+        let label = super::proxy_auth_label(&auth);
+
+        assert_eq!(label, "Basic (alice)");
+        assert!(
+            !label.contains("username"),
+            "label leaked the Debug field name"
+        );
+        assert!(!label.contains('{'), "label leaked Debug formatting");
+    }
+
+    #[test]
+    fn proxy_auth_label_basic_never_includes_proxy_secrets() {
+        let profile = dbflux_core::ProxyProfile {
+            id: uuid::Uuid::new_v4(),
+            name: "corporate".to_string(),
+            kind: dbflux_core::ProxyKind::Http,
+            host: "proxy.internal".to_string(),
+            port: 3128,
+            auth: dbflux_core::ProxyAuth::Basic {
+                username: "alice".to_string(),
+            },
+            no_proxy: None,
+            enabled: true,
+            save_secret: true,
+        };
+
+        let label = super::proxy_auth_label(&profile.auth);
+
+        assert_eq!(label, "Basic (alice)");
+        assert!(!label.contains(&profile.secret_ref()));
+    }
+
+    #[test]
+    fn proxy_auth_basic_with_username_translates_in_every_locale() {
+        let expected = [
+            ("en", "Basic (alice)"),
+            ("es", "Básica (alice)"),
+            ("ko", "Basic (alice)"),
+            ("zh_Hans", "基本认证（alice）"),
+        ];
+
+        for (locale, value) in expected {
+            // `t!` cannot combine `locale =` with interpolation arguments, so
+            // the placeholder is substituted here the same way the macro does.
+            let label = dbflux_i18n::t!("access.proxy_auth_basic_with_username", locale = locale)
+                .replace("%{username}", "alice");
+
+            assert_eq!(label, value, "unexpected label for locale {locale}");
+        }
     }
 }

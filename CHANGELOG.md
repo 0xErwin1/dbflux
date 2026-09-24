@@ -10,6 +10,7 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+
 * UI automation: screenshots now wait until DBFlux has presented the frame that
   follows an action and, on Linux, until two consecutive captures match, so they
   no longer show the previous frame. The new `wait_for_idle` tool waits until
@@ -48,6 +49,11 @@ All notable changes to DBFlux will be documented in this file.
   category section now uses a fixed two-column grid that fits the window, and
   Up/Down move to the card above or below, crossing into the neighboring
   section's matching column.
+
+* **Proxy details show readable labels** — the Access tab's proxy details
+  card printed the proxy type and authentication as Rust debug output, such
+  as `Http` and `Basic { username: "..." }`. It now shows translated labels:
+  HTTP, HTTPS or SOCKS5, and None or Basic with the username.
 
 
 ### Added
