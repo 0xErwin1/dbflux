@@ -293,9 +293,9 @@ impl GeneralSection {
 
     fn theme_items() -> Vec<DropdownItem> {
         vec![
-            DropdownItem::new("Ayu Dark"),
-            DropdownItem::new("Ayu Mirage"),
-            DropdownItem::new("Ayu Light"),
+            DropdownItem::new(dbflux_i18n::t!("settings.general.theme.option.ayu_dark")),
+            DropdownItem::new(dbflux_i18n::t!("settings.general.theme.option.ayu_mirage")),
+            DropdownItem::new(dbflux_i18n::t!("settings.general.theme.option.ayu_light")),
         ]
     }
 
@@ -481,6 +481,36 @@ mod tests {
             .collect();
 
         assert_eq!(labels, vec!["Ayu Dark", "Ayu Mirage", "Ayu Light"]);
+    }
+
+    #[test]
+    fn theme_option_keys_resolve_in_every_locale_and_keep_the_ayu_family_name() {
+        let keys = [
+            "settings.general.theme.option.ayu_dark",
+            "settings.general.theme.option.ayu_mirage",
+            "settings.general.theme.option.ayu_light",
+        ];
+
+        for key in keys {
+            for locale in ["en", "es", "ko", "zh_Hans"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(
+                    value.starts_with("Ayu "),
+                    "{key} must keep the Ayu name in {locale}, got {value:?}"
+                );
+                assert_ne!(value, format!("{locale}.{key}"));
+            }
+        }
+
+        assert_eq!(
+            dbflux_i18n::t!("settings.general.theme.option.ayu_mirage", locale = "es"),
+            "Ayu Mirage"
+        );
+        assert_ne!(
+            dbflux_i18n::t!("settings.general.theme.option.ayu_dark", locale = "en"),
+            dbflux_i18n::t!("settings.general.theme.option.ayu_dark", locale = "es")
+        );
     }
 
     #[test]

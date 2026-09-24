@@ -43,6 +43,16 @@ All notable changes to DBFlux will be documented in this file.
   as `Http` and `Basic { username: "..." }`. It now shows translated labels:
   HTTP, HTTPS or SOCKS5, and None or Basic with the username.
 
+* **Remaining English-only labels are translated** — the command palette
+  footer and its "no saved charts" warning, the key-value encoding picker and
+  size labels, the audit viewer's filter options, time zone, placeholders and
+  row range, the time-range "Custom…" picker, the visual query builder section
+  titles, the theme, audit log level and MCP client badges in Settings, the
+  object preview's text kind, and the MCP approvals requester and actor lines
+  now follow the selected language. SQL keywords in section titles keep their
+  SQL spelling. The palette footer no longer advertises an "open in new tab"
+  shortcut that did nothing.
+
 
 ### Added
 

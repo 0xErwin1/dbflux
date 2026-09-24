@@ -3984,10 +3984,12 @@ mod tests {
             "document.object_browser.preview.body.svg_missing_root",
             "document.object_browser.preview.body.image_header_error",
             "document.object_browser.preview.body.image_decode_error",
+            "document.object_browser.preview.body.text_kind.json",
+            "document.object_browser.preview.body.text_kind.text",
         ];
 
         for key in keys {
-            for locale in ["en", "es"] {
+            for locale in ["en", "es", "ko", "zh_Hans"] {
                 let value = dbflux_i18n::t!(key, locale = locale);
 
                 assert!(!value.is_empty(), "{key} resolved empty in {locale}");
@@ -5559,6 +5561,8 @@ mod tests {
             "document.governance.reject",
             "document.governance.select_prompt",
             "document.governance.load_failed",
+            "document.governance.semantics_preview",
+            "document.governance.pending_actor",
             "document.shared.result_warnings.context.query",
             "document.shared.result_warnings.context.table_browse",
             "document.shared.result_warnings.context.visual_query",
