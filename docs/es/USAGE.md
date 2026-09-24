@@ -74,6 +74,12 @@ Los hooks de conexión (si están configurados) se ejecutan en las fases
 PreConnect, PostConnect, PreDisconnect y PostDisconnect. Ver el resumen de
 Settings para dónde se definen los hooks.
 
+Si un intento de conexión falla, el error aparece en un toast y la fila de la
+conexión conserva un ícono de error rojo. Pasa el puntero sobre el ícono para
+leer el error. Elige **Reintentar** en el menú contextual de la fila, o presiona `Enter`
+sobre la fila, para volver a conectar. La marca se borra cuando empieza un nuevo
+intento, cuando la conexión tiene éxito o cuando editas la conexión.
+
 ---
 
 ## 2. Explorar el schema

@@ -52,6 +52,17 @@ All notable changes to DBFlux will be documented in this file.
   matches anywhere in the key. The header count now reads as the number of
   keys on the current page instead of implying a total.
 
+* **Sidebar menus and failed connections** — the Databases folder, the
+  instance metric and inspector folders, and the metric, inspector and
+  Instance Overview leaves now open their context menu from right click and
+  the row button, as `m` already did, and **Open** on those leaves opens them.
+  A failed connect now leaves a red error icon on the connection row, with the
+  error in its tooltip and **Retry** in its menu, until a new attempt starts,
+  the connection succeeds, or the connection is edited. The Saved Charts
+  folder no longer offers a **New Saved Chart…** entry that did nothing, and
+  index, foreign key and custom type rows offer no menu when the driver
+  cannot generate SQL for them.
+
 * **Driver picker arrow keys land on the card you see** — Up and Down in the
   Connection Manager driver picker moved four cards at a time while the window
   showed two per row, so the cursor landed on an unrelated driver. Each

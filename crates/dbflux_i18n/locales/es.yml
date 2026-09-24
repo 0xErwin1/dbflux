@@ -3430,6 +3430,7 @@ sidebar:
     generate_query: Generar consulta
     drop_collection: Eliminar colección
     connect: Conectar
+    retry_connect: Reintentar
     disconnect: Desconectar
     edit: Editar
     duplicate: Duplicar
@@ -3453,7 +3454,6 @@ sidebar:
     schema_diff_unsupported: La comparación de esquemas solo está disponible para conexiones relacionales.
     new_dashboard: Nuevo dashboard...
     import_dashboard: Importar dashboard desde JSON...
-    new_saved_chart: Nuevo gráfico...
     rename_ellipsis: Renombrar...
     delete_ellipsis: Eliminar...
     copy_metric_id: Copiar ID de métrica
@@ -3598,6 +3598,7 @@ sidebar:
       profile_connecting: "Conectando a %{name}…"
       database_loading: "%{name} (cargando…)"
       error_retry: "Error: %{error} — clic para reintentar"
+      connect_failed: "Error de conexión: %{error}"
       remote_listing_count: "%{label} (%{count})"
       remote_dashboards_error_retry: "Error: %{error} — colapsa y expande para reintentar"
       used_by_objects:

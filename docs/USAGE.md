@@ -67,6 +67,12 @@ by the driver connect and an initial schema fetch. Connection hooks (if
 configured) run at the PreConnect, PostConnect, PreDisconnect, and PostDisconnect
 phases. See the Settings overview for where hooks are defined.
 
+If a connection attempt fails, the error appears in a toast and the connection
+row keeps a red error icon. Hover the icon to read the error. Choose **Retry**
+from the row's context menu, or press `Enter` on the row, to connect again. The mark
+clears when a new attempt starts, when the connection succeeds, or when you edit
+the connection.
+
 ---
 
 ## 2. Browsing the Schema
