@@ -141,8 +141,14 @@ pub fn run_export(
 
         let was_cancelled = report.outcome == TransferOutcome::Cancelled;
         warnings.extend(report.warnings);
-        table_statuses[index].status = TableTransferStatus::Completed {
-            rows: report.rows_transferred,
+        table_statuses[index].status = if was_cancelled {
+            TableTransferStatus::Cancelled {
+                rows: report.rows_transferred,
+            }
+        } else {
+            TableTransferStatus::Completed {
+                rows: report.rows_transferred,
+            }
         };
 
         manifest_tables.push(ManifestTable {
@@ -452,6 +458,12 @@ mod tests {
         .unwrap();
 
         assert!(outcome.cancelled);
+        assert_eq!(
+            outcome.tables[0].status,
+            TableTransferStatus::Cancelled { rows: 1 },
+            "the table in flight when the cancel arrived must report the rows it wrote"
+        );
+        assert_eq!(outcome.tables[1].status, TableTransferStatus::NotStarted);
         assert!(
             outcome.manifest.is_none(),
             "a cancelled export must not write a manifest"

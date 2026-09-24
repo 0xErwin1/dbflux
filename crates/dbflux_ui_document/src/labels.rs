@@ -1714,6 +1714,11 @@ pub(crate) fn import_table_status_line(table: &dbflux_transfer::import::Imported
             table = table.source_table,
             error = error
         ),
+        TableTransferStatus::Cancelled { rows } => dbflux_i18n::t!(
+            "document.import_wizard.status_line.cancelled",
+            table = table.source_table,
+            rows = rows
+        ),
         TableTransferStatus::NotStarted => dbflux_i18n::t!(
             "document.import_wizard.status_line.not_attempted",
             table = table.source_table
@@ -1793,6 +1798,11 @@ pub(crate) fn export_table_status_line(
             "document.export_wizard.status_line.failed",
             table = label,
             error = error
+        ),
+        TableTransferStatus::Cancelled { rows } => dbflux_i18n::t!(
+            "document.export_wizard.status_line.cancelled",
+            table = label,
+            rows = rows
         ),
         TableTransferStatus::NotStarted => dbflux_i18n::t!(
             "document.export_wizard.status_line.not_attempted",
@@ -1895,6 +1905,11 @@ pub(crate) fn migrate_table_status_line(
             "document.migrate_wizard.status_line.failed",
             table = table.source_table,
             error = error
+        ),
+        TableTransferStatus::Cancelled { rows } => dbflux_i18n::t!(
+            "document.migrate_wizard.status_line.cancelled",
+            table = table.source_table,
+            rows = rows
         ),
         TableTransferStatus::NotStarted => dbflux_i18n::t!(
             "document.migrate_wizard.status_line.not_attempted",
@@ -5081,6 +5096,7 @@ mod tests {
             TableTransferStatus::Failed {
                 error: "boom".to_string(),
             },
+            TableTransferStatus::Cancelled { rows: 3 },
             TableTransferStatus::NotStarted,
         ];
         for status in statuses {
@@ -5218,6 +5234,7 @@ mod tests {
             TableTransferStatus::Failed {
                 error: "boom".to_string(),
             },
+            TableTransferStatus::Cancelled { rows: 3 },
             TableTransferStatus::NotStarted,
         ];
         for status in statuses {
@@ -5516,6 +5533,7 @@ mod tests {
             TableTransferStatus::Failed {
                 error: "boom".to_string(),
             },
+            TableTransferStatus::Cancelled { rows: 3 },
             TableTransferStatus::NotStarted,
         ];
         for status in statuses {

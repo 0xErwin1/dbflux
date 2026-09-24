@@ -20,6 +20,15 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **Cancelled import and migration tables** — after a cancel, the Done screen
+  of the import and migrate wizards lists every table, and the table the
+  cancel stopped shows as cancelled with the rows it kept instead of
+  completed. An import whose connection closed just before the run started
+  now reports the error and returns to the configure step, where it used to
+  sit on a running screen whose Cancel did nothing. The import configure step
+  scrolls its table list, so a bundle with many tables no longer overflows
+  the dialog.
+
 * `F5` now refreshes the focused document (table data, bucket list, object
   listing, key browser), and the audit viewer's `r` refreshes the audit list
   instead of the connection schema. The buckets empty state showed `r refresh`,

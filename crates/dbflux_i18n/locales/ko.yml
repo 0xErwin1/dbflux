@@ -1383,6 +1383,7 @@ document:
       skipped: "%{table}: 건너뜀"
       failed: "%{table}: 실패 — %{error}"
       not_attempted: "%{table}: 시도하지 않음"
+      cancelled: "%{table}: %{rows}행 처리 후 취소됨"
     footer:
       back: 뒤로
       continue: 계속
@@ -1461,6 +1462,7 @@ document:
       skipped: "%{table}: 건너뜀"
       failed: "%{table}: 실패 — %{error}"
       not_attempted: "%{table}: 시도하지 않음"
+      cancelled: "%{table}: %{rows}행 처리 후 취소됨"
   instance_inspector:
     task_label: "검사기: %{metric_id}"
     connection_not_found: 연결을 찾을 수 없습니다
@@ -1702,6 +1704,7 @@ document:
       skipped: "%{table}: 건너뜀"
       failed: "%{table}: 실패 — %{error}"
       not_attempted: "%{table}: 시도하지 않음"
+      cancelled: "%{table}: %{rows}행 처리 후 취소됨"
     mapping:
       target_placeholder: 대상 테이블
       mode_placeholder: 모드
