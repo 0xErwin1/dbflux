@@ -15,9 +15,11 @@ impl Workspace {
             Command::ExportConnections => {
                 // Export is now per-connection: it is initiated from a
                 // connection's three-dots menu, which carries the profile id.
-                dbflux_ui_base::toast::Toast::info("Export a connection from its menu")
-                    .body("Right-click a connection in the sidebar and choose Export.")
-                    .push(cx);
+                dbflux_ui_base::toast::Toast::info(dbflux_i18n::t!(
+                    "connections.toast.export_from_menu"
+                ))
+                .body(dbflux_i18n::t!("connections.toast.export_from_menu_body"))
+                .push(cx);
                 Some(true)
             }
             Command::Disconnect => {

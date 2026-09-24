@@ -1313,7 +1313,7 @@ impl DataGridPanel {
         let refresh_dropdown = cx.new(|_cx| {
             let items: Vec<DropdownItem> = RefreshPolicy::ALL
                 .iter()
-                .map(|policy| DropdownItem::new(policy.label()))
+                .map(|policy| DropdownItem::new(crate::labels::refresh_policy_label(*policy)))
                 .collect();
 
             Dropdown::new("data-grid-auto-refresh")

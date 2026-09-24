@@ -176,14 +176,29 @@ impl TimeRangePanel {
     // ── Preset mapping ────────────────────────────────────────────────────────
 
     pub fn preset_items() -> Vec<DropdownItem> {
-        vec![
-            DropdownItem::new("15m"),
-            DropdownItem::new("1h"),
-            DropdownItem::new("6h"),
-            DropdownItem::new("24h"),
-            DropdownItem::new("7d"),
-            DropdownItem::new(dbflux_i18n::t!("common.time_range.preset.custom")),
+        [
+            TimeRange::Last15min,
+            TimeRange::LastHour,
+            TimeRange::Last6Hours,
+            TimeRange::Last24Hours,
+            TimeRange::Last7Days,
+            TimeRange::Custom,
         ]
+        .into_iter()
+        .map(|range| DropdownItem::new(Self::preset_label(range)))
+        .collect()
+    }
+
+    /// Translated short label for a preset (e.g. `"15m"`, `"24h"` in English).
+    pub fn preset_label(range: TimeRange) -> String {
+        match range {
+            TimeRange::Last15min => dbflux_i18n::t!("common.time_range.preset.last_15_minutes"),
+            TimeRange::LastHour => dbflux_i18n::t!("common.time_range.preset.last_hour"),
+            TimeRange::Last6Hours => dbflux_i18n::t!("common.time_range.preset.last_6_hours"),
+            TimeRange::Last24Hours => dbflux_i18n::t!("common.time_range.preset.last_24_hours"),
+            TimeRange::Last7Days => dbflux_i18n::t!("common.time_range.preset.last_7_days"),
+            TimeRange::Custom => dbflux_i18n::t!("common.time_range.preset.custom"),
+        }
     }
 
     pub fn time_range_for_index(index: usize) -> Option<TimeRange> {
@@ -198,18 +213,14 @@ impl TimeRangePanel {
         }
     }
 
-    /// Returns the short label string for a preset index (e.g. `"15m"`, `"24h"`).
+    /// Returns the translated short label for a preset index (e.g. `"15m"`,
+    /// `"24h"` in English).
     ///
     /// Returns `None` for unknown indices (index >= 6 or Custom = 5).
-    pub fn label_for_index(index: usize) -> Option<&'static str> {
-        match index {
-            0 => Some("15m"),
-            1 => Some("1h"),
-            2 => Some("6h"),
-            3 => Some("24h"),
-            4 => Some("7d"),
-            _ => None,
-        }
+    pub fn label_for_index(index: usize) -> Option<String> {
+        Self::time_range_for_index(index)
+            .filter(|range| *range != TimeRange::Custom)
+            .map(Self::preset_label)
     }
 
     /// Returns the lookback duration in milliseconds for a preset index.
@@ -527,6 +538,67 @@ mod tests {
                 "index {index} should map to {expected:?}"
             );
         }
+    }
+
+    const PRESET_KEYS: [(TimeRange, &str); 6] = [
+        (
+            TimeRange::Last15min,
+            "common.time_range.preset.last_15_minutes",
+        ),
+        (TimeRange::LastHour, "common.time_range.preset.last_hour"),
+        (
+            TimeRange::Last6Hours,
+            "common.time_range.preset.last_6_hours",
+        ),
+        (
+            TimeRange::Last24Hours,
+            "common.time_range.preset.last_24_hours",
+        ),
+        (TimeRange::Last7Days, "common.time_range.preset.last_7_days"),
+        (TimeRange::Custom, "common.time_range.preset.custom"),
+    ];
+
+    #[test]
+    fn preset_label_maps_every_variant_to_a_key_in_every_locale() {
+        for (range, key) in PRESET_KEYS {
+            assert_eq!(TimeRangePanel::preset_label(range), dbflux_i18n::t!(key));
+
+            for locale in ["en", "es", "ko", "zh_Hans"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(
+                    !value.is_empty() && value != key && value != format!("{locale}.{key}"),
+                    "{locale} missing for {key}"
+                );
+            }
+        }
+
+        assert_eq!(
+            dbflux_i18n::t!("common.time_range.preset.last_24_hours", locale = "en"),
+            "24h"
+        );
+        assert_ne!(
+            dbflux_i18n::t!("common.time_range.preset.last_24_hours", locale = "en"),
+            dbflux_i18n::t!("common.time_range.preset.last_24_hours", locale = "ko")
+        );
+    }
+
+    #[test]
+    fn preset_items_and_label_for_index_follow_the_preset_order() {
+        let items = TimeRangePanel::preset_items();
+
+        assert_eq!(items.len(), PRESET_KEYS.len());
+
+        for (index, (range, _)) in PRESET_KEYS.iter().enumerate() {
+            let label = TimeRangePanel::preset_label(*range);
+
+            assert_eq!(items[index].label.as_ref(), label);
+
+            let expected = (*range != TimeRange::Custom).then_some(label);
+            assert_eq!(TimeRangePanel::label_for_index(index), expected);
+        }
+
+        assert_eq!(TimeRangePanel::label_for_index(6), None);
     }
 
     #[test]

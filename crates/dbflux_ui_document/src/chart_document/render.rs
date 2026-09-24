@@ -92,7 +92,8 @@ impl Render for ChartDocument {
         //   Index 3 = Last24Hours (all other sources — default)
         if self.time_range_panel.is_none() {
             let preset_index = self.initial_time_range_index;
-            let label = TimeRangePanel::label_for_index(preset_index).unwrap_or("24h");
+            let label = TimeRangePanel::label_for_index(preset_index)
+                .unwrap_or_else(|| TimeRangePanel::preset_label(TimeRange::Last24Hours));
             let panel = cx.new(|cx| TimeRangePanel::new(label, Some(preset_index), window, cx));
 
             let time_range_sub = cx.subscribe(

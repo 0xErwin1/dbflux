@@ -16,6 +16,10 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Changed
 
+* SQLite explicit row limits retain at most N rows of any single row-producing statement (including `PRAGMA`, `WITH`, `VALUES`, and `RETURNING`) and flag actual omissions, including at zero; the statement still runs to completion, so mutations finish and late errors propagate. Explicit timeouts, bounded multi-statement batches, and bounded instance requests are refused before execution; unbounded requests remain compatible. The row cap does not bound memory, engine work, or elapsed time.
+
+* MySQL/MariaDB explicit row limits retain at most N rows across script/server result sets and flag actual omissions, including at zero; later mutations finish and errors propagate. Explicit timeouts and bounded instance requests are refused before execution; unbounded requests remain compatible. The row cap does not bound bytes, server work, engine allocation, or elapsed time; hosted MariaDB was not verified.
+
 * ClickHouse and Redshift now refuse explicit query row limits (including zero) and statement timeouts before dispatch or preparation; unprotected queries retain existing behavior, including possible full-result buffering. ClickHouse HTTP timeout does not guarantee server cancellation, and the Redshift early-refusal regression uses PostgreSQL 16 protocol compatibility rather than a hosted Redshift cluster.
 
 ### Fixed
@@ -35,6 +39,13 @@ All notable changes to DBFlux will be documented in this file.
   drops them: the refresh key, the toolbar button and the command palette show
   a warning to save or revert first, and auto-refresh skips its tick.
 
+* **SSO wizard account and role labels** — the account-ID and role inputs on
+  the AWS SSO wizard's second and third steps had only placeholders. They now
+  have visible labels, which are also their accessible names, and stable
+  `sso-field-account-id` and `sso-field-role-name` ids, like the first step.
+  The login modal's waiting indicator now animates while it waits for the
+  browser; the elapsed caption still counts whole wall-clock seconds.
+
 * UI automation: `set_text` and `set_value` now fill a text input addressed by
   its element id, and `click_element` accepts text inputs and focuses them for
   `type_text`. Previously both failed on every input, `set_text` with a
@@ -47,10 +58,26 @@ All notable changes to DBFlux will be documented in this file.
   extras already bound when a connection is edited, is reachable with j/k, and
   is addressable as `cm-setting-<phase>_hook_extra`.
 
+* **More English-only labels are translated** — the audit viewer's tab title,
+  filter-bar labels and its category and level chips, the "Off" and "Custom"
+  auto-refresh options, the Default and Compact style options in Settings, the
+  short time-range presets (15m, 1h, 6h, 24h, 7d), and the dashboard-import
+  and export-connection toasts now follow the selected language. Object-storage
+  audit events showed a `NULL` category chip; they now show their category.
+
 * The SQL editor warns once when any delivered result set actually omitted rows; the
   data grid shows the warning for its selected result set, even when no rows were
   retained. A result that merely fills its limit is not flagged, and discarded
   stale executions do not raise omission warnings.
+
+* **Cancelled import and migration tables** — after a cancel, the Done screen
+  of the import and migrate wizards lists every table, and the table the
+  cancel stopped shows as cancelled with the rows it kept instead of
+  completed. An import whose connection closed just before the run started
+  now reports the error and returns to the configure step, where it used to
+  sit on a running screen whose Cancel did nothing. The import configure step
+  scrolls its table list, so a bundle with many tables no longer overflows
+  the dialog.
 
 * Redis, Turso, and InfluxDB now refuse requested row limits (including zero)
   or statement timeouts before execution with `NotSupported`, rather than
@@ -58,6 +85,13 @@ All notable changes to DBFlux will be documented in this file.
   protections. Unprotected execution remains available; the default editor
   cannot promise these protections on these backends.
   
+* **Checkbox names in Settings and the Connection Manager** — every checkbox in
+  the Settings window and the Connection Manager now has the text shown next to
+  it as its accessible name. In Settings > General all eight checkboxes
+  (`vim-mode`, `restore-session`, `requires-preview`, ...) had no name, so a
+  screen reader announced a bare checkbox and UI automation could only find them
+  by id. Element ids and behavior are unchanged.
+
 * **Audit export asks where to save** — exporting from the audit viewer now
   opens the same save dialog as the other exports, with a timestamped default
   name (`audit_export_<YYYYMMDD-HHMMSS>.<csv|json>`), instead of writing to a
@@ -320,6 +354,12 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **Modal footers no longer cover the body** — the shared modal shell sized its
+  body to its 96 px minimum instead of its content, so the footer covered the
+  end of any taller body, such as the connection name in the Delete connection
+  dialog. The body now grows to fit its content and scrolls only when the
+  dialog reaches its maximum height.
+
 * **Missing PostgreSQL relations no longer open as empty tables** — asking a
   PostgreSQL connection for the details of a table or view that does not exist
   returned an empty structure instead of an error, so the grid showed a blank
@@ -354,6 +394,19 @@ All notable changes to DBFlux will be documented in this file.
   declared scale (`1123.40`), very large or very precise values, and `NaN`,
   `Infinity`, and `-Infinity`. A value that still cannot be decoded is reported
   as an unsupported type instead of passing for `NULL`.
+
+* **PostgreSQL values that cannot be decoded no longer show as `NULL`** —
+  `infinity` and `-infinity` dates and timestamps, and any other value the
+  driver could not decode, read back as `NULL` in query results, table
+  browsing, MCP `select_data`, exports, and the rows returned after an insert,
+  update, or delete. Infinite dates and timestamps now show as `infinity` and
+  `-infinity`, as PostgreSQL prints them. A value that still cannot be decoded
+  is reported as an unsupported type and flags the result, and a real SQL
+  `NULL` shows as `NULL` for every column type, including types without a
+  decoder. The instance inspectors log the column and type of a cell they
+  cannot decode and show it as unsupported. `numeric[]` arrays now show their
+  exact decimals; `money` stays unsupported because its scale depends on the
+  server's `lc_monetary` setting.
 
 * **The inspector rail follows the active tab** — switching to a tab, or
   closing the active one, could leave the right-side rail showing the row

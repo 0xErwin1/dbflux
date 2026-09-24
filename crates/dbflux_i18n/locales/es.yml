@@ -70,6 +70,11 @@ chart:
 common:
   time_range:
     preset:
+      last_15_minutes: "15m"
+      last_hour: "1h"
+      last_6_hours: "6h"
+      last_24_hours: "24h"
+      last_7_days: "7d"
       custom: "Personalizado…"
     picker:
       date_range_placeholder: "Seleccionar rango de fechas"
@@ -498,6 +503,8 @@ connections:
     manager_title: Administrador de conexiones
     edit_title: Editar conexión
   toast:
+    export_from_menu: "Exporta una conexión desde su menú"
+    export_from_menu_body: "Haz clic derecho en una conexión de la barra lateral y elige Exportar."
     disconnecting: "Desconectando de %{name}..."
     no_active_connection: No hay conexión activa
     refreshing_schema: Actualizando esquema...
@@ -514,6 +521,24 @@ diagnostics:
   shutdown_flush_timed_out: "Es posible que algunas ediciones no hayan llegado a sus archivos: DBFlux se quedó sin tiempo para guardarlas al salir. Se conservan en el session store para recuperarlas."
 document:
   audit:
+    title: "Auditoría"
+    category_chip:
+      config: "CONFIG"
+      connection: "CONEX"
+      query: "CONSULTA"
+      hook: "HOOK"
+      script: "SCRIPT"
+      system: "SIST"
+      mcp: "MCP"
+      governance: "GOB"
+      object_storage: "ALMAC"
+    level_chip:
+      trace: "TRAZA"
+      debug: "DEPUR"
+      info: "INFO"
+      warn: "AVISO"
+      error: "ERROR"
+      fatal: "FATAL"
     pager:
       range: "%{start}-%{end} de %{total} %{unit}"
     actor:
@@ -563,6 +588,16 @@ document:
       summary: Resumen
       time: Hora
     filter:
+      bar:
+        search: "Buscar:"
+        time: "Período:"
+        timezone: "Zona horaria:"
+        range: "Rango:"
+        start_hour: "Hora de inicio:"
+        start_minute: "Minuto de inicio:"
+        end_hour: "Hora de fin:"
+        end_minute: "Minuto de fin:"
+        auto_refresh: "Actualización automática:"
       timezone:
         local: "Local"
         utc: "UTC"
@@ -1384,6 +1419,7 @@ document:
       skipped: "%{table}: omitida"
       failed: "%{table}: FALLIDA — %{error}"
       not_attempted: "%{table}: no intentada"
+      cancelled: "%{table}: cancelada tras %{rows} fila(s)"
     footer:
       back: Atrás
       continue: Continuar
@@ -1462,6 +1498,7 @@ document:
       skipped: "%{table}: omitida"
       failed: "%{table}: FALLIDA — %{error}"
       not_attempted: "%{table}: no intentada"
+      cancelled: "%{table}: cancelada tras %{rows} fila(s)"
   instance_inspector:
     task_label: "Inspector: %{metric_id}"
     connection_not_found: Conexión no encontrada
@@ -1703,6 +1740,7 @@ document:
       skipped: "%{table}: omitida"
       failed: "%{table}: FALLIDA — %{error}"
       not_attempted: "%{table}: no intentada"
+      cancelled: "%{table}: cancelada tras %{rows} fila(s)"
     mapping:
       target_placeholder: Tabla destino
       mode_placeholder: Modo
@@ -2703,6 +2741,9 @@ settings:
       label: Tema
     style:
       label: Estilo
+      option:
+        default: "Predeterminado"
+        compact: "Compacto"
     language:
       label: Idioma
       option:
@@ -3751,6 +3792,8 @@ sso_wizard:
     profile_name: Nombre del perfil
     start_url: URL de inicio de SSO
     region: Región
+    account_id: ID de cuenta
+    role_name: Nombre del rol
   account:
     hint: Usa el ID de cuenta obtenido con el descubrimiento de cuentas de AWS SSO
     discovering: Descubriendo cuentas...

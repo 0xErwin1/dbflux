@@ -1549,6 +1549,9 @@ impl HooksSection {
                         .child(
                             Checkbox::new("hook-lua-logging")
                                 .checked(self.hook_lua_logging)
+                                .aria_label(dbflux_i18n::t!(
+                                    "settings.hooks.form.capability.logging"
+                                ))
                                 .on_click(cx.listener(|this, checked: &bool, _, cx| {
                                     this.hook_lua_logging = *checked;
                                     cx.notify();
@@ -1571,6 +1574,9 @@ impl HooksSection {
                         .child(
                             Checkbox::new("hook-lua-env-read")
                                 .checked(self.hook_lua_env_read)
+                                .aria_label(dbflux_i18n::t!(
+                                    "settings.hooks.form.capability.env_read"
+                                ))
                                 .on_click(cx.listener(|this, checked: &bool, _, cx| {
                                     this.hook_lua_env_read = *checked;
                                     cx.notify();
@@ -1593,6 +1599,9 @@ impl HooksSection {
                         .child(
                             Checkbox::new("hook-lua-connection-metadata")
                                 .checked(self.hook_lua_connection_metadata)
+                                .aria_label(dbflux_i18n::t!(
+                                    "settings.hooks.form.capability.connection_metadata"
+                                ))
                                 .on_click(cx.listener(|this, checked: &bool, _, cx| {
                                     this.hook_lua_connection_metadata = *checked;
                                     cx.notify();
@@ -1615,6 +1624,9 @@ impl HooksSection {
                         .child(
                             Checkbox::new("hook-lua-process-run")
                                 .checked(self.hook_lua_process_run)
+                                .aria_label(dbflux_i18n::t!(
+                                    "settings.hooks.form.capability.process_run"
+                                ))
                                 .on_click(cx.listener(|this, checked: &bool, _, cx| {
                                     this.hook_lua_process_run = *checked;
                                     cx.notify();
@@ -1642,6 +1654,7 @@ impl HooksSection {
                     .child(
                         Checkbox::new("hook-lua-logging")
                             .checked(self.hook_lua_logging)
+                            .aria_label(dbflux_i18n::t!("settings.hooks.form.capability.logging"))
                             .on_click(cx.listener(|this, checked: &bool, _, cx| {
                                 this.hook_lua_logging = *checked;
                                 cx.notify();
@@ -1659,6 +1672,7 @@ impl HooksSection {
                     .child(
                         Checkbox::new("hook-lua-env-read")
                             .checked(self.hook_lua_env_read)
+                            .aria_label(dbflux_i18n::t!("settings.hooks.form.capability.env_read"))
                             .on_click(cx.listener(|this, checked: &bool, _, cx| {
                                 this.hook_lua_env_read = *checked;
                                 cx.notify();
@@ -1676,6 +1690,9 @@ impl HooksSection {
                     .child(
                         Checkbox::new("hook-lua-connection-metadata")
                             .checked(self.hook_lua_connection_metadata)
+                            .aria_label(dbflux_i18n::t!(
+                                "settings.hooks.form.capability.connection_metadata"
+                            ))
                             .on_click(cx.listener(|this, checked: &bool, _, cx| {
                                 this.hook_lua_connection_metadata = *checked;
                                 cx.notify();
@@ -1693,6 +1710,9 @@ impl HooksSection {
                     .child(
                         Checkbox::new("hook-lua-process-run")
                             .checked(self.hook_lua_process_run)
+                            .aria_label(dbflux_i18n::t!(
+                                "settings.hooks.form.capability.process_run"
+                            ))
                             .on_click(cx.listener(|this, checked: &bool, _, cx| {
                                 this.hook_lua_process_run = *checked;
                                 cx.notify();
@@ -2037,6 +2057,7 @@ impl HooksSection {
                             .child(
                                 Checkbox::new("hook-enabled")
                                     .checked(self.hook_enabled)
+                                    .aria_label(dbflux_i18n::t!("settings.hooks.form.enabled"))
                                     .on_click(cx.listener(|this, checked: &bool, _, cx| {
                                         this.hook_enabled = *checked;
                                         cx.notify();
@@ -2056,6 +2077,7 @@ impl HooksSection {
                                 .child(
                                     Checkbox::new("hook-inherit-env")
                                         .checked(self.hook_inherit_env)
+                                        .aria_label(dbflux_i18n::t!("settings.hooks.form.inherit_env"))
                                         .on_click(cx.listener(|this, checked: &bool, _, cx| {
                                             this.hook_inherit_env = *checked;
                                             cx.notify();

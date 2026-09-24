@@ -291,7 +291,7 @@ impl Workspace {
         let doc = cx.new(|cx| {
             use crate::ui::document::DashboardDocument;
             use crate::ui::document::DashboardPanelSlot;
-            use dbflux_components::common::time_range::view::TimeRangePanel;
+            use dbflux_components::common::time_range::{TimeRange, TimeRangePanel};
 
             // Build panel slots: Loaded when a Query/Metric-source chart exists,
             // Orphan otherwise. Grid position is carried on every slot so
@@ -397,13 +397,14 @@ impl Workspace {
             // available; fall back to Last24Hours (index 3) when the dashboard
             // has no stored preset.
             use dbflux_components::saved_chart::TimeRangePreset;
-            let (preset_placeholder, preset_index) = match dashboard.shared_time_range_preset {
-                Some(TimeRangePreset::Last15min) => ("15m", Some(0usize)),
-                Some(TimeRangePreset::LastHour) => ("1h", Some(1)),
-                Some(TimeRangePreset::Last6Hours) => ("6h", Some(2)),
-                Some(TimeRangePreset::Last24Hours) | None => ("24h", Some(3)),
-                Some(TimeRangePreset::Last7Days) => ("7d", Some(4)),
+            let (preset_range, preset_index) = match dashboard.shared_time_range_preset {
+                Some(TimeRangePreset::Last15min) => (TimeRange::Last15min, Some(0usize)),
+                Some(TimeRangePreset::LastHour) => (TimeRange::LastHour, Some(1)),
+                Some(TimeRangePreset::Last6Hours) => (TimeRange::Last6Hours, Some(2)),
+                Some(TimeRangePreset::Last24Hours) | None => (TimeRange::Last24Hours, Some(3)),
+                Some(TimeRangePreset::Last7Days) => (TimeRange::Last7Days, Some(4)),
             };
+            let preset_placeholder = TimeRangePanel::preset_label(preset_range);
             let shared_time_range =
                 cx.new(|cx| TimeRangePanel::new(preset_placeholder, preset_index, window, cx));
 
@@ -786,7 +787,7 @@ impl Workspace {
         use dbflux_components::chart::{
             AxisKind, AxisSpec, BindingSpec, ChartKind, ChartSpec, YScale,
         };
-        use dbflux_components::common::time_range::view::TimeRangePanel;
+        use dbflux_components::common::time_range::{TimeRange, TimeRangePanel};
         use dbflux_components::saved_chart::{MetricSeries, SavedChart, SavedChartRefreshPolicy};
 
         let doc = cx.new(|cx| {
@@ -887,7 +888,14 @@ impl Workspace {
                 })
                 .collect();
 
-            let shared_time_range = cx.new(|cx| TimeRangePanel::new("24h", Some(3), window, cx));
+            let shared_time_range = cx.new(|cx| {
+                TimeRangePanel::new(
+                    TimeRangePanel::preset_label(TimeRange::Last24Hours),
+                    Some(3),
+                    window,
+                    cx,
+                )
+            });
 
             DashboardDocument::new(
                 dashboard_id,

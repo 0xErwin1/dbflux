@@ -21,6 +21,16 @@ Base de datos embebida basada en archivos.
   ejecutan sentencia por sentencia, cada una a través del camino preparado
   tipado, devolviendo un result set por sentencia. (`rusqlite::prepare` solo
   parsea la primera sentencia de un string, así que un script debe dividirse.)
+- Aplica el límite de filas solicitado en toda sentencia única que produce filas
+  (`SELECT`, `PRAGMA`, `EXPLAIN`, `WITH ... SELECT`, `VALUES` y DML con
+  `RETURNING`) reteniendo solo las filas pedidas durante la iteración: la iteración drena hasta el final, así que
+  los efectos de una mutación siempre se completan, un error tardío por fila
+  aún se propaga, y el resultado informa cuando se omitieron filas.
+- Rechaza, antes de cualquier preparación o ejecución, los pedidos que no puede
+  acotar de forma segura: un lote multi-sentencia combinado con un límite de
+  filas (los comentarios o punto y coma finales no crean un lote), un pedido con
+  límite de filas dirigido a instance metrics o inspectors, y un statement
+  timeout solicitado.
 - Motor de transferencia de datos: carga masiva nativa multi-fila con `INSERT`
   (`BULK_INSERT`), DDL `CREATE TABLE` nativo del driver a partir de las columnas
   de una tabla origen, y un toggle de integridad referencial por conexión
@@ -30,6 +40,29 @@ Base de datos embebida basada en archivos.
 
 - Driver solo de archivo local; sin transporte de red, túnel SSH, ni modo
   TLS/SSL.
+- El límite de filas solicitado es un tope de retención, no un límite del
+  motor: la sentencia sigue ejecutándose hasta el final dentro del motor
+  embebido, todas las filas que pasan el tope se observan y descartan, y no se
+  aplica ningún presupuesto de bytes, memoria ni tiempo — las asignaciones del
+  sorter y de `RETURNING` no están acotadas por el tope. Una mutación con
+  límite de filas completa todos sus efectos.
+- Los pedidos acotados (con límite de filas) no pueden ejecutar lotes
+  multi-sentencia: preparar o ejecutar un lote puede ejecutar sentencias
+  anteriores antes de que un tope pudiera aplicarse, así que esos pedidos se
+  rechazan antes de preparar cualquier sentencia. Los lotes sin límite mantienen
+  el comportamiento previo de división y ejecución. Una sentencia única acotada
+  con comentarios o punto y coma finales no se trata como un lote.
+- Sin límite de filas, `WITH ... SELECT`, `VALUES` y DML con `RETURNING`
+  mantienen el comportamiento previo: reportan un error de ejecución no
+  soportada después de que la sentencia ya se ejecutó.
+- Un pedido con límite de filas dirigido a las instance metrics o inspectors
+  del driver se rechaza antes del lock de conexión o de cualquier dispatch — el
+  tipo público de pedido puede llevar esos contextos aunque el driver no
+  anuncie instance catalog — mientras que los pedidos sin tope mantienen el
+  comportamiento existente.
+- Un statement timeout solicitado (`QueryRequest::statement_timeout`) no está
+  soportado y se rechaza antes de la ejecución. Los queries normales sin tope
+  siguen siendo cancelables por la vía de interrupción existente.
 - Driver solo SQL; no expone APIs de documentos ni de key-value.
 - El modelo de schema de SQLite no tiene un equivalente de namespace
   multi-schema del lado del servidor.
