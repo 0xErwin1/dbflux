@@ -16,7 +16,10 @@ All notable changes to DBFlux will be documented in this file.
   the row button, as `m` already did, and **Open** on those leaves opens them.
   A failed connect now leaves a red error icon on the connection row, with the
   error in its tooltip and **Retry** in its menu, until a new attempt starts,
-  the connection succeeds, or the connection is edited.
+  the connection succeeds, or the connection is edited. The Saved Charts
+  folder no longer offers a **New Saved Chart…** entry that did nothing, and
+  index, foreign key and custom type rows offer no menu when the driver
+  cannot generate SQL for them.
 
 * Redis, Turso, and InfluxDB now refuse requested row limits (including zero)
   or statement timeouts before execution with `NotSupported`, rather than

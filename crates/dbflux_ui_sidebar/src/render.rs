@@ -262,6 +262,7 @@ impl Sidebar {
         let tree_params = TreeRenderParams {
             connections: Vec::new(),
             connect_failures: HashMap::new(),
+            code_gen_capabilities: HashMap::new(),
             active_id: None,
             profile_icons: HashMap::new(),
             active_databases: HashMap::new(),
@@ -384,6 +385,14 @@ impl Render for Sidebar {
             })
             .collect();
 
+        let code_gen_capabilities: HashMap<Uuid, CodeGenCapabilities> = state
+            .connections()
+            .iter()
+            .map(|(profile_id, connected)| {
+                (*profile_id, connected.connection.code_gen_capabilities())
+            })
+            .collect();
+
         let active_databases = self.active_databases.clone();
         let sidebar_entity = cx.entity().clone();
         let multi_selection = self.multi_selection.clone();
@@ -392,6 +401,7 @@ impl Render for Sidebar {
         let tree_params = TreeRenderParams {
             connections,
             connect_failures,
+            code_gen_capabilities,
             active_id,
             profile_icons,
             active_databases,

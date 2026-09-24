@@ -1,13 +1,52 @@
 use super::*;
 use dbflux_core::DdlCapabilities;
 
-/// Whether rows of `kind` offer a context menu. Right click, the row's menu
-/// button and the keyboard menu command all consult this, and
-/// `build_context_menu_items` defines an arm for exactly these kinds.
+/// Code-generation capabilities that fill the "Generate SQL" submenu of an
+/// index row.
+const INDEX_MENU_CAPABILITIES: CodeGenCapabilities = CodeGenCapabilities::CREATE_INDEX
+    .union(CodeGenCapabilities::DROP_INDEX)
+    .union(CodeGenCapabilities::REINDEX);
+
+/// Code-generation capabilities that fill the "Generate SQL" submenu of a
+/// foreign key row.
+const FOREIGN_KEY_MENU_CAPABILITIES: CodeGenCapabilities =
+    CodeGenCapabilities::ADD_FOREIGN_KEY.union(CodeGenCapabilities::DROP_FOREIGN_KEY);
+
+/// Code-generation capabilities that fill the "Generate SQL" submenu of a
+/// custom type row.
+const CUSTOM_TYPE_MENU_CAPABILITIES: CodeGenCapabilities = CodeGenCapabilities::CREATE_TYPE
+    .union(CodeGenCapabilities::ALTER_TYPE)
+    .union(CodeGenCapabilities::DROP_TYPE);
+
+/// Whether a row of `kind` opens a context menu on a connection whose driver
+/// advertises `code_gen` (empty when the row has no connected profile).
+/// Right click, the row's menu button and the keyboard menu command all
+/// consult this, so a row never offers a menu with nothing in it.
 ///
-/// A menu may still come out empty at runtime when every entry is gated on a
-/// capability the connection lacks (generated SQL for indexes, foreign keys
-/// and custom types); opening it is then a no-op.
+/// Index, foreign key and custom type menus only hold generated SQL, so they
+/// exist only when the driver can generate some of it. A custom type whose
+/// driver can create or alter types but not drop them still gets an empty
+/// menu for a composite type, since the type kind lives in the schema cache.
+pub(crate) fn node_has_context_menu(kind: SchemaNodeKind, code_gen: CodeGenCapabilities) -> bool {
+    if !node_kind_has_context_menu(kind) {
+        return false;
+    }
+
+    match kind {
+        SchemaNodeKind::Index | SchemaNodeKind::SchemaIndex => {
+            code_gen.intersects(INDEX_MENU_CAPABILITIES)
+        }
+        SchemaNodeKind::ForeignKey | SchemaNodeKind::SchemaForeignKey => {
+            code_gen.intersects(FOREIGN_KEY_MENU_CAPABILITIES)
+        }
+        SchemaNodeKind::CustomType => code_gen.intersects(CUSTOM_TYPE_MENU_CAPABILITIES),
+        _ => true,
+    }
+}
+
+/// Whether rows of `kind` can offer a context menu at all, independent of the
+/// connection. `build_context_menu_items` defines an arm for exactly these
+/// kinds.
 pub(crate) fn node_kind_has_context_menu(kind: SchemaNodeKind) -> bool {
     match kind {
         SchemaNodeKind::ConnectionFolder
@@ -27,7 +66,6 @@ pub(crate) fn node_kind_has_context_menu(kind: SchemaNodeKind) -> bool {
         | SchemaNodeKind::DashboardsFolder
         | SchemaNodeKind::DashboardItem
         | SchemaNodeKind::RemoteDashboardsFolder
-        | SchemaNodeKind::SavedChartsFolder
         | SchemaNodeKind::SavedChartItem
         | SchemaNodeKind::InstanceMetricsFolder
         | SchemaNodeKind::InstanceMetricLeaf
@@ -52,6 +90,7 @@ pub(crate) fn node_kind_has_context_menu(kind: SchemaNodeKind) -> bool {
         | SchemaNodeKind::MetricNamespaceFolder
         | SchemaNodeKind::MetricLeaf
         | SchemaNodeKind::RemoteDashboardItem
+        | SchemaNodeKind::SavedChartsFolder
         | SchemaNodeKind::CollectionChild
         | SchemaNodeKind::CollectionChildrenMore
         | SchemaNodeKind::ColumnsFolder
@@ -204,7 +243,7 @@ impl Sidebar {
         cx: &mut Context<Self>,
     ) {
         let node_kind = parse_node_kind(item_id);
-        if !node_kind_has_context_menu(node_kind) {
+        if !node_has_context_menu(node_kind, self.get_capabilities_for_item(item_id, cx)) {
             return;
         }
 
@@ -1084,13 +1123,6 @@ impl Sidebar {
                 )]
             }
 
-            SchemaNodeKind::SavedChartsFolder => {
-                vec![ContextMenuItem::item(
-                    dbflux_i18n::t!("sidebar.menu.new_saved_chart"),
-                    ContextMenuAction::NewSavedChart,
-                )]
-            }
-
             SchemaNodeKind::DashboardItem => {
                 let mut items = Vec::new();
 
@@ -1836,11 +1868,6 @@ impl Sidebar {
                     cx.emit(SidebarEvent::RequestDuplicateDashboard { dashboard_id });
                 }
             }
-            ContextMenuAction::NewSavedChart => {
-                // No action needed from the context menu; "New Saved Chart" is only
-                // reachable by saving from a ChartDocument. The menu item is present
-                // so users discover the feature; clicking it is a no-op for now.
-            }
             ContextMenuAction::RenameSavedChart => {
                 if let Some(SchemaNodeId::SavedChartItem { chart_id, .. }) = parse_node_id(&item_id)
                 {
@@ -2154,10 +2181,9 @@ mod menu_i18n_tests {
         assert_ne!(english, spanish);
     }
 
-    const B3_KEYS: [&str; 7] = [
+    const B3_KEYS: [&str; 6] = [
         "sidebar.menu.new_dashboard",
         "sidebar.menu.import_dashboard",
-        "sidebar.menu.new_saved_chart",
         "sidebar.menu.rename_ellipsis",
         "sidebar.menu.delete_ellipsis",
         "sidebar.menu.copy_metric_id",
@@ -2193,12 +2219,13 @@ mod menu_i18n_tests {
 
 #[cfg(test)]
 mod menu_availability_tests {
-    use super::node_kind_has_context_menu;
+    use super::{node_has_context_menu, node_kind_has_context_menu};
     use crate::table_loading::object_tree_adapter_tests::{
         AdapterFakeConnection, connect_profile, register_per_database_driver, snapshot_naming,
         test_app_state,
     };
     use crate::{ContextMenuAction, Sidebar, SidebarEvent};
+    use dbflux_core::CodeGenCapabilities;
     use dbflux_core::{SchemaNodeId, SchemaNodeKind};
     use dbflux_ui_base::app_state_entity::AppStateEntity;
     use gpui::{
@@ -2276,7 +2303,7 @@ mod menu_availability_tests {
     ];
 
     /// Kinds whose rows open a context menu.
-    const KINDS_WITH_MENU: [SchemaNodeKind; 24] = [
+    const KINDS_WITH_MENU: [SchemaNodeKind; 23] = [
         SchemaNodeKind::ConnectionFolder,
         SchemaNodeKind::Profile,
         SchemaNodeKind::DatabasesFolder,
@@ -2294,7 +2321,6 @@ mod menu_availability_tests {
         SchemaNodeKind::DashboardsFolder,
         SchemaNodeKind::DashboardItem,
         SchemaNodeKind::RemoteDashboardsFolder,
-        SchemaNodeKind::SavedChartsFolder,
         SchemaNodeKind::SavedChartItem,
         SchemaNodeKind::InstanceMetricsFolder,
         SchemaNodeKind::InstanceMetricLeaf,
@@ -2322,6 +2348,191 @@ mod menu_availability_tests {
                 "{kind:?}"
             );
         }
+    }
+
+    #[test]
+    fn generated_sql_menus_need_a_capability_that_fills_them() {
+        let generated_sql_kinds = [
+            (
+                SchemaNodeKind::Index,
+                CodeGenCapabilities::REINDEX,
+                CodeGenCapabilities::DROP_FOREIGN_KEY,
+            ),
+            (
+                SchemaNodeKind::SchemaIndex,
+                CodeGenCapabilities::CREATE_INDEX,
+                CodeGenCapabilities::DROP_TYPE,
+            ),
+            (
+                SchemaNodeKind::ForeignKey,
+                CodeGenCapabilities::DROP_FOREIGN_KEY,
+                CodeGenCapabilities::DROP_INDEX,
+            ),
+            (
+                SchemaNodeKind::SchemaForeignKey,
+                CodeGenCapabilities::ADD_FOREIGN_KEY,
+                CodeGenCapabilities::CREATE_TYPE,
+            ),
+            (
+                SchemaNodeKind::CustomType,
+                CodeGenCapabilities::DROP_TYPE,
+                CodeGenCapabilities::REINDEX,
+            ),
+        ];
+
+        for (kind, filling, unrelated) in generated_sql_kinds {
+            assert!(
+                !node_has_context_menu(kind, CodeGenCapabilities::empty()),
+                "{kind:?} without code generation"
+            );
+            assert!(
+                !node_has_context_menu(kind, unrelated),
+                "{kind:?} with {unrelated:?}"
+            );
+            assert!(
+                node_has_context_menu(kind, filling),
+                "{kind:?} with {filling:?}"
+            );
+        }
+
+        for kind in KINDS_WITH_MENU.into_iter().filter(|kind| {
+            !generated_sql_kinds
+                .iter()
+                .any(|(generated_sql_kind, _, _)| generated_sql_kind == kind)
+        }) {
+            assert!(
+                node_has_context_menu(kind, CodeGenCapabilities::empty()),
+                "{kind:?} does not depend on code generation"
+            );
+        }
+    }
+
+    #[gpui::test]
+    async fn saved_charts_folder_offers_no_menu(cx: &mut TestAppContext) {
+        let (state, profile_id) = connected_profile(cx);
+        let window = cx.add_window(|window, cx| Sidebar::new(state.clone(), window, cx));
+        let folder_item = SchemaNodeId::SavedChartsFolder { profile_id }.to_string();
+
+        assert!(!node_kind_has_context_menu(
+            SchemaNodeKind::SavedChartsFolder
+        ));
+        window
+            .update(cx, |sidebar, _, cx| {
+                let items = sidebar.build_context_menu_items(
+                    SchemaNodeKind::SavedChartsFolder,
+                    &folder_item,
+                    cx,
+                );
+                assert!(
+                    items.is_empty(),
+                    "saved charts folder must not list entries"
+                );
+
+                sidebar.open_menu_for_item(&folder_item, point(px(0.0), px(0.0)), cx);
+                assert!(!sidebar.has_context_menu_open());
+            })
+            .expect("sidebar alive");
+    }
+
+    /// Flattens the sidebar tree into its item ids, depth-first.
+    fn tree_rows(sidebar: &Entity<Sidebar>, cx: &mut VisualTestContext) -> Vec<String> {
+        fn walk(items: &[gpui_component::tree::TreeItem], rows: &mut Vec<String>) {
+            for item in items {
+                rows.push(item.id.to_string());
+                walk(&item.children, rows);
+            }
+        }
+
+        sidebar.update(cx, |sidebar, cx| {
+            let mut rows = Vec::new();
+            walk(&sidebar.build_tree_items_with_overrides(cx), &mut rows);
+            rows
+        })
+    }
+
+    fn expand_first_of_kind(
+        sidebar: &Entity<Sidebar>,
+        kind: SchemaNodeKind,
+        cx: &mut VisualTestContext,
+    ) -> String {
+        let item_id = tree_rows(sidebar, cx)
+            .into_iter()
+            .find(|id| crate::parse_node_kind(id) == kind)
+            .unwrap_or_else(|| panic!("no {kind:?} row in the tree"));
+        sidebar.update(cx, |sidebar, cx| sidebar.set_expanded(&item_id, true, cx));
+        cx.run_until_parked();
+        item_id
+    }
+
+    /// The fake driver generates no SQL, so an index row has nothing to put
+    /// in its menu: no row button, and right click opens nothing.
+    #[gpui::test]
+    async fn index_row_without_code_generation_offers_no_menu(cx: &mut TestAppContext) {
+        let (state, profile_id) = connected_profile(cx);
+        let users = dbflux_core::TableInfo {
+            name: "users".into(),
+            schema: Some("main".into()),
+            columns: Some(Vec::new()),
+            indexes: Some(dbflux_core::IndexData::Relational(vec![
+                dbflux_core::IndexInfo {
+                    name: "users_pkey".into(),
+                    columns: vec!["id".into()],
+                    is_unique: true,
+                    is_primary: true,
+                },
+            ])),
+            foreign_keys: Some(Vec::new()),
+            constraints: Some(Vec::new()),
+            sample_fields: None,
+            presentation: dbflux_core::CollectionPresentation::DataGrid,
+            child_items: None,
+            storage_hints: None,
+        };
+        state.update(cx, |state, _| {
+            state.set_database_schema(
+                profile_id,
+                "main".into(),
+                dbflux_core::DbSchemaInfo {
+                    name: "main".into(),
+                    tables: vec![users],
+                    views: Vec::new(),
+                    custom_types: None,
+                },
+            );
+        });
+
+        let (sidebar, cx) =
+            cx.add_window_view(|window, cx| Sidebar::new(state.clone(), window, cx));
+        let profile_item = SchemaNodeId::Profile { profile_id }.to_string();
+        sidebar.update(cx, |sidebar, cx| {
+            sidebar.set_expanded(&profile_item, true, cx)
+        });
+        cx.run_until_parked();
+
+        expand_first_of_kind(&sidebar, SchemaNodeKind::Database, cx);
+        let table_item = expand_first_of_kind(&sidebar, SchemaNodeKind::Table, cx);
+        expand_first_of_kind(&sidebar, SchemaNodeKind::IndexesFolder, cx);
+        let index_item = tree_rows(&sidebar, cx)
+            .into_iter()
+            .find(|id| crate::parse_node_kind(id) == SchemaNodeKind::Index)
+            .expect("index row in the tree");
+
+        rendered_bounds(cx, format!("menu-btn-{table_item}"));
+        let index_row = rendered_bounds(cx, format!("row-{index_item}"));
+        assert!(
+            cx.debug_bounds(format!("menu-btn-{index_item}").leak())
+                .is_none(),
+            "an index row with no generated SQL must not show a menu button"
+        );
+
+        cx.simulate_mouse_down(center(index_row), MouseButton::Right, Modifiers::none());
+        cx.simulate_mouse_up(center(index_row), MouseButton::Right, Modifiers::none());
+        assert_eq!(open_menu_item_id(&sidebar, cx), None);
+
+        sidebar.update(cx, |sidebar, cx| {
+            sidebar.open_menu_for_item(&index_item, point(px(0.0), px(0.0)), cx);
+            assert!(!sidebar.has_context_menu_open());
+        });
     }
 
     struct EventRecorder;
@@ -2430,7 +2641,6 @@ mod menu_availability_tests {
                 dashboard_id: Uuid::new_v4(),
             },
             SchemaNodeId::RemoteDashboardsFolder { profile_id },
-            SchemaNodeId::SavedChartsFolder { profile_id },
             SchemaNodeId::SavedChartItem {
                 profile_id,
                 chart_id: Uuid::new_v4(),

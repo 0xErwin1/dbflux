@@ -36,6 +36,8 @@ pub(super) struct TreeRenderParams {
     pub connections: Vec<Uuid>,
     /// Tooltip text for profiles whose latest connect attempt failed.
     pub connect_failures: HashMap<Uuid, SharedString>,
+    /// Code-generation capabilities of each connected profile's driver.
+    pub code_gen_capabilities: HashMap<Uuid, CodeGenCapabilities>,
     pub active_id: Option<Uuid>,
     pub profile_icons: HashMap<Uuid, AppIcon>,
     pub active_databases: HashMap<Uuid, String>,
@@ -238,7 +240,12 @@ pub(super) fn render_tree_item(
         _ => false,
     };
 
-    let has_context_menu = crate::context_menu::node_kind_has_context_menu(node_kind);
+    let code_gen = parsed_id
+        .as_ref()
+        .and_then(SchemaNodeId::profile_id)
+        .and_then(|profile_id| params.code_gen_capabilities.get(&profile_id).copied())
+        .unwrap_or_else(CodeGenCapabilities::empty);
+    let has_context_menu = crate::context_menu::node_has_context_menu(node_kind, code_gen);
 
     let is_table_or_view = matches!(
         node_kind,
