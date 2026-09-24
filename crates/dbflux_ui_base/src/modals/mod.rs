@@ -14,8 +14,8 @@ pub use delete_confirm::{
 pub use rename_item::{ModalRenameItem, RenameItemOutcome, RenameItemRequest, RenameTarget};
 
 /// Hosts one modal in a test window, the way the workspace renders it.
-#[cfg(test)]
-pub(crate) mod test_host {
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_host {
     use gpui::{
         AppContext as _, Context, Entity, FocusHandle, InteractiveElement as _, IntoElement,
         Modifiers, ParentElement as _, Render, Styled as _, TestAppContext, VisualTestContext,
@@ -23,7 +23,7 @@ pub(crate) mod test_host {
     };
 
     /// A focusable surface with the modal drawn over it.
-    pub(crate) struct Host<M: Render> {
+    pub struct Host<M: Render> {
         outside: FocusHandle,
         modal: Entity<M>,
     }
@@ -40,7 +40,7 @@ pub(crate) mod test_host {
     /// Opens a window hosting a closed modal built by `build`, with focus on
     /// the surface behind it. Returns the modal, that surface's handle and the
     /// window.
-    pub(crate) fn host_modal<M: Render>(
+    pub fn host_modal<M: Render>(
         cx: &mut TestAppContext,
         build: impl FnOnce(&mut Window, &mut Context<M>) -> M,
     ) -> (Entity<M>, FocusHandle, &mut VisualTestContext) {
@@ -64,13 +64,13 @@ pub(crate) mod test_host {
 
     /// Clicks the backdrop next to the window's top-left corner, well away
     /// from the centered card.
-    pub(crate) fn click_backdrop(window: &mut VisualTestContext) {
+    pub fn click_backdrop(window: &mut VisualTestContext) {
         window.simulate_click(point(px(2.0), px(2.0)), Modifiers::default());
         window.run_until_parked();
     }
 
     /// Whether `handle` has focus again.
-    pub(crate) fn has_focus(window: &mut VisualTestContext, handle: &FocusHandle) -> bool {
+    pub fn has_focus(window: &mut VisualTestContext, handle: &FocusHandle) -> bool {
         window.update(|window, _| handle.is_focused(window))
     }
 }

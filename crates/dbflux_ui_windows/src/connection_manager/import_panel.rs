@@ -7,13 +7,13 @@ use dbflux_app::portability::{
 };
 use dbflux_components::controls::{Button, Checkbox, Input, InputEvent, InputState};
 use dbflux_components::icons::AppIcon;
-use dbflux_components::modals::shell::ModalShell;
+use dbflux_components::modals::shell::{ModalFocus, ModalShell};
 use dbflux_components::primitives::{
     BannerBlock, BannerVariant, IconButton, SegmentedControl, SegmentedItem, Text, surface_raised,
 };
 use dbflux_components::tokens::{FontSizes, Heights, Spacing};
 use dbflux_core::secrecy::SecretString;
-use dbflux_core::{AuthProfile, ConnectionProfile, ProxyProfile, SshTunnelProfile};
+use dbflux_core::{AuthProfile, ConnectionProfile, LogErr, ProxyProfile, SshTunnelProfile};
 use dbflux_portability::external::{
     ExternalImportCandidate, ExternalImportOutcome, ExternalImportSkip, ImportInput, ImportSource,
     importers,
@@ -236,7 +236,7 @@ pub struct ImportConnectionsPanel {
 
     dest_auth_profiles: Vec<AuthProfile>,
 
-    focus_handle: FocusHandle,
+    focus: ModalFocus,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -277,7 +277,6 @@ impl ImportConnectionsPanel {
         });
 
         let dest_auth_profiles = app_state.read(cx).list_auth_profiles();
-        let focus_handle = cx.focus_handle();
 
         Self {
             app_state,
@@ -312,7 +311,7 @@ impl ImportConnectionsPanel {
             is_applying: false,
             run_result: None,
             dest_auth_profiles,
-            focus_handle,
+            focus: ModalFocus::new(cx),
             _subscriptions: vec![passphrase_sub, file_sub],
         }
     }
@@ -355,8 +354,71 @@ impl ImportConnectionsPanel {
         self.file_input
             .update(cx, |state, cx| state.set_value("", window, cx));
 
-        window.focus(&self.focus_handle, cx);
+        self.focus.focus(None, window, cx);
         cx.notify();
+    }
+
+    /// Whether a load or an import is running. The panel cannot be dismissed
+    /// until it finishes.
+    fn is_busy(&self) -> bool {
+        self.is_parsing || self.is_parsing_external || self.is_applying || self.is_applying_external
+    }
+
+    /// Whether the current step's primary action may run, the same condition
+    /// that enables its button. On the outcome step the action is Done.
+    fn can_advance(&self, cx: &App) -> bool {
+        match self.step {
+            Step::SelectFile => match &self.source_selection {
+                ImportSourceSelection::Bundle => {
+                    !self.file_input.read(cx).value().trim().is_empty() && !self.is_parsing
+                }
+                ImportSourceSelection::External(_) => {
+                    self.external_primary_path.is_some() && !self.is_parsing_external
+                }
+            },
+            Step::Preview | Step::Outcome => true,
+            Step::Conflicts => self.all_conflicts_resolved(),
+            Step::RequiredReferences => !self.is_applying,
+            Step::ExternalReview => {
+                !self.is_applying_external && self.external_includes.iter().any(|&v| v)
+            }
+        }
+    }
+
+    /// Run the current step's primary action, as its button does. Does
+    /// nothing while [`Self::can_advance`] is false.
+    fn advance(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.can_advance(cx) {
+            return;
+        }
+
+        match self.step {
+            Step::SelectFile => match self.source_selection {
+                ImportSourceSelection::Bundle => self.do_parse_and_plan(window, cx),
+                ImportSourceSelection::External(_) => self.do_parse_external(window, cx),
+            },
+            Step::Preview => self.advance_from_preview(window, cx),
+            Step::Conflicts => self.advance_from_conflicts(window, cx),
+            Step::RequiredReferences => self.do_apply(window, cx),
+            Step::ExternalReview => self.do_apply_external(window, cx),
+            Step::Outcome => self.dismiss(ImportConnectionsPanelEvent::Completed, cx),
+        }
+    }
+
+    /// Dismiss the panel without importing anything more. Does nothing while
+    /// a load or an import is running.
+    pub fn cancel(&mut self, cx: &mut Context<Self>) {
+        if self.is_busy() {
+            return;
+        }
+
+        self.dismiss(ImportConnectionsPanelEvent::Cancelled, cx);
+    }
+
+    /// Hands focus back and tells the host to hide the panel.
+    fn dismiss(&mut self, event: ImportConnectionsPanelEvent, cx: &mut Context<Self>) {
+        self.focus.restore(cx);
+        cx.emit(event);
     }
 
     /// Switches the source picker to the first registered external-client
@@ -455,7 +517,7 @@ impl ImportConnectionsPanel {
         self.is_parsing_external = true;
         self.external_parse_error = None;
         self.run_result = None;
-        window.focus(&self.focus_handle, cx);
+        window.focus(self.focus.handle(), cx);
         cx.notify();
 
         let this = cx.entity().clone();
@@ -546,7 +608,7 @@ impl ImportConnectionsPanel {
         let this = cx.entity().clone();
 
         self.is_applying_external = true;
-        window.focus(&self.focus_handle, cx);
+        window.focus(self.focus.handle(), cx);
         cx.notify();
 
         cx.spawn(async move |_this, cx| {
@@ -662,7 +724,7 @@ impl ImportConnectionsPanel {
         self.is_parsing = true;
         self.parse_error = None;
         self.run_result = None;
-        window.focus(&self.focus_handle, cx);
+        window.focus(self.focus.handle(), cx);
         cx.notify();
 
         cx.spawn(async move |_this, cx| {
@@ -882,7 +944,7 @@ impl ImportConnectionsPanel {
         let this = cx.entity().clone();
 
         self.is_applying = true;
-        window.focus(&self.focus_handle, cx);
+        window.focus(self.focus.handle(), cx);
         cx.notify();
 
         cx.spawn(async move |_this, cx| {
@@ -985,27 +1047,43 @@ impl Render for ImportConnectionsPanel {
         };
 
         let body = div()
-            .track_focus(&self.focus_handle)
             .flex()
             .flex_col()
             .gap(Spacing::MD)
             .child(body_content)
             .into_any_element();
 
-        let close_for_x = cx.entity().clone();
-
-        ModalShell::new(
+        let shell = ModalShell::new(
             dbflux_i18n::t!("connection_manager.import.modal_title"),
             body,
             self.render_footer(cx),
         )
         .width(px(640.0))
-        .on_close(move |_window, cx| {
-            close_for_x.update(cx, |_this, cx| {
-                cx.emit(ImportConnectionsPanelEvent::Cancelled);
-            });
+        .focus_handle(self.focus.handle())
+        .on_confirm({
+            let entity = cx.entity().downgrade();
+            move |window, cx| {
+                entity
+                    .update(cx, |this, cx| this.advance(window, cx))
+                    .log_err();
+            }
         })
-        .into_any_element()
+        .confirm_enabled(self.can_advance(cx));
+
+        // A running load or import cannot be cancelled, so the shell draws no
+        // close button and ignores Escape and backdrop clicks until it ends.
+        let shell = if self.is_busy() {
+            shell
+        } else {
+            shell.on_close({
+                let entity = cx.entity().downgrade();
+                move |_, cx| {
+                    entity.update(cx, |this, cx| this.cancel(cx)).log_err();
+                }
+            })
+        };
+
+        shell.into_any_element()
     }
 }
 
@@ -1885,8 +1963,9 @@ impl ImportConnectionsPanel {
                 dbflux_i18n::t!("connection_manager.import.action.cancel"),
             )
             .ghost()
-            .on_click(cx.listener(|_this, _: &gpui::ClickEvent, _, cx| {
-                cx.emit(ImportConnectionsPanelEvent::Cancelled);
+            .disabled(self.is_busy())
+            .on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
+                this.cancel(cx);
             })),
             Step::Preview => Button::new(
                 "import-back",
@@ -1933,8 +2012,8 @@ impl ImportConnectionsPanel {
                 dbflux_i18n::t!("connection_manager.import.action.done"),
             )
             .ghost()
-            .on_click(cx.listener(|_this, _: &gpui::ClickEvent, _, cx| {
-                cx.emit(ImportConnectionsPanelEvent::Completed);
+            .on_click(cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
+                this.dismiss(ImportConnectionsPanelEvent::Completed, cx);
             })),
         };
 
@@ -1951,81 +2030,34 @@ impl ImportConnectionsPanel {
     }
 
     fn render_primary_button(&self, cx: &Context<Self>) -> Option<AnyElement> {
-        match self.step {
+        let (id, label) = match self.step {
             Step::SelectFile => {
-                let (can_load, is_busy) = match &self.source_selection {
-                    ImportSourceSelection::Bundle => (
-                        !self.file_input.read(cx).value().trim().is_empty() && !self.is_parsing,
-                        self.is_parsing,
-                    ),
-                    ImportSourceSelection::External(_) => (
-                        self.external_primary_path.is_some() && !self.is_parsing_external,
-                        self.is_parsing_external,
-                    ),
+                let is_busy = match &self.source_selection {
+                    ImportSourceSelection::Bundle => self.is_parsing,
+                    ImportSourceSelection::External(_) => self.is_parsing_external,
                 };
                 let label = if is_busy {
                     dbflux_i18n::t!("connection_manager.import.status.loading")
                 } else {
                     dbflux_i18n::t!("connection_manager.import.action.load")
                 };
-                Some(
-                    Button::new("import-load", label)
-                        .primary()
-                        .disabled(!can_load)
-                        .on_click(cx.listener(|this, _: &gpui::ClickEvent, window, cx| {
-                            match this.source_selection.clone() {
-                                ImportSourceSelection::Bundle => this.do_parse_and_plan(window, cx),
-                                ImportSourceSelection::External(_) => {
-                                    this.do_parse_external(window, cx)
-                                }
-                            }
-                        }))
-                        .into_any_element(),
-                )
+                ("import-load", label)
             }
-            Step::Preview => Some(
-                Button::new(
-                    "import-preview-next",
-                    dbflux_i18n::t!("connection_manager.import.action.continue_"),
-                )
-                .primary()
-                .on_click(cx.listener(|this, _: &gpui::ClickEvent, window, cx| {
-                    this.advance_from_preview(window, cx);
-                }))
-                .into_any_element(),
+            Step::Preview => (
+                "import-preview-next",
+                dbflux_i18n::t!("connection_manager.import.action.continue_"),
             ),
-            Step::Conflicts => {
-                let resolved = self.all_conflicts_resolved();
-                Some(
-                    Button::new(
-                        "import-conflicts-next",
-                        dbflux_i18n::t!("connection_manager.import.action.continue_"),
-                    )
-                    .primary()
-                    .disabled(!resolved)
-                    .on_click(cx.listener(|this, _: &gpui::ClickEvent, window, cx| {
-                        if this.all_conflicts_resolved() {
-                            this.advance_from_conflicts(window, cx);
-                        }
-                    }))
-                    .into_any_element(),
-                )
-            }
+            Step::Conflicts => (
+                "import-conflicts-next",
+                dbflux_i18n::t!("connection_manager.import.action.continue_"),
+            ),
             Step::RequiredReferences => {
                 let label = if self.is_applying {
                     dbflux_i18n::t!("connection_manager.import.status.importing")
                 } else {
                     dbflux_i18n::t!("connection_manager.import.action.import")
                 };
-                Some(
-                    Button::new("import-required-apply", label)
-                        .primary()
-                        .disabled(self.is_applying)
-                        .on_click(cx.listener(|this, _: &gpui::ClickEvent, window, cx| {
-                            this.do_apply(window, cx);
-                        }))
-                        .into_any_element(),
-                )
+                ("import-required-apply", label)
             }
             Step::ExternalReview => {
                 let included_count = self.external_includes.iter().filter(|&&v| v).count();
@@ -2034,18 +2066,20 @@ impl ImportConnectionsPanel {
                 } else {
                     crate::labels::import_external_action_import_selected(included_count)
                 };
-                Some(
-                    Button::new("import-external-apply", label)
-                        .primary()
-                        .disabled(self.is_applying_external || included_count == 0)
-                        .on_click(cx.listener(|this, _: &gpui::ClickEvent, window, cx| {
-                            this.do_apply_external(window, cx);
-                        }))
-                        .into_any_element(),
-                )
+                ("import-external-apply", label)
             }
-            Step::Outcome => None,
-        }
+            Step::Outcome => return None,
+        };
+
+        Some(
+            Button::new(id, label)
+                .primary()
+                .disabled(!self.can_advance(cx))
+                .on_click(cx.listener(|this, _: &gpui::ClickEvent, window, cx| {
+                    this.advance(window, cx);
+                }))
+                .into_any_element(),
+        )
     }
 }
 
@@ -2228,5 +2262,148 @@ mod tests {
             let label = crate::labels::import_conflict_kind_label(kind);
             assert!(!label.is_empty(), "{kind:?} resolved an empty label");
         }
+    }
+}
+
+#[cfg(test)]
+mod keyboard_tests {
+    // Explicit imports rather than the parent glob: combining `use super::*`
+    // with `#[gpui::test]` sends the gpui_macros expansion into unbounded
+    // recursion.
+    use super::{ImportConnectionsPanel, ImportConnectionsPanelEvent, Step};
+    use dbflux_storage::bootstrap::StorageRuntime;
+    use dbflux_ui_base::AppStateEntity;
+    use dbflux_ui_base::modals::test_host::{click_backdrop, has_focus, host_modal};
+    use gpui::{AppContext as _, Entity, FocusHandle, TestAppContext, VisualTestContext};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    type Events = Rc<RefCell<Vec<ImportConnectionsPanelEvent>>>;
+
+    /// Shows the panel on its first step, as the connection manager does.
+    fn open_panel(
+        cx: &mut TestAppContext,
+    ) -> (
+        Entity<ImportConnectionsPanel>,
+        FocusHandle,
+        &mut VisualTestContext,
+        Events,
+    ) {
+        cx.update(dbflux_components::theme::init);
+        let app_state = cx.new(|_| {
+            AppStateEntity::new_with_storage_runtime(
+                StorageRuntime::in_memory().expect("in-memory storage"),
+            )
+            .expect("app state")
+        });
+
+        let (panel, outside, window) = host_modal(cx, move |window, cx| {
+            ImportConnectionsPanel::new(app_state, window, cx)
+        });
+
+        let events: Events = Rc::default();
+        window.update(|window, cx| {
+            let sink = events.clone();
+            cx.subscribe(&panel, move |_, event: &ImportConnectionsPanelEvent, _| {
+                sink.borrow_mut().push(event.clone());
+            })
+            .detach();
+
+            panel.update(cx, |panel, cx| panel.reset(window, cx));
+        });
+        window.run_until_parked();
+
+        (panel, outside, window, events)
+    }
+
+    fn update_panel(
+        window: &mut VisualTestContext,
+        panel: &Entity<ImportConnectionsPanel>,
+        change: impl FnOnce(&mut ImportConnectionsPanel),
+    ) {
+        window.update(|_, cx| {
+            panel.update(cx, |panel, cx| {
+                change(panel);
+                cx.notify();
+            });
+        });
+        window.run_until_parked();
+    }
+
+    #[gpui::test]
+    fn enter_loads_only_once_a_file_is_chosen(cx: &mut TestAppContext) {
+        let (panel, _outside, window, events) = open_panel(cx);
+
+        window.simulate_keystrokes("enter");
+        assert!(window.update(|_, cx| panel.read(cx).parse_error.is_none()));
+
+        window.update(|window, cx| {
+            let input = panel.read(cx).file_input.clone();
+            input.update(cx, |state, cx| {
+                state.set_value("/nonexistent/bundle.toml", window, cx)
+            });
+        });
+        window.run_until_parked();
+        window.simulate_keystrokes("enter");
+        window.run_until_parked();
+
+        // The file does not exist, so loading fails; the error proves Enter
+        // started the load.
+        let (step, parse_error) = window.update(|_, cx| {
+            let panel = panel.read(cx);
+            (panel.step, panel.parse_error.clone())
+        });
+        assert_eq!(step, Step::SelectFile);
+        assert!(parse_error.is_some());
+        assert!(events.borrow().is_empty());
+    }
+
+    #[gpui::test]
+    fn enter_on_the_outcome_step_is_done(cx: &mut TestAppContext) {
+        let (panel, _outside, window, events) = open_panel(cx);
+        update_panel(window, &panel, |panel| panel.step = Step::Outcome);
+
+        window.simulate_keystrokes("enter");
+
+        assert_eq!(
+            events.borrow().as_slice(),
+            [ImportConnectionsPanelEvent::Completed]
+        );
+    }
+
+    #[gpui::test]
+    fn escape_cancels_and_gives_focus_back(cx: &mut TestAppContext) {
+        let (_panel, outside, window, events) = open_panel(cx);
+
+        window.simulate_keystrokes("escape");
+
+        assert_eq!(
+            events.borrow().as_slice(),
+            [ImportConnectionsPanelEvent::Cancelled]
+        );
+        assert!(has_focus(window, &outside));
+    }
+
+    #[gpui::test]
+    fn a_backdrop_click_cancels(cx: &mut TestAppContext) {
+        let (_panel, _outside, window, events) = open_panel(cx);
+
+        click_backdrop(window);
+
+        assert_eq!(
+            events.borrow().as_slice(),
+            [ImportConnectionsPanelEvent::Cancelled]
+        );
+    }
+
+    #[gpui::test]
+    fn a_running_load_ignores_escape_and_the_backdrop(cx: &mut TestAppContext) {
+        let (panel, _outside, window, events) = open_panel(cx);
+        update_panel(window, &panel, |panel| panel.is_parsing = true);
+
+        window.simulate_keystrokes("escape");
+        click_backdrop(window);
+
+        assert!(events.borrow().is_empty());
     }
 }
