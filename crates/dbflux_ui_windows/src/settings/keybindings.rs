@@ -4,7 +4,7 @@ use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{BannerBlock, BannerVariant, Chord, Icon as FluxIcon};
 use dbflux_components::tokens::{Heights, Radii, Spacing};
 use dbflux_components::typography::{Body, FieldLabel, MonoCaption};
-use dbflux_ui_base::keymap::default_keymap;
+use dbflux_ui_base::keymap::{chord_display_parts, default_keymap};
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -349,7 +349,7 @@ impl KeybindingsSection {
             .child(
                 div()
                     .w(px(140.0))
-                    .child(Chord::new(self.chord_to_parts(chord))),
+                    .child(Chord::new(chord_display_parts(chord))),
             )
             .child(div().flex_1().child(if is_inherited {
                 Body::new(cmd_name.to_string()).color(muted_foreground)
@@ -366,26 +366,6 @@ impl KeybindingsSection {
                         .child(MonoCaption::new(inherited_label.to_string())),
                 )
             })
-    }
-
-    fn chord_to_parts(&self, chord: &KeyChord) -> Vec<SharedString> {
-        let mut parts: Vec<SharedString> = Vec::new();
-
-        if chord.modifiers.ctrl {
-            parts.push("Ctrl".into());
-        }
-        if chord.modifiers.alt {
-            parts.push("Alt".into());
-        }
-        if chord.modifiers.shift {
-            parts.push("Shift".into());
-        }
-        if chord.modifiers.platform {
-            parts.push("Cmd".into());
-        }
-
-        parts.push(SharedString::from(self.format_key(&chord.key)));
-        parts
     }
 
     fn render_conflict_warning(
@@ -407,26 +387,6 @@ impl KeybindingsSection {
             )
             .with_body(conflict_body.to_string()),
         )
-    }
-
-    fn format_key(&self, key: &str) -> String {
-        match key {
-            "down" => "↓".to_string(),
-            "up" => "↑".to_string(),
-            "left" => "←".to_string(),
-            "right" => "→".to_string(),
-            "enter" => "Enter".to_string(),
-            "escape" => "Esc".to_string(),
-            "backspace" => "⌫".to_string(),
-            "delete" => "Del".to_string(),
-            "tab" => "Tab".to_string(),
-            "space" => "Space".to_string(),
-            "home" => "Home".to_string(),
-            "end" => "End".to_string(),
-            "pageup" => "PgUp".to_string(),
-            "pagedown" => "PgDn".to_string(),
-            _ => key.to_uppercase(),
-        }
     }
 
     fn get_filter_text(&self, cx: &Context<Self>) -> String {

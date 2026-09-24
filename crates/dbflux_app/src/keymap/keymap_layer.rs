@@ -96,15 +96,23 @@ impl KeymapStack {
     /// Returns the shortcut string for a command in the given context, if any.
     #[allow(dead_code)]
     pub fn shortcut_for_command(&self, context: ContextId, command: Command) -> Option<String> {
+        self.chord_for_command(context, command)
+            .map(|chord| chord.to_string())
+    }
+
+    /// Returns the chord bound to a command in the given context, falling back
+    /// to parent contexts the same way [`KeymapStack::resolve`] does.
+    ///
+    /// When one layer binds the command to several chords, which of them is
+    /// returned is unspecified.
+    pub fn chord_for_command(&self, context: ContextId, command: Command) -> Option<&KeyChord> {
         let mut current = Some(context);
 
         while let Some(ctx) = current {
-            if let Some(layer) = self.layers.get(&ctx) {
-                for (chord, cmd) in layer.bindings() {
-                    if *cmd == command {
-                        return Some(chord.to_string());
-                    }
-                }
+            if let Some(layer) = self.layers.get(&ctx)
+                && let Some((chord, _)) = layer.bindings().iter().find(|(_, cmd)| **cmd == command)
+            {
+                return Some(chord);
             }
             current = ctx.parent();
         }
@@ -189,5 +197,49 @@ mod tests {
 
         let chord = KeyChord::new("p", Modifiers::ctrl_shift());
         assert_eq!(stack.resolve(ContextId::CommandPalette, &chord), None);
+    }
+
+    #[test]
+    fn chord_for_command_prefers_context_then_falls_back_to_parent() {
+        let mut stack = KeymapStack::new();
+
+        let mut global = KeymapLayer::new(ContextId::Global);
+        global.bind(
+            KeyChord::new("n", Modifiers::ctrl_shift()),
+            Command::OpenConnectionManager,
+        );
+
+        let mut sidebar = KeymapLayer::new(ContextId::Sidebar);
+        sidebar.bind(
+            KeyChord::new("c", Modifiers::none()),
+            Command::OpenConnectionManager,
+        );
+
+        stack.add_layer(global);
+        stack.add_layer(sidebar);
+
+        let global_chord = KeyChord::new("n", Modifiers::ctrl_shift());
+        let sidebar_chord = KeyChord::new("c", Modifiers::none());
+
+        assert_eq!(
+            stack.chord_for_command(ContextId::Global, Command::OpenConnectionManager),
+            Some(&global_chord)
+        );
+        assert_eq!(
+            stack.chord_for_command(ContextId::Editor, Command::OpenConnectionManager),
+            Some(&global_chord)
+        );
+        assert_eq!(
+            stack.chord_for_command(ContextId::Sidebar, Command::OpenConnectionManager),
+            Some(&sidebar_chord)
+        );
+        assert_eq!(
+            stack.chord_for_command(ContextId::CommandPalette, Command::OpenConnectionManager),
+            None
+        );
+        assert_eq!(
+            stack.shortcut_for_command(ContextId::Global, Command::OpenConnectionManager),
+            Some(global_chord.to_string())
+        );
     }
 }
