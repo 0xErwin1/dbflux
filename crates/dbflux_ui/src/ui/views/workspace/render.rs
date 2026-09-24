@@ -188,8 +188,14 @@ impl Render for Workspace {
                 vec![]
             }
         };
-        let linux_title_bar =
-            platform::render_csd_title_bar_with_crumbs(window, cx, "DBFlux", &crumbs);
+        let title_bar_close = self.title_bar_close_handler(cx);
+        let linux_title_bar = platform::render_csd_title_bar_with_crumbs(
+            window,
+            cx,
+            "DBFlux",
+            &crumbs,
+            Some(title_bar_close),
+        );
 
         let right_pane = if has_tabs {
             let workspace = cx.entity().clone();

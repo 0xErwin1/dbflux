@@ -179,6 +179,37 @@ impl Workspace {
         !self.prompt_active_query(ActiveQueryScope::Quit, window, cx)
     }
 
+    /// Close action for the main window's in-app (Linux CSD) title bar.
+    ///
+    /// Follows the window-manager close: [`Self::request_quit`] first, so a
+    /// running query opens the prompt, then graceful shutdown through
+    /// [`QuitConfirmed`]. Removing the window directly would skip both.
+    pub(in crate::ui::views::workspace) fn title_bar_close_handler(
+        &self,
+        cx: &mut Context<Self>,
+    ) -> platform::TitleBarHandler {
+        let workspace = cx.entity().downgrade();
+
+        Box::new(move |window, cx| {
+            if let Some(workspace) = workspace.upgrade() {
+                workspace.update(cx, |workspace, cx| {
+                    workspace.close_from_title_bar(window, cx);
+                });
+            }
+        })
+    }
+
+    fn close_from_title_bar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // A shutdown already under way finishes on its own and quits.
+        if self.app_state.read(cx).is_shutting_down() {
+            return;
+        }
+
+        if self.request_quit(window, cx) {
+            cx.emit(QuitConfirmed);
+        }
+    }
+
     /// Opens the active-query prompt when a query is running within `scope`.
     ///
     /// Returns `false`, without opening anything, when no query is running,
@@ -566,6 +597,18 @@ mod active_query_prompt_tests {
             allowed
         }
 
+        /// Presses the main window's title-bar close button through the same
+        /// handler the render path hands to the CSD title bar.
+        fn close_from_title_bar(&mut self) {
+            let workspace = self.workspace.clone();
+            self.window.update(|window, cx| {
+                let handler =
+                    workspace.update(cx, |workspace, cx| workspace.title_bar_close_handler(cx));
+                handler(window, cx);
+            });
+            self.window.run_until_parked();
+        }
+
         fn count_quit_confirmed(&mut self) -> Rc<Cell<usize>> {
             let count = Rc::new(Cell::new(0));
             let sink = count.clone();
@@ -776,5 +819,53 @@ mod active_query_prompt_tests {
         );
         assert!(harness.is_connected(first_profile));
         assert!(harness.is_connected(second_profile));
+    }
+
+    #[gpui::test]
+    fn title_bar_close_with_a_running_query_opens_the_prompt(cx: &mut TestAppContext) {
+        let mut harness = new_harness(cx);
+        let (profile_id, _) = harness.connect("prod");
+        let query = harness.start_query(profile_id);
+        let quit_confirmed = harness.count_quit_confirmed();
+
+        harness.close_from_title_bar();
+
+        assert!(harness.prompt_visible());
+        assert_eq!(quit_confirmed.get(), 0);
+        assert_eq!(harness.task_status(query), Some(TaskStatus::Running));
+
+        harness.force();
+
+        assert_eq!(quit_confirmed.get(), 1);
+    }
+
+    #[gpui::test]
+    fn title_bar_close_without_a_running_query_confirms_the_quit(cx: &mut TestAppContext) {
+        let mut harness = new_harness(cx);
+        harness.connect("prod");
+        let quit_confirmed = harness.count_quit_confirmed();
+
+        harness.close_from_title_bar();
+
+        assert!(!harness.prompt_visible());
+        assert_eq!(quit_confirmed.get(), 1);
+    }
+
+    #[gpui::test]
+    fn title_bar_close_during_shutdown_does_nothing(cx: &mut TestAppContext) {
+        let mut harness = new_harness(cx);
+        let (profile_id, _) = harness.connect("prod");
+        harness.start_query(profile_id);
+        let quit_confirmed = harness.count_quit_confirmed();
+
+        let app_state = harness.app_state.clone();
+        harness.window.update(|_, cx| {
+            assert!(app_state.read(cx).begin_shutdown());
+        });
+
+        harness.close_from_title_bar();
+
+        assert!(!harness.prompt_visible());
+        assert_eq!(quit_confirmed.get(), 0);
     }
 }

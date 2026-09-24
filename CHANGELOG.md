@@ -17,6 +17,12 @@ All notable changes to DBFlux will be documented in this file.
   **Keep waiting** changes nothing, and **Disconnect anyway** / **Quit anyway**
   cancels the query and continues. The prompt existed but nothing opened it.
 
+* **Linux title-bar close follows the window-manager close** — the main
+  window's in-app close button (client-side decorations) removed the window
+  directly, skipping the running-query prompt and the graceful shutdown that
+  saves pending edits and closes connections. It now takes the same path as
+  closing through the window manager. Other windows keep their close behavior.
+
 * Redis, Turso, and InfluxDB now refuse requested row limits (including zero)
   or statement timeouts before execution with `NotSupported`, rather than
   dispatching commands, SQL, HTTP, or instance-context queries without those

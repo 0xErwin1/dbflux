@@ -410,8 +410,10 @@ enum ActiveQueryScope {
     Quit,
 }
 
-/// Emitted when the user chose to quit even though queries are still
-/// running. The application shell owns shutdown and starts it on this event.
+/// Emitted when a quit started inside the workspace may proceed: the user
+/// chose "Quit anyway" in the active-query prompt, or closed the window from
+/// the in-app title bar with no query running. The application shell owns
+/// shutdown and starts it on this event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct QuitConfirmed;
 
