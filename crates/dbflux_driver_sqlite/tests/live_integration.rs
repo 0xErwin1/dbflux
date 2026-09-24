@@ -642,8 +642,18 @@ fn sqlite_query_safety_uncapped_batch_still_executes_later_statements() -> Resul
     Ok(())
 }
 
+fn execute_bounded_batch(
+    connection: &dyn dbflux_core::Connection,
+    sql: &str,
+    limit: u32,
+) -> dbflux_core::QueryResult {
+    connection
+        .execute(&QueryRequest::new(sql).with_limit(limit))
+        .unwrap_or_else(|error| panic!("bounded batch must run, got {error:?}"))
+}
+
 #[test]
-fn sqlite_query_safety_bounded_batch_rejected_without_effects_and_reusable() -> Result<(), DbError>
+fn sqlite_query_safety_bounded_batch_runs_every_statement_and_stays_reusable() -> Result<(), DbError>
 {
     let temp_dir = tempfile::tempdir()?;
     let db_path = temp_dir.path().join("safety_bounded_batch.sqlite");
@@ -653,74 +663,215 @@ fn sqlite_query_safety_bounded_batch_rejected_without_effects_and_reusable() -> 
         "CREATE TABLE safety_bounded_batch (n INTEGER PRIMARY KEY)",
     ))?;
 
-    // A bounded request over a multi-statement batch must be rejected before
-    // any statement is prepared or executed — including the first INSERT and
-    // the later RETURNING statement, which would otherwise take effect.
-    let rejected = connection.execute(
-        &QueryRequest::new(
-            "INSERT INTO safety_bounded_batch (n) VALUES (1); \
-             INSERT INTO safety_bounded_batch (n) VALUES (2) RETURNING n;",
-        )
-        .with_limit(5),
+    // Deliberate behavior change: a bounded multi-statement batch used to be
+    // refused before execution. It now runs statement by statement under one
+    // shared row budget, so both INSERTs take effect and the RETURNING rows
+    // are capped by the same budget.
+    let result = execute_bounded_batch(
+        connection.as_ref(),
+        "INSERT INTO safety_bounded_batch (n) VALUES (1); \
+         INSERT INTO safety_bounded_batch (n) VALUES (2) RETURNING n;",
+        5,
     );
-    match rejected {
-        Err(DbError::NotSupported(reason)) => {
-            assert!(
-                reason.to_lowercase().contains("batch"),
-                "rejection should name the batch limitation, got: {reason}"
-            );
-        }
-        Err(other) => panic!("unexpected error kind: {other:?}"),
-        Ok(result) => panic!(
-            "bounded batch must be rejected, got {:?}",
-            result.rows.len()
-        ),
-    }
+    assert_eq!(result.affected_rows, Some(1));
+    assert_eq!(result.additional_results.len(), 1);
+    let returning = &result.additional_results[0];
+    assert_no_rows_truncated(returning, 1);
+    assert_eq!(returning.rows[0][0], Value::Int(2));
 
-    // No statement of the batch may have run: same connection and an
-    // independent connection against the same database file both see zero
-    // rows.
-    let count = connection
-        .execute(&QueryRequest::new(
-            "SELECT COUNT(*) FROM safety_bounded_batch",
-        ))?
-        .rows;
-    assert_eq!(count[0][0], Value::Int(0));
     let witness = connect_sqlite_at(&db_path)?;
     let count = witness
         .execute(&QueryRequest::new(
             "SELECT COUNT(*) FROM safety_bounded_batch",
         ))?
         .rows;
-    assert_eq!(count[0][0], Value::Int(0));
+    assert_eq!(count[0][0], Value::Int(2));
 
-    // DDL-dependent batch: if any earlier statement had executed, the table
-    // created by the first statement would exist afterwards.
-    let rejected = connection.execute(
-        &QueryRequest::new(
-            "CREATE TABLE safety_ddl_batch (id INTEGER PRIMARY KEY); \
-             INSERT INTO safety_ddl_batch VALUES (1);",
-        )
-        .with_limit(1),
+    // DDL-dependent batch with a trigger body: the trigger's inner semicolon
+    // does not split it, and every statement runs in order.
+    let result = execute_bounded_batch(
+        connection.as_ref(),
+        "CREATE TABLE safety_ddl_batch (id INTEGER PRIMARY KEY); \
+         CREATE TABLE safety_ddl_log (id INTEGER); \
+         CREATE TRIGGER safety_ddl_trigger AFTER INSERT ON safety_ddl_batch \
+         BEGIN INSERT INTO safety_ddl_log VALUES (new.id); END; \
+         INSERT INTO safety_ddl_batch VALUES (1);",
+        1,
     );
-    assert!(
-        matches!(rejected, Err(DbError::NotSupported(_))),
-        "bounded DDL-dependent batch must be rejected, got: {rejected:?}"
-    );
-    let exists = connection
-        .execute(&QueryRequest::new(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'safety_ddl_batch'",
-        ))?
+    assert_eq!(result.additional_results.len(), 3);
+    assert_eq!(result.additional_results[2].affected_rows, Some(1));
+    let logged = connection
+        .execute(&QueryRequest::new("SELECT id FROM safety_ddl_log"))?
         .rows;
-    assert_eq!(
-        exists[0][0],
-        Value::Int(0),
-        "no statement of the DDL-dependent batch may run"
-    );
+    assert_eq!(logged, vec![vec![Value::Int(1)]]);
 
-    // The connection stays reusable for a bounded single statement.
     let reused = connection.execute(&QueryRequest::new("SELECT 1").with_limit(1))?;
     assert_eq!(reused.rows.len(), 1);
+
+    Ok(())
+}
+
+fn seeded_budget_connection(
+    file_name: &str,
+) -> Result<
+    (
+        tempfile::TempDir,
+        std::path::PathBuf,
+        Box<dyn dbflux_core::Connection>,
+    ),
+    DbError,
+> {
+    let temp_dir = tempfile::tempdir()?;
+    let db_path = temp_dir.path().join(file_name);
+    let connection = connect_sqlite_at(&db_path)?;
+
+    connection.execute(&QueryRequest::new(
+        "CREATE TABLE budget (id INTEGER PRIMARY KEY)",
+    ))?;
+    connection.execute(&QueryRequest::new(
+        "INSERT INTO budget VALUES (1), (2), (3), (4), (5)",
+    ))?;
+
+    Ok((temp_dir, db_path, connection))
+}
+
+#[test]
+fn sqlite_query_safety_bounded_batch_shares_one_row_budget() -> Result<(), DbError> {
+    let (_temp_dir, _db_path, connection) = seeded_budget_connection("budget_shared.sqlite")?;
+
+    let result = execute_bounded_batch(
+        connection.as_ref(),
+        "SELECT id FROM budget ORDER BY id; \
+         SELECT id FROM budget ORDER BY id; \
+         SELECT id FROM budget WHERE id > 100; \
+         SELECT id FROM budget ORDER BY id",
+        7,
+    );
+
+    assert_no_rows_truncated(&result, 5);
+    assert_eq!(result.additional_results.len(), 3);
+
+    let second = &result.additional_results[0];
+    assert_eq!(second.rows, vec![vec![Value::Int(1)], vec![Value::Int(2)]]);
+    assert!(second.rows_truncated(), "the second set dropped rows");
+
+    assert_no_rows_truncated(&result.additional_results[1], 0);
+
+    let fourth = &result.additional_results[2];
+    assert!(fourth.rows.is_empty());
+    assert!(fourth.rows_truncated(), "the exhausted budget dropped rows");
+
+    Ok(())
+}
+
+#[test]
+fn sqlite_query_safety_bounded_batch_mutation_after_cap_persists() -> Result<(), DbError> {
+    let (_temp_dir, db_path, connection) = seeded_budget_connection("budget_mutation.sqlite")?;
+
+    let result = execute_bounded_batch(
+        connection.as_ref(),
+        "SELECT id FROM budget ORDER BY id; \
+         INSERT INTO budget VALUES (6); \
+         SELECT id FROM budget ORDER BY id",
+        2,
+    );
+
+    assert_eq!(result.rows.len(), 2);
+    assert!(result.rows_truncated());
+    assert_eq!(result.additional_results.len(), 2);
+    assert_eq!(result.additional_results[0].affected_rows, Some(1));
+    assert!(result.additional_results[1].rows.is_empty());
+    assert!(result.additional_results[1].rows_truncated());
+
+    let witness = connect_sqlite_at(&db_path)?;
+    assert_eq!(row_count(witness.as_ref(), "budget")?, 6);
+
+    Ok(())
+}
+
+#[test]
+fn sqlite_query_safety_bounded_batch_zero_limit_runs_everything() -> Result<(), DbError> {
+    let (_temp_dir, db_path, connection) = seeded_budget_connection("budget_zero.sqlite")?;
+
+    let result = execute_bounded_batch(
+        connection.as_ref(),
+        "SELECT id FROM budget; \
+         DELETE FROM budget WHERE id > 3; \
+         SELECT id FROM budget WHERE id > 100",
+        0,
+    );
+
+    assert!(result.rows.is_empty());
+    assert!(result.rows_truncated());
+    assert_eq!(result.additional_results.len(), 2);
+    assert_eq!(result.additional_results[0].affected_rows, Some(2));
+    assert_no_rows_truncated(&result.additional_results[1], 0);
+
+    let witness = connect_sqlite_at(&db_path)?;
+    assert_eq!(row_count(witness.as_ref(), "budget")?, 3);
+
+    Ok(())
+}
+
+#[test]
+fn sqlite_query_safety_bounded_batch_trailing_comments_add_no_result_set() -> Result<(), DbError> {
+    let connection = connect_sqlite()?;
+
+    let result = execute_bounded_batch(
+        connection.as_ref(),
+        "SELECT 1; SELECT 2;; -- trailing\n/* block ; */ ;\n  ;",
+        10,
+    );
+
+    assert_no_rows_truncated(&result, 1);
+    assert_eq!(result.additional_results.len(), 1);
+    assert_eq!(result.additional_results[0].rows, vec![vec![Value::Int(2)]]);
+
+    Ok(())
+}
+
+#[test]
+fn sqlite_query_safety_bounded_batch_failure_matches_unbounded_batch() -> Result<(), DbError> {
+    let script = "CREATE TABLE fail_batch (id INTEGER PRIMARY KEY); \
+                  BEGIN; \
+                  INSERT INTO fail_batch VALUES (1); \
+                  INSERT INTO fail_batch VALUES (1); \
+                  INSERT INTO fail_batch VALUES (2); \
+                  COMMIT;";
+
+    let mut outcomes = Vec::new();
+    for limit in [None, Some(1)] {
+        let temp_dir = tempfile::tempdir()?;
+        let db_path = temp_dir.path().join("fail_batch.sqlite");
+        let connection = connect_sqlite_at(&db_path)?;
+
+        let mut request = QueryRequest::new(script);
+        request.limit = limit;
+        let error = connection
+            .execute(&request)
+            .expect_err("the duplicate primary key must stop the batch");
+
+        let witness = connect_sqlite_at(&db_path)?;
+        outcomes.push((
+            error.to_string(),
+            error_hint(&error).map(str::to_string),
+            row_count(witness.as_ref(), "fail_batch").map_err(|error| error.to_string()),
+        ));
+    }
+
+    assert_eq!(
+        outcomes[0], outcomes[1],
+        "bounded batch failure must match the unbounded batch (unbounded, bounded)"
+    );
+    assert!(
+        outcomes[0]
+            .1
+            .as_deref()
+            .is_some_and(|hint| hint.contains(TransactionStateNote::RolledBack.message())),
+        "the opened transaction must be rolled back, got {:?}",
+        outcomes[0]
+    );
+    assert_eq!(outcomes[0].2, Ok(0));
 
     Ok(())
 }
@@ -768,26 +919,37 @@ fn sqlite_query_safety_bounded_bom_prefixed_pragma_runs_as_requested() -> Result
 }
 
 #[test]
-fn sqlite_query_safety_backslash_literal_batch_refused_before_insert() -> Result<(), DbError> {
+fn sqlite_query_safety_backslash_literal_batch_splits_and_runs_both_inserts() -> Result<(), DbError>
+{
     let temp_dir = tempfile::tempdir()?;
     let db_path = temp_dir.path().join("backslash_batch.sqlite");
     let connection = connect_sqlite_at(&db_path)?;
     connection.execute(&QueryRequest::new("CREATE TABLE t (v TEXT)"))?;
 
-    let outcome = connection.execute(
-        &QueryRequest::new(r"INSERT INTO t VALUES ('\'); INSERT INTO t VALUES ('x');")
-            .with_limit(1),
+    // Deliberate behavior change: this bounded batch used to be refused. A
+    // backslash is not an escape in SQLite, so the batch splits after the
+    // first literal and both INSERTs run.
+    let result = execute_bounded_batch(
+        connection.as_ref(),
+        r"INSERT INTO t VALUES ('\'); INSERT INTO t VALUES ('x');",
+        1,
     );
-    let witness = connect_sqlite_at(&db_path)?;
-    let persisted_count = witness
-        .execute(&QueryRequest::new("SELECT COUNT(*) FROM t"))?
-        .rows[0][0]
-        .clone();
+    assert_eq!(result.affected_rows, Some(1));
+    assert_eq!(result.additional_results.len(), 1);
+    assert_eq!(result.additional_results[0].affected_rows, Some(1));
 
-    assert!(
-        matches!(outcome, Err(DbError::NotSupported(_))) && persisted_count == Value::Int(0),
-        "bounded batch must be refused before execution without persisting its first INSERT: outcome={outcome:?}, persisted_count={persisted_count:?}"
+    let witness = connect_sqlite_at(&db_path)?;
+    let persisted = witness
+        .execute(&QueryRequest::new("SELECT v FROM t ORDER BY rowid"))?
+        .rows;
+    assert_eq!(
+        persisted,
+        vec![
+            vec![Value::Text(r"\".to_string())],
+            vec![Value::Text("x".to_string())],
+        ]
     );
+
     Ok(())
 }
 
