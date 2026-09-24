@@ -218,7 +218,7 @@ impl AuditDocument {
             AuditDocumentSource::Internal {
                 adapter: AuditSourceAdapter::new(audit_repo),
             },
-            "Audit".to_string(),
+            dbflux_i18n::t!("document.audit.title"),
             dbflux_i18n::t!("document.audit.filter.placeholder.search_events"),
             window,
             cx,
@@ -484,7 +484,7 @@ impl AuditDocument {
         let refresh_dropdown = cx.new(|_cx| {
             let items = RefreshPolicy::ALL
                 .iter()
-                .map(|policy| DropdownItem::new(policy.label()))
+                .map(|policy| DropdownItem::new(crate::labels::refresh_policy_label(*policy)))
                 .collect();
 
             Dropdown::new("audit-auto-refresh")
@@ -648,34 +648,64 @@ impl AuditDocument {
         refresh_dropdown: &Entity<Dropdown>,
     ) -> Vec<FilterBarItem> {
         let mut toolbar_items = vec![
-            FilterBarItem::input("Search:", search_input.clone()),
-            FilterBarItem::dropdown("Time:", dropdown_time_range.clone()),
-            FilterBarItem::dropdown("Time zone:", dropdown_timestamp_mode.clone()),
+            FilterBarItem::input(
+                dbflux_i18n::t!("document.audit.filter.bar.search"),
+                search_input.clone(),
+            ),
+            FilterBarItem::dropdown(
+                dbflux_i18n::t!("document.audit.filter.bar.time"),
+                dropdown_time_range.clone(),
+            ),
+            FilterBarItem::dropdown(
+                dbflux_i18n::t!("document.audit.filter.bar.timezone"),
+                dropdown_timestamp_mode.clone(),
+            ),
         ];
 
         if selected_time_range == Some(TimeRange::Custom) {
             toolbar_items.extend([
-                FilterBarItem::date_picker("Range:", custom_date_range_picker.clone()),
-                FilterBarItem::dropdown("Start hour:", custom_start_hour_dropdown.clone()),
-                FilterBarItem::dropdown("Start minute:", custom_start_minute_dropdown.clone()),
-                FilterBarItem::dropdown("End hour:", custom_end_hour_dropdown.clone()),
-                FilterBarItem::dropdown("End minute:", custom_end_minute_dropdown.clone()),
-                FilterBarItem::button("Apply"),
+                FilterBarItem::date_picker(
+                    dbflux_i18n::t!("document.audit.filter.bar.range"),
+                    custom_date_range_picker.clone(),
+                ),
+                FilterBarItem::dropdown(
+                    dbflux_i18n::t!("document.audit.filter.bar.start_hour"),
+                    custom_start_hour_dropdown.clone(),
+                ),
+                FilterBarItem::dropdown(
+                    dbflux_i18n::t!("document.audit.filter.bar.start_minute"),
+                    custom_start_minute_dropdown.clone(),
+                ),
+                FilterBarItem::dropdown(
+                    dbflux_i18n::t!("document.audit.filter.bar.end_hour"),
+                    custom_end_hour_dropdown.clone(),
+                ),
+                FilterBarItem::dropdown(
+                    dbflux_i18n::t!("document.audit.filter.bar.end_minute"),
+                    custom_end_minute_dropdown.clone(),
+                ),
+                FilterBarItem::button(dbflux_i18n::t!("document.audit.filter.apply")),
             ]);
         }
 
         if matches!(source, AuditDocumentSource::Internal { .. }) {
             toolbar_items.extend([
-                FilterBarItem::button("Level"),
-                FilterBarItem::button("Category"),
-                FilterBarItem::button("Outcome"),
+                FilterBarItem::button(dbflux_i18n::t!("document.audit.detail.level")),
+                FilterBarItem::button(dbflux_i18n::t!("document.audit.detail.category")),
+                FilterBarItem::button(dbflux_i18n::t!("document.audit.detail.outcome")),
             ]);
         }
 
         toolbar_items.extend([
-            FilterBarItem::button_with_icon("Refresh", AppIcon::RefreshCcw),
-            FilterBarItem::dropdown("Auto-refresh:", refresh_dropdown.clone()),
-            FilterBarItem::button("Clear"),
+            FilterBarItem::button_with_icon(
+                dbflux_i18n::t!("composites.refresh_split_button.label"),
+                AppIcon::RefreshCcw,
+            ),
+            FilterBarItem::dropdown(
+                dbflux_i18n::t!("document.audit.filter.bar.auto_refresh"),
+                refresh_dropdown.clone(),
+            ),
+            FilterBarItem::button(dbflux_i18n::t!("document.audit.filter.clear")),
         ]);
 
         toolbar_items
@@ -1976,6 +2006,65 @@ mod tests {
             dbflux_i18n::t!("document.audit.filter.timezone.local", locale = "en"),
             dbflux_i18n::t!("document.audit.filter.timezone.local", locale = "ko")
         );
+    }
+
+    const FILTER_BAR_AND_TITLE_KEYS: &[&str] = &[
+        "document.audit.title",
+        "document.audit.filter.bar.search",
+        "document.audit.filter.bar.time",
+        "document.audit.filter.bar.timezone",
+        "document.audit.filter.bar.range",
+        "document.audit.filter.bar.start_hour",
+        "document.audit.filter.bar.start_minute",
+        "document.audit.filter.bar.end_hour",
+        "document.audit.filter.bar.end_minute",
+        "document.audit.filter.bar.auto_refresh",
+    ];
+
+    #[test]
+    fn filter_bar_and_title_keys_resolve_in_every_locale() {
+        for key in FILTER_BAR_AND_TITLE_KEYS {
+            for locale in ["en", "es", "ko", "zh_Hans"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty in {locale}");
+                assert_ne!(value, *key, "{key} resolved to its own key in {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing from {locale} catalog"
+                );
+            }
+        }
+
+        assert_eq!(
+            dbflux_i18n::t!("document.audit.filter.bar.search", locale = "en"),
+            "Search:"
+        );
+        assert_ne!(
+            dbflux_i18n::t!("document.audit.title", locale = "en"),
+            dbflux_i18n::t!("document.audit.title", locale = "es")
+        );
+    }
+
+    #[test]
+    fn row_chips_translate_known_values_and_keep_fallbacks() {
+        assert_eq!(
+            AuditDocument::short_category_label(Some("object_storage")),
+            crate::labels::audit_category_chip_label(EventCategory::ObjectStorage)
+        );
+        assert_eq!(
+            AuditDocument::short_category_label(Some("connection")),
+            dbflux_i18n::t!("document.audit.category_chip.connection")
+        );
+        assert_eq!(AuditDocument::short_category_label(Some("unknown")), "NULL");
+        assert_eq!(AuditDocument::short_category_label(None), "NULL");
+
+        assert_eq!(
+            AuditDocument::short_level_label("warn"),
+            dbflux_i18n::t!("document.audit.level_chip.warn")
+        );
+        assert_eq!(AuditDocument::short_level_label("notice"), "NOTICE");
     }
 
     const SOURCE_AND_ROW_KEYS: &[&str] = &[

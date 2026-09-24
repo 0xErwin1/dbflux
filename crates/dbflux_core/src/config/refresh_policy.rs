@@ -36,19 +36,6 @@ impl RefreshPolicy {
         matches!(self, RefreshPolicy::Interval { .. })
     }
 
-    pub fn label(self) -> &'static str {
-        match self {
-            RefreshPolicy::Manual => "Off",
-            RefreshPolicy::Interval { every_secs: 1 } => "1s",
-            RefreshPolicy::Interval { every_secs: 2 } => "2s",
-            RefreshPolicy::Interval { every_secs: 5 } => "5s",
-            RefreshPolicy::Interval { every_secs: 10 } => "10s",
-            RefreshPolicy::Interval { every_secs: 30 } => "30s",
-            RefreshPolicy::Interval { every_secs: 60 } => "60s",
-            RefreshPolicy::Interval { .. } => "Custom",
-        }
-    }
-
     pub fn index(self) -> usize {
         Self::ALL
             .iter()

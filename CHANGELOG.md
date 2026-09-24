@@ -47,6 +47,13 @@ All notable changes to DBFlux will be documented in this file.
   extras already bound when a connection is edited, is reachable with j/k, and
   is addressable as `cm-setting-<phase>_hook_extra`.
 
+* **More English-only labels are translated** — the audit viewer's tab title,
+  filter-bar labels and its category and level chips, the "Off" and "Custom"
+  auto-refresh options, the Default and Compact style options in Settings, the
+  short time-range presets (15m, 1h, 6h, 24h, 7d), and the dashboard-import
+  and export-connection toasts now follow the selected language. Object-storage
+  audit events showed a `NULL` category chip; they now show their category.
+
 * The SQL editor warns once when any delivered result set actually omitted rows; the
   data grid shows the warning for its selected result set, even when no rows were
   retained. A result that merely fills its limit is not flagged, and discarded
