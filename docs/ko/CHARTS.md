@@ -159,7 +159,7 @@ query") 액션으로 만든 차트 문서는 아직 저장된 ID에 연결되지
 
 ## UI에서 차트 만들기
 
-두 가지 진입점이 있습니다.
+세 가지 진입점이 있습니다.
 
 ### 이 쿼리를 차트로 만들기(Chart this query)
 
@@ -179,6 +179,21 @@ query") 액션으로 만든 차트 문서는 아직 저장된 ID에 연결되지
 "차트 열기..."("Open chart...") 명령은 활성 프로필에 대해 저장된 차트를 나열하고
 (`build_saved_chart_palette_items`로 구축), 앞서 설명한 대로 `open_saved_chart`를 통해
 선택한 차트를 엽니다.
+
+### 시계열 컬렉션
+
+카테고리가 `DatabaseCategory::TimeSeries`인 연결(예: InfluxDB measurement)에서
+컬렉션을 열면, 데이터 그리드가 쿼리 결과와 같은 Data, Chart, JSON 뷰를 제공합니다.
+`detect_chart_columns`가 `Ok`를 반환하면 첫 페이지가 차트로 열리며, 축은
+`default_bindings_for_time_series`로 미리 설정됩니다(X는 시간, Y는 첫 번째 숫자 열,
+그룹은 첫 번째 `Text` 열). Data 뷰는 다른 컬렉션이 사용하는 문서 트리 대신 그리드에
+행을 표시합니다. 수동, 자동, 페이지 이동 등 어떤 새로 고침이든 사용자가 고른 뷰를
+유지하며, 새 페이지를 더 이상 차트로 그릴 수 없을 때만 Data로 돌아갑니다.
+
+도구 모음과 상태 표시줄은 드라이버가 실제로 실행하는 쿼리로 이 조회를 표시합니다.
+이 쿼리는 `QueryGenerator::collection_browse_query`에서 가져오므로 레이블은 연결
+자체의 쿼리 언어로 작성됩니다. 이 메서드를 구현하지 않은 드라이버는 일반 레이블을
+유지합니다.
 
 ### 저장
 

@@ -106,7 +106,7 @@ DBFlux 可以将查询结果转换为图表。图表引擎完全不依赖特定�
 
 ## 在界面中创建图表
 
-有两个入口。
+有三个入口。
 
 ### 将此查询制作成图表
 
@@ -120,6 +120,12 @@ DBFlux 可以将查询结果转换为图表。图表引擎完全不依赖特定�
 ### 打开图表…
 
 “打开图表…”命令会列出当前连接配置的已保存图表（由 `build_saved_chart_palette_items` 构建），并通过上文所述的 `open_saved_chart` 打开所选图表。
+
+### 时间序列集合
+
+在类别为 `DatabaseCategory::TimeSeries` 的连接（例如 InfluxDB 的 measurement）上打开集合时，其数据网格会提供与查询结果相同的 Data、Chart 和 JSON 视图。当 `detect_chart_columns` 返回 `Ok` 时，第一页以图表形式打开，坐标轴由 `default_bindings_for_time_series` 预设（X 轴为时间，Y 轴为第一个数值列，分组为第一个 `Text` 列）。Data 视图以网格显示各行，而不是其他集合使用的文档树。刷新（无论是手动、自动还是翻页）会保留用户选择的视图，只有当新的一页无法再绘制图表时才回退到 Data。
+
+工具栏和状态栏使用驱动程序实际运行的查询来命名这次浏览，该查询取自 `QueryGenerator::collection_browse_query`，因此标签以连接自身的查询语言书写。未实现该方法的驱动程序保留通用标签。
 
 ### 保存
 

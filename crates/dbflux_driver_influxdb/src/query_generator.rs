@@ -4,9 +4,11 @@
 //! context menu ("SELECT *", "SHOW MEASUREMENTS", etc.) and MCP previews.
 
 use dbflux_core::{
-    CollectionTemplateRequest, GeneratedQuery, InfluxVersion, MutationCategory, MutationRequest,
-    QueryGenerator, QueryLanguage, ReadTemplateRequest,
+    CollectionBrowseRequest, CollectionTemplateRequest, GeneratedQuery, InfluxVersion,
+    MutationCategory, MutationRequest, QueryGenerator, QueryLanguage, ReadTemplateRequest,
 };
+
+use crate::connection::{escape_flux_string, escape_influxql_ident};
 
 /// InfluxDB query generator — produces InfluxQL or Flux templates.
 ///
@@ -74,6 +76,70 @@ impl InfluxQueryGenerator {
             "from(bucket: \"{bucket_escaped}\")\n  |> range(start: -1h)\n  |> filter(fn: (r) => r._measurement == \"{measurement_escaped}\")"
         )
     }
+
+    /// InfluxQL statement that reads one page of a measurement, newest first.
+    pub fn browse_measurement_influxql(measurement: &str, limit: u32, offset: u64) -> String {
+        let measurement = escape_influxql_ident(measurement);
+
+        format!("SELECT * FROM {measurement} ORDER BY time DESC LIMIT {limit} OFFSET {offset}")
+    }
+
+    /// Flux query that reads one page of a measurement from the last 24 hours,
+    /// newest first.
+    ///
+    /// Flux has no offset, so a later page fetches `offset + limit` rows and
+    /// keeps the last `limit` of them with `tail`.
+    pub fn browse_measurement_flux(
+        bucket: &str,
+        measurement: &str,
+        limit: u32,
+        offset: u64,
+    ) -> String {
+        let bucket = escape_flux_string(bucket);
+        let measurement = escape_flux_string(measurement);
+
+        let head = format!(
+            "from(bucket: \"{bucket}\")\
+             \n  |> range(start: -24h)\
+             \n  |> filter(fn: (r) => r._measurement == \"{measurement}\")\
+             \n  |> sort(columns: [\"_time\"], desc: true)"
+        );
+
+        if offset == 0 {
+            format!("{head}\n  |> limit(n: {limit})")
+        } else {
+            let fetch = offset + u64::from(limit);
+            format!("{head}\n  |> limit(n: {fetch})\n  |> tail(n: {limit})")
+        }
+    }
+
+    /// The query `InfluxConnection::browse_collection` runs for `request`.
+    ///
+    /// Flux is used only on a v2 connection whose default language is Flux.
+    /// Every other connection browses with InfluxQL. The bucket or database
+    /// comes from the collection reference, not the profile default.
+    pub fn browse_query(&self, request: &CollectionBrowseRequest) -> GeneratedQuery {
+        let measurement = &request.collection.name;
+        let limit = request.pagination.limit();
+        let offset = request.pagination.offset();
+
+        if self.version == InfluxVersion::V2 && self.default_language == QueryLanguage::Flux {
+            GeneratedQuery {
+                language: QueryLanguage::Flux,
+                text: Self::browse_measurement_flux(
+                    &request.collection.database,
+                    measurement,
+                    limit,
+                    offset,
+                ),
+            }
+        } else {
+            GeneratedQuery {
+                language: QueryLanguage::InfluxQuery,
+                text: Self::browse_measurement_influxql(measurement, limit, offset),
+            }
+        }
+    }
 }
 
 impl QueryGenerator for InfluxQueryGenerator {
@@ -104,6 +170,10 @@ impl QueryGenerator for InfluxQueryGenerator {
                 text: Self::select_all_influxql(measurement, 100),
             }),
         }
+    }
+
+    fn collection_browse_query(&self, request: &CollectionBrowseRequest) -> Option<GeneratedQuery> {
+        Some(self.browse_query(request))
     }
 
     fn template_for_collection(
@@ -279,5 +349,103 @@ mod tests {
         let q = InfluxQueryGenerator::query_measurement_flux("my\"bucket", "my\"measurement");
         // Embedded double quotes are escaped with backslash in Flux string literals
         assert!(q.contains("\\\""), "Flux must escape embedded quotes: {q}");
+    }
+
+    fn browse_request(
+        database: &str,
+        measurement: &str,
+        limit: u32,
+        offset: u64,
+    ) -> CollectionBrowseRequest {
+        CollectionBrowseRequest::new(dbflux_core::CollectionRef::new(database, measurement))
+            .with_pagination(dbflux_core::Pagination::Offset { limit, offset })
+    }
+
+    #[test]
+    fn browse_measurement_influxql_reads_newest_page_first() {
+        let query = InfluxQueryGenerator::browse_measurement_influxql("cpu usage", 50, 100);
+
+        assert_eq!(
+            query,
+            "SELECT * FROM \"cpu usage\" ORDER BY time DESC LIMIT 50 OFFSET 100"
+        );
+    }
+
+    #[test]
+    fn browse_measurement_flux_first_page_limits_without_tail() {
+        let query =
+            InfluxQueryGenerator::browse_measurement_flux("my_bucket", "temperature", 25, 0);
+
+        assert_eq!(
+            query,
+            "from(bucket: \"my_bucket\")\n  |> range(start: -24h)\n  |> filter(fn: (r) => r._measurement == \"temperature\")\n  |> sort(columns: [\"_time\"], desc: true)\n  |> limit(n: 25)"
+        );
+    }
+
+    #[test]
+    fn browse_measurement_flux_later_page_overfetches_and_tails() {
+        let query =
+            InfluxQueryGenerator::browse_measurement_flux("my_bucket", "temperature", 25, 50);
+
+        assert!(
+            query.ends_with("|> limit(n: 75)\n  |> tail(n: 25)"),
+            "{query}"
+        );
+    }
+
+    #[test]
+    fn browse_measurement_escapes_names_for_each_language() {
+        let influxql = InfluxQueryGenerator::browse_measurement_influxql("a\"b", 10, 0);
+        let flux = InfluxQueryGenerator::browse_measurement_flux("b\\k", "a\"b", 10, 0);
+
+        assert!(influxql.contains("FROM \"a\"\"b\""), "{influxql}");
+        assert!(flux.contains("from(bucket: \"b\\\\k\")"), "{flux}");
+        assert!(flux.contains("r._measurement == \"a\\\"b\""), "{flux}");
+    }
+
+    #[test]
+    fn collection_browse_query_is_influxql_on_v1() {
+        let generator =
+            InfluxQueryGenerator::new(InfluxVersion::V1, QueryLanguage::InfluxQuery, None);
+
+        let query = generator
+            .collection_browse_query(&browse_request("metrics", "system", 100, 0))
+            .expect("InfluxDB always describes its browse query");
+
+        assert_eq!(query.language, QueryLanguage::InfluxQuery);
+        assert_eq!(
+            query.text,
+            "SELECT * FROM \"system\" ORDER BY time DESC LIMIT 100 OFFSET 0"
+        );
+    }
+
+    #[test]
+    fn collection_browse_query_follows_the_v2_default_language() {
+        let request = browse_request("metrics", "system", 100, 0);
+
+        let influxql =
+            InfluxQueryGenerator::new(InfluxVersion::V2, QueryLanguage::InfluxQuery, None)
+                .collection_browse_query(&request)
+                .expect("InfluxDB always describes its browse query");
+        assert_eq!(influxql.language, QueryLanguage::InfluxQuery);
+        assert!(
+            influxql.text.starts_with("SELECT * FROM \"system\""),
+            "{}",
+            influxql.text
+        );
+
+        let flux = InfluxQueryGenerator::new(
+            InfluxVersion::V2,
+            QueryLanguage::Flux,
+            Some("profile-default".to_string()),
+        )
+        .collection_browse_query(&request)
+        .expect("InfluxDB always describes its browse query");
+        assert_eq!(flux.language, QueryLanguage::Flux);
+        assert!(
+            flux.text.starts_with("from(bucket: \"metrics\")"),
+            "the sidebar bucket must win over the profile default: {}",
+            flux.text
+        );
     }
 }

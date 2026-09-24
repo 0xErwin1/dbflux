@@ -15,7 +15,7 @@ use super::query_builder::completion::{
 };
 use super::query_builder::{BuilderEvent, FkLoadState, QueryBuilderPanel};
 use super::result_view::{
-    ResultViewMode, default_bindings_for_time_series, should_auto_select_chart_for_time_series,
+    ResultViewMode, default_bindings_for_time_series, result_view_mode_for_fresh_result,
 };
 use super::task_runner::DocumentTaskRunner;
 use dbflux_components::SqlPreviewContext;
@@ -525,6 +525,12 @@ struct FilterBarState {
     /// chart toolbar. Change events are handled via a subscription wired in
     /// `new_internal`.
     refresh_dropdown: Entity<Dropdown>,
+    /// Driver-native text of the running collection browse, on one line.
+    ///
+    /// Shown in place of the generic source label so a collection reads in the
+    /// connection's own query language. `None` when the driver does not
+    /// describe its browse query, or for table and query-result sources.
+    browse_query_label: Option<String>,
 }
 
 /// Auto-refresh policy, timer, and grid load state.
@@ -572,6 +578,15 @@ struct ChartState {
     /// after the panel is built. `None` for non-TimeSeries sources.
     chart_source_time_range_panel:
         Option<Entity<dbflux_components::common::time_range::view::TimeRangePanel>>,
+
+    /// The source is a collection on a `TimeSeries` connection. Such a source
+    /// offers the Data / Chart / JSON result views and opens as a chart.
+    time_series_collection: bool,
+
+    /// Whether the time-series collection already received its first result.
+    /// Only that first result picks the chart view and seeds the axis bindings.
+    /// Later refreshes keep what the user chose.
+    time_series_result_seen: bool,
 }
 
 /// Mutation confirmation modal pair (light + hard variants).
@@ -1291,7 +1306,10 @@ impl DataGridPanel {
         )
         .detach();
 
-        let view_config = super::data_view::DataViewConfig::for_source(&source);
+        let time_series_collection = matches!(source, DataSource::Collection { .. })
+            && Self::connection_category(&source, &app_state, cx)
+                == Some(DatabaseCategory::TimeSeries);
+        let view_config = Self::view_config_for(&source, time_series_collection);
         let result_view_mode = ResultViewMode::Table;
 
         let connection_id = match &source {
@@ -1378,6 +1396,7 @@ impl DataGridPanel {
                 filter_completion_cache,
                 limit_input,
                 refresh_dropdown,
+                browse_query_label: None,
             },
             refresh: RefreshState {
                 refresh_policy: default_refresh,
@@ -1396,6 +1415,8 @@ impl DataGridPanel {
             chart: ChartState {
                 chart_shell: None,
                 chart_source_time_range_panel: None,
+                time_series_collection,
+                time_series_result_seen: false,
             },
             mutation_confirm: MutationConfirmState {
                 mutation_confirm_light,
@@ -1762,7 +1783,7 @@ impl DataGridPanel {
     /// succeeded. Independent of the currently active mode — switching to
     /// Chart and back must not change which modes are offered.
     pub fn available_result_view_modes(&self, cx: &App) -> Vec<ResultViewMode> {
-        if !matches!(self.source, DataSource::QueryResult { .. }) {
+        if !self.has_result_views() {
             return vec![];
         }
 
@@ -1789,9 +1810,14 @@ impl DataGridPanel {
         cx.notify();
     }
 
+    /// Whether the source offers the Data / Chart / JSON result views: every
+    /// query result, and a collection on a time-series connection.
+    fn has_result_views(&self) -> bool {
+        matches!(self.source, DataSource::QueryResult { .. }) || self.chart.time_series_collection
+    }
+
     fn uses_result_view(&self) -> bool {
-        matches!(self.source, DataSource::QueryResult { .. })
-            && !self.chrome.result_view_mode.is_table()
+        self.has_result_views() && !self.chrome.result_view_mode.is_table()
     }
 
     /// Returns `true` when the current result has a `Timestamp` column and at
@@ -2319,68 +2345,91 @@ impl DataGridPanel {
         }));
     }
 
-    /// Update the result data (for QueryResult source or after table fetch).
-    pub fn set_result(&mut self, result: QueryResult, cx: &mut Context<Self>) {
+    /// View configuration a source opens with.
+    ///
+    /// A time-series collection holds flat rows (time, tags, fields), so its
+    /// Data view is the grid rather than the document tree other collections use.
+    fn view_config_for(
+        source: &DataSource,
+        time_series_collection: bool,
+    ) -> super::data_view::DataViewConfig {
+        if time_series_collection {
+            super::data_view::DataViewConfig {
+                mode: super::data_view::DataViewMode::Table,
+            }
+        } else {
+            super::data_view::DataViewConfig::for_source(source)
+        }
+    }
+
+    /// Picks the result view for a fresh result and keeps the chart shell in
+    /// step with it.
+    ///
+    /// Shared by query results (`set_result`) and collection browses
+    /// (`apply_collection_result`), so a time-series collection opens as a
+    /// chart the same way a time-series query result can.
+    fn apply_chart_for_result(&mut self, result: &QueryResult, cx: &mut Context<Self>) {
         let was_chart_mode = matches!(self.chrome.result_view_mode, ResultViewMode::Chart);
 
-        self.view_config = super::data_view::DataViewConfig::for_source(&self.source);
+        let detection = detect_chart_columns(result);
+        let detection_ok = matches!(detection, ChartDetection::Ok { .. });
+
+        let time_series_collection = self.chart.time_series_collection;
+        let first_time_series_result =
+            time_series_collection && !self.chart.time_series_result_seen;
+
+        self.chrome.result_view_mode = result_view_mode_for_fresh_result(
+            self.chrome.result_view_mode,
+            &result.shape,
+            &detection,
+            time_series_collection,
+            first_time_series_result,
+        );
+
+        if time_series_collection {
+            self.chart.time_series_result_seen = true;
+        }
+
+        if !detection_ok && self.chart.chart_shell.is_none() {
+            return;
+        }
+
+        if let Some(shell) = &self.chart.chart_shell {
+            shell.update(cx, |s, cx| s.set_result(result, was_chart_mode, cx));
+        } else {
+            let host = crate::chart::HostAdapter::DataGrid(cx.entity().clone());
+            let shell = cx.new(|cx| {
+                let mut shell = crate::chart::ChartShell::new(host, cx);
+                shell.set_result(result, false, cx);
+                shell
+            });
+            self.chart.chart_shell = Some(shell);
+        }
+
+        // Seed the axis bar (time, first numeric, first text tag) only for the
+        // first time-series collection result, so a refresh never clobbers
+        // bindings the user adjusted.
+        if first_time_series_result
+            && let ChartDetection::Ok {
+                time_col,
+                ref numeric_cols,
+            } = detection
+        {
+            let bindings =
+                default_bindings_for_time_series(time_col, numeric_cols, &result.columns);
+            if let Some(shell) = &self.chart.chart_shell {
+                shell.update(cx, |s, cx| s.apply_bindings(bindings, cx));
+            }
+        }
+    }
+
+    /// Update the result data (for QueryResult source or after table fetch).
+    pub fn set_result(&mut self, result: QueryResult, cx: &mut Context<Self>) {
+        self.view_config = Self::view_config_for(&self.source, self.chart.time_series_collection);
         self.chrome.derived_json = None;
         self.chrome.derived_text = None;
 
-        let detection = detect_chart_columns(&result);
-        let detection_ok = matches!(detection, ChartDetection::Ok { .. });
-
-        // Auto-select Chart for TimeSeries Collection sources: fires on every fresh
-        // result when detection passes, regardless of previous mode. Non-TimeSeries
-        // and non-Collection sources follow the existing was_chart_mode preservation path.
-        let is_time_series_collection = matches!(self.source, DataSource::Collection { .. })
-            && Self::connection_category(&self.source, &self.app_state, cx)
-                == Some(DatabaseCategory::TimeSeries);
-
-        let auto_chart = (is_time_series_collection
-            && should_auto_select_chart_for_time_series(&detection))
-            || (was_chart_mode && detection_ok);
-
-        self.chrome.result_view_mode = if auto_chart {
-            ResultViewMode::Chart
-        } else {
-            ResultViewMode::default_for_shape(&result.shape)
-        };
-
-        // Update or create the chart shell for this result.
-        if detection_ok || self.chart.chart_shell.is_some() {
-            if let Some(shell) = &self.chart.chart_shell {
-                let was_chart = was_chart_mode;
-                shell.update(cx, |s, cx| s.set_result(&result, was_chart, cx));
-            } else {
-                // Create the shell for the first chartable result.
-                let host = crate::chart::HostAdapter::DataGrid(cx.entity().clone());
-                let shell = cx.new(|cx| {
-                    let mut shell = crate::chart::ChartShell::new(host, cx);
-                    shell.set_result(&result, false, cx);
-                    shell
-                });
-                self.chart.chart_shell = Some(shell);
-            }
-
-            // Pre-populate bindings for the first TimeSeries Collection result so the
-            // AxisBar shows sensible defaults (time, first numeric, first Text tag).
-            // Only applied on the initial load (!was_chart_mode) to avoid clobbering
-            // user adjustments made during a refresh.
-            if is_time_series_collection
-                && !was_chart_mode
-                && let ChartDetection::Ok {
-                    time_col,
-                    ref numeric_cols,
-                } = detection
-            {
-                let bindings =
-                    default_bindings_for_time_series(time_col, numeric_cols, &result.columns);
-                if let Some(shell) = &self.chart.chart_shell {
-                    shell.update(cx, |s, cx| s.apply_bindings(bindings, cx));
-                }
-            }
-        }
+        self.apply_chart_for_result(&result, cx);
 
         self.result = result;
         self.rebuild_table(None, cx);
@@ -3107,6 +3156,29 @@ impl DataGridPanel {
             Some(DatabaseCategory::TimeSeries) => ("SELECT * FROM", "WHERE"),
             _ => ("SELECT * FROM", "WHERE"),
         }
+    }
+
+    /// Caption and label that name the source left of the filter input.
+    ///
+    /// A collection whose driver describes its browse query shows that query,
+    /// in the connection's own language, with no caption. Every other source
+    /// shows the category-derived verb and the qualified source name.
+    pub(super) fn source_query_labels(&self, cx: &App) -> (&'static str, String) {
+        if let (DataSource::Collection { .. }, Some(label)) =
+            (&self.source, &self.filter_bar.browse_query_label)
+        {
+            return ("", label.clone());
+        }
+
+        let (prefix, _) = Self::filter_labels_for_source(&self.source, &self.app_state, cx);
+
+        let source_name = match &self.source {
+            DataSource::Table { table, .. } => table.qualified_name(),
+            DataSource::Collection { collection, .. } => collection.qualified_name(),
+            DataSource::QueryResult { .. } => String::new(),
+        };
+
+        (prefix, source_name)
     }
 
     /// Filter input placeholder text, derived from `DatabaseCategory`.
@@ -9365,5 +9437,319 @@ mod tests {
             asked_to_close(&seen),
             "a landed delete must let the tab it was closing go"
         );
+    }
+
+    // ---- Time-series collections open as a chart, labelled in the driver's language ----
+
+    const STUB_FLUX_BROWSE: &str = "from(bucket: \"metrics\")\n  |> range(start: -24h)\n  |> filter(fn: (r) => r._measurement == \"system\")\n  |> limit(n: 100)";
+
+    /// Time, one numeric field and one text tag: the shape chart detection
+    /// accepts, as an InfluxQL browse of a measurement returns it.
+    fn time_series_rows() -> QueryResult {
+        let column = |name: &str, kind: ColumnKind| ColumnMeta {
+            name: name.to_string(),
+            type_name: String::new(),
+            kind,
+            nullable: true,
+            is_primary_key: false,
+        };
+
+        let now = chrono::Utc::now();
+
+        QueryResult::table(
+            vec![
+                column("time", ColumnKind::Timestamp),
+                column("load", ColumnKind::Float),
+                column("host", ColumnKind::Text),
+            ],
+            (0..3)
+                .map(|offset| {
+                    vec![
+                        dbflux_core::Value::DateTime(now - chrono::Duration::seconds(offset)),
+                        dbflux_core::Value::Float(offset as f64),
+                        dbflux_core::Value::Text("server-a".to_string()),
+                    ]
+                })
+                .collect(),
+            None,
+            Duration::ZERO,
+        )
+    }
+
+    struct StubBrowseQueryGenerator;
+
+    impl dbflux_core::QueryGenerator for StubBrowseQueryGenerator {
+        fn supported_categories(&self) -> &'static [dbflux_core::MutationCategory] {
+            &[]
+        }
+
+        fn generate_mutation(
+            &self,
+            _mutation: &dbflux_core::MutationRequest,
+        ) -> Option<dbflux_core::GeneratedQuery> {
+            None
+        }
+
+        fn collection_browse_query(
+            &self,
+            _request: &dbflux_core::CollectionBrowseRequest,
+        ) -> Option<dbflux_core::GeneratedQuery> {
+            Some(dbflux_core::GeneratedQuery {
+                language: dbflux_core::QueryLanguage::Flux,
+                text: STUB_FLUX_BROWSE.to_string(),
+            })
+        }
+    }
+
+    /// Time-series connection whose collection browse answers with
+    /// `time_series_rows` and whose generator describes the browse in Flux.
+    struct StubTimeSeriesConnection {
+        metadata: dbflux_core::DriverMetadata,
+        generator: StubBrowseQueryGenerator,
+    }
+
+    impl dbflux_core::Connection for StubTimeSeriesConnection {
+        fn metadata(&self) -> &dbflux_core::DriverMetadata {
+            &self.metadata
+        }
+
+        fn kind(&self) -> dbflux_core::DbKind {
+            dbflux_core::DbKind::InfluxDB
+        }
+
+        fn schema_loading_strategy(&self) -> dbflux_core::SchemaLoadingStrategy {
+            dbflux_core::SchemaLoadingStrategy::SingleDatabase
+        }
+
+        fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
+            unimplemented!("StubTimeSeriesConnection::dialect not needed for this test")
+        }
+
+        fn ping(&self) -> Result<(), dbflux_core::DbError> {
+            Ok(())
+        }
+
+        fn close(&mut self) -> Result<(), dbflux_core::DbError> {
+            Ok(())
+        }
+
+        fn execute(
+            &self,
+            _req: &dbflux_core::QueryRequest,
+        ) -> Result<QueryResult, dbflux_core::DbError> {
+            Err(dbflux_core::DbError::NotSupported("stub".to_string()))
+        }
+
+        fn cancel(&self, _handle: &dbflux_core::QueryHandle) -> Result<(), dbflux_core::DbError> {
+            Ok(())
+        }
+
+        fn schema(&self) -> Result<dbflux_core::SchemaSnapshot, dbflux_core::DbError> {
+            Ok(dbflux_core::SchemaSnapshot::default())
+        }
+
+        fn browse_collection(
+            &self,
+            _request: &dbflux_core::CollectionBrowseRequest,
+        ) -> Result<QueryResult, dbflux_core::DbError> {
+            Ok(time_series_rows())
+        }
+
+        fn count_collection(
+            &self,
+            _request: &dbflux_core::CollectionCountRequest,
+        ) -> Result<u64, dbflux_core::DbError> {
+            Ok(3)
+        }
+
+        fn query_generator(&self) -> Option<&dyn dbflux_core::QueryGenerator> {
+            Some(&self.generator)
+        }
+    }
+
+    fn register_time_series_connection(
+        cx: &mut TestAppContext,
+    ) -> (gpui::Entity<AppStateEntity>, Uuid) {
+        let (app_state, profile_id) = register_builder_stub_connection(
+            cx,
+            dbflux_core::DatabaseCategory::TimeSeries,
+            dbflux_core::QueryLanguage::Flux,
+            None,
+        );
+
+        cx.update(|cx| {
+            app_state.update(cx, |app, _cx| {
+                let connected = app
+                    .connections_mut()
+                    .get_mut(&profile_id)
+                    .expect("stub profile is registered");
+                let metadata = connected.connection.metadata().clone();
+
+                connected.connection = Arc::new(StubTimeSeriesConnection {
+                    metadata,
+                    generator: StubBrowseQueryGenerator,
+                });
+            });
+        });
+
+        (app_state, profile_id)
+    }
+
+    fn open_collection_panel(
+        cx: &mut TestAppContext,
+        app_state: gpui::Entity<AppStateEntity>,
+        profile_id: Uuid,
+    ) -> (gpui::Entity<DataGridPanel>, &mut VisualTestContext) {
+        let panel_holder = Rc::new(RefCell::new(None));
+        let panel_handle = panel_holder.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let panel = cx.new(|cx| {
+                let source = DataSource::Collection {
+                    profile_id,
+                    collection: CollectionRef::new("metrics", "system"),
+                    pagination: Pagination::default(),
+                    total_docs: None,
+                };
+
+                DataGridPanel::new_internal(source, app_state.clone(), vec![], window, cx)
+            });
+
+            panel_handle.replace(Some(panel.clone()));
+            Root::new(panel, window, cx)
+        });
+
+        let panel = panel_holder
+            .borrow()
+            .clone()
+            .expect("panel should be created");
+
+        (panel, window)
+    }
+
+    #[gpui::test]
+    fn time_series_collection_browse_opens_as_chart_with_the_driver_query(cx: &mut TestAppContext) {
+        let (app_state, profile_id) = register_time_series_connection(cx);
+        let (panel, window) = open_collection_panel(cx, app_state.clone(), profile_id);
+
+        window.update(|window, app| {
+            panel.update(app, |panel, cx| panel.refresh(window, cx));
+        });
+        window.run_until_parked();
+
+        window.update(|_, app| {
+            let panel = panel.read(app);
+
+            assert_eq!(
+                panel.result_view_mode(),
+                super::ResultViewMode::Chart,
+                "a chartable time-series collection must open as a chart"
+            );
+            assert!(panel.uses_result_view(), "the chart view must render");
+            assert_eq!(
+                panel.available_result_view_modes(app),
+                vec![
+                    super::ResultViewMode::Table,
+                    super::ResultViewMode::Chart,
+                    super::ResultViewMode::Json,
+                ],
+                "the table stays one click away from the chart"
+            );
+            assert_eq!(
+                panel.view_config.mode,
+                crate::data_view::DataViewMode::Table,
+                "the Data view of a time-series collection is the grid, not the document tree"
+            );
+            assert_eq!(
+                panel.source_query_labels(app),
+                (
+                    "",
+                    "from(bucket: \"metrics\") |> range(start: -24h) |> filter(fn: (r) => r._measurement == \"system\") |> limit(n: 100)"
+                        .to_string()
+                ),
+                "the toolbar must show the driver's own browse query"
+            );
+        });
+
+        let task = cx.update(|cx| {
+            app_state
+                .read(cx)
+                .tasks()
+                .recent_tasks(10)
+                .into_iter()
+                .find(|task| task.kind == dbflux_core::TaskKind::Query)
+                .expect("the browse runs as a query task")
+        });
+
+        assert!(
+            task.description.starts_with("from(bucket: \"metrics\")"),
+            "the status bar must name the driver query, not a generic verb: {}",
+            task.description
+        );
+        assert_eq!(task.query_text.as_deref(), Some(STUB_FLUX_BROWSE));
+    }
+
+    #[gpui::test]
+    fn time_series_collection_refresh_keeps_the_view_the_user_picked(cx: &mut TestAppContext) {
+        let (app_state, profile_id) = register_time_series_connection(cx);
+        let (panel, window) = open_collection_panel(cx, app_state, profile_id);
+
+        window.update(|window, app| {
+            panel.update(app, |panel, cx| panel.refresh(window, cx));
+        });
+        window.run_until_parked();
+
+        window.update(|window, app| {
+            panel.update(app, |panel, cx| {
+                panel.set_result_view_mode(super::ResultViewMode::Table, cx);
+                panel.refresh(window, cx);
+            });
+        });
+        window.run_until_parked();
+
+        window.update(|_, app| {
+            assert_eq!(
+                panel.read(app).result_view_mode(),
+                super::ResultViewMode::Table,
+                "a refresh must not flip the Data view back to the chart"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn document_collection_keeps_the_document_view_without_result_views(cx: &mut TestAppContext) {
+        let (app_state, profile_id) = register_builder_stub_connection(
+            cx,
+            dbflux_core::DatabaseCategory::Document,
+            dbflux_core::QueryLanguage::MongoQuery,
+            None,
+        );
+        let (panel, window) = open_collection_panel(cx, app_state, profile_id);
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                panel.apply_collection_result(
+                    profile_id,
+                    CollectionRef::new("metrics", "system"),
+                    Pagination::default(),
+                    None,
+                    time_series_rows(),
+                    cx,
+                );
+
+                assert_eq!(panel.result_view_mode(), super::ResultViewMode::Table);
+                assert!(!panel.uses_result_view());
+                assert!(panel.available_result_view_modes(cx).is_empty());
+                assert_eq!(
+                    panel.view_config.mode,
+                    crate::data_view::DataViewMode::Document
+                );
+                assert_eq!(
+                    panel.source_query_labels(cx),
+                    ("find", "metrics.system".to_string()),
+                    "a driver without a browse query keeps the generic label"
+                );
+            });
+        });
     }
 }

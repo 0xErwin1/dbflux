@@ -2,6 +2,7 @@ use crate::Value;
 use crate::data::crud::MutationRequest;
 use crate::driver::capabilities::QueryLanguage;
 use crate::query::semantic::{PlannedQuery, SemanticPlan, SemanticPlanKind};
+use crate::query::table_browser::CollectionBrowseRequest;
 use crate::query::transfer::TransferColumn;
 use crate::query::visual_query::VisualQuerySpec;
 use crate::schema::types::ColumnInfo;
@@ -322,6 +323,22 @@ pub trait QueryGenerator: Send + Sync {
     fn template_for_collection(
         &self,
         _request: &CollectionTemplateRequest<'_>,
+    ) -> Option<GeneratedQuery> {
+        None
+    }
+
+    /// Native query text that `Connection::browse_collection` runs for `request`.
+    ///
+    /// Lets the UI show a collection browse in the connection's own query
+    /// language instead of a generic label. The returned text must be the
+    /// statement the driver executes for the same request, so the label never
+    /// describes a query that did not run.
+    ///
+    /// Drivers whose browse path is not a single native statement return `None`
+    /// (default), and the UI keeps its generic label.
+    fn collection_browse_query(
+        &self,
+        _request: &CollectionBrowseRequest,
     ) -> Option<GeneratedQuery> {
         None
     }

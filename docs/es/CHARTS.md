@@ -184,7 +184,7 @@ a un ID guardado y, por tanto, no se deduplica hasta que se guarda.
 
 ## Crear un chart en la UI
 
-Hay dos puntos de entrada.
+Hay tres puntos de entrada.
 
 ### Chart this query
 
@@ -207,6 +207,24 @@ en su primer render.
 El comando "Open chart..." lista los saved charts (construidos por
 `build_saved_chart_palette_items`) para el perfil activo, y abre el chart
 seleccionado a través de `open_saved_chart` como se describió arriba.
+
+### Colecciones de series temporales
+
+Abrir una colección en una conexión cuya categoría es
+`DatabaseCategory::TimeSeries` (un measurement de InfluxDB, por ejemplo) le da a
+su data grid las vistas Data, Chart y JSON que tienen los resultados de query.
+La primera página se abre como chart cuando `detect_chart_columns` devuelve
+`Ok`, con los ejes sembrados por `default_bindings_for_time_series` (el tiempo en
+X, la primera columna numérica en Y y la primera columna `Text` como grupo).
+Data muestra las filas en la grilla en lugar del árbol de documentos que usan
+las demás colecciones. Un refresco, sea manual, automático o un cambio de
+página, conserva la vista que eligió el usuario, y vuelve a Data solo cuando la
+página nueva ya no se puede graficar.
+
+La barra de herramientas y la barra de estado nombran el browse con la query que
+ejecuta el driver, tomada de `QueryGenerator::collection_browse_query`, así que
+la etiqueta está escrita en el lenguaje de query de la propia conexión. Un
+driver que no implementa ese método conserva la etiqueta genérica.
 
 ### Guardar
 

@@ -52,10 +52,43 @@ pub fn should_auto_select_chart_for_time_series(detection: &ChartDetection) -> b
     matches!(detection, ChartDetection::Ok { .. })
 }
 
+/// Result view a fresh result opens in.
+///
+/// - The first result of a time-series collection opens as a chart when chart
+///   detection passed.
+/// - A chart stays a chart while the new result is still chartable.
+/// - Later results of a time-series collection (refresh, paging) keep the view
+///   the user picked, so an auto-refresh never flips Data back to Chart.
+/// - Everything else falls back to the default view for the result shape.
+pub fn result_view_mode_for_fresh_result(
+    current: ResultViewMode,
+    shape: &QueryResultShape,
+    detection: &ChartDetection,
+    time_series_collection: bool,
+    first_result: bool,
+) -> ResultViewMode {
+    let chartable = should_auto_select_chart_for_time_series(detection);
+
+    if time_series_collection && first_result && chartable {
+        return ResultViewMode::Chart;
+    }
+
+    if current == ResultViewMode::Chart && chartable {
+        return ResultViewMode::Chart;
+    }
+
+    if time_series_collection && !first_result && current != ResultViewMode::Chart {
+        return current;
+    }
+
+    ResultViewMode::default_for_shape(shape)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        ResultViewMode, default_bindings_for_time_series, should_auto_select_chart_for_time_series,
+        ResultViewMode, default_bindings_for_time_series, result_view_mode_for_fresh_result,
+        should_auto_select_chart_for_time_series,
     };
     use dbflux_components::chart::{AggKind, ChartDetection};
     use dbflux_core::{ColumnKind, ColumnMeta, QueryResultShape};
@@ -83,6 +116,88 @@ mod tests {
             should_auto_select_chart_for_time_series(&detection),
             "Ok detection must auto-select Chart for TimeSeries sources"
         );
+    }
+
+    fn chartable() -> ChartDetection {
+        ChartDetection::Ok {
+            time_col: 0,
+            numeric_cols: vec![1],
+        }
+    }
+
+    #[test]
+    fn first_time_series_collection_result_opens_as_chart() {
+        let mode = result_view_mode_for_fresh_result(
+            ResultViewMode::Table,
+            &QueryResultShape::Table,
+            &chartable(),
+            true,
+            true,
+        );
+
+        assert_eq!(mode, ResultViewMode::Chart);
+    }
+
+    #[test]
+    fn unchartable_time_series_collection_result_opens_as_data() {
+        let mode = result_view_mode_for_fresh_result(
+            ResultViewMode::Table,
+            &QueryResultShape::Table,
+            &ChartDetection::NoNumericSeries,
+            true,
+            true,
+        );
+
+        assert_eq!(mode, ResultViewMode::Table);
+    }
+
+    #[test]
+    fn refreshed_time_series_collection_keeps_the_view_the_user_picked() {
+        for picked in [ResultViewMode::Table, ResultViewMode::Json] {
+            let mode = result_view_mode_for_fresh_result(
+                picked,
+                &QueryResultShape::Table,
+                &chartable(),
+                true,
+                false,
+            );
+
+            assert_eq!(mode, picked, "a refresh must not replace {picked:?}");
+        }
+    }
+
+    #[test]
+    fn chart_falls_back_to_data_when_the_new_result_is_not_chartable() {
+        let mode = result_view_mode_for_fresh_result(
+            ResultViewMode::Chart,
+            &QueryResultShape::Table,
+            &ChartDetection::EmptyResult,
+            true,
+            false,
+        );
+
+        assert_eq!(mode, ResultViewMode::Table);
+    }
+
+    #[test]
+    fn other_sources_only_stay_in_chart_when_already_there() {
+        let from_table = result_view_mode_for_fresh_result(
+            ResultViewMode::Table,
+            &QueryResultShape::Table,
+            &chartable(),
+            false,
+            true,
+        );
+        let from_chart = result_view_mode_for_fresh_result(
+            ResultViewMode::Chart,
+            &QueryResultShape::Table,
+            &chartable(),
+            false,
+            false,
+        );
+
+        assert_eq!(from_table, ResultViewMode::Table);
+        assert_eq!(from_chart, ResultViewMode::Chart);
     }
 
     /// When there is no Timestamp column, do NOT auto-select Chart.

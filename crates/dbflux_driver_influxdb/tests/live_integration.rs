@@ -17,8 +17,9 @@
 )]
 
 use dbflux_core::{
-    Connection, ConnectionProfile, DbConfig, DbDriver, DbError, ExecutionContext,
-    ExecutionSourceContext, InfluxVersion, QueryRequest,
+    CollectionBrowseRequest, CollectionRef, ColumnKind, Connection, ConnectionProfile, DbConfig,
+    DbDriver, DbError, ExecutionContext, ExecutionSourceContext, InfluxVersion, Pagination,
+    QueryLanguage, QueryRequest, QueryResult,
 };
 use dbflux_driver_influxdb::InfluxDriver;
 use dbflux_test_support::containers;
@@ -717,6 +718,112 @@ fn v1_instance_catalog_is_none_and_degrades_cleanly() -> Result<(), DbError> {
             matches!(error, DbError::NotSupported(_)),
             "expected NotSupported, got {error:?}"
         );
+
+        Ok(())
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Measurement browse: the query the UI shows is the query that runs, and the
+// result carries the column kinds the chart view needs.
+// ---------------------------------------------------------------------------
+
+fn browse_first_page(database: &str) -> CollectionBrowseRequest {
+    CollectionBrowseRequest::new(CollectionRef::new(database, "metric")).with_pagination(
+        Pagination::Offset {
+            limit: 10,
+            offset: 0,
+        },
+    )
+}
+
+/// Asserts a browse result has a timestamp column and a numeric column, which
+/// is what chart detection needs to open a time-series source as a chart.
+fn assert_chartable(result: &QueryResult) {
+    assert!(
+        result
+            .columns
+            .iter()
+            .any(|column| column.kind == ColumnKind::Timestamp),
+        "browse result must carry a timestamp column: {:?}",
+        result.columns
+    );
+    assert!(
+        result
+            .columns
+            .iter()
+            .any(|column| matches!(column.kind, ColumnKind::Integer | ColumnKind::Float)),
+        "browse result must carry a numeric column: {:?}",
+        result.columns
+    );
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn v2_measurement_browse_runs_the_query_it_describes() -> Result<(), DbError> {
+    containers::with_influxdb_v2(|cfg| {
+        let lines = generate_metric_points(20);
+        write_v2_line_protocol(&cfg.endpoint, &cfg.token, &cfg.org, &cfg.bucket, &lines)?;
+
+        std::thread::sleep(Duration::from_millis(500));
+
+        let conn = connect_v2(&cfg.endpoint, &cfg.bucket, &cfg.org, &cfg.token)?;
+        let request = browse_first_page(&cfg.bucket);
+
+        let described = conn
+            .query_generator()
+            .and_then(|generator| generator.collection_browse_query(&request))
+            .expect("InfluxDB must describe its browse query");
+        assert_eq!(described.language, QueryLanguage::InfluxQuery);
+        assert_eq!(
+            described.text,
+            "SELECT * FROM \"metric\" ORDER BY time DESC LIMIT 10 OFFSET 0"
+        );
+
+        let result = conn.browse_collection(&request)?;
+
+        assert_eq!(
+            result.rows.len(),
+            10,
+            "the browse must honour the page size"
+        );
+        assert_chartable(&result);
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn v1_measurement_browse_runs_the_query_it_describes() -> Result<(), DbError> {
+    containers::with_influxdb_v1(|cfg| {
+        let database = "testdb";
+        setup_v1_database(&cfg.endpoint, database)?;
+        write_v1_line_protocol(&cfg.endpoint, database, &generate_metric_points(20))?;
+
+        std::thread::sleep(Duration::from_millis(500));
+
+        let conn = connect_v1(&cfg.endpoint, database)?;
+        let request = browse_first_page(database);
+
+        let described = conn
+            .query_generator()
+            .and_then(|generator| generator.collection_browse_query(&request))
+            .expect("InfluxDB must describe its browse query");
+        assert_eq!(described.language, QueryLanguage::InfluxQuery);
+        assert_eq!(
+            described.text,
+            "SELECT * FROM \"metric\" ORDER BY time DESC LIMIT 10 OFFSET 0"
+        );
+
+        let result = conn.browse_collection(&request)?;
+
+        assert_eq!(
+            result.rows.len(),
+            10,
+            "the browse must honour the page size"
+        );
+        assert_chartable(&result);
 
         Ok(())
     })

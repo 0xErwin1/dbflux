@@ -176,7 +176,7 @@ and therefore is not deduplicated until it is saved.
 
 ## Creating a chart in the UI
 
-There are two entry points.
+There are three entry points.
 
 ### Chart this query
 
@@ -198,6 +198,23 @@ non-empty query causes the document to auto-execute on its first render.
 The "Open chart..." command lists saved charts (built by
 `build_saved_chart_palette_items`) for the active profile, and opens the
 selected chart via `open_saved_chart` as described above.
+
+### Time-series collections
+
+Opening a collection on a connection whose category is
+`DatabaseCategory::TimeSeries` (an InfluxDB measurement, for example) gives its
+data grid the Data, Chart and JSON views that query results have. The first page
+opens as a chart when `detect_chart_columns` returns `Ok`, with the axes seeded
+by `default_bindings_for_time_series` (time on X, the first numeric column on Y,
+the first `Text` column as the group). Data shows the rows in the grid rather
+than the document tree other collections use. A refresh, whether manual,
+automatic or a page change, keeps the view the user picked, and falls back to
+Data only when the new page is no longer chartable.
+
+The toolbar and the status bar name the browse by the query the driver runs,
+taken from `QueryGenerator::collection_browse_query`, so the label is written in
+the connection's own query language. A driver that does not implement that
+method keeps the generic label.
 
 ### Saving
 

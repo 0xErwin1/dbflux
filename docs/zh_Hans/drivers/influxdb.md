@@ -70,6 +70,7 @@
 - **审计发出** —— 所有查询都经由标准的 DBFlux 审计接收端（sink）跟踪。`bucket_or_database` 元数据字段记录的是每条查询实际使用的存储桶，而不是配置中的默认值。
 - **多语句 InfluxQL** —— 当查询包含多个以 `;` 分隔的语句时（例如 `SHOW MEASUREMENTS; SHOW SERIES`），所有结果会被拼接成单个结果集，并在前面附加一个合成的 `statement_index` 整数列，用以区分来自不同语句的行。
 - **「查询测量」右键菜单** —— 右键点击侧边栏中的某个测量会显示「查询测量」。该动作会打开一个新的代码文档，其中预填了模板查询（InfluxQL 为 `SELECT * FROM ...`，Flux 为 `from(bucket: ...) |> range(...)`）。
+- **打开测量时以图表显示** —— 从侧边栏打开一个测量时，会针对该测量所属的存储桶或数据库，以 InfluxQL 运行 `SELECT * FROM "<measurement>" ORDER BY time DESC LIMIT <n> OFFSET <m>`（在 v2 上经由 InfluxQL 兼容端点）。`InfluxQueryGenerator::collection_browse_query` 返回的正是同一条语句，因此数据网格的工具栏和状态栏显示的就是实际运行的 InfluxQL 查询。结果包含一个时间戳列和带类型的字段列，因此测量会在 Chart 视图中打开，切换到 Data 视图即可查看各行。
 - **存储桶上的「新建查询」右键菜单** —— 右键点击存储桶/数据库节点会显示「新建查询」，打开一个已激活该连接的空白代码文档。
 - **读取模板生成** —— `InfluxQueryGenerator` 为 InfluxQL 与 Flux 生成「查询全部」以及按测量的读取模板（供右键菜单动作与「复制为查询」使用），并依据连接所配置的版本与默认存储桶感知版本差异。
 - **客户端身份** —— 每个 HTTP 请求都以 `dbflux/<version>` 作为 `User-Agent` 头，可在服务器端的请求日志中看到。
@@ -93,3 +94,6 @@
 - **向后兼容的序列化** —— 用旧的必填 `bucket_or_database` 字段保存的配置仍可正确加载。该字段通过一个 serde 别名反序列化为 `default_bucket`。此变更之后保存的配置使用 `default_bucket` 键。
 - **实例指标与检查器仅支持 v2** —— 在 v1 连接上 `instance_catalog()` 返回 `None`。v1 确实也提供 `/metrics`，但其暴露的内容不含本目录所声明的 v2 指标名，而 `/health` 是 v2 的端点（v1 提供的是 `/ping`）。`execute()` 对 v1 连接上的实例查询会以 `NotSupported` 拒绝，而不是从一个本目录从未验证过的面去回答，这与上面提到的 v1 写入权限探测限制是一致的。
 - **实例指标不支持行操作** —— `InstanceCatalog::row_actions` 使用 trait 默认实现（空列表）；`/metrics` 是一次只读的遥测抓取，没有任何可由某一行触发的服务端动作。
+- **浏览测量时忽略过滤输入** —— `browse_collection` 与 `count_collection` 不读取集合过滤条件，因此在数据网格过滤框中输入的内容不会缩小结果行。
+- **浏览测量没有时间窗口** —— 浏览会读取整个保留期内最新的行，并且图表的时间范围预设不会对测量提供。需要限定时间的查询请使用「查询测量」。
+- **结果中不区分标签与字段** —— 两者都作为普通列返回。图表按第一个文本列分组，它通常是一个标签，但也可能是字符串字段。

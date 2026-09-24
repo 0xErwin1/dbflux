@@ -26,6 +26,16 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **Time-series measurements open as a chart** — opening a measurement on an
+  InfluxDB connection showed a document tree, the toolbar read
+  `SELECT * FROM <bucket>.<measurement>` and the status bar `find ...`,
+  whatever the connection's query language. A collection on a time-series
+  connection now offers the Data, Chart and JSON views and opens as a chart
+  when the result has a time and a numeric column. Data shows a grid, and a
+  refresh keeps the view you picked. The toolbar and the status bar show the
+  query the driver runs, which drivers supply through
+  `QueryGenerator::collection_browse_query`. For InfluxDB that is InfluxQL.
+
 * **Active query prompt shows the whole query** — the "Active query running"
   prompt showed the running task's label, which the editor cuts at 80
   characters, so a longer query ended in "..." as in the status bar. The
