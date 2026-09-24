@@ -22,6 +22,12 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* External RPC drivers now refuse a query that sets a row limit (including
+  zero) or a statement timeout, both in the client before the request is sent
+  and in the driver host before the plugin connection runs it. Previously the
+  host passed those options through with nothing to guarantee the driver
+  honored them. Queries without either option run as before.
+
 * `F5` now refreshes the focused document (table data, bucket list, object
   listing, key browser), and the audit viewer's `r` refreshes the audit list
   instead of the connection schema. The buckets empty state showed `r refresh`,
@@ -43,12 +49,24 @@ All notable changes to DBFlux will be documented in this file.
   extras already bound when a connection is edited, is reachable with j/k, and
   is addressable as `cm-setting-<phase>_hook_extra`.
 
+* The SQL editor warns once when any delivered result set actually omitted rows; the
+  data grid shows the warning for its selected result set, even when no rows were
+  retained. A result that merely fills its limit is not flagged, and discarded
+  stale executions do not raise omission warnings.
+
 * Redis, Turso, and InfluxDB now refuse requested row limits (including zero)
   or statement timeouts before execution with `NotSupported`, rather than
   dispatching commands, SQL, HTTP, or instance-context queries without those
   protections. Unprotected execution remains available; the default editor
   cannot promise these protections on these backends.
   
+* **Audit export asks where to save** — exporting from the audit viewer now
+  opens the same save dialog as the other exports, with a timestamped default
+  name (`audit_export_<YYYYMMDD-HHMMSS>.<csv|json>`), instead of writing to a
+  fixed `~/Downloads/audit_export.*` path that a second export silently
+  replaced. Cancelling writes nothing, and write failures are reported with a
+  correlation id in the audit log.
+
 * Reject MongoDB execution requests with row limits or statement timeouts before any operation dispatches.
 
 * **Chart controls for missing features removed** — the chart toolbar's PNG
@@ -69,6 +87,26 @@ All notable changes to DBFlux will be documented in this file.
   sparse filter no longer returns empty pages. Keys repeated by `SCAN` appear
   once per page, and the page's key types are fetched in one pipeline instead
   of one `TYPE` round trip per key.
+
+* **Prompt before abandoning a running query** — disconnecting a connection
+  with a query still running, or closing the DBFlux window while any
+  connection runs one, now opens the "Active query running" prompt instead of
+  acting right away. **Cancel query** cancels the query and stays connected,
+  **Keep waiting** changes nothing, and **Disconnect anyway** / **Quit anyway**
+  cancels the query and continues. The prompt existed but nothing opened it.
+
+* **Linux title-bar close follows the window-manager close** — the main
+  window's in-app close button (client-side decorations) removed the window
+  directly, skipping the running-query prompt and the graceful shutdown that
+  saves pending edits and closes connections. It now takes the same path as
+  closing through the window manager. Other windows keep their close behavior.
+
+* **Cancelling a query no longer freezes the UI** — SQLite's cancel waited
+  for the connection lock that the running query holds, so cancelling from the
+  editor, the tasks panel, or the running-query prompt froze the window until
+  the query ended (forever, for an endless query). SQLite now interrupts
+  without taking the lock, and driver cancels for every backend run off the UI
+  thread, so a slow network cancel cannot stall it either.
 
 * The key browser filter now passes input containing `*`, `?` or `[` through
   as a glob, so a prefix search such as `leaderboard*` works; plain text still
@@ -475,6 +513,20 @@ All notable changes to DBFlux will be documented in this file.
   instead of closing over unsaved work; a document that has no save path
   at all keeps its tab too and says so. "Don't save" discards only the
   documents the dialog listed, not every open tab.
+
+* **Modals answer Enter, Escape and close the same way** — only the delete
+  connection and unsaved changes dialogs answered the keyboard, and most
+  dialogs had no close button and ignored clicks on the backdrop. Every dialog
+  built on the shared modal shell now cancels on Escape, the X button and a
+  backdrop click, and confirms on Enter only while its primary action is
+  enabled; Enter inside a multi-line editor still inserts a new line. The drop
+  table and tunnel passphrase dialogs focus their input when they open, the
+  drop table and unsaved changes dialogs use real disabled buttons, and the
+  unsaved changes list uses the standard checkbox. The drop table SQL preview
+  now quotes the table the way the connection's database does, such as
+  backticks on MySQL and brackets on SQL Server, instead of always using
+  PostgreSQL double quotes. The cell editor and document preview have their
+  own keyboard contexts, and Escape closes them.
 
 * **Password save failures are reported** — a failed keyring write while
   saving or duplicating a connection profile now keeps the form open and

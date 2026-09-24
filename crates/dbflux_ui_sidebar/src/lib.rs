@@ -143,6 +143,9 @@ pub enum SidebarEvent {
     /// Request to open the drop-table modal for a specific table.
     RequestDropTable {
         item_id: String,
+        /// Connection the table belongs to, so the modal can quote its SQL
+        /// preview in that connection's dialect.
+        profile_id: Uuid,
         table_name: String,
         schema_name: Option<String>,
         dependents: Vec<dbflux_core::RelationRef>,
@@ -239,6 +242,13 @@ pub enum SidebarEvent {
     ///
     /// Emitted when the user clicks the `InstanceOverviewLeaf` node in the sidebar.
     OpenInstanceOverview {
+        profile_id: Uuid,
+    },
+
+    /// The user asked to disconnect a connection that still has a query
+    /// running. The host asks what to do with the query instead of
+    /// disconnecting right away.
+    RequestActiveQueryDisconnect {
         profile_id: Uuid,
     },
 

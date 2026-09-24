@@ -243,6 +243,7 @@ impl Sidebar {
 
                 cx.emit(SidebarEvent::RequestDropTable {
                     item_id: item_id.to_string(),
+                    profile_id: *profile_id,
                     table_name,
                     schema_name,
                     dependents,

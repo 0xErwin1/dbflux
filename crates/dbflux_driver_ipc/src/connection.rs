@@ -116,6 +116,7 @@ impl Connection for IpcConnection {
     }
 
     fn execute(&self, req: &QueryRequest) -> Result<QueryResult, DbError> {
+        reject_protected_query(req)?;
         self.client
             .execute(self.session_id, req)
             .map_err(DbError::from)
@@ -125,6 +126,7 @@ impl Connection for IpcConnection {
         &self,
         req: &QueryRequest,
     ) -> Result<(QueryHandle, QueryResult), DbError> {
+        reject_protected_query(req)?;
         let (handle_id, result) = self
             .client
             .execute_with_handle(self.session_id, req)
@@ -527,6 +529,16 @@ impl KeyValueApi for IpcConnection {
     }
 }
 
+#[allow(clippy::result_large_err)]
+fn reject_protected_query(request: &QueryRequest) -> Result<(), DbError> {
+    if request.limit.is_some() || request.statement_timeout.is_some() {
+        return Err(DbError::NotSupported(
+            "IPC drivers cannot certify query limit or statement timeout enforcement".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Whether bulk schema column loads (`SchemaColumns`) are available on the
 /// negotiated driver RPC version. Introduced in v1.4; mirrors
 /// `protocol_supports_semantic_planning` in the transport, which assumes
@@ -553,9 +565,100 @@ fn ensure_bulk_schema_columns_supported(version: ProtocolVersion) -> Result<(), 
 
 #[cfg(test)]
 mod tests {
-    use super::ensure_bulk_schema_columns_supported;
-    use dbflux_core::DbError;
+    use super::{IpcConnection, ensure_bulk_schema_columns_supported};
+    use crate::transport::RpcClient;
+    use dbflux_core::{
+        Connection, DatabaseCategory, DbError, DbKind, DriverMetadataBuilder, QueryLanguage,
+        QueryRequest,
+    };
     use dbflux_ipc::ProtocolVersion;
+    use dbflux_ipc::driver_socket_name;
+    use dbflux_test_support::{FakeDriverAction, FakeDriverRpcConfig, FakeDriverRpcServer};
+    use std::{sync::Arc, time::Duration};
+    use uuid::Uuid;
+
+    #[test]
+    fn protected_ipc_calls_do_not_reach_transport() {
+        let socket_id = format!("protected-ipc-{}", Uuid::new_v4());
+        let server = FakeDriverRpcServer::start(
+            FakeDriverRpcConfig::new(&socket_id)
+                .with_actions(vec![FakeDriverAction::Pong, FakeDriverAction::Pong]),
+        )
+        .expect("start server");
+        let socket_name = driver_socket_name(&socket_id).expect("socket name");
+        let client = Arc::new(RpcClient::connect(socket_name.borrow()).expect("connect"));
+        let connection = IpcConnection::new(
+            client,
+            Uuid::nil(),
+            DbKind::SQLite,
+            DriverMetadataBuilder::new(
+                "test",
+                "Test",
+                DatabaseCategory::Relational,
+                QueryLanguage::Sql,
+            )
+            .build(),
+            dbflux_core::DriverCapabilities::empty(),
+            dbflux_core::SchemaLoadingStrategy::SingleDatabase,
+            dbflux_core::SchemaFeatures::empty(),
+            dbflux_core::CodeGenCapabilities::empty(),
+        );
+
+        for mut request in [
+            QueryRequest::new("SELECT 1").with_limit(0),
+            QueryRequest::new("SELECT 1"),
+        ] {
+            if request.limit.is_none() {
+                request.statement_timeout = Some(Duration::ZERO);
+            }
+            assert!(matches!(
+                connection.execute(&request),
+                Err(DbError::NotSupported(_))
+            ));
+            assert!(matches!(
+                connection.execute_with_handle(&request),
+                Err(DbError::NotSupported(_))
+            ));
+        }
+        // Both scripted pongs must remain available: neither protected call consumed a frame.
+        assert!(connection.ping().is_ok());
+        assert!(connection.ping().is_ok());
+        server.wait().expect("server completed");
+    }
+
+    #[test]
+    fn unprotected_ipc_calls_reach_transport() {
+        let socket_id = format!("unprotected-ipc-{}", Uuid::new_v4());
+        let server = FakeDriverRpcServer::start(
+            FakeDriverRpcConfig::new(&socket_id)
+                .with_actions(vec![FakeDriverAction::Pong, FakeDriverAction::Pong]),
+        )
+        .expect("start server");
+        let socket_name = driver_socket_name(&socket_id).expect("socket name");
+        let client = Arc::new(RpcClient::connect(socket_name.borrow()).expect("connect"));
+        let connection = IpcConnection::new(
+            client,
+            Uuid::nil(),
+            DbKind::SQLite,
+            DriverMetadataBuilder::new(
+                "test",
+                "Test",
+                DatabaseCategory::Relational,
+                QueryLanguage::Sql,
+            )
+            .build(),
+            dbflux_core::DriverCapabilities::empty(),
+            dbflux_core::SchemaLoadingStrategy::SingleDatabase,
+            dbflux_core::SchemaFeatures::empty(),
+            dbflux_core::CodeGenCapabilities::empty(),
+        );
+        let request = QueryRequest::new("SELECT 1");
+        assert!(connection.execute(&request).is_err());
+        assert!(connection.execute_with_handle(&request).is_err());
+        server
+            .wait()
+            .expect("both calls consumed their scripted responses");
+    }
 
     #[test]
     fn bulk_schema_columns_refused_below_v1_4() {

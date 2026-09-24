@@ -1,10 +1,11 @@
 use crate::controls::{Checkbox, Input, InputState};
-use crate::modals::shell::{ModalShell, ModalVariant};
+use crate::modals::shell::{ModalFocus, ModalShell, ModalVariant};
 use crate::primitives::{BannerBlock, BannerVariant, surface_raised};
 use crate::tokens::{FontSizes, Spacing};
 use crate::typography::AppFonts;
+use dbflux_core::LogErr;
 use gpui::prelude::*;
-use gpui::{Context, EventEmitter, Window, div, px};
+use gpui::{Context, EventEmitter, Focusable, Subscription, Window, div, px};
 use gpui_component::ActiveTheme;
 use gpui_component::Disableable;
 use gpui_component::button::{Button, ButtonVariants};
@@ -77,6 +78,8 @@ pub struct ModalTunnelAuth {
     visible: bool,
     passphrase_input: gpui::Entity<InputState>,
     remember: bool,
+    focus: ModalFocus,
+    _input_observation: Subscription,
 }
 
 impl ModalTunnelAuth {
@@ -86,11 +89,18 @@ impl ModalTunnelAuth {
                 .placeholder(dbflux_i18n::t!("modals.tunnel_auth.placeholder"))
                 .masked(true)
         });
+
+        // The Connect button and Enter both follow the typed passphrase, so
+        // every edit re-renders the modal.
+        let input_observation = cx.observe(&passphrase_input, |_, _, cx| cx.notify());
+
         Self {
             request: None,
             visible: false,
             passphrase_input,
             remember: true,
+            focus: ModalFocus::new(cx),
+            _input_observation: input_observation,
         }
     }
 
@@ -113,13 +123,39 @@ impl ModalTunnelAuth {
         self.remember = true;
         self.request = Some(request);
         self.visible = true;
+
+        let input_focus = self.passphrase_input.read(cx).focus_handle(cx);
+        self.focus.focus(Some(&input_focus), window, cx);
+
         cx.notify();
     }
 
     pub fn close(&mut self, cx: &mut Context<Self>) {
         self.visible = false;
         self.request = None;
+        self.focus.restore(cx);
         cx.notify();
+    }
+
+    /// Connect with the typed passphrase, as the Connect button does. Does
+    /// nothing while the passphrase is empty.
+    pub fn confirm(&mut self, cx: &mut Context<Self>) {
+        let passphrase = self.passphrase_input.read(cx).value().to_string();
+        if TunnelAuthRequest::validate_passphrase(&passphrase).is_err() {
+            return;
+        }
+
+        cx.emit(TunnelAuthOutcome::Provided {
+            passphrase,
+            remember: self.remember,
+        });
+        self.close(cx);
+    }
+
+    /// Abandon the connection attempt.
+    pub fn cancel(&mut self, cx: &mut Context<Self>) {
+        cx.emit(TunnelAuthOutcome::Cancelled);
+        self.close(cx);
     }
 }
 
@@ -207,21 +243,11 @@ impl Render for ModalTunnelAuth {
             );
 
         let on_cancel = cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
-            cx.emit(TunnelAuthOutcome::Cancelled);
-            this.close(cx);
+            this.cancel(cx);
         });
 
         let on_connect = cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
-            let passphrase = this.passphrase_input.read(cx).value().to_string();
-            if TunnelAuthRequest::validate_passphrase(&passphrase).is_err() {
-                return;
-            }
-            let remember = this.remember;
-            cx.emit(TunnelAuthOutcome::Provided {
-                passphrase,
-                remember,
-            });
-            this.close(cx);
+            this.confirm(cx);
         });
 
         let footer = div()
@@ -248,6 +274,20 @@ impl Render for ModalTunnelAuth {
         )
         .variant(ModalVariant::Default)
         .width(px(480.0))
+        .focus_handle(self.focus.handle())
+        .on_close({
+            let entity = cx.entity().downgrade();
+            move |_, cx| {
+                entity.update(cx, |this, cx| this.cancel(cx)).log_err();
+            }
+        })
+        .on_confirm({
+            let entity = cx.entity().downgrade();
+            move |_, cx| {
+                entity.update(cx, |this, cx| this.confirm(cx)).log_err();
+            }
+        })
+        .confirm_enabled(connect_enabled)
         .into_any_element()
     }
 }

@@ -1114,6 +1114,7 @@ document:
           insert_failed: "Failed to insert document: %{error}"
           update_failed: "Failed to update document: %{error}"
     grid:
+      rows_omitted: Rows omitted from this result set because an execution limit was reached.
       edit_bar:
         clean: No unsaved changes
         dirty:
@@ -2226,6 +2227,9 @@ document:
       custom: Custom
       on_open: On open
     result_warnings:
+      rows_omitted:
+        summary: Rows omitted from query result
+        cause: At least one result set omitted rows because an execution limit was reached.
       context:
         query: query result
         table_browse: table browse result
@@ -2382,6 +2386,7 @@ modals:
   active_query:
     title: Active query running
     prompt: A query is still running on this connection. What would you like to do?
+    prompt_shutdown: "Queries are still running on %{connections}. What would you like to do?"
     elapsed: "Running for %{seconds}s"
     disconnect_anyway: Disconnect anyway
     quit_anyway: Quit anyway
@@ -2910,6 +2915,8 @@ settings:
       text_input: Text Input
       dropdown: Dropdown
       sql_preview_modal: SQL Preview
+      cell_editor_modal: Cell Editor
+      document_preview_modal: Document Preview
       context_menu: Context Menu
       confirm_modal: Confirm
       form_navigation: Form Navigation

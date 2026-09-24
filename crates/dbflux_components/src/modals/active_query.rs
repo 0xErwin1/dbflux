@@ -1,7 +1,8 @@
-use crate::modals::shell::{ModalShell, ModalVariant};
+use crate::modals::shell::{ModalFocus, ModalShell, ModalVariant};
 use crate::primitives::{Text, surface_raised};
 use crate::tokens::{FontSizes, Spacing};
 use crate::typography::AppFonts;
+use dbflux_core::LogErr;
 use gpui::prelude::*;
 use gpui::{Context, EventEmitter, Task, Window, div, px};
 use gpui_component::ActiveTheme;
@@ -35,6 +36,12 @@ pub struct ActiveQueryRequest {
     /// The SQL text currently running.
     pub sql: String,
     pub trigger: ActiveQueryTrigger,
+    /// How long the query has already been running when the modal opens, so
+    /// the elapsed hint continues from the real start instead of from zero.
+    pub elapsed_secs: u64,
+    /// Names of the connections the running queries belong to. The shutdown
+    /// prompt lists them, because quitting affects every connection.
+    pub connection_names: Vec<String>,
 }
 
 /// Modal entity for "active query running" confirmation.
@@ -45,15 +52,17 @@ pub struct ModalActiveQuery {
     request: Option<ActiveQueryRequest>,
     visible: bool,
     elapsed_secs: u64,
+    focus: ModalFocus,
     _elapsed_task: Option<Task<()>>,
 }
 
 impl ModalActiveQuery {
-    pub fn new(_cx: &mut Context<Self>) -> Self {
+    pub fn new(cx: &mut Context<Self>) -> Self {
         Self {
             request: None,
             visible: false,
             elapsed_secs: 0,
+            focus: ModalFocus::new(cx),
             _elapsed_task: None,
         }
     }
@@ -63,18 +72,48 @@ impl ModalActiveQuery {
     }
 
     pub fn open(&mut self, request: ActiveQueryRequest, cx: &mut Context<Self>) {
+        self.elapsed_secs = request.elapsed_secs;
         self.request = Some(request);
         self.visible = true;
-        self.elapsed_secs = 0;
         self.start_timer(cx);
+        self.focus.focus_on_next_render();
         cx.notify();
+    }
+
+    /// Resolve the modal as if "Cancel query" was clicked. This is the
+    /// primary action, so Enter runs it: through the shell while focus is in
+    /// the modal, and through the workspace's ConfirmModal keymap otherwise.
+    pub fn confirm(&mut self, cx: &mut Context<Self>) {
+        self.resolve(ActiveQueryOutcome::CancelQuery, cx);
+    }
+
+    /// Resolve the modal as if "Disconnect anyway" / "Quit anyway" was clicked.
+    pub fn force(&mut self, cx: &mut Context<Self>) {
+        self.resolve(ActiveQueryOutcome::ForceDisconnect, cx);
+    }
+
+    fn resolve(&mut self, outcome: ActiveQueryOutcome, cx: &mut Context<Self>) {
+        if !self.visible {
+            return;
+        }
+
+        cx.emit(outcome);
+        self.close(cx);
     }
 
     pub fn close(&mut self, cx: &mut Context<Self>) {
         self.visible = false;
         self.request = None;
         self._elapsed_task = None;
+        self.focus.restore(cx);
         cx.notify();
+    }
+
+    /// Dismiss the modal and let the query keep running. This is what the
+    /// close button, a backdrop click and Escape do: none of them may cancel
+    /// the query or force the disconnect.
+    pub fn keep_waiting(&mut self, cx: &mut Context<Self>) {
+        self.resolve(ActiveQueryOutcome::KeepWaiting, cx);
     }
 
     fn start_timer(&mut self, cx: &mut Context<Self>) {
@@ -106,13 +145,26 @@ fn elapsed_label(seconds: u64) -> String {
     dbflux_i18n::t!("modals.active_query.elapsed", seconds = seconds)
 }
 
+/// Body prompt for the flow that opened the modal.
+fn prompt_label(trigger: ActiveQueryTrigger, connection_names: &[String]) -> String {
+    match trigger {
+        ActiveQueryTrigger::Disconnect => dbflux_i18n::t!("modals.active_query.prompt"),
+        ActiveQueryTrigger::Shutdown => dbflux_i18n::t!(
+            "modals.active_query.prompt_shutdown",
+            connections = connection_names.join(", ")
+        ),
+    }
+}
+
 impl EventEmitter<ActiveQueryOutcome> for ModalActiveQuery {}
 
 impl Render for ModalActiveQuery {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if !self.visible {
             return div().into_any_element();
         }
+
+        self.focus.apply_pending(window, cx);
 
         let Some(ref request) = self.request else {
             return div().into_any_element();
@@ -123,12 +175,13 @@ impl Render for ModalActiveQuery {
         let trigger = request.trigger;
         let elapsed = self.elapsed_secs;
         let elapsed_label = elapsed_label(elapsed);
+        let prompt = prompt_label(trigger, &request.connection_names);
 
         let body = div()
             .flex()
             .flex_col()
             .gap(Spacing::MD)
-            .child(Text::body(dbflux_i18n::t!("modals.active_query.prompt")).into_any_element())
+            .child(Text::body(prompt).into_any_element())
             .child(
                 surface_raised(cx)
                     .w_full()
@@ -152,18 +205,15 @@ impl Render for ModalActiveQuery {
             );
 
         let on_cancel_query = cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
-            cx.emit(ActiveQueryOutcome::CancelQuery);
-            this.close(cx);
+            this.confirm(cx);
         });
 
         let on_keep_waiting = cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
-            cx.emit(ActiveQueryOutcome::KeepWaiting);
-            this.close(cx);
+            this.keep_waiting(cx);
         });
 
         let on_force_disconnect = cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
-            cx.emit(ActiveQueryOutcome::ForceDisconnect);
-            this.close(cx);
+            this.force(cx);
         });
 
         let force_btn_label = match trigger {
@@ -203,6 +253,21 @@ impl Render for ModalActiveQuery {
         )
         .variant(ModalVariant::Default)
         .width(px(520.0))
+        .focus_handle(self.focus.handle())
+        .on_close({
+            let entity = cx.entity().downgrade();
+            move |_, cx| {
+                entity
+                    .update(cx, |this, cx| this.keep_waiting(cx))
+                    .log_err();
+            }
+        })
+        .on_confirm({
+            let entity = cx.entity().downgrade();
+            move |_, cx| {
+                entity.update(cx, |this, cx| this.confirm(cx)).log_err();
+            }
+        })
         .into_any_element()
     }
 }
@@ -220,6 +285,7 @@ mod tests {
         let keys = [
             "modals.active_query.title",
             "modals.active_query.prompt",
+            "modals.active_query.prompt_shutdown",
             "modals.active_query.elapsed",
             "modals.active_query.disconnect_anyway",
             "modals.active_query.quit_anyway",
@@ -267,5 +333,195 @@ mod tests {
             label,
             dbflux_i18n::t!("modals.active_query.elapsed", seconds = 42)
         );
+    }
+}
+
+#[cfg(test)]
+mod outcome_tests {
+    // Explicit imports rather than the parent glob: combining `use super::*`
+    // with `#[gpui::test]` sends the gpui_macros expansion into unbounded
+    // recursion.
+    use super::{
+        ActiveQueryOutcome, ActiveQueryRequest, ActiveQueryTrigger, ModalActiveQuery, prompt_label,
+    };
+    use gpui::{AppContext, Entity, TestAppContext};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    fn request(trigger: ActiveQueryTrigger) -> ActiveQueryRequest {
+        ActiveQueryRequest {
+            sql: "SELECT pg_sleep(60)".to_string(),
+            trigger,
+            elapsed_secs: 12,
+            connection_names: vec!["prod".to_string()],
+        }
+    }
+
+    fn open_modal(
+        cx: &mut TestAppContext,
+        trigger: ActiveQueryTrigger,
+    ) -> (
+        Entity<ModalActiveQuery>,
+        Rc<RefCell<Vec<ActiveQueryOutcome>>>,
+    ) {
+        let modal = cx.new(ModalActiveQuery::new);
+        let outcomes: Rc<RefCell<Vec<ActiveQueryOutcome>>> = Rc::new(RefCell::new(Vec::new()));
+        let sink = outcomes.clone();
+
+        cx.update(|cx| {
+            cx.subscribe(&modal, move |_, event: &ActiveQueryOutcome, _| {
+                sink.borrow_mut().push(event.clone());
+            })
+            .detach();
+
+            modal.update(cx, |modal, cx| modal.open(request(trigger), cx));
+        });
+
+        (modal, outcomes)
+    }
+
+    #[gpui::test]
+    fn open_continues_the_elapsed_time_of_the_running_query(cx: &mut TestAppContext) {
+        let (modal, _outcomes) = open_modal(cx, ActiveQueryTrigger::Disconnect);
+
+        let (visible, elapsed) = cx.update(|cx| {
+            let modal = modal.read(cx);
+            (modal.is_visible(), modal.elapsed_secs)
+        });
+
+        assert!(visible);
+        assert_eq!(elapsed, 12);
+    }
+
+    #[gpui::test]
+    fn each_choice_emits_its_outcome_once_and_closes(cx: &mut TestAppContext) {
+        type Choice = fn(&mut ModalActiveQuery, &mut gpui::Context<ModalActiveQuery>);
+        let choices: [(Choice, &str); 3] = [
+            (ModalActiveQuery::confirm, "CancelQuery"),
+            (ModalActiveQuery::keep_waiting, "KeepWaiting"),
+            (ModalActiveQuery::force, "ForceDisconnect"),
+        ];
+
+        for (choice, expected) in choices {
+            let (modal, outcomes) = open_modal(cx, ActiveQueryTrigger::Disconnect);
+
+            cx.update(|cx| {
+                modal.update(cx, |modal, cx| choice(modal, cx));
+                // A second resolution on a closed modal must not emit again.
+                modal.update(cx, |modal, cx| choice(modal, cx));
+            });
+
+            let emitted: Vec<String> = outcomes
+                .borrow()
+                .iter()
+                .map(|outcome| format!("{outcome:?}"))
+                .collect();
+            assert_eq!(emitted, vec![expected.to_string()]);
+
+            let visible = cx.update(|cx| modal.read(cx).is_visible());
+            assert!(!visible, "{expected} must close the modal");
+        }
+    }
+
+    #[test]
+    fn shutdown_prompt_names_the_connections_and_disconnect_prompt_does_not() {
+        let names = vec!["prod".to_string(), "analytics".to_string()];
+
+        let shutdown = prompt_label(ActiveQueryTrigger::Shutdown, &names);
+        assert!(shutdown.contains("prod, analytics"), "{shutdown}");
+
+        let disconnect = prompt_label(ActiveQueryTrigger::Disconnect, &names);
+        assert_eq!(disconnect, dbflux_i18n::t!("modals.active_query.prompt"));
+    }
+}
+
+#[cfg(test)]
+mod keyboard_tests {
+    // Explicit imports rather than the parent glob: combining `use super::*`
+    // with `#[gpui::test]` sends the gpui_macros expansion into unbounded
+    // recursion.
+    use super::{ActiveQueryOutcome, ActiveQueryRequest, ActiveQueryTrigger, ModalActiveQuery};
+    use gpui::{
+        AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, Styled as _,
+        TestAppContext, VisualTestContext, Window, div,
+    };
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    struct Host {
+        modal: Entity<ModalActiveQuery>,
+    }
+
+    impl Render for Host {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child(self.modal.clone())
+        }
+    }
+
+    /// Opens the modal the way the workspace does, without a window, so the
+    /// shell's own focus handling is what moves the keyboard into it.
+    fn open_modal(
+        cx: &mut TestAppContext,
+    ) -> (
+        Entity<ModalActiveQuery>,
+        &mut VisualTestContext,
+        Rc<RefCell<Vec<ActiveQueryOutcome>>>,
+    ) {
+        cx.update(gpui_component::init);
+
+        let (host, window) = cx.add_window_view(|_, cx| Host {
+            modal: cx.new(ModalActiveQuery::new),
+        });
+        let modal = window.update(|_, cx| host.read(cx).modal.clone());
+
+        let outcomes: Rc<RefCell<Vec<ActiveQueryOutcome>>> = Rc::default();
+        window.update(|_, cx| {
+            let sink = outcomes.clone();
+            cx.subscribe(&modal, move |_, outcome: &ActiveQueryOutcome, _| {
+                sink.borrow_mut().push(outcome.clone());
+            })
+            .detach();
+
+            modal.update(cx, |modal, cx| {
+                modal.open(
+                    ActiveQueryRequest {
+                        sql: "SELECT pg_sleep(60)".to_string(),
+                        trigger: ActiveQueryTrigger::Disconnect,
+                        elapsed_secs: 0,
+                        connection_names: vec!["prod".to_string()],
+                    },
+                    cx,
+                );
+            });
+        });
+        window.run_until_parked();
+
+        (modal, window, outcomes)
+    }
+
+    #[gpui::test]
+    fn escape_keeps_waiting(cx: &mut TestAppContext) {
+        let (modal, window, outcomes) = open_modal(cx);
+
+        window.simulate_keystrokes("escape");
+
+        assert!(matches!(
+            outcomes.borrow().as_slice(),
+            [ActiveQueryOutcome::KeepWaiting]
+        ));
+        assert!(!window.update(|_, cx| modal.read(cx).is_visible()));
+    }
+
+    #[gpui::test]
+    fn enter_cancels_the_query(cx: &mut TestAppContext) {
+        let (modal, window, outcomes) = open_modal(cx);
+
+        window.simulate_keystrokes("enter");
+
+        assert!(matches!(
+            outcomes.borrow().as_slice(),
+            [ActiveQueryOutcome::CancelQuery]
+        ));
+        assert!(!window.update(|_, cx| modal.read(cx).is_visible()));
     }
 }

@@ -331,6 +331,12 @@ pub struct Workspace {
 
     /// S8 modals — rendered as full-screen overlays via `ModalShell`.
     modal_delete_connection: Entity<crate::ui::overlays::modals::ModalDeleteConnection>,
+    /// "Active query running" prompt shown before a disconnect or quit that
+    /// would abandon a running query.
+    modal_active_query: Entity<crate::ui::overlays::modals::ModalActiveQuery>,
+    /// What the open active-query prompt is guarding, consumed when the user
+    /// chooses an outcome.
+    pending_active_query: Option<ActiveQueryScope>,
     modal_unsaved_changes: Entity<crate::ui::overlays::modals::ModalUnsavedChanges>,
     modal_drop_table: Entity<crate::ui::overlays::modals::ModalDropTable>,
     /// Item ID of the drop-table pending delete, consumed when modal confirms.
@@ -395,6 +401,24 @@ enum GovernancePanel {
     Approvals,
 }
 
+/// The operation the active-query prompt interrupted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ActiveQueryScope {
+    /// Disconnecting this connection.
+    Disconnect(uuid::Uuid),
+    /// Quitting the application.
+    Quit,
+}
+
+/// Emitted when a quit started inside the workspace may proceed: the user
+/// chose "Quit anyway" in the active-query prompt, or closed the window from
+/// the in-app title bar with no query running. The application shell owns
+/// shutdown and starts it on this event.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct QuitConfirmed;
+
+impl EventEmitter<QuitConfirmed> for Workspace {}
+
 impl Workspace {
     pub fn new(
         app_state: Entity<AppStateEntity>,
@@ -444,6 +468,7 @@ impl Workspace {
 
         let modal_delete_connection =
             cx.new(crate::ui::overlays::modals::ModalDeleteConnection::new);
+        let modal_active_query = cx.new(crate::ui::overlays::modals::ModalActiveQuery::new);
         let modal_unsaved_changes = cx.new(crate::ui::overlays::modals::ModalUnsavedChanges::new);
         let modal_drop_table =
             cx.new(|cx| crate::ui::overlays::modals::ModalDropTable::new(window, cx));
@@ -489,6 +514,17 @@ impl Workspace {
                         sidebar.cancel_modal_delete(cx);
                     });
                 }
+            },
+        )
+        .detach();
+
+        // Subscribe: ModalActiveQuery — apply the choice to the disconnect or
+        // quit it interrupted.
+        cx.subscribe_in(
+            &modal_active_query,
+            window,
+            |this, _, outcome: &crate::ui::overlays::modals::ActiveQueryOutcome, window, cx| {
+                this.resolve_active_query(outcome, window, cx);
             },
         )
         .detach();
@@ -1027,18 +1063,48 @@ impl Workspace {
                         modal.open(req, cx);
                     });
                 }
+                SidebarEvent::RequestActiveQueryDisconnect { profile_id } => {
+                    // The query may have finished between the sidebar's check
+                    // and this handler; then there is nothing to ask about.
+                    if !this.prompt_active_query(
+                        ActiveQueryScope::Disconnect(*profile_id),
+                        window,
+                        cx,
+                    ) {
+                        this.sidebar.update(cx, |sidebar, cx| {
+                            sidebar.disconnect_profile(*profile_id, cx);
+                        });
+                    }
+                }
                 SidebarEvent::RequestDropTable {
                     item_id,
+                    profile_id,
                     table_name,
                     schema_name,
                     dependents,
                 } => {
                     use crate::ui::overlays::modals::DropTableRequest;
-                    let req = DropTableRequest {
-                        table_name: table_name.clone(),
-                        schema_name: schema_name.clone(),
-                        dependents: dependents.clone(),
+
+                    // Without a live connection there is no dialect to ask,
+                    // so the preview falls back to ANSI double quotes.
+                    let connection = this
+                        .app_state
+                        .read(cx)
+                        .connections()
+                        .get(profile_id)
+                        .map(|connected| connected.connection.clone());
+                    let default_dialect = dbflux_core::DefaultSqlDialect;
+                    let dialect: &dyn dbflux_core::SqlDialect = match connection.as_ref() {
+                        Some(connection) => connection.dialect(),
+                        None => &default_dialect,
                     };
+
+                    let req = DropTableRequest::new(
+                        table_name.clone(),
+                        schema_name.clone(),
+                        dependents.clone(),
+                        dialect,
+                    );
                     this.pending_drop_table_item_id = Some(item_id.clone());
                     this.modal_drop_table.update(cx, |modal, cx| {
                         modal.open(req, window, cx);
@@ -1462,6 +1528,8 @@ impl Workspace {
             #[cfg(feature = "mcp")]
             mcp_approvals_view,
             modal_delete_connection,
+            modal_active_query,
+            pending_active_query: None,
             modal_unsaved_changes,
             modal_drop_table,
             pending_drop_table_item_id: None,
@@ -1882,6 +1950,13 @@ impl Workspace {
     }
 
     fn active_context(&self, cx: &Context<Self>) -> ContextId {
+        // A quit request can open the active-query prompt over any other
+        // overlay, and the prompt is drawn above them, so it owns the keyboard
+        // first.
+        if self.modal_active_query.read(cx).is_visible() {
+            return ContextId::ConfirmModal;
+        }
+
         if self.command_palette.read(cx).is_visible() {
             return ContextId::CommandPalette;
         }

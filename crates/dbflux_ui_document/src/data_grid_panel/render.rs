@@ -21,7 +21,7 @@ use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{BannerBlock, BannerVariant, Icon, Text, surface_raised};
 use dbflux_components::semantic::ChartColors;
 use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
-use dbflux_core::{ColumnKind, Pagination, QueryResultShape, SortDirection, Value};
+use dbflux_core::{ColumnKind, Pagination, QueryResult, QueryResultShape, SortDirection, Value};
 use dbflux_ui_base::toast::{Toast, copy_action, now_hms};
 use gpui::prelude::*;
 use gpui::*;
@@ -65,6 +65,7 @@ struct RenderState {
     can_undo: bool,
     can_redo: bool,
     show_grouped_warning: bool,
+    show_rows_omitted_warning: bool,
     show_pk_warning: bool,
     show_builder_readonly_hint: bool,
     show_edit_toolbar: bool,
@@ -84,6 +85,29 @@ pub(super) enum DataGridContentMode {
     ResultView,
     Document,
     Table,
+}
+
+fn shows_rows_omitted_warning(result: &QueryResult) -> bool {
+    result.rows_truncated()
+}
+
+#[cfg(test)]
+mod omission_tests {
+    use super::shows_rows_omitted_warning;
+    use dbflux_core::QueryResult;
+
+    #[test]
+    fn banner_follows_current_result_set_even_when_empty() {
+        let mut first = QueryResult::empty();
+        let mut second = QueryResult::empty();
+        second.set_rows_truncated(true);
+        assert!(!shows_rows_omitted_warning(&first));
+        assert!(shows_rows_omitted_warning(&second));
+        first = second;
+        assert!(shows_rows_omitted_warning(&first));
+        first = QueryResult::empty();
+        assert!(!shows_rows_omitted_warning(&first));
+    }
 }
 
 pub(super) fn content_mode_for_result(
@@ -407,6 +431,7 @@ impl DataGridPanel {
             can_undo,
             can_redo,
             show_grouped_warning,
+            show_rows_omitted_warning: shows_rows_omitted_warning(&self.result),
             show_pk_warning,
             show_builder_readonly_hint,
             show_edit_toolbar,
@@ -436,6 +461,24 @@ impl DataGridPanel {
     /// always emitted so the call site never needs a conditional.
     fn render_warning_banners(&self, st: &RenderState) -> impl IntoElement {
         div()
+            .when(st.show_rows_omitted_warning, |d| {
+                d.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(Spacing::SM)
+                        .h(Heights::ROW_COMPACT)
+                        .px(Spacing::SM)
+                        .bg(st.theme.warning.opacity(0.15))
+                        .border_b_1()
+                        .border_color(st.theme.warning.opacity(0.3))
+                        .child(Icon::new(AppIcon::TriangleAlert).small().warning())
+                        .child(
+                            Text::caption(dbflux_i18n::t!("document.data.grid.rows_omitted"))
+                                .warning(),
+                        ),
+                )
+            })
             .when(st.show_grouped_warning, |d| {
                 d.child(
                     div()

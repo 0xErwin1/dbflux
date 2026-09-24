@@ -1,10 +1,13 @@
-use crate::modals::shell::{ModalShell, ModalVariant};
+use crate::controls::Checkbox;
+use crate::modals::shell::{ModalFocus, ModalShell, ModalVariant};
 use crate::primitives::Text;
 use crate::tokens::{FontSizes, Spacing};
+use dbflux_core::LogErr;
 use dbflux_core::document_id::DocumentId;
 use gpui::prelude::*;
 use gpui::{Context, EventEmitter, Window, div, px};
 use gpui_component::ActiveTheme;
+use gpui_component::Disableable;
 use gpui_component::button::{Button, ButtonVariants};
 use std::collections::HashMap;
 
@@ -58,14 +61,16 @@ pub struct ModalUnsavedChanges {
     entries: Vec<DirtySummaryEntry>,
     selected: HashMap<DocumentId, bool>,
     visible: bool,
+    focus: ModalFocus,
 }
 
 impl ModalUnsavedChanges {
-    pub fn new(_cx: &mut Context<Self>) -> Self {
+    pub fn new(cx: &mut Context<Self>) -> Self {
         Self {
             entries: Vec::new(),
             selected: HashMap::new(),
             visible: false,
+            focus: ModalFocus::new(cx),
         }
     }
 
@@ -77,6 +82,7 @@ impl ModalUnsavedChanges {
         self.selected = request.entries.iter().map(|e| (e.id, true)).collect();
         self.entries = request.entries;
         self.visible = true;
+        self.focus.focus_on_next_render();
         cx.notify();
     }
 
@@ -84,6 +90,7 @@ impl ModalUnsavedChanges {
         self.visible = false;
         self.entries.clear();
         self.selected.clear();
+        self.focus.restore(cx);
         cx.notify();
     }
 
@@ -117,6 +124,11 @@ impl ModalUnsavedChanges {
     fn toggle(&mut self, id: DocumentId, cx: &mut Context<Self>) {
         let entry = self.selected.entry(id).or_insert(false);
         *entry = !*entry;
+        cx.notify();
+    }
+
+    fn set_selected(&mut self, id: DocumentId, checked: bool, cx: &mut Context<Self>) {
+        self.selected.insert(id, checked);
         cx.notify();
     }
 
@@ -175,10 +187,12 @@ fn confirm_label(actions: &[CloseAction]) -> String {
 impl EventEmitter<UnsavedChangesOutcome> for ModalUnsavedChanges {}
 
 impl Render for ModalUnsavedChanges {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if !self.visible {
             return div().into_any_element();
         }
+
+        self.focus.apply_pending(window, cx);
 
         let theme = cx.theme();
         let selected_count = self.selected_count();
@@ -190,11 +204,6 @@ impl Render for ModalUnsavedChanges {
             let is_checked = self.selected.get(&id).copied().unwrap_or(false);
             let name = entry.name.clone();
             let summary = action_summary(entry.action, &entry.summary);
-            let check_color = if is_checked {
-                theme.primary
-            } else {
-                theme.border
-            };
 
             rows = rows.child(
                 div()
@@ -210,27 +219,14 @@ impl Render for ModalUnsavedChanges {
                     .on_click(cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
                         this.toggle(id, cx);
                     }))
-                    // Checkbox indicator
+                    // A click on the checkbox itself does not reach the row, so
+                    // each click toggles the entry exactly once.
                     .child(
-                        div()
-                            .w(px(14.0))
-                            .h(px(14.0))
-                            .rounded(px(2.0))
-                            .border_1()
-                            .border_color(check_color)
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .when(is_checked, |el| {
-                                el.bg(theme.primary).child(
-                                    div()
-                                        .w(Spacing::SM)
-                                        .h(Spacing::SM)
-                                        .text_size(FontSizes::XS)
-                                        .text_color(theme.background)
-                                        .child("✓"),
-                                )
-                            }),
+                        Checkbox::new(("unsaved-check", row_idx))
+                            .checked(is_checked)
+                            .on_click(cx.listener(move |this, checked: &bool, _, cx| {
+                                this.set_selected(id, *checked, cx);
+                            })),
                     )
                     .child(
                         div()
@@ -268,17 +264,14 @@ impl Render for ModalUnsavedChanges {
         });
 
         let on_cancel = cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
-            cx.emit(UnsavedChangesOutcome::Cancelled);
-            this.close(cx);
+            this.cancel(cx);
         });
 
         let save_label = confirm_label(&self.selected_actions());
-        let save_disabled = selected_count == 0;
+        let save_enabled = selected_count > 0;
 
-        let on_save = cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
-            let ids = this.selected_ids();
-            cx.emit(UnsavedChangesOutcome::SaveSelected(ids));
-            this.close(cx);
+        let on_save = cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
+            this.confirm(cx);
         });
 
         let footer = div()
@@ -297,29 +290,13 @@ impl Render for ModalUnsavedChanges {
                     .label(dbflux_i18n::t!("modals.unsaved_changes.cancel"))
                     .on_click(on_cancel),
             )
-            .child(if save_disabled {
-                div()
-                    .flex()
-                    .items_center()
-                    .px(Spacing::SM)
-                    .py(Spacing::XS)
-                    .rounded(px(4.0)) // guardrail-allow: border radius, not spacing
-                    .opacity(0.4)
-                    .bg(theme.primary)
-                    .child(
-                        div()
-                            .text_size(FontSizes::SM)
-                            .text_color(theme.background)
-                            .child(save_label),
-                    )
-                    .into_any_element()
-            } else {
+            .child(
                 Button::new("unsaved-save")
                     .label(save_label)
                     .primary()
-                    .on_click(on_save)
-                    .into_any_element()
-            });
+                    .disabled(!save_enabled)
+                    .on_click(on_save),
+            );
 
         ModalShell::new(
             dbflux_i18n::t!("modals.unsaved_changes.title"),
@@ -328,6 +305,20 @@ impl Render for ModalUnsavedChanges {
         )
         .variant(ModalVariant::Default)
         .width(px(520.0))
+        .focus_handle(self.focus.handle())
+        .on_close({
+            let entity = cx.entity().downgrade();
+            move |_, cx| {
+                entity.update(cx, |this, cx| this.cancel(cx)).log_err();
+            }
+        })
+        .on_confirm({
+            let entity = cx.entity().downgrade();
+            move |_, cx| {
+                entity.update(cx, |this, cx| this.confirm(cx)).log_err();
+            }
+        })
+        .confirm_enabled(save_enabled)
         .into_any_element()
     }
 }
@@ -356,10 +347,12 @@ mod tests {
 
     fn modal_with(entries: Vec<DirtySummaryEntry>) -> ModalUnsavedChanges {
         let selected: HashMap<DocumentId, bool> = entries.iter().map(|e| (e.id, true)).collect();
+        let focus = gpui::TestAppContext::single().update(ModalFocus::new);
         ModalUnsavedChanges {
             entries,
             selected,
             visible: true,
+            focus,
         }
     }
 
