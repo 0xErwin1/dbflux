@@ -49,6 +49,18 @@ impl CommandDispatcher for Workspace {
             return true;
         }
 
+        // The sidebar's inline delete confirmation, drawn by the workspace,
+        // resolves the same way when focus is outside it.
+        if matches!(cmd, Command::Execute | Command::Cancel)
+            && self.sidebar.read(cx).delete_modal_state().is_some()
+        {
+            self.sidebar.update(cx, |sidebar, cx| match cmd {
+                Command::Execute => sidebar.confirm_modal_delete(cx),
+                _ => sidebar.cancel_modal_delete(cx),
+            });
+            return true;
+        }
+
         if self.sidebar.read(cx).has_child_picker_open() {
             match cmd {
                 Command::SelectNext => {
@@ -211,6 +223,9 @@ impl Workspace {
 /// confirmation modal, resolving and closing it through the same outcome
 /// handler its buttons use. Returns `true` when a visible modal consumed
 /// the command.
+///
+/// Only reached while focus is outside the modal: the modal shell answers
+/// Enter and Escape itself while it has focus.
 pub(crate) fn route_confirm_modal_command(
     cmd: Command,
     delete_connection: &Entity<crate::ui::overlays::modals::ModalDeleteConnection>,

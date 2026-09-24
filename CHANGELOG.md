@@ -610,6 +610,20 @@ All notable changes to DBFlux will be documented in this file.
   PostgreSQL double quotes. The cell editor and document preview have their
   own keyboard contexts, and Escape closes them.
 
+* **The remaining dialogs answer Enter, Escape and close too** — the dashboard
+  and saved chart dialogs (new dashboard, rename, delete, add panel), the
+  connection import and export dialogs, the script and dangerous query
+  confirmations, the chart Configure popover and the sidebar's delete
+  confirmation for folders, scripts, views and multi-selections ignored the
+  keyboard or had no close on the backdrop. They now take focus when they
+  open, cancel on Escape, the X button and a backdrop click, confirm on Enter
+  only while their primary action is enabled, and give focus back when they
+  close. New dashboard and rename need a non-blank name, and their Create and
+  Rename buttons are now disabled until then; add panel needs a complete tab,
+  the import and export dialogs follow their primary button, and Enter in the
+  Configure popover applies. While an import or export runs, Escape, the
+  backdrop and Cancel do nothing, since the run cannot be stopped.
+
 * **Password save failures are reported** — a failed keyring write while
   saving or duplicating a connection profile now keeps the form open and
   shows the error instead of silently committing a profile with no secret.

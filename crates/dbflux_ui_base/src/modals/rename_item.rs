@@ -1,7 +1,8 @@
 use dbflux_components::controls::{Button, GpuiInput as Input, InputState};
-use dbflux_components::modals::shell::ModalShell;
+use dbflux_components::modals::shell::{ModalFocus, ModalShell};
 use dbflux_components::primitives::Text;
 use dbflux_components::tokens::Spacing;
+use dbflux_core::LogErr;
 use gpui::prelude::*;
 use gpui::*;
 use uuid::Uuid;
@@ -34,15 +35,15 @@ pub struct RenameItemRequest {
 
 /// Modal entity for renaming a dashboard or saved chart.
 ///
-/// Renders a single text input pre-filled with `current_name`. Rejects empty
-/// (or whitespace-only) input with an inline validation message.
+/// Renders a single text input pre-filled with `current_name`. The Rename
+/// button and Enter stay disabled while the input is empty or whitespace-only.
 pub struct ModalRenameItem {
     request: Option<RenameItemRequest>,
     visible: bool,
     input: Entity<InputState>,
-    focus_handle: FocusHandle,
+    focus: ModalFocus,
     validation_error: Option<String>,
-    _subscriptions: Vec<Subscription>,
+    _input_observation: Subscription,
 }
 
 impl ModalRenameItem {
@@ -51,13 +52,17 @@ impl ModalRenameItem {
             InputState::new(window, cx).placeholder(dbflux_i18n::t!("modals.rename.placeholder"))
         });
 
+        // The Rename button and Enter both follow the typed name, so every
+        // edit re-renders the modal.
+        let input_observation = cx.observe(&input, |_, _, cx| cx.notify());
+
         Self {
             request: None,
             visible: false,
             input,
-            focus_handle: cx.focus_handle(),
+            focus: ModalFocus::new(cx),
             validation_error: None,
-            _subscriptions: Vec::new(),
+            _input_observation: input_observation,
         }
     }
 
@@ -78,18 +83,11 @@ impl ModalRenameItem {
 
         self.input.update(cx, |state, cx| {
             state.set_value(&name, window, cx);
-            state.focus(window, cx);
         });
 
-        let sub = cx.subscribe_in(&self.input.clone(), window, |this, _, event, window, cx| {
-            use dbflux_components::controls::InputEvent;
-            if let InputEvent::PressEnter { .. } = event {
-                this.confirm(window, cx);
-            }
-        });
-        self._subscriptions = vec![sub];
+        let input_focus = self.input.read(cx).focus_handle(cx);
+        self.focus.focus(Some(&input_focus), window, cx);
 
-        self.focus_handle.focus(window, cx);
         cx.notify();
     }
 
@@ -97,10 +95,17 @@ impl ModalRenameItem {
         self.visible = false;
         self.request = None;
         self.validation_error = None;
+        self.focus.restore(cx);
         cx.notify();
     }
 
-    fn confirm(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    /// Whether the typed name may be submitted: non-empty once trimmed.
+    fn has_valid_name(&self, cx: &App) -> bool {
+        !self.input.read(cx).value().trim().is_empty()
+    }
+
+    /// Rename with the typed name, as the Rename button does.
+    pub fn confirm(&mut self, cx: &mut Context<Self>) {
         let name = self.input.read(cx).value().trim().to_string();
 
         if name.is_empty() {
@@ -118,6 +123,12 @@ impl ModalRenameItem {
             new_name: name,
         });
 
+        self.close(cx);
+    }
+
+    /// Dismiss the modal without renaming anything.
+    pub fn cancel(&mut self, cx: &mut Context<Self>) {
+        cx.emit(RenameItemOutcome::Cancelled);
         self.close(cx);
     }
 }
@@ -140,6 +151,7 @@ impl Render for ModalRenameItem {
         };
 
         let validation_error = self.validation_error.clone();
+        let rename_enabled = self.has_valid_name(cx);
 
         let body = div()
             .flex()
@@ -150,13 +162,8 @@ impl Render for ModalRenameItem {
                 el.child(div().text_sm().child(Text::body(err).into_any_element()))
             });
 
-        let on_cancel = cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
-            cx.emit(RenameItemOutcome::Cancelled);
-            this.close(cx);
-        });
-
-        let on_confirm =
-            cx.listener(|this, _: &gpui::ClickEvent, window, cx| this.confirm(window, cx));
+        let on_cancel = cx.listener(|this, _: &gpui::ClickEvent, _, cx| this.cancel(cx));
+        let on_confirm = cx.listener(|this, _: &gpui::ClickEvent, _, cx| this.confirm(cx));
 
         let footer = div()
             .flex()
@@ -175,11 +182,26 @@ impl Render for ModalRenameItem {
                     dbflux_i18n::t!("modals.rename.confirm"),
                 )
                 .primary()
+                .disabled(!rename_enabled)
                 .on_click(on_confirm),
             );
 
         ModalShell::new(title, body.into_any_element(), footer.into_any_element())
             .width(gpui::px(400.0))
+            .focus_handle(self.focus.handle())
+            .on_close({
+                let entity = cx.entity().downgrade();
+                move |_, cx| {
+                    entity.update(cx, |this, cx| this.cancel(cx)).log_err();
+                }
+            })
+            .on_confirm({
+                let entity = cx.entity().downgrade();
+                move |_, cx| {
+                    entity.update(cx, |this, cx| this.confirm(cx)).log_err();
+                }
+            })
+            .confirm_enabled(rename_enabled)
             .into_any_element()
     }
 }
@@ -299,5 +321,116 @@ mod tests {
         assert_eq!(english, "Rename dashboard");
         assert_eq!(spanish, "Renombrar dashboard");
         assert_ne!(english, spanish);
+    }
+}
+
+#[cfg(test)]
+mod keyboard_tests {
+    // Explicit imports rather than the parent glob: combining `use super::*`
+    // with `#[gpui::test]` sends the gpui_macros expansion into unbounded
+    // recursion.
+    use super::{ModalRenameItem, RenameItemOutcome, RenameItemRequest, RenameTarget};
+    use crate::modals::test_host::{click_backdrop, has_focus, host_modal};
+    use gpui::{Entity, FocusHandle, TestAppContext, VisualTestContext};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use uuid::Uuid;
+
+    type Outcomes = Rc<RefCell<Vec<RenameItemOutcome>>>;
+
+    fn open_modal(
+        cx: &mut TestAppContext,
+    ) -> (
+        Entity<ModalRenameItem>,
+        FocusHandle,
+        &mut VisualTestContext,
+        Outcomes,
+    ) {
+        let (modal, outside, window) = host_modal(cx, ModalRenameItem::new);
+
+        let outcomes: Outcomes = Rc::default();
+        window.update(|window, cx| {
+            let sink = outcomes.clone();
+            cx.subscribe(&modal, move |_, outcome: &RenameItemOutcome, _| {
+                sink.borrow_mut().push(outcome.clone());
+            })
+            .detach();
+
+            modal.update(cx, |modal, cx| {
+                modal.open(
+                    RenameItemRequest {
+                        target: RenameTarget::Dashboard {
+                            dashboard_id: Uuid::nil(),
+                        },
+                        current_name: "Ops".to_string(),
+                    },
+                    window,
+                    cx,
+                );
+            });
+        });
+        window.run_until_parked();
+
+        (modal, outside, window, outcomes)
+    }
+
+    fn set_name(window: &mut VisualTestContext, modal: &Entity<ModalRenameItem>, name: &str) {
+        window.update(|window, cx| {
+            let input = modal.read(cx).input.clone();
+            input.update(cx, |state, cx| state.set_value(name, window, cx));
+        });
+        window.run_until_parked();
+    }
+
+    #[gpui::test]
+    fn enter_renames_with_the_trimmed_name(cx: &mut TestAppContext) {
+        let (modal, _outside, window, outcomes) = open_modal(cx);
+        set_name(window, &modal, "  Ops v2  ");
+
+        window.simulate_keystrokes("enter");
+
+        assert!(matches!(
+            outcomes.borrow().as_slice(),
+            [RenameItemOutcome::Confirmed { new_name, .. }] if new_name == "Ops v2"
+        ));
+        assert!(!window.update(|_, cx| modal.read(cx).is_visible()));
+    }
+
+    #[gpui::test]
+    fn enter_does_nothing_while_the_name_is_blank(cx: &mut TestAppContext) {
+        let (modal, _outside, window, outcomes) = open_modal(cx);
+        set_name(window, &modal, "   ");
+
+        window.simulate_keystrokes("enter");
+
+        assert!(outcomes.borrow().is_empty());
+        assert!(window.update(|_, cx| modal.read(cx).is_visible()));
+    }
+
+    #[gpui::test]
+    fn escape_cancels_and_gives_focus_back(cx: &mut TestAppContext) {
+        let (modal, outside, window, outcomes) = open_modal(cx);
+
+        window.simulate_keystrokes("escape");
+
+        assert!(matches!(
+            outcomes.borrow().as_slice(),
+            [RenameItemOutcome::Cancelled]
+        ));
+        assert!(!window.update(|_, cx| modal.read(cx).is_visible()));
+        assert!(has_focus(window, &outside));
+    }
+
+    #[gpui::test]
+    fn a_backdrop_click_cancels(cx: &mut TestAppContext) {
+        let (modal, _outside, window, outcomes) = open_modal(cx);
+
+        click_backdrop(window);
+
+        assert!(matches!(
+            outcomes.borrow().as_slice(),
+            [RenameItemOutcome::Cancelled]
+        ));
+        assert!(!window.update(|_, cx| modal.read(cx).is_visible()));
     }
 }

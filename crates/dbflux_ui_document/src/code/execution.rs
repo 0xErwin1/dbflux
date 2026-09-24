@@ -189,20 +189,47 @@ impl CodeDocument {
         // statement and the driver can execute batches, confirm before running
         // the entire script.
         if let Some(statement_count) = self.script_statement_count(&query, cx) {
-            self.pending.script_confirm = Some(PendingScriptConfirm {
-                query,
-                in_new_tab,
-                statement_count,
-            });
-            // Take focus off the editor input so Enter/Escape resolve through
-            // the ConfirmModal keymap instead of editing the buffer behind the
-            // modal.
-            self.focus_handle.focus(window, cx);
-            cx.notify();
+            self.ask_script_confirm(
+                PendingScriptConfirm {
+                    query,
+                    in_new_tab,
+                    statement_count,
+                },
+                window,
+                cx,
+            );
             return;
         }
 
         self.run_query_text(query, in_new_tab, window, cx);
+    }
+
+    /// Shows the script confirmation and moves focus into it, off the editor
+    /// input, so Enter and Escape resolve it instead of editing the buffer
+    /// behind it.
+    fn ask_script_confirm(
+        &mut self,
+        pending: PendingScriptConfirm,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.pending.script_confirm = Some(pending);
+        self.script_confirm_focus.focus(None, window, cx);
+        cx.notify();
+    }
+
+    /// Shows the dangerous query confirmation and moves focus into it, off
+    /// the editor input, so Enter and Escape resolve it instead of editing the
+    /// buffer behind it.
+    fn ask_dangerous_query_confirm(
+        &mut self,
+        pending: PendingDangerousQuery,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.pending.dangerous_query = Some(pending);
+        self.dangerous_query_focus.focus(None, window, cx);
+        cx.notify();
     }
 
     /// Returns the statement count when `query` is a multi-statement script and
@@ -234,12 +261,14 @@ impl CodeDocument {
             return;
         };
 
+        self.script_confirm_focus.restore(cx);
         self.focus(window, cx);
         self.run_query_text(pending.query, pending.in_new_tab, window, cx);
     }
 
     pub(super) fn cancel_script_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.pending.script_confirm = None;
+        self.script_confirm_focus.restore(cx);
         self.focus(window, cx);
         cx.notify();
     }
@@ -298,16 +327,15 @@ impl CodeDocument {
             ) {
                 DangerousAction::Allow => {}
                 DangerousAction::Confirm(kind) => {
-                    self.pending.dangerous_query = Some(PendingDangerousQuery {
-                        query,
-                        kind,
-                        in_new_tab,
-                    });
-                    // Take focus off the editor input so Enter/Escape resolve
-                    // through the ConfirmModal keymap instead of editing the
-                    // buffer behind the modal.
-                    self.focus_handle.focus(window, cx);
-                    cx.notify();
+                    self.ask_dangerous_query_confirm(
+                        PendingDangerousQuery {
+                            query,
+                            kind,
+                            in_new_tab,
+                        },
+                        window,
+                        cx,
+                    );
                     return;
                 }
                 DangerousAction::Block(msg) => {
@@ -890,6 +918,7 @@ impl CodeDocument {
         // Emit audit event for dangerous query confirmation
         self.emit_dangerous_query_audit_event(cx, pending.kind);
 
+        self.dangerous_query_focus.restore(cx);
         self.focus(window, cx);
         self.execute_query_internal(pending.query, pending.in_new_tab, window, cx);
     }
@@ -1021,6 +1050,7 @@ impl CodeDocument {
 
     pub(super) fn cancel_dangerous_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.pending.dangerous_query = None;
+        self.dangerous_query_focus.restore(cx);
         self.focus(window, cx);
         cx.notify();
     }
@@ -2778,5 +2808,168 @@ mod rail_tests {
         activate(window, &document);
 
         assert_eq!(opens.get(), 0, "a tab without results has no inspector");
+    }
+}
+
+#[cfg(test)]
+mod confirm_keyboard_tests {
+    // Explicit imports rather than the parent glob: combining `use super::*`
+    // with `#[gpui::test]` sends the gpui_macros expansion into unbounded
+    // recursion.
+    use crate::code::{CodeDocument, PendingDangerousQuery, PendingScriptConfirm};
+    use dbflux_components::theme;
+    use dbflux_core::{DangerousQueryKind, QueryLanguage};
+    use dbflux_storage::bootstrap::StorageRuntime;
+    use dbflux_ui_base::AppStateEntity;
+    use dbflux_ui_base::modals::test_host::{click_backdrop, host_modal};
+    use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
+    use gpui::{AppContext as _, Entity, Focusable as _, TestAppContext, VisualTestContext};
+
+    /// Which confirmation a test opens.
+    #[derive(Clone, Copy)]
+    enum Confirmation {
+        Script,
+        DangerousQuery,
+    }
+
+    /// Opens `confirmation` over a code document whose editor had focus. The
+    /// document has no connection, so running the query ends in a "no active
+    /// connection" toast, which tells a confirmed run from a cancelled one.
+    fn open_confirmation(
+        cx: &mut TestAppContext,
+        confirmation: Confirmation,
+    ) -> (
+        Entity<CodeDocument>,
+        Entity<ToastHost>,
+        &mut VisualTestContext,
+    ) {
+        cx.update(theme::init);
+        let toasts = cx.update(|cx| {
+            let host = cx.new(|_| ToastHost::new());
+            cx.set_global(ToastGlobal { host: host.clone() });
+            host
+        });
+        let app_state = cx.new(|_| {
+            AppStateEntity::new_with_storage_runtime(
+                StorageRuntime::in_memory().expect("in-memory storage"),
+            )
+            .expect("app state")
+        });
+
+        let (document, _outside, window) = host_modal(cx, move |window, cx| {
+            CodeDocument::new_with_language(app_state, None, QueryLanguage::Sql, window, cx)
+        });
+
+        window.update(|window, cx| {
+            document.update(cx, |document, cx| {
+                document.focus(window, cx);
+
+                let query = "DELETE FROM orders; DELETE FROM items".to_string();
+                match confirmation {
+                    Confirmation::Script => document.ask_script_confirm(
+                        PendingScriptConfirm {
+                            query,
+                            in_new_tab: false,
+                            statement_count: 2,
+                        },
+                        window,
+                        cx,
+                    ),
+                    Confirmation::DangerousQuery => document.ask_dangerous_query_confirm(
+                        PendingDangerousQuery {
+                            query,
+                            kind: DangerousQueryKind::DeleteNoWhere,
+                            in_new_tab: false,
+                        },
+                        window,
+                        cx,
+                    ),
+                }
+            });
+        });
+        window.run_until_parked();
+
+        (document, toasts, window)
+    }
+
+    fn is_open(window: &mut VisualTestContext, document: &Entity<CodeDocument>) -> bool {
+        window.update(|_, cx| {
+            let pending = &document.read(cx).pending;
+            pending.script_confirm.is_some() || pending.dangerous_query.is_some()
+        })
+    }
+
+    fn ran_the_query(window: &mut VisualTestContext, toasts: &Entity<ToastHost>) -> bool {
+        let expected = dbflux_i18n::t!("document.code.execution.toast.no_active_connection");
+        window.update(|_, cx| toasts.read(cx).last_toast_title()) == Some(expected)
+    }
+
+    fn editor_has_focus(window: &mut VisualTestContext, document: &Entity<CodeDocument>) -> bool {
+        window.update(|window, cx| {
+            let editor = document.read(cx).editor.input_state.clone();
+            editor.read(cx).focus_handle(cx).is_focused(window)
+        })
+    }
+
+    #[gpui::test]
+    fn enter_runs_the_confirmed_script(cx: &mut TestAppContext) {
+        let (document, toasts, window) = open_confirmation(cx, Confirmation::Script);
+
+        window.simulate_keystrokes("enter");
+
+        assert!(!is_open(window, &document));
+        assert!(ran_the_query(window, &toasts));
+    }
+
+    #[gpui::test]
+    fn escape_cancels_the_script_and_returns_to_the_editor(cx: &mut TestAppContext) {
+        let (document, toasts, window) = open_confirmation(cx, Confirmation::Script);
+
+        window.simulate_keystrokes("escape");
+
+        assert!(!is_open(window, &document));
+        assert!(!ran_the_query(window, &toasts));
+        assert!(editor_has_focus(window, &document));
+    }
+
+    #[gpui::test]
+    fn a_backdrop_click_cancels_the_script(cx: &mut TestAppContext) {
+        let (document, toasts, window) = open_confirmation(cx, Confirmation::Script);
+
+        click_backdrop(window);
+
+        assert!(!is_open(window, &document));
+        assert!(!ran_the_query(window, &toasts));
+    }
+
+    #[gpui::test]
+    fn enter_runs_the_dangerous_query(cx: &mut TestAppContext) {
+        let (document, toasts, window) = open_confirmation(cx, Confirmation::DangerousQuery);
+
+        window.simulate_keystrokes("enter");
+
+        assert!(!is_open(window, &document));
+        assert!(ran_the_query(window, &toasts));
+    }
+
+    #[gpui::test]
+    fn escape_cancels_the_dangerous_query_and_returns_to_the_editor(cx: &mut TestAppContext) {
+        let (document, toasts, window) = open_confirmation(cx, Confirmation::DangerousQuery);
+
+        window.simulate_keystrokes("escape");
+
+        assert!(!is_open(window, &document));
+        assert!(!ran_the_query(window, &toasts));
+        assert!(editor_has_focus(window, &document));
+    }
+
+    #[gpui::test]
+    fn a_backdrop_click_cancels_the_dangerous_query(cx: &mut TestAppContext) {
+        let (document, toasts, window) = open_confirmation(cx, Confirmation::DangerousQuery);
+
+        click_backdrop(window);
+
+        assert!(!is_open(window, &document));
+        assert!(!ran_the_query(window, &toasts));
     }
 }

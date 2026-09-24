@@ -1,9 +1,10 @@
 use dbflux_components::controls::Button;
 use dbflux_components::icons::AppIcon;
-use dbflux_components::modals::shell::{ModalShell, ModalVariant};
+use dbflux_components::modals::shell::{ModalFocus, ModalShell, ModalVariant};
 use dbflux_components::primitives::{Icon, Text, surface_raised};
 use dbflux_components::tokens::{FontSizes, Heights, Spacing};
 use dbflux_components::typography::AppFonts;
+use dbflux_core::LogErr;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -62,13 +63,15 @@ pub struct DeleteDashboardRequest {
 pub struct ModalDeleteDashboardConfirm {
     request: Option<DeleteDashboardRequest>,
     visible: bool,
+    focus: ModalFocus,
 }
 
 impl ModalDeleteDashboardConfirm {
-    pub fn new(_cx: &mut Context<Self>) -> Self {
+    pub fn new(cx: &mut Context<Self>) -> Self {
         Self {
             request: None,
             visible: false,
+            focus: ModalFocus::new(cx),
         }
     }
 
@@ -79,19 +82,21 @@ impl ModalDeleteDashboardConfirm {
     pub fn open(&mut self, request: DeleteDashboardRequest, cx: &mut Context<Self>) {
         self.request = Some(request);
         self.visible = true;
+        self.focus.focus_on_next_render();
         cx.notify();
     }
 
     pub fn close(&mut self, cx: &mut Context<Self>) {
         self.visible = false;
         self.request = None;
+        self.focus.restore(cx);
         cx.notify();
     }
 
     /// Resolve the modal as if the confirm button was clicked: emit the
-    /// outcome and close. The keyboard path (ConfirmModal keymap) uses this
-    /// so Enter resolves the modal through the same outcome handler as a
-    /// mouse click.
+    /// outcome and close. Enter uses this, through the modal shell while focus
+    /// is inside the modal and through the workspace's ConfirmModal keymap
+    /// otherwise.
     pub fn confirm(&mut self, cx: &mut Context<Self>) {
         let Some(dashboard_id) = self.request.as_ref().map(|r| r.dashboard_id) else {
             return;
@@ -110,10 +115,12 @@ impl ModalDeleteDashboardConfirm {
 impl EventEmitter<DeleteDashboardOutcome> for ModalDeleteDashboardConfirm {}
 
 impl Render for ModalDeleteDashboardConfirm {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if !self.visible {
             return div().into_any_element();
         }
+
+        self.focus.apply_pending(window, cx);
 
         let Some(ref request) = self.request else {
             return div().into_any_element();
@@ -121,7 +128,6 @@ impl Render for ModalDeleteDashboardConfirm {
 
         let theme = cx.theme();
         let dashboard_name = request.dashboard_name.clone();
-        let dashboard_id = request.dashboard_id;
 
         let body = div()
             .flex()
@@ -155,15 +161,8 @@ impl Render for ModalDeleteDashboardConfirm {
                     ),
             );
 
-        let on_cancel = cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
-            cx.emit(DeleteDashboardOutcome::Cancelled);
-            this.close(cx);
-        });
-
-        let on_confirm = cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
-            cx.emit(DeleteDashboardOutcome::Confirmed { dashboard_id });
-            this.close(cx);
-        });
+        let on_cancel = cx.listener(|this, _: &gpui::ClickEvent, _, cx| this.cancel(cx));
+        let on_confirm = cx.listener(|this, _: &gpui::ClickEvent, _, cx| this.confirm(cx));
 
         let footer = div()
             .flex()
@@ -192,6 +191,19 @@ impl Render for ModalDeleteDashboardConfirm {
         )
         .variant(ModalVariant::Danger)
         .width(px(460.0))
+        .focus_handle(self.focus.handle())
+        .on_close({
+            let entity = cx.entity().downgrade();
+            move |_, cx| {
+                entity.update(cx, |this, cx| this.cancel(cx)).log_err();
+            }
+        })
+        .on_confirm({
+            let entity = cx.entity().downgrade();
+            move |_, cx| {
+                entity.update(cx, |this, cx| this.confirm(cx)).log_err();
+            }
+        })
         .into_any_element()
     }
 }
@@ -225,13 +237,15 @@ pub struct DeleteSavedChartRequest {
 pub struct ModalDeleteSavedChartConfirm {
     request: Option<DeleteSavedChartRequest>,
     visible: bool,
+    focus: ModalFocus,
 }
 
 impl ModalDeleteSavedChartConfirm {
-    pub fn new(_cx: &mut Context<Self>) -> Self {
+    pub fn new(cx: &mut Context<Self>) -> Self {
         Self {
             request: None,
             visible: false,
+            focus: ModalFocus::new(cx),
         }
     }
 
@@ -242,19 +256,21 @@ impl ModalDeleteSavedChartConfirm {
     pub fn open(&mut self, request: DeleteSavedChartRequest, cx: &mut Context<Self>) {
         self.request = Some(request);
         self.visible = true;
+        self.focus.focus_on_next_render();
         cx.notify();
     }
 
     pub fn close(&mut self, cx: &mut Context<Self>) {
         self.visible = false;
         self.request = None;
+        self.focus.restore(cx);
         cx.notify();
     }
 
     /// Resolve the modal as if the confirm button was clicked: emit the
-    /// outcome and close. The keyboard path (ConfirmModal keymap) uses this
-    /// so Enter resolves the modal through the same outcome handler as a
-    /// mouse click.
+    /// outcome and close. Enter uses this, through the modal shell while focus
+    /// is inside the modal and through the workspace's ConfirmModal keymap
+    /// otherwise.
     pub fn confirm(&mut self, cx: &mut Context<Self>) {
         let Some(chart_id) = self.request.as_ref().map(|r| r.chart_id) else {
             return;
@@ -273,10 +289,12 @@ impl ModalDeleteSavedChartConfirm {
 impl EventEmitter<DeleteSavedChartOutcome> for ModalDeleteSavedChartConfirm {}
 
 impl Render for ModalDeleteSavedChartConfirm {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if !self.visible {
             return div().into_any_element();
         }
+
+        self.focus.apply_pending(window, cx);
 
         let Some(ref request) = self.request else {
             return div().into_any_element();
@@ -284,7 +302,6 @@ impl Render for ModalDeleteSavedChartConfirm {
 
         let theme = cx.theme();
         let chart_name = request.chart_name.clone();
-        let chart_id = request.chart_id;
         let referencing = request.referencing_dashboards.clone();
         let has_refs = !referencing.is_empty();
 
@@ -322,15 +339,8 @@ impl Render for ModalDeleteSavedChartConfirm {
                 )
             });
 
-        let on_cancel = cx.listener(|this, _: &gpui::ClickEvent, _, cx| {
-            cx.emit(DeleteSavedChartOutcome::Cancelled);
-            this.close(cx);
-        });
-
-        let on_confirm = cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
-            cx.emit(DeleteSavedChartOutcome::Confirmed { chart_id });
-            this.close(cx);
-        });
+        let on_cancel = cx.listener(|this, _: &gpui::ClickEvent, _, cx| this.cancel(cx));
+        let on_confirm = cx.listener(|this, _: &gpui::ClickEvent, _, cx| this.confirm(cx));
 
         let footer = div()
             .flex()
@@ -359,6 +369,19 @@ impl Render for ModalDeleteSavedChartConfirm {
         )
         .variant(ModalVariant::Danger)
         .width(px(460.0))
+        .focus_handle(self.focus.handle())
+        .on_close({
+            let entity = cx.entity().downgrade();
+            move |_, cx| {
+                entity.update(cx, |this, cx| this.cancel(cx)).log_err();
+            }
+        })
+        .on_confirm({
+            let entity = cx.entity().downgrade();
+            move |_, cx| {
+                entity.update(cx, |this, cx| this.confirm(cx)).log_err();
+            }
+        })
         .into_any_element()
     }
 }
@@ -366,6 +389,7 @@ impl Render for ModalDeleteSavedChartConfirm {
 #[cfg(test)]
 mod tests {
     use super::{DeleteDashboardRequest, DeleteSavedChartRequest, ModalDeleteDashboardConfirm};
+    use gpui::AppContext as _;
     use uuid::Uuid;
 
     fn test_uuid() -> Uuid {
@@ -399,20 +423,17 @@ mod tests {
         );
     }
 
-    #[test]
-    fn modal_delete_dashboard_confirm_is_visible_after_open() {
-        // Verify the data model: after calling open(), visible must be true.
-        let mut modal = ModalDeleteDashboardConfirm {
-            request: None,
-            visible: false,
-        };
+    #[gpui::test]
+    fn modal_delete_dashboard_confirm_is_visible_after_open(cx: &mut gpui::TestAppContext) {
+        let modal = cx.new(ModalDeleteDashboardConfirm::new);
         let req = DeleteDashboardRequest {
             dashboard_id: test_uuid(),
             dashboard_name: "Alpha".to_string(),
         };
-        modal.request = Some(req);
-        modal.visible = true;
-        assert!(modal.is_visible());
+
+        cx.update(|cx| modal.update(cx, |modal, cx| modal.open(req, cx)));
+
+        assert!(cx.update(|cx| modal.read(cx).is_visible()));
     }
 
     // O.4 tests
@@ -535,5 +556,175 @@ mod tests {
             assert!(!spanish.is_empty(), "empty Spanish translation for {key}");
             assert_ne!(spanish, *key, "missing Spanish translation for {key}");
         }
+    }
+}
+
+#[cfg(test)]
+mod keyboard_tests {
+    // Explicit imports rather than the parent glob: combining `use super::*`
+    // with `#[gpui::test]` sends the gpui_macros expansion into unbounded
+    // recursion.
+    use super::{
+        DeleteDashboardOutcome, DeleteDashboardRequest, DeleteSavedChartOutcome,
+        DeleteSavedChartRequest, ModalDeleteDashboardConfirm, ModalDeleteSavedChartConfirm,
+    };
+    use crate::modals::test_host::{click_backdrop, has_focus, host_modal};
+    use gpui::{Entity, FocusHandle, TestAppContext, VisualTestContext};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use uuid::Uuid;
+
+    type Outcomes<T> = Rc<RefCell<Vec<T>>>;
+
+    /// Opens the dashboard delete modal without a window, as the workspace
+    /// does, so the modal's own focus handling moves the keyboard into it.
+    fn open_dashboard_modal(
+        cx: &mut TestAppContext,
+    ) -> (
+        Entity<ModalDeleteDashboardConfirm>,
+        FocusHandle,
+        &mut VisualTestContext,
+        Outcomes<DeleteDashboardOutcome>,
+    ) {
+        let (modal, outside, window) = host_modal(cx, |_, cx| ModalDeleteDashboardConfirm::new(cx));
+
+        let outcomes: Outcomes<DeleteDashboardOutcome> = Rc::default();
+        window.update(|_, cx| {
+            let sink = outcomes.clone();
+            cx.subscribe(&modal, move |_, outcome: &DeleteDashboardOutcome, _| {
+                sink.borrow_mut().push(outcome.clone());
+            })
+            .detach();
+
+            modal.update(cx, |modal, cx| {
+                modal.open(
+                    DeleteDashboardRequest {
+                        dashboard_id: Uuid::nil(),
+                        dashboard_name: "Ops".to_string(),
+                    },
+                    cx,
+                );
+            });
+        });
+        window.run_until_parked();
+
+        (modal, outside, window, outcomes)
+    }
+
+    fn open_chart_modal(
+        cx: &mut TestAppContext,
+    ) -> (
+        Entity<ModalDeleteSavedChartConfirm>,
+        FocusHandle,
+        &mut VisualTestContext,
+        Outcomes<DeleteSavedChartOutcome>,
+    ) {
+        let (modal, outside, window) =
+            host_modal(cx, |_, cx| ModalDeleteSavedChartConfirm::new(cx));
+
+        let outcomes: Outcomes<DeleteSavedChartOutcome> = Rc::default();
+        window.update(|_, cx| {
+            let sink = outcomes.clone();
+            cx.subscribe(&modal, move |_, outcome: &DeleteSavedChartOutcome, _| {
+                sink.borrow_mut().push(outcome.clone());
+            })
+            .detach();
+
+            modal.update(cx, |modal, cx| {
+                modal.open(
+                    DeleteSavedChartRequest {
+                        chart_id: Uuid::nil(),
+                        chart_name: "Latency".to_string(),
+                        referencing_dashboards: Vec::new(),
+                    },
+                    cx,
+                );
+            });
+        });
+        window.run_until_parked();
+
+        (modal, outside, window, outcomes)
+    }
+
+    #[gpui::test]
+    fn enter_deletes_the_dashboard(cx: &mut TestAppContext) {
+        let (modal, _outside, window, outcomes) = open_dashboard_modal(cx);
+
+        window.simulate_keystrokes("enter");
+
+        assert_eq!(
+            outcomes.borrow().as_slice(),
+            [DeleteDashboardOutcome::Confirmed {
+                dashboard_id: Uuid::nil()
+            }]
+        );
+        assert!(!window.update(|_, cx| modal.read(cx).is_visible()));
+    }
+
+    #[gpui::test]
+    fn escape_keeps_the_dashboard_and_gives_focus_back(cx: &mut TestAppContext) {
+        let (modal, outside, window, outcomes) = open_dashboard_modal(cx);
+
+        window.simulate_keystrokes("escape");
+
+        assert_eq!(
+            outcomes.borrow().as_slice(),
+            [DeleteDashboardOutcome::Cancelled]
+        );
+        assert!(!window.update(|_, cx| modal.read(cx).is_visible()));
+        assert!(has_focus(window, &outside));
+    }
+
+    #[gpui::test]
+    fn a_backdrop_click_keeps_the_dashboard(cx: &mut TestAppContext) {
+        let (_modal, _outside, window, outcomes) = open_dashboard_modal(cx);
+
+        click_backdrop(window);
+
+        assert_eq!(
+            outcomes.borrow().as_slice(),
+            [DeleteDashboardOutcome::Cancelled]
+        );
+    }
+
+    #[gpui::test]
+    fn enter_deletes_the_saved_chart(cx: &mut TestAppContext) {
+        let (modal, _outside, window, outcomes) = open_chart_modal(cx);
+
+        window.simulate_keystrokes("enter");
+
+        assert_eq!(
+            outcomes.borrow().as_slice(),
+            [DeleteSavedChartOutcome::Confirmed {
+                chart_id: Uuid::nil()
+            }]
+        );
+        assert!(!window.update(|_, cx| modal.read(cx).is_visible()));
+    }
+
+    #[gpui::test]
+    fn escape_keeps_the_saved_chart_and_gives_focus_back(cx: &mut TestAppContext) {
+        let (modal, outside, window, outcomes) = open_chart_modal(cx);
+
+        window.simulate_keystrokes("escape");
+
+        assert_eq!(
+            outcomes.borrow().as_slice(),
+            [DeleteSavedChartOutcome::Cancelled]
+        );
+        assert!(!window.update(|_, cx| modal.read(cx).is_visible()));
+        assert!(has_focus(window, &outside));
+    }
+
+    #[gpui::test]
+    fn a_backdrop_click_keeps_the_saved_chart(cx: &mut TestAppContext) {
+        let (_modal, _outside, window, outcomes) = open_chart_modal(cx);
+
+        click_backdrop(window);
+
+        assert_eq!(
+            outcomes.borrow().as_slice(),
+            [DeleteSavedChartOutcome::Cancelled]
+        );
     }
 }
