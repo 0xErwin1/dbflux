@@ -70,6 +70,11 @@ chart:
 common:
   time_range:
     preset:
+      last_15_minutes: "15m"
+      last_hour: "1h"
+      last_6_hours: "6h"
+      last_24_hours: "24h"
+      last_7_days: "7d"
       custom: "Custom…"
     picker:
       date_range_placeholder: "Select date range"
@@ -498,6 +503,8 @@ connections:
     manager_title: Connection Manager
     edit_title: Edit Connection
   toast:
+    export_from_menu: "Export a connection from its menu"
+    export_from_menu_body: "Right-click a connection in the sidebar and choose Export."
     disconnecting: "Disconnecting from %{name}..."
     no_active_connection: No active connection
     refreshing_schema: Refreshing schema...
@@ -514,6 +521,24 @@ diagnostics:
   shutdown_flush_timed_out: "Some edits may not have reached their files: DBFlux ran out of time saving them while quitting. They are kept in the session store for recovery."
 document:
   audit:
+    title: "Audit"
+    category_chip:
+      config: "CONFIG"
+      connection: "CONN"
+      query: "QUERY"
+      hook: "HOOK"
+      script: "SCRIPT"
+      system: "SYS"
+      mcp: "MCP"
+      governance: "GOV"
+      object_storage: "STORAGE"
+    level_chip:
+      trace: "TRACE"
+      debug: "DEBUG"
+      info: "INFO"
+      warn: "WARN"
+      error: "ERROR"
+      fatal: "FATAL"
     pager:
       range: "%{start}-%{end} of %{total} %{unit}"
     actor:
@@ -563,6 +588,16 @@ document:
       summary: Summary
       time: Time
     filter:
+      bar:
+        search: "Search:"
+        time: "Time:"
+        timezone: "Time zone:"
+        range: "Range:"
+        start_hour: "Start hour:"
+        start_minute: "Start minute:"
+        end_hour: "End hour:"
+        end_minute: "End minute:"
+        auto_refresh: "Auto-refresh:"
       timezone:
         local: "Local"
         utc: "UTC"
@@ -2709,6 +2744,9 @@ settings:
       label: Theme
     style:
       label: Style
+      option:
+        default: "Default"
+        compact: "Compact"
     language:
       label: Language
       option:
@@ -3757,6 +3795,8 @@ sso_wizard:
     profile_name: Profile name
     start_url: SSO start URL
     region: Region
+    account_id: Account ID
+    role_name: Role name
   account:
     hint: Use account ID from AWS SSO account discovery
     discovering: Discovering accounts...

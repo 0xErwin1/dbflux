@@ -21,6 +21,22 @@ use gpui::prelude::*;
 use gpui::*;
 use gpui_component::theme::Theme;
 
+/// Translated label for a [`RefreshPolicy`].
+///
+/// A named interval renders its seconds directly (`"{every_secs}s"`): the
+/// suffix is a unit symbol, not prose, so it stays outside the catalog.
+/// Manual and any interval outside [`RefreshPolicy::ALL`] resolve through
+/// the `document.shared.refresh.*` catalog entries.
+pub fn refresh_policy_label(policy: RefreshPolicy) -> String {
+    match policy {
+        RefreshPolicy::Manual => dbflux_i18n::t!("document.shared.refresh.off"),
+        RefreshPolicy::Interval { every_secs } if RefreshPolicy::ALL.contains(&policy) => {
+            format!("{every_secs}s")
+        }
+        RefreshPolicy::Interval { .. } => dbflux_i18n::t!("document.shared.refresh.custom"),
+    }
+}
+
 /// Render the refresh split-button.
 ///
 /// `id` must be unique within the containing element tree.
@@ -40,7 +56,7 @@ pub fn refresh_split_button(
     theme: &Theme,
 ) -> impl IntoElement {
     let refresh_label: SharedString = if refresh_policy.is_auto() {
-        refresh_policy.label().into()
+        refresh_policy_label(refresh_policy).into()
     } else {
         dbflux_i18n::t!("composites.refresh_split_button.label").into()
     };
@@ -100,6 +116,52 @@ pub fn refresh_split_button(
 
 #[cfg(test)]
 mod tests {
+    use super::refresh_policy_label;
+    use dbflux_core::RefreshPolicy;
+
+    #[test]
+    fn refresh_policy_label_maps_every_variant_to_its_catalog_entry() {
+        for policy in RefreshPolicy::ALL {
+            let label = refresh_policy_label(*policy);
+
+            match policy {
+                RefreshPolicy::Manual => {
+                    assert_eq!(label, dbflux_i18n::t!("document.shared.refresh.off"))
+                }
+                RefreshPolicy::Interval { every_secs } => {
+                    assert_eq!(label, format!("{every_secs}s"))
+                }
+            }
+        }
+
+        assert_eq!(
+            refresh_policy_label(RefreshPolicy::Interval { every_secs: 7 }),
+            dbflux_i18n::t!("document.shared.refresh.custom")
+        );
+    }
+
+    #[test]
+    fn refresh_policy_keys_resolve_in_every_locale() {
+        for key in [
+            "document.shared.refresh.off",
+            "document.shared.refresh.custom",
+        ] {
+            for locale in ["en", "es", "ko", "zh_Hans"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(
+                    !value.is_empty() && value != format!("{locale}.{key}"),
+                    "{key} missing in {locale}"
+                );
+            }
+        }
+
+        assert_ne!(
+            dbflux_i18n::t!("document.shared.refresh.off", locale = "en"),
+            dbflux_i18n::t!("document.shared.refresh.off", locale = "es")
+        );
+    }
+
     #[test]
     fn refresh_split_button_label_key_resolves() {
         let en = dbflux_i18n::t!("composites.refresh_split_button.label", locale = "en");
