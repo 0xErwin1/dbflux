@@ -207,10 +207,13 @@ recientes orientados al usuario.
 ### Exportar
 
 El botón **Export** escribe los eventos actualmente visibles a **CSV** o
-**JSON** en tu carpeta `~/Downloads` (`audit_export.csv` / `audit_export.json`),
-usando el schema extendido (todos los campos, incluidos los details
-estructurados). Un toast de éxito informa de cuántos eventos se escribieron y
-dónde.
+**JSON**, usando el schema extendido (todos los campos, incluidos los details
+estructurados). Un diálogo de guardado pregunta dónde escribir el archivo y
+propone un nombre con fecha y hora (`audit_export_20260923-140507.csv`), así que
+una segunda exportación no reemplaza a la primera. Cancelar el diálogo no
+escribe nada. Si no hay un selector de archivos nativo disponible, el archivo
+va a `~/.local/share/dbflux/exports/`, igual que en las demás exportaciones. Un
+toast de éxito informa de cuántos eventos se escribieron y dónde.
 
 ### Retención
 

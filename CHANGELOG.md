@@ -47,6 +47,13 @@ All notable changes to DBFlux will be documented in this file.
   protections. Unprotected execution remains available; the default editor
   cannot promise these protections on these backends.
   
+* **Audit export asks where to save** — exporting from the audit viewer now
+  opens the same save dialog as the other exports, with a timestamped default
+  name (`audit_export_<YYYYMMDD-HHMMSS>.<csv|json>`), instead of writing to a
+  fixed `~/Downloads/audit_export.*` path that a second export silently
+  replaced. Cancelling writes nothing, and write failures are reported with a
+  correlation id in the audit log.
+
 * Reject MongoDB execution requests with row limits or statement timeouts before any operation dispatches.
 
 * **Chart controls for missing features removed** — the chart toolbar's PNG
