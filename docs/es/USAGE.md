@@ -626,6 +626,7 @@ así la escritura funciona con normalidad.)
 | `g` / `Shift+g` (o `Home` / `End`)            | Primera / última fila                      |
 | `Ctrl+d` / `Ctrl+u` (o `PageDown` / `PageUp`) | Página abajo / arriba                      |
 | `]` / `[`                                     | Página siguiente / anterior de resultados  |
+| `F5`                                          | Recargar el documento enfocado (filas de la tabla, lista de buckets, listado de objetos, claves) |
 | `Ctrl+e` / `Cmd+e`                            | Exportar resultados                        |
 | `f`                                           | Enfocar la toolbar                         |
 | `/`                                           | Enfocar búsqueda/filtro                    |

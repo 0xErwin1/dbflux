@@ -10,6 +10,11 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* `F5` now refreshes the focused document (table data, bucket list, object
+  listing, key browser), and the audit viewer's `r` refreshes the audit list
+  instead of the connection schema. The buckets empty state showed `r refresh`,
+  but `r` renames in that view; the hint now shows the key the keymap binds.
+
 * Redis, Turso, and InfluxDB now refuse requested row limits (including zero)
   or statement timeouts before execution with `NotSupported`, rather than
   dispatching commands, SQL, HTTP, or instance-context queries without those

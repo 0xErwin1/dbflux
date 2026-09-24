@@ -441,6 +441,12 @@ fn results_layer() -> KeymapLayer {
         Command::ResultsPrevPage,
     );
 
+    // Refresh the focused document. `r` stays Rename in this layer.
+    layer.bind(
+        KeyChord::new("f5", Modifiers::none()),
+        Command::RefreshSchema,
+    );
+
     // Export
     layer.bind(
         KeyChord::new("e", Modifiers::primary()),
@@ -1074,6 +1080,51 @@ mod tests {
             keymap.resolve(ContextId::Results, &chord),
             Some(Command::ExpandCollapse),
         );
+    }
+
+    /// `F5` refreshes the focused document from the Results layer, and it is
+    /// the only refresh chord there: `r` keeps renaming, and documents render
+    /// their refresh hint from `shortcut_for_command`.
+    #[test]
+    fn results_layer_binds_f5_to_refresh() {
+        let keymap = default_keymap();
+        let f5 = KeyChord::new("f5", Modifiers::none());
+
+        assert_eq!(
+            keymap.resolve(ContextId::Results, &f5),
+            Some(Command::RefreshSchema)
+        );
+        assert_eq!(
+            keymap.resolve(ContextId::Results, &KeyChord::new("r", Modifiers::none())),
+            Some(Command::Rename)
+        );
+        assert_eq!(
+            keymap
+                .shortcut_for_command(ContextId::Results, Command::RefreshSchema)
+                .as_deref(),
+            Some("f5")
+        );
+    }
+
+    /// No other layer binds `F5`, so the Results binding cannot shadow or be
+    /// shadowed by another command.
+    #[test]
+    fn f5_is_bound_only_in_the_results_layer() {
+        let keymap = default_keymap();
+        let f5 = KeyChord::new("f5", Modifiers::none());
+
+        for context in ContextId::all_variants() {
+            let bound_here = keymap
+                .bindings_for_context(*context)
+                .into_iter()
+                .any(|(chord, _, owner)| chord == f5 && owner == *context);
+
+            assert_eq!(
+                bound_here,
+                *context == ContextId::Results,
+                "unexpected F5 binding ownership in {context:?}"
+            );
+        }
     }
 
     /// The find shortcut must stay unbound in the text-input context (and in

@@ -9,6 +9,7 @@ use super::data::{BucketDetailsState, BucketRow, BucketSizeEstimateState};
 use super::{BucketsFocusMode, BucketsTableDocument};
 use crate::handle::DocumentEvent;
 use crate::types::DocumentState;
+use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::controls::Input;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Text, overlay_bg, surface_panel};
@@ -48,6 +49,25 @@ pub(crate) fn format_bytes(bytes: u64) -> String {
     }
 
     format!("{value:.1} {}", UNITS[unit])
+}
+
+/// Keystroke that refreshes the bucket list while the table has focus, read
+/// from the keymap so the empty-state hint always names the live binding.
+/// `None` when nothing in the table context refreshes the document.
+pub(super) fn refresh_shortcut() -> Option<String> {
+    dbflux_ui_base::default_keymap()
+        .shortcut_for_command(ContextId::Results, Command::RefreshSchema)
+}
+
+/// Empty-state hint for refreshing the bucket list, or `None` when no key
+/// refreshes it (see [`refresh_shortcut`]).
+pub(super) fn refresh_hint() -> Option<String> {
+    refresh_shortcut().map(|key| {
+        dbflux_i18n::t!(
+            "document.buckets_table.empty.hint_refresh",
+            key = key.as_str()
+        )
+    })
 }
 
 /// Footer summary line: how many buckets are listed and how many distinct
@@ -500,9 +520,9 @@ impl BucketsTableDocument {
             } else {
                 Text::muted(message)
             })
-            .child(Text::key_hint(dbflux_i18n::t!(
-                "document.buckets_table.empty.hint_refresh"
-            )))
+            .when_some(refresh_hint(), |this, hint| {
+                this.child(Text::key_hint(hint))
+            })
             .into_any_element()
     }
 

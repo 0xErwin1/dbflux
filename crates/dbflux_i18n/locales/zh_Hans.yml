@@ -643,7 +643,7 @@ document:
       error_detail: "列出存储桶失败：%{error}"
       no_match: "没有符合 %{query} 的存储桶"
       no_buckets: 此连接没有存储桶
-      hint_refresh: r 刷新
+      hint_refresh: "%{key} 刷新"
     delete_confirm:
       title: 删除存储桶？
       body: "%{bucket} 为空，将被删除。此操作无法撤销。"

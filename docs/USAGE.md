@@ -578,6 +578,7 @@ stay `Ctrl` on all platforms (to avoid clashing with macOS system shortcuts).
 | `g` / `Shift+g` (or `Home` / `End`) | First / last row |
 | `Ctrl+d` / `Ctrl+u` (or `PageDown` / `PageUp`) | Page down / up |
 | `]` / `[` | Next / previous results page |
+| `F5` | Refresh the focused document (table rows, bucket list, object listing, keys) |
 | `Ctrl+e` / `Cmd+e` | Export results |
 | `f` | Focus toolbar |
 | `/` | Focus search/filter |

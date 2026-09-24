@@ -643,7 +643,7 @@ document:
       error_detail: "Failed to list buckets: %{error}"
       no_match: "No buckets match \"%{query}\""
       no_buckets: This connection has no buckets
-      hint_refresh: r refresh
+      hint_refresh: "%{key} refresh"
     delete_confirm:
       title: Delete bucket?
       body: "\"%{bucket}\" is empty and will be removed. This cannot be undone."

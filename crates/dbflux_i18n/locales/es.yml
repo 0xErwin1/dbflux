@@ -643,7 +643,7 @@ document:
       error_detail: "Error al listar buckets: %{error}"
       no_match: "Ningún bucket coincide con \"%{query}\""
       no_buckets: Esta conexión no tiene buckets
-      hint_refresh: r para actualizar
+      hint_refresh: "%{key} para actualizar"
     delete_confirm:
       title: ¿Eliminar bucket?
       body: "\"%{bucket}\" está vacío y se eliminará. Esta acción no se puede deshacer."
