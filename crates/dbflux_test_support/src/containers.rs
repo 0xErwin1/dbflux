@@ -564,14 +564,19 @@ where
     let access_key_id = "minioadmin";
     let secret_access_key = "minioadmin";
 
-    // quay.io, not Docker Hub: the minio/minio repository was withdrawn from
-    // Docker Hub, so the Hub reference 404s on every pull. Same release tag.
-    let image = GenericImage::new("quay.io/minio/minio", "RELEASE.2025-09-07T16-13-09Z")
-        .with_exposed_port(ContainerPort::Tcp(9000))
-        .with_wait_for(WaitFor::seconds(1))
-        .with_env_var("MINIO_ROOT_USER", access_key_id)
-        .with_env_var("MINIO_ROOT_PASSWORD", secret_access_key)
-        .with_cmd(vec!["server".to_string(), "/data".to_string()]);
+    // MinIO no longer publishes pullable images: quay.io and Docker Hub both
+    // answer 401 anonymously. Chainguard builds MinIO from source and keeps it
+    // public; only `latest` is free, so the multi-arch index is pinned by digest.
+    // The image runs as uid 65532, so the data directory must be writable.
+    let image = GenericImage::new(
+        "cgr.dev/chainguard/minio",
+        "latest@sha256:bd014394a80898e68c149f2311fdf8d5a2c2f3bb2c33b9327ae6d02b4b065ae1",
+    )
+    .with_exposed_port(ContainerPort::Tcp(9000))
+    .with_wait_for(WaitFor::seconds(1))
+    .with_env_var("MINIO_ROOT_USER", access_key_id)
+    .with_env_var("MINIO_ROOT_PASSWORD", secret_access_key)
+    .with_cmd(vec!["server".to_string(), "/tmp/minio-data".to_string()]);
 
     let container = image.start().expect("failed to start minio container");
     let port = container
