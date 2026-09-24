@@ -45,6 +45,12 @@ recurren a English para el texto general aún no traducido. Este release solo
 traduce la sección General; el resto de la UI se está convirtiendo crate por crate
 y permanece en English por ahora.
 
+### Editor
+
+| Setting                      | Default | Qué hace |
+| ---------------------------- | ------- | -------- |
+| **Vim mode in code editors** | Off     | Edición modal en los editores de código: modos Normal e Insertar con `h`, `j`, `k`, `l`, `i`, `Escape`, `x` y `u`. Se aplica a los editores abiertos al guardar. Ver la sección de modo Vim en la referencia de teclado de la [Guía de uso](USAGE.md). |
+
 ### Inicio y sesión
 
 | Setting                        | Default | Qué hace                                                         |

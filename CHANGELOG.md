@@ -4,6 +4,16 @@ All notable changes to DBFlux will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+* **Opt-in Vim mode for code editors** — Settings → General → Editor adds a
+  Vim mode toggle, off by default. Code editors then open in Normal mode,
+  where `h`/`j`/`k`/`l` and `Enter` move, `i` enters Insert mode, `x` deletes
+  a character and `u` undoes; `Escape` closes an open completion menu or
+  returns to Normal mode. Normal mode inserts no text from any key, paste, or
+  input method, and application shortcuts keep working. A strip under the
+  editor shows `NORMAL` or `INSERT`.
+
 ### Changed
 
 * ClickHouse and Redshift now refuse explicit query row limits (including zero) and statement timeouts before dispatch or preparation; unprotected queries retain existing behavior, including possible full-result buffering. ClickHouse HTTP timeout does not guarantee server cancellation, and the Redshift early-refusal regression uses PostgreSQL 16 protocol compatibility rather than a hosted Redshift cluster.
