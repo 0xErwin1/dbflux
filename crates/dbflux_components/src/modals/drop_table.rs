@@ -26,38 +26,49 @@ pub struct DropTableRequest {
     pub schema_name: Option<String>,
     /// Dependent objects — empty if none.
     pub dependents: Vec<RelationRef>,
-    /// The table reference as the connection's SQL dialect writes it, e.g.
-    /// `"public"."orders"`, `` `shop`.`orders` `` or `[dbo].[orders]`.
-    pub qualified_table: String,
+    /// The `DROP TABLE` statement as the connection's SQL dialect writes it,
+    /// e.g. `DROP TABLE "public"."orders" CASCADE` or `DROP TABLE [dbo].[orders]`.
+    pub statement: String,
+    /// Whether `statement` also drops the dependents. False when there are
+    /// none, or when the database has no `DROP TABLE ... CASCADE`.
+    pub cascade: bool,
 }
 
 impl DropTableRequest {
-    /// Builds a request whose SQL preview quotes the table the way `dialect`
-    /// does, so the preview matches the connection it will run against.
+    /// Builds a request whose SQL preview is the statement `dialect` writes,
+    /// so the preview matches the connection it will run against. CASCADE is
+    /// requested only when the table has dependents, and the dialect decides
+    /// whether its database supports it.
     pub fn new(
         table_name: String,
         schema_name: Option<String>,
         dependents: Vec<RelationRef>,
         dialect: &dyn SqlDialect,
     ) -> Self {
-        let qualified_table = dialect.qualified_table(schema_name.as_deref(), &table_name);
+        let cascade = !dependents.is_empty() && dialect.supports_drop_cascade();
+        let statement = dialect.drop_table_statement(schema_name.as_deref(), &table_name, cascade);
 
         Self {
             table_name,
             schema_name,
             dependents,
-            qualified_table,
+            statement,
+            cascade,
         }
     }
 
     /// Build the SQL preview text for this request.
     pub fn sql_preview(&self) -> String {
-        let base = format!("DROP TABLE {}", self.qualified_table);
+        format!("{};", self.statement)
+    }
 
-        if self.dependents.is_empty() {
-            format!("{};", base)
+    /// Heading shown above the list of dependents: it only mentions CASCADE
+    /// when the statement actually drops them.
+    fn dependents_heading(&self) -> String {
+        if self.cascade {
+            dbflux_i18n::t!("modals.drop_table.cascade_warning")
         } else {
-            format!("{}\n  CASCADE;", base)
+            dbflux_i18n::t!("modals.drop_table.dependents_heading")
         }
     }
 }
@@ -195,6 +206,7 @@ impl Render for ModalDropTable {
         let table_name = request.table_name.clone();
         let dependents = request.dependents.clone();
         let sql = request.sql_preview();
+        let dependents_heading = request.dependents_heading();
         let has_deps = !dependents.is_empty();
         let drop_enabled = self.drop_enabled;
 
@@ -218,7 +230,7 @@ impl Render for ModalDropTable {
                     .text_size(FontSizes::XS)
                     .font_weight(gpui::FontWeight::SEMIBOLD)
                     .text_color(theme.muted_foreground)
-                    .child(dbflux_i18n::t!("modals.drop_table.cascade_warning")),
+                    .child(dependents_heading),
             );
 
             for dep in &dependents {
@@ -392,6 +404,36 @@ mod tests {
         }
     }
 
+    /// Quotes with double quotes and drops dependents with CASCADE, as
+    /// PostgreSQL does.
+    struct CascadeDialect;
+
+    impl SqlDialect for CascadeDialect {
+        fn quote_identifier(&self, name: &str) -> String {
+            DefaultSqlDialect.quote_identifier(name)
+        }
+
+        fn qualified_table(&self, schema: Option<&str>, table: &str) -> String {
+            DefaultSqlDialect.qualified_table(schema, table)
+        }
+
+        fn value_to_literal(&self, _value: &dbflux_core::Value) -> String {
+            String::new()
+        }
+
+        fn escape_string(&self, text: &str) -> String {
+            text.to_string()
+        }
+
+        fn placeholder_style(&self) -> PlaceholderStyle {
+            PlaceholderStyle::DollarNumber
+        }
+
+        fn supports_drop_cascade(&self) -> bool {
+            true
+        }
+    }
+
     /// Quotes identifiers with brackets, as SQL Server does.
     struct BracketDialect;
 
@@ -430,7 +472,7 @@ mod tests {
             "orders".to_string(),
             Some("public".to_string()),
             vec![],
-            &DefaultSqlDialect,
+            &CascadeDialect,
         );
         let mysql = DropTableRequest::new(
             "orders".to_string(),
@@ -447,10 +489,7 @@ mod tests {
 
         assert_eq!(postgres.sql_preview(), "DROP TABLE \"public\".\"orders\";");
         assert_eq!(mysql.sql_preview(), "DROP TABLE `shop`.`orders`;");
-        assert_eq!(
-            sql_server.sql_preview(),
-            "DROP TABLE [dbo].[orders]\n  CASCADE;"
-        );
+        assert_eq!(sql_server.sql_preview(), "DROP TABLE [dbo].[orders];");
     }
 
     #[test]
@@ -480,22 +519,80 @@ mod tests {
     }
 
     #[test]
-    fn sql_preview_with_schema_and_deps() {
-        let r = request(
-            "orders",
-            Some("public"),
+    fn sql_preview_cascades_dependents_where_the_dialect_supports_it() {
+        let r = DropTableRequest::new(
+            "orders".to_string(),
+            Some("public".to_string()),
             vec![view_dep("public.order_view")],
+            &CascadeDialect,
         );
+
+        assert!(r.cascade);
+        assert_eq!(r.sql_preview(), "DROP TABLE \"public\".\"orders\" CASCADE;");
         assert_eq!(
-            r.sql_preview(),
-            "DROP TABLE \"public\".\"orders\"\n  CASCADE;"
+            r.dependents_heading(),
+            dbflux_i18n::t!("modals.drop_table.cascade_warning")
         );
     }
 
     #[test]
-    fn sql_preview_no_schema_with_deps() {
-        let r = request("orders", None, vec![view_dep("public.order_view")]);
-        assert_eq!(r.sql_preview(), "DROP TABLE \"orders\"\n  CASCADE;");
+    fn sql_preview_omits_cascade_where_the_dialect_does_not_support_it() {
+        let deps = || vec![view_dep("order_view")];
+        let sql_server = DropTableRequest::new(
+            "orders".to_string(),
+            Some("dbo".to_string()),
+            deps(),
+            &BracketDialect,
+        );
+        let mysql = DropTableRequest::new(
+            "orders".to_string(),
+            Some("shop".to_string()),
+            deps(),
+            &BacktickDialect,
+        );
+        let default = request("orders", None, deps());
+
+        for (r, expected) in [
+            (&sql_server, "DROP TABLE [dbo].[orders];"),
+            (&mysql, "DROP TABLE `shop`.`orders`;"),
+            (&default, "DROP TABLE \"orders\";"),
+        ] {
+            assert!(!r.cascade);
+            assert_eq!(r.sql_preview(), expected);
+            assert_eq!(
+                r.dependents_heading(),
+                dbflux_i18n::t!("modals.drop_table.dependents_heading")
+            );
+        }
+    }
+
+    #[test]
+    fn sql_preview_omits_cascade_without_dependents() {
+        let r = DropTableRequest::new(
+            "orders".to_string(),
+            Some("public".to_string()),
+            vec![],
+            &CascadeDialect,
+        );
+
+        assert!(!r.cascade);
+        assert_eq!(r.sql_preview(), "DROP TABLE \"public\".\"orders\";");
+    }
+
+    #[test]
+    fn sql_preview_is_the_statement_the_dialect_writes() {
+        let r = DropTableRequest::new(
+            "orders".to_string(),
+            Some("public".to_string()),
+            vec![view_dep("public.order_view")],
+            &CascadeDialect,
+        );
+
+        assert_eq!(
+            r.statement,
+            CascadeDialect.drop_table_statement(Some("public"), "orders", true)
+        );
+        assert_eq!(r.sql_preview(), format!("{};", r.statement));
     }
 
     #[test]
@@ -507,6 +604,7 @@ mod tests {
             "modals.drop_table.confirm_placeholder",
             "modals.drop_table.confirm_prompt",
             "modals.drop_table.cascade_warning",
+            "modals.drop_table.dependents_heading",
             "modals.drop_table.delete_warning",
             "modals.drop_table.relation_kind.view",
             "modals.drop_table.relation_kind.materialized_view",

@@ -5078,4 +5078,13 @@ mod tests {
         let result = resolve_write_privilege(false, Some(false), &grants);
         assert_eq!(result, WritePrivilege::Unknown);
     }
+
+    #[test]
+    fn drop_table_statement_never_writes_cascade() {
+        assert!(!MysqlDialect.supports_drop_cascade());
+        assert_eq!(
+            MysqlDialect.drop_table_statement(Some("shop"), "orders", true),
+            "DROP TABLE `shop`.`orders`"
+        );
+    }
 }

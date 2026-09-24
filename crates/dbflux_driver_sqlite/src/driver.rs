@@ -2825,4 +2825,13 @@ mod tests {
             })
         );
     }
+
+    #[test]
+    fn drop_table_statement_never_writes_cascade() {
+        assert!(!SqliteDialect.supports_drop_cascade());
+        assert_eq!(
+            SqliteDialect.drop_table_statement(None, "orders", true),
+            "DROP TABLE \"orders\""
+        );
+    }
 }

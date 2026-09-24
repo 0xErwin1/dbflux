@@ -130,6 +130,32 @@ pub trait SqlDialect: Send + Sync {
         false
     }
 
+    /// Whether `DROP TABLE ... CASCADE` drops the objects that depend on the
+    /// table.
+    ///
+    /// Defaults to `false`: SQL Server and SQLite reject the keyword, and
+    /// MySQL parses it but does nothing with it. Dialects whose database
+    /// honors it (PostgreSQL, Redshift) opt in.
+    fn supports_drop_cascade(&self) -> bool {
+        false
+    }
+
+    /// Build a `DROP TABLE` statement for this dialect, without a trailing
+    /// semicolon.
+    ///
+    /// `cascade` asks for dependent objects to be dropped as well. The
+    /// keyword is only written when [`Self::supports_drop_cascade`] is
+    /// `true`, so the statement stays valid on databases without it.
+    fn drop_table_statement(&self, schema: Option<&str>, table: &str, cascade: bool) -> String {
+        let qualified_table = self.qualified_table(schema, table);
+
+        if cascade && self.supports_drop_cascade() {
+            format!("DROP TABLE {} CASCADE", qualified_table)
+        } else {
+            format!("DROP TABLE {}", qualified_table)
+        }
+    }
+
     /// Build an UPSERT statement for this dialect.
     fn build_upsert_statement(
         &self,
@@ -336,5 +362,58 @@ mod tests {
     fn default_limit_offset_clause_with_nonzero_offset_appends_offset() {
         let dialect = NopDialect;
         assert_eq!(dialect.limit_offset_clause(5, 10), "LIMIT 5 OFFSET 10");
+    }
+
+    #[test]
+    fn default_drop_table_statement_omits_cascade() {
+        let dialect = DefaultSqlDialect;
+
+        assert!(!dialect.supports_drop_cascade());
+        assert_eq!(
+            dialect.drop_table_statement(Some("public"), "orders", true),
+            "DROP TABLE \"public\".\"orders\""
+        );
+    }
+
+    #[test]
+    fn drop_table_statement_adds_cascade_only_when_asked_and_supported() {
+        struct CascadeDialect;
+
+        impl SqlDialect for CascadeDialect {
+            fn quote_identifier(&self, name: &str) -> String {
+                format!("\"{}\"", name)
+            }
+
+            fn qualified_table(&self, _schema: Option<&str>, table: &str) -> String {
+                self.quote_identifier(table)
+            }
+
+            fn value_to_literal(&self, _value: &crate::Value) -> String {
+                "?".to_string()
+            }
+
+            fn escape_string(&self, s: &str) -> String {
+                s.to_string()
+            }
+
+            fn placeholder_style(&self) -> PlaceholderStyle {
+                PlaceholderStyle::DollarNumber
+            }
+
+            fn supports_drop_cascade(&self) -> bool {
+                true
+            }
+        }
+
+        let dialect = CascadeDialect;
+
+        assert_eq!(
+            dialect.drop_table_statement(None, "orders", true),
+            "DROP TABLE \"orders\" CASCADE"
+        );
+        assert_eq!(
+            dialect.drop_table_statement(None, "orders", false),
+            "DROP TABLE \"orders\""
+        );
     }
 }

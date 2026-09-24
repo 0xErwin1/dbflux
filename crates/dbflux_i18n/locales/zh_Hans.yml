@@ -2463,6 +2463,7 @@ modals:
     confirm_placeholder: 输入表名以确认
     confirm_prompt: "输入 %{table} 以确认"
     cascade_warning: "依赖对象也将被删除（CASCADE）："
+    dependents_heading: "依赖此表的对象："
     delete_warning: 这将永久删除该表及所有依赖对象。
     relation_kind:
       view: 视图
