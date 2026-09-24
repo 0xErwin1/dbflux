@@ -80,6 +80,7 @@ pub static S3_FORM: LazyLock<DriverFormDef> = LazyLock::new(|| DriverFormDef {
                         FormFieldKind::Text,
                         "optional — leave blank to use the profile above or the default AWS credential chain",
                     ),
+                    field("password", "Secret Access Key", FormFieldKind::Password, ""),
                 ],
             },
             FormSection {
@@ -1369,6 +1370,31 @@ mod tests {
             .find(|f| f.id == "path_style")
             .expect("path_style field");
         assert_eq!(path_style.kind, FormFieldKind::Checkbox);
+    }
+
+    #[test]
+    fn secret_access_key_follows_access_key_id_in_the_aws_section() {
+        let aws_section = S3_FORM
+            .tabs
+            .iter()
+            .find(|tab| tab.id == "main")
+            .and_then(|tab| tab.sections.iter().find(|section| section.title == "AWS"))
+            .expect("S3 form must declare an AWS section");
+
+        let field_ids: Vec<&str> = aws_section
+            .fields
+            .iter()
+            .map(|field| field.id.as_str())
+            .collect();
+        assert_eq!(
+            field_ids,
+            ["region", "profile", "access_key_id", "password"],
+            "the secret key must sit right after the access key id"
+        );
+
+        let secret = &aws_section.fields[3];
+        assert_eq!(secret.kind, FormFieldKind::Password);
+        assert_eq!(secret.label, "Secret Access Key");
     }
 
     #[test]

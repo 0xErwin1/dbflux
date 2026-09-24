@@ -812,9 +812,15 @@ impl McpSection {
                     label: SharedString::from(client.name.clone()),
                     detail: Some(SharedString::from(client.id.clone())),
                     badge: Some(if client.active {
-                        (SharedString::from("active"), BadgeTone::Success)
+                        (
+                            SharedString::from(dbflux_i18n::t!("settings.mcp.badge.active")),
+                            BadgeTone::Success,
+                        )
                     } else {
-                        (SharedString::from("inactive"), BadgeTone::Neutral)
+                        (
+                            SharedString::from(dbflux_i18n::t!("settings.mcp.badge.inactive")),
+                            BadgeTone::Neutral,
+                        )
                     }),
                     selected: is_selected,
                     focused: is_list_focused && is_selected,
@@ -2273,13 +2279,15 @@ mod tests {
         "settings.mcp.action.create_role",
         "settings.mcp.action.update_policy",
         "settings.mcp.action.create_policy",
+        "settings.mcp.badge.active",
+        "settings.mcp.badge.inactive",
     ];
 
     const EXPECTED_CLASS_IDS: &[&str] = &["metadata", "read", "write", "destructive", "admin"];
 
     #[test]
     fn mcp_chrome_keys_resolve_in_both_locales() {
-        for locale in ["en", "es"] {
+        for locale in ["en", "es", "ko", "zh_Hans"] {
             for key in CHROME_KEYS {
                 let value = dbflux_i18n::t!(key, locale = locale);
 

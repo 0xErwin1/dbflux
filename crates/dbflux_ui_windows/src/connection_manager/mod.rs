@@ -173,6 +173,10 @@ enum FormFocus {
     SettingsConfirmDangerous,
     SettingsRequiresWhere,
     SettingsRequiresPreview,
+    SettingsPreConnectHookExtra,
+    SettingsPostConnectHookExtra,
+    SettingsPreDisconnectHookExtra,
+    SettingsPostDisconnectHookExtra,
     SettingsDriverField(u8),
     // Actions (shared between tabs)
     TestConnection,
@@ -822,6 +826,10 @@ impl ConnectionManagerWindow {
             subscribe_input(cx, window, &input_ssm_instance_id),
             subscribe_input(cx, window, &input_ssm_region),
             subscribe_input(cx, window, &input_ssm_remote_port),
+            subscribe_input(cx, window, &conn_pre_hook_extra_input),
+            subscribe_input(cx, window, &conn_post_hook_extra_input),
+            subscribe_input(cx, window, &conn_pre_disconnect_hook_extra_input),
+            subscribe_input(cx, window, &conn_post_disconnect_hook_extra_input),
         ];
         #[cfg(feature = "mcp")]
         subscriptions.push(mcp_client_filter_sub);
@@ -1416,6 +1424,25 @@ impl ConnectionManagerWindow {
         }
 
         values
+    }
+
+    /// Label of the canonical secret input for the selected driver.
+    ///
+    /// Drivers can rename the secret (e.g. "API Token" for InfluxDB v2). The
+    /// override depends on current form values so that toggles like a version
+    /// selector flip the label live. Falls back to the generic "Password".
+    fn secret_field_label(&self, cx: &Context<Self>) -> String {
+        let default_label = || dbflux_i18n::t!("connection_manager.placeholder.password");
+
+        let Some(driver) = &self.form.selected_driver else {
+            return default_label();
+        };
+
+        let form_values = self.collect_form_values(driver.form_definition(), cx);
+
+        driver
+            .secret_field_label(&form_values)
+            .unwrap_or_else(default_label)
     }
 
     fn reset_value_source_selectors(&mut self, window: &mut Window, cx: &mut Context<Self>) {

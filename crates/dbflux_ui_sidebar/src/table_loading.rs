@@ -1000,7 +1000,7 @@ impl Sidebar {
 }
 
 #[cfg(test)]
-mod object_tree_adapter_tests {
+pub(crate) mod object_tree_adapter_tests {
     //! Behavioral tests for the T4 sidebar adapter: the sidebar's generic
     //! profile/database/schema/table hierarchy and metadata loading must run
     //! through the shared `dbflux_ui_base::object_tree` projection and the
@@ -1029,7 +1029,7 @@ mod object_tree_adapter_tests {
     use std::sync::{Arc, LazyLock, Mutex};
     use uuid::Uuid;
 
-    fn test_app_state(cx: &mut TestAppContext) -> Entity<AppStateEntity> {
+    pub(crate) fn test_app_state(cx: &mut TestAppContext) -> Entity<AppStateEntity> {
         cx.update(gpui_component::theme::init);
         let state = cx.update(|cx| {
             cx.new(|_| {
@@ -1052,10 +1052,10 @@ mod object_tree_adapter_tests {
 
     // --- fixtures ---
 
-    struct AdapterFakeConnection {
+    pub(crate) struct AdapterFakeConnection {
         metadata: dbflux_core::DriverMetadata,
         strategy: SchemaLoadingStrategy,
-        databases: Mutex<Vec<dbflux_core::DatabaseInfo>>,
+        pub(crate) databases: Mutex<Vec<dbflux_core::DatabaseInfo>>,
         schemas: Mutex<HashMap<String, dbflux_core::DbSchemaInfo>>,
         schema_failures: Mutex<HashMap<String, usize>>,
         list_calls: AtomicUsize,
@@ -1070,7 +1070,7 @@ mod object_tree_adapter_tests {
     }
 
     impl AdapterFakeConnection {
-        fn lazy() -> Arc<Self> {
+        pub(crate) fn lazy() -> Arc<Self> {
             Arc::new(Self {
                 metadata: fake_metadata(),
                 strategy: SchemaLoadingStrategy::LazyPerDatabase,
@@ -1219,7 +1219,7 @@ mod object_tree_adapter_tests {
         }
     }
 
-    fn register_per_database_driver(
+    pub(crate) fn register_per_database_driver(
         state: &Entity<AppStateEntity>,
         cx: &mut TestAppContext,
     ) -> (Arc<AtomicUsize>, Arc<AtomicBool>) {
@@ -1440,7 +1440,7 @@ mod object_tree_adapter_tests {
         details
     }
 
-    fn connect_profile(
+    pub(crate) fn connect_profile(
         state: &Entity<AppStateEntity>,
         cx: &mut TestAppContext,
         profile_id: Uuid,
@@ -1484,7 +1484,9 @@ mod object_tree_adapter_tests {
         })
     }
 
-    fn snapshot_naming(databases: Vec<dbflux_core::DatabaseInfo>) -> dbflux_core::SchemaSnapshot {
+    pub(crate) fn snapshot_naming(
+        databases: Vec<dbflux_core::DatabaseInfo>,
+    ) -> dbflux_core::SchemaSnapshot {
         let current_database = databases
             .iter()
             .find(|db| db.is_current)

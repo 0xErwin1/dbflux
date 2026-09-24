@@ -18,6 +18,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use dbflux_components::composites::{render_wizard_progress_bar, wizard_progress_fraction};
 use dbflux_components::controls::{Button, Checkbox};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::{Icon, Text};
@@ -839,8 +840,6 @@ impl ConfirmRunPhase {
         let color_current = theme.primary;
         let color_foreground = theme.foreground;
         let color_pending = theme.muted_foreground;
-        let color_track = theme.muted;
-        let color_fill = theme.primary;
 
         let progress = *self.progress.lock().unwrap_or_else(|p| p.into_inner());
 
@@ -850,11 +849,7 @@ impl ConfirmRunPhase {
 
         let rows_label =
             crate::labels::migrate_running_rows_label(progress.rows_done, progress.estimated_total);
-        let determinate = matches!(progress.estimated_total, Some(total) if total > 0);
-        let fraction = match progress.estimated_total {
-            Some(total) if total > 0 => (progress.rows_done as f32 / total as f32).clamp(0.0, 1.0),
-            _ => 0.0,
-        };
+        let fraction = wizard_progress_fraction(progress.rows_done, progress.estimated_total);
 
         let elapsed = self
             .run_started_at
@@ -938,21 +933,8 @@ impl ConfirmRunPhase {
                     .child(Text::caption(format!("{position_label}: {current_table}")))
                     .child(Text::caption(rows_label.clone()).muted_foreground()),
             )
-            .when(determinate, |el| {
-                el.child(
-                    div()
-                        .w_full()
-                        .h(px(6.0)) // guardrail-allow: progress-bar track height
-                        .rounded_full()
-                        .bg(color_track)
-                        .child(
-                            div()
-                                .h_full()
-                                .w(relative(fraction))
-                                .rounded_full()
-                                .bg(color_fill),
-                        ),
-                )
+            .when_some(fraction, |el, fraction| {
+                el.child(render_wizard_progress_bar(fraction, cx))
             })
             .child(
                 div()

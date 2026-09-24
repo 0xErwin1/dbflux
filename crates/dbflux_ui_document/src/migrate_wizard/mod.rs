@@ -22,7 +22,9 @@ pub mod tree_model;
 
 use std::sync::Arc;
 
-use dbflux_components::composites::{RailItem, render_wizard_rail};
+use dbflux_components::composites::{
+    RailItem, WIZARD_MODAL_HEIGHT_FRACTION, WIZARD_MODAL_WIDTH, render_wizard_rail,
+};
 use dbflux_components::controls::Button;
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::Text;
@@ -1322,8 +1324,8 @@ impl Render for MigrateWizard {
         let frame = ModalFrame::new("migrate-wizard", &self.focus_handle, close)
             .title(dbflux_i18n::t!("document.migrate_wizard.title"))
             .icon(AppIcon::ArrowUpDown)
-            .width(px(1000.0))
-            .height_fraction(0.8)
+            .width(WIZARD_MODAL_WIDTH)
+            .height_fraction(WIZARD_MODAL_HEIGHT_FRACTION)
             .center_vertically()
             .child(self.render_body(cx));
 

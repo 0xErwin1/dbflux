@@ -18,6 +18,12 @@ pub(crate) fn unsaved_changes_label(count: usize) -> String {
     }
 }
 
+/// Warning shown when a refresh is refused because the grid holds unsaved
+/// edits that the reload would drop.
+pub(crate) fn grid_refresh_blocked_by_pending_edits() -> String {
+    dbflux_i18n::t!("document.data.grid.edit_bar.refresh_blocked")
+}
+
 /// Label for a [`dbflux_core::RefreshPolicy`], mirroring
 /// `RefreshPolicy::label()` in English while routing every arm through the
 /// translation catalog.
@@ -549,6 +555,14 @@ pub(crate) fn live_output_truncated_label(limit: usize) -> String {
 ///
 /// Uses the singular catalog bucket only for exactly one result tab; every
 /// other count, including zero, uses the plural bucket.
+/// Mode indicator shown under the code editor while Vim mode is enabled.
+pub(crate) fn vim_mode_label(mode: crate::code::VimMode) -> String {
+    match mode {
+        crate::code::VimMode::Normal => dbflux_i18n::t!("document.code.vim.normal"),
+        crate::code::VimMode::Insert => dbflux_i18n::t!("document.code.vim.insert"),
+    }
+}
+
 pub(crate) fn result_tab_count_label(count: usize) -> String {
     if count == 1 {
         dbflux_i18n::t!("document.code.result.count.one", count = count)
@@ -3984,10 +3998,12 @@ mod tests {
             "document.object_browser.preview.body.svg_missing_root",
             "document.object_browser.preview.body.image_header_error",
             "document.object_browser.preview.body.image_decode_error",
+            "document.object_browser.preview.body.text_kind.json",
+            "document.object_browser.preview.body.text_kind.text",
         ];
 
         for key in keys {
-            for locale in ["en", "es"] {
+            for locale in ["en", "es", "ko", "zh_Hans"] {
                 let value = dbflux_i18n::t!(key, locale = locale);
 
                 assert!(!value.is_empty(), "{key} resolved empty in {locale}");
@@ -4665,7 +4681,6 @@ mod tests {
             "document.chart.status.task_label",
             "document.chart.toast.chart_saved",
             "document.chart.toast.save_failed",
-            "document.chart.toast.png_export_coming",
             "document.chart.error.source",
             "document.chart.error.no_connection_selected",
             "document.chart.error.connection_not_found",
@@ -4945,6 +4960,8 @@ mod tests {
         "document.import_wizard.running.title",
         "document.import_wizard.running.progress.of_total",
         "document.import_wizard.running.progress.only",
+        "document.import_wizard.running.cancel",
+        "document.import_wizard.done.cancelled_rows",
         "document.import_wizard.done.close",
         "document.import_wizard.error.no_connection",
         "document.import_wizard.toast.cancelled",
@@ -5559,6 +5576,8 @@ mod tests {
             "document.governance.reject",
             "document.governance.select_prompt",
             "document.governance.load_failed",
+            "document.governance.semantics_preview",
+            "document.governance.pending_actor",
             "document.shared.result_warnings.context.query",
             "document.shared.result_warnings.context.table_browse",
             "document.shared.result_warnings.context.visual_query",

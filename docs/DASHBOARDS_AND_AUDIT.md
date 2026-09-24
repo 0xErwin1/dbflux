@@ -70,8 +70,7 @@ Click **+ Add Panel**. The picker has up to three tabs:
 
 Each panel's kebab menu (Edit mode) offers **Configure / Edit title / Remove
 panel**. The **Configure** popover lets you change the chart type (Line, Bar,
-Scatter, Area, Stacked, Pie), adjust axis bindings, view **Stats**, and **Export
-PNG**.
+Scatter, Area, Stacked, Pie), adjust axis bindings, and view **Stats**.
 
 Dashboards can also contain **Divider** strips — markdown headers that visually
 group panels and collapse the panels beneath them when clicked.

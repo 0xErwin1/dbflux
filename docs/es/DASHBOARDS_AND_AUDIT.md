@@ -74,8 +74,7 @@ Haz clic en **+ Add Panel**. El selector tiene hasta tres pestañas:
 
 El menú kebab de cada panel (modo Edit) ofrece **Configure / Edit title / Remove
 panel**. El popover **Configure** te permite cambiar el tipo de chart (Line,
-Bar, Scatter, Area, Stacked, Pie), ajustar los axis bindings, ver **Stats** y
-**Export PNG**.
+Bar, Scatter, Area, Stacked, Pie), ajustar los axis bindings y ver **Stats**.
 
 Los dashboards también pueden contener tiras **Divider** — cabeceras markdown
 que agrupan visualmente los panels y colapsan los panels debajo al hacer clic.

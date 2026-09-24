@@ -73,11 +73,11 @@ impl McpApprovalsView {
     }
 
     fn semantics_preview(detail: &PendingExecutionDetail) -> String {
-        format!(
-            "requester: {} | connection: {} | classification: {}",
-            detail.summary.actor_id,
-            detail.summary.connection_id,
-            Self::classification_label(detail.summary.classification)
+        dbflux_i18n::t!(
+            "document.governance.semantics_preview",
+            requester = detail.summary.actor_id,
+            connection = detail.summary.connection_id,
+            classification = Self::classification_label(detail.summary.classification)
         )
     }
 
@@ -231,9 +231,9 @@ impl Render for McpApprovalsView {
                                         cx.notify();
                                     }))
                                     .child(Self::pending_tool_text(entry.tool_id.clone()))
-                                    .child(Self::pending_actor_text(format!(
-                                        "actor: {}",
-                                        entry.actor_id
+                                    .child(Self::pending_actor_text(dbflux_i18n::t!(
+                                        "document.governance.pending_actor",
+                                        actor = entry.actor_id
                                     )))
                             })),
                     ),

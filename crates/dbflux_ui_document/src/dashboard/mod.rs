@@ -618,16 +618,6 @@ impl DashboardDocument {
         }
     }
 
-    /// Schedule a "PNG export coming soon" toast on the panel.
-    pub fn configure_export_png(&mut self, panel_index: usize, cx: &mut Context<Self>) {
-        if let Some(DashboardPanelSlot::Loaded { panel, .. }) = self.panel_slots.get(panel_index) {
-            let panel = panel.clone();
-            panel.update(cx, |doc, cx| {
-                doc.schedule_png_export_toast(cx);
-            });
-        }
-    }
-
     /// Persist the panel's current chart spec + bindings and trigger a
     /// re-execute against the new configuration. Closes the popover on
     /// completion (whether the persist succeeded or failed — the toast carries

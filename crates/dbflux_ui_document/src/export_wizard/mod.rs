@@ -19,7 +19,10 @@ mod run;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use dbflux_components::composites::{RailItem, render_wizard_rail};
+use dbflux_components::composites::{
+    RailItem, WIZARD_MODAL_HEIGHT_FRACTION, WIZARD_MODAL_WIDTH, render_wizard_progress_bar,
+    render_wizard_rail, wizard_progress_fraction,
+};
 use dbflux_components::controls::{
     Button, Dropdown, DropdownItem, DropdownSelectionChanged, GpuiInput as Input, InputEvent,
     InputState,
@@ -367,8 +370,8 @@ impl Render for ExportWizard {
         let frame = ModalFrame::new("export-wizard", &self.focus_handle, close)
             .title(dbflux_i18n::t!("document.export_wizard.title"))
             .icon(AppIcon::ArrowUp)
-            .width(px(720.0))
-            .height_fraction(0.7)
+            .width(WIZARD_MODAL_WIDTH)
+            .height_fraction(WIZARD_MODAL_HEIGHT_FRACTION)
             .center_vertically()
             .child(self.render_body(cx));
 
@@ -581,6 +584,7 @@ impl ExportWizard {
             crate::labels::export_running_rows_label(progress.rows_done, progress.estimated_total);
         let position_label =
             crate::labels::export_running_position_label(current_index, total_tables);
+        let fraction = wizard_progress_fraction(progress.rows_done, progress.estimated_total);
 
         div()
             .flex()
@@ -591,6 +595,9 @@ impl ExportWizard {
             )))
             .child(Text::caption(format!("{position_label}: {current_table}")))
             .child(Text::caption(rows_label).muted_foreground())
+            .when_some(fraction, |el, fraction| {
+                el.child(render_wizard_progress_bar(fraction, cx))
+            })
             .child(
                 div().flex().justify_end().child(
                     Button::new(
