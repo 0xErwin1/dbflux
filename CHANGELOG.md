@@ -15,6 +15,10 @@ All notable changes to DBFlux will be documented in this file.
   instead of the connection schema. The buckets empty state showed `r refresh`,
   but `r` renames in that view; the hint now shows the key the keymap binds.
 
+* Refreshing a table or collection grid with unsaved cell edits no longer
+  drops them: the refresh key, the toolbar button and the command palette show
+  a warning to save or revert first, and auto-refresh skips its tick.
+
 * Redis, Turso, and InfluxDB now refuse requested row limits (including zero)
   or statement timeouts before execution with `NotSupported`, rather than
   dispatching commands, SQL, HTTP, or instance-context queries without those

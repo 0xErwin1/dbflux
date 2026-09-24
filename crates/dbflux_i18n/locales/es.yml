@@ -1107,6 +1107,7 @@ document:
           many: "%{count} cambios sin guardar"
         save: Guardar
         revert: Descartar
+        refresh_blocked: Guarda o descarta los cambios sin guardar antes de actualizar
       toolbar:
         refresh: Actualizar
         builder: Constructor

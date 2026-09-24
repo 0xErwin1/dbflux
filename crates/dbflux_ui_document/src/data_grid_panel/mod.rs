@@ -2282,9 +2282,13 @@ impl DataGridPanel {
                     };
 
                     entity.update(cx, |panel, cx| {
+                        // A tick with unsaved edits is skipped rather than
+                        // reported: the reload would drop them, and a warning
+                        // on every interval would be noise.
                         if !panel.refresh.refresh_policy.is_auto()
                             || !panel.supports_auto_refresh()
                             || panel.runner.is_primary_active()
+                            || panel.has_pending_edits(cx)
                         {
                             return;
                         }
@@ -4875,7 +4879,8 @@ impl EventEmitter<DataGridEvent> for DataGridPanel {}
 
 #[cfg(test)]
 mod tests {
-    use super::{DataGridEvent, DataGridPanel, DataSource, MutationIntent, MutationRun};
+    use super::{DataGridEvent, DataGridPanel, DataSource, GridState, MutationIntent, MutationRun};
+    use dbflux_app::keymap::Command;
     use dbflux_components::theme;
     use dbflux_core::{
         AggFn, CollectionRef, ColumnKind, ColumnMeta, GroupByEntry, Pagination, Projection,
@@ -8646,6 +8651,83 @@ mod tests {
                 "a staged edit is keyed by a row index of the replaced result"
             );
         });
+    }
+
+    fn last_toast_title(window: &mut gpui::VisualTestContext) -> Option<String> {
+        window.update(|_, app| {
+            app.global::<ToastGlobal>()
+                .host
+                .read(app)
+                .last_toast_title()
+        })
+    }
+
+    /// A user refresh (the refresh key, the toolbar button and the command
+    /// palette all dispatch it) keeps unsaved edits and does not re-run the
+    /// query; it warns instead.
+    #[gpui::test]
+    fn refresh_request_with_pending_edits_keeps_them_and_skips_the_query(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let window = cx.add_empty_window();
+        let panel = table_panel(window, app_state);
+
+        let handled = window.update(|window, app| {
+            panel.update(app, |panel, cx| {
+                let table_state = panel.grid_table.table_state.clone().expect("table state");
+                table_state.update(cx, |state, _cx| {
+                    state.stage_base_cell_value(
+                        0,
+                        1,
+                        dbflux_components::components::data_table::model::CellValue::text("carol"),
+                    );
+                });
+
+                panel.dispatch_command(Command::RefreshSchema, window, cx)
+            })
+        });
+        window.run_until_parked();
+
+        assert!(handled);
+        window.update(|_, app| {
+            let panel = panel.read(app);
+            let table_state = panel.grid_table.table_state.as_ref().expect("table state");
+
+            assert!(table_state.read(app).has_pending_changes());
+            assert!(panel.refresh.state != GridState::Loading);
+            assert!(!panel.runner.is_primary_active());
+        });
+        assert_eq!(
+            last_toast_title(window),
+            Some(crate::labels::grid_refresh_blocked_by_pending_edits())
+        );
+    }
+
+    /// Without unsaved edits the same refresh reaches the query path, which
+    /// here stops at the missing connection.
+    #[gpui::test]
+    fn refresh_request_without_pending_edits_runs_the_query(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let window = cx.add_empty_window();
+        let panel = table_panel(window, app_state);
+
+        let handled = window.update(|window, app| {
+            panel.update(app, |panel, cx| {
+                panel.dispatch_command(Command::RefreshSchema, window, cx)
+            })
+        });
+        window.run_until_parked();
+
+        assert!(handled);
+        assert_eq!(
+            last_toast_title(window),
+            Some(dbflux_i18n::t!(
+                "document.data.grid.error.connection_not_found"
+            ))
+        );
     }
 
     #[gpui::test]

@@ -967,7 +967,7 @@ pub(super) fn render_filter_bar_as_segment(
                                     this.runner.cancel_primary(cx);
                                     cx.notify();
                                 } else {
-                                    this.refresh(window, cx);
+                                    this.request_refresh(window, cx);
                                     this.focus_table(window, cx);
                                 }
                             });
@@ -1251,7 +1251,7 @@ impl DataGridPanel {
                                     this.runner.cancel_primary(cx);
                                     cx.notify();
                                 } else {
-                                    this.refresh(window, cx);
+                                    this.request_refresh(window, cx);
                                     this.focus_table(window, cx);
                                 }
                             }))
@@ -1717,6 +1717,10 @@ impl DataGridPanel {
             on_refresh: Arc::new(move |_window, cx| {
                 if let Some(panel) = weak_panel_for_refresh.upgrade() {
                     panel.update(cx, |this, cx| {
+                        if this.refresh_blocked_by_pending_edits(cx) {
+                            return;
+                        }
+
                         this.pending.refresh = true;
                         cx.notify();
                     });
