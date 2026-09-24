@@ -1582,8 +1582,8 @@ document:
       next: Next
       page: "Page %{page}"
       keys_count:
-        one: "%{count} key"
-        many: "%{count} keys"
+        one: "%{count} key on this page"
+        many: "%{count} keys on this page"
       filter:
         keys_placeholder: "Filter keys..."
         members_placeholder: "Filter members..."
