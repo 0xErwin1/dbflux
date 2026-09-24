@@ -656,12 +656,31 @@ impl DataGridPanel {
             database: Some(collection.database.clone()),
         };
 
+        let browse_query = conn
+            .query_generator()
+            .and_then(|generator| generator.collection_browse_query(&browse_request));
+
+        self.filter_bar.browse_query_label = browse_query
+            .as_ref()
+            .map(|query| super::utils::single_line(&query.text));
+
+        let task_description = match &self.filter_bar.browse_query_label {
+            Some(label) => dbflux_core::truncate_string_safe(label, 80),
+            None => format!("find {}.{}", collection.database, collection.name),
+        };
+
         let (task_id, cancel_token) = self.runner.start_primary_for_target(
             TaskKind::Query,
-            format!("find {}.{}", collection.database, collection.name),
+            task_description,
             Some(task_target),
             cx,
         );
+
+        if let Some(query) = &browse_query {
+            self.app_state.update(cx, |state, _cx| {
+                state.set_task_query_text(task_id, query.text.as_str());
+            });
+        }
 
         self.refresh.state = GridState::Loading;
         cx.notify();
@@ -760,6 +779,10 @@ impl DataGridPanel {
             pagination,
             total_docs: total_docs.or(existing_total),
         };
+
+        self.chrome.derived_json = None;
+        self.chrome.derived_text = None;
+        self.apply_chart_for_result(&result, cx);
 
         self.result = result;
         self.grid_table.local_sort_state = None;

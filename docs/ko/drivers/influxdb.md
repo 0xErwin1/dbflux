@@ -70,6 +70,7 @@ DBFlux용 InfluxDB 드라이버입니다.
 - **감사 이벤트 발행** — 모든 쿼리는 표준 DBFlux 감사 싱크(audit sink)를 통해 추적됩니다. `bucket_or_database` 메타데이터 필드는 프로필 기본값이 아니라 각 쿼리에 실제로 사용된 버킷을 기록합니다.
 - **다중 문 InfluxQL** — 쿼리에 `;`로 구분된 여러 문이 있으면(예: `SHOW MEASUREMENTS; SHOW SERIES`), 모든 결과가 하나의 결과 집합으로 이어집니다. 서로 다른 문의 행을 구별하기 위해 합성 `statement_index` 정수 열이 앞에 붙습니다.
 - **"Query Measurement" 상황에 맞는 메뉴** — 사이드바에서 measurement를 마우스 오른쪽 버튼으로 클릭하면 "Query Measurement"가 표시됩니다. 이 작업은 템플릿 쿼리(InfluxQL은 `SELECT * FROM ...`, Flux는 `from(bucket: ...) |> range(...)`)가 미리 채워진 새 코드 문서를 엽니다.
+- **measurement를 열면 차트로 표시됩니다** — 사이드바에서 measurement를 열면 해당 measurement가 속한 버킷 또는 데이터베이스에 대해 InfluxQL로 `SELECT * FROM "<measurement>" ORDER BY time DESC LIMIT <n> OFFSET <m>`을 실행합니다(v2에서는 InfluxQL 호환 엔드포인트를 통해). `InfluxQueryGenerator::collection_browse_query`가 같은 문장을 반환하므로 데이터 그리드의 도구 모음과 상태 표시줄은 실제로 실행되는 InfluxQL 쿼리를 보여줍니다. 결과에는 타임스탬프 열과 타입이 지정된 필드 열이 있으므로 measurement는 Chart 뷰로 열리며, 행은 Data 뷰에서 한 번의 클릭으로 볼 수 있습니다.
 - **버킷의 "New Query" 상황에 맞는 메뉴** — 버킷/데이터베이스 노드를 마우스 오른쪽 버튼으로 클릭하면 "New Query"가 표시되며, 연결이 활성화된 빈 코드 문서를 엽니다.
 - **읽기 템플릿 생성** — `InfluxQueryGenerator`는 InfluxQL과 Flux 모두에 대해 전체 선택 및 measurement별 읽기 템플릿을 생성하며(상황에 맞는 메뉴 작업과 쿼리로 복사에서 사용), 연결에 구성된 버전과 기본 버킷에 따라 버전을 인식합니다.
 - **클라이언트 식별** — 모든 HTTP 요청은 `User-Agent` 헤더로 `dbflux/<version>`을 보고하며, 서버 측 요청 로그에 표시됩니다.
@@ -93,3 +94,6 @@ DBFlux용 InfluxDB 드라이버입니다.
 - **하위 호환 직렬화** — 이전의 필수 `bucket_or_database` 필드로 저장된 프로필도 계속 올바르게 로드됩니다. 이 필드는 serde 별칭을 통해 `default_bucket`으로 역직렬화됩니다. 이 변경 이후에 저장된 프로필은 `default_bucket` 키를 사용합니다.
 - **인스턴스 지표와 검사기는 v2 전용입니다** — `instance_catalog()`는 v1 연결에서 `None`을 반환합니다. v1도 `/metrics`를 제공하지만 그 노출에는 이 카탈로그가 선언하는 v2 지표 이름이 없고, `/health`는 v2 엔드포인트입니다(v1은 `/ping`을 제공). `execute()`는 v1 연결에 대한 인스턴스 쿼리를, 카탈로그가 검증된 적 없는 표면에서 답하는 대신 `NotSupported`로 거부합니다. 이는 위의 v1 쓰기 권한 프로브 제한과 같은 방식입니다.
 - **인스턴스 지표 행 작업은 지원되지 않습니다** — `InstanceCatalog::row_actions`는 트레이트 기본값(빈 목록)을 사용합니다. `/metrics`는 읽기 전용 텔레메트리 스크랩이며 행에서 트리거할 서버 측 작업이 없습니다.
+- **measurement 조회는 필터 입력을 무시합니다** — `browse_collection`과 `count_collection`은 컬렉션 필터를 읽지 않으므로 데이터 그리드의 필터 상자에 입력한 텍스트는 행을 줄이지 않습니다.
+- **measurement 조회에는 시간 창이 없습니다** — 조회는 전체 보존 기간에서 가장 최근 행을 읽으며, 차트의 시간 범위 프리셋은 measurement에 제공되지 않습니다. 시간 범위가 있는 쿼리에는 "Query Measurement"를 사용하세요.
+- **결과에서 태그와 필드를 구분하지 않습니다** — 둘 다 일반 열로 전달됩니다. 차트는 첫 번째 텍스트 열로 그룹화하며, 이는 보통 태그이지만 문자열 필드일 수도 있습니다.

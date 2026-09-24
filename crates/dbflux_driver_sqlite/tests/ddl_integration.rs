@@ -18,12 +18,17 @@ use std::path::PathBuf;
 
 fn connect_sqlite() -> Result<(Box<dyn dbflux_core::Connection>, SqliteDriver, PathBuf), DbError> {
     let driver = SqliteDriver::new();
-    let temp_dir = std::env::temp_dir();
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let db_path = temp_dir.join(format!("test_ddl_{}.db", timestamp));
+
+    // Exclusive creation guarantees each test its own file; a timestamp name
+    // can repeat across threads on a coarse clock.
+    let db_path = tempfile::Builder::new()
+        .prefix("test_ddl_")
+        .suffix(".db")
+        .tempfile()
+        .and_then(|file| file.into_temp_path().keep().map_err(|error| error.error))
+        .map_err(|error| {
+            DbError::query_failed(format!("failed to create test database file: {error}"))
+        })?;
 
     let profile = ConnectionProfile::new(
         "ddl-sqlite",

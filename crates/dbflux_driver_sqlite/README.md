@@ -12,7 +12,7 @@ Embedded file-based database.
 
 - Embedded SQLite relational driver using file-based database paths.
 - Supports SQL execution, schema discovery, views, indexes, foreign keys, check constraints, and unique constraints.
-- Supports query cancellation via SQLite interrupt handles.
+- Supports query cancellation via SQLite interrupt handles, backed by a progress handler that checks the cancel request while a statement runs, so a cancel that arrives before the first statement starts still ends the query.
 - Includes SQL/code generation for CRUD, indexes, reindex, create table, and drop table.
 - Multi-statement scripts (several `;`-separated statements) are split and executed statement by statement, each through the typed prepared path, returning one result set per statement. (`rusqlite::prepare` only parses the first statement of a string, so a script must be split.)
 - Enforces a requested row limit on every single statement that produces rows (`SELECT`, `PRAGMA`, `EXPLAIN`, `WITH ... SELECT`, `VALUES`, and DML with `RETURNING`) by retaining only the requested rows during iteration: iteration drains to completion, so a mutation's effects always finish fully, a late per-row error still surfaces, and the result reports when rows were omitted.

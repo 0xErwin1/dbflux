@@ -5,7 +5,7 @@
 //! stored `RenderModel`.
 
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use gpui::prelude::*;
@@ -157,6 +157,9 @@ impl ChartView {
             return Err(ChartBuildError::Empty);
         }
 
+        let spec = spec.with_group_series(result);
+        let group_column = spec.binding.group_by;
+
         let x_col = spec.x_axis.column_index;
         if x_col >= result.columns.len() {
             return Err(ChartBuildError::InvalidXColumn(x_col));
@@ -195,8 +198,20 @@ impl ChartView {
             let mut any_valid = false;
 
             for s in &spec.series {
+                // A grouped series only plots the rows of its own group value.
+                let in_group = match (&s.group_value, group_column) {
+                    (Some(value), Some(column)) => {
+                        row.get(column).map(crate::chart::spec::group_key).as_ref() == Some(value)
+                    }
+                    _ => true,
+                };
+
                 let col_kind = result.columns[s.column_index].kind;
-                let y_val = extract_f64(&row[s.column_index], col_kind == ColumnKind::Timestamp);
+                let y_val = if in_group {
+                    extract_f64(&row[s.column_index], col_kind == ColumnKind::Timestamp)
+                } else {
+                    None
+                };
                 match y_val {
                     Some(y) => {
                         y_vals.push(y);
@@ -282,16 +297,27 @@ impl ChartView {
         let mut source_indices_per_series: Vec<Vec<usize>> =
             Vec::with_capacity(raw_series_sorted.len());
 
-        for ys in &raw_series_sorted {
-            let pts: Vec<(f64, f64)> = raw_x_sorted
+        for (series_idx, ys) in raw_series_sorted.iter().enumerate() {
+            // A grouped series has no value on rows of other groups. Those rows
+            // are dropped rather than kept as NaN, so each group draws its own
+            // continuous line instead of dipping to the axis between points.
+            let grouped = spec
+                .series
+                .get(series_idx)
+                .is_some_and(|series| series.group_value.is_some());
+
+            let (pts, series_source_indices): (Vec<(f64, f64)>, Vec<usize>) = raw_x_sorted
                 .iter()
                 .zip(ys.iter())
-                .map(|(&x, &y)| (x, y))
-                .collect();
+                .zip(sorted_source_indices.iter())
+                .filter(|((_, y), _)| !grouped || y.is_finite())
+                .map(|((&x, &y), &source)| ((x, y), source))
+                .unzip();
+            let n = pts.len();
 
             if n > threshold {
                 if track_indices {
-                    let with_idx = lttb_with_indices(&pts, &sorted_source_indices, threshold);
+                    let with_idx = lttb_with_indices(&pts, &series_source_indices, threshold);
                     let (dec_pts, src_idx): (Vec<_>, Vec<_>) = with_idx.into_iter().unzip();
                     decimated.push(dec_pts);
                     source_indices_per_series.push(src_idx);
@@ -301,7 +327,7 @@ impl ChartView {
             } else {
                 decimated.push(pts);
                 if track_indices {
-                    source_indices_per_series.push(sorted_source_indices.clone());
+                    source_indices_per_series.push(series_source_indices);
                 }
             }
         }
@@ -336,13 +362,7 @@ impl ChartView {
         // In log1p mode: bounds and ticks live in log1p space so the canvas
         // projection is a simple linear map of those transformed values.
         // In linear mode: y_log_* mirrors y_min/y_max unchanged.
-        let (y_log_min, y_log_max) = if y_is_log {
-            let lmin = (y_min.max(0.0) + 1.0).ln();
-            let lmax = (y_max.max(0.0) + 1.0).ln();
-            (lmin, lmax)
-        } else {
-            (y_min, y_max)
-        };
+        let (y_log_min, y_log_max) = y_projection_bounds(y_min, y_max, y_is_log);
 
         // --- Axis ticks ---
 
@@ -583,41 +603,64 @@ impl ChartView {
         cx.notify();
     }
 
-    /// The padded Y ceiling used when rendering a `StackedBar` chart.
+    /// The Y range a `StackedBar` chart plots, in data space.
     ///
-    /// `RenderModel.y_max` stores per-series maxima, which underestimate the top
-    /// of a stack. This recomputes the true ceiling by summing the visible
-    /// series at each shared point index and adding the same 8% headroom render
-    /// uses, so the render path and the hover hit-test agree on the Y scale. It
-    /// is recomputed from the current hidden set, so toggling series off keeps
-    /// the scale correct.
-    fn stacked_y_max(&self) -> f64 {
+    /// `RenderModel.y_min` / `y_max` hold per-series extremes, which say
+    /// nothing about the height of a stack. Stacks grow from zero, so the range
+    /// starts at zero (or at the lowest value when one is negative) and ends at
+    /// the tallest stack (see `stack_columns`) plus the same 8% headroom plain
+    /// bars get. Render, the tick labels and the hover hit-test all read this
+    /// one range, so bars and ticks agree. It follows the current hidden set,
+    /// so toggling series off rescales the axis.
+    fn stacked_y_range(&self) -> (f64, f64) {
         let model = &self.render_model;
-        let y_min = model.y_min;
+        let lower = model.y_min.min(0.0);
 
-        let visible: Vec<usize> = (0..model.decimated.len())
-            .filter(|i| !self.hidden.contains(i))
-            .collect();
-
-        let max_points = model.decimated.iter().map(|s| s.len()).max().unwrap_or(0);
-
-        let stacked_max = (0..max_points)
-            .map(|pt_idx| {
-                visible
-                    .iter()
-                    .filter_map(|&s| model.decimated[s].get(pt_idx).map(|(_, y)| *y))
-                    .filter(|y| y.is_finite())
-                    .sum::<f64>()
-            })
+        let tallest = stack_columns(&model.decimated, &self.hidden)
+            .iter()
+            .map(StackColumn::total)
             .fold(f64::NEG_INFINITY, f64::max);
 
-        let stacked_max = if stacked_max.is_finite() {
-            stacked_max
+        let tallest = if tallest.is_finite() {
+            tallest
         } else {
             model.y_max
         };
 
-        stacked_max + (stacked_max - y_min).abs() * 0.08
+        (lower, tallest + (tallest - lower).abs() * 0.08)
+    }
+
+    /// The Y range the plot area maps to, shared by the series painters, the
+    /// gridlines, the tick labels and the hover hit-test.
+    ///
+    /// Line, Scatter, Area and Pie plot the data range. Bar adds 8% headroom
+    /// above it. StackedBar plots `stacked_y_range`.
+    fn plot_y_range(&self) -> PlotYRange {
+        use crate::chart::spec::ChartKind;
+
+        let model = &self.render_model;
+        let kind = self.spec.kind;
+
+        let stacked = matches!(kind, ChartKind::StackedBar).then(|| self.stacked_y_range());
+
+        let min = stacked.map_or(model.y_min, |(lower, _)| lower);
+        let max = bar_layout_params(
+            kind,
+            model.y_max,
+            (model.y_max - model.y_min).max(1.0),
+            stacked.map(|(_, upper)| upper),
+            &model.decimated,
+        )
+        .y_max_adjusted;
+
+        let (proj_min, proj_max) = y_projection_bounds(min, max, model.y_is_log);
+
+        PlotYRange {
+            min,
+            max,
+            proj_min,
+            proj_range: (proj_max - proj_min).max(1.0),
+        }
     }
 
     /// Re-evaluate which series the cursor hovers over and update
@@ -721,18 +764,12 @@ impl ChartView {
                 return;
             }
 
-            let max_points = self
-                .render_model
-                .decimated
-                .iter()
-                .map(|s| s.len())
-                .max()
-                .unwrap_or(1)
-                .max(1);
+            let columns = stack_columns(&self.render_model.decimated, &self.hidden);
+            let slots = stack_slot_count(&self.render_model.decimated);
 
-            let x_pad = plot_w * (0.5 / max_points as f32);
+            let x_pad = plot_w * (0.5 / slots as f32);
             let usable_w = (plot_w - 2.0 * x_pad).max(1.0);
-            let slot_w = plot_w / max_points as f32;
+            let slot_w = plot_w / slots as f32;
             let bar_w = (slot_w * 0.8).max(1.0);
 
             let data_to_screen_x = |dx: f64| -> f32 {
@@ -742,36 +779,36 @@ impl ChartView {
             let cursor_sx = f32::from(hover_x);
             let cursor_sy = f32::from(hover_y);
 
-            // Use the same stacked Y ceiling render uses, not the per-series
-            // RenderModel.y_max, so segment boundaries line up with the bars.
-            let stacked_y_max = self.stacked_y_max();
-            let y_range_local = (stacked_y_max - y_min).max(1.0);
+            // Use the same Y range render paints the bars with, so segment
+            // boundaries line up with what is on screen.
+            let plot_y = self.plot_y_range();
             let data_to_screen_y = |dy: f64| -> f32 {
-                plot_y0 + plot_h - ((dy - y_min) / y_range_local * plot_h as f64) as f32
+                project_y_to_screen(
+                    dy,
+                    plot_y0,
+                    plot_h,
+                    plot_y.proj_min,
+                    plot_y.proj_range,
+                    y_is_log,
+                )
             };
 
-            // Use the first visible series as x-position anchor.
-            let anchor = visible[0];
-            for pt_idx in 0..self.render_model.decimated[anchor].len() {
-                let (x, _) = self.render_model.decimated[anchor][pt_idx];
-                let bar_center = data_to_screen_x(x);
+            for column in &columns {
+                let bar_center = data_to_screen_x(column.x);
                 if cursor_sx < bar_center - bar_w / 2.0 || cursor_sx > bar_center + bar_w / 2.0 {
                     continue;
                 }
 
                 // Cursor is inside this bar column. Find which series segment
                 // the cursor's Y lands in by checking stacked segment boundaries.
-                let baseline = if y_min <= 0.0 && stacked_y_max >= 0.0 {
+                let baseline = if plot_y.min <= 0.0 && plot_y.max >= 0.0 {
                     0.0_f64
                 } else {
-                    y_min
+                    plot_y.min
                 };
                 let mut cumulative = baseline;
 
-                for &s_idx in &visible {
-                    let Some(&(_, y)) = self.render_model.decimated[s_idx].get(pt_idx) else {
-                        break;
-                    };
+                for &(s_idx, y) in &column.segments {
                     let seg_bottom_sy = data_to_screen_y(cumulative);
                     cumulative += y;
                     let seg_top_sy = data_to_screen_y(cumulative);
@@ -1085,27 +1122,24 @@ impl Render for ChartView {
         let x_min = model.x_min;
         let x_max = model.x_max;
         let x_range = (x_max - x_min).max(1.0);
-        let y_min = model.y_min;
-        let y_max = model.y_max;
-        let y_range = (y_max - y_min).max(1.0);
-        let y_log_min = model.y_log_min;
-        let y_log_max = model.y_log_max;
-        let y_log_range = (y_log_max - y_log_min).max(1.0);
         let y_is_log = model.y_is_log;
 
-        let bar_layout = bar_layout_params(
+        // One Y range drives the series, gridlines, tick labels and hit-test,
+        // so a tick sits exactly where a value of that size is drawn.
+        let plot_y = self.plot_y_range();
+        let y_min = plot_y.min;
+        let y_max = plot_y.max;
+        let y_log_min = plot_y.proj_min;
+        let y_log_range = plot_y.proj_range;
+
+        let bar_x_inset_fraction = bar_layout_params(
             kind,
-            y_max,
-            y_range,
-            if matches!(kind, crate::chart::spec::ChartKind::StackedBar) {
-                Some(self.stacked_y_max())
-            } else {
-                None
-            },
+            model.y_max,
+            (model.y_max - model.y_min).max(1.0),
+            None,
             &model.decimated,
-        );
-        let y_max = bar_layout.y_max_adjusted;
-        let bar_x_inset_fraction = bar_layout.bar_x_inset_fraction;
+        )
+        .bar_x_inset_fraction;
 
         let theme = cx.theme();
         let palette: Vec<Hsla> = model
@@ -1380,6 +1414,28 @@ impl Render for ChartView {
 // Helpers
 // ---------------------------------------------------------------------------
 
+/// The Y range a chart's plot area maps to.
+///
+/// `min` / `max` are in data space and feed the tick generator. `proj_min` /
+/// `proj_range` are the same bounds in projection space (log1p or linear) and
+/// feed `project_y_to_screen` / `project_y_proj_space_to_screen`.
+struct PlotYRange {
+    min: f64,
+    max: f64,
+    proj_min: f64,
+    proj_range: f64,
+}
+
+/// Maps a data-space Y range into projection space: `ln(y + 1)` (values below
+/// zero clamp to zero) in log mode, unchanged in linear mode.
+fn y_projection_bounds(y_min: f64, y_max: f64, y_is_log: bool) -> (f64, f64) {
+    if y_is_log {
+        ((y_min.max(0.0) + 1.0).ln(), (y_max.max(0.0) + 1.0).ln())
+    } else {
+        (y_min, y_max)
+    }
+}
+
 /// Pre-computed bar/stacked-bar layout values derived from the data bounds.
 ///
 /// Computed once in `render` and captured by the canvas paint closure.
@@ -1422,7 +1478,11 @@ fn bar_layout_params(
     };
 
     let bar_x_inset_fraction: f32 = if needs_bar_layout {
-        let max_points = decimated.iter().map(|s| s.len()).max().unwrap_or(1).max(1);
+        let max_points = if matches!(kind, ChartKind::StackedBar) {
+            stack_slot_count(decimated)
+        } else {
+            decimated.iter().map(|s| s.len()).max().unwrap_or(1).max(1)
+        };
         0.5 / max_points as f32
     } else {
         0.0
@@ -2099,6 +2159,84 @@ fn paint_bars<FX, FY>(
     }
 }
 
+/// One X position of a stacked bar chart.
+struct StackColumn {
+    x: f64,
+    /// `(series index, value)` for each visible series with a value at `x`,
+    /// bottom of the stack first.
+    segments: Vec<(usize, f64)>,
+}
+
+impl StackColumn {
+    fn total(&self) -> f64 {
+        self.segments.iter().map(|(_, y)| y).sum()
+    }
+}
+
+/// Hash key for an X value. Adding `0.0` folds `-0.0` onto `0.0`.
+fn stack_x_key(x: f64) -> u64 {
+    (x + 0.0).to_bits()
+}
+
+/// Every distinct finite X value across all series, ascending.
+///
+/// Hidden series count too, so bars keep their slots when a series is toggled.
+fn stack_x_values(decimated: &[Vec<(f64, f64)>]) -> Vec<f64> {
+    let mut xs: Vec<f64> = decimated
+        .iter()
+        .flatten()
+        .map(|(x, _)| *x)
+        .filter(|x| x.is_finite())
+        .collect();
+
+    xs.sort_by(f64::total_cmp);
+    xs.dedup();
+    xs
+}
+
+/// Number of bar slots a stacked chart lays out, never zero.
+fn stack_slot_count(decimated: &[Vec<(f64, f64)>]) -> usize {
+    stack_x_values(decimated).len().max(1)
+}
+
+/// Aligns the visible series on X for stacking.
+///
+/// Stacking by point position mixes timestamps as soon as series have
+/// different X sets, which grouped series do. Each column holds the values of
+/// every visible series at that exact X, in series order. A series with no
+/// value there, or a non-finite one, adds nothing: it counts as 0 in the
+/// stack and draws no segment. Several points of one series at the same X are
+/// summed.
+fn stack_columns(decimated: &[Vec<(f64, f64)>], hidden: &HashSet<usize>) -> Vec<StackColumn> {
+    let values_by_x: Vec<(usize, HashMap<u64, f64>)> = decimated
+        .iter()
+        .enumerate()
+        .filter(|(series_idx, _)| !hidden.contains(series_idx))
+        .map(|(series_idx, points)| {
+            let mut values: HashMap<u64, f64> = HashMap::new();
+            for &(x, y) in points {
+                if y.is_finite() {
+                    *values.entry(stack_x_key(x)).or_insert(0.0) += y;
+                }
+            }
+            (series_idx, values)
+        })
+        .collect();
+
+    stack_x_values(decimated)
+        .into_iter()
+        .map(|x| StackColumn {
+            x,
+            segments: values_by_x
+                .iter()
+                .filter_map(|(series_idx, values)| {
+                    values.get(&stack_x_key(x)).map(|&y| (*series_idx, y))
+                })
+                .collect(),
+        })
+        .collect()
+}
+
 /// Paint stacked vertical bars for every visible series.
 ///
 /// Unlike `paint_bars` (which groups series side-by-side), stacked bars pile
@@ -2109,8 +2247,9 @@ fn paint_bars<FX, FY>(
 /// The Y axis **must** have already been rescaled to the maximum stack sum
 /// before calling this function — `render()` does this for `ChartKind::StackedBar`.
 ///
-/// Series with mismatched lengths are handled safely: iteration stops at the
-/// shortest series at each point index.
+/// Series are aligned on X by `stack_columns`, so series with different X sets
+/// (grouped series, sparse metrics) stack where their values share a
+/// timestamp. A series with no value at an X adds no segment there.
 #[allow(clippy::too_many_arguments)]
 fn paint_stacked_bars<FX, FY>(
     window: &mut Window,
@@ -2141,34 +2280,21 @@ fn paint_stacked_bars<FX, FY>(
         return;
     }
 
-    // Bar width: one slot per X position (single full-width column per x,
-    // since the series stack rather than sit side-by-side).
-    let max_points = decimated.iter().map(|s| s.len()).max().unwrap_or(1).max(1);
-
-    let slot_w = plot_w / max_points as f32;
+    // Bar width: one slot per distinct X value (single full-width column per
+    // x, since the series stack rather than sit side-by-side).
+    let slot_w = plot_w / stack_slot_count(decimated) as f32;
     let bar_w = (slot_w * 0.8).max(1.0);
 
     let fallback = gpui::hsla(0.6, 0.6, 0.5, 1.0);
 
-    // Iterate over x positions using the first visible series as the anchor.
-    // For each x position, collect the y values from all visible series in order.
-    let anchor_series = visible[0];
-    let n_points = decimated[anchor_series].len();
-
-    for pt_idx in 0..n_points {
-        let (x, _) = decimated[anchor_series][pt_idx];
-        let bar_center_sx = data_to_screen_x(x);
+    for column in stack_columns(decimated, hidden) {
+        let bar_center_sx = data_to_screen_x(column.x);
         let bar_left = bar_center_sx - bar_w / 2.0;
 
         // Accumulate from the baseline upward, one segment per visible series.
         let mut cumulative = baseline;
 
-        for &s_idx in &visible {
-            let Some(&(_, y)) = decimated[s_idx].get(pt_idx) else {
-                // This series has fewer points — skip remaining series for this slot.
-                break;
-            };
-
+        for (s_idx, y) in column.segments {
             let seg_bottom_sy = data_to_screen_y(cumulative);
             let seg_top_sy = data_to_screen_y(cumulative + y);
             cumulative += y;
@@ -3053,6 +3179,7 @@ mod tests {
                     column_index: col,
                     label: format!("series_{}", slot),
                     color_slot: slot as u8,
+                    group_value: None,
                 })
                 .collect(),
             legend_visible: false,
@@ -3067,6 +3194,291 @@ mod tests {
             track_source_indices: false,
             y_scale: crate::chart::spec::YScale::Linear,
         }
+    }
+
+    /// Rows alternate between tag values `a` and `b`, as an InfluxQL browse
+    /// of a measurement with two series returns them.
+    fn two_host_result() -> QueryResult {
+        let rows = (0..6)
+            .map(|i| {
+                let host = if i % 2 == 0 { "a" } else { "b" };
+                let load = if host == "a" { 10.0 } else { 90.0 };
+                vec![
+                    Value::Int(1_000 * i),
+                    Value::Float(load + i as f64),
+                    Value::Text(host.to_string()),
+                ]
+            })
+            .collect();
+
+        QueryResult::table(
+            vec![
+                make_col("time", ColumnKind::Timestamp),
+                make_col("load", ColumnKind::Float),
+                make_col("host", ColumnKind::Text),
+            ],
+            rows,
+            None,
+            Duration::ZERO,
+        )
+    }
+
+    #[test]
+    fn build_draws_one_series_per_group_value() {
+        let mut spec = simple_spec(0, &[1]);
+        spec.binding.group_by = Some(2);
+
+        let view = ChartView::build(&two_host_result(), spec).expect("build should succeed");
+
+        let labels: Vec<&str> = view
+            .spec_series()
+            .iter()
+            .map(|s| s.label.as_str())
+            .collect();
+        assert_eq!(labels, vec!["a", "b"], "one line per host");
+
+        let decimated = &view.render_model.decimated;
+        assert_eq!(decimated.len(), 2);
+        assert_eq!(
+            decimated[0].iter().map(|(_, y)| *y).collect::<Vec<_>>(),
+            vec![10.0, 12.0, 14.0],
+            "host a keeps only its own points"
+        );
+        assert_eq!(
+            decimated[1].iter().map(|(_, y)| *y).collect::<Vec<_>>(),
+            vec![91.0, 93.0, 95.0],
+            "host b keeps only its own points"
+        );
+    }
+
+    #[test]
+    fn build_without_group_keeps_one_series_across_groups() {
+        let view = ChartView::build(&two_host_result(), simple_spec(0, &[1]))
+            .expect("build should succeed");
+
+        assert_eq!(view.spec_series().len(), 1);
+        assert_eq!(view.render_model.decimated[0].len(), 6);
+    }
+
+    /// Host `a` reports at t=1,2,3 and host `b` at t=2,3,4: the two groups
+    /// only share the timestamps 2 and 3.
+    fn partially_overlapping_hosts() -> QueryResult {
+        let rows = [
+            (1, "a", 1.0),
+            (2, "a", 1.0),
+            (2, "b", 10.0),
+            (3, "a", 1.0),
+            (3, "b", 10.0),
+            (4, "b", 10.0),
+        ]
+        .into_iter()
+        .map(|(t, host, load)| {
+            vec![
+                Value::Int(t * 1_000),
+                Value::Float(load),
+                Value::Text(host.to_string()),
+            ]
+        })
+        .collect();
+
+        QueryResult::table(
+            vec![
+                make_col("time", ColumnKind::Timestamp),
+                make_col("load", ColumnKind::Float),
+                make_col("host", ColumnKind::Text),
+            ],
+            rows,
+            None,
+            Duration::ZERO,
+        )
+    }
+
+    fn grouped_stacked_view() -> ChartView {
+        let mut spec = simple_spec(0, &[1]);
+        spec.binding.group_by = Some(2);
+        spec.kind = crate::chart::spec::ChartKind::StackedBar;
+
+        ChartView::build(&partially_overlapping_hosts(), spec).expect("build should succeed")
+    }
+
+    #[test]
+    fn stack_columns_align_series_on_x_not_on_position() {
+        let view = grouped_stacked_view();
+
+        let columns: Vec<(f64, Vec<(usize, f64)>)> =
+            stack_columns(&view.render_model.decimated, &HashSet::new())
+                .into_iter()
+                .map(|column| (column.x, column.segments))
+                .collect();
+
+        assert_eq!(
+            columns,
+            vec![
+                (1_000.0, vec![(0, 1.0)]),
+                (2_000.0, vec![(0, 1.0), (1, 10.0)]),
+                (3_000.0, vec![(0, 1.0), (1, 10.0)]),
+                (4_000.0, vec![(1, 10.0)]),
+            ],
+            "each timestamp stacks only the values reported at it"
+        );
+    }
+
+    #[test]
+    fn stack_columns_leave_hidden_series_out_but_keep_their_slots() {
+        let view = grouped_stacked_view();
+        let hidden: HashSet<usize> = [1].into_iter().collect();
+
+        let columns = stack_columns(&view.render_model.decimated, &hidden);
+
+        assert_eq!(columns.len(), 4, "slots stay put when a series is hidden");
+        assert!(
+            columns[3].segments.is_empty(),
+            "t=4 only had the hidden host"
+        );
+        assert_eq!(stack_slot_count(&view.render_model.decimated), 4);
+    }
+
+    #[test]
+    fn stacked_y_max_sums_only_values_that_share_a_timestamp() {
+        // Host `a` reports 5 at t=1,2 and host `b` 10 at t=3,4. No timestamp
+        // carries both, so the tallest stack is 10. Stacking by point
+        // position would pile b's first point onto a's and report 15.
+        let rows = [(1, "a", 5.0), (2, "a", 5.0), (3, "b", 10.0), (4, "b", 10.0)]
+            .into_iter()
+            .map(|(t, host, load)| {
+                vec![
+                    Value::Int(t * 1_000),
+                    Value::Float(load),
+                    Value::Text(host.to_string()),
+                ]
+            })
+            .collect();
+        let result = QueryResult::table(
+            vec![
+                make_col("time", ColumnKind::Timestamp),
+                make_col("load", ColumnKind::Float),
+                make_col("host", ColumnKind::Text),
+            ],
+            rows,
+            None,
+            Duration::ZERO,
+        );
+
+        let mut spec = simple_spec(0, &[1]);
+        spec.binding.group_by = Some(2);
+        spec.kind = crate::chart::spec::ChartKind::StackedBar;
+        let view = ChartView::build(&result, spec).expect("build should succeed");
+
+        let (lower, upper) = view.stacked_y_range();
+        assert_eq!(lower, 0.0, "stacks grow from zero");
+        assert!(
+            (upper - 10.8).abs() < 1e-9,
+            "tallest stack 10 plus 8% headroom, got {upper}"
+        );
+    }
+
+    /// Host `a` reports 1 at t=1..6 and host `b` reports 1..6 at the same
+    /// times, so single values stay within 1..6 while the tallest stack is 7.
+    fn stacked_hosts_view(kind: crate::chart::spec::ChartKind) -> ChartView {
+        let rows = (1..=6)
+            .flat_map(|t| {
+                [("a", 1.0), ("b", t as f64)].map(|(host, load)| {
+                    vec![
+                        Value::Int(t * 1_000),
+                        Value::Float(load),
+                        Value::Text(host.to_string()),
+                    ]
+                })
+            })
+            .collect();
+        let result = QueryResult::table(
+            vec![
+                make_col("time", ColumnKind::Timestamp),
+                make_col("load", ColumnKind::Float),
+                make_col("host", ColumnKind::Text),
+            ],
+            rows,
+            None,
+            Duration::ZERO,
+        );
+
+        let mut spec = simple_spec(0, &[1]);
+        spec.binding.group_by = Some(2);
+        spec.kind = kind;
+
+        ChartView::build(&result, spec).expect("build should succeed")
+    }
+
+    #[test]
+    fn stacked_plot_range_and_ticks_follow_the_stacked_max() {
+        let view = stacked_hosts_view(crate::chart::spec::ChartKind::StackedBar);
+        let plot_y = view.plot_y_range();
+        let (stack_min, stack_max) = view.stacked_y_range();
+
+        assert_eq!(view.render_model.y_max, 6.0, "single values stop at 6");
+        assert_eq!((plot_y.min, plot_y.max), (stack_min, stack_max));
+        assert!((stack_max - 7.0 * 1.08).abs() < 1e-9, "tallest stack is 7");
+
+        // Bars and ticks project through the same bounds: the stacked range,
+        // not the per-series 1..6 the model stores.
+        assert_eq!(plot_y.proj_min, stack_min);
+        assert!((plot_y.proj_range - (stack_max - stack_min)).abs() < 1e-9);
+
+        let ticks = ticks_numeric(plot_y.min, plot_y.max, 5);
+        let values: Vec<f64> = ticks.iter().map(|tick| tick.value).collect();
+        assert!(
+            values
+                .iter()
+                .all(|&value| value >= plot_y.min && value <= plot_y.max),
+            "every tick lies inside the plotted range: {values:?}"
+        );
+        assert!(
+            values.last().is_some_and(|&top| top >= 6.0),
+            "ticks reach the stacked max, not the per-series max: {values:?}"
+        );
+        let steps: Vec<f64> = values.windows(2).map(|pair| pair[1] - pair[0]).collect();
+        assert!(
+            steps
+                .windows(2)
+                .all(|pair| (pair[0] - pair[1]).abs() < 1e-9),
+            "ticks are evenly spaced: {values:?}"
+        );
+
+        // A segment top of 4.25 must sit above the "4" tick, as it is drawn.
+        let (plot_y0, plot_h) = (0.0_f32, 400.0_f32);
+        let four_tick = project_y_proj_space_to_screen(
+            4.0,
+            plot_y0,
+            plot_h,
+            plot_y.proj_min,
+            plot_y.proj_range,
+        );
+        let segment_top = project_y_to_screen(
+            4.25,
+            plot_y0,
+            plot_h,
+            plot_y.proj_min,
+            plot_y.proj_range,
+            false,
+        );
+        assert!(segment_top < four_tick, "4.25 is drawn above the 4 tick");
+        assert!(
+            four_tick - segment_top < 20.0,
+            "and only a quarter unit above it, not a whole tick spacing"
+        );
+    }
+
+    #[test]
+    fn bar_plot_range_adds_headroom_and_line_plots_the_data_range() {
+        let bar = stacked_hosts_view(crate::chart::spec::ChartKind::Bar).plot_y_range();
+        assert_eq!(bar.min, 1.0);
+        assert!((bar.max - (6.0 + 5.0 * 0.08)).abs() < 1e-9);
+        assert!((bar.proj_range - (bar.max - bar.min)).abs() < 1e-9);
+
+        let line_view = stacked_hosts_view(crate::chart::spec::ChartKind::Line);
+        let line = line_view.plot_y_range();
+        assert_eq!((line.min, line.max), (1.0, 6.0));
+        assert_eq!(line.proj_min, line_view.render_model.y_log_min);
     }
 
     #[test]

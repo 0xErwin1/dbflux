@@ -124,6 +124,15 @@ Driver de InfluxDB para DBFlux.
   en la barra lateral muestra "Query Measurement". La acción abre un nuevo
   documento de código pre-poblado con una query de plantilla (`SELECT * FROM
   ...` para InfluxQL, `from(bucket: ...) |> range(...)` para Flux).
+- **Abrir un measurement lo muestra como chart** — abrir un measurement desde la
+  barra lateral ejecuta `SELECT * FROM "<measurement>" ORDER BY time DESC LIMIT
+  <n> OFFSET <m>` en InfluxQL (en v2 a través del endpoint de compatibilidad
+  InfluxQL) contra el bucket o la base de datos a la que pertenece el
+  measurement. `InfluxQueryGenerator::collection_browse_query` devuelve esa
+  misma sentencia, así que la barra de herramientas del data grid y la barra de
+  estado muestran la query que se ejecuta, en InfluxQL. El resultado trae una
+  columna de tiempo y columnas de fields tipadas, así que el measurement se abre
+  en la vista Chart, con las filas a un clic en la vista Data.
 - **Menú contextual "New Query" en buckets** — hacer clic derecho en un nodo de
   bucket/database muestra "New Query", abriendo un documento de código en blanco
   con la conexión activada.
@@ -196,3 +205,13 @@ Driver de InfluxDB para DBFlux.
   monitoreo interno de InfluxDB y el endpoint `/metrics` son candidatos
   naturales para un futuro `InstanceCatalog`, así que esto está planeado y no
   excluido permanentemente.
+- **El browse de un measurement ignora el filtro** — `browse_collection` y
+  `count_collection` no leen el filtro de la colección, así que el texto escrito
+  en el cuadro de filtro del data grid no reduce las filas.
+- **El browse de un measurement no tiene ventana de tiempo** — lee las filas más
+  recientes de todo el período de retención, y los presets de rango de tiempo del
+  chart no se ofrecen para un measurement. Usa "Query Measurement" para una query
+  acotada en el tiempo.
+- **Tags y fields no se distinguen en un resultado** — ambos llegan como columnas
+  comunes. El chart agrupa por la primera columna de texto, que suele ser un tag
+  pero puede ser un field de tipo string.

@@ -37,6 +37,42 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **SQLite cancel is no longer lost at query start** — cancelling a SQLite
+  query right after it started, before its first statement began running,
+  did nothing: SQLite drops an interrupt that arrives before a statement
+  steps, so the query ran on (forever, for an endless query). The query now
+  checks the cancel request while it runs and ends as cancelled.
+
+* **Chart group splits the lines** — a chart's Group binding was dropped
+  before rendering and the chart engine never split series by it, so a
+  measurement with tags `host=a` and `host=b` drew one line zigzagging
+  between both hosts, and the axis bar showed `Group —`. The first text
+  column now becomes the default group for a time-series collection when it
+  holds at most 12 distinct values, and a group, default or picked in the
+  axis bar, draws one line per value.
+
+* **Stacked bars stack by timestamp** — Stacked Bar summed series by point
+  position, so series with different timestamps, such as grouped hosts,
+  piled values from different times into one bar. Bars now stack the values
+  that share an X value, and a series with no value there adds nothing.
+
+* **Bar chart ticks match the bars** — Bar and Stacked Bar generated Y tick
+  labels from the padded or stacked range but drew bars and gridlines with
+  the unpadded per-series range, so a Stacked Bar segment of 4.25 appeared
+  above the "4" tick and the labels bunched at the bottom. Bars, gridlines,
+  tick labels and hover now share one Y range. For Stacked Bar it runs from
+  zero to the tallest stack.
+
+* **Time-series measurements open as a chart** — opening a measurement on an
+  InfluxDB connection showed a document tree, the toolbar read
+  `SELECT * FROM <bucket>.<measurement>` and the status bar `find ...`,
+  whatever the connection's query language. A collection on a time-series
+  connection now offers the Data, Chart and JSON views and opens as a chart
+  when the result has a time and a numeric column. Data shows a grid, and a
+  refresh keeps the view you picked. The toolbar and the status bar show the
+  query the driver runs, which drivers supply through
+  `QueryGenerator::collection_browse_query`. For InfluxDB that is InfluxQL.
+
 * **Active query prompt shows the whole query** — the "Active query running"
   prompt showed the running task's label, which the editor cuts at 80
   characters, so a longer query ended in "..." as in the status bar. The

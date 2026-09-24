@@ -846,8 +846,59 @@ impl CoreEventSink for AuditService {
     }
 }
 
+/// Returns a fresh SQLite path under the system temp directory, for tests.
+///
+/// Every call yields a different path, even for the same `file_name`: the name
+/// is prefixed with the process id and a process-wide counter. Uniqueness must
+/// not come from the wall clock. On a coarse clock two test threads can read the
+/// same timestamp and open the same file, and the second opener then fails with
+/// `SQLITE_BUSY` while switching the database to WAL, without waiting on the
+/// busy timeout. The process id separates concurrent test binaries and the
+/// counter separates threads within one binary.
+///
+/// Anything left at the returned path, or at its WAL and shared-memory
+/// sidecars, by an earlier process that had the same id is removed, so the
+/// caller always starts from an empty database.
+///
+/// # Panics
+///
+/// Panics when a leftover file at the returned path cannot be removed.
 pub fn temp_sqlite_path(file_name: &str) -> PathBuf {
-    std::env::temp_dir().join(file_name)
+    static NEXT_TEMP_SQLITE_ID: AtomicU64 = AtomicU64::new(0);
+
+    let id = NEXT_TEMP_SQLITE_ID.fetch_add(1, Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!(
+        "dbflux-test-{}-{}-{}",
+        std::process::id(),
+        id,
+        file_name
+    ));
+
+    for suffix in ["", "-wal", "-shm"] {
+        let mut leftover = path.clone().into_os_string();
+        leftover.push(suffix);
+        remove_leftover_temp_path(Path::new(&leftover));
+    }
+
+    path
+}
+
+fn remove_leftover_temp_path(path: &Path) {
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => panic!("failed to inspect {}: {error}", path.display()),
+    };
+
+    let removal = if metadata.is_dir() {
+        std::fs::remove_dir_all(path)
+    } else {
+        std::fs::remove_file(path)
+    };
+
+    if let Err(error) = removal {
+        panic!("failed to remove leftover {}: {error}", path.display());
+    }
 }
 
 #[cfg(test)]
@@ -1340,5 +1391,37 @@ mod tests {
             AuditService::build_truncated_envelope("hello world", 33).expect("should not error");
         let s = result.expect("33 bytes is exactly enough for minimal envelope");
         assert!(s.len() <= 33, "envelope length {} exceeds 33", s.len());
+    }
+
+    #[test]
+    fn temp_sqlite_path_gives_concurrent_callers_distinct_openable_databases() {
+        const CALLERS: usize = 8;
+
+        let barrier = Arc::new(std::sync::Barrier::new(CALLERS));
+
+        let handles: Vec<_> = (0..CALLERS)
+            .map(|_| {
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+
+                    let path = temp_sqlite_path("temp_sqlite_path_concurrency.sqlite");
+                    let service = AuditService::new_sqlite(&path);
+
+                    (path, service.map(|_service| ()))
+                })
+            })
+            .collect();
+
+        let mut paths = std::collections::HashSet::new();
+
+        for handle in handles {
+            let (path, service) = handle.join().expect("caller thread should not panic");
+
+            service.expect("each caller should open its own audit database");
+            assert!(paths.insert(path.clone()), "path {path:?} was reused");
+        }
+
+        assert_eq!(paths.len(), CALLERS);
     }
 }
