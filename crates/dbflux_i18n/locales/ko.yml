@@ -1422,7 +1422,9 @@ document:
       progress:
         of_total: "%{done} / %{total} 행"
         only: "%{done}행"
+      cancel: 취소
     done:
+      cancelled_rows: "가져오기가 중지되기 전에 %{rows}행을 가져왔습니다."
       close: 닫기
     error:
       no_connection: 이 가져오기에 대한 활성 연결이 없습니다

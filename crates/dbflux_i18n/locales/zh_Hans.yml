@@ -1422,7 +1422,9 @@ document:
       progress:
         of_total: "%{done} / %{total} 行"
         only: "%{done} 行"
+      cancel: 取消
     done:
+      cancelled_rows: "导入停止前已导入 %{rows} 行。"
       close: 关闭
     error:
       no_connection: 此导入没有活动连接

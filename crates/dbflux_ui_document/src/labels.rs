@@ -4950,6 +4950,8 @@ mod tests {
         "document.import_wizard.running.title",
         "document.import_wizard.running.progress.of_total",
         "document.import_wizard.running.progress.only",
+        "document.import_wizard.running.cancel",
+        "document.import_wizard.done.cancelled_rows",
         "document.import_wizard.done.close",
         "document.import_wizard.error.no_connection",
         "document.import_wizard.toast.cancelled",

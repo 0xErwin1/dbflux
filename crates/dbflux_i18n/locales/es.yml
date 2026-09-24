@@ -1422,7 +1422,9 @@ document:
       progress:
         of_total: "%{done} / %{total} filas"
         only: "%{done} filas"
+      cancel: Cancelar
     done:
+      cancelled_rows: "Se importaron %{rows} filas antes de que se detuviera la importación."
       close: Cerrar
     error:
       no_connection: No hay una conexión activa para esta importación
