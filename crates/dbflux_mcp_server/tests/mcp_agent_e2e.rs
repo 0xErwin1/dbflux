@@ -193,13 +193,7 @@ fn build_state(
 /// roles and policies, one trusted client, and the global read-only assignment
 /// plus a connection-scoped assignment for the same actor.
 fn build_runtime(connection_id: Option<&str>, role: &str) -> McpRuntime {
-    let audit_path = dbflux_audit::temp_sqlite_path(&format!(
-        "agent_e2e_{}.sqlite",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("system clock before unix epoch")
-            .as_nanos()
-    ));
+    let audit_path = dbflux_audit::temp_sqlite_path("agent_e2e_audit.sqlite");
     let audit_service =
         dbflux_audit::AuditService::new_sqlite(&audit_path).expect("create the audit database");
     let mut runtime = McpRuntime::new(

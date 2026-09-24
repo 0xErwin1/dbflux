@@ -14,7 +14,10 @@ Base de datos embebida basada en archivos.
   archivos.
 - Soporta ejecución de SQL, descubrimiento de schema, vistas, índices, foreign
   keys, constraints CHECK, y constraints UNIQUE.
-- Soporta cancelación de queries vía los handles de interrupt de SQLite.
+- Soporta cancelación de queries vía los handles de interrupt de SQLite,
+  respaldados por un progress handler que revisa el pedido de cancelación
+  mientras corre una sentencia, así que una cancelación que llega antes de que
+  empiece la primera sentencia igual termina la query.
 - Incluye generación de SQL/código para CRUD, índices, reindex, create table, y
   drop table.
 - Los scripts multi-sentencia (varias sentencias separadas por `;`) se dividen y

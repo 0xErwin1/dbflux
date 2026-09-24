@@ -37,6 +37,12 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **SQLite cancel is no longer lost at query start** — cancelling a SQLite
+  query right after it started, before its first statement began running,
+  did nothing: SQLite drops an interrupt that arrives before a statement
+  steps, so the query ran on (forever, for an endless query). The query now
+  checks the cancel request while it runs and ends as cancelled.
+
 * **Active query prompt shows the whole query** — the "Active query running"
   prompt showed the running task's label, which the editor cuts at 80
   characters, so a longer query ended in "..." as in the status bar. The
