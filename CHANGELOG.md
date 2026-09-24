@@ -54,14 +54,6 @@ All notable changes to DBFlux will be documented in this file.
   Connection Manager, and every empty-state hint reads its chord from the
   keymap, so macOS shows `Cmd` instead of `Ctrl`.
 
-* Connection Manager forms: long field labels (such as Redis "Sentinel Master
-  Name" and the InfluxDB default bucket/database) now wrap inside the label
-  column instead of running into their input, single-choice options such as
-  the Redis topology render as radio buttons instead of checkboxes, the secret
-  input's placeholder follows its label (InfluxDB v2 shows "API Token", not
-  "Password"), and the secret input sits where the driver form places it, so
-  the S3 Secret Access Key follows the Access Key ID.
-
 
 ### Added
 
@@ -272,6 +264,14 @@ All notable changes to DBFlux will be documented in this file.
   accident. The driver now rolls back a transaction the failed script opened
   itself and leaves one that was already open, and the error says which of the
   two happened.
+
+* Connection Manager forms: long field labels (such as Redis "Sentinel Master
+  Name" and the InfluxDB default bucket/database) now wrap inside the label
+  column instead of running into their input, single-choice options such as
+  the Redis topology render as radio buttons instead of checkboxes, the secret
+  input's placeholder follows its label (InfluxDB v2 shows "API Token", not
+  "Password"), and the secret input sits where the driver form places it, so
+  the S3 Secret Access Key follows the Access Key ID.
 
 * **`ON COMMIT` no longer shows as a syntax error** — the editor flagged
   PostgreSQL's `ON COMMIT { DROP | DELETE ROWS | PRESERVE ROWS }` clause on
