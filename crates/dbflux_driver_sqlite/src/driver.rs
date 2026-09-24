@@ -15,7 +15,7 @@ use dbflux_core::{
     DdlRejection, DeploymentClass, DescribeRequest, DocumentConnection, DriverCapabilities,
     DriverFormDef, DriverLimits, DriverMetadata, DropColumnRequest, DropIndexRequest,
     ExecutionSourceContext, ExplainRequest, ForeignKeyInfo, FormSection, FormTab, FormValues,
-    FormattedError, Icon, IndexData, IndexInfo, IsolationLevel, KeyValueConnection,
+    FormattedError, Icon, IndexData, IndexInfo, IsolationLevel, KeyValueConnection, LogErr,
     MutationCapabilities, OrderByColumn, PaginationStyle, PlaceholderStyle, QueryCancelHandle,
     QueryCapabilities, QueryErrorFormatter, QueryGenerator, QueryHandle, QueryLanguage,
     QueryRequest, QueryResult, ReindexRequest, RelationalConnection, RelationalSchema, Row,
@@ -613,6 +613,72 @@ impl QueryCancelHandle for SqliteCancelHandle {
     }
 }
 
+/// Approximate number of SQLite virtual-machine instructions between two
+/// checks of the cancellation flag while a statement runs.
+const CANCEL_CHECK_INTERVAL_OPS: std::os::raw::c_int = 1000;
+
+/// Stops the statements `execute` runs once the connection's cancellation
+/// flag is set, for as long as the guard lives.
+///
+/// `sqlite3_interrupt` does nothing while no statement is stepping, and
+/// preparing a statement clears an interrupt that arrived earlier, so a cancel
+/// that lands after `execute` took the connection lock but before its first
+/// step would otherwise be lost and the statement would run to completion. The
+/// progress handler reads the flag from inside the running statement, so that
+/// cancel still ends it with `SQLITE_INTERRUPT`, which `execute_one_statement`
+/// maps to `DbError::Cancelled` because the flag is set.
+///
+/// Dropping the guard removes the handler, so the connection's other users
+/// (schema loading, table rebuilds) never abort on a flag a finished query left
+/// set.
+struct CancelProgressHandler<'conn> {
+    conn: &'conn RusqliteConnection,
+}
+
+impl<'conn> CancelProgressHandler<'conn> {
+    fn install(
+        conn: &'conn RusqliteConnection,
+        cancelled: &Arc<AtomicBool>,
+    ) -> Result<Self, DbError> {
+        let cancelled = cancelled.clone();
+        conn.progress_handler(
+            CANCEL_CHECK_INTERVAL_OPS,
+            Some(move || cancelled.load(Ordering::SeqCst)),
+        )
+        .map_err(|error| format_sqlite_query_error(&error))?;
+
+        Ok(Self { conn })
+    }
+}
+
+impl Drop for CancelProgressHandler<'_> {
+    fn drop(&mut self) {
+        self.conn
+            .progress_handler(0, None::<fn() -> bool>)
+            .log_err_with("SQLite could not remove the cancellation progress handler");
+    }
+}
+
+/// Runs between taking the connection lock and preparing the first statement
+/// in `execute`, on the thread that registered it.
+#[cfg(test)]
+type AfterExecuteLockHook = (std::thread::ThreadId, Box<dyn FnOnce() + Send>);
+
+#[cfg(test)]
+static AFTER_EXECUTE_LOCK: Mutex<Option<AfterExecuteLockHook>> = Mutex::new(None);
+
+#[cfg(test)]
+fn run_after_execute_lock_hook() {
+    let hook = AFTER_EXECUTE_LOCK
+        .lock()
+        .expect("execute test hook mutex should not be poisoned")
+        .take_if(|(thread_id, _)| *thread_id == std::thread::current().id());
+
+    if let Some((_, hook)) = hook {
+        hook();
+    }
+}
+
 fn sqlite_code_generators() -> Vec<CodeGeneratorInfo> {
     vec![
         CodeGeneratorInfo {
@@ -795,8 +861,8 @@ impl Connection for SqliteConnection {
         // before the cancellation flag is reset, the connection lock is taken,
         // or any statement is prepared, so a rejection never carries side
         // effects and never clears a pending cancellation. A requested
-        // statement deadline cannot be honored safely (no watchdog, no progress
-        // hook), and a bounded request must not reach an instance dispatch
+        // statement deadline cannot be honored safely (nothing enforces a
+        // deadline), and a bounded request must not reach an instance dispatch
         // context this engine has no cap seam for. A bounded request is split
         // into statements here, with SQLite's own lexer and without preparing
         // anything, so a request it cannot split is refused just as early.
@@ -832,6 +898,9 @@ impl Connection for SqliteConnection {
             None => Vec::new(),
         };
 
+        // The flag is reset before the lock is taken, not after: a caller that
+        // sees this query holding the connection and cancels it must never
+        // have that cancel erased by a reset that runs later.
         self.cancelled.store(false, Ordering::SeqCst);
 
         let start = Instant::now();
@@ -839,11 +908,18 @@ impl Connection for SqliteConnection {
 
         let autocommit_before = conn.is_autocommit();
 
-        let outcome = match req.limit {
-            Some(limit) if bounded_statements.len() > 1 => {
-                execute_bounded_batch(&conn, &bounded_statements, limit, start, &self.cancelled)
+        let outcome = {
+            let _cancel_watch = CancelProgressHandler::install(&conn, &self.cancelled)?;
+
+            #[cfg(test)]
+            run_after_execute_lock_hook();
+
+            match req.limit {
+                Some(limit) if bounded_statements.len() > 1 => {
+                    execute_bounded_batch(&conn, &bounded_statements, limit, start, &self.cancelled)
+                }
+                _ => execute_sql(&conn, &req.sql, req.limit, start, &self.cancelled),
             }
-            _ => execute_sql(&conn, &req.sql, req.limit, start, &self.cancelled),
         };
 
         outcome.map_err(|error| settle_failed_transaction(&conn, autocommit_before, error))
@@ -2566,9 +2642,10 @@ pub fn fetch_dependents(
 
 #[cfg(test)]
 mod cancel_tests {
-    use super::{SqliteConnection, SqliteConnectionState};
-    use dbflux_core::{Connection, QueryRequest};
+    use super::{AFTER_EXECUTE_LOCK, SqliteConnection, SqliteConnectionState};
+    use dbflux_core::{Connection, DbError, QueryRequest};
     use rusqlite::Connection as RusqliteConnection;
+    use std::sync::atomic::Ordering;
     use std::sync::mpsc;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
@@ -2590,10 +2667,11 @@ mod cancel_tests {
         std::thread::spawn({
             let connection = connection.clone();
             move || {
-                let failed = connection
-                    .execute(&QueryRequest::new(ENDLESS_QUERY))
-                    .is_err();
-                if let Err(error) = query_done_tx.send(failed) {
+                let cancelled = matches!(
+                    connection.execute(&QueryRequest::new(ENDLESS_QUERY)),
+                    Err(DbError::Cancelled)
+                );
+                if let Err(error) = query_done_tx.send(cancelled) {
                     log::warn!("query result channel closed: {error}");
                 }
             }
@@ -2626,8 +2704,81 @@ mod cancel_tests {
         assert_eq!(
             query_done_rx.recv_timeout(Duration::from_secs(5)),
             Ok(true),
-            "the interrupt must end the running query with an error"
+            "the cancel must end the running query as cancelled"
         );
+    }
+
+    /// Regression: `sqlite3_interrupt` does nothing before a statement steps,
+    /// and preparing a statement clears an earlier interrupt, so a cancel that
+    /// landed after `execute` took the connection lock but before the first
+    /// step was lost and the query ran on forever.
+    #[test]
+    fn cancel_between_lock_and_first_step_still_ends_the_query() {
+        let raw = RusqliteConnection::open_in_memory().expect("open in-memory SQLite");
+        let state = Arc::new(Mutex::new(SqliteConnectionState::new(raw)));
+        let connection = Arc::new(SqliteConnection::for_test(state.clone()));
+
+        let (query_done_tx, query_done_rx) = mpsc::channel();
+        std::thread::spawn({
+            let connection = connection.clone();
+            move || {
+                let cancel_handle = connection.cancel_handle();
+                *AFTER_EXECUTE_LOCK
+                    .lock()
+                    .expect("execute test hook mutex should not be poisoned") = Some((
+                    std::thread::current().id(),
+                    Box::new(move || {
+                        if let Err(error) = cancel_handle.cancel() {
+                            log::warn!("cancel inside the execute hook failed: {error}");
+                        }
+                    }),
+                ));
+
+                let outcome = connection.execute(&QueryRequest::new(ENDLESS_QUERY));
+                if let Err(error) = query_done_tx.send(matches!(outcome, Err(DbError::Cancelled))) {
+                    log::warn!("query result channel closed: {error}");
+                }
+            }
+        });
+
+        assert_eq!(
+            query_done_rx.recv_timeout(Duration::from_secs(5)),
+            Ok(true),
+            "a cancel that lands before the first step must still end the query as cancelled"
+        );
+
+        let next = connection
+            .execute(&QueryRequest::new("SELECT 1"))
+            .expect("the next query must run after a cancelled one");
+        assert_eq!(next.rows.len(), 1);
+    }
+
+    /// The cancellation progress handler lives only for one `execute`, so a
+    /// flag a cancelled query left set never aborts the connection's other
+    /// users, which run statements without resetting it.
+    #[test]
+    fn cancellation_watch_is_removed_when_execute_returns() {
+        let raw = RusqliteConnection::open_in_memory().expect("open in-memory SQLite");
+        let state = Arc::new(Mutex::new(SqliteConnectionState::new(raw)));
+        let connection = SqliteConnection::for_test(state.clone());
+
+        connection
+            .execute(&QueryRequest::new("SELECT 1"))
+            .expect("a plain query should run");
+        connection.cancelled.store(true, Ordering::SeqCst);
+
+        let guard = state
+            .lock()
+            .expect("test SQLite connection mutex should not be poisoned");
+        let count: i64 = guard
+            .query_row(
+                "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < 100000) \
+                 SELECT count(*) FROM c",
+                [],
+                |row| row.get(0),
+            )
+            .expect("a statement outside execute must not see the cancellation flag");
+        assert_eq!(count, 100_000);
     }
 }
 
