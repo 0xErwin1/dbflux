@@ -2796,6 +2796,9 @@ settings:
       label: DELETE/UPDATE에 WHERE 필요
     requires_preview:
       label: 항상 미리 보기 필요(억제 무시)
+    editor_row_limit:
+      label: 편집기 행 제한
+      error: 편집기 행 제한은 1에서 9223372036854775807 사이의 정수여야 합니다
     object_preview_limit:
       label: 개체 미리 보기 크기 제한(MiB)
       error: 개체 미리 보기 크기 제한은 1 MiB 이상이어야 합니다

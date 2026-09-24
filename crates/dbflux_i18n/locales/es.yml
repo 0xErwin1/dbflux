@@ -2796,6 +2796,9 @@ settings:
       label: Exigir WHERE en DELETE/UPDATE
     requires_preview:
       label: Exigir siempre la vista previa (ignorar supresiones)
+    editor_row_limit:
+      label: Límite de filas del editor
+      error: El límite de filas del editor debe ser un número entero entre 1 y 9223372036854775807
     object_preview_limit:
       label: Límite de tamaño para la vista previa de objetos (MiB)
       error: El límite de tamaño para la vista previa de objetos debe ser >= 1 MiB

@@ -667,6 +667,7 @@ impl CodeDocument {
             active_database,
             &self.source.exec_ctx,
             self.effective_language().clone(),
+            self.app_state.read(cx).general_settings().editor_row_limit,
         );
 
         // Governance ceiling for a driver-dispatched multi-statement script
@@ -2184,9 +2185,71 @@ impl CodeDocument {
 #[cfg(test)]
 mod tests {
     use super::{query_request_for_execution, resolve_source_context};
-    use crate::code::build_source_window_context;
-    use dbflux_core::{ExecutionContext, ExecutionSourceContext, QueryLanguage};
+    use crate::code::{apply_editor_row_limit, build_source_window_context};
+    use dbflux_core::{
+        ExecutionContext, ExecutionSourceContext, GeneralSettings, QueryLanguage, QueryRequest,
+    };
     use uuid::Uuid;
+
+    #[test]
+    fn editor_query_request_uses_default_editor_row_limit() {
+        let request = query_request_for_execution(
+            "SELECT 1".into(),
+            None,
+            &ExecutionContext::default(),
+            QueryLanguage::Sql,
+            GeneralSettings::default().editor_row_limit,
+        );
+
+        assert_eq!(request.limit, Some(10_000));
+        assert_eq!(request.statement_timeout, None);
+    }
+
+    #[test]
+    fn editor_query_request_uses_configured_editor_row_limit_for_every_language() {
+        let languages = [
+            QueryLanguage::Sql,
+            QueryLanguage::MongoQuery,
+            QueryLanguage::RedisCommands,
+            QueryLanguage::InfluxQuery,
+            QueryLanguage::Flux,
+            QueryLanguage::CloudWatchLogsInsightsQl,
+            QueryLanguage::Cql,
+        ];
+
+        for language in languages {
+            let request = query_request_for_execution(
+                "query".into(),
+                None,
+                &ExecutionContext::default(),
+                language.clone(),
+                5_000,
+            );
+
+            assert_eq!(request.limit, Some(5_000), "{language:?}");
+            assert_eq!(request.statement_timeout, None, "{language:?}");
+        }
+    }
+
+    #[test]
+    fn editor_row_limit_preserves_an_explicit_request_limit() {
+        for explicit_limit in [0, 25] {
+            let request = apply_editor_row_limit(
+                QueryRequest::new("SELECT 1").with_limit(explicit_limit),
+                5_000,
+            );
+
+            assert_eq!(request.limit, Some(explicit_limit));
+            assert_eq!(request.statement_timeout, None);
+        }
+    }
+
+    #[test]
+    fn editor_row_limit_above_u32_range_saturates() {
+        let request = apply_editor_row_limit(QueryRequest::new("SELECT 1"), usize::MAX);
+
+        assert_eq!(request.limit, Some(u32::MAX));
+    }
 
     /// A panel-emitted override window wins over the input-field fallback,
     /// even when the fallback would have returned a different valid window.
@@ -2302,6 +2365,7 @@ mod tests {
             Some("logs".into()),
             &exec_ctx,
             QueryLanguage::CloudWatchLogsInsightsQl,
+            10_000,
         );
 
         assert_eq!(request.database.as_deref(), Some("logs"));
@@ -2393,6 +2457,7 @@ mod tests {
             None,
             &exec_ctx,
             QueryLanguage::InfluxQuery,
+            10_000,
         );
 
         assert!(
@@ -2437,6 +2502,7 @@ mod tests {
             None,
             &exec_ctx,
             QueryLanguage::Flux,
+            10_000,
         );
 
         assert!(
@@ -2473,8 +2539,13 @@ mod tests {
         };
 
         let query = "SELECT * FROM cpu WHERE time >= $__from";
-        let request =
-            query_request_for_execution(query.into(), None, &exec_ctx, QueryLanguage::InfluxQuery);
+        let request = query_request_for_execution(
+            query.into(),
+            None,
+            &exec_ctx,
+            QueryLanguage::InfluxQuery,
+            10_000,
+        );
 
         assert_eq!(
             request.sql, query,
@@ -2503,7 +2574,7 @@ mod tests {
 
         let query = "SELECT $__from FROM table";
         let request =
-            query_request_for_execution(query.into(), None, &exec_ctx, QueryLanguage::Sql);
+            query_request_for_execution(query.into(), None, &exec_ctx, QueryLanguage::Sql, 10_000);
 
         assert_eq!(
             request.sql, query,

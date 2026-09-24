@@ -68,6 +68,10 @@ DBFlux 各设置项以及连接 Hooks 的参考说明——连接 Hooks 指在�
 | **DELETE / UPDATE 需要 WHERE** | 默认开启；不带 `WHERE` 的 `DELETE`/`UPDATE` 被视为危险查询。 |
 | **始终要求预览（忽略抑制）** | 默认关闭；即使此前选择不再确认的查询，也强制弹出确认/预览对话框。 |
 
+**编辑器行数上限**（默认 10,000）限制从查询编辑器运行的查询返回的行数。它是独立于上述三项危险查询设置的执行安全选项。它只接受大于等于 1 的整数，不能设为零或关闭：保存其他值会显示错误并保留之前的上限。DBFlux 随每个编辑器查询把上限传给驱动，而不是在查询文本中加入 `LIMIT`，并在结果省略了行时显示警告。在包含多条语句的脚本中，所有结果集共享同一个上限，每条语句仍会执行。
+
+无法执行行数上限的驱动会在运行前拒绝查询，而不是忽略上限。因此在 MongoDB、Redis、Turso、InfluxDB、ClickHouse、Redshift、CloudWatch、外部 RPC 驱动以及 DynamoDB 写操作（PartiQL `INSERT`/`UPDATE`/`DELETE` 和 put、update、delete 命令）上，编辑器查询会以 "Operation not supported" 错误失败。修改上限不会改变这一点。此上限不会增加超时，也不适用于 Lua、Python 或 Bash 脚本、连接钩子或指标。
+
 ### 存储（仅 nightly 构建）
 
 | 设置项 | 默认值 | 作用 |

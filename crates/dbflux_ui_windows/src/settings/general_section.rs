@@ -27,6 +27,7 @@ pub(super) enum GeneralFormRow {
     ConfirmDangerous,
     RequiresWhere,
     RequiresPreview,
+    EditorRowLimit,
     ObjectPreviewLimit,
     KeyValueSizeLimit,
     ShareStableDb,
@@ -50,6 +51,7 @@ pub(super) struct GeneralSection {
     pub(super) input_auto_save: Entity<InputState>,
     pub(super) input_refresh_interval: Entity<InputState>,
     pub(super) input_max_bg_tasks: Entity<InputState>,
+    pub(super) input_editor_row_limit: Entity<InputState>,
     pub(super) input_object_preview_limit: Entity<InputState>,
     pub(super) input_key_value_size_limit: Entity<InputState>,
     pub(super) content_focused: bool,
@@ -75,6 +77,7 @@ impl GeneralSection {
         let auto_save_interval = settings.auto_save_interval_ms.to_string();
         let refresh_interval = settings.default_refresh_interval_secs.to_string();
         let max_background_tasks = settings.max_concurrent_background_tasks.to_string();
+        let editor_row_limit = settings.editor_row_limit.to_string();
         let object_preview_limit = settings.object_preview_size_limit_mib.to_string();
         let key_value_size_limit = settings.key_value_size_limit_mib.to_string();
 
@@ -130,6 +133,12 @@ impl GeneralSection {
             InputState::new(window, cx)
                 .placeholder("8")
                 .default_value(max_background_tasks.clone())
+        });
+
+        let input_editor_row_limit = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("10000")
+                .default_value(editor_row_limit.clone())
         });
 
         let input_object_preview_limit = cx.new(|cx| {
@@ -231,6 +240,19 @@ impl GeneralSection {
                 }
             });
 
+        let blur_editor_row_limit = cx.subscribe(
+            &input_editor_row_limit,
+            |this, _, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::Blur) {
+                    if this.switching_input {
+                        this.switching_input = false;
+                        return;
+                    }
+                    cx.emit(SectionFocusEvent::RequestFocusReturn);
+                }
+            },
+        );
+
         let blur_object_preview_limit = cx.subscribe(
             &input_object_preview_limit,
             |this, _, event: &InputEvent, cx| {
@@ -272,6 +294,7 @@ impl GeneralSection {
             input_auto_save,
             input_refresh_interval,
             input_max_bg_tasks,
+            input_editor_row_limit,
             input_object_preview_limit,
             input_key_value_size_limit,
             content_focused: false,
@@ -286,6 +309,7 @@ impl GeneralSection {
                 blur_auto_save,
                 blur_refresh_interval,
                 blur_max_bg_tasks,
+                blur_editor_row_limit,
                 blur_object_preview_limit,
                 blur_key_value_size_limit,
             ],
@@ -478,13 +502,195 @@ impl Render for GeneralSection {
 
 #[cfg(test)]
 mod tests {
-    use super::GeneralSection;
+    use super::{GeneralFormRow, GeneralSection};
     use dbflux_core::{AppStyle, ThemeSetting};
     use dbflux_storage::bootstrap::StorageRuntime;
     use dbflux_ui_base::AppStateEntity;
-    use gpui::{AppContext as _, TestAppContext, WindowOptions};
+    use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
+    use gpui::{AppContext, Entity, TestAppContext, WindowOptions};
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
+
+    fn with_general_section(
+        test: impl FnOnce(
+            &mut GeneralSection,
+            &Entity<ToastHost>,
+            &mut gpui::Window,
+            &mut gpui::Context<GeneralSection>,
+        ),
+    ) {
+        let mut cx = TestAppContext::single();
+        cx.update(gpui_component::init);
+        cx.update(dbflux_components::theme::init);
+        let toast_host = cx.update(|cx| {
+            let host = cx.new(|_| ToastHost::new());
+            cx.set_global(ToastGlobal { host: host.clone() });
+            host
+        });
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                AppStateEntity::new_with_storage_runtime(
+                    StorageRuntime::in_memory().expect("isolated storage runtime"),
+                )
+                .expect("test app state")
+            })
+        });
+        let window = cx
+            .update(|cx| {
+                cx.open_window(WindowOptions::default(), |window, cx| {
+                    cx.new(|cx| GeneralSection::new(app_state, window, cx))
+                })
+            })
+            .expect("general settings window opens");
+
+        window
+            .update(&mut cx, |section, window, cx| {
+                test(section, &toast_host, window, cx)
+            })
+            .expect("general section updates");
+        window
+            .update(&mut cx, |_, window, _| window.remove_window())
+            .expect("window closes");
+    }
+
+    fn stored_editor_row_limit(section: &GeneralSection, cx: &gpui::App) -> Option<i64> {
+        section
+            .app_state
+            .read(cx)
+            .storage_runtime()
+            .general_settings()
+            .get()
+            .expect("stored general settings readable")
+            .map(|settings| settings.editor_row_limit)
+    }
+
+    #[test]
+    fn parse_editor_row_limit_accepts_only_positive_whole_numbers_that_fit_storage() {
+        assert_eq!(GeneralSection::parse_editor_row_limit("5000"), Some(5_000));
+        assert_eq!(GeneralSection::parse_editor_row_limit(" 42 "), Some(42));
+        assert_eq!(GeneralSection::parse_editor_row_limit("1"), Some(1));
+        assert_eq!(
+            GeneralSection::parse_editor_row_limit("9223372036854775807"),
+            usize::try_from(i64::MAX).ok()
+        );
+
+        for rejected in [
+            "0",
+            "-1",
+            "",
+            "   ",
+            "garbage",
+            "1.5",
+            "10k",
+            "9223372036854775808",
+        ] {
+            assert_eq!(
+                GeneralSection::parse_editor_row_limit(rejected),
+                None,
+                "{rejected:?} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn editor_row_limit_input_shows_the_saved_value_and_is_keyboard_reachable() {
+        with_general_section(|section, _, window, cx| {
+            assert_eq!(
+                section.input_editor_row_limit.read(cx).value().as_ref(),
+                "10000"
+            );
+
+            let index = section
+                .gen_form_rows()
+                .iter()
+                .position(|row| *row == GeneralFormRow::EditorRowLimit)
+                .expect("editor row limit row is navigable");
+            for _ in 0..index {
+                section.gen_move_down();
+            }
+            assert_eq!(section.gen_form_cursor, index);
+
+            section.gen_activate_current_field(window, cx);
+            assert!(section.gen_editing_field);
+        });
+    }
+
+    #[test]
+    fn valid_editor_row_limit_marks_dirty_and_saves() {
+        with_general_section(|section, _, window, cx| {
+            section
+                .input_editor_row_limit
+                .update(cx, |input, cx| input.set_value("5000", window, cx));
+            assert!(section.has_unsaved_general_changes(cx));
+
+            section.save_general_settings(window, cx);
+
+            assert_eq!(
+                section
+                    .app_state
+                    .read(cx)
+                    .general_settings()
+                    .editor_row_limit,
+                5_000
+            );
+            assert_eq!(stored_editor_row_limit(section, cx), Some(5_000));
+            assert!(!section.has_unsaved_general_changes(cx));
+        });
+    }
+
+    #[test]
+    fn invalid_editor_row_limit_shows_an_error_and_saves_nothing() {
+        with_general_section(|section, toast_host, window, cx| {
+            let stored_before = stored_editor_row_limit(section, cx);
+
+            for value in ["0", "garbage", "", "-1", "9223372036854775808"] {
+                section
+                    .input_editor_row_limit
+                    .update(cx, |input, cx| input.set_value(value, window, cx));
+
+                section.save_general_settings(window, cx);
+
+                assert_eq!(
+                    toast_host.read(cx).last_toast_title(),
+                    Some(dbflux_i18n::t!("settings.general.editor_row_limit.error").to_string()),
+                    "{value:?} must show the validation error"
+                );
+                assert_eq!(section.gen_settings.editor_row_limit, 10_000);
+                assert_eq!(
+                    section
+                        .app_state
+                        .read(cx)
+                        .general_settings()
+                        .editor_row_limit,
+                    10_000
+                );
+                assert_eq!(
+                    stored_editor_row_limit(section, cx),
+                    stored_before,
+                    "{value:?} must not change persisted settings"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn editor_row_limit_copy_resolves_in_every_locale() {
+        for key in [
+            "settings.general.editor_row_limit.label",
+            "settings.general.editor_row_limit.error",
+        ] {
+            for locale in ["en", "es", "ko", "zh_Hans"] {
+                let value = dbflux_i18n::t!(key, locale = locale);
+
+                assert!(!value.is_empty(), "{key} resolved empty for {locale}");
+                assert_ne!(
+                    value,
+                    format!("{locale}.{key}"),
+                    "{key} missing in {locale}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn theme_dropdown_exposes_exactly_three_ayu_labels() {

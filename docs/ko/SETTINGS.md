@@ -79,6 +79,21 @@ System은 운영체제의 로캘을 따르며, 함께 제공된 로캘이 명확
 | **Require WHERE for DELETE/UPDATE** | 기본적으로 켜짐; `WHERE`가 없는 `DELETE`/`UPDATE`를 위험한 쿼리로 취급합니다. |
 | **Always require preview (ignore suppressions)** | 기본적으로 꺼짐; 이전에 확인을 생략하기로 선택했던 쿼리에 대해서도 확인/미리 보기 모달을 강제합니다. |
 
+**Editor row limit**(에디터 행 제한, 기본값 10,000)은 쿼리 에디터에서 실행한
+쿼리가 반환하는 행 수를 제한합니다. 위의 세 가지 위험 쿼리 설정과는 별개의 실행
+안전 설정입니다. 1 이상의 정수만 허용하며 0으로 설정하거나 끌 수 없습니다. 다른
+값을 저장하면 오류가 표시되고 이전 제한이 유지됩니다. DBFlux는 쿼리 텍스트에
+`LIMIT`을 추가하는 대신 모든 에디터 쿼리와 함께 이 제한을 드라이버에 전달하며,
+결과에서 행이 생략되면 경고를 표시합니다. 여러 문장으로 된 스크립트에서는 모든 결과
+집합이 하나의 제한을 함께 사용하며, 모든 문장은 그대로 실행됩니다.
+
+행 제한을 적용할 수 없는 드라이버는 제한을 무시하는 대신 실행 전에 쿼리를
+거부합니다. 따라서 MongoDB, Redis, Turso, InfluxDB, ClickHouse, Redshift,
+CloudWatch, 외부 RPC 드라이버, DynamoDB 쓰기(PartiQL `INSERT`/`UPDATE`/`DELETE`
+및 put, update, delete 명령)에서는 에디터 쿼리가 "Operation not supported" 오류로
+실패합니다. 제한 값을 바꿔도 이 동작은 바뀌지 않습니다. 이 제한은 시간 제한을
+추가하지 않으며 Lua, Python, Bash 스크립트, 연결 훅, 메트릭에는 적용되지 않습니다.
+
 ### 스토리지(나이틀리 빌드 전용)
 
 | 설정 | 기본값 | 설명 |
