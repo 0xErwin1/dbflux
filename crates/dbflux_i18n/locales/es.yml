@@ -1100,6 +1100,7 @@ document:
           insert_failed: "Error al insertar el documento: %{error}"
           update_failed: "Error al actualizar el documento: %{error}"
     grid:
+      rows_omitted: Se omitieron filas de este conjunto de resultados porque se alcanzó un límite de ejecución.
       edit_bar:
         clean: Sin cambios pendientes
         dirty:
@@ -2187,6 +2188,9 @@ document:
       custom: Personalizado
       on_open: Al abrir
     result_warnings:
+      rows_omitted:
+        summary: Se omitieron filas del resultado de la consulta
+        cause: Se omitieron filas de al menos un conjunto de resultados porque se alcanzó un límite de ejecución.
       context:
         query: resultado de consulta
         table_browse: resultado de exploración de tabla

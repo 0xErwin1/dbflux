@@ -190,6 +190,8 @@ instead, and **Save File As** is offered when you close them.
 If a non-empty text selection exists, only the selected text runs. With no
 selection, the full editor buffer is used.
 
+When execution actually omits rows, the editor reports one warning for the query and the grid marks the affected result set, even if no rows were retained. A result that exactly fills a limit without omitting rows does not trigger the warning. A retained-row cap limits stored rows only; byte and time limits are separate execution controls. This does not imply a default editor row cap.
+
 ### Multi-statement scripts
 
 When you run with no selection and the buffer contains multiple `;`-separated

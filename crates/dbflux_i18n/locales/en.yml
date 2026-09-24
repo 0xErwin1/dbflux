@@ -1100,6 +1100,7 @@ document:
           insert_failed: "Failed to insert document: %{error}"
           update_failed: "Failed to update document: %{error}"
     grid:
+      rows_omitted: Rows omitted from this result set because an execution limit was reached.
       edit_bar:
         clean: No unsaved changes
         dirty:
@@ -2187,6 +2188,9 @@ document:
       custom: Custom
       on_open: On open
     result_warnings:
+      rows_omitted:
+        summary: Rows omitted from query result
+        cause: At least one result set omitted rows because an execution limit was reached.
       context:
         query: query result
         table_browse: table browse result

@@ -1100,6 +1100,7 @@ document:
           insert_failed: "문서를 삽입하지 못했습니다: %{error}"
           update_failed: "문서를 업데이트하지 못했습니다: %{error}"
     grid:
+      rows_omitted: 실행 제한에 도달하여 이 결과 집합의 일부 행이 생략되었습니다.
       edit_bar:
         clean: 저장하지 않은 변경 사항 없음
         dirty:
@@ -2187,6 +2188,9 @@ document:
       custom: "사용자 지정"
       on_open: 열 때
     result_warnings:
+      rows_omitted:
+        summary: 쿼리 결과에서 행이 생략되었습니다
+        cause: 실행 제한에 도달하여 하나 이상의 결과 집합에서 행이 생략되었습니다.
       context:
         query: 쿼리 결과
         table_browse: 테이블 탐색 결과
