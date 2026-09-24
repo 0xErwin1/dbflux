@@ -109,13 +109,30 @@ pub struct QueryRequest {
     /// Bind parameters for parameterized queries.
     pub params: Vec<Value>,
 
-    /// Maximum number of rows to return (applied as SQL LIMIT).
+    /// Maximum number of rows the driver may retain, counted once across every
+    /// result set the request produces.
+    ///
+    /// The SQL text is never rewritten with a `LIMIT`. A driver either enforces
+    /// the budget while collecting rows, marking each result set that actually
+    /// dropped rows through [`QueryResult::rows_truncated`], or refuses the whole
+    /// request with [`DbError::NotSupported`](crate::DbError::NotSupported)
+    /// before anything runs. It bounds retained rows only: not bytes, server work,
+    /// or elapsed time, and a statement past the cap still runs to completion.
     pub limit: Option<u32>,
 
-    /// Number of rows to skip (applied as SQL OFFSET).
+    /// Number of rows to skip.
+    ///
+    /// Only drivers that page through their own API apply it (DynamoDB envelope
+    /// queries and ClickHouse); every other driver ignores it. Paged table
+    /// browsing goes through [`TableBrowseRequest`](crate::TableBrowseRequest),
+    /// which renders its own `OFFSET`, so callers must not rely on this field.
     pub offset: Option<u32>,
 
-    /// Maximum time to wait for query completion.
+    /// Deadline for the statement.
+    ///
+    /// No built-in driver can currently enforce one, so every driver refuses a
+    /// request that sets it with [`DbError::NotSupported`](crate::DbError::NotSupported)
+    /// before executing anything, and so do external RPC drivers.
     pub statement_timeout: Option<Duration>,
 
     /// Target database for query execution (MySQL/MariaDB).
