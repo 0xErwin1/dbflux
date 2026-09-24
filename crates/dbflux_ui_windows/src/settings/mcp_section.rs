@@ -898,6 +898,7 @@ impl McpSection {
                             .child(
                                 Checkbox::new("mcp-client-active")
                                     .checked(self.draft_active)
+                                    .aria_label(dbflux_i18n::t!("settings.mcp.field.active"))
                                     .on_click(cx.listener(|this, checked: &bool, _, cx| {
                                         this.draft_active = *checked;
                                         cx.notify();
@@ -1191,6 +1192,7 @@ impl McpSection {
                                                     class
                                                 )))
                                                 .checked(checked)
+                                                .aria_label(label.clone())
                                                 .on_click(cx.listener(
                                                     move |this, checked: &bool, _, cx| {
                                                         if *checked {
@@ -1253,6 +1255,7 @@ impl McpSection {
                                                         tool
                                                     )))
                                                     .checked(checked)
+                                                    .aria_label(label.clone())
                                                     .on_click(cx.listener(
                                                         move |this, checked: &bool, _, cx| {
                                                             if *checked {

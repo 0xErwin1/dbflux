@@ -873,6 +873,7 @@ impl GeneralSection {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let primary = cx.theme().primary;
+        let label = label.into();
 
         div()
             .flex()
@@ -901,12 +902,15 @@ impl GeneralSection {
                     cx.notify();
                 }),
             )
-            .child(Checkbox::new(id).checked(checked).on_click(cx.listener(
-                move |this, value: &bool, _, cx| {
-                    setter(this, *value, cx);
-                    cx.notify();
-                },
-            )))
+            .child(
+                Checkbox::new(id)
+                    .checked(checked)
+                    .aria_label(label.clone())
+                    .on_click(cx.listener(move |this, value: &bool, _, cx| {
+                        setter(this, *value, cx);
+                        cx.notify();
+                    })),
+            )
             .child(Body::new(label))
     }
 

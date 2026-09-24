@@ -478,6 +478,7 @@ impl ProxiesSection {
 
         let is_save_secret_focused = is_form_focused && current_field == ProxyFormField::SaveSecret;
         let is_password_focused = is_form_focused && current_field == ProxyFormField::Password;
+        let save_label = dbflux_i18n::t!("settings.proxies.action.save");
 
         let save_checkbox = if keyring_available {
             Some(
@@ -498,16 +499,13 @@ impl ProxiesSection {
                     .child(
                         Checkbox::new("proxy-save-secret")
                             .checked(self.proxy_save_secret)
+                            .aria_label(save_label.clone())
                             .on_click(cx.listener(|this, checked: &bool, _, cx| {
                                 this.proxy_save_secret = *checked;
                                 cx.notify();
                             })),
                     )
-                    .child(
-                        div()
-                            .text_sm()
-                            .child(dbflux_i18n::t!("settings.proxies.action.save")),
-                    ),
+                    .child(div().text_sm().child(save_label)),
             )
         } else {
             None
@@ -790,6 +788,7 @@ impl ProxiesSection {
                 )
                 .child({
                     let is_enabled_focused = is_form_focused && field == ProxyFormField::Enabled;
+                    let enabled_label = dbflux_i18n::t!("settings.proxies.field.enabled");
 
                     div()
                         .flex()
@@ -807,12 +806,13 @@ impl ProxiesSection {
                         .child(
                             Checkbox::new("proxy-enabled")
                                 .checked(self.proxy_enabled)
+                                .aria_label(enabled_label.clone())
                                 .on_click(cx.listener(|this, checked: &bool, _, cx| {
                                     this.proxy_enabled = *checked;
                                     cx.notify();
                                 })),
                         )
-                        .child(Body::new(dbflux_i18n::t!("settings.proxies.field.enabled")))
+                        .child(Body::new(enabled_label))
                 }),
             None,
             &theme,

@@ -480,6 +480,11 @@ impl Render for GeneralSection {
 mod tests {
     use super::GeneralSection;
     use dbflux_core::{AppStyle, ThemeSetting};
+    use dbflux_storage::bootstrap::StorageRuntime;
+    use dbflux_ui_base::AppStateEntity;
+    use gpui::{AppContext as _, TestAppContext, WindowOptions};
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
 
     #[test]
     fn theme_dropdown_exposes_exactly_three_ayu_labels() {
@@ -621,6 +626,115 @@ mod tests {
 
         assert_eq!(GeneralSection::language_index("de"), 0);
         assert_eq!(GeneralSection::language_for_index(available.len() + 1), "");
+    }
+
+    /// Keeps the latest rendered accessibility frame of the window it observes.
+    #[derive(Default)]
+    struct FrameCapture(Mutex<Option<gpui::AccessibilityFrame>>);
+
+    impl gpui::FrameObserver for FrameCapture {
+        fn accessibility_updated(&self, frame: &gpui::AccessibilityFrame) {
+            *self.0.lock().expect("frame capture lock") = Some(frame.clone());
+        }
+    }
+
+    /// Renders the General section in its own window and returns the element
+    /// id and accessible name of every checkbox in the rendered frame.
+    fn render_general_checkboxes(cx: &mut TestAppContext) -> HashMap<String, Option<String>> {
+        cx.update(gpui_component::init);
+        cx.update(dbflux_components::theme::init);
+
+        let app_state = cx.update(|cx| {
+            cx.new(|_| {
+                AppStateEntity::new_with_storage_runtime(
+                    StorageRuntime::in_memory().expect("test storage runtime"),
+                )
+                .expect("test app state")
+            })
+        });
+
+        let capture = Arc::new(FrameCapture::default());
+        let window = cx
+            .update(|cx| {
+                cx.open_window(WindowOptions::default(), |window, cx| {
+                    window.observe_frames(&capture);
+                    cx.new(|cx| GeneralSection::new(app_state, window, cx))
+                })
+            })
+            .expect("general settings window opens");
+        cx.run_until_parked();
+
+        let frame = capture
+            .0
+            .lock()
+            .expect("frame capture lock")
+            .clone()
+            .expect("the window rendered a frame");
+
+        let checkboxes = frame
+            .nodes()
+            .filter_map(|(_, node)| {
+                let accessible = frame.accessibility_node(node)?;
+                (accessible.role() == gpui::Role::CheckBox).then(|| {
+                    (
+                        node.id().to_owned(),
+                        accessible.label().map(ToOwned::to_owned),
+                    )
+                })
+            })
+            .collect();
+
+        window
+            .update(cx, |_, window, _| window.remove_window())
+            .expect("general settings window closes");
+
+        checkboxes
+    }
+
+    #[::core::prelude::v1::test]
+    fn general_checkboxes_are_named_after_their_visible_labels() {
+        let mut cx = TestAppContext::single();
+        let checkboxes = render_general_checkboxes(&mut cx);
+
+        let expected = [
+            ("vim-mode", "settings.general.vim_mode.label"),
+            ("restore-session", "settings.general.restore_session.label"),
+            ("reopen-conns", "settings.general.reopen_connections.label"),
+            (
+                "pause-on-error",
+                "settings.general.pause_refresh_on_error.label",
+            ),
+            (
+                "refresh-visible",
+                "settings.general.refresh_only_if_visible.label",
+            ),
+            (
+                "confirm-dangerous",
+                "settings.general.confirm_dangerous.label",
+            ),
+            ("requires-where", "settings.general.requires_where.label"),
+            (
+                "requires-preview",
+                "settings.general.requires_preview.label",
+            ),
+        ];
+
+        for (id, key) in expected {
+            let label = dbflux_i18n::t!(key);
+            assert!(!label.is_empty(), "{key} resolved empty");
+            assert_eq!(
+                checkboxes.get(id),
+                Some(&Some(label)),
+                "checkbox {id} in {checkboxes:?}"
+            );
+        }
+
+        let unnamed: Vec<_> = checkboxes
+            .iter()
+            .filter(|(_, label)| label.as_deref().is_none_or(str::is_empty))
+            .map(|(id, _)| id.as_str())
+            .collect();
+        assert!(unnamed.is_empty(), "checkboxes without a name: {unnamed:?}");
     }
 
     #[test]
