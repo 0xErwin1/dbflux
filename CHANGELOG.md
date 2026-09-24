@@ -41,6 +41,11 @@ All notable changes to DBFlux will be documented in this file.
   extras already bound when a connection is edited, is reachable with j/k, and
   is addressable as `cm-setting-<phase>_hook_extra`.
 
+* The SQL editor warns once when any delivered result set actually omitted rows; the
+  data grid shows the warning for its selected result set, even when no rows were
+  retained. A result that merely fills its limit is not flagged, and discarded
+  stale executions do not raise omission warnings.
+
 * Redis, Turso, and InfluxDB now refuse requested row limits (including zero)
   or statement timeouts before execution with `NotSupported`, rather than
   dispatching commands, SQL, HTTP, or instance-context queries without those

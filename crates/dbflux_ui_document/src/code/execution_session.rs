@@ -266,6 +266,7 @@ mod tests {
         cancels: AtomicUsize,
         databases: Mutex<Vec<Option<String>>>,
         execute_gate: Option<Arc<ExecuteGate>>,
+        truncate_rows: AtomicBool,
     }
 
     impl FakeConnection {
@@ -276,6 +277,7 @@ mod tests {
                 cancels: AtomicUsize::new(0),
                 databases: Mutex::new(Vec::new()),
                 execute_gate: None,
+                truncate_rows: AtomicBool::new(false),
             })
         }
 
@@ -290,6 +292,7 @@ mod tests {
                 cancels: AtomicUsize::new(0),
                 databases: Mutex::new(Vec::new()),
                 execute_gate,
+                truncate_rows: AtomicBool::new(false),
             })
         }
     }
@@ -326,7 +329,9 @@ mod tests {
                 .lock()
                 .expect("test database collection")
                 .push(request.database.clone());
-            Ok(QueryResult::empty())
+            let mut result = QueryResult::empty();
+            result.set_rows_truncated(self.truncate_rows.load(Ordering::SeqCst));
+            Ok(result)
         }
 
         fn cancel(&self, _handle: &QueryHandle) -> Result<(), DbError> {
@@ -794,6 +799,7 @@ mod tests {
             entered: AtomicBool::new(false),
         });
         let isolated = FakeConnection::isolated_with_gate(Some(execute_gate.clone()));
+        isolated.truncate_rows.store(true, Ordering::SeqCst);
         let session = Arc::new(FakeSession {
             connection: isolated.clone(),
             closed: AtomicBool::new(false),
@@ -861,6 +867,26 @@ mod tests {
             });
         });
         window.run_until_parked();
+
+        let (toast_count, toast_title) = window.update(|_, cx| {
+            let host = cx.global::<ToastGlobal>().host.read(cx);
+            (host.toast_count(), host.last_toast_title())
+        });
+        let omission_title =
+            dbflux_i18n::t!("document.shared.result_warnings.rows_omitted.summary");
+        match interruption {
+            CompletionInterruption::Cancel => {
+                assert_eq!(toast_count, 1, "preserved result must warn exactly once");
+                assert_eq!(toast_title.as_deref(), Some(omission_title.as_ref()));
+            }
+            CompletionInterruption::ChangeDatabaseContext => {
+                assert_ne!(
+                    toast_title.as_deref(),
+                    Some(omission_title.as_ref()),
+                    "discarded result must not display an omission warning (visible toasts: {toast_count})"
+                );
+            }
+        }
 
         assert_eq!(root.cancels.load(Ordering::SeqCst), 0);
         assert_eq!(isolated.queries.load(Ordering::SeqCst), 1);

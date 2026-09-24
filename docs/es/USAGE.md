@@ -217,6 +217,8 @@ cerrarlas.
 Si existe una selección de texto no vacía, solo se ejecuta el texto
 seleccionado. Sin selección, se usa el buffer completo del editor.
 
+Cuando la ejecución omite filas efectivamente, el editor muestra una advertencia por consulta y la cuadrícula señala el conjunto de resultados afectado, aunque no se haya conservado ninguna fila. Un resultado que alcanza exactamente el límite sin omitir filas no genera la advertencia. Un límite de filas conservadas solo restringe las filas almacenadas; los límites de bytes y tiempo son controles de ejecución independientes. Esto no implica que el editor tenga un límite de filas predeterminado.
+
 ### Scripts multi-statement
 
 Cuando ejecutas sin selección y el buffer contiene varias sentencias separadas

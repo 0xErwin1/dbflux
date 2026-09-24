@@ -1114,6 +1114,7 @@ document:
           insert_failed: "插入文档失败：%{error}"
           update_failed: "更新文档失败：%{error}"
     grid:
+      rows_omitted: 达到执行限制后，此结果集中的部分行被省略。
       edit_bar:
         clean: 无未保存的更改
         dirty:
@@ -2226,6 +2227,9 @@ document:
       custom: 自定义
       on_open: 打开时
     result_warnings:
+      rows_omitted:
+        summary: 查询结果中有行被省略
+        cause: 达到执行限制后，至少一个结果集中的部分行被省略。
       context:
         query: 查询结果
         table_browse: 表浏览结果
