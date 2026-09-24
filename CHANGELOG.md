@@ -16,6 +16,8 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Changed
 
+* SQL Server explicit row limits retain at most N rows across every result set of a batch and flag actual omissions, including at zero; every set is drained, so later statements and mutations finish and late errors propagate. Explicit timeouts and bounded instance requests are refused before execution without clearing a pending cancellation; unbounded requests remain compatible. The row cap does not bound bytes, server work, or elapsed time; Azure SQL Database and Managed Instance were not verified.
+
 * SQLite explicit row limits retain at most N rows of any single row-producing statement (including `PRAGMA`, `WITH`, `VALUES`, and `RETURNING`) and flag actual omissions, including at zero; the statement still runs to completion, so mutations finish and late errors propagate. Explicit timeouts, bounded multi-statement batches, and bounded instance requests are refused before execution; unbounded requests remain compatible. The row cap does not bound memory, engine work, or elapsed time.
 
 * MySQL/MariaDB explicit row limits retain at most N rows across script/server result sets and flag actual omissions, including at zero; later mutations finish and errors propagate. Explicit timeouts and bounded instance requests are refused before execution; unbounded requests remain compatible. The row cap does not bound bytes, server work, engine allocation, or elapsed time; hosted MariaDB was not verified.

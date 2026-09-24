@@ -53,6 +53,22 @@ Driver de Microsoft SQL Server para DBFlux, construido sobre el cliente TDS
   lotes de pura preparación (`SET LOCK_TIMEOUT 5000`) siguen mostrándose como un
   único primario vacío. Los callers que quieran recorrer cada set usan
   `QueryResult::iter_result_sets()`.
+- Ejecución acotada: un límite de filas solicitado (`QueryRequest::limit`) se
+  aplica durante la recolección — el stream de tiberius se lee de forma perezosa
+  y solo se retienen y convierten las filas solicitadas. Un presupuesto de filas
+  restantes se comparte en toda la petición execute: cada result set del lote
+  consume del mismo presupuesto en el orden real del stream (el límite es un
+  total, no un tope por set), y cada set se drena hasta completarse, de modo que
+  los efectos de una mutación terminan por completo, las sentencias posteriores
+  siguen ejecutándose una vez agotado el presupuesto, los errores tardíos se
+  propagan en vez de descartarse, y cada set reporta `rows_truncated` solo cuando
+  realmente omitió una fila. El resultado primario sigue siendo el último set. Un
+  límite de `0` no retiene ninguna fila pero igualmente ejecuta y drena todo; las
+  peticiones sin límite conservan el comportamiento anterior sin tope.
+- Rechaza, antes de cualquier ejecución y sin borrar una cancelación
+  pendiente, las peticiones que no puede acotar de forma segura: un statement
+  timeout solicitado y una petición con límite de filas dirigida a las instance
+  metrics o inspectores del driver.
 - Motor de transferencia de datos: carga masiva nativa multi-fila con `INSERT`
   (`BULK_INSERT`, con un tope de 1000 filas por sentencia según el límite de
   filas de `VALUES` de T-SQL, expuesto vía `DriverLimits::max_bulk_insert_rows`)
@@ -334,6 +350,26 @@ Requiere el permiso `VIEW SERVER STATE`.
   Los helpers CRUD componen valores dentro del texto SQL a través del
   `SqlQueryBuilder` compartido y los formatters de literales del dialecto. Los
   payloads binarios o Unicode grandes se insertan como literales `0x…` o `N'…'`.
+- La ejecución acotada es un tope de retención, no un límite del lado del
+  servidor: la sentencia igualmente se ejecuta hasta completarse, todas las filas
+  pasadas el tope se reciben y descartan, y no se aplica ningún presupuesto de
+  trabajo del servidor, de tiempo ni de bytes. El tope aplica a las filas
+  retenidas, no a los bytes totales transferidos, y una fila individual enorme se
+  retiene completa. Una mutación bajo un límite de filas completa todos sus
+  efectos.
+- El tope de filas aplica a la ejecución SQL ordinaria, no a todo contexto de
+  execute: una petición acotada dirigida a las instance metrics o inspectores del
+  driver se rechaza antes del lock de conexión o de cualquier dispatch — esas
+  queries internas de catálogo no tienen dónde aplicar un tope — mientras que las
+  peticiones sin límite contra ellas siguen funcionando.
+- Un statement timeout solicitado (`QueryRequest::statement_timeout`) no está
+  soportado y se rechaza antes de la ejecución: el driver no implementa ningún
+  mecanismo de deadline propio — ni watchdog, ni deadline basada en `KILL`, ni
+  `SET` a nivel de sesión. Las queries ordinarias sin límite siguen siendo
+  cancelables por la vía existente de `KILL`.
+- El comportamiento de ejecución acotada y de rechazo se probó en vivo solo
+  contra la imagen `mcr.microsoft.com/mssql/server:2022-latest` (SQL Server
+  2022); no se probó contra Azure SQL Database ni Managed Instance.
 - Streaming: los result sets se materializan en `Vec<Row>`. El trait
   `Connection::execute` devuelve un `QueryResult` totalmente resuelto, así que
   el streaming al estilo cursor requeriría un cambio de API a nivel de
