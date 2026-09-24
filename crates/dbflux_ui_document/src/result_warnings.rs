@@ -54,7 +54,21 @@ pub(crate) fn handoff_sql_editor_result(
     result: &mut QueryResult,
     report: impl FnMut(UserFacingError),
 ) {
-    consume_query_result_warnings(result, ResultWarningContext::Query, report);
+    let rows_omitted = result.iter_result_sets().any(QueryResult::rows_truncated);
+    let mut report = report;
+    consume_query_result_warnings(result, ResultWarningContext::Query, &mut report);
+    if rows_omitted {
+        report(
+            UserFacingError::new(
+                ErrorKind::Driver,
+                dbflux_i18n::t!("document.shared.result_warnings.rows_omitted.summary"),
+            )
+            .with_cause(dbflux_i18n::t!(
+                "document.shared.result_warnings.rows_omitted.cause"
+            ))
+            .with_severity(EventSeverity::Warn),
+        );
+    }
 }
 
 pub(crate) fn handoff_table_browse_result(
@@ -271,6 +285,54 @@ mod tests {
                 "Unsupported database type 'varbit' in query result",
             ]
         );
+    }
+
+    #[test]
+    fn rows_truncated_warning_reports_primary_omission() {
+        assert_rows_truncated_warning(true, false);
+    }
+
+    #[test]
+    fn rows_truncated_warning_reports_secondary_omission() {
+        assert_rows_truncated_warning(false, true);
+    }
+
+    #[test]
+    fn rows_truncated_warning_reports_both_omissions_once() {
+        assert_rows_truncated_warning(true, true);
+    }
+
+    fn assert_rows_truncated_warning(primary_truncated: bool, secondary_truncated: bool) {
+        let mut result = QueryResult::empty();
+        result.set_rows_truncated(primary_truncated);
+        let mut secondary = QueryResult::empty();
+        secondary.set_rows_truncated(secondary_truncated);
+        result.additional_results.push(secondary);
+
+        let mut warnings = Vec::new();
+        handoff_sql_editor_result(&mut result, |warning| warnings.push(warning));
+        assert_eq!(
+            warnings.len(),
+            1,
+            "truncation: {primary_truncated}/{secondary_truncated}"
+        );
+        assert_eq!(warnings[0].severity, EventSeverity::Warn);
+        assert_eq!(result.rows_truncated(), primary_truncated);
+        assert_eq!(
+            result.additional_results[0].rows_truncated(),
+            secondary_truncated
+        );
+    }
+
+    #[test]
+    fn rows_truncated_warning_does_not_report_exactly_full_or_complete_result() {
+        for row_count in [0, 100] {
+            let mut result = QueryResult::empty();
+            result.rows = vec![Vec::new(); row_count];
+            let mut warnings = Vec::new();
+            handoff_sql_editor_result(&mut result, |warning| warnings.push(warning));
+            assert!(warnings.is_empty(), "complete result with {row_count} rows");
+        }
     }
 
     #[test]
