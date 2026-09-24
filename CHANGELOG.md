@@ -54,14 +54,6 @@ All notable changes to DBFlux will be documented in this file.
   Connection Manager, and every empty-state hint reads its chord from the
   keymap, so macOS shows `Cmd` instead of `Ctrl`.
 
-* **A running import can be cancelled** — the import wizard's running step
-  had no Cancel button, while export and migration did. Cancel now stops the
-  import after the chunk being written, ends its Tasks panel entry as
-  cancelled rather than failed, and reports how many rows were already
-  imported. The import's row counter now also advances while it runs, import
-  and export show the migration wizard's progress bar when the row total is
-  known, and the three data wizards open at the same size.
-
 
 ### Added
 
@@ -320,6 +312,14 @@ All notable changes to DBFlux will be documented in this file.
   common case) silently fell back to a grid and the Left-Right choice made no
   difference. Layers are assigned on the graph's strongly connected components now,
   and the tables inside each layer are ordered to reduce crossings.
+
+* **A running import can be cancelled** — the import wizard's running step
+  had no Cancel button, while export and migration did. Cancel now stops the
+  import after the chunk being written, ends its Tasks panel entry as
+  cancelled rather than failed, and reports how many rows were already
+  imported. The import's row counter now also advances while it runs, import
+  and export show the migration wizard's progress bar when the row total is
+  known, and the three data wizards open at the same size.
 
 * **Switching diagram layouts no longer panics** — two tables closer together than
   the gap the edge anchors need — dragged by hand, or placed by the radial layout —
