@@ -15,14 +15,6 @@ All notable changes to DBFlux will be documented in this file.
   `type_text`. Previously both failed on every input, `set_text` with a
   misleading document-range error, so filling a form needed coordinates.
 
-* **Tasks panel cancel and failed-task retention** — key-value scans, reads
-  and mutations no longer show a cancel button, because no key-value driver
-  can stop those calls once they start and cancelling only marked the task
-  cancelled while the work (including a write) went on. Failed tasks now stay
-  in the Tasks panel with a dismiss button instead of disappearing after 60
-  seconds, so their error output remains readable; completed and cancelled
-  tasks are still removed after 60 seconds.
-
 * Redis, Turso, and InfluxDB now refuse requested row limits (including zero)
   or statement timeouts before execution with `NotSupported`, rather than
   dispatching commands, SQL, HTTP, or instance-context queries without those
@@ -50,6 +42,14 @@ All notable changes to DBFlux will be documented in this file.
   category section now uses a fixed two-column grid that fits the window, and
   Up/Down move to the card above or below, crossing into the neighboring
   section's matching column.
+
+* **Tasks panel cancel and failed-task retention** — key-value scans, reads
+  and mutations no longer show a cancel button, because no key-value driver
+  can stop those calls once they start and cancelling only marked the task
+  cancelled while the work (including a write) went on. Failed tasks now stay
+  in the Tasks panel with a dismiss button instead of disappearing after 60
+  seconds, so their error output remains readable; completed and cancelled
+  tasks are still removed after 60 seconds.
 
 * **Proxy details show readable labels** — the Access tab's proxy details
   card printed the proxy type and authentication as Rust debug output, such
