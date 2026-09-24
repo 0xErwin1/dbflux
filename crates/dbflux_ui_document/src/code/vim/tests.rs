@@ -12,8 +12,9 @@ use dbflux_app::keymap::Command;
 use dbflux_components::controls::register_input_overrides;
 use dbflux_components::controls::{GpuiInput, InputState};
 use dbflux_components::theme;
-use dbflux_core::QueryLanguage;
+use dbflux_core::{ConnectionProfile, DbConfig, DbKind, QueryLanguage, WritePrivilege};
 use dbflux_storage::bootstrap::StorageRuntime;
+use dbflux_test_support::fake_driver::FakeDriver;
 use dbflux_ui_base::keymap::{default_keymap, key_chord_from_gpui};
 use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
 use dbflux_ui_base::{AppStateChanged, AppStateEntity};
@@ -44,8 +45,10 @@ impl Render for Harness {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .size_full()
-            .on_action(cx.listener(|this, _: &HarnessRunQuery, _window, _cx| {
+            .on_action(cx.listener(|this, _: &HarnessRunQuery, window, cx| {
                 this.run_query_actions += 1;
+                this.document
+                    .update(cx, |document, cx| document.run_query(window, cx));
             }))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
                 let context = this.document.read(cx).active_context(cx);
@@ -387,6 +390,93 @@ fn open_editor_with<'a>(cx: &'a mut TestAppContext, setup: EditorSetup<'_>) -> F
         harness,
         window,
     }
+}
+
+#[gpui::test]
+fn visual_run_query_executes_selected_sql_and_whitespace_falls_back_to_buffer(
+    cx: &mut TestAppContext,
+) {
+    let mut editor = open_editor_with(
+        cx,
+        EditorSetup {
+            content: "  SELECT 1;  \nSELECT 2;",
+            vim_enabled: true,
+            language: QueryLanguage::Sql,
+            read_only: false,
+        },
+    );
+    let driver = FakeDriver::new(DbKind::SQLite);
+    let profile = ConnectionProfile::new(
+        "test",
+        DbConfig::SQLite {
+            path: ":memory:".into(),
+            connection_id: None,
+        },
+    );
+    let connection = driver.connect_arc(&profile).expect("fake connection");
+    let profile_id = profile.id;
+    let app_state = editor.app_state.clone();
+    let document = editor.document.clone();
+    editor.window.update(|_, cx| {
+        app_state.update(cx, |app, _| {
+            app.apply_connect_profile(
+                profile,
+                connection,
+                None,
+                None,
+                false,
+                WritePrivilege::Unknown,
+            );
+        });
+        document.update(cx, |document, _| document.connection_id = Some(profile_id));
+    });
+    editor.keys("v 1 2 l");
+    assert_eq!(editor.selected_query().as_deref(), Some("SELECT 1;"));
+    editor.keys("ctrl-enter");
+    editor.window.run_until_parked();
+    editor.window.update(|window, _| window.refresh());
+    editor.window.run_until_parked();
+    assert_eq!(editor.run_query_actions(), 1);
+    assert_eq!(
+        editor
+            .window
+            .update(|_, cx| document.read(cx).execution.execution_history.len()),
+        1,
+        "query did not start"
+    );
+    assert_eq!(
+        driver
+            .stats()
+            .executed_requests
+            .iter()
+            .map(|request| request.sql.as_str())
+            .collect::<Vec<_>>(),
+        vec!["SELECT 1;"],
+        "execution error: {:?}",
+        editor.window.update(|_, cx| document
+            .read(cx)
+            .execution
+            .execution_history
+            .last()
+            .and_then(|record| record.error.clone()))
+    );
+
+    editor.keys("escape");
+    editor.set_cursor(0);
+    editor.keys("v l ctrl-enter");
+    editor.window.run_until_parked();
+    editor.window.update(|window, _| window.refresh());
+    editor.window.run_until_parked();
+    assert_eq!(editor.run_query_actions(), 2);
+    assert_eq!(
+        driver
+            .stats()
+            .executed_requests
+            .iter()
+            .map(|request| request.sql.as_str())
+            .collect::<Vec<_>>(),
+        vec!["SELECT 1;", "  SELECT 1;  \nSELECT 2;"]
+    );
 }
 
 #[gpui::test]
