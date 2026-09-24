@@ -1995,6 +1995,7 @@ impl Workspace {
             || self.modal_unsaved_changes.read(cx).is_visible()
             || self.modal_delete_dashboard.read(cx).is_visible()
             || self.modal_delete_saved_chart.read(cx).is_visible()
+            || self.sidebar.read(cx).delete_modal_state().is_some()
         {
             return ContextId::ConfirmModal;
         }

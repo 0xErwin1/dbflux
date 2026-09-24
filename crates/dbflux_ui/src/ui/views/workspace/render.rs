@@ -102,6 +102,20 @@ impl Render for Workspace {
             self.set_focus(target, window, cx);
         }
 
+        // The sidebar's inline delete confirmation is drawn below, so its
+        // request to take focus is applied here, in the render that shows it.
+        let inline_delete_focus = self
+            .sidebar
+            .read(cx)
+            .delete_modal_state()
+            .is_some()
+            .then(|| {
+                self.sidebar.update(cx, |sidebar, cx| {
+                    sidebar.apply_delete_modal_focus(window, cx);
+                    sidebar.delete_modal_focus_handle().clone()
+                })
+            });
+
         if let Some(pending) = self.pending_open_script.take() {
             self.finalize_open_script(pending, window, cx);
         }
@@ -1062,12 +1076,16 @@ impl Render for Workspace {
             })
             // Delete confirmation modal rendered at workspace level for proper centering
             .when_some(
-                self.sidebar.read(cx).delete_modal_state(),
-                |el, modal_state| {
+                self.sidebar
+                    .read(cx)
+                    .delete_modal_state()
+                    .zip(inline_delete_focus),
+                |el, (modal_state, focus_handle)| {
                     // Capture sidebar clones for each callback before building the footer.
                     let sidebar_confirm = self.sidebar.clone();
                     let sidebar_cancel = self.sidebar.clone();
                     let sidebar_close = self.sidebar.clone();
+                    let sidebar_enter = self.sidebar.clone();
 
                     let title = if modal_state.multi_count.is_some() {
                         dbflux_i18n::t!("workspace.action.delete")
@@ -1136,9 +1154,15 @@ impl Render for Workspace {
                         ModalShell::new(title, body, footer)
                             .width(px(360.0))
                             .variant(variant)
+                            .focus_handle(&focus_handle)
                             .on_close(move |_, cx| {
                                 sidebar_close.update(cx, |this, cx| {
                                     this.cancel_modal_delete(cx);
+                                });
+                            })
+                            .on_confirm(move |_, cx| {
+                                sidebar_enter.update(cx, |this, cx| {
+                                    this.confirm_modal_delete(cx);
                                 });
                             }),
                     )
@@ -1498,5 +1522,171 @@ mod tests {
             !source.contains("\"Ctrl\"") && !source.contains("\"Cmd\""),
             "empty-state hints must read their chords from the keymap"
         );
+    }
+}
+
+#[cfg(test)]
+mod inline_delete_keyboard_tests {
+    // Explicit imports rather than the parent glob: combining `use super::*`
+    // with `#[gpui::test]` sends the gpui_macros expansion into unbounded
+    // recursion.
+    use crate::ui::views::workspace::Workspace;
+    use dbflux_core::SchemaNodeId;
+    use dbflux_ui_base::AppStateEntity;
+    use dbflux_ui_base::modals::test_host::{click_backdrop, has_focus};
+    use gpui::{AppContext as _, Entity, TestAppContext, VisualTestContext};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    use uuid::Uuid;
+
+    struct Harness<'a> {
+        workspace: Entity<Workspace>,
+        app_state: Entity<AppStateEntity>,
+        folder_id: Uuid,
+        window: &'a mut VisualTestContext,
+    }
+
+    /// Asks to delete a connection folder from a focused workspace, which
+    /// opens the sidebar's inline delete confirmation.
+    fn open_confirmation(cx: &mut TestAppContext) -> Harness<'_> {
+        cx.update(gpui_component::init);
+        cx.update(dbflux_components::theme::init);
+
+        let app_state: Entity<AppStateEntity> = cx.update(|cx| {
+            cx.new(|_| {
+                let runtime = dbflux_storage::bootstrap::StorageRuntime::in_memory()
+                    .expect("in-memory storage");
+                AppStateEntity::new_with_storage_runtime(runtime).expect("test storage setup")
+            })
+        });
+        let folder_id =
+            cx.update(|cx| app_state.update(cx, |state, _| state.create_folder("Staging", None)));
+
+        let holder: Rc<RefCell<Option<Entity<Workspace>>>> = Rc::default();
+        let (_, window) = cx.add_window_view({
+            let holder = holder.clone();
+            let app_state = app_state.clone();
+            move |window, cx| {
+                let workspace = cx.new(|cx| Workspace::new(app_state, window, cx));
+                holder.replace(Some(workspace.clone()));
+                gpui_component::Root::new(workspace, window, cx)
+            }
+        });
+        let workspace = holder.borrow().clone().expect("workspace created");
+
+        window.update(|window, cx| {
+            let (focus_handle, sidebar) = {
+                let workspace = workspace.read(cx);
+                (workspace.focus_handle.clone(), workspace.sidebar.clone())
+            };
+            focus_handle.focus(window, cx);
+
+            let item_id = SchemaNodeId::ConnectionFolder { node_id: folder_id }.to_string();
+            sidebar.update(cx, |sidebar, cx| {
+                sidebar.show_delete_confirm_modal(&item_id, cx);
+            });
+        });
+        window.run_until_parked();
+
+        Harness {
+            workspace,
+            app_state,
+            folder_id,
+            window,
+        }
+    }
+
+    impl Harness<'_> {
+        fn is_open(&mut self) -> bool {
+            let workspace = self.workspace.clone();
+            self.window
+                .update(|_, cx| workspace.read(cx).sidebar.read(cx).has_delete_modal())
+        }
+
+        fn folder_exists(&mut self) -> bool {
+            let (app_state, folder_id) = (self.app_state.clone(), self.folder_id);
+            self.window.update(|_, cx| {
+                app_state
+                    .read(cx)
+                    .connection_tree()
+                    .find_by_id(folder_id)
+                    .is_some()
+            })
+        }
+
+        fn workspace_has_focus(&mut self) -> bool {
+            let handle = self
+                .window
+                .update(|_, cx| self.workspace.read(cx).focus_handle.clone());
+            has_focus(self.window, &handle)
+        }
+    }
+
+    #[gpui::test]
+    fn enter_deletes_the_folder(cx: &mut TestAppContext) {
+        let mut harness = open_confirmation(cx);
+        assert!(harness.is_open());
+
+        harness.window.simulate_keystrokes("enter");
+
+        assert!(!harness.is_open());
+        assert!(!harness.folder_exists());
+    }
+
+    #[gpui::test]
+    fn escape_keeps_the_folder_and_gives_focus_back(cx: &mut TestAppContext) {
+        let mut harness = open_confirmation(cx);
+
+        harness.window.simulate_keystrokes("escape");
+
+        assert!(!harness.is_open());
+        assert!(harness.folder_exists());
+        assert!(harness.workspace_has_focus());
+    }
+
+    impl Harness<'_> {
+        /// Moves focus back to the workspace while the confirmation stays
+        /// open, as when something else takes focus behind it.
+        fn focus_workspace(&mut self) {
+            let workspace = self.workspace.clone();
+            self.window.update(|window, cx| {
+                let handle = workspace.read(cx).focus_handle.clone();
+                handle.focus(window, cx);
+            });
+            self.window.run_until_parked();
+            assert!(self.is_open());
+        }
+    }
+
+    #[gpui::test]
+    fn enter_deletes_the_folder_when_focus_is_outside_the_confirmation(cx: &mut TestAppContext) {
+        let mut harness = open_confirmation(cx);
+        harness.focus_workspace();
+
+        harness.window.simulate_keystrokes("enter");
+
+        assert!(!harness.is_open());
+        assert!(!harness.folder_exists());
+    }
+
+    #[gpui::test]
+    fn escape_keeps_the_folder_when_focus_is_outside_the_confirmation(cx: &mut TestAppContext) {
+        let mut harness = open_confirmation(cx);
+        harness.focus_workspace();
+
+        harness.window.simulate_keystrokes("escape");
+
+        assert!(!harness.is_open());
+        assert!(harness.folder_exists());
+    }
+
+    #[gpui::test]
+    fn a_backdrop_click_keeps_the_folder(cx: &mut TestAppContext) {
+        let mut harness = open_confirmation(cx);
+
+        click_backdrop(harness.window);
+
+        assert!(!harness.is_open());
+        assert!(harness.folder_exists());
     }
 }
