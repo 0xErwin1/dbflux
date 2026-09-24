@@ -778,6 +778,9 @@ document:
       query_history: 查询历史
       explain_query: 解释查询
       open_in_chart: 在图表文档中打开当前查询
+    vim:
+      normal: "普通"
+      insert: "插入"
     output:
       running: 正在执行…
       stopped: 已停止
@@ -2700,6 +2703,11 @@ settings:
       option:
         system: 跟随系统
       notice: 语言更改将在重启 DBFlux 后生效。
+    editor:
+      group: "编辑器"
+    vim_mode:
+      label: "在代码编辑器中使用 Vim 模式"
+      hint: "普通模式与插入模式：h、j、k、l 和 Enter 移动光标，i 进入插入模式，Esc 返回普通模式，x 删除一个字符，u 撤销。保存后应用于已打开的编辑器。"
     restore_session:
       label: 启动时恢复会话
     reopen_connections:

@@ -778,6 +778,9 @@ document:
       query_history: Historial de consultas
       explain_query: Explicar consulta
       open_in_chart: Abrir la consulta actual en un documento de gráfico
+    vim:
+      normal: "NORMAL"
+      insert: "INSERTAR"
     output:
       running: "Ejecutando..."
       stopped: Detenido
@@ -2700,6 +2703,11 @@ settings:
       option:
         system: Sistema
       notice: Los cambios de idioma se aplican al reiniciar DBFlux.
+    editor:
+      group: "Editor"
+    vim_mode:
+      label: "Modo Vim en los editores de código"
+      hint: "Modos Normal e Insertar: h, j, k, l y Enter mueven el cursor, i inserta, Esc vuelve a Normal, x borra un carácter, u deshace. Se aplica a los editores abiertos al guardar."
     restore_session:
       label: Restaurar la sesión al iniciar
     reopen_connections:

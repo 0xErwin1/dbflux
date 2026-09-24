@@ -42,6 +42,12 @@ effect. Partial catalogs fall back to English for untranslated general UI text.
 This release only translates the General section; the rest of the UI is being
 converted crate by crate and stays in English for now.
 
+### Editor
+
+| Setting | Default | What it does |
+|---------|---------|--------------|
+| **Vim mode in code editors** | Off | Modal editing in code editors: Normal and Insert modes with `h`, `j`, `k`, `l`, `i`, `Escape`, `x`, and `u`. Applies to open editors when you save. See the Vim mode section of the [Usage Guide](USAGE.md) keyboard reference. |
+
 ### Startup & session
 
 | Setting | Default | What it does |
