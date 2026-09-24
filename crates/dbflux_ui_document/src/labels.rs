@@ -4671,7 +4671,6 @@ mod tests {
             "document.chart.status.task_label",
             "document.chart.toast.chart_saved",
             "document.chart.toast.save_failed",
-            "document.chart.toast.png_export_coming",
             "document.chart.error.source",
             "document.chart.error.no_connection_selected",
             "document.chart.error.connection_not_found",

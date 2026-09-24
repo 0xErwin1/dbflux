@@ -67,9 +67,6 @@ chart:
     source_doc: SOURCE DOC
     quick_actions: QUICK ACTIONS
     show_in_tree: Show in tree
-    annotate: Annotate
-    copy_as_query: Copy as query
-    coming_soon: Coming soon
 common:
   time_range:
     error:
@@ -719,7 +716,6 @@ document:
     toast:
       chart_saved: Chart saved
       save_failed: "Failed to save chart: %{error}"
-      png_export_coming: "PNG export coming in v0.7"
     error:
       source: "Chart source error: %{error}"
       no_connection_selected: No connection selected
@@ -915,7 +911,6 @@ document:
         last_hour: Last 1 hour
     configure:
       action:
-        export_png: Export PNG
         stats: Stats
       apply: Apply
       bindings_hint: Run the chart at least once to configure bindings.
@@ -1144,7 +1139,6 @@ document:
         trigger: Export
         save_as_file: Save as file
         copy_to_clipboard: Copy to clipboard
-        png_coming_soon: "PNG export coming in v0.7 — %{detail}"
         format:
           csv: CSV
           json_pretty: "JSON (pretty)"
