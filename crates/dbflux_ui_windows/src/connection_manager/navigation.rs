@@ -730,7 +730,11 @@ impl FormFocus {
             SettingsRefreshInterval => SettingsConfirmDangerous,
             SettingsConfirmDangerous => SettingsRequiresWhere,
             SettingsRequiresWhere => SettingsRequiresPreview,
-            SettingsRequiresPreview => {
+            SettingsRequiresPreview => SettingsPreConnectHookExtra,
+            SettingsPreConnectHookExtra => SettingsPostConnectHookExtra,
+            SettingsPostConnectHookExtra => SettingsPreDisconnectHookExtra,
+            SettingsPreDisconnectHookExtra => SettingsPostDisconnectHookExtra,
+            SettingsPostDisconnectHookExtra => {
                 if driver_field_count > 0 {
                     SettingsDriverField(0)
                 } else {
@@ -760,13 +764,17 @@ impl FormFocus {
             SettingsConfirmDangerous => SettingsRefreshInterval,
             SettingsRequiresWhere => SettingsConfirmDangerous,
             SettingsRequiresPreview => SettingsRequiresWhere,
-            SettingsDriverField(0) => SettingsRequiresPreview,
+            SettingsPreConnectHookExtra => SettingsRequiresPreview,
+            SettingsPostConnectHookExtra => SettingsPreConnectHookExtra,
+            SettingsPreDisconnectHookExtra => SettingsPostConnectHookExtra,
+            SettingsPostDisconnectHookExtra => SettingsPreDisconnectHookExtra,
+            SettingsDriverField(0) => SettingsPostDisconnectHookExtra,
             SettingsDriverField(idx) => SettingsDriverField(idx - 1),
             TestConnection => {
                 if driver_field_count > 0 {
                     SettingsDriverField(driver_field_count - 1)
                 } else {
-                    SettingsRequiresPreview
+                    SettingsPostDisconnectHookExtra
                 }
             }
             Save => TestConnection,
@@ -871,11 +879,17 @@ impl ConnectionManagerWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        use super::render_driver_select::{GridDirection, move_grid_focus, visible_drivers};
+        use super::render_driver_select::{
+            GRID_COLUMNS, GridDirection, move_grid_focus, visible_drivers, visible_section_sizes,
+        };
 
         let query = self.current_driver_filter(cx);
         let visible = visible_drivers(&self.available_drivers, &query);
         let count = visible.len();
+
+        let section_sizes = visible_section_sizes(&visible);
+        let current = self.driver_focus.index();
+        let step = |direction| move_grid_focus(&section_sizes, GRID_COLUMNS, current, direction);
 
         match command {
             Command::FocusSearch => {
@@ -896,37 +910,37 @@ impl ConnectionManagerWindow {
                 }
             }
             Command::SelectNext => {
-                let next = move_grid_focus(count, self.driver_focus.index(), GridDirection::Down);
+                let next = step(GridDirection::Down);
                 self.driver_focus = DriverFocus::Index(next);
                 cx.notify();
                 true
             }
             Command::SelectPrev => {
-                let next = move_grid_focus(count, self.driver_focus.index(), GridDirection::Up);
+                let next = step(GridDirection::Up);
                 self.driver_focus = DriverFocus::Index(next);
                 cx.notify();
                 true
             }
             Command::FocusLeft | Command::ColumnLeft => {
-                let next = move_grid_focus(count, self.driver_focus.index(), GridDirection::Left);
+                let next = step(GridDirection::Left);
                 self.driver_focus = DriverFocus::Index(next);
                 cx.notify();
                 true
             }
             Command::FocusRight | Command::ColumnRight => {
-                let next = move_grid_focus(count, self.driver_focus.index(), GridDirection::Right);
+                let next = step(GridDirection::Right);
                 self.driver_focus = DriverFocus::Index(next);
                 cx.notify();
                 true
             }
             Command::FocusUp => {
-                let next = move_grid_focus(count, self.driver_focus.index(), GridDirection::Up);
+                let next = step(GridDirection::Up);
                 self.driver_focus = DriverFocus::Index(next);
                 cx.notify();
                 true
             }
             Command::FocusDown => {
-                let next = move_grid_focus(count, self.driver_focus.index(), GridDirection::Down);
+                let next = step(GridDirection::Down);
                 self.driver_focus = DriverFocus::Index(next);
                 cx.notify();
                 true
@@ -1428,6 +1442,10 @@ impl ConnectionManagerWindow {
             &self.access.input_ssm_instance_id,
             &self.access.input_ssm_region,
             &self.access.input_ssm_remote_port,
+            &self.settings_tab.conn_pre_hook_extra_input,
+            &self.settings_tab.conn_post_hook_extra_input,
+            &self.settings_tab.conn_pre_disconnect_hook_extra_input,
+            &self.settings_tab.conn_post_disconnect_hook_extra_input,
         ];
 
         #[cfg(feature = "mcp")]
@@ -1613,7 +1631,13 @@ impl ConnectionManagerWindow {
             },
             ActiveTab::Settings => match self.form_focus {
                 SettingsRefreshPolicy | SettingsRefreshInterval => 0,
-                SettingsConfirmDangerous | SettingsRequiresWhere | SettingsRequiresPreview => 1,
+                SettingsConfirmDangerous
+                | SettingsRequiresWhere
+                | SettingsRequiresPreview
+                | SettingsPreConnectHookExtra
+                | SettingsPostConnectHookExtra
+                | SettingsPreDisconnectHookExtra
+                | SettingsPostDisconnectHookExtra => 1,
                 SettingsDriverField(idx) => 2 + idx as usize,
                 _ => 0,
             },
@@ -2071,6 +2095,17 @@ impl ConnectionManagerWindow {
             | FormFocus::SettingsRequiresPreview => {
                 // These are dropdowns — no toggle action needed in navigate mode
             }
+            FormFocus::SettingsPreConnectHookExtra
+            | FormFocus::SettingsPostConnectHookExtra
+            | FormFocus::SettingsPreDisconnectHookExtra
+            | FormFocus::SettingsPostDisconnectHookExtra => {
+                if let Some(input) = self.settings_hook_extra_input(self.form_focus).cloned() {
+                    self.edit_state = EditState::Editing;
+                    input.update(cx, |state, cx| {
+                        state.focus(window, cx);
+                    });
+                }
+            }
 
             FormFocus::SettingsDriverField(idx) => {
                 if let Some(field) = self.settings_driver_field_def(idx) {
@@ -2524,6 +2559,43 @@ mod tests {
         assert_eq!(
             FormFocus::ProxyEditInSettings.up_proxy(state),
             FormFocus::ProxySelector
+        );
+    }
+
+    // --- Settings tab ---
+
+    const SETTINGS_HOOK_EXTRA_ORDER: [FormFocus; 6] = [
+        FormFocus::SettingsRequiresPreview,
+        FormFocus::SettingsPreConnectHookExtra,
+        FormFocus::SettingsPostConnectHookExtra,
+        FormFocus::SettingsPreDisconnectHookExtra,
+        FormFocus::SettingsPostDisconnectHookExtra,
+        FormFocus::SettingsDriverField(0),
+    ];
+
+    #[test]
+    fn settings_down_walks_the_hook_extra_inputs_before_driver_fields() {
+        for pair in SETTINGS_HOOK_EXTRA_ORDER.windows(2) {
+            assert_eq!(pair[0].down_settings(2), pair[1], "down from {:?}", pair[0]);
+        }
+    }
+
+    #[test]
+    fn settings_up_walks_the_hook_extra_inputs_back_to_the_overrides() {
+        for pair in SETTINGS_HOOK_EXTRA_ORDER.windows(2) {
+            assert_eq!(pair[1].up_settings(2), pair[0], "up from {:?}", pair[1]);
+        }
+    }
+
+    #[test]
+    fn settings_hook_extra_inputs_border_the_actions_without_driver_fields() {
+        assert_eq!(
+            FormFocus::SettingsPostDisconnectHookExtra.down_settings(0),
+            FormFocus::TestConnection
+        );
+        assert_eq!(
+            FormFocus::TestConnection.up_settings(0),
+            FormFocus::SettingsPostDisconnectHookExtra
         );
     }
 

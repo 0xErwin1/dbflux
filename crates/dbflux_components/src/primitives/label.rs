@@ -55,7 +55,14 @@ impl RenderOnce for Label {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
         let label = Self::build_text(self.text, self.color_override);
 
-        let mut el = div().flex().items_center().gap(gpui::px(2.0)).child(label);
+        // A text flex item's automatic minimum width is its unwrapped width, so
+        // without `min_w_0` a label longer than its column overflows it instead
+        // of wrapping.
+        let mut el = div()
+            .flex()
+            .items_center()
+            .gap(gpui::px(2.0))
+            .child(div().min_w_0().child(label));
 
         if self.required {
             el = el.child(RequiredMarker::new());

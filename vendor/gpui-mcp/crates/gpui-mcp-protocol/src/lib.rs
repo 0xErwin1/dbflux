@@ -945,6 +945,14 @@ pub enum Operation {
         /// Stable semantic node identifier.
         node_id: String,
     },
+    /// Set the value of one element from the current semantic frame through its
+    /// accessibility `SetValue` action, without moving focus or using an input handler.
+    SetValue {
+        /// Stable semantic node identifier.
+        node_id: String,
+        /// Replacement value, bounded like typed text.
+        value: String,
+    },
     /// Wait without polling until a newer semantic tree is published.
     WaitForTree {
         /// Return immediately when the current generation is newer than this value.
@@ -958,9 +966,15 @@ pub enum Operation {
         after_frame_count: u64,
         /// Maximum wait duration from one through 30,000 milliseconds.
         timeout_ms: u64,
+        /// Wait until a newer frame has also been presented to the platform window, not only
+        /// painted. Only [`Operation::Refresh`] advances the presented-frame token, so send one
+        /// before waiting. Absent means `false`, which keeps the root-paint behavior.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        presented: bool,
     },
     /// Request a new GPUI frame and return the last completed-frame token observed before the
-    /// refresh was scheduled.
+    /// refresh was scheduled. Once the refreshed frame has been presented, the presented-frame
+    /// token that [`Operation::WaitForFrame`] waits on with `presented` passes that value.
     Refresh,
     /// Return current GPUI client-area geometry for native region capture.
     GetWindowGeometry,
@@ -1135,7 +1149,7 @@ impl WireResponse {
 mod tests {
     use super::{
         AppId, Capabilities, EndpointDescriptor, InstanceId, LocalEndpoint, NativeWindowId,
-        PROTOCOL_VERSION, Point, ProcessId, Rect, RequestId, WireResponse,
+        Operation, PROTOCOL_VERSION, Point, ProcessId, Rect, RequestId, WireResponse,
     };
 
     #[test]
@@ -1212,6 +1226,38 @@ mod tests {
         let parsed: EndpointDescriptor = serde_json::from_value(value)?;
 
         assert_eq!(parsed, descriptor);
+        Ok(())
+    }
+
+    /// A frame wait that does not ask for presentation keeps the wire shape it had
+    /// before the `presented` field existed, in both directions.
+    #[test]
+    fn frame_wait_without_presentation_keeps_its_wire_shape() -> Result<(), serde_json::Error> {
+        let legacy = serde_json::json!({
+            "kind": "wait_for_frame",
+            "after_frame_count": 4,
+            "timeout_ms": 100
+        });
+        let parsed: Operation = serde_json::from_value(legacy.clone())?;
+        assert_eq!(
+            parsed,
+            Operation::WaitForFrame {
+                after_frame_count: 4,
+                timeout_ms: 100,
+                presented: false,
+            }
+        );
+        assert_eq!(serde_json::to_value(&parsed)?, legacy);
+
+        let presented = serde_json::to_value(Operation::WaitForFrame {
+            after_frame_count: 4,
+            timeout_ms: 100,
+            presented: true,
+        })?;
+        assert_eq!(
+            presented.get("presented"),
+            Some(&serde_json::Value::Bool(true))
+        );
         Ok(())
     }
 

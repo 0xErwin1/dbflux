@@ -37,12 +37,16 @@ bridge's exact protocol version.
   commit, so the bridge and the gpui hooks it calls come from one upstream snapshot.
 - License: Apache-2.0. `LICENSE` is upstream's license file, copied verbatim.
 - Contents: `crates/gpui-mcp/`, `crates/gpui-mcp-protocol/`, `crates/gpui-mcp-server/` and
-  `crates/gpui-mcp-capture/` as they are at that commit, with `dbflux-port.patch` applied.
-  `refresh.sh` rebuilds exactly this tree.
+  `crates/gpui-mcp-capture/` as they are at that commit, with `dbflux-port.patch`,
+  `text-input-automation.patch` and then `screenshot-freshness.patch` applied. `refresh.sh`
+  rebuilds exactly this tree.
 
 ## The DBFlux delta
 
-`dbflux-port.patch` changes only the four `Cargo.toml` files. No Rust source is modified.
+Three patches, applied in this order. `dbflux-port.patch` changes only the four `Cargo.toml`
+files. `text-input-automation.patch` and `screenshot-freshness.patch` are the only changes to
+Rust source and are described in [Text input automation](#text-input-automation) and
+[Screenshot freshness](#screenshot-freshness) below.
 
 - Package metadata. Upstream inherits `version`, `edition`, `license`, `repository` and
   `homepage` from its own workspace root, which is not vendored. Inheriting from DBFlux's
@@ -63,6 +67,64 @@ bridge's exact protocol version.
   newer gpui's separate `gpui_platform` crate). They stay in the tree unbuilt. Without this,
   both fail on any machine with a desktop session; on a headless one they skip themselves.
 - Lints: see below.
+
+### Text input automation
+
+`text-input-automation.patch` was written for DBFlux against this directory with
+`dbflux-port.patch` applied, and has no upstream counterpart. It depends on
+`Window::set_observed_element_value` and `Window::has_input_handler`, which
+`vendor/gpui-pre/text-input-automation.patch` adds. Five files, 428 diff lines.
+
+A text input rendered by gpui-component is addressed by the element id of its `Input` frame,
+whose focus handle is not the one the platform input handler belongs to. Upstream's
+`set_text` focuses the node and replaces text through the active input handler, so on such an
+input it finds no handler; and the frame has no click listener, so `click_element` refuses it.
+
+- `gpui-mcp-protocol`: a new `Operation::SetValue { node_id, value }`.
+- `gpui-mcp`: `SetValue` calls `Window::set_observed_element_value`, which runs the node's
+  accessibility `SetValue` listener, and fails with `Unsupported` when the node has none. It
+  is validated like `Focus` (node id) and `TypeText` (text size). `ReplaceText` now reports
+  "focused element has no active text input handler" when there is no handler, and keeps
+  the document-range message for a handler that cannot expose its range.
+- `gpui-mcp-server`: `set_text`, and `set_value` on text inputs, send `SetValue` when the
+  node advertises the `SetValue` action and settle a frame, with no focus step. Other
+  editable nodes keep upstream's focus-then-`ReplaceText` path. `click_element` and
+  `double_click_element` also accept a node with the `SetText` action and click its bounds
+  center, which focuses the editor for `type_text`. Other nodes keep the `Click` check.
+
+### Screenshot freshness
+
+`screenshot-freshness.patch` was written for DBFlux against this directory with the first two
+patches applied, and has no upstream counterpart. It needs no change to `vendor/gpui-pre`.
+Six files, 1078 diff lines.
+
+Upstream settles a screenshot on a frame that has finished root paint. GPUI reports that from
+inside `Window::draw`, before `Window::present` hands the frame to the platform window, and on
+Linux the capture was a single X11 `GetImage`, so a screenshot taken right after an action
+could show the previous frame.
+
+- `gpui-mcp-protocol`: `Operation::WaitForFrame` gains `presented`. It defaults to `false` and
+  is serialized only when `true`, so a request without it keeps the root-paint behavior and its
+  wire shape.
+- `gpui-mcp`: `Refresh` registers a GPUI next-frame callback that registers a second one. GPUI
+  runs next-frame callbacks at the start of a frame request, before that request draws and
+  presents, so the second callback runs at the start of the request after the one that drew
+  the refreshed frame, once that frame's `present` has returned. It advances a presented-frame
+  token, and `WaitForFrame` with `presented` waits on that token instead of on root paint.
+  Only `Refresh` advances the token.
+- `gpui-mcp-server`: the settle step used before a screenshot and after input (`Refresh` then
+  `WaitForFrame`, twice) waits with `presented`. A new `wait_for_idle` tool checks every
+  250 ms and succeeds once the semantic tree generation has not changed and the window has
+  drawn at most one frame over two consecutive checks, so the 500 ms caret blink of a focused
+  input still counts as idle. Each check waits for a newer tree with `WaitForTree`, so an
+  unchanged tree is not transferred. `timeout_ms` defaults to 5000 and must be between 500
+  and 30000.
+- `gpui-mcp-capture`: on Linux a screenshot samples the window every 16 ms until two
+  consecutive captures are identical, within the settle deadline (one second by default, plus
+  the measured cost of one readback, as for the Windows freshness samples). At the deadline it
+  returns the newest sample instead of failing, so a blinking caret or a spinner does not make
+  a screenshot fail. Windows and macOS keep upstream's behavior, and video recording does not
+  use this path.
 
 ### Dependencies the server and capture crates add
 
@@ -125,8 +187,8 @@ without `indexing_slicing`. **Keep those two tables in step with the root when t
 workspace lints change.** Each site is bounded by the surrounding code, and rewriting them
 to `.get()` would be a refactor of upstream code for no behavior change:
 
-- `gpui-mcp`: five sites in library code (`src/registry.rs` lines 430, 531 and 568,
-  `src/service.rs` lines 1413 and 1414) and more in its tests: a slice up to the current
+- `gpui-mcp`: five sites in library code (`src/registry.rs` lines 483, 584 and 621,
+  `src/service.rs` lines 1457 and 1458) and more in its tests: a slice up to the current
   enumerate index, a position recorded from the same vector, a key taken from the map's own
   order list, a nibble indexing a 16-entry table.
 - `gpui-mcp-server`: three sites in the binary (`src/recording.rs` lines 514, 576 and 616)
@@ -148,9 +210,9 @@ installs the bridge, still follows AGENTS.md.
   process that no longer exists during discovery; lines 558, 561, 602 and 1053 silence
   parameters unused on the current platform. Its integration tests have five more, each
   killing a child process during test cleanup.
-- `gpui-mcp-capture`, `src/lib.rs`: two sites. Line 482 (Windows only) drops a failed
-  `try_send` of a capture-closed notice to a receiver that may be gone; line 688 silences a
-  parameter unused outside Windows.
+- `gpui-mcp-capture`, `src/lib.rs`: two sites. Line 486 (Windows only) drops a failed
+  `try_send` of a capture-closed notice to a receiver that may be gone; line 697 silences a
+  parameter unused outside Windows and Linux.
 
 ## CI
 
@@ -174,8 +236,8 @@ vendor/gpui-mcp/refresh.sh <full commit SHA>
 ```
 
 The script downloads that commit, rebuilds `crates/` and `LICENSE` from it and re-applies
-`dbflux-port.patch`, leaving a `.rej` file next to any manifest hunk that no longer
-applies. Refresh `vendor/gpui-pre/frame-observer.patch` from the same commit first (see
+`dbflux-port.patch`, `text-input-automation.patch` and then `screenshot-freshness.patch`,
+leaving a `.rej` file next to any hunk that no longer applies. Refresh `vendor/gpui-pre/frame-observer.patch` from the same commit first (see
 `vendor/gpui-pre/VENDOR.md`); the bridge calls the hooks that patch adds.
 
 Afterwards, update the commit in this file and re-check:

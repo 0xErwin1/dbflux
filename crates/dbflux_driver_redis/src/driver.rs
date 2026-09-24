@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 use std::sync::Mutex;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use std::sync::Arc;
 
@@ -1242,11 +1242,12 @@ impl RedisConnection {
     /// `SCAN` is unroutable against a `ClusterConnection` (redis-rs has no
     /// single-node "current" concept for it, unlike single-key commands).
     ///
-    /// The page budget (`request.limit`, defaulting to 100) is split evenly
-    /// across the masters still pending this round, rounded up so every
-    /// node gets at least one slot per page. Each node's returned cursor is
-    /// tracked independently and round-tripped via `ClusterScanCursor`; the
-    /// overall scan is exhausted once every node has reported cursor 0.
+    /// Pending masters are scanned in turn, each one until the page holds
+    /// `request.limit` keys (defaulting to 100) or that node reports cursor
+    /// 0, under one `ScanBudget` shared by the whole page. Each node's
+    /// returned cursor is tracked independently and round-tripped via
+    /// `ClusterScanCursor`; the overall scan is exhausted once every node
+    /// has reported cursor 0.
     fn scan_keys_cluster(&self, request: &KeyScanRequest) -> Result<KeyScanPage, DbError> {
         validate_cluster_database(request.keyspace)?;
 
@@ -1283,61 +1284,57 @@ impl RedisConnection {
             });
         }
 
-        let total_limit = if request.limit == 0 {
-            100
-        } else {
-            request.limit
-        } as usize;
-        let addresses = cursor_state.addresses();
-        let per_node_count = total_limit.div_ceil(addresses.len()).max(1) as u32;
+        let limit = key_page_limit(request.limit);
+        let filter = request
+            .filter
+            .as_deref()
+            .filter(|filter| !filter.is_empty());
 
-        let mut entries = Vec::new();
+        let mut budget = ScanBudget::for_key_page();
+        let mut page = ScanPageKeys::default();
 
-        for address in &addresses {
-            let (host, port) = split_host_port(address)?;
-            let node_cursor = cursor_state.cursor_for(address);
-
-            let mut command = redis::cmd("SCAN");
-            command.arg(node_cursor);
-
-            if let Some(filter) = request.filter.as_ref()
-                && !filter.is_empty()
-            {
-                command.arg("MATCH").arg(filter);
+        for address in cursor_state.addresses() {
+            if budget.has_started() && (page.len() >= limit || budget.is_exhausted()) {
+                break;
             }
 
-            command.arg("COUNT").arg(per_node_count);
+            let (host, port) = split_host_port(&address)?;
+            let node_cursor = cursor_state.cursor_for(&address);
 
-            let value = conn
-                .route_command(
-                    &command,
-                    RoutingInfo::SingleNode(SingleNodeRoutingInfo::ByAddress { host, port }),
-                )
-                .map_err(|e| format_redis_query_error(&e))?;
+            let next_cursor =
+                fill_scan_page(node_cursor, limit, &mut budget, &mut page, |batch_cursor| {
+                    let routing = RoutingInfo::SingleNode(SingleNodeRoutingInfo::ByAddress {
+                        host: host.clone(),
+                        port,
+                    });
 
-            let (next_cursor, keys): (u64, Vec<String>) =
-                redis::FromRedisValue::from_redis_value(&value)
-                    .map_err(|e| format_redis_query_error(&e))?;
+                    let value = conn
+                        .route_command(&scan_command(batch_cursor, filter, limit), routing)
+                        .map_err(|e| format_redis_query_error(&e))?;
 
-            cursor_state.record_result(address, next_cursor);
+                    redis::FromRedisValue::from_redis_value(&value)
+                        .map_err(|e| format_redis_query_error(&e))
+                })?;
 
-            // Each key routes to its own node by slot through `ConnectionLike`
-            // dispatch regardless of which master's SCAN page produced it, so
-            // this works unchanged from the standalone TYPE lookup below.
-            for key in keys {
-                let type_name = redis::cmd("TYPE")
-                    .arg(&key)
-                    .query::<String>(conn)
-                    .map_err(|e| format_redis_query_error(&e))?;
-
-                entries.push(KeyEntry {
-                    key,
-                    key_type: Some(parse_key_type(&type_name)),
-                    ttl_seconds: None,
-                    size_bytes: None,
-                });
-            }
+            cursor_state.record_result(&address, next_cursor);
         }
+
+        // The cluster pipeline routes each TYPE to the master that owns the
+        // key's slot and sends one pipeline per node.
+        let keys = page.into_keys();
+        let type_names = if keys.is_empty() {
+            Vec::new()
+        } else {
+            let mut pipeline = redis::cluster::cluster_pipe();
+            for key in &keys {
+                pipeline.cmd("TYPE").arg(key);
+            }
+
+            pipeline
+                .query::<Vec<String>>(conn)
+                .map_err(|e| format_redis_query_error(&e))?
+        };
+        let entries = key_entries_with_types(keys, type_names)?;
 
         Ok(KeyScanPage {
             entries,
@@ -1745,44 +1742,39 @@ impl KeyValueApi for RedisConnection {
             .parse::<u64>()
             .map_err(|_| DbError::InvalidProfile("Invalid key scan cursor".to_string()))?;
 
-        let count = if request.limit == 0 {
-            100
-        } else {
-            request.limit
-        };
+        let limit = key_page_limit(request.limit);
+        let filter = request
+            .filter
+            .as_deref()
+            .filter(|filter| !filter.is_empty());
 
+        // Budget and page are created inside the closure so a Sentinel retry
+        // restarts the page from `cursor` with a fresh budget.
         self.with_connection(request.keyspace, |conn| {
-            let mut command = redis::cmd("SCAN");
-            command.arg(cursor);
+            let mut budget = ScanBudget::for_key_page();
+            let mut page = ScanPageKeys::default();
 
-            if let Some(filter) = request.filter.as_ref()
-                && !filter.is_empty()
-            {
-                command.arg("MATCH").arg(filter);
-            }
+            let next_cursor =
+                fill_scan_page(cursor, limit, &mut budget, &mut page, |batch_cursor| {
+                    scan_command(batch_cursor, filter, limit)
+                        .query::<(u64, Vec<String>)>(conn)
+                        .map_err(|e| format_redis_query_error(&e))
+                })?;
 
-            command.arg("COUNT").arg(count);
+            let keys = page.into_keys();
+            let type_names = if keys.is_empty() {
+                Vec::new()
+            } else {
+                let mut pipeline = redis::pipe();
+                for key in &keys {
+                    pipeline.cmd("TYPE").arg(key);
+                }
 
-            let (next_cursor, keys): (u64, Vec<String>) = command
-                .query(conn)
-                .map_err(|e| format_redis_query_error(&e))?;
-
-            let entries = keys
-                .into_iter()
-                .map(|key| {
-                    let type_name = redis::cmd("TYPE")
-                        .arg(&key)
-                        .query::<String>(conn)
-                        .map_err(|e| format_redis_query_error(&e))?;
-
-                    Ok(KeyEntry {
-                        key,
-                        key_type: Some(parse_key_type(&type_name)),
-                        ttl_seconds: None,
-                        size_bytes: None,
-                    })
-                })
-                .collect::<Result<Vec<_>, DbError>>()?;
+                pipeline
+                    .query::<Vec<String>>(conn)
+                    .map_err(|e| format_redis_query_error(&e))?
+            };
+            let entries = key_entries_with_types(keys, type_names)?;
 
             let next_cursor = if next_cursor == 0 {
                 None
@@ -3187,6 +3179,157 @@ fn fetch_key_payload(
     }
 }
 
+/// Page size used when a key scan request asks for 0 keys.
+const DEFAULT_KEY_PAGE_LIMIT: usize = 100;
+
+/// Most `SCAN` round trips one key page may spend before it is returned
+/// short, with its cursor still pending.
+const KEY_PAGE_MAX_SCAN_ROUND_TRIPS: usize = 1000;
+
+/// Longest one key page may spend scanning before it is returned short,
+/// with its cursor still pending. The connection mutex is held throughout.
+const KEY_PAGE_MAX_SCAN_DURATION: Duration = Duration::from_millis(500);
+
+fn key_page_limit(requested: u32) -> usize {
+    if requested == 0 {
+        DEFAULT_KEY_PAGE_LIMIT
+    } else {
+        requested as usize
+    }
+}
+
+/// Builds `SCAN <cursor> [MATCH <filter>] COUNT <count>`.
+fn scan_command(cursor: u64, filter: Option<&str>, count: usize) -> redis::Cmd {
+    let mut command = redis::cmd("SCAN");
+    command.arg(cursor);
+
+    if let Some(filter) = filter {
+        command.arg("MATCH").arg(filter);
+    }
+
+    command.arg("COUNT").arg(count);
+    command
+}
+
+/// Pairs page keys with the `TYPE` replies fetched for them, in order.
+fn key_entries_with_types(
+    keys: Vec<String>,
+    type_names: Vec<String>,
+) -> Result<Vec<KeyEntry>, DbError> {
+    if keys.len() != type_names.len() {
+        return Err(DbError::query_failed(format!(
+            "Redis returned {} TYPE replies for {} scanned keys",
+            type_names.len(),
+            keys.len()
+        )));
+    }
+
+    let entries = keys
+        .into_iter()
+        .zip(type_names)
+        .map(|(key, type_name)| KeyEntry {
+            key,
+            key_type: Some(parse_key_type(&type_name)),
+            ttl_seconds: None,
+            size_bytes: None,
+        })
+        .collect();
+
+    Ok(entries)
+}
+
+/// Round-trip and wall-clock allowance for filling one key page, so a sparse
+/// `MATCH` over a large keyspace cannot hold the connection indefinitely.
+struct ScanBudget {
+    max_round_trips: usize,
+    max_duration: Duration,
+    started: Instant,
+    round_trips: usize,
+}
+
+impl ScanBudget {
+    fn new(max_round_trips: usize, max_duration: Duration) -> Self {
+        Self {
+            max_round_trips,
+            max_duration,
+            started: Instant::now(),
+            round_trips: 0,
+        }
+    }
+
+    fn for_key_page() -> Self {
+        Self::new(KEY_PAGE_MAX_SCAN_ROUND_TRIPS, KEY_PAGE_MAX_SCAN_DURATION)
+    }
+
+    fn record_round_trip(&mut self) {
+        self.round_trips += 1;
+    }
+
+    fn has_started(&self) -> bool {
+        self.round_trips > 0
+    }
+
+    fn is_exhausted(&self) -> bool {
+        self.round_trips >= self.max_round_trips || self.started.elapsed() >= self.max_duration
+    }
+}
+
+/// Keys collected for one page, in first-seen order and without the
+/// duplicates `SCAN` is allowed to return.
+#[derive(Default)]
+struct ScanPageKeys {
+    keys: Vec<String>,
+    seen: HashSet<String>,
+}
+
+impl ScanPageKeys {
+    fn extend(&mut self, batch: Vec<String>) {
+        for key in batch {
+            if self.seen.insert(key.clone()) {
+                self.keys.push(key);
+            }
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.keys.len()
+    }
+
+    fn into_keys(self) -> Vec<String> {
+        self.keys
+    }
+}
+
+/// Fills `page` from consecutive `SCAN` batches starting at `start_cursor`
+/// and returns the cursor to resume from (0 once the scan is complete).
+///
+/// Always issues at least one batch, then stops as soon as the page holds
+/// `limit` keys, the cursor returns to 0, or `budget` is exhausted. A batch
+/// that is empty but carries a non-zero cursor does not end the page. Every
+/// key of the last batch is kept even when that overshoots `limit`, because
+/// the returned cursor has already moved past them.
+fn fill_scan_page(
+    start_cursor: u64,
+    limit: usize,
+    budget: &mut ScanBudget,
+    page: &mut ScanPageKeys,
+    mut scan_batch: impl FnMut(u64) -> Result<(u64, Vec<String>), DbError>,
+) -> Result<u64, DbError> {
+    let mut cursor = start_cursor;
+
+    loop {
+        let (next_cursor, batch) = scan_batch(cursor)?;
+        budget.record_round_trip();
+
+        page.extend(batch);
+        cursor = next_cursor;
+
+        if cursor == 0 || page.len() >= limit || budget.is_exhausted() {
+            return Ok(cursor);
+        }
+    }
+}
+
 fn parse_key_type(type_name: &str) -> KeyType {
     let normalized = type_name.trim().to_ascii_lowercase();
 
@@ -3476,6 +3619,189 @@ mod tests {
         SemanticPlanKind, SemanticRequest, TableBrowseRequest, TableRef, ValidationResult,
     };
 
+    fn generous_scan_budget() -> ScanBudget {
+        ScanBudget::new(1000, Duration::from_secs(60))
+    }
+
+    /// Replays scripted `SCAN` replies in order and records the cursor each
+    /// call was issued with.
+    fn scripted_scan<'a>(
+        replies: Vec<(u64, Vec<&'static str>)>,
+        requested_cursors: &'a mut Vec<u64>,
+    ) -> impl FnMut(u64) -> Result<(u64, Vec<String>), DbError> + 'a {
+        let mut replies = replies.into_iter();
+
+        move |cursor| {
+            requested_cursors.push(cursor);
+
+            let (next_cursor, keys) = replies
+                .next()
+                .ok_or_else(|| DbError::query_failed("unexpected extra SCAN call"))?;
+
+            Ok((next_cursor, keys.into_iter().map(String::from).collect()))
+        }
+    }
+
+    #[test]
+    fn fill_scan_page_continues_past_empty_batches_until_a_match() -> Result<(), DbError> {
+        let mut requested_cursors = Vec::new();
+        let mut budget = generous_scan_budget();
+        let mut page = ScanPageKeys::default();
+
+        let next_cursor = fill_scan_page(
+            0,
+            1,
+            &mut budget,
+            &mut page,
+            scripted_scan(
+                vec![(7, vec![]), (12, vec![]), (19, vec!["leaderboard:weekly"])],
+                &mut requested_cursors,
+            ),
+        )?;
+
+        assert_eq!(next_cursor, 19);
+        assert_eq!(requested_cursors, vec![0, 7, 12]);
+        assert_eq!(page.into_keys(), vec!["leaderboard:weekly".to_string()]);
+        Ok(())
+    }
+
+    #[test]
+    fn fill_scan_page_drops_keys_repeated_across_batches() -> Result<(), DbError> {
+        let mut requested_cursors = Vec::new();
+        let mut budget = generous_scan_budget();
+        let mut page = ScanPageKeys::default();
+
+        let next_cursor = fill_scan_page(
+            0,
+            10,
+            &mut budget,
+            &mut page,
+            scripted_scan(
+                vec![(4, vec!["a", "b"]), (0, vec!["b", "c", "a"])],
+                &mut requested_cursors,
+            ),
+        )?;
+
+        assert_eq!(next_cursor, 0);
+        assert_eq!(
+            page.into_keys(),
+            vec!["a".to_string(), "b".to_string(), "c".to_string()]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn fill_scan_page_stops_when_cursor_returns_to_zero() -> Result<(), DbError> {
+        let mut requested_cursors = Vec::new();
+        let mut budget = generous_scan_budget();
+        let mut page = ScanPageKeys::default();
+
+        let next_cursor = fill_scan_page(
+            5,
+            100,
+            &mut budget,
+            &mut page,
+            scripted_scan(vec![(0, vec!["only"])], &mut requested_cursors),
+        )?;
+
+        assert_eq!(next_cursor, 0);
+        assert_eq!(requested_cursors, vec![5]);
+        assert_eq!(page.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn fill_scan_page_returns_pending_cursor_at_round_trip_cap() -> Result<(), DbError> {
+        let mut requested_cursors = Vec::new();
+        let mut budget = ScanBudget::new(3, Duration::from_secs(60));
+        let mut page = ScanPageKeys::default();
+
+        let next_cursor = fill_scan_page(
+            0,
+            10,
+            &mut budget,
+            &mut page,
+            scripted_scan(
+                vec![(1, vec![]), (2, vec![]), (3, vec![]), (4, vec!["late"])],
+                &mut requested_cursors,
+            ),
+        )?;
+
+        assert_eq!(next_cursor, 3);
+        assert_eq!(requested_cursors, vec![0, 1, 2]);
+        assert_eq!(page.len(), 0);
+        assert!(budget.is_exhausted());
+        Ok(())
+    }
+
+    #[test]
+    fn fill_scan_page_runs_one_batch_when_time_budget_is_already_spent() -> Result<(), DbError> {
+        let mut requested_cursors = Vec::new();
+        let mut budget = ScanBudget::new(1000, Duration::ZERO);
+        let mut page = ScanPageKeys::default();
+
+        let next_cursor = fill_scan_page(
+            0,
+            10,
+            &mut budget,
+            &mut page,
+            scripted_scan(vec![(8, vec![]), (9, vec![])], &mut requested_cursors),
+        )?;
+
+        assert_eq!(next_cursor, 8);
+        assert_eq!(requested_cursors, vec![0]);
+        Ok(())
+    }
+
+    #[test]
+    fn fill_scan_page_keeps_every_key_of_the_last_batch() -> Result<(), DbError> {
+        let mut requested_cursors = Vec::new();
+        let mut budget = generous_scan_budget();
+        let mut page = ScanPageKeys::default();
+
+        let next_cursor = fill_scan_page(
+            0,
+            2,
+            &mut budget,
+            &mut page,
+            scripted_scan(
+                vec![(6, vec!["a"]), (11, vec!["b", "c", "d"]), (0, vec!["e"])],
+                &mut requested_cursors,
+            ),
+        )?;
+
+        assert_eq!(next_cursor, 11);
+        assert_eq!(
+            page.into_keys(),
+            vec![
+                "a".to_string(),
+                "b".to_string(),
+                "c".to_string(),
+                "d".to_string()
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn fill_scan_page_propagates_batch_errors() {
+        let mut budget = generous_scan_budget();
+        let mut page = ScanPageKeys::default();
+
+        let outcome = fill_scan_page(0, 10, &mut budget, &mut page, |_cursor| {
+            Err(DbError::query_failed("scan failed"))
+        });
+
+        assert!(outcome.is_err());
+    }
+
+    #[test]
+    fn key_entries_with_types_rejects_mismatched_reply_count() {
+        let outcome = key_entries_with_types(vec!["a".to_string()], Vec::new());
+
+        assert!(outcome.is_err());
+    }
+
     #[test]
     fn gate_decision_allows_fetch_when_size_under_budget() {
         assert_eq!(gate_decision(50, Some(100)), SizeGateDecision::Fetch);
@@ -3586,6 +3912,40 @@ mod tests {
             Some("")
         );
         assert_eq!(values.get("additional_nodes").map(String::as_str), Some(""));
+    }
+
+    #[test]
+    fn topology_is_a_single_choice_field_that_loads_saved_profiles_unchanged() {
+        let driver = RedisDriver::new();
+        let topology_field = driver
+            .form_definition()
+            .field("topology")
+            .expect("redis form must declare a topology field");
+
+        let FormFieldKind::Select { options } = &topology_field.kind else {
+            panic!("topology must be a single-choice Select field");
+        };
+        let option_values: Vec<&str> = options.iter().map(|opt| opt.value.as_str()).collect();
+        assert_eq!(option_values, ["standalone", "cluster", "sentinel"]);
+        assert_eq!(topology_field.default_value, "standalone");
+
+        for saved_topology in [None, Some("standalone"), Some("cluster"), Some("sentinel")] {
+            let mut config = base_redis_config();
+            if let DbConfig::Redis { topology, .. } = &mut config {
+                *topology = saved_topology.map(str::to_string);
+            }
+
+            let values = driver.extract_values(&config);
+            let loaded = values
+                .get("topology")
+                .expect("extract_values must always emit a topology value");
+
+            assert_eq!(loaded, saved_topology.unwrap_or("standalone"));
+            assert!(
+                option_values.contains(&loaded.as_str()),
+                "saved topology {saved_topology:?} must select one of the form options"
+            );
+        }
     }
 
     #[test]

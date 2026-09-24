@@ -1223,6 +1223,7 @@ impl Sidebar {
                 }
                 Err(error) => {
                     state.finish_pending_operation(profile_id, None);
+                    state.record_connect_failure(profile_id, error.clone());
                     Err((error, true))
                 }
             }
@@ -1261,6 +1262,7 @@ impl Sidebar {
         }
 
         let (task_id, cancel_token) = self.app_state.update(cx, |state, cx| {
+            state.clear_connect_failure(profile_id);
             let result = state.start_task(
                 TaskKind::Connect,
                 crate::labels::pipeline_connecting_task_label(&profile_name),
@@ -1420,6 +1422,7 @@ impl Sidebar {
                         app_state.update(cx, |state, cx| {
                             state.cancel_detached_hook_tasks(profile_id);
                             state.fail_task(task_id, error.clone());
+                            state.record_connect_failure(profile_id, error.clone());
                             state.finish_pending_operation(profile_id, None);
                             cx.emit(dbflux_ui_base::AppStateChanged);
                         });
@@ -1461,6 +1464,10 @@ impl Sidebar {
                                 task_id,
                                 crate::labels::connection_hook_cancelled_task_label(),
                             );
+                            state.record_connect_failure(
+                                profile_id,
+                                crate::labels::connection_cancelled_by_hook_toast_label(),
+                            );
                             state.finish_pending_operation(profile_id, None);
                             cx.emit(dbflux_ui_base::AppStateChanged);
                         });
@@ -1489,7 +1496,9 @@ impl Sidebar {
             let output = match pipeline_result {
                 Ok(output) => output,
                 Err(pipeline_error) => {
-                    if pipeline_error.stage == "cancelled" {
+                    let was_cancelled = pipeline_error.stage == "cancelled";
+
+                    if was_cancelled {
                         let _ = state_tx.send(dbflux_core::PipelineState::Cancelled);
                     } else {
                         let _ = state_tx.send(dbflux_core::PipelineState::Failed {
@@ -1531,6 +1540,9 @@ impl Sidebar {
                         app_state.update(cx, |state, cx| {
                             state.cancel_detached_hook_tasks(profile_id);
                             state.fail_task(task_id, error_msg.clone());
+                            if !was_cancelled {
+                                state.record_connect_failure(profile_id, error_msg.clone());
+                            }
                             state.finish_pending_operation(profile_id, None);
                             cx.emit(dbflux_ui_base::AppStateChanged);
                         });
@@ -1636,6 +1648,7 @@ impl Sidebar {
                         app_state.update(cx, |state, cx| {
                             state.cancel_detached_hook_tasks(profile_id);
                             state.fail_task(task_id, error.clone());
+                            state.record_connect_failure(profile_id, error.clone());
                             state.finish_pending_operation(profile_id, None);
                             cx.emit(dbflux_ui_base::AppStateChanged);
                         });
@@ -1678,6 +1691,7 @@ impl Sidebar {
                         app_state.update(cx, |state, cx| {
                             state.cancel_detached_hook_tasks(profile_id);
                             state.fail_task(task_id, error.clone());
+                            state.record_connect_failure(profile_id, error.clone());
                             state.finish_pending_operation(profile_id, None);
                             cx.emit(dbflux_ui_base::AppStateChanged);
                         });
@@ -1718,6 +1732,10 @@ impl Sidebar {
                             state.fail_task(
                                 task_id,
                                 crate::labels::post_connect_hook_cancelled_task_label(),
+                            );
+                            state.record_connect_failure(
+                                profile_id,
+                                crate::labels::connection_cancelled_by_post_connect_hook_toast_label(),
                             );
                             state.finish_pending_operation(profile_id, None);
                             cx.emit(dbflux_ui_base::AppStateChanged);

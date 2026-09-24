@@ -14,17 +14,22 @@ mod column_mapping;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use dbflux_components::composites::{RailItem, render_wizard_rail};
+use dbflux_components::composites::{
+    RailItem, WIZARD_MODAL_HEIGHT_FRACTION, WIZARD_MODAL_WIDTH, render_wizard_progress_bar,
+    render_wizard_rail, wizard_progress_fraction,
+};
 use dbflux_components::controls::{Button, Dropdown, DropdownItem, DropdownSelectionChanged};
 use dbflux_components::icons::AppIcon;
 use dbflux_components::primitives::Text;
 use dbflux_components::tokens::Spacing;
-use dbflux_core::{Connection, DriverCapabilities, TaskId, TaskKind, TaskStatus, TaskTarget};
-use dbflux_transfer::TableTransferStatus;
+use dbflux_core::{
+    CancelToken, Connection, DriverCapabilities, TaskId, TaskKind, TaskStatus, TaskTarget,
+};
 use dbflux_transfer::import::{
     ImportOptions, ImportOutcome, ImportTablePlan, ImportedTable, run_import,
 };
 use dbflux_transfer::manifest::read_manifest;
+use dbflux_transfer::{TableTransferStatus, TransferError};
 use dbflux_ui_base::app_state_entity::{AppStateChanged, AppStateEntity};
 use dbflux_ui_base::modal_frame::ModalFrame;
 use dbflux_ui_base::toast::Toast;
@@ -75,6 +80,107 @@ fn import_rail_items(step: WizardStep) -> Vec<RailItem> {
         .collect()
 }
 
+/// The terminal action to apply to the run's task registry entry.
+enum RunTaskAction {
+    Complete,
+    Cancel,
+    Fail(String),
+}
+
+/// The fully-resolved outcome of an import run: the task action, an optional
+/// user-facing error to report, whether to toast success, and the Done
+/// screen's summary and status lines. Computed once so the task-finalization
+/// path and the UI-reflection path agree even if the wizard entity is dropped
+/// between them (mirrors the export wizard's resolution).
+struct RunResolution {
+    task_action: RunTaskAction,
+    report: Option<String>,
+    toast_success: bool,
+    summary: String,
+    warnings: Vec<String>,
+}
+
+/// Maps a finished `run_import` call onto its [`RunResolution`]. A cancelled
+/// run is neither a failure nor a success: the task ends cancelled, nothing is
+/// reported as an error, and the Done screen states how many rows were
+/// already written — the engine commits each chunk that was in flight when
+/// the cancel arrived, so those rows stay in the target.
+fn resolve_run_outcome(result: Result<ImportOutcome, TransferError>) -> RunResolution {
+    match result {
+        Ok(outcome) if outcome.cancelled => {
+            let mut warnings = vec![dbflux_i18n::t!(
+                "document.import_wizard.done.cancelled_rows",
+                rows = imported_row_count(&outcome.tables)
+            )];
+            warnings.extend(outcome.warnings.iter().cloned());
+
+            RunResolution {
+                task_action: RunTaskAction::Cancel,
+                report: None,
+                toast_success: false,
+                summary: dbflux_i18n::t!("document.import_wizard.toast.cancelled"),
+                warnings,
+            }
+        }
+        Ok(outcome) => {
+            let failed_table = outcome.tables.iter().find_map(|t| match &t.status {
+                TableTransferStatus::Failed { error } => {
+                    Some((t.source_table.clone(), error.clone()))
+                }
+                _ => None,
+            });
+
+            let summary = ImportWizard::summarize(&outcome);
+            let warnings = ImportWizard::itemized_status_lines(&outcome.tables, &outcome.warnings);
+
+            match failed_table {
+                Some((table, error)) => RunResolution {
+                    task_action: RunTaskAction::Fail(format!("{table}: {error}")),
+                    report: Some(dbflux_i18n::t!(
+                        "document.import_wizard.toast.table_failed",
+                        table = table,
+                        error = error
+                    )),
+                    toast_success: false,
+                    summary,
+                    warnings,
+                },
+                None => RunResolution {
+                    task_action: RunTaskAction::Complete,
+                    report: None,
+                    toast_success: true,
+                    summary,
+                    warnings,
+                },
+            }
+        }
+        Err(e) => {
+            let message =
+                dbflux_i18n::t!("document.import_wizard.toast.failed", error = e.to_string());
+
+            RunResolution {
+                task_action: RunTaskAction::Fail(e.to_string()),
+                report: Some(message.clone()),
+                toast_success: false,
+                summary: message,
+                warnings: Vec::new(),
+            }
+        }
+    }
+}
+
+/// Rows written across every table that reached `Completed`, including the
+/// partially loaded table a cancel stopped.
+fn imported_row_count(tables: &[ImportedTable]) -> u64 {
+    tables
+        .iter()
+        .map(|t| match &t.status {
+            TableTransferStatus::Completed { rows } => *rows,
+            _ => 0,
+        })
+        .sum()
+}
+
 /// One table row's live controls, wrapping the pure [`TableImportConfig`]
 /// with the `Dropdown` entities the user adjusts it through. Item lists are
 /// static (source/target column names don't change once the folder is
@@ -106,6 +212,9 @@ pub struct ImportWizard {
     loading: bool,
     running: bool,
     progress: Arc<Mutex<(u64, Option<u64>)>>,
+    /// The running import's cancel token, shared with its Tasks-panel entry;
+    /// `Some` only while a run is in flight.
+    cancel_token: Option<CancelToken>,
     active_task_id: Option<TaskId>,
     result_summary: Option<String>,
     result_warnings: Vec<String>,
@@ -129,6 +238,7 @@ impl ImportWizard {
             loading: false,
             running: false,
             progress: Arc::new(Mutex::new((0, None))),
+            cancel_token: None,
             active_task_id: None,
             result_summary: None,
             result_warnings: Vec::new(),
@@ -158,6 +268,7 @@ impl ImportWizard {
         self.confirmed_destructive = false;
         self.loading = false;
         self.running = false;
+        self.cancel_token = None;
         self.active_task_id = None;
         self.result_summary = None;
         self.result_warnings.clear();
@@ -480,13 +591,14 @@ impl ImportWizard {
             pair
         });
         self.active_task_id = Some(task_id);
+        self.cancel_token = Some(cancel_token.clone());
 
         let app_state = self.app_state.clone();
         let progress = Arc::clone(&self.progress);
         let ticker_progress = Arc::clone(&self.progress);
         let ticker_app_state = app_state.clone();
 
-        cx.spawn(async move |_this, cx| {
+        cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor()
                     .timer(std::time::Duration::from_millis(150))
@@ -519,6 +631,11 @@ impl ImportWizard {
                 if !still_running {
                     break;
                 }
+
+                // The app-state notify above only refreshes the Tasks panel;
+                // re-render the wizard so its own row counter and progress
+                // bar advance while the run is in flight.
+                this.update(cx, |_this, cx| cx.notify()).ok();
             }
         })
         .detach();
@@ -548,77 +665,59 @@ impl ImportWizard {
                 })
                 .await;
 
+            let RunResolution {
+                task_action,
+                report,
+                toast_success,
+                summary,
+                warnings,
+            } = resolve_run_outcome(import_result);
+
+            // The task must reach a terminal state and any failure must reach
+            // the foreground even if the wizard entity was dropped, so
+            // finalize through the app directly, never gated on `this`.
+            cx.update(|cx| {
+                app_state.update(cx, |state, cx| {
+                    match &task_action {
+                        RunTaskAction::Complete => state.complete_task(task_id),
+                        RunTaskAction::Cancel => {
+                            state.tasks_mut().cancel(task_id);
+                        }
+                        RunTaskAction::Fail(message) => state.fail_task(task_id, message.clone()),
+                    }
+                    cx.emit(AppStateChanged);
+                });
+
+                if let Some(message) = &report {
+                    report_error(UserFacingError::new(ErrorKind::Driver, message.clone()), cx);
+                }
+                if toast_success {
+                    Toast::success(dbflux_i18n::t!("document.import_wizard.toast.completed"))
+                        .push(cx);
+                }
+            });
+
             this.update(cx, |this, cx| {
                 this.running = false;
+                this.cancel_token = None;
                 this.step = WizardStep::Done;
-
-                match import_result {
-                    Ok(outcome) if outcome.cancelled => {
-                        app_state.update(cx, |state, cx| {
-                            state.tasks_mut().cancel(task_id);
-                            cx.emit(AppStateChanged);
-                        });
-                        this.result_summary =
-                            Some(dbflux_i18n::t!("document.import_wizard.toast.cancelled"));
-                    }
-                    Ok(outcome) => {
-                        let failed_table = outcome.tables.iter().find_map(|t| match &t.status {
-                            TableTransferStatus::Failed { error } => {
-                                Some((t.source_table.clone(), error.clone()))
-                            }
-                            _ => None,
-                        });
-
-                        if let Some((table, error)) = &failed_table {
-                            app_state.update(cx, |state, cx| {
-                                state.fail_task(task_id, format!("{table}: {error}"));
-                                cx.emit(AppStateChanged);
-                            });
-                            report_error(
-                                UserFacingError::new(
-                                    ErrorKind::Driver,
-                                    dbflux_i18n::t!(
-                                        "document.import_wizard.toast.table_failed",
-                                        table = table,
-                                        error = error
-                                    ),
-                                ),
-                                cx,
-                            );
-                        } else {
-                            app_state.update(cx, |state, cx| {
-                                state.complete_task(task_id);
-                                cx.emit(AppStateChanged);
-                            });
-                            Toast::success(dbflux_i18n::t!(
-                                "document.import_wizard.toast.completed"
-                            ))
-                            .push(cx);
-                        }
-
-                        this.result_summary = Some(Self::summarize(&outcome));
-                        this.result_warnings =
-                            Self::itemized_status_lines(&outcome.tables, &outcome.warnings);
-                    }
-                    Err(e) => {
-                        app_state.update(cx, |state, cx| {
-                            state.fail_task(task_id, e.to_string());
-                            cx.emit(AppStateChanged);
-                        });
-                        let message = dbflux_i18n::t!(
-                            "document.import_wizard.toast.failed",
-                            error = e.to_string()
-                        );
-                        report_error(UserFacingError::new(ErrorKind::Driver, message.clone()), cx);
-                        this.result_summary = Some(message);
-                    }
-                }
-
+                this.result_summary = Some(summary);
+                this.result_warnings = warnings;
                 cx.notify();
             })
             .ok();
         })
         .detach();
+    }
+
+    /// Requests cancellation of the running import. The engine checks the
+    /// token before each chunk, so the chunk already in flight is written and
+    /// committed, and no later chunk or table is started.
+    fn cancel_run(&mut self, cx: &mut Context<Self>) {
+        if let Some(token) = &self.cancel_token {
+            token.cancel();
+        }
+        cx.notify();
     }
 
     fn summarize(outcome: &ImportOutcome) -> String {
@@ -637,14 +736,7 @@ impl ImportWizard {
             .iter()
             .filter(|t| matches!(t.status, TableTransferStatus::Failed { .. }))
             .count();
-        let rows: u64 = outcome
-            .tables
-            .iter()
-            .map(|t| match &t.status {
-                TableTransferStatus::Completed { rows } => *rows,
-                _ => 0,
-            })
-            .sum();
+        let rows = imported_row_count(&outcome.tables);
 
         crate::labels::import_summary_label(completed, rows, skipped, failed)
     }
@@ -690,8 +782,9 @@ impl Render for ImportWizard {
         let mut frame = ModalFrame::new("import-wizard", &self.focus_handle, close)
             .title(dbflux_i18n::t!("document.import_wizard.title"))
             .icon(AppIcon::Download)
-            .width(px(720.0))
-            .max_height(px(640.0));
+            .width(WIZARD_MODAL_WIDTH)
+            .height_fraction(WIZARD_MODAL_HEIGHT_FRACTION)
+            .center_vertically();
 
         frame = frame.child(self.render_body(cx));
         frame.render(cx).into_any_element()
@@ -709,7 +802,7 @@ impl ImportWizard {
             WizardStep::PickFolder => self.render_pick_folder(cx),
             WizardStep::Configure => self.render_configure(cx),
             WizardStep::Confirm => self.render_confirm(cx),
-            WizardStep::Running => self.render_running(),
+            WizardStep::Running => self.render_running(cx),
             WizardStep::Done => self.render_done(cx),
         };
 
@@ -864,8 +957,13 @@ impl ImportWizard {
             .into_any_element()
     }
 
-    fn render_running(&self) -> AnyElement {
+    fn render_running(&self, cx: &mut Context<Self>) -> AnyElement {
         let (rows_done, estimated_total) = *self.progress.lock().unwrap_or_else(|p| p.into_inner());
+        let fraction = wizard_progress_fraction(rows_done, estimated_total);
+        let cancel_requested = self
+            .cancel_token
+            .as_ref()
+            .is_none_or(CancelToken::is_cancelled);
         let label = match estimated_total {
             Some(total) if total > 0 => dbflux_i18n::t!(
                 "document.import_wizard.running.progress.of_total",
@@ -887,6 +985,20 @@ impl ImportWizard {
                 "document.import_wizard.running.title"
             )))
             .child(Text::caption(label))
+            .when_some(fraction, |d, fraction| {
+                d.child(render_wizard_progress_bar(fraction, cx))
+            })
+            .child(
+                div().flex().justify_end().child(
+                    Button::new(
+                        "import-wizard-cancel-run",
+                        dbflux_i18n::t!("document.import_wizard.running.cancel"),
+                    )
+                    .ghost()
+                    .disabled(cancel_requested)
+                    .on_click(cx.listener(|this, _, _, cx| this.cancel_run(cx))),
+                ),
+            )
             .into_any_element()
     }
 
@@ -918,9 +1030,14 @@ mod tests {
     // `use super::*` would re-glob the parent module's `use gpui::*`, and
     // combining that wildcard with `#[gpui::test]` blows rustc's macro
     // recursion limit in this crate — import only what the tests need.
-    use super::{AppStateEntity, ImportWizard, TableImportConfig, WizardStep};
-    use dbflux_transfer::TableMappingMode;
+    use super::{
+        AppStateEntity, ImportWizard, RunTaskAction, TableImportConfig, WizardStep,
+        resolve_run_outcome,
+    };
+    use dbflux_core::CancelToken;
+    use dbflux_transfer::import::{ImportOutcome, ImportedTable};
     use dbflux_transfer::manifest::ManifestTable;
+    use dbflux_transfer::{TableMappingMode, TableTransferStatus, TransferError};
     use dbflux_ui_base::toast::{ToastGlobal, ToastHost};
     use gpui::{AppContext, Entity};
 
@@ -1017,5 +1134,129 @@ mod tests {
             confirmed,
             "the explicit Yes-proceed action must set the confirm flag"
         );
+    }
+
+    fn imported(name: &str, status: TableTransferStatus) -> ImportedTable {
+        ImportedTable {
+            source_table: name.to_string(),
+            target_table: name.to_string(),
+            status,
+        }
+    }
+
+    fn outcome(tables: Vec<ImportedTable>, cancelled: bool) -> ImportOutcome {
+        ImportOutcome {
+            tables,
+            warnings: Vec::new(),
+            cancelled,
+        }
+    }
+
+    /// A cancelled run ends its task as cancelled, never as a failure or a
+    /// success, and tells the user how many rows were already written.
+    #[test]
+    fn resolve_run_outcome_cancelled_run_cancels_the_task_and_reports_rows_written() {
+        let result = Ok(outcome(
+            vec![
+                imported("users", TableTransferStatus::Completed { rows: 500 }),
+                imported("orders", TableTransferStatus::Completed { rows: 20 }),
+                imported("line_items", TableTransferStatus::NotStarted),
+            ],
+            true,
+        ));
+
+        let resolution = resolve_run_outcome(result);
+
+        assert!(matches!(resolution.task_action, RunTaskAction::Cancel));
+        assert!(resolution.report.is_none());
+        assert!(!resolution.toast_success);
+        assert_eq!(resolution.summary, "Import cancelled");
+        assert_eq!(
+            resolution.warnings,
+            vec!["520 row(s) were imported before the import stopped.".to_string()]
+        );
+    }
+
+    #[test]
+    fn resolve_run_outcome_all_success_completes_the_task_and_toasts() {
+        let result = Ok(outcome(
+            vec![imported(
+                "users",
+                TableTransferStatus::Completed { rows: 3 },
+            )],
+            false,
+        ));
+
+        let resolution = resolve_run_outcome(result);
+
+        assert!(matches!(resolution.task_action, RunTaskAction::Complete));
+        assert!(resolution.report.is_none());
+        assert!(resolution.toast_success);
+        assert_eq!(
+            resolution.summary,
+            "Imported 1 table(s), 3 row(s) total (0 skipped)"
+        );
+    }
+
+    #[test]
+    fn resolve_run_outcome_table_failure_fails_the_task_and_reports_once() {
+        let result = Ok(outcome(
+            vec![
+                imported("users", TableTransferStatus::Completed { rows: 3 }),
+                imported(
+                    "orders",
+                    TableTransferStatus::Failed {
+                        error: "constraint violation".to_string(),
+                    },
+                ),
+            ],
+            false,
+        ));
+
+        let resolution = resolve_run_outcome(result);
+
+        match resolution.task_action {
+            RunTaskAction::Fail(ref message) => {
+                assert_eq!(message, "orders: constraint violation");
+            }
+            _ => panic!("a per-table failure must fail the task"),
+        }
+        assert_eq!(
+            resolution.report.as_deref(),
+            Some("Import failed on table 'orders': constraint violation")
+        );
+        assert!(!resolution.toast_success);
+    }
+
+    #[test]
+    fn resolve_run_outcome_engine_error_fails_the_task_and_reports_once() {
+        let result: Result<ImportOutcome, TransferError> =
+            Err(TransferError::Sink("disk full".to_string()));
+
+        let resolution = resolve_run_outcome(result);
+
+        assert!(matches!(resolution.task_action, RunTaskAction::Fail(_)));
+        assert_eq!(
+            resolution.report.as_deref(),
+            Some("Import failed: sink error: disk full")
+        );
+        assert!(!resolution.toast_success);
+    }
+
+    /// The running step's Cancel trips the same token the engine and the
+    /// Tasks panel entry share.
+    #[gpui::test]
+    fn cancel_run_cancels_the_running_import_token(cx: &mut gpui::TestAppContext) {
+        init_test_runtime(cx);
+        let app_state = isolated_test_app_state(cx);
+        let wizard = cx.update(|cx| cx.new(|cx| ImportWizard::new(app_state, cx)));
+        let token = CancelToken::new();
+
+        wizard.update(cx, |this, cx| {
+            this.cancel_token = Some(token.clone());
+            this.cancel_run(cx);
+        });
+
+        assert!(token.is_cancelled());
     }
 }

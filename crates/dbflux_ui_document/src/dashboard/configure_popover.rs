@@ -1,7 +1,7 @@
 //! Per-panel Configure popover for the dashboard.
 //!
 //! Surfaces three sections behind a modal shell so per-panel configuration
-//! (chart kind, axis bindings, stats/PNG actions) is reachable from the kebab
+//! (chart kind, axis bindings, stats action) is reachable from the kebab
 //! menu without polluting the chrome of every embedded chart panel.
 //!
 //! All operations route through `ChartDocument` public accessors so the
@@ -260,9 +260,6 @@ fn render_actions_row(panel_index: usize, cx: &mut Context<DashboardDocument>) -
     let on_stats = cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
         this.configure_toggle_stats(panel_index, cx);
     });
-    let on_png = cx.listener(move |this, _: &gpui::ClickEvent, _, cx| {
-        this.configure_export_png(panel_index, cx);
-    });
 
     div()
         .flex()
@@ -274,13 +271,6 @@ fn render_actions_row(panel_index: usize, cx: &mut Context<DashboardDocument>) -
                 dbflux_i18n::t!("document.dashboard.configure.action.stats"),
             )
             .on_click(on_stats),
-        )
-        .child(
-            Button::new(
-                "configure-png",
-                dbflux_i18n::t!("document.dashboard.configure.action.export_png"),
-            )
-            .on_click(on_png),
         )
         .into_any_element()
 }
@@ -353,7 +343,6 @@ mod tests {
             "document.dashboard.configure.apply",
             "document.dashboard.configure.bindings_hint",
             "document.dashboard.configure.action.stats",
-            "document.dashboard.configure.action.export_png",
         ];
         for key in keys {
             for locale in ["en", "es"] {

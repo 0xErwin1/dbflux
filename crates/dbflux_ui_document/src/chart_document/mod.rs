@@ -147,7 +147,7 @@ pub struct ChartDocument {
     /// When `true`, this chart is embedded inside another document (e.g. a
     /// `DashboardDocument` panel) and must suppress its own chrome — the
     /// header segments (title/Run/Save) and the internal chart toolbar row
-    /// (TYPE/Stats/PNG/Save) are not rendered. The host document supplies the
+    /// (TYPE/Stats/Save) are not rendered. The host document supplies the
     /// surrounding chrome instead.
     pub(super) embedded: bool,
 
@@ -1174,8 +1174,8 @@ impl ChartDocument {
     /// a `DashboardDocument` panel).
     ///
     /// When embedded, the chart suppresses its own header segments (title /
-    /// Run / Save) and its internal chart toolbar row (TYPE / Stats / PNG /
-    /// Save chart). The host document provides the surrounding chrome.
+    /// Run / Save) and its internal chart toolbar row (TYPE / Stats / Save
+    /// chart). The host document provides the surrounding chrome.
     pub fn set_embedded(&mut self, embedded: bool, cx: &mut Context<Self>) {
         if self.embedded != embedded {
             self.embedded = embedded;
@@ -1272,16 +1272,6 @@ impl ChartDocument {
             shell.chart_rail_tab = tab;
             cx.notify();
         });
-    }
-
-    /// Schedule a "PNG export coming soon" toast. The host document's render
-    /// loop drains `pending_toast` and surfaces it through the global toast host.
-    pub fn schedule_png_export_toast(&mut self, cx: &mut Context<Self>) {
-        self.pending_toast = Some(PendingToast {
-            message: dbflux_i18n::t!("document.chart.toast.png_export_coming"),
-            is_error: false,
-        });
-        cx.notify();
     }
 
     /// Persist the current `chart_spec` + bindings back to `SavedChart` storage.
@@ -2726,20 +2716,6 @@ mod tests {
         assert_eq!(
             err,
             dbflux_i18n::t!("document.chart.error.collection_source_unsupported")
-        );
-    }
-
-    /// `schedule_png_export_toast` routes its message through the translation
-    /// catalog instead of a hardcoded English literal.
-    #[test]
-    fn png_export_toast_message_is_translated() {
-        assert_eq!(
-            dbflux_i18n::t!("document.chart.toast.png_export_coming"),
-            dbflux_i18n::t!("document.chart.toast.png_export_coming", locale = "en")
-        );
-        assert_ne!(
-            dbflux_i18n::t!("document.chart.toast.png_export_coming", locale = "en"),
-            dbflux_i18n::t!("document.chart.toast.png_export_coming", locale = "es")
         );
     }
 }

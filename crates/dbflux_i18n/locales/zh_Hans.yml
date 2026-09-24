@@ -23,6 +23,7 @@ access:
   proxy_type: 类型
   proxy_host: 地址
   proxy_auth: 认证
+  proxy_auth_basic_with_username: "基本认证（%{username}）"
   proxy_enabled: 已启用
   proxy_no_proxy: 不使用代理
   value_yes: 是
@@ -66,11 +67,14 @@ chart:
     source_doc: 来源文档
     quick_actions: 快捷操作
     show_in_tree: 在树中显示
-    annotate: 标注
-    copy_as_query: 复制为查询语句
-    coming_soon: 即将推出
 common:
   time_range:
+    preset:
+      custom: "自定义…"
+    picker:
+      date_range_placeholder: "选择日期范围"
+      from: "从"
+      to: "至"
     error:
       invalid_selection: 时间选择无效
       ambiguous_local: 本地时间不准确或无效
@@ -510,6 +514,8 @@ diagnostics:
   shutdown_flush_timed_out: "部分编辑可能未写入文件：退出时 DBFlux 未能及时保存。它们已保留在会话存储中以便恢复。"
 document:
   audit:
+    pager:
+      range: "第 %{start}-%{end} 条，共 %{total} %{unit}"
     actor:
       app: 应用
       external_auth_provider: 外部认证提供程序
@@ -557,11 +563,18 @@ document:
       summary: 摘要
       time: 时间
     filter:
+      timezone:
+        local: "本地"
+        utc: "UTC"
       apply: 应用
       clear: 清除
       group_label: 分组：
       loading: 加载中…
       placeholder:
+        search_events: "搜索事件..."
+        filter_events: "筛选事件..."
+        all_time: "全部时间"
+        last_12_hours: "最近 12 小时"
         local: 本地
       retry: 重试
       view_mode:
@@ -643,7 +656,7 @@ document:
       error_detail: "列出存储桶失败：%{error}"
       no_match: "没有符合 %{query} 的存储桶"
       no_buckets: 此连接没有存储桶
-      hint_refresh: r 刷新
+      hint_refresh: "%{key} 刷新"
     delete_confirm:
       title: 删除存储桶？
       body: "%{bucket} 为空，将被删除。此操作无法撤销。"
@@ -718,7 +731,6 @@ document:
     toast:
       chart_saved: 图表已保存
       save_failed: "保存图表失败：%{error}"
-      png_export_coming: PNG 导出将在 v0.7 提供
     error:
       source: "图表源错误：%{error}"
       no_connection_selected: 未选择连接
@@ -766,6 +778,9 @@ document:
       query_history: 查询历史
       explain_query: 解释查询
       open_in_chart: 在图表文档中打开当前查询
+    vim:
+      normal: "普通"
+      insert: "插入"
     output:
       running: 正在执行…
       stopped: 已停止
@@ -914,7 +929,6 @@ document:
         last_hour: 最近 1 小时
     configure:
       action:
-        export_png: 导出 PNG
         stats: 统计
       apply: 应用
       bindings_hint: 请先至少执行一次图表以配置绑定。
@@ -1107,6 +1121,7 @@ document:
           many: "%{count} 处未保存更改"
         save: 保存
         revert: 还原
+        refresh_blocked: 刷新前请先保存或还原未保存的更改
       toolbar:
         refresh: 刷新
         builder: 构建器
@@ -1142,7 +1157,6 @@ document:
         trigger: 导出
         save_as_file: 保存为文件
         copy_to_clipboard: 复制到剪贴板
-        png_coming_soon: "PNG 导出将在 v0.7 提供 — %{detail}"
         format:
           csv: CSV
           json_pretty: JSON（美化）
@@ -1374,6 +1388,8 @@ document:
       continue: 继续
       close: 关闭
   governance:
+    semantics_preview: "请求者：%{requester} | 连接：%{connection} | 分类：%{classification}"
+    pending_actor: "执行者：%{actor}"
     refresh: 刷新待处理项
     no_pending: 无待处理执行
     pending_title: "待处理 %{id}"
@@ -1426,7 +1442,9 @@ document:
       progress:
         of_total: "%{done} / %{total} 行"
         only: "%{done} 行"
+      cancel: 取消
     done:
+      cancelled_rows: "导入停止前已导入 %{rows} 行。"
       close: 关闭
     error:
       no_connection: 此导入没有活动连接
@@ -1551,6 +1569,10 @@ document:
       error:
         background_task_limit: 后台任务运行过多，请稍候
     parsing:
+      preview:
+        binary:
+          one: "%{count} 字节（二进制）"
+          many: "%{count} 字节（二进制）"
       type:
         string: 字符串
         bytes: 字节
@@ -1562,6 +1584,7 @@ document:
         stream: 流
         unknown: ？
     render:
+      size_bytes: "%{size} B"
       delete_key:
         title: 删除键？
         message: "确认删除 %{key}？此操作无法撤销。"
@@ -1582,8 +1605,8 @@ document:
       next: 下一页
       page: "第 %{page} 页"
       keys_count:
-        one: "%{count} 个键"
-        many: "%{count} 个键"
+        one: "本页 %{count} 个键"
+        many: "本页 %{count} 个键"
       filter:
         keys_placeholder: 筛选键…
         members_placeholder: 筛选元素…
@@ -1597,6 +1620,13 @@ document:
         truncated: "部分值 — 已显示 %{returned}，共 %{total}"
         truncated_unknown_total: "部分值 — 已显示 %{returned}"
       decode:
+        choice:
+          auto: "自动"
+          raw: "原始"
+        preview:
+          image:
+            one: "%{count} 字节（图像：%{format}）"
+            many: "%{count} 字节（图像：%{format}）"
         failed: 解码失败
         too_large: 解码后的输出过大
         edit_locked: 切换到原始视图以编辑
@@ -1848,6 +1878,9 @@ document:
         open: 打开
         presign: 预签名
       body:
+        text_kind:
+          json: "JSON"
+          text: "文本"
         decode_failed: "检测为 %{encoding}，但无法解码：%{reason}"
         decode_too_large: "检测为 %{encoding}，但解码后超出 %{limit} 的预览上限。"
         decoded_not_utf8: 解码后的字节不是有效的 UTF-8 文本。
@@ -2000,6 +2033,7 @@ document:
         and: AND
         or: OR
     group_by:
+      managed_select_notice: "分组查询 — SELECT 由系统自动管理"
       heading: 按列分组
       add_column: + 分组列
       aggregates_heading: 聚合项
@@ -2024,6 +2058,11 @@ document:
     mutation:
       preview_placeholder: "-- %{kind}：配置赋值 / 筛选以预览 SQL"
     section:
+      joins: "JOINS"
+      group_by_aggregates: "GROUP BY / 聚合项"
+      having: "HAVING"
+      limit_offset: "LIMIT & OFFSET"
+      set: "SET"
       columns: 列
       execution: 执行
       filters: 筛选
@@ -2318,7 +2357,7 @@ language:
 login:
   window_title: 连接流程
   field:
-    start_url: 起始 URL
+    verification_url: 验证 URL
   action:
     open_browser: 打开浏览器
     copy_url: 复制 URL
@@ -2332,6 +2371,7 @@ login:
   body:
     sign_in_prompt: "使用 %{provider} 登录以继续连接 %{profile}。"
     instructions: 在浏览器中打开登录 URL 并完成认证。登录完成后 DBFlux 将自动继续。
+    waiting: 正在等待你在浏览器中授权…
     elapsed: "登录最多可能需要 5 分钟。已用时：%{seconds}s"
     browser_open_failed: "无法自动打开浏览器。请手动打开该 URL。（%{error}；回退失败：%{fallback_error}）"
   error:
@@ -2509,6 +2549,9 @@ modals:
     dont_save: 不保存
     cancel: 取消
 palette:
+  footer:
+    navigate: "导航"
+    run: "运行"
   search:
     placeholder: 搜索命令、连接、表、脚本…
   empty: 没有匹配项
@@ -2527,6 +2570,7 @@ palette:
     keyspace: 键空间
     script: 脚本
   chart:
+    no_saved_charts: "当前配置文件没有已保存的图表"
     browse_suffix: "[浏览]"
   import_dashboard:
     name: 从 JSON 导入仪表盘…
@@ -2647,6 +2691,10 @@ settings:
     storage:
       group: 存储
     theme:
+      option:
+        ayu_dark: "Ayu 深色"
+        ayu_mirage: "Ayu Mirage"
+        ayu_light: "Ayu 浅色"
       label: 主题
     style:
       label: 样式
@@ -2655,6 +2703,11 @@ settings:
       option:
         system: 跟随系统
       notice: 语言更改将在重启 DBFlux 后生效。
+    editor:
+      group: "编辑器"
+    vim_mode:
+      label: "在代码编辑器中使用 Vim 模式"
+      hint: "普通模式与插入模式：h、j、k、l 和 Enter 移动光标，i 进入插入模式，Esc 返回普通模式，x 删除一个字符，u 撤销。保存后应用于已打开的编辑器。"
     restore_session:
       label: 启动时恢复会话
     reopen_connections:
@@ -2824,6 +2877,27 @@ settings:
       open_saved_chart: 打开图表…
       import_dashboard: 从 JSON 导入仪表盘…
       new_dashboard: 新建仪表盘…
+      preview_document: 预览文档
+      toggle_raw_view: 切换原始 JSON 视图
+      next_match: 下一个匹配项
+      prev_match: 上一个匹配项
+      zoom_in: 放大
+      zoom_out: 缩小
+      pan_left: 向左平移
+      pan_right: 向右平移
+      pan_up: 向上平移
+      pan_down: 向下平移
+      select_table_left: 选择左侧的表
+      select_table_right: 选择右侧的表
+      select_table_up: 选择上方的表
+      select_table_down: 选择下方的表
+      move_table_left: 向左移动表
+      move_table_right: 向右移动表
+      move_table_up: 向上移动表
+      move_table_down: 向下移动表
+      layout_left_right: 左右布局
+      layout_snowflake: 雪花布局
+      layout_compact: 紧凑布局
     context:
       global: 全局
       sidebar: 侧边栏
@@ -2843,6 +2917,7 @@ settings:
       audit: 审计查看器
       event_streams_picker: 事件流选择器
       schema_viz: 架构可视化
+      document_tree: 文档树
     category:
       global: 全局
       focus: 聚焦
@@ -2989,6 +3064,9 @@ settings:
       secret_store_failed: 配置文件的密钥无法存储（操作系统密钥环可能已锁定或不可用），重启后不会保留。
       write_config_failed: "将配置文件写入配置失败：%{error}"
   mcp:
+    badge:
+      active: "活动"
+      inactive: "非活动"
     tool:
       list_connections:
         name: 列出连接
@@ -3319,6 +3397,12 @@ settings:
     discard_dialog:
       body: 您有未保存的代理更改。要放弃它们吗？
   audit:
+    log_level:
+      trace: "跟踪"
+      debug: "调试"
+      info: "信息"
+      warn: "警告"
+      error: "错误"
     placeholder_level: 级别
     section_title: 审计
     section_description: 配置全局审计事件捕获和保留
@@ -3346,7 +3430,7 @@ settings:
     action:
       save: 保存
     status:
-      degraded: 审计处于降级状态（需要重启）
+      degraded: 无法打开审计数据库，审计已暂停。请重启 DBFlux。
       enabled: 审计已启用
       disabled: 审计已禁用
     error:
@@ -3355,7 +3439,7 @@ settings:
       purge_interval_invalid: 后台清理间隔必须是数字
       cannot_enable: 无法启用审计
       cannot_enable_body: 无法启用审计：审计数据库无法打开。请重启应用。如果问题持续存在，请检查 dbflux 数据目录的磁盘空间和文件权限。
-      cannot_enable_copy: 无法启用审计：无法启用审计：审计数据库无法打开。请重启应用。如果问题持续存在，请检查 dbflux 数据目录的磁盘空间和文件权限。
+      cannot_enable_copy: 无法启用审计：审计数据库无法打开。请重启应用。如果问题持续存在，请检查 dbflux 数据目录的磁盘空间和文件权限。
       save_failed: 保存失败
       save_failed_copy: "保存失败：%{error}"
     toast:
@@ -3426,6 +3510,7 @@ sidebar:
     generate_query: 生成查询
     drop_collection: 删除集合
     connect: 连接
+    retry_connect: 重试
     disconnect: 断开连接
     edit: 编辑
     duplicate: 复制
@@ -3449,7 +3534,6 @@ sidebar:
     schema_diff_unsupported: Schema 差异仅适用于关系型连接。
     new_dashboard: 新建仪表盘…
     import_dashboard: 从 JSON 导入仪表盘…
-    new_saved_chart: 新建已保存图表…
     rename_ellipsis: 重命名…
     delete_ellipsis: 删除…
     copy_metric_id: 复制指标 ID
@@ -3594,6 +3678,7 @@ sidebar:
       profile_connecting: "正在连接 %{name}…"
       database_loading: "%{name}（加载中…）"
       error_retry: "错误：%{error} — 点击重试"
+      connect_failed: "连接失败：%{error}"
       remote_listing_count: "%{label}（%{count}）"
       remote_dashboards_error_retry: "错误：%{error} — 折叠再展开以重试"
       used_by_objects:
@@ -3649,10 +3734,14 @@ ssh:
 sso_wizard:
   title: AWS SSO 向导
   step:
-    start: 第 1 步：起始 URL
-    account: 第 2 步：账户
-    role: 第 3 步：角色
-    confirm: 第 4 步：确认
+    start: 起始 URL
+    account: 账户
+    role: 角色
+    confirm: 确认
+  field:
+    profile_name: 配置文件名称
+    start_url: SSO 起始 URL
+    region: 区域
   account:
     hint: 使用 AWS SSO 账户发现中的账户 ID
     discovering: 正在发现账户…
