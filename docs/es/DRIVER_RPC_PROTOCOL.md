@@ -380,6 +380,8 @@ El protocolo también soporta operaciones de browse, CRUD, key-value y generaci�
 de código. Ver `crates/dbflux_ipc/src/driver_protocol.rs` para el conjunto
 completo de enums.
 
+**Ejecución protegida:** ninguna capacidad negociada permite que un driver externo certifique que aplica un límite de filas o un timeout de sentencia, así que las consultas protegidas se rechazan. `IpcConnection` rechaza `Execute` y `ExecuteWithHandle` con `NotSupported` antes de enviar el RPC cuando `QueryRequest.limit` es `Some(n)` (incluido `Some(0)`) o `statement_timeout` es `Some(...)`. El despacho de sesión del host rechaza de forma independiente esas mismas solicitudes con `UnsupportedMethod` antes de invocar la conexión del plugin. Las solicitudes con ambas opciones en `None` siguen funcionando, y las operaciones de exploración y CRUD no se ven afectadas.
+
 ## Emisión de audit desde drivers (v1.2+)
 
 Los drivers que negocian la versión de protocolo v1.2 o superior pueden emitir
