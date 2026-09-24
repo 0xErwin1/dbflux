@@ -18,6 +18,7 @@ use dbflux_components::icons::AppIcon;
 use dbflux_components::modals::schema_drift::{
     ModalSchemaDrift, SchemaDriftContinue, SchemaDriftDismissed, SchemaDriftRefresh,
 };
+use dbflux_components::modals::shell::ModalFocus;
 use dbflux_components::result_panel::ResultPanel;
 use dbflux_components::tokens::{FontSizes, Heights, Radii, Spacing};
 use dbflux_core::observability::actions as audit_actions;
@@ -424,6 +425,10 @@ pub struct CodeDocument {
     layout: SqlQueryLayout,
     focus_handle: FocusHandle,
     focus_mode: SqlQueryFocus,
+    /// Keyboard focus for the multi-statement script confirmation.
+    script_confirm_focus: ModalFocus,
+    /// Keyboard focus for the dangerous query confirmation.
+    dangerous_query_focus: ModalFocus,
     context_bar_slot: ContextBarSlot,
     results_maximized: bool,
 
@@ -1024,6 +1029,8 @@ impl CodeDocument {
             layout: SqlQueryLayout::EditorOnly,
             focus_handle: cx.focus_handle(),
             focus_mode: SqlQueryFocus::Editor,
+            script_confirm_focus: ModalFocus::new(cx),
+            dangerous_query_focus: ModalFocus::new(cx),
             context_bar_slot: ContextBarSlot::Connection,
             results_maximized: false,
             runner,

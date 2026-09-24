@@ -20,6 +20,7 @@ use builder::{DragReorderState, DragResizeState, PanelContextMenu, ResizeAxis};
 use dbflux_app::keymap::{Command, ContextId};
 use dbflux_components::common::time_range::view::{TimeRangeChanged, TimeRangePanel};
 use dbflux_components::controls::{Dropdown, DropdownItem, DropdownSelectionChanged, InputState};
+use dbflux_components::modals::shell::ModalFocus;
 use dbflux_components::saved_chart::{SavedChartRefreshPolicy, TimeRangePreset};
 use dbflux_core::RefreshPolicy;
 use dbflux_ui_base::toast::Toast;
@@ -342,6 +343,9 @@ pub struct DashboardDocument {
     /// `None` means no popover is shown.
     pub(crate) pending_configure_panel_index: Option<usize>,
 
+    /// Keyboard focus for the Configure popover.
+    pub(crate) configure_focus: ModalFocus,
+
     /// Indices of `Divider` panel slots the user has folded shut. Chart panels
     /// positioned between a collapsed divider's `grid_row` and the next
     /// divider's `grid_row` (or the end of the dashboard) are skipped at render
@@ -550,6 +554,7 @@ impl DashboardDocument {
             _refresh_timer: None,
             refresh_dropdown,
             pending_configure_panel_index: None,
+            configure_focus: ModalFocus::new(cx),
             collapsed_divider_indices: HashSet::new(),
             _subscriptions: subscriptions,
         }
@@ -560,6 +565,7 @@ impl DashboardDocument {
     /// Open the per-panel Configure popover for the panel at `panel_index`.
     pub fn start_configure_panel(&mut self, panel_index: usize, cx: &mut Context<Self>) {
         self.pending_configure_panel_index = Some(panel_index);
+        self.configure_focus.focus_on_next_render();
         cx.notify();
     }
 
@@ -567,6 +573,7 @@ impl DashboardDocument {
     pub fn close_configure_panel(&mut self, cx: &mut Context<Self>) {
         if self.pending_configure_panel_index.is_some() {
             self.pending_configure_panel_index = None;
+            self.configure_focus.restore(cx);
             cx.notify();
         }
     }
