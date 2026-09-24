@@ -871,11 +871,17 @@ impl ConnectionManagerWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        use super::render_driver_select::{GridDirection, move_grid_focus, visible_drivers};
+        use super::render_driver_select::{
+            GRID_COLUMNS, GridDirection, move_grid_focus, visible_drivers, visible_section_sizes,
+        };
 
         let query = self.current_driver_filter(cx);
         let visible = visible_drivers(&self.available_drivers, &query);
         let count = visible.len();
+
+        let section_sizes = visible_section_sizes(&visible);
+        let current = self.driver_focus.index();
+        let step = |direction| move_grid_focus(&section_sizes, GRID_COLUMNS, current, direction);
 
         match command {
             Command::FocusSearch => {
@@ -896,37 +902,37 @@ impl ConnectionManagerWindow {
                 }
             }
             Command::SelectNext => {
-                let next = move_grid_focus(count, self.driver_focus.index(), GridDirection::Down);
+                let next = step(GridDirection::Down);
                 self.driver_focus = DriverFocus::Index(next);
                 cx.notify();
                 true
             }
             Command::SelectPrev => {
-                let next = move_grid_focus(count, self.driver_focus.index(), GridDirection::Up);
+                let next = step(GridDirection::Up);
                 self.driver_focus = DriverFocus::Index(next);
                 cx.notify();
                 true
             }
             Command::FocusLeft | Command::ColumnLeft => {
-                let next = move_grid_focus(count, self.driver_focus.index(), GridDirection::Left);
+                let next = step(GridDirection::Left);
                 self.driver_focus = DriverFocus::Index(next);
                 cx.notify();
                 true
             }
             Command::FocusRight | Command::ColumnRight => {
-                let next = move_grid_focus(count, self.driver_focus.index(), GridDirection::Right);
+                let next = step(GridDirection::Right);
                 self.driver_focus = DriverFocus::Index(next);
                 cx.notify();
                 true
             }
             Command::FocusUp => {
-                let next = move_grid_focus(count, self.driver_focus.index(), GridDirection::Up);
+                let next = step(GridDirection::Up);
                 self.driver_focus = DriverFocus::Index(next);
                 cx.notify();
                 true
             }
             Command::FocusDown => {
-                let next = move_grid_focus(count, self.driver_focus.index(), GridDirection::Down);
+                let next = step(GridDirection::Down);
                 self.driver_focus = DriverFocus::Index(next);
                 cx.notify();
                 true
