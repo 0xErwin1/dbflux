@@ -123,10 +123,7 @@ fn pg_relational_filter_single_hop() -> Result<(), DbError> {
         let select =
             dbflux_core::select_query_from_spec(&lowering.spec, dialect).expect("build SQL");
 
-        let mut request = QueryRequest::new(select.sql.clone());
-        request.params = select.params.clone();
-
-        let result = connection.execute(&request)?;
+        let result = connection.execute(&select.to_query_request(dialect))?;
 
         assert_eq!(result.rows.len(), 2, "alice has 2 posts: {}", select.sql);
 
@@ -156,7 +153,7 @@ fn pg_relational_filter_multi_hop() -> Result<(), DbError> {
 
         let dialect = connection.dialect();
         let lowering = dbflux_core::parse_and_resolve(
-            "created_by.organization.name = 'Acme'",
+            "created_by.org.name = 'Acme'",
             source,
             &post_fks,
             dialect,
@@ -168,10 +165,7 @@ fn pg_relational_filter_multi_hop() -> Result<(), DbError> {
         let select =
             dbflux_core::select_query_from_spec(&lowering.spec, dialect).expect("build SQL");
 
-        let mut request = QueryRequest::new(select.sql.clone());
-        request.params = select.params.clone();
-
-        let result = connection.execute(&request)?;
+        let result = connection.execute(&select.to_query_request(dialect))?;
 
         assert_eq!(
             result.rows.len(),
@@ -217,14 +211,8 @@ fn pg_count_parity() -> Result<(), DbError> {
             dbflux_core::select_query_from_spec(&lowering.spec, dialect).expect("build data SQL");
         let count = dbflux_core::count_query_from_spec(&lowering.spec, dialect);
 
-        let mut data_request = QueryRequest::new(select.sql.clone());
-        data_request.params = select.params.clone();
-
-        let mut count_request = QueryRequest::new(count.sql.clone());
-        count_request.params = count.params.clone();
-
-        let data_result = connection.execute(&data_request)?;
-        let count_result = connection.execute(&count_request)?;
+        let data_result = connection.execute(&select.to_query_request(dialect))?;
+        let count_result = connection.execute(&count.to_query_request(dialect))?;
 
         let data_count = data_result.rows.len();
         let count_value = match count_result.rows.first().and_then(|r| r.first()) {
@@ -276,10 +264,7 @@ fn pg_relational_filter_ilike() -> Result<(), DbError> {
         let select =
             dbflux_core::select_query_from_spec(&lowering.spec, dialect).expect("build SQL");
 
-        let mut request = QueryRequest::new(select.sql.clone());
-        request.params = select.params.clone();
-
-        let result = connection.execute(&request)?;
+        let result = connection.execute(&select.to_query_request(dialect))?;
 
         assert_eq!(
             result.rows.len(),

@@ -3,7 +3,8 @@ use std::time::Duration;
 
 use dbflux_components::modals::{MutationConfirmHardRequest, MutationConfirmRequest};
 use dbflux_core::{
-    Connection, FilterNode, QueryRequest, Value, VisualMutationSpec, render_filter_node_sql,
+    Connection, FilterNode, QueryRequest, Value, VisualMutationSpec, inline_params,
+    render_filter_node_sql,
 };
 use dbflux_ui_base::user_error::UserFacingError;
 
@@ -23,7 +24,8 @@ pub enum PendingMutationModal {
 ///
 /// Builds the SELECT using the connection's dialect for correct identifier quoting and
 /// placeholder style. The filter is rendered through `render_filter_node_sql` so the
-/// WHERE clause is valid SQL, not a literal `<filter>` placeholder.
+/// WHERE clause is valid SQL, not a literal `<filter>` placeholder. The filter values are
+/// inlined as dialect literals because drivers do not bind `QueryRequest.params`.
 ///
 /// Returns `(column_names, rows)` on success, or an empty result on failure or timeout.
 /// The deadline is 2 seconds per spec DR-9.
@@ -50,12 +52,11 @@ pub fn fetch_sample_rows(
         }
         _ => format!("SELECT * FROM {} ORDER BY 1 {}", qualified_table, limit),
     };
+    let request = QueryRequest::new(inline_params(&sql, &params, dialect));
 
     let (tx, rx) = std::sync::mpsc::channel();
 
     std::thread::spawn(move || {
-        let mut request = QueryRequest::new(sql);
-        request.params = params;
         let result = connection.execute(&request).ok();
         // The receiver may have already timed out and been dropped; drop the send error.
         let _drop_send = tx.send(result);
@@ -599,6 +600,164 @@ mod tests {
             fn query_generator(&self) -> Option<&dyn dbflux_core::QueryGenerator> {
                 None
             }
+        }
+
+        struct PlaceholderDialect(dbflux_core::PlaceholderStyle);
+
+        static DOLLAR_DIALECT: PlaceholderDialect =
+            PlaceholderDialect(dbflux_core::PlaceholderStyle::DollarNumber);
+        static AT_SIGN_DIALECT: PlaceholderDialect =
+            PlaceholderDialect(dbflux_core::PlaceholderStyle::AtSign);
+
+        impl dbflux_core::SqlDialect for PlaceholderDialect {
+            fn quote_identifier(&self, name: &str) -> String {
+                format!("\"{}\"", name)
+            }
+
+            fn qualified_table(&self, _schema: Option<&str>, table: &str) -> String {
+                self.quote_identifier(table)
+            }
+
+            fn value_to_literal(&self, value: &dbflux_core::Value) -> String {
+                DefaultSqlDialect.value_to_literal(value)
+            }
+
+            fn escape_string(&self, s: &str) -> String {
+                s.replace('\'', "''")
+            }
+
+            fn placeholder_style(&self) -> dbflux_core::PlaceholderStyle {
+                self.0
+            }
+        }
+
+        struct RequestRecordingConnection {
+            meta: dbflux_core::DriverMetadata,
+            dialect: &'static dyn dbflux_core::SqlDialect,
+            requests: Mutex<Vec<dbflux_core::QueryRequest>>,
+        }
+
+        impl RequestRecordingConnection {
+            fn new(dialect: &'static dyn dbflux_core::SqlDialect) -> Arc<Self> {
+                let meta = DriverMetadataBuilder::new(
+                    "recording",
+                    "Recording",
+                    DatabaseCategory::Relational,
+                    QueryLanguage::Sql,
+                )
+                .build();
+                Arc::new(Self {
+                    meta,
+                    dialect,
+                    requests: Mutex::new(Vec::new()),
+                })
+            }
+
+            fn recorded_requests(&self) -> Vec<dbflux_core::QueryRequest> {
+                self.requests.lock().unwrap().clone()
+            }
+        }
+
+        impl dbflux_core::Connection for RequestRecordingConnection {
+            fn metadata(&self) -> &dbflux_core::DriverMetadata {
+                &self.meta
+            }
+            fn ping(&self) -> Result<(), dbflux_core::DbError> {
+                Ok(())
+            }
+            fn close(&mut self) -> Result<(), dbflux_core::DbError> {
+                Ok(())
+            }
+            fn execute(
+                &self,
+                req: &dbflux_core::QueryRequest,
+            ) -> Result<QueryResult, dbflux_core::DbError> {
+                self.requests.lock().unwrap().push(req.clone());
+                Ok(QueryResult::empty())
+            }
+            fn cancel(
+                &self,
+                _handle: &dbflux_core::QueryHandle,
+            ) -> Result<(), dbflux_core::DbError> {
+                Ok(())
+            }
+            fn schema(&self) -> Result<SchemaSnapshot, dbflux_core::DbError> {
+                Err(dbflux_core::DbError::NotSupported("stub".to_string()))
+            }
+            fn kind(&self) -> DbKind {
+                DbKind::Postgres
+            }
+            fn schema_loading_strategy(&self) -> SchemaLoadingStrategy {
+                SchemaLoadingStrategy::SingleDatabase
+            }
+            fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
+                self.dialect
+            }
+        }
+
+        fn filtered_delete_spec() -> VisualMutationSpec {
+            let mut spec = delete_spec("orders");
+            spec.filter = Some(dbflux_core::FilterNode::Predicate(dbflux_core::Predicate {
+                source_alias: "orders".to_string(),
+                column: "status".to_string(),
+                comparator: dbflux_core::Comparator::Eq,
+                value: dbflux_core::PredicateValue::Single(dbflux_core::LiteralValue::Text(
+                    "it's done".to_string(),
+                )),
+                node_id: 0,
+            }));
+            spec
+        }
+
+        fn sample_request_for(
+            dialect: &'static dyn dbflux_core::SqlDialect,
+        ) -> dbflux_core::QueryRequest {
+            let conn = RequestRecordingConnection::new(dialect);
+            let conn_ref = Arc::clone(&conn);
+
+            fetch_sample_rows(
+                conn as Arc<dyn dbflux_core::Connection>,
+                &filtered_delete_spec(),
+                |_| {},
+            );
+
+            let requests = conn_ref.recorded_requests();
+            assert_eq!(requests.len(), 1, "expected exactly one SELECT call");
+            requests.into_iter().next().unwrap()
+        }
+
+        #[test]
+        fn sample_rows_inline_filter_values_for_dollar_placeholders() {
+            let request = sample_request_for(&DOLLAR_DIALECT);
+
+            assert!(
+                !request.sql.contains("$1"),
+                "placeholder must be inlined: {}",
+                request.sql
+            );
+            assert!(
+                request.sql.contains("'it''s done'"),
+                "value must be an escaped literal: {}",
+                request.sql
+            );
+            assert!(request.params.is_empty(), "drivers do not bind params");
+        }
+
+        #[test]
+        fn sample_rows_inline_filter_values_for_at_sign_placeholders() {
+            let request = sample_request_for(&AT_SIGN_DIALECT);
+
+            assert!(
+                !request.sql.contains("@p1"),
+                "placeholder must be inlined: {}",
+                request.sql
+            );
+            assert!(
+                request.sql.contains("it''s done'"),
+                "value must be an escaped literal: {}",
+                request.sql
+            );
+            assert!(request.params.is_empty(), "drivers do not bind params");
         }
 
         fn delete_spec(table: &str) -> VisualMutationSpec {
