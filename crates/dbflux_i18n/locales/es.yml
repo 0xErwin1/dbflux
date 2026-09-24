@@ -3346,7 +3346,7 @@ settings:
     action:
       save: Guardar
     status:
-      degraded: Auditoría degradada (requiere reiniciar)
+      degraded: La auditoría está en pausa porque no se pudo abrir su base de datos. Reinicia DBFlux.
       enabled: Auditoría habilitada
       disabled: Auditoría deshabilitada
     error:
@@ -3355,7 +3355,7 @@ settings:
       purge_interval_invalid: El intervalo de purga debe ser un número
       cannot_enable: La auditoría no se puede habilitar
       cannot_enable_body: "La auditoría no se puede habilitar: no se pudo abrir la base de datos de auditoría. Reinicia la aplicación. Si el problema persiste, revisa el espacio en disco y los permisos de archivo del directorio de datos de dbflux."
-      cannot_enable_copy: "La auditoría no se puede habilitar: La auditoría no se puede habilitar: no se pudo abrir la base de datos de auditoría. Reinicia la aplicación. Si el problema persiste, revisa el espacio en disco y los permisos de archivo del directorio de datos de dbflux."
+      cannot_enable_copy: "La auditoría no se puede habilitar: no se pudo abrir la base de datos de auditoría. Reinicia la aplicación. Si el problema persiste, revisa el espacio en disco y los permisos de archivo del directorio de datos de dbflux."
       save_failed: No se pudo guardar
       save_failed_copy: "No se pudo guardar: %{error}"
     toast:

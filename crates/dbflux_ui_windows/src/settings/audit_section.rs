@@ -7,7 +7,7 @@ use dbflux_app::keymap::Modifiers;
 use dbflux_components::controls::{
     Dropdown, DropdownItem, DropdownSelectionChanged, GpuiInput as Input, InputEvent, InputState,
 };
-use dbflux_components::primitives::Text;
+use dbflux_components::primitives::{StatusDot, StatusDotVariant, Text};
 use dbflux_components::tokens::Radii;
 use dbflux_components::typography::{FieldLabel, SubSectionLabel};
 use dbflux_core::observability::EventSeverity;
@@ -35,6 +35,44 @@ pub(super) enum AuditFormRow {
     BackgroundPurgeInterval,
     LogCaptureMinLevel,
     SaveButton,
+}
+
+/// Effective state of the audit service as shown in the Settings status row.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum AuditStatus {
+    Enabled,
+    /// The audit database could not be opened at startup, so the service is
+    /// off regardless of the persisted setting until DBFlux restarts.
+    Degraded,
+    Disabled,
+}
+
+impl AuditStatus {
+    fn resolve(is_degraded: bool, enabled_setting: bool) -> Self {
+        if is_degraded {
+            AuditStatus::Degraded
+        } else if enabled_setting {
+            AuditStatus::Enabled
+        } else {
+            AuditStatus::Disabled
+        }
+    }
+
+    fn dot_variant(self) -> StatusDotVariant {
+        match self {
+            AuditStatus::Enabled => StatusDotVariant::Success,
+            AuditStatus::Degraded => StatusDotVariant::Warning,
+            AuditStatus::Disabled => StatusDotVariant::Idle,
+        }
+    }
+
+    fn label_key(self) -> &'static str {
+        match self {
+            AuditStatus::Enabled => "settings.audit.status.enabled",
+            AuditStatus::Degraded => "settings.audit.status.degraded",
+            AuditStatus::Disabled => "settings.audit.status.disabled",
+        }
+    }
 }
 
 fn audit_form_rows() -> Vec<AuditFormRow> {
@@ -808,13 +846,13 @@ impl AuditSection {
     }
 
     fn render_audit_status_indicator(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
-        let is_degraded = self.app_state.read(cx).is_audit_degraded();
-        // When degraded, the service is disabled regardless of the persisted setting.
-        // Show this honestly so the user understands why no events appear.
-        let is_enabled = !is_degraded && self.settings.enabled;
+        let status = AuditStatus::resolve(
+            self.app_state.read(cx).is_audit_degraded(),
+            self.settings.enabled,
+        );
 
         div()
+            .id("settings-audit-status")
             .flex()
             .items_center()
             .gap_2()
@@ -823,18 +861,8 @@ impl AuditSection {
             .rounded(Radii::SM)
             .border_1()
             .border_color(gpui::transparent_black())
-            .child(div().size_2().rounded_full().bg(if is_enabled {
-                theme.success
-            } else {
-                theme.muted_foreground
-            }))
-            .child(div().text_sm().child(if is_degraded {
-                dbflux_i18n::t!("settings.audit.status.degraded")
-            } else if is_enabled {
-                dbflux_i18n::t!("settings.audit.status.enabled")
-            } else {
-                dbflux_i18n::t!("settings.audit.status.disabled")
-            }))
+            .child(StatusDot::new(status.dot_variant()))
+            .child(div().text_sm().child(dbflux_i18n::t!(status.label_key())))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1003,7 +1031,8 @@ impl AuditSection {
 
 #[cfg(test)]
 mod tests {
-    use super::{AuditFormRow, audit_form_rows};
+    use super::{AuditFormRow, AuditStatus, audit_form_rows};
+    use dbflux_components::primitives::StatusDotVariant;
 
     #[test]
     fn audit_form_rows_excludes_status_indicator_row() {
@@ -1096,7 +1125,10 @@ mod tests {
         let disabled_en = dbflux_i18n::t!("settings.audit.status.disabled", locale = "en");
         let disabled_es = dbflux_i18n::t!("settings.audit.status.disabled", locale = "es");
 
-        assert_eq!(degraded_en, "Audit is degraded (restart required)");
+        assert_eq!(
+            degraded_en,
+            "Audit is paused because its database could not be opened. Restart DBFlux."
+        );
         assert_eq!(enabled_en, "Audit is enabled");
         assert_eq!(disabled_en, "Audit is disabled");
         assert_ne!(degraded_en, degraded_es);
@@ -1121,6 +1153,92 @@ mod tests {
             let spanish = dbflux_i18n::t!(key, locale = "es");
 
             assert_ne!(english, spanish, "group header {key} did not diverge");
+        }
+    }
+
+    const ALL_AUDIT_STATUSES: [AuditStatus; 3] = [
+        AuditStatus::Enabled,
+        AuditStatus::Degraded,
+        AuditStatus::Disabled,
+    ];
+
+    #[test]
+    fn audit_status_maps_each_variant_to_its_own_dot_token() {
+        for status in ALL_AUDIT_STATUSES {
+            let expected = match status {
+                AuditStatus::Enabled => StatusDotVariant::Success,
+                AuditStatus::Degraded => StatusDotVariant::Warning,
+                AuditStatus::Disabled => StatusDotVariant::Idle,
+            };
+
+            assert_eq!(status.dot_variant(), expected, "status {status:?}");
+        }
+
+        assert_ne!(
+            AuditStatus::Degraded.dot_variant(),
+            AuditStatus::Enabled.dot_variant()
+        );
+    }
+
+    #[test]
+    fn audit_status_maps_each_variant_to_its_own_label() {
+        for status in ALL_AUDIT_STATUSES {
+            let expected = match status {
+                AuditStatus::Enabled => "settings.audit.status.enabled",
+                AuditStatus::Degraded => "settings.audit.status.degraded",
+                AuditStatus::Disabled => "settings.audit.status.disabled",
+            };
+
+            assert_eq!(status.label_key(), expected, "status {status:?}");
+        }
+    }
+
+    #[test]
+    fn audit_status_degraded_wins_over_the_persisted_setting() {
+        assert_eq!(AuditStatus::resolve(true, true), AuditStatus::Degraded);
+        assert_eq!(AuditStatus::resolve(true, false), AuditStatus::Degraded);
+        assert_eq!(AuditStatus::resolve(false, true), AuditStatus::Enabled);
+        assert_eq!(AuditStatus::resolve(false, false), AuditStatus::Disabled);
+    }
+
+    #[test]
+    fn audit_degraded_label_tells_the_user_to_restart_in_every_locale() {
+        let english = dbflux_i18n::t!("settings.audit.status.degraded", locale = "en");
+
+        for language in dbflux_i18n::Language::available() {
+            let locale = language.locale_code();
+            let label = dbflux_i18n::t!("settings.audit.status.degraded", locale = locale);
+
+            assert!(
+                label.contains("DBFlux"),
+                "degraded label for {locale} does not name DBFlux: {label}"
+            );
+
+            if locale != "en" {
+                assert_ne!(
+                    label, english,
+                    "degraded label for {locale} is untranslated"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn audit_cannot_enable_copy_contains_prefix_once_in_every_locale() {
+        for language in dbflux_i18n::Language::available() {
+            let locale = language.locale_code();
+            let prefix = dbflux_i18n::t!("settings.audit.error.cannot_enable", locale = locale);
+            let copy = dbflux_i18n::t!("settings.audit.error.cannot_enable_copy", locale = locale);
+
+            assert!(
+                copy.starts_with(prefix.as_str()),
+                "copy text for {locale} does not start with the prefix: {copy}"
+            );
+            assert_eq!(
+                copy.matches(prefix.as_str()).count(),
+                1,
+                "copy text for {locale} repeats the prefix: {copy}"
+            );
         }
     }
 }

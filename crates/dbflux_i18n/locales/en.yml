@@ -3346,7 +3346,7 @@ settings:
     action:
       save: Save
     status:
-      degraded: Audit is degraded (restart required)
+      degraded: Audit is paused because its database could not be opened. Restart DBFlux.
       enabled: Audit is enabled
       disabled: Audit is disabled
     error:
@@ -3355,7 +3355,7 @@ settings:
       purge_interval_invalid: Background purge interval must be a number
       cannot_enable: Audit cannot be enabled
       cannot_enable_body: "Audit cannot be enabled: the audit database could not be opened. Please restart the application. If the problem persists, check disk space and file permissions for the dbflux data directory."
-      cannot_enable_copy: "Audit cannot be enabled: Audit cannot be enabled: the audit database could not be opened. Please restart the application. If the problem persists, check disk space and file permissions for the dbflux data directory."
+      cannot_enable_copy: "Audit cannot be enabled: the audit database could not be opened. Please restart the application. If the problem persists, check disk space and file permissions for the dbflux data directory."
       save_failed: Failed to save
       save_failed_copy: "Failed to save: %{error}"
     toast:

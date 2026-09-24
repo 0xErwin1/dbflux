@@ -10,6 +10,11 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Fixed
 
+* **Audit degraded status** — Settings → Audit now shows a warning-colored dot
+  when the audit database could not be opened, instead of the green "enabled"
+  dot, and tells you to restart DBFlux. The copied "Audit cannot be enabled"
+  error no longer repeats its prefix.
+
 * Redis, Turso, and InfluxDB now refuse requested row limits (including zero)
   or statement timeouts before execution with `NotSupported`, rather than
   dispatching commands, SQL, HTTP, or instance-context queries without those
