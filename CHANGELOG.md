@@ -26,13 +26,6 @@ All notable changes to DBFlux will be documented in this file.
   host passed those options through with nothing to guarantee the driver
   honored them. Queries without either option run as before.
 
-* **Checkbox names in Settings and the Connection Manager** — every checkbox in
-  the Settings window and the Connection Manager now has the text shown next to
-  it as its accessible name. In Settings > General all eight checkboxes
-  (`vim-mode`, `restore-session`, `requires-preview`, ...) had no name, so a
-  screen reader announced a bare checkbox and UI automation could only find them
-  by id. Element ids and behavior are unchanged.
-
 * `F5` now refreshes the focused document (table data, bucket list, object
   listing, key browser), and the audit viewer's `r` refreshes the audit list
   instead of the connection schema. The buckets empty state showed `r refresh`,
@@ -65,6 +58,13 @@ All notable changes to DBFlux will be documented in this file.
   protections. Unprotected execution remains available; the default editor
   cannot promise these protections on these backends.
   
+* **Checkbox names in Settings and the Connection Manager** — every checkbox in
+  the Settings window and the Connection Manager now has the text shown next to
+  it as its accessible name. In Settings > General all eight checkboxes
+  (`vim-mode`, `restore-session`, `requires-preview`, ...) had no name, so a
+  screen reader announced a bare checkbox and UI automation could only find them
+  by id. Element ids and behavior are unchanged.
+
 * **Audit export asks where to save** — exporting from the audit viewer now
   opens the same save dialog as the other exports, with a timestamped default
   name (`audit_export_<YYYYMMDD-HHMMSS>.<csv|json>`), instead of writing to a
