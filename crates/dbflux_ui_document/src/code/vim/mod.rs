@@ -63,6 +63,7 @@ impl CodeDocument {
             ..VimState::default()
         };
         self.sync_editor_lock(cx);
+        self.sync_editor_cursor_shape(cx);
 
         if enabled {
             self.clamp_cursor_for_normal(cx);
@@ -97,6 +98,19 @@ impl CodeDocument {
         self.editor
             .input_state
             .update(cx, |state, cx| state.set_readonly(locked, cx));
+    }
+
+    fn sync_editor_cursor_shape(&mut self, cx: &mut Context<Self>) {
+        use gpui_base::input::InputCursorShape;
+
+        let shape = if self.vim.enabled && self.vim.mode == VimMode::Normal {
+            InputCursorShape::Block
+        } else {
+            InputCursorShape::Bar
+        };
+        self.editor
+            .input_state
+            .update(cx, |state, cx| state.set_cursor_shape(shape, cx));
     }
 
     /// Handles a key before the editor and the workspace keymap see it.
@@ -195,6 +209,7 @@ impl CodeDocument {
         self.vim.mode = mode;
         self.vim.vertical_goal = None;
         self.sync_editor_lock(cx);
+        self.sync_editor_cursor_shape(cx);
         cx.notify();
     }
 

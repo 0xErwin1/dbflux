@@ -5,6 +5,14 @@ use gpui::{
     Styled, Window, div, prelude::FluentBuilder as _,
 };
 
+/// Shape of the text input caret. Independent of selection and editing mode.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum InputCursorShape {
+    #[default]
+    Bar,
+    Block,
+}
+
 /// What the input can offer to its context menu, at the moment it is opened.
 ///
 /// Built by the input and read by the menu, the fields are private and reached

@@ -22,6 +22,7 @@ use gpui::{
     InteractiveElement as _, IntoElement, KeyBinding, KeyDownEvent, ParentElement as _, Render,
     Styled as _, TestAppContext, VisualTestContext, Window, actions, div,
 };
+use gpui_base::input::InputCursorShape;
 use gpui_component::Root;
 use gpui_component::input::Paste;
 use std::cell::RefCell;
@@ -108,6 +109,12 @@ impl Fixture<'_> {
     fn mode(&mut self) -> Option<VimMode> {
         let document = self.document.clone();
         self.window.update(|_, cx| document.read(cx).vim_mode())
+    }
+
+    fn cursor_shape(&mut self) -> InputCursorShape {
+        let document = self.document.clone();
+        self.window
+            .update(|_, cx| document.read(cx).editor.input_state.read(cx).cursor_shape())
     }
 
     fn editor_focused(&mut self) -> bool {
@@ -961,6 +968,20 @@ fn vim_mode_is_off_unless_the_setting_enables_it(
         Some(VimMode::Normal),
         "a document opens in Normal mode"
     );
+}
+
+#[gpui::test]
+fn vim_cursor_shape_follows_mode_and_disabled_setting(cx: &mut TestAppContext) {
+    let mut editor = open_editor(cx, "abc", false);
+    assert_eq!(editor.cursor_shape(), InputCursorShape::Bar);
+    editor.set_vim(true);
+    assert_eq!(editor.cursor_shape(), InputCursorShape::Block);
+    editor.keys("i");
+    assert_eq!(editor.cursor_shape(), InputCursorShape::Bar);
+    editor.keys("escape");
+    assert_eq!(editor.cursor_shape(), InputCursorShape::Block);
+    editor.set_vim(false);
+    assert_eq!(editor.cursor_shape(), InputCursorShape::Bar);
 }
 
 #[gpui::test]

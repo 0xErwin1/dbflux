@@ -442,7 +442,7 @@ impl<M: InputModeKind> TextElement<M> {
         last_layout: &LastLayout,
         bounds: &mut Bounds<Pixels>,
         scroll_size: Size<Pixels>,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut App,
     ) -> (Vec<CursorRenderInfo>, Point<Pixels>, Option<usize>) {
         let state = self.state.read(cx);
@@ -600,23 +600,71 @@ impl<M: InputModeKind> TextElement<M> {
                 .map(|offset| offset.x)
                 .unwrap_or(scroll_offset.x);
 
-            // For Right alignment, clamp cursor within the right edge of bounds so it
-            // stays visible without having to shift the text via scroll_offset.
-            let cursor_x = bounds.left() + cursor_pos.x + line_number_width + cursor_scroll_x;
-            let cursor_x = if last_layout.text_align == TextAlign::Right {
-                cursor_x.min(bounds.right() - CURSOR_WIDTH)
+            let block = is_active && state.cursor_shape == super::base::InputCursorShape::Block;
+            let mut block_character = None;
+            let mut block_has_unpainted_glyph = false;
+            let cursor_width = if block {
+                let style = window.text_style();
+                let font_size = style.font_size.to_pixels(window.rem_size());
+                let font_id = window.text_system().resolve_font(&style.font());
+                let space_width = window.text_system().layout_width(font_id, font_size, ' ');
+                visible_buffer_lines
+                    .iter()
+                    .position(|&row| row == cursor_row)
+                    .map(|index| {
+                        let local =
+                            cursor.saturating_sub(last_layout.visible_line_byte_offsets[index]);
+                        let wrapped = &lines[index].wrapped_lines;
+                        let Some((visual_index, local)) = block_visual_index(
+                            wrapped.iter().map(ShapedLine::len),
+                            local,
+                            affinity,
+                        ) else {
+                            return space_width;
+                        };
+                        let shaped = &wrapped[visual_index];
+                        if let Some(character) =
+                            block_buffer_character(&shaped.text, local, state.text.len() > 0)
+                        {
+                            block_character = character.is_ascii_graphic().then_some(character);
+                            block_has_unpainted_glyph =
+                                block_character.is_none() && !character.is_whitespace();
+                        }
+                        block_advance(shaped, local, space_width)
+                    })
+                    .unwrap_or(space_width)
             } else {
-                cursor_x
+                CURSOR_WIDTH
             };
+            // Clamp against the painted caret width without shifting the text or
+            // changing the deferred scroll offset used by both text and cursor.
+            let cursor_x = bounds.left() + cursor_pos.x + line_number_width + cursor_scroll_x;
+            let cursor_x = clamp_right_aligned_cursor(
+                cursor_x,
+                bounds.right(),
+                cursor_width,
+                last_layout.text_align,
+            );
             cursor_infos.push(CursorRenderInfo {
                 bounds: Bounds::new(
                     point(
                         cursor_x,
-                        bounds.top() + cursor_pos.y + ((line_height - cursor_height) / 2.),
+                        bounds.top()
+                            + cursor_pos.y
+                            + if block {
+                                px(0.)
+                            } else {
+                                (line_height - cursor_height) / 2.
+                            },
                     ),
-                    size(CURSOR_WIDTH, cursor_height),
+                    size(
+                        cursor_width,
+                        if block { line_height } else { cursor_height },
+                    ),
                 ),
                 is_active,
+                block_character,
+                block_has_unpainted_glyph,
             });
         }
 
@@ -1604,6 +1652,63 @@ impl<M: InputModeKind> TextElement<M> {
 struct CursorRenderInfo {
     bounds: Bounds<Pixels>,
     is_active: bool,
+    block_character: Option<char>,
+    block_has_unpainted_glyph: bool,
+}
+
+// Match TextLayout::position_for_index: a wrap boundary belongs to the next
+// visual line unless the cursor explicitly has line-end affinity.
+fn block_visual_index(
+    lengths: impl ExactSizeIterator<Item = usize>,
+    mut offset: usize,
+    line_end_affinity: bool,
+) -> Option<(usize, usize)> {
+    let count = lengths.len();
+    for (index, length) in lengths.enumerate() {
+        if offset < length || (offset == length && (line_end_affinity || index + 1 == count)) {
+            return Some((index, offset));
+        }
+        offset = offset.saturating_sub(length);
+    }
+    None
+}
+
+fn block_buffer_character(text: &str, byte_index: usize, has_buffer_content: bool) -> Option<char> {
+    has_buffer_content
+        .then(|| text.get(byte_index..).and_then(|tail| tail.chars().next()))
+        .flatten()
+}
+
+fn clamp_right_aligned_cursor(
+    cursor_x: Pixels,
+    right: Pixels,
+    width: Pixels,
+    alignment: TextAlign,
+) -> Pixels {
+    if alignment == TextAlign::Right {
+        cursor_x.min(right - width)
+    } else {
+        cursor_x
+    }
+}
+
+fn block_advance(line: &ShapedLine, byte_index: usize, space_width: Pixels) -> Pixels {
+    let next = line
+        .text
+        .get(byte_index..)
+        .and_then(|tail| tail.chars().next());
+    match next {
+        Some(character) => {
+            let end = byte_index + character.len_utf8();
+            let advance = line.x_for_index(end) - line.x_for_index(byte_index);
+            if advance > px(0.) {
+                advance
+            } else {
+                space_width
+            }
+        }
+        None => space_width,
+    }
 }
 
 pub(super) struct PrepaintState {
@@ -1648,6 +1753,8 @@ impl PrepaintState {
                 CursorRenderInfo {
                     bounds,
                     is_active: info.is_active,
+                    block_character: info.block_character,
+                    block_has_unpainted_glyph: info.block_has_unpainted_glyph,
                 }
             })
             .collect()
@@ -2367,7 +2474,38 @@ impl<M: InputModeKind> Element for TextElement<M> {
         // Paint blinking cursors (shared blink state for all carets)
         if focused && show_cursor {
             for cursor_info in prepaint.cursor_infos_with_scroll() {
-                window.paint_quad(fill(cursor_info.bounds, editor_style.caret));
+                // Retain the original text underneath unsupported clusters instead of
+                // painting an opaque block that makes them unreadable.
+                let caret_color = if cursor_info.block_has_unpainted_glyph {
+                    editor_style.caret.opacity(0.35)
+                } else {
+                    editor_style.caret
+                };
+                window.paint_quad(fill(cursor_info.bounds, caret_color));
+                if let Some(character) = cursor_info.block_character {
+                    let style = window.text_style();
+                    let text = SharedString::from(character.to_string());
+                    let font_size = style.font_size.to_pixels(window.rem_size());
+                    let run = TextRun {
+                        len: text.len(),
+                        font: style.font(),
+                        color: editor_background,
+                        background_color: None,
+                        underline: None,
+                        strikethrough: None,
+                    };
+                    let glyph = window
+                        .text_system()
+                        .shape_line(text, font_size, &[run], None);
+                    _ = glyph.paint(
+                        cursor_info.bounds.origin,
+                        line_height,
+                        TextAlign::Left,
+                        None,
+                        window,
+                        cx,
+                    );
+                }
             }
         }
 
@@ -2726,6 +2864,55 @@ fn split_runs_by_bg_segments(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn block_wrap_boundary_matches_cursor_affinity() {
+        assert_eq!(
+            block_visual_index([3, 4].into_iter(), 3, false),
+            Some((1, 0))
+        );
+        assert_eq!(
+            block_visual_index([3, 4].into_iter(), 3, true),
+            Some((0, 3))
+        );
+        assert_eq!(
+            block_visual_index([3, 4].into_iter(), 7, false),
+            Some((1, 4))
+        );
+    }
+
+    #[test]
+    fn block_placeholder_is_not_repainted_as_buffer_text() {
+        assert_eq!(block_buffer_character("Placeholder", 0, false), None);
+        assert_eq!(block_buffer_character("hello", 0, true), Some('h'));
+        assert_eq!(block_buffer_character("hello", 5, true), None);
+        assert_eq!(block_buffer_character("wrapped", 0, true), Some('w'));
+    }
+
+    #[test]
+    fn block_right_edge_clamps_to_painted_width() {
+        for width in [px(9.), block_advance(&ShapedLine::default(), 0, px(9.))] {
+            assert_eq!(
+                clamp_right_aligned_cursor(px(98.), px(100.), width, TextAlign::Right),
+                px(91.)
+            );
+            assert_eq!(
+                clamp_right_aligned_cursor(px(80.), px(100.), width, TextAlign::Right),
+                px(80.)
+            );
+            for alignment in [TextAlign::Left, TextAlign::Center] {
+                assert_eq!(
+                    clamp_right_aligned_cursor(px(98.), px(100.), width, alignment),
+                    px(98.)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn empty_shaped_line_uses_space_advance_for_block() {
+        assert_eq!(block_advance(&ShapedLine::default(), 0, px(9.)), px(9.));
+    }
 
     #[test]
     fn test_plain_text_decorations_include_unstyled_gaps() {

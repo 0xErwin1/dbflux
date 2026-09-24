@@ -1,10 +1,19 @@
 # Vendored `gpui-base`
 
-This directory contains the complete published `gpui-base` 0.6.1 crate, without source changes. It establishes a local dependency boundary for future DBF-279 editor work; no caret or selection behavior is changed here.
+This directory starts from the complete published `gpui-base` 0.6.1 crate. DBF-279 carries the following local cursor patch; rectangular selection is not implemented by this patch.
 
 - Upstream: [`gpui-base` 0.6.1 on crates.io](https://crates.io/crates/gpui-base/0.6.1), from the crates.io registry archive `gpui-base-0.6.1.crate`.
 - License: Apache-2.0; see `LICENSE-APACHE` and the published `Cargo.toml`.
 - Archive SHA-256: `9d45dcaaeac889bf1e7757db1beb26c9043c8ea3156651facc11c6be56bb6722` (the registry checksum recorded in the original root `Cargo.lock`).
+
+## Local patch list
+
+- `src/input/base/mod.rs`: public `InputCursorShape` (`Bar` / `Block`).
+- `src/input/mod.rs`: re-export the cursor shape for application use.
+- `src/input/base/state.rs`: per-input cursor shape, Bar default, getter and notifying setter.
+- `src/input/base/element.rs`: block geometry from shaped advances (with soft-wrap boundary affinity matching layout), space-width fallback, right-edge clamp using the painted block width, and contrasting foreground for simple ASCII glyphs; retain the existing blink, scroll and IME paths. The foreground is reshaped as a single character using the current window font, so ligatures, contextual shaping, syntax-specific font substitutions, combining clusters and colored emoji are not inverted. Unsupported non-ASCII glyphs use a translucent block so the original glyph remains visible rather than being covered by an opaque caret. ASCII ligatures and contextual shaping can still differ from the reshaped foreground; the block is not a general glyph-color inversion. When the buffer is empty, placeholder glyphs are never repainted as buffer text inside the block.
+
+Live visual verification of block placement and glyph contrast is still required.
 
 ## Refresh
 

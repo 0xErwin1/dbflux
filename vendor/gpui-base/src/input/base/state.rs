@@ -352,6 +352,7 @@ pub struct InputBaseState<M: InputModeKind> {
     pub(super) wrapping_indent: WrappingIndent,
     pub(super) scroll_beyond_last_line: Option<usize>,
     pub(super) cursor_surrounding_lines: Option<usize>,
+    pub(super) cursor_shape: super::base::InputCursorShape,
     pub(super) blink_cursor: Entity<BlinkCursor>,
     pub(super) loading: bool,
     /// The cursors and selections.
@@ -688,6 +689,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             wrapping_indent: WrappingIndent::default(),
             scroll_beyond_last_line: None,
             cursor_surrounding_lines: None,
+            cursor_shape: super::base::InputCursorShape::Bar,
             blink_cursor,
             undo_manager,
             selections: Selections::default(),
@@ -1057,6 +1059,21 @@ impl<M: InputModeKind> InputBaseState<M> {
     pub(crate) fn readonly(mut self, readonly: bool) -> Self {
         self.readonly = readonly;
         self
+    }
+
+    pub fn cursor_shape(&self) -> super::base::InputCursorShape {
+        self.cursor_shape
+    }
+
+    pub fn set_cursor_shape(
+        &mut self,
+        shape: super::base::InputCursorShape,
+        cx: &mut Context<Self>,
+    ) {
+        if self.cursor_shape != shape {
+            self.cursor_shape = shape;
+            cx.notify();
+        }
     }
 
     pub fn set_readonly(&mut self, readonly: bool, cx: &mut Context<Self>) {
