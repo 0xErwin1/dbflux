@@ -37,12 +37,14 @@ bridge's exact protocol version.
   commit, so the bridge and the gpui hooks it calls come from one upstream snapshot.
 - License: Apache-2.0. `LICENSE` is upstream's license file, copied verbatim.
 - Contents: `crates/gpui-mcp/`, `crates/gpui-mcp-protocol/`, `crates/gpui-mcp-server/` and
-  `crates/gpui-mcp-capture/` as they are at that commit, with `dbflux-port.patch` applied.
-  `refresh.sh` rebuilds exactly this tree.
+  `crates/gpui-mcp-capture/` as they are at that commit, with `dbflux-port.patch` and then
+  `text-input-automation.patch` applied. `refresh.sh` rebuilds exactly this tree.
 
 ## The DBFlux delta
 
-`dbflux-port.patch` changes only the four `Cargo.toml` files. No Rust source is modified.
+Two patches, applied in this order. `dbflux-port.patch` changes only the four `Cargo.toml`
+files. `text-input-automation.patch` is the only change to Rust source and is described in
+[Text input automation](#text-input-automation) below.
 
 - Package metadata. Upstream inherits `version`, `edition`, `license`, `repository` and
   `homepage` from its own workspace root, which is not vendored. Inheriting from DBFlux's
@@ -63,6 +65,30 @@ bridge's exact protocol version.
   newer gpui's separate `gpui_platform` crate). They stay in the tree unbuilt. Without this,
   both fail on any machine with a desktop session; on a headless one they skip themselves.
 - Lints: see below.
+
+### Text input automation
+
+`text-input-automation.patch` was written for DBFlux against this directory with
+`dbflux-port.patch` applied, and has no upstream counterpart. It depends on
+`Window::set_observed_element_value` and `Window::has_input_handler`, which
+`vendor/gpui-pre/text-input-automation.patch` adds. Five files, 428 diff lines.
+
+A text input rendered by gpui-component is addressed by the element id of its `Input` frame,
+whose focus handle is not the one the platform input handler belongs to. Upstream's
+`set_text` focuses the node and replaces text through the active input handler, so on such an
+input it finds no handler; and the frame has no click listener, so `click_element` refuses it.
+
+- `gpui-mcp-protocol`: a new `Operation::SetValue { node_id, value }`.
+- `gpui-mcp`: `SetValue` calls `Window::set_observed_element_value`, which runs the node's
+  accessibility `SetValue` listener, and fails with `Unsupported` when the node has none. It
+  is validated like `Focus` (node id) and `TypeText` (text size). `ReplaceText` now reports
+  "focused element has no active text input handler" when there is no handler, and keeps
+  the document-range message for a handler that cannot expose its range.
+- `gpui-mcp-server`: `set_text`, and `set_value` on text inputs, send `SetValue` when the
+  node advertises the `SetValue` action and settle a frame, with no focus step. Other
+  editable nodes keep upstream's focus-then-`ReplaceText` path. `click_element` and
+  `double_click_element` also accept a node with the `SetText` action and click its bounds
+  center, which focuses the editor for `type_text`. Other nodes keep the `Click` check.
 
 ### Dependencies the server and capture crates add
 
@@ -126,7 +152,7 @@ workspace lints change.** Each site is bounded by the surrounding code, and rewr
 to `.get()` would be a refactor of upstream code for no behavior change:
 
 - `gpui-mcp`: five sites in library code (`src/registry.rs` lines 430, 531 and 568,
-  `src/service.rs` lines 1413 and 1414) and more in its tests: a slice up to the current
+  `src/service.rs` lines 1427 and 1428) and more in its tests: a slice up to the current
   enumerate index, a position recorded from the same vector, a key taken from the map's own
   order list, a nibble indexing a 16-entry table.
 - `gpui-mcp-server`: three sites in the binary (`src/recording.rs` lines 514, 576 and 616)
@@ -174,8 +200,8 @@ vendor/gpui-mcp/refresh.sh <full commit SHA>
 ```
 
 The script downloads that commit, rebuilds `crates/` and `LICENSE` from it and re-applies
-`dbflux-port.patch`, leaving a `.rej` file next to any manifest hunk that no longer
-applies. Refresh `vendor/gpui-pre/frame-observer.patch` from the same commit first (see
+`dbflux-port.patch` and then `text-input-automation.patch`, leaving a `.rej` file next to
+any hunk that no longer applies. Refresh `vendor/gpui-pre/frame-observer.patch` from the same commit first (see
 `vendor/gpui-pre/VENDOR.md`); the bridge calls the hooks that patch adds.
 
 Afterwards, update the commit in this file and re-check:

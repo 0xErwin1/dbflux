@@ -7,7 +7,10 @@
 use dbflux_app::keymap::{Command, ContextId, KeymapLayer};
 use dbflux_app::keymap::{KeyChord, KeymapStack, Modifiers};
 use dbflux_components::components::document_tree;
-use gpui::{Action, App, DummyKeyboardMapper, KeyBinding, KeyBindingContextPredicate, Keystroke};
+use gpui::{
+    Action, App, DummyKeyboardMapper, KeyBinding, KeyBindingContextPredicate, Keystroke,
+    SharedString,
+};
 use std::rc::Rc;
 use std::sync::LazyLock;
 
@@ -32,6 +35,48 @@ pub fn modifiers_from_gpui(mods: &gpui::Modifiers) -> Modifiers {
         alt: mods.alt,
         shift: mods.shift,
         platform: mods.platform,
+    }
+}
+
+/// Splits a [`KeyChord`] into the display labels of its keys, in the order a
+/// `Chord` badge row renders them (for example `["Ctrl", "Shift", "N"]`).
+pub fn chord_display_parts(chord: &KeyChord) -> Vec<SharedString> {
+    let mut parts: Vec<SharedString> = Vec::new();
+
+    if chord.modifiers.ctrl {
+        parts.push("Ctrl".into());
+    }
+    if chord.modifiers.alt {
+        parts.push("Alt".into());
+    }
+    if chord.modifiers.shift {
+        parts.push("Shift".into());
+    }
+    if chord.modifiers.platform {
+        parts.push("Cmd".into());
+    }
+
+    parts.push(SharedString::from(display_key(&chord.key)));
+    parts
+}
+
+fn display_key(key: &str) -> String {
+    match key {
+        "down" => "↓".to_string(),
+        "up" => "↑".to_string(),
+        "left" => "←".to_string(),
+        "right" => "→".to_string(),
+        "enter" => "Enter".to_string(),
+        "escape" => "Esc".to_string(),
+        "backspace" => "⌫".to_string(),
+        "delete" => "Del".to_string(),
+        "tab" => "Tab".to_string(),
+        "space" => "Space".to_string(),
+        "home" => "Home".to_string(),
+        "end" => "End".to_string(),
+        "pageup" => "PgUp".to_string(),
+        "pagedown" => "PgDn".to_string(),
+        _ => key.to_uppercase(),
     }
 }
 
@@ -76,6 +121,12 @@ fn global_layer() -> KeymapLayer {
     layer.bind(
         KeyChord::new("p", Modifiers::primary_shift()),
         Command::ToggleCommandPalette,
+    );
+
+    // Connection Manager — Cmd+Shift+N on macOS, Ctrl+Shift+N elsewhere.
+    layer.bind(
+        KeyChord::new("n", Modifiers::primary_shift()),
+        Command::OpenConnectionManager,
     );
 
     // Tab management — primary modifier (Cmd on macOS, Ctrl elsewhere).
@@ -1129,6 +1180,55 @@ mod tests {
             keymap.resolve(ContextId::Global, &chord),
             Some(Command::ToggleCommandPalette)
         );
+    }
+
+    #[test]
+    fn primary_shift_n_opens_connection_manager_from_global_and_workspace_panels() {
+        let keymap = default_keymap();
+        let chord = KeyChord::new("n", Modifiers::primary_shift());
+
+        for context in [
+            ContextId::Global,
+            ContextId::Sidebar,
+            ContextId::Editor,
+            ContextId::Results,
+            ContextId::BackgroundTasks,
+        ] {
+            assert_eq!(
+                keymap.resolve(context, &chord),
+                Some(Command::OpenConnectionManager),
+                "primary+shift+n must open the Connection Manager in {context:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn primary_shift_n_is_not_bound_to_any_other_command() {
+        let keymap = default_keymap();
+        let chord = KeyChord::new("n", Modifiers::primary_shift());
+
+        for context in ContextId::all_variants() {
+            let resolved = keymap.resolve(*context, &chord);
+            assert!(
+                resolved.is_none() || resolved == Some(Command::OpenConnectionManager),
+                "primary+shift+n resolves to {resolved:?} in {context:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn chord_display_parts_follow_the_platform_modifier() {
+        let chord = KeyChord::new("n", Modifiers::primary_shift());
+
+        #[cfg(target_os = "macos")]
+        let expected = ["Shift", "Cmd", "N"];
+        #[cfg(not(target_os = "macos"))]
+        let expected = ["Ctrl", "Shift", "N"];
+
+        let parts = chord_display_parts(&chord);
+        let parts: Vec<&str> = parts.iter().map(|part| part.as_ref()).collect();
+
+        assert_eq!(parts, expected);
     }
 
     #[test]
