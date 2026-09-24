@@ -1041,4 +1041,34 @@ mod active_query_prompt_tests {
         assert_eq!(harness.task_status(query), Some(TaskStatus::Cancelled));
         assert_cancel_ran_off_the_ui_thread(elapsed, &gate, &cancel_threads);
     }
+
+    #[gpui::test]
+    fn pressing_escape_on_the_prompt_keeps_waiting(cx: &mut TestAppContext) {
+        let mut harness = new_harness(cx);
+        let (profile_id, _) = harness.connect("prod");
+        let query = harness.start_query(profile_id);
+        harness.disconnect_active();
+
+        harness.window.simulate_keystrokes("escape");
+        harness.window.run_until_parked();
+
+        assert!(!harness.prompt_visible());
+        assert!(harness.is_connected(profile_id));
+        assert_eq!(harness.task_status(query), Some(TaskStatus::Running));
+    }
+
+    #[gpui::test]
+    fn pressing_enter_on_the_prompt_cancels_the_query(cx: &mut TestAppContext) {
+        let mut harness = new_harness(cx);
+        let (profile_id, _) = harness.connect("prod");
+        let query = harness.start_query(profile_id);
+        harness.disconnect_active();
+
+        harness.window.simulate_keystrokes("enter");
+        harness.window.run_until_parked();
+
+        assert!(!harness.prompt_visible());
+        assert!(harness.is_connected(profile_id));
+        assert_eq!(harness.task_status(query), Some(TaskStatus::Cancelled));
+    }
 }

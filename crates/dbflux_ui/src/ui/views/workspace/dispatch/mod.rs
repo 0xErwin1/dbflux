@@ -14,8 +14,11 @@ use preflight::sidebar_tree_command_is_blocked_by_search_focus;
 
 impl CommandDispatcher for Workspace {
     fn dispatch(&mut self, cmd: Command, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        // The active-query prompt is checked first: it can open over another
-        // confirmation (quitting while one is visible) and is drawn on top.
+        // Fallback for the active-query prompt when focus is not inside it,
+        // like `route_confirm_modal_command` for the other confirmations; the
+        // shell answers Escape and Enter itself while it has focus. Checked
+        // first: it can open over another confirmation (quitting while one is
+        // visible) and is drawn on top.
         if matches!(cmd, Command::Execute | Command::Cancel)
             && self.modal_active_query.read(cx).is_visible()
         {

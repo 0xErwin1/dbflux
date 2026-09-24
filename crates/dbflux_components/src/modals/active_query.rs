@@ -80,9 +80,9 @@ impl ModalActiveQuery {
         cx.notify();
     }
 
-    /// Resolve the modal as if "Cancel query" was clicked. The keyboard path
-    /// (ConfirmModal keymap, Enter) uses this so it goes through the same
-    /// outcome handler as a mouse click.
+    /// Resolve the modal as if "Cancel query" was clicked. This is the
+    /// primary action, so Enter runs it: through the shell while focus is in
+    /// the modal, and through the workspace's ConfirmModal keymap otherwise.
     pub fn confirm(&mut self, cx: &mut Context<Self>) {
         self.resolve(ActiveQueryOutcome::CancelQuery, cx);
     }
@@ -262,6 +262,12 @@ impl Render for ModalActiveQuery {
                     .log_err();
             }
         })
+        .on_confirm({
+            let entity = cx.entity().downgrade();
+            move |_, cx| {
+                entity.update(cx, |this, cx| this.confirm(cx)).log_err();
+            }
+        })
         .into_any_element()
     }
 }
@@ -426,5 +432,96 @@ mod outcome_tests {
 
         let disconnect = prompt_label(ActiveQueryTrigger::Disconnect, &names);
         assert_eq!(disconnect, dbflux_i18n::t!("modals.active_query.prompt"));
+    }
+}
+
+#[cfg(test)]
+mod keyboard_tests {
+    // Explicit imports rather than the parent glob: combining `use super::*`
+    // with `#[gpui::test]` sends the gpui_macros expansion into unbounded
+    // recursion.
+    use super::{ActiveQueryOutcome, ActiveQueryRequest, ActiveQueryTrigger, ModalActiveQuery};
+    use gpui::{
+        AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, Styled as _,
+        TestAppContext, VisualTestContext, Window, div,
+    };
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    struct Host {
+        modal: Entity<ModalActiveQuery>,
+    }
+
+    impl Render for Host {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().child(self.modal.clone())
+        }
+    }
+
+    /// Opens the modal the way the workspace does, without a window, so the
+    /// shell's own focus handling is what moves the keyboard into it.
+    fn open_modal(
+        cx: &mut TestAppContext,
+    ) -> (
+        Entity<ModalActiveQuery>,
+        &mut VisualTestContext,
+        Rc<RefCell<Vec<ActiveQueryOutcome>>>,
+    ) {
+        cx.update(gpui_component::init);
+
+        let (host, window) = cx.add_window_view(|_, cx| Host {
+            modal: cx.new(ModalActiveQuery::new),
+        });
+        let modal = window.update(|_, cx| host.read(cx).modal.clone());
+
+        let outcomes: Rc<RefCell<Vec<ActiveQueryOutcome>>> = Rc::default();
+        window.update(|_, cx| {
+            let sink = outcomes.clone();
+            cx.subscribe(&modal, move |_, outcome: &ActiveQueryOutcome, _| {
+                sink.borrow_mut().push(outcome.clone());
+            })
+            .detach();
+
+            modal.update(cx, |modal, cx| {
+                modal.open(
+                    ActiveQueryRequest {
+                        sql: "SELECT pg_sleep(60)".to_string(),
+                        trigger: ActiveQueryTrigger::Disconnect,
+                        elapsed_secs: 0,
+                        connection_names: vec!["prod".to_string()],
+                    },
+                    cx,
+                );
+            });
+        });
+        window.run_until_parked();
+
+        (modal, window, outcomes)
+    }
+
+    #[gpui::test]
+    fn escape_keeps_waiting(cx: &mut TestAppContext) {
+        let (modal, window, outcomes) = open_modal(cx);
+
+        window.simulate_keystrokes("escape");
+
+        assert!(matches!(
+            outcomes.borrow().as_slice(),
+            [ActiveQueryOutcome::KeepWaiting]
+        ));
+        assert!(!window.update(|_, cx| modal.read(cx).is_visible()));
+    }
+
+    #[gpui::test]
+    fn enter_cancels_the_query(cx: &mut TestAppContext) {
+        let (modal, window, outcomes) = open_modal(cx);
+
+        window.simulate_keystrokes("enter");
+
+        assert!(matches!(
+            outcomes.borrow().as_slice(),
+            [ActiveQueryOutcome::CancelQuery]
+        ));
+        assert!(!window.update(|_, cx| modal.read(cx).is_visible()));
     }
 }
