@@ -211,6 +211,9 @@ impl Workspace {
 /// confirmation modal, resolving and closing it through the same outcome
 /// handler its buttons use. Returns `true` when a visible modal consumed
 /// the command.
+///
+/// Only reached while focus is outside the modal: the modal shell answers
+/// Enter and Escape itself while it has focus.
 pub(crate) fn route_confirm_modal_command(
     cmd: Command,
     delete_connection: &Entity<crate::ui::overlays::modals::ModalDeleteConnection>,
