@@ -90,6 +90,7 @@ DriverRequestBody::Hello(DriverHelloRequest {
         ProtocolVersion::new(1, 2),
         ProtocolVersion::new(1, 3),
         ProtocolVersion::new(1, 4),
+        ProtocolVersion::new(1, 5),
     ],
     requested_capabilities: vec![
         DriverCapability::Cancellation,
@@ -172,6 +173,12 @@ DriverResponseBody::Hello(DriverHelloResponse {
 `SchemaColumns { database, schema }`는 하나의 호출로 스키마 안의 모든 릴레이션의 열을 가져와 `SchemaColumns { columns: Vec<SchemaColumnInfo> }`로 응답하며, 각 항목은 평소의 `ColumnInfo` 옆에 자신의 `table_name`을 담고 있습니다. 호스트는 `SchemaIndexes` 및 `SchemaForeignKeys`와 정확히 같은 방식으로 이 요청을 연결의 `schema_columns` 확장 지점(seam)으로 전달합니다.
 
 위의 v1.3 필드들과 달리 이 작업은 와이어상 추가 확장(additive)이 아닙니다: 프레임은 postcard로 인코딩되며, postcard는 열거형 변형(variant)에 이름이 아닌 varint 판별자 인덱스를 붙입니다. 따라서 `SchemaColumns`는 요청 열거형과 응답 열거형 양쪽 모두에서 마지막 v1.3 변형 뒤에 덧붙여집니다; 열거형 중간에 삽입하면 이후 모든 변형의 인덱스가 밀려나서, v1.3으로 협상한 피어가 밀려난 변형들을 잘못된 것으로 디코딩하고 프레임의 나머지 부분을 디코딩하지 못해 스트림이 어긋납니다. 클라이언트도 로컬에서 게이트합니다: `IpcConnection::schema_columns`는 `Hello`에서 선택된 버전을 검사하여 협상된 마이너가 1.4 미만이면 아무것도 보내지 않고 `DbError::NotSupported`를 반환하므로, 오래된 호스트는 새 변형을 전혀 받지 않습니다. 소비자는 이 오류를 트레이트 자체의 `NotSupported` 기본값과 동일하게 취급하며 테이블별 `table_details` 로드로 폴백합니다.
+
+### 키 개수 (v1.5+)
+
+`KvKeyCount { keyspace }`는 키스페이스의 키 개수를 요청하며(`None`은 세션의 현재 키스페이스를 뜻합니다) `KvKeyCountResult { count }`로 응답합니다. 호스트는 요청을 연결의 `KeyValueApi::key_count` 시임으로 전달합니다; 이를 구현하지 않은 드라이버는 트레이트의 `NotSupported` 기본값으로 응답하며, 이는 클라이언트에 `UnsupportedMethod`로 전달됩니다.
+
+두 변형 모두 위에서 설명한 와이어 인덱스 이유로 각 열거형의 마지막 v1.4 변형 뒤에 덧붙여집니다. 클라이언트도 같은 방식으로 로컬에서 게이트합니다: 협상된 마이너가 1.5 미만이면 `IpcConnection::key_count`는 아무것도 보내지 않고 `DbError::NotSupported`를 반환합니다. 키 브라우저는 이 오류를 "전체 개수 없음"으로 취급하고 페이지 키 수만 표시합니다.
 
 ## 인증 프로바이더 RPC 계약
 

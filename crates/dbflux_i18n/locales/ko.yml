@@ -1645,6 +1645,7 @@ document:
       keys_count:
         one: "이 페이지의 키 %{count}개"
         many: "이 페이지의 키 %{count}개"
+      keys_total: "전체 %{count}개"
       filter:
         keys_placeholder: "키 필터링..."
         members_placeholder: "멤버 필터링..."
@@ -2430,6 +2431,9 @@ modals:
     quit_anyway: 그래도 종료
     keep_waiting: 계속 기다리기
     cancel_query: 쿼리 취소
+    more_queries:
+      one: "실행 중인 쿼리 %{count}개 더 있음"
+      many: "실행 중인 쿼리 %{count}개 더 있음"
   add_panel_picker:
     title: 패널 추가
     submit:

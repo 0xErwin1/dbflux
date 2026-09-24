@@ -1645,6 +1645,7 @@ document:
       keys_count:
         one: "%{count} key on this page"
         many: "%{count} keys on this page"
+      keys_total: "%{count} total"
       filter:
         keys_placeholder: "Filter keys..."
         members_placeholder: "Filter members..."
@@ -2430,6 +2431,9 @@ modals:
     quit_anyway: Quit anyway
     keep_waiting: Keep waiting
     cancel_query: Cancel query
+    more_queries:
+      one: "And %{count} more running query"
+      many: "And %{count} more running queries"
   add_panel_picker:
     title: Add panels
     submit:

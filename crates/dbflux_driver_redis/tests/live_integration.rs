@@ -501,6 +501,43 @@ fn redis_scan_keys() -> Result<(), DbError> {
 
 #[test]
 #[ignore = "requires Docker daemon"]
+fn redis_key_count_reports_the_keyspace_total() -> Result<(), DbError> {
+    containers::with_redis_url(|uri| {
+        let connection = connect_redis(uri)?;
+        let kv = connection
+            .key_value_api()
+            .expect("Redis should have KV API");
+
+        assert_eq!(kv.key_count(None)?, 0);
+
+        for i in 0..7 {
+            kv.set_key(
+                &KeySetRequest::new(format!("count:key:{i}"), b"v".to_vec())
+                    .with_repr(ValueRepr::Text),
+            )?;
+        }
+        for i in 0..3 {
+            kv.set_key(
+                &KeySetRequest::new(format!("count:other:{i}"), b"v".to_vec())
+                    .with_repr(ValueRepr::Text)
+                    .with_keyspace(2),
+            )?;
+        }
+
+        assert_eq!(kv.key_count(None)?, 7);
+        assert_eq!(kv.key_count(Some(2))?, 3);
+        assert_eq!(
+            kv.key_count(Some(0))?,
+            7,
+            "counting another keyspace must restore the active database"
+        );
+
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires Docker daemon"]
 fn redis_scan_keys_fills_sparse_filtered_page_across_batches() -> Result<(), DbError> {
     containers::with_redis_url(|uri| {
         let connection = connect_redis(uri)?;

@@ -393,6 +393,10 @@ pub enum DriverRequestBody {
         database: String,
         schema: Option<String>,
     },
+    // Appended after the last v1.4 variant for the same wire-index reason.
+    KvKeyCount {
+        keyspace: Option<u32>,
+    },
 }
 
 /// Request envelope for driver RPC operations.
@@ -539,6 +543,10 @@ pub enum DriverResponseBody {
     // for any peer that negotiated an older minor and desynchronise the stream.
     SchemaColumns {
         columns: Vec<SchemaColumnInfo>,
+    },
+    // Appended after the last v1.4 variant for the same wire-index reason.
+    KvKeyCountResult {
+        count: u64,
     },
 }
 
@@ -937,6 +945,43 @@ mod tests {
             }),
             56
         );
+    }
+
+    #[test]
+    fn kv_key_count_is_appended_after_the_last_v1_4_request_variant() {
+        assert_eq!(
+            wire_variant_index(&DriverRequestBody::KvKeyCount { keyspace: Some(2) }),
+            57
+        );
+    }
+
+    #[test]
+    fn kv_key_count_result_is_appended_after_the_last_v1_4_response_variant() {
+        assert_eq!(
+            wire_variant_index(&DriverResponseBody::KvKeyCountResult { count: 42 }),
+            34
+        );
+    }
+
+    #[test]
+    fn kv_key_count_request_and_result_round_trip_through_postcard() {
+        let request = DriverRequestBody::KvKeyCount { keyspace: Some(2) };
+        let bytes = postcard::to_allocvec(&request).expect("serialize");
+        let restored: DriverRequestBody = postcard::from_bytes(&bytes).expect("deserialize");
+
+        match restored {
+            DriverRequestBody::KvKeyCount { keyspace } => assert_eq!(keyspace, Some(2)),
+            other => panic!("unexpected request body: {other:?}"),
+        }
+
+        let response = DriverResponseBody::KvKeyCountResult { count: 1_234_567 };
+        let bytes = postcard::to_allocvec(&response).expect("serialize");
+        let restored: DriverResponseBody = postcard::from_bytes(&bytes).expect("deserialize");
+
+        match restored {
+            DriverResponseBody::KvKeyCountResult { count } => assert_eq!(count, 1_234_567),
+            other => panic!("unexpected response body: {other:?}"),
+        }
     }
 
     #[test]

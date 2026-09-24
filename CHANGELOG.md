@@ -16,13 +16,22 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Changed
 
-* SQLite explicit row limits retain at most N rows of any single row-producing statement (including `PRAGMA`, `WITH`, `VALUES`, and `RETURNING`) and flag actual omissions, including at zero; the statement still runs to completion, so mutations finish and late errors propagate. Explicit timeouts, bounded multi-statement batches, and bounded instance requests are refused before execution; unbounded requests remain compatible. The row cap does not bound memory, engine work, or elapsed time.
+* SQL Server explicit row limits retain at most N rows across every result set of a batch and flag actual omissions, including at zero; every set is drained, so later statements and mutations finish and late errors propagate. Explicit timeouts and bounded instance requests are refused before execution without clearing a pending cancellation; unbounded requests remain compatible. The row cap does not bound bytes, server work, or elapsed time; Azure SQL Database and Managed Instance were not verified.
+
+* SQLite explicit row limits retain at most N rows across the row-producing statements of a request (including `PRAGMA`, `WITH`, `VALUES`, and `RETURNING`) and flag actual omissions, including at zero; every statement still runs to completion, so mutations finish and late errors propagate. Bounded multi-statement batches are split with SQLite's own lexer and run in order under that one budget, so statements after the budget is exhausted still run, and a failure stops the batch as it does without a limit. Explicit timeouts and bounded instance requests are refused before execution; unbounded requests remain compatible. The row cap does not bound memory, engine work, or elapsed time, and splitting a bounded batch is quadratic in statement length.
 
 * MySQL/MariaDB explicit row limits retain at most N rows across script/server result sets and flag actual omissions, including at zero; later mutations finish and errors propagate. Explicit timeouts and bounded instance requests are refused before execution; unbounded requests remain compatible. The row cap does not bound bytes, server work, engine allocation, or elapsed time; hosted MariaDB was not verified.
 
 * ClickHouse and Redshift now refuse explicit query row limits (including zero) and statement timeouts before dispatch or preparation; unprotected queries retain existing behavior, including possible full-result buffering. ClickHouse HTTP timeout does not guarantee server cancellation, and the Redshift early-refusal regression uses PostgreSQL 16 protocol compatibility rather than a hosted Redshift cluster.
 
 ### Fixed
+
+* **Active query prompt shows the whole query** — the "Active query running"
+  prompt showed the running task's label, which the editor cuts at 80
+  characters, so a longer query ended in "..." as in the status bar. The
+  prompt now wraps the full query text and caps it at six lines, adding an
+  ellipsis only when it does not fit. When several queries run at quit, it
+  shows the longest-running one and counts the others.
 
 * External RPC drivers now refuse a query that sets a row limit (including
   zero) or a statement timeout, both in the client before the request is sent
@@ -279,6 +288,13 @@ All notable changes to DBFlux will be documented in this file.
   snapshot deduplication no longer discards a fresh capture just because the
   structural fingerprint is unchanged.
 
+* **Key total in the Redis key browser** — with no filter set, the key browser
+  now shows how many keys the whole keyspace holds next to the keys on the
+  current page. Drivers report it through a new defaulted
+  `KeyValueApi::key_count` seam: Redis answers with `DBSIZE`, and a Cluster
+  connection sums `DBSIZE` over every master. External drivers carry it over
+  driver RPC 1.5; against an older host the total is simply not shown.
+
 * **Interactive schema visualization** — a table or a whole database can now be
   opened as a diagram of the schema instead of a list of objects. Tables render
   as nodes carrying their columns, primary keys and flags, and foreign keys as
@@ -396,6 +412,17 @@ All notable changes to DBFlux will be documented in this file.
   no longer show the previous frame. The new `wait_for_idle` tool waits until
   the element tree stops changing and the window draws at most one frame per
   500 ms.
+
+* UI automation: `focus_element` on a text input now focuses its editor, so a
+  following `type_text` types into it instead of failing with "no active text
+  input handler". `focus_element`, `click_element` and `double_click_element`
+  click a text input inside its text area, near the left edge, instead of at
+  its center, which in a narrow input could land on the clear or show-password
+  button. Read-only inputs (the audit viewer's event details, the object
+  browser's decoded preview, the query builder's SQL preview) now report
+  `read_only` in the element tree, and `set_text` and `set_value` refuse them
+  with an error instead of replacing text a user could not edit. DBFlux itself
+  also ignores a value sent to a read-only input, whichever client sends it.
 
 * **The MCP approvals overlay can be closed** — once opened, the approvals
   overlay stayed on screen until the audit viewer was opened. It now closes

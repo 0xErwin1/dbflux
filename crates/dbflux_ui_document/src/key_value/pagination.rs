@@ -1,5 +1,5 @@
 use super::parsing::parse_database_name;
-use dbflux_core::{DbError, KeyGetRequest, KeyScanRequest, TaskKind};
+use dbflux_core::{DbError, KeyGetRequest, KeyScanRequest, KeyValueApi, TaskKind};
 use dbflux_ui_base::AsyncUpdateResultExt;
 use gpui::*;
 
@@ -41,6 +41,7 @@ impl super::KeyValueDocument {
 
     pub(super) fn load_page(&mut self, cx: &mut Context<Self>) {
         self.keys.clear();
+        self.key_total = None;
         self.selected_index = None;
         self.selected_value = None;
         self.last_error = None;
@@ -107,7 +108,11 @@ impl super::KeyValueDocument {
                     let api = connection.key_value_api().ok_or_else(|| {
                         DbError::NotSupported("Key-value API unavailable".to_string())
                     })?;
-                    api.scan_keys(&request)
+                    let page = api.scan_keys(&request)?;
+                    let key_total =
+                        fetch_key_total(api, request.keyspace, request.filter.as_deref());
+
+                    Ok::<_, DbError>((page, key_total))
                 })
                 .await;
 
@@ -118,11 +123,12 @@ impl super::KeyValueDocument {
                     }
 
                     match result {
-                        Ok(page) => {
+                        Ok((page, key_total)) => {
                             this.runner.complete_primary(task_id, cx);
 
                             this.keys = page.entries;
                             this.next_cursor = page.next_cursor;
+                            this.key_total = key_total;
                             this.last_error = None;
 
                             if is_first_page && is_unfiltered {
@@ -270,9 +276,115 @@ fn key_scan_pattern(filter: &str) -> Option<String> {
     }
 }
 
+/// Counts every key in the keyspace, but only for an unfiltered scan: a total
+/// next to a filtered page would read as the number of matches.
+///
+/// A driver that cannot count, or a count that fails, yields `None` so the
+/// total is simply not shown; the page itself already loaded.
+fn fetch_key_total(
+    api: &dyn KeyValueApi,
+    keyspace: Option<u32>,
+    pattern: Option<&str>,
+) -> Option<u64> {
+    if pattern.is_some() {
+        return None;
+    }
+
+    match api.key_count(keyspace) {
+        Ok(count) => Some(count),
+        Err(DbError::NotSupported(_)) => None,
+        Err(error) => {
+            log::debug!("Key total unavailable: {error}");
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::key_scan_pattern;
+    use super::{fetch_key_total, key_scan_pattern};
+    use dbflux_core::{
+        DbError, KeyDeleteRequest, KeyExistsRequest, KeyGetRequest, KeyGetResult, KeyScanPage,
+        KeyScanRequest, KeySetRequest, KeyValueApi,
+    };
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    enum CountOutcome {
+        Count(u64),
+        Unsupported,
+        Fails,
+    }
+
+    struct CountingKeyValue {
+        outcome: CountOutcome,
+        calls: AtomicUsize,
+    }
+
+    impl CountingKeyValue {
+        fn new(outcome: CountOutcome) -> Self {
+            Self {
+                outcome,
+                calls: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    impl KeyValueApi for CountingKeyValue {
+        fn key_count(&self, _keyspace: Option<u32>) -> Result<u64, DbError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+
+            match self.outcome {
+                CountOutcome::Count(count) => Ok(count),
+                CountOutcome::Unsupported => Err(DbError::NotSupported("no count".to_string())),
+                CountOutcome::Fails => Err(DbError::query_failed("connection reset")),
+            }
+        }
+
+        fn scan_keys(&self, _request: &KeyScanRequest) -> Result<KeyScanPage, DbError> {
+            unimplemented!("not used by fetch_key_total")
+        }
+
+        fn get_key(&self, _request: &KeyGetRequest) -> Result<KeyGetResult, DbError> {
+            unimplemented!("not used by fetch_key_total")
+        }
+
+        fn set_key(&self, _request: &KeySetRequest) -> Result<(), DbError> {
+            unimplemented!("not used by fetch_key_total")
+        }
+
+        fn delete_key(&self, _request: &KeyDeleteRequest) -> Result<bool, DbError> {
+            unimplemented!("not used by fetch_key_total")
+        }
+
+        fn exists_key(&self, _request: &KeyExistsRequest) -> Result<bool, DbError> {
+            unimplemented!("not used by fetch_key_total")
+        }
+    }
+
+    #[test]
+    fn key_total_is_fetched_for_an_unfiltered_scan() {
+        let api = CountingKeyValue::new(CountOutcome::Count(42));
+
+        assert_eq!(fetch_key_total(&api, Some(0), None), Some(42));
+        assert_eq!(api.calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn key_total_is_hidden_and_not_fetched_while_a_filter_is_set() {
+        let api = CountingKeyValue::new(CountOutcome::Count(42));
+
+        assert_eq!(fetch_key_total(&api, Some(0), Some("*user*")), None);
+        assert_eq!(api.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn key_total_is_hidden_when_the_driver_cannot_count() {
+        let unsupported = CountingKeyValue::new(CountOutcome::Unsupported);
+        let failing = CountingKeyValue::new(CountOutcome::Fails);
+
+        assert_eq!(fetch_key_total(&unsupported, None, None), None);
+        assert_eq!(fetch_key_total(&failing, None, None), None);
+    }
 
     #[test]
     fn key_scan_pattern_scans_everything_for_an_empty_filter() {

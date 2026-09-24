@@ -1645,6 +1645,7 @@ document:
       keys_count:
         one: "本页 %{count} 个键"
         many: "本页 %{count} 个键"
+      keys_total: "共 %{count} 个"
       filter:
         keys_placeholder: 筛选键…
         members_placeholder: 筛选元素…
@@ -2430,6 +2431,9 @@ modals:
     quit_anyway: 仍然退出
     keep_waiting: 继续等待
     cancel_query: 取消查询
+    more_queries:
+      one: "另有 %{count} 个查询正在执行"
+      many: "另有 %{count} 个查询正在执行"
   add_panel_picker:
     title: 添加面板
     submit:
