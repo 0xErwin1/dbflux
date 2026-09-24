@@ -204,6 +204,9 @@ impl ConnectionManagerWindow {
                                 .child(
                                     Checkbox::new("save-password")
                                         .checked(save_password)
+                                        .aria_label(dbflux_i18n::t!(
+                                            "connection_manager.action.save"
+                                        ))
                                         .on_click(cx.listener(|this, checked: &bool, _, cx| {
                                             this.form.form_save_password = *checked;
                                             cx.notify();

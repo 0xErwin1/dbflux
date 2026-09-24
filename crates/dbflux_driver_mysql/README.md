@@ -19,7 +19,7 @@ Popular open-source relational database.
 - Includes SQL/code generation for CRUD, indexes, foreign keys, and table DDL operations.
 - Routine discovery: lists stored procedures and user-defined functions from `information_schema.ROUTINES` including parameter types and return type hints (Functions only).
 - Routine definition: retrieves the full `CREATE FUNCTION` or `CREATE PROCEDURE` body via `SHOW CREATE FUNCTION`/`SHOW CREATE PROCEDURE` (read-only; definition is not editable or executable in the viewer).
-- Multi-statement scripts (several `;`-separated statements) are split and executed statement by statement, each through the typed prepared path, returning one result set per statement.
+- Multi-statement scripts (several `;`-separated statements) are split and executed statement by statement, each through the typed prepared path, returning one result set per statement. An explicit row limit retains at most N rows total across script and server result sets, flagging actual omitted rows even when N is zero; later mutations still complete and errors propagate.
 - Data-transfer engine: native multi-row `INSERT` bulk-load (`BULK_INSERT`), driver-native `CREATE TABLE` DDL from a source table's columns, `TRUNCATE TABLE` support, and a referential-integrity toggle (`SET FOREIGN_KEY_CHECKS`) for FK-safe migrations. Both MySQL and MariaDB share this support.
 - Sends the `program_name` connection attribute as `dbflux/<version>`, visible in `performance_schema.session_connect_attrs`.
 - Write-privilege probe: after connecting, checks `@@read_only`/`@@super_read_only` and `SHOW GRANTS` for the current user to detect a read-only replica or a role without `INSERT`/`UPDATE`/`DELETE` grants, tightening the resolved mutation policy to read-only when the server would reject writes anyway (side-effect free; falls back to `@@read_only` alone on MariaDB, which has no `@@super_read_only`).
@@ -50,6 +50,7 @@ Exposes tabular snapshots of running server state:
 
 ## Limitations
 
+- Explicit statement timeouts and bounded instance metric/inspector requests are refused before execution; unbounded requests retain compatibility. The retained-row cap does not bound bytes, server work, engine allocation, or elapsed time. Hosted MariaDB was not verified.
 - SQL-only driver; it does not expose document or key-value APIs.
 
 - Instance metrics return a single data point per call (current snapshot from `SHOW GLOBAL STATUS`), not a historical time series. Cumulative counters (e.g. `mysql.bytes_sent`) grow monotonically — interpret them as deltas between samples rather than absolute rates.

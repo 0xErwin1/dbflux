@@ -2661,6 +2661,7 @@ impl AuthProfilesSection {
                             .child(
                                 Checkbox::new("auth-profile-enabled")
                                     .checked(self.profile_enabled)
+                                    .aria_label(dbflux_i18n::t!("settings.auth_profiles.enabled"))
                                     .on_click(cx.listener(|this, checked: &bool, _, cx| {
                                         this.profile_enabled = *checked;
                                         cx.notify();

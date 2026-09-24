@@ -16,6 +16,8 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Changed
 
+* MySQL/MariaDB explicit row limits retain at most N rows across script/server result sets and flag actual omissions, including at zero; later mutations finish and errors propagate. Explicit timeouts and bounded instance requests are refused before execution; unbounded requests remain compatible. The row cap does not bound bytes, server work, engine allocation, or elapsed time; hosted MariaDB was not verified.
+
 * ClickHouse and Redshift now refuse explicit query row limits (including zero) and statement timeouts before dispatch or preparation; unprotected queries retain existing behavior, including possible full-result buffering. ClickHouse HTTP timeout does not guarantee server cancellation, and the Redshift early-refusal regression uses PostgreSQL 16 protocol compatibility rather than a hosted Redshift cluster.
 
 ### Fixed
@@ -35,6 +37,13 @@ All notable changes to DBFlux will be documented in this file.
   drops them: the refresh key, the toolbar button and the command palette show
   a warning to save or revert first, and auto-refresh skips its tick.
 
+* **SSO wizard account and role labels** — the account-ID and role inputs on
+  the AWS SSO wizard's second and third steps had only placeholders. They now
+  have visible labels, which are also their accessible names, and stable
+  `sso-field-account-id` and `sso-field-role-name` ids, like the first step.
+  The login modal's waiting indicator now animates while it waits for the
+  browser; the elapsed caption still counts whole wall-clock seconds.
+
 * UI automation: `set_text` and `set_value` now fill a text input addressed by
   its element id, and `click_element` accepts text inputs and focuses them for
   `type_text`. Previously both failed on every input, `set_text` with a
@@ -46,6 +55,13 @@ All notable changes to DBFlux will be documented in this file.
   from the form. Each input takes comma-separated hook IDs or names, shows the
   extras already bound when a connection is edited, is reachable with j/k, and
   is addressable as `cm-setting-<phase>_hook_extra`.
+
+* **More English-only labels are translated** — the audit viewer's tab title,
+  filter-bar labels and its category and level chips, the "Off" and "Custom"
+  auto-refresh options, the Default and Compact style options in Settings, the
+  short time-range presets (15m, 1h, 6h, 24h, 7d), and the dashboard-import
+  and export-connection toasts now follow the selected language. Object-storage
+  audit events showed a `NULL` category chip; they now show their category.
 
 * The SQL editor warns once when any delivered result set actually omitted rows; the
   data grid shows the warning for its selected result set, even when no rows were
@@ -67,6 +83,13 @@ All notable changes to DBFlux will be documented in this file.
   protections. Unprotected execution remains available; the default editor
   cannot promise these protections on these backends.
   
+* **Checkbox names in Settings and the Connection Manager** — every checkbox in
+  the Settings window and the Connection Manager now has the text shown next to
+  it as its accessible name. In Settings > General all eight checkboxes
+  (`vim-mode`, `restore-session`, `requires-preview`, ...) had no name, so a
+  screen reader announced a bare checkbox and UI automation could only find them
+  by id. Element ids and behavior are unchanged.
+
 * **Audit export asks where to save** — exporting from the audit viewer now
   opens the same save dialog as the other exports, with a timestamped default
   name (`audit_export_<YYYYMMDD-HHMMSS>.<csv|json>`), instead of writing to a
