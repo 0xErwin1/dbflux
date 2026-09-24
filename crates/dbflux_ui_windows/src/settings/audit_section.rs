@@ -877,6 +877,7 @@ impl AuditSection {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let primary = cx.theme().primary;
+        let label = label.into();
 
         div()
             .flex()
@@ -904,13 +905,16 @@ impl AuditSection {
                     cx.notify();
                 }),
             )
-            .child(Checkbox::new(id).checked(checked).on_click(cx.listener(
-                move |this, value: &bool, _, cx| {
-                    setter(this, *value);
-                    cx.notify();
-                },
-            )))
-            .child(div().text_sm().child(label.into()))
+            .child(
+                Checkbox::new(id)
+                    .checked(checked)
+                    .aria_label(label.clone())
+                    .on_click(cx.listener(move |this, value: &bool, _, cx| {
+                        setter(this, *value);
+                        cx.notify();
+                    })),
+            )
+            .child(div().text_sm().child(label))
     }
 
     fn render_audit_input_field(
@@ -935,6 +939,7 @@ impl AuditSection {
     ) -> impl IntoElement {
         let theme = cx.theme();
         let primary = theme.primary;
+        let label = label.into();
         // Row is non-interactive: no cursor movement on activation,
         // checkbox cannot be toggled. Only visual focus state is shown.
         div()
@@ -957,7 +962,7 @@ impl AuditSection {
                     cx.notify();
                 }),
             )
-            .child(Checkbox::new(id).checked(checked))
+            .child(Checkbox::new(id).checked(checked).aria_label(label.clone()))
             .child(Text::muted(label))
             .child(div().italic().child(Text::dim_secondary(dbflux_i18n::t!(
                 "settings.audit.field.not_wired"

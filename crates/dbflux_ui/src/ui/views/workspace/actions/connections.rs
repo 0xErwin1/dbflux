@@ -250,12 +250,15 @@ impl Workspace {
             }
         }
 
+        // The description is a shortened label for some tasks; the prompt
+        // previews the full text of the longest-running query and counts the rest.
         let request = ActiveQueryRequest {
-            sql: tasks
-                .iter()
-                .map(|task| task.description.as_str())
-                .collect::<Vec<_>>()
-                .join("\n"),
+            sql: longest_running
+                .query_text
+                .as_deref()
+                .unwrap_or(&longest_running.description)
+                .to_string(),
+            more_queries: tasks.len() - 1,
             trigger,
             elapsed_secs: longest_running.elapsed_secs as u64,
             connection_names,
@@ -379,6 +382,7 @@ mod active_query_prompt_tests {
     // Explicit imports, not `use super::*`: the parent glob together with
     // `#[gpui::test]` sends the macro expansion into unbounded recursion.
     use crate::keymap::{Command, CommandDispatcher, ContextId};
+    use crate::ui::overlays::modals::ActiveQueryRequest;
     use crate::ui::views::workspace::{QuitConfirmed, Workspace};
     use dbflux_core::{
         Connection, ConnectionProfile, DatabaseCategory, DbConfig, DbError, DbKind, DriverMetadata,
@@ -631,6 +635,30 @@ mod active_query_prompt_tests {
             })
         }
 
+        /// Starts a query task the way the code editor does: a shortened
+        /// description plus the full query text.
+        fn start_query_with_text(&mut self, profile_id: Uuid, query_text: &str) -> TaskId {
+            let task_id = self.start_query(profile_id);
+            self.window.update(|_, cx| {
+                self.app_state.update(cx, |state, _| {
+                    state.set_task_query_text(task_id, query_text);
+                });
+            });
+            task_id
+        }
+
+        fn prompt_request(&mut self) -> Option<ActiveQueryRequest> {
+            let workspace = self.workspace.clone();
+            self.window.update(|_, cx| {
+                workspace
+                    .read(cx)
+                    .modal_active_query
+                    .read(cx)
+                    .request()
+                    .cloned()
+            })
+        }
+
         fn disconnect_active(&mut self) {
             let workspace = self.workspace.clone();
             self.window.update(|window, cx| {
@@ -840,6 +868,45 @@ mod active_query_prompt_tests {
         assert!(!harness.prompt_visible());
         assert!(!harness.is_connected(profile_id));
         assert_eq!(harness.task_status(query), Some(TaskStatus::Cancelled));
+    }
+
+    #[gpui::test]
+    fn disconnect_prompt_previews_the_full_query_text(cx: &mut TestAppContext) {
+        let full_query = "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c) \
+                          SELECT count(*) FROM c;";
+        let mut harness = new_harness(cx);
+        let (profile_id, _) = harness.connect("prod");
+        harness.start_query_with_text(profile_id, full_query);
+
+        harness.disconnect_active();
+
+        let request = harness.prompt_request().expect("the prompt is open");
+        assert_eq!(request.sql, full_query);
+        assert_eq!(request.more_queries, 0);
+    }
+
+    #[gpui::test]
+    fn quit_prompt_previews_the_longest_running_query_and_counts_the_rest(cx: &mut TestAppContext) {
+        let first_query = "SELECT * FROM orders JOIN order_lines USING (order_id) \
+                           WHERE created_at > now() - interval '1 year';";
+        let second_query = "SELECT count(*) FROM events;";
+        let mut harness = new_harness(cx);
+        let (first_profile, _) = harness.connect("prod");
+        let (second_profile, _) = harness.connect("analytics");
+        harness.start_query_with_text(first_profile, first_query);
+        // Starts apart so the first query is unambiguously the longest-running.
+        std::thread::sleep(Duration::from_millis(20));
+        harness.start_query_with_text(second_profile, second_query);
+
+        assert!(!harness.request_quit());
+
+        let request = harness.prompt_request().expect("the prompt is open");
+        assert_eq!(request.sql, first_query);
+        assert_eq!(request.more_queries, 1);
+        assert_eq!(
+            request.connection_names,
+            vec!["prod".to_string(), "analytics".to_string()]
+        );
     }
 
     #[gpui::test]

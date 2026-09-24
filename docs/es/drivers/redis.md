@@ -74,6 +74,10 @@ Driver de clave-valor Redis para DBFlux, construido sobre el crate
     independiente, y el cursor agregado viaja como un objeto JSON opaco que
     mapea `"<host>:<port>"` a su cursor `SCAN` pendiente. El escaneo completo
     termina cuando todos los masters reportan cursor 0.
+  - Total de claves del keyspace (`key_count`): `DBSIZE` sobre la base de datos
+    seleccionada; en una conexión Cluster, la suma de `DBSIZE` de todos los
+    masters. El explorador de claves lo muestra junto al conteo de la página
+    cuando no hay filtro.
   - Descubrimiento de tipo por clave (`KV_KEY_TYPES`) entre string, hash, list,
     set, sorted set y stream.
   - Inspección de TTL (`KV_TTL`) y reporte de tamaño de valor (`KV_VALUE_SIZE`).

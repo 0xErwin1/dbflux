@@ -261,6 +261,39 @@ fn redis_cluster_schema_reports_aggregated_key_count() -> Result<(), DbError> {
 }
 
 // ---------------------------------------------------------------------------
+// Key count summed across masters
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore = "requires Docker daemon"]
+fn redis_cluster_key_count_sums_every_master() -> Result<(), DbError> {
+    containers::with_redis_cluster_urls(|urls| {
+        let connection = connect_cluster(urls[0].clone())?;
+        let kv = connection
+            .key_value_api()
+            .expect("Redis should have KV API");
+
+        let baseline = kv.key_count(None)?;
+
+        // No hash tags, so the keys spread across hash slots and therefore
+        // across masters; a count read from a single node would fall short.
+        let seeded_keys: Vec<String> = (0..40).map(|i| format!("cluster:count:{i}")).collect();
+        for key in &seeded_keys {
+            kv.set_key(&KeySetRequest::new(key, b"v".to_vec()).with_repr(ValueRepr::Text))?;
+        }
+
+        assert_eq!(kv.key_count(None)?, baseline + seeded_keys.len() as u64);
+        assert_eq!(kv.key_count(Some(0))?, baseline + seeded_keys.len() as u64);
+        assert!(matches!(
+            kv.key_count(Some(3)),
+            Err(DbError::NotSupported(_))
+        ));
+
+        Ok(())
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Auto-detection connects as Cluster without an explicit topology
 // ---------------------------------------------------------------------------
 

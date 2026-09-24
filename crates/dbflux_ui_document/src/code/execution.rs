@@ -607,6 +607,9 @@ impl CodeDocument {
             Some(task_target.clone()),
             cx,
         );
+        self.app_state.update(cx, |state, _cx| {
+            state.set_task_query_text(task_id, query.trim());
+        });
 
         let exec_id = Uuid::new_v4();
         let record = ExecutionRecord {

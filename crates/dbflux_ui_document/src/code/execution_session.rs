@@ -937,6 +937,53 @@ mod tests {
     }
 
     #[gpui::test]
+    fn running_query_task_carries_the_full_query_text(cx: &mut gpui::TestAppContext) {
+        let full_query = "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c) \
+                          SELECT count(*) FROM c;";
+        let app_state = initialized_app_state(cx);
+        let profile_id = add_test_profile(cx, &app_state, FakeConnection::isolated());
+        let document = Rc::new(RefCell::new(None));
+        let document_ref = document.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let document = cx.new(|cx| {
+                let mut document = CodeDocument::new_with_language(
+                    app_state.clone(),
+                    Some(profile_id),
+                    dbflux_core::QueryLanguage::Sql,
+                    window,
+                    cx,
+                );
+                document.set_content(full_query, window, cx);
+                document
+            });
+            document_ref.replace(Some(document.clone()));
+            Root::new(document, window, cx)
+        });
+        let document = document.borrow().clone().expect("document created");
+        window.run_until_parked();
+
+        window.update(|window, cx| {
+            document.update(cx, |document, cx| document.run_query(window, cx));
+        });
+        for _ in 0..128 {
+            if window.update(|_, cx| document.read(cx).execution.active_query_task.is_some()) {
+                break;
+            }
+            window.dispatcher.tick(false);
+        }
+
+        let running =
+            window.update(|_, cx| app_state.read(cx).running_query_tasks(Some(profile_id)));
+        assert_eq!(running.len(), 1, "the query must still be running");
+        assert_ne!(
+            running[0].description, full_query,
+            "the task description is the shortened label"
+        );
+        assert_eq!(running[0].query_text.as_deref(), Some(full_query));
+    }
+
+    #[gpui::test]
     fn real_run_query_rotates_session_after_database_context_change(cx: &mut gpui::TestAppContext) {
         let app_state = initialized_app_state(cx);
         let (root, factory, isolated) = factory_backed_root();

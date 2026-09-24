@@ -806,7 +806,7 @@ impl CodeDocument {
         let refresh_dropdown = cx.new(|_cx| {
             let items = RefreshPolicy::ALL
                 .iter()
-                .map(|policy| DropdownItem::new(policy.label()))
+                .map(|policy| DropdownItem::new(crate::labels::refresh_policy_label(*policy)))
                 .collect();
 
             Dropdown::new("sql-auto-refresh")

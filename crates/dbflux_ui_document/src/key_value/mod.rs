@@ -88,6 +88,9 @@ pub struct KeyValueDocument {
     current_cursor: Option<String>,
     next_cursor: Option<String>,
     previous_cursors: Vec<Option<String>>,
+    /// Keys in the whole keyspace, shown only for an unfiltered scan and only
+    /// when the driver can count them.
+    key_total: Option<u64>,
 
     // Inline rename
     rename_input: Option<Entity<InputState>>,
@@ -233,7 +236,7 @@ impl KeyValueDocument {
         let refresh_dropdown = cx.new(|_cx| {
             let items = RefreshPolicy::ALL
                 .iter()
-                .map(|policy| DropdownItem::new(policy.label()))
+                .map(|policy| DropdownItem::new(crate::labels::refresh_policy_label(*policy)))
                 .collect();
 
             Dropdown::new("kv-auto-refresh")
@@ -316,6 +319,7 @@ impl KeyValueDocument {
             current_cursor: None,
             next_cursor: None,
             previous_cursors: Vec::new(),
+            key_total: None,
             rename_input: None,
             renaming_index: None,
             editing_member_index: None,

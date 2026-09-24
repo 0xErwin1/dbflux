@@ -227,7 +227,7 @@ jobs:
             mirror.gcr.io/amazon/dynamodb-local:latest
             mirror.gcr.io/library/influxdb:2.7
             mirror.gcr.io/library/influxdb:1.8
-            quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+            cgr.dev/chainguard/minio:latest@sha256:bd014394a80898e68c149f2311fdf8d5a2c2f3bb2c33b9327ae6d02b4b065ae1
             mirror.gcr.io/localstack/localstack:3
             ghcr.io/tursodatabase/libsql-server:v0.24.33
           )
@@ -266,6 +266,9 @@ jobs:
       - name: Run MySQL live integration tests
         run: cargo test -p dbflux_driver_mysql --locked --test live_integration -- --ignored
 
+      - name: Run MySQL query safety cancellation regression
+        run: cargo test -p dbflux_driver_mysql --locked --lib mysql_query_safety_refusal_preserves_existing_cancel_signal -- --ignored
+
       - name: Run MongoDB live integration tests
         run: cargo test -p dbflux_driver_mongodb --locked --test live_integration -- --ignored
 
@@ -295,6 +298,9 @@ jobs:
       # exhausting the runner with concurrent containers.
       - name: Run MSSQL live integration tests
         run: cargo test -p dbflux_driver_mssql --locked --test live_integration -- --ignored --test-threads=1
+
+      - name: Run MSSQL query safety collector regression
+        run: cargo test -p dbflux_driver_mssql --locked --lib mssql_query_safety_collector_consumes_budget_before_late_error -- --ignored --test-threads=1
 
       - name: Run MSSQL DDL integration tests
         run: cargo test -p dbflux_driver_mssql --locked --test ddl_integration -- --ignored --test-threads=1

@@ -15,11 +15,19 @@ Embedded file-based database.
 - Supports query cancellation via SQLite interrupt handles.
 - Includes SQL/code generation for CRUD, indexes, reindex, create table, and drop table.
 - Multi-statement scripts (several `;`-separated statements) are split and executed statement by statement, each through the typed prepared path, returning one result set per statement. (`rusqlite::prepare` only parses the first statement of a string, so a script must be split.)
+- Enforces a requested row limit on every single statement that produces rows (`SELECT`, `PRAGMA`, `EXPLAIN`, `WITH ... SELECT`, `VALUES`, and DML with `RETURNING`) by retaining only the requested rows during iteration: iteration drains to completion, so a mutation's effects always finish fully, a late per-row error still surfaces, and the result reports when rows were omitted.
+- Runs a row-limited multi-statement batch statement by statement under one row budget shared by the whole request. The batch is split with SQLite's own lexer, so a backslash is not an escape and semicolons inside literals, comments, and trigger bodies do not split a statement; trailing comments or semicolons do not create an extra statement. Each row-producing statement retains rows only while the budget lasts, statements after the budget is exhausted still run, and the batch stops at the first failure exactly as an unbounded batch does.
+- Rejects, before any preparation or execution, requests it cannot bound safely: a row-limited request aimed at instance metrics or inspectors, and a requested statement timeout.
 - Data-transfer engine: native multi-row `INSERT` bulk-load (`BULK_INSERT`), driver-native `CREATE TABLE` DDL from a source table's columns, and a per-connection referential-integrity toggle (`PRAGMA foreign_keys`) for FK-safe migrations.
 
 ## Limitations
 
 - Local file driver only; no network transport, SSH tunneling, or TLS/SSL mode.
+- A requested row limit is a retention cap, not an engine bound: the statement still runs to completion inside the embedded engine, all rows past the cap are observed and discarded, and no byte, memory, or time budget is enforced — sorter and `RETURNING` allocations are not bounded by the cap. A mutation under a row limit completes all of its effects.
+- Splitting a row-limited batch prepares nothing, but probes the statement text with SQLite's lexer at every `;`, which is quadratic in the length of a statement that holds many semicolons inside literals, comments, or trigger bodies. Unbounded batches keep the legacy split-and-run behavior.
+- Without a row limit, `WITH ... SELECT`, `VALUES`, and DML with `RETURNING` keep the legacy behavior: they report an unsupported-execution error after the statement has already run.
+- A row-limited request aimed at the driver's instance metrics or inspectors is refused before the connection lock or any dispatch — the public request type can carry those contexts although the driver advertises no instance catalog — while uncapped requests keep the existing behavior.
+- A requested statement timeout (`QueryRequest::statement_timeout`) is unsupported and rejected before execution. Ordinary uncapped queries remain cancellable through the existing interrupt path.
 - SQL-only driver; it does not expose document or key-value APIs.
 - SQLite schema model has no server-side multi-schema namespace equivalent.
 - No `TRUNCATE TABLE` statement; the data-transfer engine's Truncate load option is unavailable for SQLite targets (`DriverCapabilities::TRUNCATE_TABLE` is not set).

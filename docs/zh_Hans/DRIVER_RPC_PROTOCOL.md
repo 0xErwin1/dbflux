@@ -90,6 +90,7 @@ DriverRequestBody::Hello(DriverHelloRequest {
         ProtocolVersion::new(1, 2),
         ProtocolVersion::new(1, 3),
         ProtocolVersion::new(1, 4),
+        ProtocolVersion::new(1, 5),
     ],
     requested_capabilities: vec![
         DriverCapability::Cancellation,
@@ -172,6 +173,12 @@ DriverResponseBody::Hello(DriverHelloResponse {
 `SchemaColumns { database, schema }` 通过一次调用获取某个模式下所有关系的列，并返回 `SchemaColumns { columns: Vec<SchemaColumnInfo> }`，其中每条记录都在常规的 `ColumnInfo` 旁带有其 `table_name`。宿主进程将该请求分发到连接的 `schema_columns` 接缝，处理方式与 `SchemaIndexes` 和 `SchemaForeignKeys` 完全一致。
 
 与上面的 v1.3 字段不同，该操作在线路上并非追加式变更：帧使用 postcard 编码，它以 varint 判别式索引而非名称来标记枚举变体。因此 `SchemaColumns` 被追加在请求与响应枚举中最后一个 v1.3 变体之后；若将其插入枚举中部，会使之后所有变体的索引整体后移，协商 v1.3 的对端会把移位后的变体解码成错误的变体，并使帧的剩余部分无法解码，导致流失去同步。客户端还在本地进行版本拦截：当协商的次版本低于 1.4 时，`IpcConnection::schema_columns` 检查 `Hello` 期间选定的版本，直接返回 `DbError::NotSupported` 而不发送任何内容，因此旧宿主进程根本不会收到新变体。消费者对该错误的处理与 trait 默认的 `NotSupported` 相同：回退到按表的 `table_details` 加载。
+
+### 键数量（v1.5+）
+
+`KvKeyCount { keyspace }` 请求某个键空间中的键数量（`None` 表示会话当前的键空间），并返回 `KvKeyCountResult { count }`。宿主进程将请求分派到连接的 `KeyValueApi::key_count` 接口；未实现它的驱动会以 trait 默认的 `NotSupported` 响应，客户端收到的是 `UnsupportedMethod`。
+
+出于上文所述的线路索引原因，这两个变体都追加在各自枚举中最后一个 v1.4 变体之后。客户端同样在本地进行版本拦截：当协商的次版本低于 1.5 时，`IpcConnection::key_count` 直接返回 `DbError::NotSupported` 而不发送任何内容。键浏览器将该错误视为“无总数”，只显示本页键数。
 
 ## 认证提供程序 RPC 契约
 
