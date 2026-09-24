@@ -2527,8 +2527,8 @@ impl Window {
     /// The value reaches the listeners the element registered with `on_a11y_action`,
     /// the same way an assistive technology request does, so a text input can replace
     /// its document without holding focus or an active input handler. Returns `false`
-    /// when the ID is absent or duplicated, or when the element has no `SetValue`
-    /// listener.
+    /// when the ID is absent or duplicated, when the element is read-only, or when the
+    /// element has no `SetValue` listener.
     pub fn set_observed_element_value(&mut self, id: &str, value: &str, cx: &mut App) -> bool {
         let Some(node_id) = self.rendered_frame.observed.accessibility_id(id) else {
             return false;
@@ -7248,9 +7248,26 @@ impl Window {
             .push((action, Box::new(listener)));
     }
 
+    /// Mark the first accessibility node that `f` builds as read-only.
+    ///
+    /// A wrapper element calls this around the prepaint of its child, so a control whose
+    /// frame it cannot configure, such as a text input rendered by another crate, reports
+    /// the read-only state to assistive technology and frame observers. Its descendants are
+    /// unaffected. A read-only node refuses `SetValue` and `ReplaceSelectedText` requests,
+    /// including those from [`Window::set_observed_element_value`].
+    pub fn with_accessibility_read_only<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        let previous = mem::replace(&mut self.a11y.read_only_next, true);
+        let result = f(self);
+        // A node built inside `f` also satisfies an enclosing call, so only an unused mark
+        // is handed back to it.
+        self.a11y.read_only_next = previous && self.a11y.read_only_next;
+        result
+    }
+
     /// Run the listeners registered for `action` on `target_node`.
     ///
-    /// Returns whether at least one listener matched the action.
+    /// Returns whether at least one listener matched the action. A value-changing action
+    /// on a read-only node runs no listener.
     fn dispatch_a11y_action_listeners(
         &mut self,
         target_node: accesskit::NodeId,
@@ -7258,6 +7275,13 @@ impl Window {
         data: Option<&accesskit::ActionData>,
         cx: &mut App,
     ) -> bool {
+        let changes_value = matches!(
+            action,
+            accesskit::Action::SetValue | accesskit::Action::ReplaceSelectedText
+        );
+        if changes_value && self.a11y.read_only_nodes.contains(&target_node) {
+            return false;
+        }
         // Take listeners out temporarily so the closures can borrow Window
         // mutably, then restore them afterward.
         let Some(mut listeners) = self.a11y.action_listeners.remove(&target_node) else {

@@ -1,0 +1,108 @@
+diff --git a/crates/gpui/src/element.rs b/crates/gpui/src/element.rs
+index 1c363e1a..20b75568 100644
+--- a/crates/gpui/src/element.rs
++++ b/crates/gpui/src/element.rs
+@@ -398,6 +398,12 @@ impl<E: Element> Drawable<E> {
+                                 y1: ((bounds.origin.y.0 + bounds.size.height.0) * scale) as f64,
+                             });
+                             self.element.write_a11y_info(&mut node);
++                            if mem::take(&mut window.a11y.read_only_next) {
++                                node.set_read_only();
++                            }
++                            if node.is_read_only() {
++                                window.a11y.read_only_nodes.insert(node_id);
++                            }
+                             window.a11y.node_bounds.insert(node_id, bounds);
+                             pushed_a11y_node = window.a11y.nodes.push(node_id, node);
+                             #[cfg(debug_assertions)]
+diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
+index 8fba482e..7e8577c1 100644
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -2527,8 +2527,8 @@ impl Window {
+     /// The value reaches the listeners the element registered with `on_a11y_action`,
+     /// the same way an assistive technology request does, so a text input can replace
+     /// its document without holding focus or an active input handler. Returns `false`
+-    /// when the ID is absent or duplicated, or when the element has no `SetValue`
+-    /// listener.
++    /// when the ID is absent or duplicated, when the element is read-only, or when the
++    /// element has no `SetValue` listener.
+     pub fn set_observed_element_value(&mut self, id: &str, value: &str, cx: &mut App) -> bool {
+         let Some(node_id) = self.rendered_frame.observed.accessibility_id(id) else {
+             return false;
+@@ -7248,9 +7248,26 @@ impl Window {
+             .push((action, Box::new(listener)));
+     }
+ 
++    /// Mark the first accessibility node that `f` builds as read-only.
++    ///
++    /// A wrapper element calls this around the prepaint of its child, so a control whose
++    /// frame it cannot configure, such as a text input rendered by another crate, reports
++    /// the read-only state to assistive technology and frame observers. Its descendants are
++    /// unaffected. A read-only node refuses `SetValue` and `ReplaceSelectedText` requests,
++    /// including those from [`Window::set_observed_element_value`].
++    pub fn with_accessibility_read_only<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
++        let previous = mem::replace(&mut self.a11y.read_only_next, true);
++        let result = f(self);
++        // A node built inside `f` also satisfies an enclosing call, so only an unused mark
++        // is handed back to it.
++        self.a11y.read_only_next = previous && self.a11y.read_only_next;
++        result
++    }
++
+     /// Run the listeners registered for `action` on `target_node`.
+     ///
+-    /// Returns whether at least one listener matched the action.
++    /// Returns whether at least one listener matched the action. A value-changing action
++    /// on a read-only node runs no listener.
+     fn dispatch_a11y_action_listeners(
+         &mut self,
+         target_node: accesskit::NodeId,
+@@ -7258,6 +7275,13 @@ impl Window {
+         data: Option<&accesskit::ActionData>,
+         cx: &mut App,
+     ) -> bool {
++        let changes_value = matches!(
++            action,
++            accesskit::Action::SetValue | accesskit::Action::ReplaceSelectedText
++        );
++        if changes_value && self.a11y.read_only_nodes.contains(&target_node) {
++            return false;
++        }
+         // Take listeners out temporarily so the closures can borrow Window
+         // mutably, then restore them afterward.
+         let Some(mut listeners) = self.a11y.action_listeners.remove(&target_node) else {
+diff --git a/crates/gpui/src/window/a11y.rs b/crates/gpui/src/window/a11y.rs
+index 1800dfb1..285c9cff 100644
+--- a/crates/gpui/src/window/a11y.rs
++++ b/crates/gpui/src/window/a11y.rs
+@@ -149,6 +149,11 @@ pub(crate) struct A11y {
+     pub(crate) focus_ids: FxHashMap<NodeId, FocusId>,
+     pub(crate) node_bounds: FxHashMap<NodeId, Bounds<Pixels>>,
+     pub(crate) action_listeners: FxHashMap<NodeId, Vec<(Action, A11yActionListener)>>,
++    /// Whether the next node built is marked read-only, set by
++    /// [`crate::Window::with_accessibility_read_only`].
++    pub(crate) read_only_next: bool,
++    /// Nodes of this frame that are read-only. Value-changing actions on them are refused.
++    pub(crate) read_only_nodes: FxHashSet<NodeId>,
+     /// The window's title, used to label the root node so assistive
+     /// technology can tell windows apart.
+     window_title: Option<SharedString>,
+@@ -177,6 +182,8 @@ impl A11y {
+             focus_ids: FxHashMap::default(),
+             node_bounds: FxHashMap::default(),
+             action_listeners: FxHashMap::default(),
++            read_only_next: false,
++            read_only_nodes: FxHashSet::default(),
+             window_title,
+             last_focus_without_node: None,
+             debug: debug::A11yDebug::default(),
+@@ -277,6 +284,8 @@ impl A11y {
+         self.focus_ids.clear();
+         self.node_bounds.clear();
+         self.action_listeners.clear();
++        self.read_only_next = false;
++        self.read_only_nodes.clear();
+         self.nodes.begin_frame(self.window_title.as_ref());
+     }
+ 

@@ -186,15 +186,15 @@ and then `type_text`. Both click inside the text area, a third of the input's
 width from its left edge and at most 40 pixels from it, which focuses the editor
 and stays clear of a leading icon and of the clear and show-password buttons at
 the right edge. The caret lands where the click did, so `type_text` inserts
-there; send `keyboard` with `end` first to append. On any other element
+there. Send `keyboard` with `end` first to append. On any other element
 `focus_element` moves focus without clicking.
 
-An element whose state reports `read_only` rejects a new value: `set_text` and
-`set_value` fail on it with an error that says so, and `get_element_state`
-includes `read_only: true` for it. The read-only inputs DBFlux draws do not
-report that state yet, so on them `set_text` and `set_value` still replace a
-value a user could not edit, and a successful `set_text` does not prove that
-the field is editable.
+Read-only inputs, such as the audit viewer's event details, the object
+browser's decoded preview and the query builder's SQL preview, report
+`read_only: true` in `get_element_state` and in the element tree. `set_text` and
+`set_value` refuse them with an error that says the element is read-only, and
+DBFlux itself ignores a value sent to them, so their text does not change. They
+can still be clicked, focused and selected.
 
 Coordinates are logical window pixels, the same units as the bounds in the
 element tree. Screenshots are in physical pixels, so they are larger by the UI

@@ -149,6 +149,11 @@ pub(crate) struct A11y {
     pub(crate) focus_ids: FxHashMap<NodeId, FocusId>,
     pub(crate) node_bounds: FxHashMap<NodeId, Bounds<Pixels>>,
     pub(crate) action_listeners: FxHashMap<NodeId, Vec<(Action, A11yActionListener)>>,
+    /// Whether the next node built is marked read-only, set by
+    /// [`crate::Window::with_accessibility_read_only`].
+    pub(crate) read_only_next: bool,
+    /// Nodes of this frame that are read-only. Value-changing actions on them are refused.
+    pub(crate) read_only_nodes: FxHashSet<NodeId>,
     /// The window's title, used to label the root node so assistive
     /// technology can tell windows apart.
     window_title: Option<SharedString>,
@@ -177,6 +182,8 @@ impl A11y {
             focus_ids: FxHashMap::default(),
             node_bounds: FxHashMap::default(),
             action_listeners: FxHashMap::default(),
+            read_only_next: false,
+            read_only_nodes: FxHashSet::default(),
             window_title,
             last_focus_without_node: None,
             debug: debug::A11yDebug::default(),
@@ -277,6 +284,8 @@ impl A11y {
         self.focus_ids.clear();
         self.node_bounds.clear();
         self.action_listeners.clear();
+        self.read_only_next = false;
+        self.read_only_nodes.clear();
         self.nodes.begin_frame(self.window_title.as_ref());
     }
 

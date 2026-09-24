@@ -131,9 +131,9 @@ could show the previous frame.
 ### Read-only state and text input focus
 
 `text-input-read-only-focus.patch` was written for DBFlux against this directory with the first
-three patches applied, and has no upstream counterpart. It needs no change to
-`vendor/gpui-pre`, whose `aria_read_only` builder already sets AccessKit's read-only state.
-Four files, 421 diff lines.
+three patches applied, and has no upstream counterpart. It reads the read-only state that
+`aria_read_only` and `vendor/gpui-pre/read-only-accessibility.patch` set on AccessKit nodes.
+Five files, 435 diff lines.
 
 - `gpui-mcp-protocol`: `NodeState` gains `read_only`. It defaults to `false` and is serialized
   only when `true`, so a tree without it keeps its wire shape.
@@ -142,7 +142,9 @@ Four files, 421 diff lines.
   still be clicked and focused to select and copy its text.
 - `gpui-mcp-server`: `set_text`, and `set_value` on text inputs, fail with "element ... is
   read-only and does not accept a new value" on a node that reports `read_only`, before any
-  operation reaches the bridge.
+  operation reaches the bridge. The app refuses the same write on its own (see
+  `vendor/gpui-pre/VENDOR.md`), so the bridge's `SetValue` now reports "semantic node is
+  read-only or has no accessibility value handler" when `set_observed_element_value` fails.
 - `gpui-mcp-server`: `focus_element` on a node with the `SetText` action clicks it instead of
   sending `Focus`, the way `click_element` does, and settles after the click. `Focus` on a
   gpui-component input focuses its frame, whose focus handle does not own the text input

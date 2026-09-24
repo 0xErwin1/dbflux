@@ -419,3 +419,17 @@ index 024cecc1..23018f19 100644
      /// One dock panel, rendered as its own view exactly as
      /// `gpui_component::dock::TabPanel` is. Every instance renders the same
      /// element ids, so the instances are distinguished only by the view segment
+diff --git a/crates/gpui-mcp/src/service.rs b/crates/gpui-mcp/src/service.rs
+index 5249f72f..7d0d1e1f 100644
+--- a/crates/gpui-mcp/src/service.rs
++++ b/crates/gpui-mcp/src/service.rs
+@@ -610,7 +610,8 @@ fn handle_ui_operation(
+             if !window.set_observed_element_value(&node_id, &value, cx) {
+                 return Err(BridgeError::new(
+                     ErrorCode::Unsupported,
+-                    "semantic node has no accessibility value handler in the current frame",
++                    "semantic node is read-only or has no accessibility value handler in the \
++                     current frame",
+                 ));
+             }
+             window.refresh();
