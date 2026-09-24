@@ -10,10 +10,7 @@ fn runtime_with_inaccessible_db() -> StorageRuntime {
     let unique_dir = std::env::temp_dir().join(format!(
         "dbflux_bootstrap_test_{}_{}",
         std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        uuid::Uuid::new_v4()
     ));
     std::fs::create_dir_all(&unique_dir).expect("should create temp dir");
 

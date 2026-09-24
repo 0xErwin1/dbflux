@@ -2796,6 +2796,9 @@ settings:
       label: DELETE / UPDATE 需要 WHERE
     requires_preview:
       label: 始终要求预览（忽略抑制）
+    editor_row_limit:
+      label: 编辑器行数上限
+      error: 编辑器行数上限必须是介于 1 和 9223372036854775807 之间的整数
     object_preview_limit:
       label: 对象预览大小上限（MiB）
       error: 对象预览大小上限必须大于等于 1 MiB

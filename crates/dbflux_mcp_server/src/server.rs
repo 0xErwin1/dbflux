@@ -833,13 +833,7 @@ mod tests {
         profile: ConnectionProfile,
         secret_store: Box<dyn dbflux_core::SecretStore>,
     ) -> ServerState {
-        let audit_path = dbflux_audit::temp_sqlite_path(&format!(
-            "server_test_{}.sqlite",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("system clock before unix epoch")
-                .as_nanos()
-        ));
+        let audit_path = dbflux_audit::temp_sqlite_path("server_test_audit.sqlite");
         let audit_service = dbflux_audit::AuditService::new_sqlite(&audit_path)
             .expect("failed to create test audit service");
 

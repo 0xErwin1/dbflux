@@ -196,11 +196,23 @@ fn source_input_values_from_context(source: &ExecutionSourceContext) -> Option<(
     }
 }
 
+/// Caps an editor query at `editor_row_limit` rows unless the request already
+/// carries its own limit, which wins even when it is zero. A limit beyond
+/// `u32::MAX` saturates because `QueryRequest::limit` is a `u32`.
+fn apply_editor_row_limit(mut request: QueryRequest, editor_row_limit: usize) -> QueryRequest {
+    if request.limit.is_none() {
+        request.limit = Some(u32::try_from(editor_row_limit).unwrap_or(u32::MAX));
+    }
+
+    request
+}
+
 fn query_request_for_execution(
     query: String,
     active_database: Option<String>,
     exec_ctx: &ExecutionContext,
     query_language: QueryLanguage,
+    editor_row_limit: usize,
 ) -> QueryRequest {
     let window = match &exec_ctx.source {
         Some(ExecutionSourceContext::CollectionWindow {
@@ -211,9 +223,11 @@ fn query_request_for_execution(
 
     let sql = dbflux_core::substitute_time_macros(&query, window, query_language);
 
-    QueryRequest::new(sql)
+    let request = QueryRequest::new(sql)
         .with_database(active_database)
-        .with_execution_context(Some(exec_ctx.clone()))
+        .with_execution_context(Some(exec_ctx.clone()));
+
+    apply_editor_row_limit(request, editor_row_limit)
 }
 
 /// Per-document execution-source UI controls and the `ExecutionContext` they populate.

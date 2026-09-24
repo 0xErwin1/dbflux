@@ -265,6 +265,7 @@ mod tests {
         queries: AtomicUsize,
         cancels: AtomicUsize,
         databases: Mutex<Vec<Option<String>>>,
+        request_limits: Mutex<Vec<(Option<u32>, Option<std::time::Duration>)>>,
         execute_gate: Option<Arc<ExecuteGate>>,
         truncate_rows: AtomicBool,
     }
@@ -276,6 +277,7 @@ mod tests {
                 queries: AtomicUsize::new(0),
                 cancels: AtomicUsize::new(0),
                 databases: Mutex::new(Vec::new()),
+                request_limits: Mutex::new(Vec::new()),
                 execute_gate: None,
                 truncate_rows: AtomicBool::new(false),
             })
@@ -291,6 +293,7 @@ mod tests {
                 queries: AtomicUsize::new(0),
                 cancels: AtomicUsize::new(0),
                 databases: Mutex::new(Vec::new()),
+                request_limits: Mutex::new(Vec::new()),
                 execute_gate,
                 truncate_rows: AtomicBool::new(false),
             })
@@ -329,6 +332,10 @@ mod tests {
                 .lock()
                 .expect("test database collection")
                 .push(request.database.clone());
+            self.request_limits
+                .lock()
+                .expect("test request limit collection")
+                .push((request.limit, request.statement_timeout));
             let mut result = QueryResult::empty();
             result.set_rows_truncated(self.truncate_rows.load(Ordering::SeqCst));
             Ok(result)
@@ -1057,6 +1064,105 @@ mod tests {
                 .expect("test database collection")
                 .as_slice(),
             &[Some("databaseB".to_string()), Some("databaseB".to_string())]
+        );
+    }
+
+    #[gpui::test]
+    fn real_run_query_sends_the_configured_editor_row_limit(cx: &mut gpui::TestAppContext) {
+        let app_state = initialized_app_state(cx);
+        let root = FakeConnection::isolated();
+        let profile_id = add_test_profile(cx, &app_state, root.clone());
+        let document = Rc::new(RefCell::new(None));
+        let document_ref = document.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let document = cx.new(|cx| {
+                let mut document = CodeDocument::new_with_language(
+                    app_state.clone(),
+                    Some(profile_id),
+                    dbflux_core::QueryLanguage::Sql,
+                    window,
+                    cx,
+                );
+                document.set_content("SELECT 1", window, cx);
+                document
+            });
+            document_ref.replace(Some(document.clone()));
+            Root::new(document, window, cx)
+        });
+        let document = document.borrow().clone().expect("document created");
+        window.run_until_parked();
+
+        window.update(|window, cx| {
+            document.update(cx, |document, cx| document.run_query(window, cx));
+        });
+        window.run_until_parked();
+        window.run_until_parked();
+
+        window.update(|_, cx| {
+            app_state.update(cx, |app, _| {
+                let mut settings = app.general_settings().clone();
+                settings.editor_row_limit = 5_000;
+                app.update_general_settings(settings);
+            });
+        });
+        window.update(|window, cx| {
+            document.update(cx, |document, cx| document.run_query(window, cx));
+        });
+        window.run_until_parked();
+        window.run_until_parked();
+
+        assert_eq!(
+            *root
+                .request_limits
+                .lock()
+                .expect("test request limit collection"),
+            vec![(Some(10_000), None), (Some(5_000), None)]
+        );
+    }
+
+    #[gpui::test]
+    fn script_run_sends_no_database_request(cx: &mut gpui::TestAppContext) {
+        let app_state = initialized_app_state(cx);
+        let root = FakeConnection::isolated();
+        let profile_id = add_test_profile(cx, &app_state, root.clone());
+        let document = Rc::new(RefCell::new(None));
+        let document_ref = document.clone();
+
+        let (_, window) = cx.add_window_view(|window, cx| {
+            let document = cx.new(|cx| {
+                let mut document = CodeDocument::new_with_language(
+                    app_state.clone(),
+                    Some(profile_id),
+                    dbflux_core::QueryLanguage::Bash,
+                    window,
+                    cx,
+                );
+                document.set_content("exit 0", window, cx);
+                document
+            });
+            document_ref.replace(Some(document.clone()));
+            Root::new(document, window, cx)
+        });
+        let document = document.borrow().clone().expect("document created");
+        window.run_until_parked();
+
+        window.update(|window, cx| {
+            document.update(cx, |document, cx| document.run_query(window, cx));
+        });
+        window.run_until_parked();
+        window.run_until_parked();
+
+        assert!(window.update(|_, cx| {
+            let history = &document.read(cx).execution.execution_history;
+            !history.is_empty() && history.iter().all(|record| record.is_script)
+        }));
+        assert_eq!(root.queries.load(Ordering::SeqCst), 0);
+        assert!(
+            root.request_limits
+                .lock()
+                .expect("test request limit collection")
+                .is_empty()
         );
     }
 

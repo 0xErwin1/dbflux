@@ -16,6 +16,15 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Changed
 
+* **Editor queries now carry a row limit, and drivers that cannot enforce it
+  refuse them.** Every query run from the query editor asks the driver for at
+  most Settings → General → Execution Safety → **Editor row limit** rows
+  (default 10,000, minimum 1, cannot be turned off). MongoDB, Redis, Turso,
+  InfluxDB, ClickHouse, Redshift, CloudWatch, external RPC drivers, and
+  DynamoDB writes cannot enforce a row limit, so editor queries on them now
+  fail with an "Operation not supported" error before they run. Scripts,
+  connection hooks, and metrics are unaffected, and no timeout is added.
+
 * SQL Server explicit row limits retain at most N rows across every result set of a batch and flag actual omissions, including at zero; every set is drained, so later statements and mutations finish and late errors propagate. Explicit timeouts and bounded instance requests are refused before execution without clearing a pending cancellation; unbounded requests remain compatible. The row cap does not bound bytes, server work, or elapsed time; Azure SQL Database and Managed Instance were not verified.
 
 * SQLite explicit row limits retain at most N rows across the row-producing statements of a request (including `PRAGMA`, `WITH`, `VALUES`, and `RETURNING`) and flag actual omissions, including at zero; every statement still runs to completion, so mutations finish and late errors propagate. Bounded multi-statement batches are split with SQLite's own lexer and run in order under that one budget, so statements after the budget is exhausted still run, and a failure stops the batch as it does without a limit. Explicit timeouts and bounded instance requests are refused before execution; unbounded requests remain compatible. The row cap does not bound memory, engine work, or elapsed time, and splitting a bounded batch is quadratic in statement length.
@@ -27,6 +36,12 @@ All notable changes to DBFlux will be documented in this file.
 * ClickHouse and Redshift now refuse explicit query row limits (including zero) and statement timeouts before dispatch or preparation; unprotected queries retain existing behavior, including possible full-result buffering. ClickHouse HTTP timeout does not guarantee server cancellation, and the Redshift early-refusal regression uses PostgreSQL 16 protocol compatibility rather than a hosted Redshift cluster.
 
 ### Fixed
+
+* **SQLite cancel is no longer lost at query start** — cancelling a SQLite
+  query right after it started, before its first statement began running,
+  did nothing: SQLite drops an interrupt that arrives before a statement
+  steps, so the query ran on (forever, for an endless query). The query now
+  checks the cancel request while it runs and ends as cancelled.
 
 * **Chart group splits the lines** — a chart's Group binding was dropped
   before rendering and the chart engine never split series by it, so a

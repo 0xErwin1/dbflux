@@ -393,13 +393,7 @@ mod tests {
     /// Helper to create a test ServerState with minimal setup
     fn create_test_state() -> ServerState {
         // Use a temporary file for testing (in-memory doesn't work well with rusqlite's open pattern)
-        let temp_path = dbflux_audit::temp_sqlite_path(&format!(
-            "test_audit_{}.sqlite",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let temp_path = dbflux_audit::temp_sqlite_path("governance_test_audit.sqlite");
         let audit_service = dbflux_audit::AuditService::new_sqlite(&temp_path)
             .expect("failed to create test audit service");
         let mut runtime = McpRuntime::new(
