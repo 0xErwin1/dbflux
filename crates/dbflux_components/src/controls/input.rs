@@ -180,8 +180,9 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use gpui::{
-        AccessibilityFrame, AppContext as _, Context, FrameObserver, IntoElement,
-        ParentElement as _, Render, Role, Styled as _, TestAppContext, Window, div,
+        AccessibilityFrame, AppContext as _, Context, Focusable as _, FrameObserver, IntoElement,
+        ParentElement as _, Render, Role, Styled as _, TestAppContext, VisualTestContext, Window,
+        div,
     };
 
     use super::{Input, InputState};
@@ -217,18 +218,38 @@ mod tests {
         }
     }
 
-    fn render_field(named: bool, cx: &mut TestAppContext) -> Vec<ObservedNode> {
+    /// Open a window holding one input and observe its frames.
+    fn open_field(
+        named: bool,
+        cx: &mut TestAppContext,
+    ) -> (
+        Arc<FrameCapture>,
+        gpui::Entity<Field>,
+        &mut VisualTestContext,
+    ) {
         cx.update(gpui_component::init);
 
         let capture = Arc::new(FrameCapture::default());
         let capture_for_window = capture.clone();
-        let (_view, visual) = cx.add_window_view(move |window, cx| {
+        let (view, visual) = cx.add_window_view(move |window, cx| {
             window.observe_frames(&capture_for_window);
             window.refresh();
             let state = cx.new(|cx| InputState::new(window, cx).placeholder("localhost"));
             Field { state, named }
         });
         visual.run_until_parked();
+
+        (capture, view, visual)
+    }
+
+    /// Redraw the window so the next frame reflects the latest focus and state.
+    fn settle_frame(visual: &mut VisualTestContext) {
+        visual.update(|window, _| window.refresh());
+        visual.run_until_parked();
+    }
+
+    fn render_field(named: bool, cx: &mut TestAppContext) -> Vec<ObservedNode> {
+        let (capture, _view, _visual) = open_field(named, cx);
 
         let frame = capture
             .0
@@ -279,5 +300,59 @@ mod tests {
                 .any(|(_, _, label)| label.as_deref() == Some("localhost")),
             "the placeholder is no longer the fallback name: {nodes:?}"
         );
+    }
+
+    #[gpui::test]
+    fn input_focused_by_id_has_no_text_input_handler(cx: &mut TestAppContext) {
+        let (_capture, view, visual) = open_field(true, cx);
+
+        let focused =
+            visual.update(|window, cx| window.focus_observed_element("cm-field-host", cx));
+        assert!(focused, "the input frame is focusable by its id");
+        settle_frame(visual);
+
+        let replaced = visual.update(|window, cx| window.replace_input_text("db.example", cx));
+        assert!(
+            !replaced,
+            "the input frame's focus handle unexpectedly owns a text input handler"
+        );
+
+        let state = visual.update(|_, cx| view.read(cx).state.clone());
+        visual.update(|window, cx| {
+            let handle = state.focus_handle(cx);
+            window.focus(&handle, cx);
+        });
+        settle_frame(visual);
+
+        let replaced = visual.update(|window, cx| window.replace_input_text("db.example", cx));
+        assert!(
+            replaced,
+            "the editor's own focus handle owns the input handler"
+        );
+        assert_eq!(
+            visual.update(|_, cx| state.read(cx).value()).as_ref(),
+            "db.example"
+        );
+    }
+
+    #[gpui::test]
+    fn input_value_is_set_by_id_through_the_accessibility_action(cx: &mut TestAppContext) {
+        let (_capture, view, visual) = open_field(true, cx);
+
+        let applied = visual.update(|window, cx| {
+            window.set_observed_element_value("cm-field-host", "db.example", cx)
+        });
+        assert!(applied, "the input frame handles the SetValue action");
+        settle_frame(visual);
+
+        let state = visual.update(|_, cx| view.read(cx).state.clone());
+        assert_eq!(
+            visual.update(|_, cx| state.read(cx).value()).as_ref(),
+            "db.example"
+        );
+
+        let applied =
+            visual.update(|window, cx| window.set_observed_element_value("missing", "value", cx));
+        assert!(!applied, "an unknown id has no SetValue listener");
     }
 }

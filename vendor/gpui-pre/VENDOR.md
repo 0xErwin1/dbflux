@@ -1,9 +1,10 @@
 # Vendored `gpui-pre`
 
-This directory is the published `gpui-pre` crate source plus three patches. It exists so the
+This directory is the published `gpui-pre` crate source plus four patches. It exists so the
 schema visualizer can pan and zoom, and so agents can drive a running DBFlux window, without
 DBFlux depending on a fork of Zed. The third patch makes a dropped window-bound subscription
-delivery visible in the log.
+delivery visible in the log. The fourth lets the automation bridge fill a text input by its
+element id.
 
 ## Why
 
@@ -73,6 +74,21 @@ Effects are flushed only after a window update has put its window back, so this 
 expected in normal operation. The warning exists so that, if it does happen, the dropped
 callback shows up instead of being guessed at.
 
+### Text input automation
+
+The automation bridge addresses a text input by the element id of gpui-component's `Input`
+frame. That frame tracks its own focus handle, while the platform input handler belongs to the
+inner editor's focus handle and is only installed when that handle is focused at paint. Focusing
+the frame by id and then replacing text through the input handler therefore finds no handler.
+
+The frame already registers an accessibility `SetValue` listener that replaces the whole text,
+the path a screen reader uses. The patch adds `Window::set_observed_element_value`, which sends
+`SetValue` with an `ActionData::Value` payload to the listeners of a node from the last observed
+frame, addressed by element id like `Window::focus_observed_element`. It reuses the listener
+dispatch of `Window::handle_a11y_action`, extracted into `dispatch_a11y_action_listeners`, and
+returns whether a listener handled the action. The built-in fallbacks of `handle_a11y_action`
+(click, focus, blur) are unchanged and are not run by the new method.
+
 ### Why vendor
 
 Depending on either fork would put `main` back on a personal git source for the whole
@@ -96,6 +112,8 @@ delta to this directory.
   already applied — eight files, 1585 diff lines.
 - Patch 3: `subscription-drop-log.patch`, written for DBFlux against this directory with
   patches 1 and 2 applied — three files, 166 diff lines. It has no upstream counterpart.
+- Patch 4: `text-input-automation.patch`, written for DBFlux against this directory with
+  patches 1 to 3 applied — one file, 86 diff lines. It has no upstream counterpart.
 - `[workspace]` is appended to `Cargo.toml` so Cargo does not expect this crate in the
   parent workspace's member list.
 
@@ -148,7 +166,8 @@ vendor/gpui-pre/refresh.sh 0.3.6   # new upstream version
 ```
 
 The script downloads the published crate, rebuilds this directory from it and re-applies
-`element-transform.patch`, `frame-observer.patch` and then `subscription-drop-log.patch`.
+`element-transform.patch`, `frame-observer.patch`, `subscription-drop-log.patch` and then
+`text-input-automation.patch`.
 It leaves a
 `<file>.<patch>.rej` file behind for any hunk that no longer applies, for example
 `src/window.rs.frame-observer.rej`; resolve them by reading the rejected hunk and porting
