@@ -15,6 +15,12 @@ All notable changes to DBFlux will be documented in this file.
   `type_text`. Previously both failed on every input, `set_text` with a
   misleading document-range error, so filling a form needed coordinates.
 
+* Redis, Turso, and InfluxDB now refuse requested row limits (including zero)
+  or statement timeouts before execution with `NotSupported`, rather than
+  dispatching commands, SQL, HTTP, or instance-context queries without those
+  protections. Unprotected execution remains available; the default editor
+  cannot promise these protections on these backends.
+  
 * **Audit export asks where to save** — exporting from the audit viewer now
   opens the same save dialog as the other exports, with a timestamped default
   name (`audit_export_<YYYYMMDD-HHMMSS>.<csv|json>`), instead of writing to a
@@ -22,12 +28,6 @@ All notable changes to DBFlux will be documented in this file.
   replaced. Cancelling writes nothing, and write failures are reported with a
   correlation id in the audit log.
 
-* Redis, Turso, and InfluxDB now refuse requested row limits (including zero)
-  or statement timeouts before execution with `NotSupported`, rather than
-  dispatching commands, SQL, HTTP, or instance-context queries without those
-  protections. Unprotected execution remains available; the default editor
-  cannot promise these protections on these backends.
-  
 * Reject MongoDB execution requests with row limits or statement timeouts before any operation dispatches.
 
 * **CloudWatch query safety** — reject requested row limits and statement timeouts before Logs or Metrics dispatch; unprotected Logs queries retain the fixed SDK `StartQuery` limit of 1000, without a default timeout or server-work guarantee.
