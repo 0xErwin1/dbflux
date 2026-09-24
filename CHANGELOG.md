@@ -41,6 +41,11 @@ All notable changes to DBFlux will be documented in this file.
 
 * **CloudWatch query safety** — reject requested row limits and statement timeouts before Logs or Metrics dispatch; unprotected Logs queries retain the fixed SDK `StartQuery` limit of 1000, without a default timeout or server-work guarantee.
 
+* **Audit degraded status** — Settings → Audit now shows a warning-colored dot
+  when the audit database could not be opened, instead of the green "enabled"
+  dot, and tells you to restart DBFlux. The copied "Audit cannot be enabled"
+  error no longer repeats its prefix.
+
 * The Redis key browser now fills each page across `SCAN` batches (and across
   masters on Cluster), bounded to 1000 round trips and 500 ms per page, so a
   sparse filter no longer returns empty pages. Keys repeated by `SCAN` appear

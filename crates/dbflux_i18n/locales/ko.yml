@@ -3347,7 +3347,7 @@ settings:
     action:
       save: 저장
     status:
-      degraded: 감사가 저하 상태입니다(다시 시작 필요)
+      degraded: 감사 데이터베이스를 열 수 없어 감사가 일시 중지되었습니다. DBFlux를 다시 시작하세요.
       enabled: 감사가 활성화되었습니다
       disabled: 감사가 비활성화되었습니다
     error:
@@ -3356,7 +3356,7 @@ settings:
       purge_interval_invalid: 백그라운드 제거 간격은 숫자여야 합니다
       cannot_enable: 감사를 활성화할 수 없습니다
       cannot_enable_body: "감사를 활성화할 수 없습니다: 감사 데이터베이스를 열지 못했습니다. 애플리케이션을 다시 시작하세요. 문제가 계속되면 dbflux 데이터 디렉터리의 디스크 공간과 파일 권한을 확인하세요."
-      cannot_enable_copy: "감사를 활성화할 수 없습니다: 감사를 활성화할 수 없습니다: 감사 데이터베이스를 열지 못했습니다. 애플리케이션을 다시 시작하세요. 문제가 계속되면 dbflux 데이터 디렉터리의 디스크 공간과 파일 권한을 확인하세요."
+      cannot_enable_copy: "감사를 활성화할 수 없습니다: 감사 데이터베이스를 열지 못했습니다. 애플리케이션을 다시 시작하세요. 문제가 계속되면 dbflux 데이터 디렉터리의 디스크 공간과 파일 권한을 확인하세요."
       save_failed: 저장하지 못했습니다
       save_failed_copy: "저장하지 못했습니다: %{error}"
     toast:

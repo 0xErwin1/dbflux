@@ -3348,7 +3348,7 @@ settings:
     action:
       save: 保存
     status:
-      degraded: 审计处于降级状态（需要重启）
+      degraded: 无法打开审计数据库，审计已暂停。请重启 DBFlux。
       enabled: 审计已启用
       disabled: 审计已禁用
     error:
@@ -3357,7 +3357,7 @@ settings:
       purge_interval_invalid: 后台清理间隔必须是数字
       cannot_enable: 无法启用审计
       cannot_enable_body: 无法启用审计：审计数据库无法打开。请重启应用。如果问题持续存在，请检查 dbflux 数据目录的磁盘空间和文件权限。
-      cannot_enable_copy: 无法启用审计：无法启用审计：审计数据库无法打开。请重启应用。如果问题持续存在，请检查 dbflux 数据目录的磁盘空间和文件权限。
+      cannot_enable_copy: 无法启用审计：审计数据库无法打开。请重启应用。如果问题持续存在，请检查 dbflux 数据目录的磁盘空间和文件权限。
       save_failed: 保存失败
       save_failed_copy: "保存失败：%{error}"
     toast:
