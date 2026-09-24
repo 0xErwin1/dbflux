@@ -28,6 +28,14 @@ pub struct TitleCrumb {
     pub label: SharedString,
 }
 
+/// Action run by a CSD title-bar button.
+///
+/// Passed as `on_close` to replace the close button's default of removing the
+/// window directly: a window whose close must go through its own checks (the
+/// main window's quit prompt and graceful shutdown) passes the handler that
+/// runs them.
+pub type TitleBarHandler = Box<dyn Fn(&mut Window, &mut App) + 'static>;
+
 /// Title bar height for Linux CSD mode. Used for layout and client inset reporting.
 pub const TITLE_BAR_HEIGHT: gpui::Pixels = px(32.0);
 
@@ -110,21 +118,25 @@ pub fn render_csd_title_bar(
     cx: &mut App,
     title: &str,
 ) -> Option<Stateful<gpui::Div>> {
-    render_csd_title_bar_with_crumbs(window, cx, title, &[])
+    render_csd_title_bar_with_crumbs(window, cx, title, &[], None)
 }
 
 /// Like [`render_csd_title_bar`] but accepts an optional breadcrumb trail displayed
 /// after the app name: `DBFlux  ›  {crumb1}  ›  {crumb2}`.
+///
+/// `on_close` replaces the close button's action; `None` keeps the default of
+/// removing the window.
 pub fn render_csd_title_bar_with_crumbs(
     window: &mut Window,
     cx: &mut App,
     title: &str,
     crumbs: &[TitleCrumb],
+    on_close: Option<TitleBarHandler>,
 ) -> Option<Stateful<gpui::Div>> {
     // Only the Linux CSD branch reads these; the signature stays uniform so
     // callers do not need their own cfg.
     #[cfg(not(target_os = "linux"))]
-    let _ = (cx, title, crumbs);
+    let _ = (cx, title, crumbs, on_close);
 
     if !should_render_csd(window) {
         #[cfg(target_os = "linux")]
@@ -140,7 +152,7 @@ pub fn render_csd_title_bar_with_crumbs(
         let theme = cx.theme();
         let title_text = title.to_string();
 
-        let make_button = |icon: AppIcon, handler: Box<dyn Fn(&mut Window) + 'static>| {
+        let make_button = |icon: AppIcon, handler: TitleBarHandler| {
             div()
                 .flex()
                 .items_center()
@@ -149,8 +161,8 @@ pub fn render_csd_title_bar_with_crumbs(
                 .h_full()
                 .cursor_pointer()
                 .hover(move |d| d.bg(theme.secondary))
-                .on_mouse_down(gpui::MouseButton::Left, move |_, window, _cx| {
-                    handler(window);
+                .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
+                    handler(window, cx);
                 })
                 .child(Icon::new(icon).size(Heights::ICON_SM).muted())
         };
@@ -215,21 +227,20 @@ pub fn render_csd_title_bar_with_crumbs(
         if controls.minimize {
             title_bar = title_bar.child(make_button(
                 AppIcon::Minimize2,
-                Box::new(|window| window.minimize_window()),
+                Box::new(|window, _cx| window.minimize_window()),
             ));
         }
 
         if controls.maximize {
             title_bar = title_bar.child(make_button(
                 AppIcon::Maximize2,
-                Box::new(|window| window.zoom_window()),
+                Box::new(|window, _cx| window.zoom_window()),
             ));
         }
 
-        title_bar = title_bar.child(make_button(
-            AppIcon::X,
-            Box::new(|window| window.remove_window()),
-        ));
+        let close_handler =
+            on_close.unwrap_or_else(|| Box::new(|window, _cx| window.remove_window()));
+        title_bar = title_bar.child(make_button(AppIcon::X, close_handler));
 
         Some(title_bar)
     }

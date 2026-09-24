@@ -86,6 +86,26 @@ All notable changes to DBFlux will be documented in this file.
   once per page, and the page's key types are fetched in one pipeline instead
   of one `TYPE` round trip per key.
 
+* **Prompt before abandoning a running query** — disconnecting a connection
+  with a query still running, or closing the DBFlux window while any
+  connection runs one, now opens the "Active query running" prompt instead of
+  acting right away. **Cancel query** cancels the query and stays connected,
+  **Keep waiting** changes nothing, and **Disconnect anyway** / **Quit anyway**
+  cancels the query and continues. The prompt existed but nothing opened it.
+
+* **Linux title-bar close follows the window-manager close** — the main
+  window's in-app close button (client-side decorations) removed the window
+  directly, skipping the running-query prompt and the graceful shutdown that
+  saves pending edits and closes connections. It now takes the same path as
+  closing through the window manager. Other windows keep their close behavior.
+
+* **Cancelling a query no longer freezes the UI** — SQLite's cancel waited
+  for the connection lock that the running query holds, so cancelling from the
+  editor, the tasks panel, or the running-query prompt froze the window until
+  the query ended (forever, for an endless query). SQLite now interrupts
+  without taking the lock, and driver cancels for every backend run off the UI
+  thread, so a slow network cancel cannot stall it either.
+
 * The key browser filter now passes input containing `*`, `?` or `[` through
   as a glob, so a prefix search such as `leaderboard*` works; plain text still
   matches anywhere in the key. The header count now reads as the number of

@@ -2387,6 +2387,7 @@ modals:
   active_query:
     title: Consulta en ejecución
     prompt: Todavía hay una consulta ejecutándose en esta conexión. ¿Qué quieres hacer?
+    prompt_shutdown: "Todavía hay consultas ejecutándose en %{connections}. ¿Qué quieres hacer?"
     elapsed: "En ejecución desde hace %{seconds} s"
     disconnect_anyway: Desconectar de todos modos
     quit_anyway: Salir de todos modos
