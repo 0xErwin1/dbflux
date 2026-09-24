@@ -24,19 +24,26 @@ mod machine;
 
 use super::*;
 use dbflux_core::LogErr;
-use gpui_component::input::Undo;
+use gpui_component::input::{Redo, Undo};
 use machine::{VimCommand, VimKey};
 
 pub use machine::VimMode;
+
+/// Which history action a Normal-mode undo shortcut runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum HistoryStep {
+    Undo,
+    Redo,
+}
 
 /// Per-document Vim state. Inert while `enabled` is false.
 #[derive(Default)]
 pub(super) struct VimState {
     enabled: bool,
     mode: VimMode,
-    /// Set while a Normal-mode `u` temporarily lifts the read-only lock so the
-    /// component's own undo handler is registered for one dispatch.
-    undo_unlocked: bool,
+    /// Set while a Normal-mode undo or redo temporarily lifts the read-only lock
+    /// so the component's own handler is registered for one dispatch.
+    history_unlocked: bool,
     /// Where the last vertical move left the cursor and the character column it
     /// aimed for. The goal is reused only while the cursor is still there, so
     /// any other cursor change (a click, an arrow key, an edit) resets it.
@@ -78,7 +85,7 @@ impl CodeDocument {
     /// Whether the editor must reject user text changes right now.
     pub(super) fn editor_input_locked(&self) -> bool {
         self.read_only
-            || (self.vim.enabled && self.vim.mode == VimMode::Normal && !self.vim.undo_unlocked)
+            || (self.vim.enabled && self.vim.mode == VimMode::Normal && !self.vim.history_unlocked)
     }
 
     /// Applies the lock immediately. Render applies it again every frame, but text
@@ -137,7 +144,9 @@ impl CodeDocument {
             VimCommand::LeaveInsert => self.leave_insert(window, cx),
             // A read-only document keeps its text: motions work, edits do nothing.
             VimCommand::DeleteChar if !self.read_only => self.delete_char(window, cx),
-            VimCommand::Undo if !self.read_only => self.undo_in_normal_mode(window, cx),
+            VimCommand::Undo if !self.read_only => {
+                self.run_history_in_normal_mode(HistoryStep::Undo, window, cx)
+            }
             VimCommand::DeleteChar | VimCommand::Undo | VimCommand::Swallow => {}
         }
     }
@@ -284,15 +293,43 @@ impl CodeDocument {
         self.clamp_cursor_for_normal(cx);
     }
 
-    /// Runs the component's undo while in Normal mode.
+    /// Handles the editor's Undo and Redo actions (`Ctrl+Z`, `Ctrl+Y`, ...) in
+    /// their capture phase. The locked Normal-mode input does not register its
+    /// own handlers, so without this those shortcuts would stop working while
+    /// Vim mode is on. Returns true when the action was consumed.
+    pub(super) fn handle_vim_history_action(
+        &mut self,
+        step: HistoryStep,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.vim.enabled
+            || self.vim.mode != VimMode::Normal
+            || self.vim.history_unlocked
+            || self.read_only
+            || self.focus_mode != SqlQueryFocus::Editor
+        {
+            return false;
+        }
+
+        self.run_history_in_normal_mode(step, window, cx);
+        true
+    }
+
+    /// Runs the component's undo or redo while in Normal mode.
     ///
-    /// The undo handler is only registered on frames painted while the input is
-    /// editable, so the lock is lifted, one frame is drawn to register it, the
+    /// The handlers are only registered on frames painted while the input is
+    /// editable, so the lock is lifted, one frame is drawn to register them, the
     /// action is dispatched to the editor, and the lock is restored. Everything
     /// happens in one deferred callback, before any further platform input can
     /// reach the unlocked editor.
-    fn undo_in_normal_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.vim.undo_unlocked = true;
+    fn run_history_in_normal_mode(
+        &mut self,
+        step: HistoryStep,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.vim.history_unlocked = true;
         self.vim.vertical_goal = None;
         self.sync_editor_lock(cx);
 
@@ -303,11 +340,14 @@ impl CodeDocument {
             window.draw(cx).clear(cx);
 
             let focus_handle = input.read(cx).focus_handle(cx);
-            focus_handle.dispatch_action(&Undo, window, cx);
+            match step {
+                HistoryStep::Undo => focus_handle.dispatch_action(&Undo, window, cx),
+                HistoryStep::Redo => focus_handle.dispatch_action(&Redo, window, cx),
+            }
 
             document
                 .update(cx, |document, cx| {
-                    document.vim.undo_unlocked = false;
+                    document.vim.history_unlocked = false;
                     document.sync_editor_lock(cx);
                     document.clamp_cursor_for_normal(cx);
                     cx.notify();

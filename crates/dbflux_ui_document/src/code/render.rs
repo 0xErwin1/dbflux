@@ -294,6 +294,20 @@ impl CodeDocument {
                         }
                     },
                 ))
+                .capture_action(
+                    cx.listener(|this, _: &gpui_component::input::Undo, window, cx| {
+                        if this.handle_vim_history_action(vim::HistoryStep::Undo, window, cx) {
+                            cx.stop_propagation();
+                        }
+                    }),
+                )
+                .capture_action(
+                    cx.listener(|this, _: &gpui_component::input::Redo, window, cx| {
+                        if this.handle_vim_history_action(vim::HistoryStep::Redo, window, cx) {
+                            cx.stop_propagation();
+                        }
+                    }),
+                )
                 .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
                     if this.handle_vim_key_down(event, window, cx) {
                         cx.stop_propagation();

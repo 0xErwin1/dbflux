@@ -1019,3 +1019,26 @@ fn another_window_is_unaffected_by_a_normal_mode_editor(cx: &mut TestAppContext)
     assert_eq!(editor.text(), "abc");
     assert_eq!(editor.mode(), Some(VimMode::Normal));
 }
+
+#[gpui::test]
+fn the_editor_undo_and_redo_shortcuts_keep_working_in_normal_mode(cx: &mut TestAppContext) {
+    #[cfg(target_os = "macos")]
+    const UNDO_REDO: (&str, &str) = ("cmd-z", "cmd-shift-z");
+    #[cfg(not(target_os = "macos"))]
+    const UNDO_REDO: (&str, &str) = ("ctrl-z", "ctrl-y");
+
+    let mut editor = open_editor(cx, "abc", true);
+
+    editor.keys("x");
+    assert_eq!(editor.text(), "bc");
+
+    editor.keys(UNDO_REDO.0);
+    assert_eq!(editor.text(), "abc");
+
+    editor.keys(UNDO_REDO.1);
+    assert_eq!(editor.text(), "bc");
+
+    editor.type_text("z");
+    assert_eq!(editor.text(), "bc", "the lock is back after the shortcut");
+    assert_eq!(editor.mode(), Some(VimMode::Normal));
+}
