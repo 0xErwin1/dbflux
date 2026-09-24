@@ -15,11 +15,6 @@ All notable changes to DBFlux will be documented in this file.
   `type_text`. Previously both failed on every input, `set_text` with a
   misleading document-range error, so filling a form needed coordinates.
 
-* **Audit degraded status** — Settings → Audit now shows a warning-colored dot
-  when the audit database could not be opened, instead of the green "enabled"
-  dot, and tells you to restart DBFlux. The copied "Audit cannot be enabled"
-  error no longer repeats its prefix.
-
 * Redis, Turso, and InfluxDB now refuse requested row limits (including zero)
   or statement timeouts before execution with `NotSupported`, rather than
   dispatching commands, SQL, HTTP, or instance-context queries without those
@@ -29,6 +24,11 @@ All notable changes to DBFlux will be documented in this file.
 * Reject MongoDB execution requests with row limits or statement timeouts before any operation dispatches.
 
 * **CloudWatch query safety** — reject requested row limits and statement timeouts before Logs or Metrics dispatch; unprotected Logs queries retain the fixed SDK `StartQuery` limit of 1000, without a default timeout or server-work guarantee.
+
+* **Audit degraded status** — Settings → Audit now shows a warning-colored dot
+  when the audit database could not be opened, instead of the green "enabled"
+  dot, and tells you to restart DBFlux. The copied "Audit cannot be enabled"
+  error no longer repeats its prefix.
 
 * The Redis key browser now fills each page across `SCAN` batches (and across
   masters on Cluster), bounded to 1000 round trips and 500 ms per page, so a
