@@ -431,6 +431,9 @@ struct PendingActions {
     total_count: Option<PendingTotalCount>,
     rebuild: bool,
     refresh: bool,
+    /// Set with `refresh` by a landed mutation: the reload it issues carries
+    /// the edits still staged on other rows over to its result.
+    refresh_keeps_edits: bool,
     toast: Option<PendingToast>,
     modal_open: Option<PendingModalOpen>,
     document_preview: Option<PendingDocumentPreview>,
@@ -508,9 +511,14 @@ struct GridTableState {
     original_row_order: Option<Vec<usize>>,
     /// Read by the next `rebuild_table` and reset to `Preserve` there.
     reload: TableReload,
-    /// Set when the next reload follows a saved mutation: `rebuild_table`
-    /// carries the edits still staged on other rows over to the reloaded
-    /// rows by primary key instead of dropping them. Reset there.
+    /// Whether the rebuild for a reload carries the edits still staged on
+    /// other rows over to the reloaded rows by primary key.
+    ///
+    /// Armed only for the duration of `refresh_keeping_edits`: the query it
+    /// issues takes the flag into its request and hands it back just before
+    /// its own result is applied, where `rebuild_table` consumes it. A rebuild
+    /// for anything else, or a request that fails or is cancelled, never
+    /// sees it.
     keep_edits_on_reload: bool,
 }
 
@@ -1183,7 +1191,7 @@ impl DataGridPanel {
                 InputEvent::PressEnter {
                     secondary: false, ..
                 } => {
-                    if this.refresh_blocked_by_pending_edits(cx) {
+                    if this.reload_blocked_by_pending_edits(cx) {
                         return;
                     }
 
@@ -1217,7 +1225,7 @@ impl DataGridPanel {
                 InputEvent::PressEnter {
                     secondary: false, ..
                 } => {
-                    if this.refresh_blocked_by_pending_edits(cx) {
+                    if this.reload_blocked_by_pending_edits(cx) {
                         return;
                     }
 
@@ -3234,6 +3242,10 @@ impl DataGridPanel {
                 }
             }
             _ => {
+                if self.reload_blocked_by_pending_edits(cx) {
+                    return;
+                }
+
                 self.pending.refresh = true;
                 cx.notify();
             }
@@ -3771,7 +3783,13 @@ impl DataGridPanel {
             self.builder.relational_filter_state,
             filter_bar::RelationalFilterState::Resolving
         ) {
-            self.pending.refresh = true;
+            if self.reload_blocked_by_pending_edits(cx) {
+                // The re-run will not happen, so the filter bar must stop
+                // showing that it is waiting for one.
+                self.builder.relational_filter_state = filter_bar::RelationalFilterState::Inactive;
+            } else {
+                self.pending.refresh = true;
+            }
         }
 
         cx.notify();
@@ -4226,6 +4244,10 @@ impl DataGridPanel {
                         .as_ref()
                         .map(|p| p.read(cx).current_spec().clone())
                 }) {
+                    if self.reload_blocked_by_pending_edits(cx) {
+                        return;
+                    }
+
                     self.apply_builder_draft_spec(spec, cx);
                     self.refresh(window, cx);
                 }
@@ -4241,6 +4263,10 @@ impl DataGridPanel {
             }
 
             BuilderEvent::ResetRequested => {
+                if self.reload_blocked_by_pending_edits(cx) {
+                    return;
+                }
+
                 self.clear_builder_draft_spec(cx);
                 cx.emit(DataGridEvent::CloseInspector);
                 self.builder.builder_panel = None;
@@ -8738,7 +8764,7 @@ mod tests {
         });
         assert_eq!(
             last_toast_title(window),
-            Some(crate::labels::grid_refresh_blocked_by_pending_edits())
+            Some(crate::labels::grid_reload_blocked_by_pending_edits())
         );
     }
 
@@ -8793,14 +8819,149 @@ mod tests {
         )
     }
 
+    /// Connection that answers a table browse with whatever `rows` holds when
+    /// the query runs, so a reload lands through the real request path.
+    struct StubBrowseConnection {
+        rows: Arc<std::sync::Mutex<QueryResult>>,
+    }
+
+    impl dbflux_core::Connection for StubBrowseConnection {
+        fn metadata(&self) -> &dbflux_core::DriverMetadata {
+            use dbflux_core::{
+                DatabaseCategory, DriverCapabilities, DriverMetadata, Icon as CoreIcon,
+                QueryLanguage, TransferFamily,
+            };
+
+            static META: std::sync::OnceLock<DriverMetadata> = std::sync::OnceLock::new();
+            META.get_or_init(|| DriverMetadata {
+                id: "stub-browse".to_string(),
+                display_name: "Stub".to_string(),
+                description: "test".to_string(),
+                category: DatabaseCategory::Relational,
+                transfer_family: TransferFamily::Sql,
+                deployment_class: None,
+                query_language: QueryLanguage::Sql,
+                capabilities: DriverCapabilities::empty(),
+                default_port: None,
+                uri_scheme: "stub".to_string(),
+                icon: CoreIcon::Database,
+                syntax: None,
+                query: None,
+                mutation: None,
+                ddl: None,
+                transactions: None,
+                limits: None,
+                ssl_modes: None,
+                ssl_cert_fields: None,
+                classification_override: None,
+                default_chunk_size: None,
+                supports_lock_timeout: false,
+                editor_profile: None,
+            })
+        }
+
+        fn kind(&self) -> dbflux_core::DbKind {
+            dbflux_core::DbKind::SQLite
+        }
+
+        fn schema_loading_strategy(&self) -> dbflux_core::SchemaLoadingStrategy {
+            dbflux_core::SchemaLoadingStrategy::SingleDatabase
+        }
+
+        fn dialect(&self) -> &dyn dbflux_core::SqlDialect {
+            unimplemented!("StubBrowseConnection::dialect is not reached by a raw browse")
+        }
+
+        fn ping(&self) -> Result<(), dbflux_core::DbError> {
+            Ok(())
+        }
+
+        fn close(&mut self) -> Result<(), dbflux_core::DbError> {
+            Ok(())
+        }
+
+        fn execute(
+            &self,
+            _: &dbflux_core::QueryRequest,
+        ) -> Result<QueryResult, dbflux_core::DbError> {
+            Err(dbflux_core::DbError::NotSupported("stub".to_string()))
+        }
+
+        fn browse_table(
+            &self,
+            _: &dbflux_core::TableBrowseRequest,
+        ) -> Result<QueryResult, dbflux_core::DbError> {
+            let rows = self
+                .rows
+                .lock()
+                .map_err(|_| dbflux_core::DbError::NotSupported("poisoned".to_string()))?;
+            Ok(rows.clone())
+        }
+
+        fn cancel(&self, _: &dbflux_core::QueryHandle) -> Result<(), dbflux_core::DbError> {
+            Ok(())
+        }
+
+        fn schema(&self) -> Result<dbflux_core::SchemaSnapshot, dbflux_core::DbError> {
+            Ok(dbflux_core::SchemaSnapshot::default())
+        }
+    }
+
+    /// Registers a connected profile whose table browse returns `reloaded`.
+    fn register_browse_stub(
+        app_state: &gpui::Entity<AppStateEntity>,
+        reloaded: QueryResult,
+        cx: &mut TestAppContext,
+    ) -> Uuid {
+        let profile_id = Uuid::new_v4();
+
+        cx.update(|cx| {
+            app_state.update(cx, |app, _cx| {
+                let profile = dbflux_core::ConnectionProfile::new(
+                    "test",
+                    dbflux_core::DbConfig::SQLite {
+                        path: std::path::PathBuf::from(":memory:"),
+                        connection_id: None,
+                    },
+                );
+                let connected = dbflux_core::ConnectedProfile {
+                    profile,
+                    connection: Arc::new(StubBrowseConnection {
+                        rows: Arc::new(std::sync::Mutex::new(reloaded)),
+                    }),
+                    schema: None,
+                    mutation_policy: dbflux_core::MutationPolicy::default(),
+                    read_only_reason: None,
+                    database_schemas: Default::default(),
+                    table_details: Default::default(),
+                    collection_children: Default::default(),
+                    schema_types: Default::default(),
+                    schema_columns: Default::default(),
+                    schema_indexes: Default::default(),
+                    schema_foreign_keys: Default::default(),
+                    schema_routines: Default::default(),
+                    dependents_cache: Default::default(),
+                    active_database: None,
+                    redis_key_cache: Default::default(),
+                    database_connections: Default::default(),
+                    proxy_tunnel: None,
+                };
+                app.connections_mut().insert(profile_id, connected);
+            });
+        });
+
+        profile_id
+    }
+
     fn keyed_table_panel(
         window: &mut gpui::VisualTestContext,
         app_state: gpui::Entity<AppStateEntity>,
+        profile_id: Uuid,
         pk_columns: Vec<String>,
     ) -> gpui::Entity<DataGridPanel> {
         window.update(|window, app| {
             let source = DataSource::Table {
-                profile_id: Uuid::nil(),
+                profile_id,
                 database: Some("app".to_string()),
                 table: TableRef::with_schema("public", "users"),
                 pagination: Pagination::default(),
@@ -8846,26 +9007,20 @@ mod tests {
         staged
     }
 
-    /// Lands the reload a saved mutation queued, with `result` as the rows the
-    /// query returned.
-    fn land_mutation_reload(
-        panel: &mut DataGridPanel,
-        result: QueryResult,
-        cx: &mut gpui::Context<DataGridPanel>,
+    /// Queues the reload a saved mutation asks for and issues it the way the
+    /// next render does, leaving the request in flight.
+    fn issue_mutation_reload(
+        window: &mut gpui::VisualTestContext,
+        panel: &gpui::Entity<DataGridPanel>,
     ) {
-        panel.queue_reload_after_mutation(cx);
-        assert!(panel.pending.refresh, "the saved mutation must reload");
-        panel.pending.refresh = false;
+        window.update(|window, app| {
+            panel.update(app, |panel, cx| {
+                panel.queue_reload_after_mutation(cx);
+                assert!(panel.pending.refresh, "the saved mutation must reload");
 
-        panel.apply_table_result(
-            Uuid::nil(),
-            TableRef::with_schema("public", "users"),
-            Pagination::default(),
-            Vec::new(),
-            Some(2),
-            result,
-            cx,
-        );
+                panel.process_pending_actions(window, cx);
+            });
+        });
     }
 
     #[gpui::test]
@@ -8873,24 +9028,25 @@ mod tests {
         init_test_runtime(cx);
 
         let app_state = isolated_test_app_state(cx);
+        // The rows come back in another order: the edit must follow the row
+        // with id 2, not stay at index 1.
+        let profile_id = register_browse_stub(&app_state, keyed_result(&["2", "1"]), cx);
         let window = cx.add_empty_window();
-        let panel = keyed_table_panel(window, app_state, vec!["id".to_string()]);
+        let panel = keyed_table_panel(window, app_state, profile_id, vec!["id".to_string()]);
 
         window.update(|_, app| {
-            panel.update(app, |panel, cx| {
-                stage_name(panel, 1, "bob", cx);
-
-                // The rows come back in another order: the edit must follow
-                // the row with id 2, not stay at index 1.
-                land_mutation_reload(panel, keyed_result(&["2", "1"]), cx);
-            });
+            panel.update(app, |panel, cx| stage_name(panel, 1, "bob", cx));
         });
+        issue_mutation_reload(window, &panel);
+        window.run_until_parked();
 
         window.update(|_, app| {
+            let panel = panel.read(app);
             assert_eq!(
-                staged_names(panel.read(app), app),
-                vec![(0, "bob".to_string())]
+                panel.result.rows[0][0],
+                dbflux_core::Value::Text("2".to_string())
             );
+            assert_eq!(staged_names(panel, app), vec![(0, "bob".to_string())]);
         });
         assert_eq!(last_toast_title(window), None);
     }
@@ -8900,15 +9056,15 @@ mod tests {
         init_test_runtime(cx);
 
         let app_state = isolated_test_app_state(cx);
+        let profile_id = register_browse_stub(&app_state, keyed_result(&["2"]), cx);
         let window = cx.add_empty_window();
-        let panel = keyed_table_panel(window, app_state, vec!["id".to_string()]);
+        let panel = keyed_table_panel(window, app_state, profile_id, vec!["id".to_string()]);
 
         window.update(|_, app| {
-            panel.update(app, |panel, cx| {
-                stage_name(panel, 0, "alice", cx);
-                land_mutation_reload(panel, keyed_result(&["2"]), cx);
-            });
+            panel.update(app, |panel, cx| stage_name(panel, 0, "alice", cx));
         });
+        issue_mutation_reload(window, &panel);
+        window.run_until_parked();
 
         window.update(|_, app| {
             assert!(staged_names(panel.read(app), app).is_empty());
@@ -8926,7 +9082,7 @@ mod tests {
 
         let app_state = isolated_test_app_state(cx);
         let window = cx.add_empty_window();
-        let panel = keyed_table_panel(window, app_state, Vec::new());
+        let panel = keyed_table_panel(window, app_state, Uuid::nil(), Vec::new());
 
         window.update(|_, app| {
             panel.update(app, |panel, cx| {
@@ -8937,7 +9093,7 @@ mod tests {
                     !panel.pending.refresh,
                     "edits addressed by position cannot survive a reload"
                 );
-                assert!(!panel.grid_table.keep_edits_on_reload);
+                assert!(!panel.pending.refresh_keeps_edits);
             });
         });
 
@@ -8949,7 +9105,7 @@ mod tests {
         });
         assert_eq!(
             last_toast_title(window),
-            Some(crate::labels::grid_refresh_blocked_by_pending_edits())
+            Some(crate::labels::grid_reload_blocked_by_pending_edits())
         );
     }
 
@@ -8958,19 +9114,81 @@ mod tests {
         init_test_runtime(cx);
 
         let app_state = isolated_test_app_state(cx);
+        let profile_id = register_browse_stub(&app_state, keyed_result(&["2"]), cx);
         let window = cx.add_empty_window();
-        let panel = keyed_table_panel(window, app_state, Vec::new());
+        let panel = keyed_table_panel(window, app_state, profile_id, Vec::new());
 
-        window.update(|_, app| {
-            panel.update(app, |panel, cx| {
-                land_mutation_reload(panel, keyed_result(&["2"]), cx);
-            });
-        });
+        issue_mutation_reload(window, &panel);
+        window.run_until_parked();
 
         window.update(|_, app| {
             assert_eq!(panel.read(app).result.row_count(), 1);
         });
         assert_eq!(last_toast_title(window), None);
+    }
+
+    /// A local re-sort rebuilds the table while the save reload is still
+    /// loading. The keep-edits intent belongs to the reload's request, so the
+    /// sort rebuild cannot take it, and the reload still carries the edit
+    /// staged after the sort.
+    #[gpui::test]
+    fn a_local_sort_rebuild_during_a_save_reload_leaves_it_the_intent(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let profile_id = register_browse_stub(&app_state, keyed_result(&["2", "1"]), cx);
+        let window = cx.add_empty_window();
+        let panel = keyed_table_panel(window, app_state, profile_id, vec!["id".to_string()]);
+
+        issue_mutation_reload(window, &panel);
+
+        window.update(|_, app| {
+            panel.update(app, |panel, cx| {
+                assert!(
+                    !panel.grid_table.keep_edits_on_reload,
+                    "the in-flight request holds the intent, not the panel"
+                );
+
+                // What a pending local-sort rebuild runs.
+                panel.rebuild_table(None, cx);
+
+                stage_name(panel, 1, "bob", cx);
+            });
+        });
+        window.run_until_parked();
+
+        window.update(|_, app| {
+            assert_eq!(
+                staged_names(panel.read(app), app),
+                vec![(0, "bob".to_string())],
+                "the reload must still carry the edit on the row with id 2"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn a_save_reload_that_cannot_run_does_not_leak_its_intent(cx: &mut TestAppContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let window = cx.add_empty_window();
+        let panel = keyed_table_panel(window, app_state, Uuid::nil(), vec!["id".to_string()]);
+
+        // The profile is not connected, so the request fails before it starts.
+        issue_mutation_reload(window, &panel);
+        window.run_until_parked();
+
+        window.update(|_, app| {
+            let panel = panel.read(app);
+            assert!(!panel.grid_table.keep_edits_on_reload);
+            assert!(!panel.pending.refresh_keeps_edits);
+        });
+        assert_eq!(
+            last_toast_title(window),
+            Some(dbflux_i18n::t!(
+                "document.data.grid.error.connection_not_found"
+            ))
+        );
     }
 
     #[gpui::test]
@@ -8979,7 +9197,7 @@ mod tests {
 
         let app_state = isolated_test_app_state(cx);
         let window = cx.add_empty_window();
-        let panel = keyed_table_panel(window, app_state, vec!["id".to_string()]);
+        let panel = keyed_table_panel(window, app_state, Uuid::nil(), vec!["id".to_string()]);
 
         let handled = window.update(|window, app| {
             panel.update(app, |panel, cx| {
@@ -9004,7 +9222,7 @@ mod tests {
         });
         assert_eq!(
             last_toast_title(window),
-            Some(crate::labels::grid_refresh_blocked_by_pending_edits())
+            Some(crate::labels::grid_reload_blocked_by_pending_edits())
         );
     }
 
@@ -9014,7 +9232,7 @@ mod tests {
 
         let app_state = isolated_test_app_state(cx);
         let window = cx.add_empty_window();
-        let panel = keyed_table_panel(window, app_state, vec!["id".to_string()]);
+        let panel = keyed_table_panel(window, app_state, Uuid::nil(), vec!["id".to_string()]);
 
         let handled = window.update(|window, app| {
             panel.update(app, |panel, cx| {
@@ -9042,7 +9260,7 @@ mod tests {
 
         let app_state = isolated_test_app_state(cx);
         let window = cx.add_empty_window();
-        let panel = keyed_table_panel(window, app_state, vec!["id".to_string()]);
+        let panel = keyed_table_panel(window, app_state, Uuid::nil(), vec!["id".to_string()]);
 
         window.update(|window, app| {
             panel.update(app, |panel, cx| {
@@ -9073,7 +9291,7 @@ mod tests {
         });
         assert_eq!(
             last_toast_title(window),
-            Some(crate::labels::grid_refresh_blocked_by_pending_edits())
+            Some(crate::labels::grid_reload_blocked_by_pending_edits())
         );
     }
 
@@ -9083,7 +9301,7 @@ mod tests {
 
         let app_state = isolated_test_app_state(cx);
         let window = cx.add_empty_window();
-        let panel = keyed_table_panel(window, app_state, vec!["id".to_string()]);
+        let panel = keyed_table_panel(window, app_state, Uuid::nil(), vec!["id".to_string()]);
 
         window.update(|window, app| {
             panel.update(app, |panel, cx| {
@@ -9115,6 +9333,206 @@ mod tests {
                 "document.data.grid.error.connection_not_found"
             ))
         );
+    }
+
+    /// Builds the keyed panel on an unconnected profile, optionally stages an
+    /// edit, and runs `act` on it.
+    fn with_keyed_panel<R>(
+        cx: &mut TestAppContext,
+        stage_edit: bool,
+        act: impl FnOnce(&mut DataGridPanel, &mut gpui::Window, &mut gpui::Context<DataGridPanel>) -> R,
+    ) -> (R, gpui::Entity<DataGridPanel>, &mut gpui::VisualTestContext) {
+        init_test_runtime(cx);
+
+        let app_state = isolated_test_app_state(cx);
+        let window = cx.add_empty_window();
+        let panel = keyed_table_panel(window, app_state, Uuid::nil(), vec!["id".to_string()]);
+
+        let outcome = window.update(|window, app| {
+            panel.update(app, |panel, cx| {
+                if stage_edit {
+                    stage_name(panel, 1, "bob", cx);
+                }
+                act(panel, window, cx)
+            })
+        });
+        window.run_until_parked();
+
+        (outcome, panel, window)
+    }
+
+    fn assert_blocked_with_edit_kept(
+        panel: &gpui::Entity<DataGridPanel>,
+        window: &mut gpui::VisualTestContext,
+    ) {
+        window.update(|_, app| {
+            assert_eq!(
+                staged_names(panel.read(app), app),
+                vec![(1, "bob".to_string())]
+            );
+        });
+        assert_eq!(
+            last_toast_title(window),
+            Some(crate::labels::grid_reload_blocked_by_pending_edits())
+        );
+    }
+
+    fn request_server_sort(panel: &mut DataGridPanel, cx: &mut gpui::Context<DataGridPanel>) {
+        let table_state = panel.grid_table.table_state.clone().expect("table state");
+        table_state.update(cx, |state, cx| {
+            state.set_sort(Some(TableSortState::ascending(1)), cx);
+        });
+    }
+
+    #[gpui::test]
+    fn server_sort_with_pending_edits_is_refused_and_keeps_the_loaded_sort(
+        cx: &mut TestAppContext,
+    ) {
+        let (_, panel, window) = with_keyed_panel(cx, true, |panel, _, cx| {
+            request_server_sort(panel, cx);
+        });
+
+        window.update(|_, app| {
+            let panel = panel.read(app);
+            assert!(
+                panel.pending.requery.is_none(),
+                "the sort must not re-query"
+            );
+            assert_eq!(
+                panel
+                    .grid_table
+                    .table_state
+                    .as_ref()
+                    .expect("table state")
+                    .read(app)
+                    .sort(),
+                None,
+                "the header must show the sort the rows were loaded with"
+            );
+        });
+        assert_blocked_with_edit_kept(&panel, window);
+    }
+
+    #[gpui::test]
+    fn server_sort_without_pending_edits_queues_the_query(cx: &mut TestAppContext) {
+        let (_, panel, window) = with_keyed_panel(cx, false, |panel, _, cx| {
+            request_server_sort(panel, cx);
+        });
+
+        window.update(|_, app| {
+            assert!(panel.read(app).pending.requery.is_some());
+        });
+    }
+
+    #[gpui::test]
+    fn builder_run_with_pending_edits_is_refused(cx: &mut TestAppContext) {
+        let (_, panel, window) = with_keyed_panel(cx, true, |panel, window, cx| {
+            panel.builder.builder_draft_spec = Some(make_test_spec());
+            panel.handle_builder_event(&super::BuilderEvent::RunRequested, window, cx);
+
+            assert!(
+                !panel.builder.filter_input_hidden,
+                "the spec must not be applied"
+            );
+            assert!(!panel.pending.refresh);
+        });
+
+        assert_blocked_with_edit_kept(&panel, window);
+    }
+
+    #[gpui::test]
+    fn builder_run_without_pending_edits_applies_the_spec(cx: &mut TestAppContext) {
+        let (_, panel, window) = with_keyed_panel(cx, false, |panel, window, cx| {
+            panel.builder.builder_draft_spec = Some(make_test_spec());
+            panel.handle_builder_event(&super::BuilderEvent::RunRequested, window, cx);
+
+            assert!(panel.builder.filter_input_hidden);
+        });
+
+        window.update(|_, app| {
+            assert!(panel.read(app).builder.builder_draft_spec.is_some());
+        });
+        assert_eq!(
+            last_toast_title(window),
+            Some(dbflux_i18n::t!(
+                "document.data.grid.error.connection_not_found"
+            ))
+        );
+    }
+
+    #[gpui::test]
+    fn builder_reset_with_pending_edits_is_refused(cx: &mut TestAppContext) {
+        let (_, panel, window) = with_keyed_panel(cx, true, |panel, window, cx| {
+            panel.builder.builder_draft_spec = Some(make_test_spec());
+            panel.handle_builder_event(&super::BuilderEvent::ResetRequested, window, cx);
+
+            assert!(
+                panel.builder.builder_draft_spec.is_some(),
+                "the spec the rows were loaded with must stay"
+            );
+        });
+
+        assert_blocked_with_edit_kept(&panel, window);
+    }
+
+    #[gpui::test]
+    fn builder_reset_without_pending_edits_clears_the_spec(cx: &mut TestAppContext) {
+        with_keyed_panel(cx, false, |panel, window, cx| {
+            panel.builder.builder_draft_spec = Some(make_test_spec());
+            panel.handle_builder_event(&super::BuilderEvent::ResetRequested, window, cx);
+
+            assert!(panel.builder.builder_draft_spec.is_none());
+        });
+    }
+
+    #[gpui::test]
+    fn fk_rerun_with_pending_edits_is_refused_and_stops_resolving(cx: &mut TestAppContext) {
+        use super::filter_bar::RelationalFilterState;
+
+        let (_, panel, window) = with_keyed_panel(cx, true, |panel, _, cx| {
+            panel.builder.relational_filter_state = RelationalFilterState::Resolving;
+            panel.apply_fk_result(Vec::new(), cx);
+
+            assert!(!panel.pending.refresh);
+            assert!(matches!(
+                panel.builder.relational_filter_state,
+                RelationalFilterState::Inactive
+            ));
+        });
+
+        assert_blocked_with_edit_kept(&panel, window);
+    }
+
+    #[gpui::test]
+    fn fk_rerun_without_pending_edits_queues_the_reload(cx: &mut TestAppContext) {
+        use super::filter_bar::RelationalFilterState;
+
+        with_keyed_panel(cx, false, |panel, _, cx| {
+            panel.builder.relational_filter_state = RelationalFilterState::Resolving;
+            panel.apply_fk_result(Vec::new(), cx);
+
+            assert!(panel.pending.refresh);
+        });
+    }
+
+    #[gpui::test]
+    fn chart_reexecute_with_pending_edits_is_refused(cx: &mut TestAppContext) {
+        let (_, panel, window) = with_keyed_panel(cx, true, |panel, _, cx| {
+            panel.chart_host_request_reexecute(cx);
+
+            assert!(!panel.pending.refresh);
+        });
+
+        assert_blocked_with_edit_kept(&panel, window);
+    }
+
+    #[gpui::test]
+    fn chart_reexecute_without_pending_edits_queues_the_reload(cx: &mut TestAppContext) {
+        with_keyed_panel(cx, false, |panel, _, cx| {
+            panel.chart_host_request_reexecute(cx);
+
+            assert!(panel.pending.refresh);
+        });
     }
 
     #[gpui::test]

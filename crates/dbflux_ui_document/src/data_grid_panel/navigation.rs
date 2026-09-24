@@ -11,12 +11,50 @@ use std::cmp::Ordering;
 impl DataGridPanel {
     // === Sorting ===
 
+    /// Refuses a server-side sort, which re-queries the rows, while unsaved
+    /// edits exist. The table has already moved its header arrow to the
+    /// requested sort, so a refused request puts back the sort the displayed
+    /// rows were loaded with.
+    fn server_sort_blocked(&mut self, cx: &mut Context<Self>) -> bool {
+        let DataSource::Table { order_by, .. } = &self.source else {
+            return false;
+        };
+
+        if !self.reload_blocked_by_pending_edits(cx) {
+            return false;
+        }
+
+        let loaded_sort = order_by.first().and_then(|column| {
+            self.result
+                .columns
+                .iter()
+                .position(|meta| meta.name == column.column.name)
+                .map(|column_ix| TableSortState::new(column_ix, column.direction))
+        });
+
+        if let Some(table_state) = self.grid_table.table_state.clone() {
+            table_state.update(cx, |state, cx| {
+                match loaded_sort {
+                    Some(sort) => state.set_sort_without_emit(sort),
+                    None => state.clear_sort_without_emit(),
+                }
+                cx.notify();
+            });
+        }
+
+        true
+    }
+
     pub(super) fn handle_sort_request(
         &mut self,
         col_ix: usize,
         direction: SortDirection,
         cx: &mut Context<Self>,
     ) {
+        if self.server_sort_blocked(cx) {
+            return;
+        }
+
         let col_name = self
             .result
             .columns
@@ -84,6 +122,10 @@ impl DataGridPanel {
     }
 
     pub(super) fn handle_sort_clear(&mut self, cx: &mut Context<Self>) {
+        if self.server_sort_blocked(cx) {
+            return;
+        }
+
         // Extract values before mutating self.source
         let table_info = match &self.source {
             DataSource::Table {
@@ -224,7 +266,7 @@ impl DataGridPanel {
     /// them.
     fn page_change_blocked(&self, cx: &mut Context<Self>) -> bool {
         matches!(self.source, DataSource::QueryResult { .. })
-            || self.refresh_blocked_by_pending_edits(cx)
+            || self.reload_blocked_by_pending_edits(cx)
     }
 
     pub fn go_to_next_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {

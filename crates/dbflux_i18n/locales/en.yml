@@ -1157,7 +1157,7 @@ document:
           many: "%{count} unsaved changes"
         save: Save
         revert: Revert
-        refresh_blocked: Save or revert your unsaved changes before refreshing
+        reload_blocked: Save or revert your unsaved changes first
         edits_dropped:
           one: "Unsaved changes on %{count} row were dropped: the row is not in the reloaded results"
           many: "Unsaved changes on %{count} rows were dropped: the rows are not in the reloaded results"

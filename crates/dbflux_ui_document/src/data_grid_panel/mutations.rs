@@ -157,12 +157,12 @@ impl DataGridPanel {
     /// Without a primary key they could only be dropped, so the reload is
     /// refused with the same warning as a user refresh instead.
     pub(super) fn queue_reload_after_mutation(&mut self, cx: &mut Context<Self>) {
-        if self.pending_edits_lack_row_identity(cx) && self.refresh_blocked_by_pending_edits(cx) {
+        if self.pending_edits_lack_row_identity(cx) && self.reload_blocked_by_pending_edits(cx) {
             return;
         }
 
-        self.grid_table.keep_edits_on_reload = true;
         self.pending.refresh = true;
+        self.pending.refresh_keeps_edits = true;
     }
 
     fn apply_inline_value_to_result(&mut self, node_id: &NodeId, new_value: &Value) {

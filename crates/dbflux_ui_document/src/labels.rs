@@ -18,10 +18,10 @@ pub(crate) fn unsaved_changes_label(count: usize) -> String {
     }
 }
 
-/// Warning shown when a refresh is refused because the grid holds unsaved
-/// edits that the reload would drop.
-pub(crate) fn grid_refresh_blocked_by_pending_edits() -> String {
-    dbflux_i18n::t!("document.data.grid.edit_bar.refresh_blocked")
+/// Warning shown when a reload of the grid rows is refused because the grid
+/// holds unsaved edits that the reload would drop.
+pub(crate) fn grid_reload_blocked_by_pending_edits() -> String {
+    dbflux_i18n::t!("document.data.grid.edit_bar.reload_blocked")
 }
 
 /// Warning shown when a reload that carries unsaved edits over could not

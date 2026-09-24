@@ -1157,7 +1157,7 @@ document:
           many: "%{count} 处未保存更改"
         save: 保存
         revert: 还原
-        refresh_blocked: 刷新前请先保存或还原未保存的更改
+        reload_blocked: 请先保存或还原未保存的更改
         edits_dropped:
           one: "已丢弃 %{count} 行的未保存更改：重新加载的结果中没有该行"
           many: "已丢弃 %{count} 行的未保存更改：重新加载的结果中没有这些行"

@@ -391,10 +391,13 @@ All notable changes to DBFlux will be documented in this file.
   reload now carries them over to the reloaded rows by primary key. An edited
   row that is no longer in the reloaded rows is dropped with a warning, and a
   result without a primary key keeps its rows and warns instead of reloading.
-  Changing or clearing the filter, the context-menu filters, the row limit and
-  the page keys and buttons are now refused with the same warning as a refresh
-  while unsaved edits exist, and a staged insert or delete on its own now
-  counts as an unsaved edit for every one of these checks.
+  Every other reload of the rows is now refused while unsaved edits exist,
+  with one warning telling the user to save or revert them first: changing or
+  clearing the filter, the context-menu filters, the row limit, the page keys
+  and buttons, a server-side sort, the query builder's Run and Reset, the
+  relational filter's re-run once foreign keys load, and a chart re-run. A
+  staged insert or delete on its own now counts as an unsaved edit for every
+  one of these checks, including refresh.
 
 * **Filters and mutation confirmation samples run on PostgreSQL** — the data
   grid sent visual SELECTs, their row counts and the sample rows of the

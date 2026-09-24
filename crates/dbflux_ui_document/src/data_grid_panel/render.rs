@@ -251,7 +251,11 @@ impl DataGridPanel {
         }
 
         if std::mem::take(&mut self.pending.refresh) {
-            self.refresh(window, cx);
+            if std::mem::take(&mut self.pending.refresh_keeps_edits) {
+                self.refresh_keeping_edits(window, cx);
+            } else {
+                self.refresh(window, cx);
+            }
         }
 
         if self.context_menu.is_none() {
@@ -766,7 +770,9 @@ pub(super) fn render_filter_bar_as_segment(
             let grid = grid_for_chip.clone();
             move |_, window, cx| {
                 grid.update(cx, |this, cx| {
-                    if let Some(spec) = this.builder.builder_draft_spec.clone() {
+                    if let Some(spec) = this.builder.builder_draft_spec.clone()
+                        && !this.reload_blocked_by_pending_edits(cx)
+                    {
                         this.apply_builder_draft_spec(spec, cx);
                     }
                     this.open_query_builder(window, cx);
@@ -794,7 +800,9 @@ pub(super) fn render_filter_bar_as_segment(
                     } else {
                         None
                     };
-                    if let Some(spec) = partial_spec {
+                    if let Some(spec) = partial_spec
+                        && !this.reload_blocked_by_pending_edits(cx)
+                    {
                         this.apply_builder_draft_spec(spec, cx);
                     }
                     this.open_query_builder(window, cx);
@@ -1056,7 +1064,9 @@ impl DataGridPanel {
             &self.builder.relational_filter_state,
             cx,
             Box::new(cx.listener(|this, _, window, cx| {
-                if let Some(spec) = this.builder.builder_draft_spec.clone() {
+                if let Some(spec) = this.builder.builder_draft_spec.clone()
+                    && !this.reload_blocked_by_pending_edits(cx)
+                {
                     this.apply_builder_draft_spec(spec, cx);
                 }
                 this.open_query_builder(window, cx);
@@ -1079,7 +1089,9 @@ impl DataGridPanel {
                 } else {
                     None
                 };
-                if let Some(spec) = partial_spec {
+                if let Some(spec) = partial_spec
+                    && !this.reload_blocked_by_pending_edits(cx)
+                {
                     this.apply_builder_draft_spec(spec, cx);
                 }
                 this.open_query_builder(window, cx);
@@ -1748,7 +1760,7 @@ impl DataGridPanel {
             on_refresh: Arc::new(move |_window, cx| {
                 if let Some(panel) = weak_panel_for_refresh.upgrade() {
                     panel.update(cx, |this, cx| {
-                        if this.refresh_blocked_by_pending_edits(cx) {
+                        if this.reload_blocked_by_pending_edits(cx) {
                             return;
                         }
 
