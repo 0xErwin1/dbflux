@@ -200,6 +200,8 @@ fn active_query_preview_and_elapsed_line_are_not_covered_by_the_footer(cx: &mut 
                     ActiveQueryRequest {
                         sql,
                         trigger: ActiveQueryTrigger::Disconnect,
+                        elapsed_secs: 42,
+                        connection_names: vec!["slowdb".to_string()],
                     },
                     cx,
                 );
