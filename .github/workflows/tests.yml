@@ -266,6 +266,9 @@ jobs:
       - name: Run MySQL live integration tests
         run: cargo test -p dbflux_driver_mysql --locked --test live_integration -- --ignored
 
+      - name: Run MySQL query safety cancellation regression
+        run: cargo test -p dbflux_driver_mysql --locked --lib mysql_query_safety_refusal_preserves_existing_cancel_signal -- --ignored
+
       - name: Run MongoDB live integration tests
         run: cargo test -p dbflux_driver_mongodb --locked --test live_integration -- --ignored
 

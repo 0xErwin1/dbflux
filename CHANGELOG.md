@@ -6,6 +6,8 @@ All notable changes to DBFlux will be documented in this file.
 
 ### Changed
 
+* MySQL/MariaDB explicit row limits retain at most N rows across script/server result sets and flag actual omissions, including at zero; later mutations finish and errors propagate. Explicit timeouts and bounded instance requests are refused before execution; unbounded requests remain compatible. The row cap does not bound bytes, server work, engine allocation, or elapsed time; hosted MariaDB was not verified.
+
 * ClickHouse and Redshift now refuse explicit query row limits (including zero) and statement timeouts before dispatch or preparation; unprotected queries retain existing behavior, including possible full-result buffering. ClickHouse HTTP timeout does not guarantee server cancellation, and the Redshift early-refusal regression uses PostgreSQL 16 protocol compatibility rather than a hosted Redshift cluster.
 
 ### Fixed
